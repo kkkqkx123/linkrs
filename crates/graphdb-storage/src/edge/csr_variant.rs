@@ -195,31 +195,25 @@ impl CsrVariant {
 
     /// Average bytes per edge based on actual memory usage.
     ///
-    /// Computed as `used_memory_size() / edge_count()` to dynamically adapt
-    /// to actual storage characteristics (fragmentation, compression).
-    /// Falls back to empirical defaults when edge_count is 0. Empty-table
-    /// fallbacks are debug-only so write-path estimates stay quiet.
+    /// Computed as `used_memory_size() / edge_count()` with no fallback.
+    /// Empty tables report zero; a degenerate zero measurement on a
+    /// non-empty table reports zero with a debug line. Callers handle zero
+    /// explicitly instead of relying on a structural estimate.
     pub fn bytes_per_edge(&self) -> usize {
-        let edges = self.edge_count().max(1) as usize;
-        let bytes = self.used_memory_size();
-        let bpe = bytes / edges;
-        if bpe == 0 {
-            let fallback = match self {
-                CsrVariant::Multiple(_) | CsrVariant::Single(_) => {
-                    std::mem::size_of::<super::Nbr>()
-                }
-                CsrVariant::None { .. } => 0,
-            };
-            log::debug!(
-                "bytes_per_edge: computed bpe=0 ({} bytes / {} edges), using fallback {}",
-                bytes,
-                self.edge_count(),
-                fallback
-            );
-            fallback
-        } else {
-            bpe
+        let edges = self.edge_count();
+        if edges == 0 {
+            return 0;
         }
+        let bytes = self.used_memory_size();
+        let bpe = bytes / edges as usize;
+        if bpe == 0 {
+            log::debug!(
+                "bytes_per_edge: measured zero ({} bytes / {} edges), reporting zero",
+                bytes,
+                edges,
+            );
+        }
+        bpe
     }
 }
 

@@ -1,18 +1,25 @@
 //! Incremental checkpoint: per-group topology files plus a manifest.
 //!
 //! Layout of one edge-table directory, version 2:
-//! - `meta.bin`: header plus label ids, schema, next edge id and the
-//!   authoritative edge timestamps.
+//! - `meta.bin`: header section (label ids, schema, next edge id) plus the
+//!   authoritative edge timestamps, with the manifest commit tail appended
+//!   so metadata and manifest share one atomic unit.
 //! - `groups_manifest.bin`: group address width plus out/in group counts.
 //! - `out_g{gid}.bin` / `in_g{gid}.bin`: one page-compressed payload per
 //!   group, each self-validated by its row header on load.
 //! - `properties.bin`: property columns plus row visibility.
 //!
-//! Only groups holding uncheckpointed writes are rewritten; clean groups
-//! are skipped. The manifest is written last so a crash between group
-//! writes and the manifest write drops the in-flight checkpoint but still
-//! loads from the previous manifest. Directories holding the old single-file
-//! layout (`out_csr.bin` without a manifest) are rejected explicitly, never
+//! Commit protocol: group and property payloads are written first, then the
+//! metadata file carrying the manifest tail, and the manifest file is
+//! published last as the snapshot commit point. Loading requires the
+//! manifest tail embedded in `meta.bin` to equal `groups_manifest.bin`;
+//! a mismatch means a torn commit or file damage and the load is rejected.
+//! The manifest epoch is the snapshot epoch: shadow (`.tmp`) files written
+//! before the manifest commit are discardable uncommitted state reclaimed at
+//! startup by the shadow cleanup. Only groups holding uncheckpointed writes
+//! are rewritten; clean groups are skipped. Directories holding the old
+//! single-file layout (`out_csr.bin` without a manifest) or a version 1
+//! `meta.bin` without a commit tail are rejected explicitly, never
 //! converted.
 
 use super::core::EdgeStore;
@@ -65,22 +72,28 @@ impl EdgeStore {
     ///
     /// Property-only writes leave topology files untouched, so the group
     /// trace records column dirt only and never forces a topology rewrite.
+    /// The group trace is a sampled observability caliber: out-of-range
+    /// endpoints leave no group trace, and the table-level flag alone
+    /// guarantees the final property flush.
     pub(crate) fn mark_properties_dirty_for_edge(&mut self, src: u32, dst: u32) {
         self.properties_dirty = true;
         self.out_csr.mark_column_updated_for(src);
         self.in_csr.mark_column_updated_for(dst);
     }
 
-    /// Flush dirty state incrementally: metadata always, property columns
-    /// only when dirty, topology groups only when dirty or missing.
+    /// Flush dirty state incrementally: topology groups and property columns
+    /// first, metadata carrying the manifest tail second, manifest last.
     ///
-    /// Property statistics are refreshed before the property payload is
-    /// serialized so they follow the checkpoint. The checkpoint kind is
-    /// derived from the dirt before it is cleared: any delete dirt makes a
-    /// rebalance, otherwise the flush only lands the memory append layer.
-    /// Flushed bytes, elapsed time and authority tombstone totals are
-    /// reported to the shared metrics registry when one is set. Returns the
-    /// checkpoint kind for engine-side logging.
+    /// Groups and properties land in shadow files before the metadata commit
+    /// so a crash before the manifest publish leaves only discardable
+    /// `.tmp` state plus the previous consistent snapshot. Property
+    /// statistics are refreshed before the property payload is serialized so
+    /// they follow the checkpoint. The checkpoint kind is derived from the
+    /// dirt before it is cleared: any delete dirt makes a rebalance,
+    /// otherwise the flush only lands the memory append layer. Flushed
+    /// bytes, elapsed time and authority tombstone totals are reported to
+    /// the shared metrics registry when one is set. Returns the checkpoint
+    /// kind for engine-side logging.
     pub(crate) fn flush_incremental(
         &mut self,
         dir: &Path,
@@ -102,10 +115,13 @@ impl EdgeStore {
         };
         let dirty_groups =
             self.out_csr.dirty_group_ids().len() + self.in_csr.dirty_group_ids().len();
+        let manifest = TableShardManifest {
+            group_bits: self.config.node_group_bits,
+            out_groups: self.out_csr.group_count() as u32,
+            in_groups: self.in_csr.group_count() as u32,
+        };
 
         let mut flushed_bytes = 0u64;
-        flushed_bytes += self.flush_metadata_file(dir, page_size, level)?;
-        flushed_bytes += self.flush_properties_file(dir, page_size, level)?;
         flushed_bytes += self.flush_group_set(
             dir,
             page_size,
@@ -120,7 +136,9 @@ impl EdgeStore {
             false,
             crate::persistence::section::EDGE_IN_CSR,
         )?;
-        self.write_manifest(dir)?;
+        flushed_bytes += self.flush_properties_file(dir, page_size, level)?;
+        flushed_bytes += self.flush_metadata_file(dir, page_size, level, &manifest)?;
+        self.write_manifest(dir, &manifest)?;
         flushed_bytes += file_bytes(&manifest_path(dir));
 
         self.properties_dirty = false;
@@ -151,11 +169,21 @@ impl EdgeStore {
         Ok(kind)
     }
 
-    fn flush_metadata_file(&self, dir: &Path, page_size: usize, level: i32) -> StorageResult<u64> {
+    fn flush_metadata_file(
+        &self,
+        dir: &Path,
+        page_size: usize,
+        level: i32,
+        manifest: &TableShardManifest,
+    ) -> StorageResult<u64> {
         // Meta stays a full rewrite: edge timestamps are a single global map
         // with no column sharding yet, so any timestamp change needs the whole
-        // table. Sharded or delta meta is future work once timestamps split
-        // by group.
+        // table. The header and timestamp sections are serialized separately
+        // inside `flush_metadata` as the future per-group split point; this
+        // revision keeps both sections in one file. The manifest commit tail
+        // is appended so metadata and manifest share one atomic unit: a lone
+        // new metadata file without its manifest commit is a torn write.
+        // Sharded or delta meta is future work once timestamps split by group.
         let mut meta_payload = Vec::new();
         crate::persistence::write_header_to(
             &mut meta_payload,
@@ -173,6 +201,7 @@ impl EdgeStore {
             self.next_edge_id,
             &self.mvcc.edge_timestamps,
         )?;
+        meta_payload.extend_from_slice(&manifest.encode());
         let path = dir.join("meta.bin");
         persistence::write_pages_to_file(&path, &meta_payload, page_size, level, 1)?;
         Ok(file_bytes(&path))
@@ -244,12 +273,9 @@ impl EdgeStore {
         Ok(written)
     }
 
-    fn write_manifest(&self, dir: &Path) -> StorageResult<()> {
-        let manifest = TableShardManifest {
-            group_bits: self.config.node_group_bits,
-            out_groups: self.out_csr.group_count() as u32,
-            in_groups: self.in_csr.group_count() as u32,
-        };
+    /// Publish the manifest as the snapshot commit point. Must be called
+    /// after the metadata file carrying the same manifest tail is durable.
+    fn write_manifest(&self, dir: &Path, manifest: &TableShardManifest) -> StorageResult<()> {
         crate::compression::write_shadow_file(manifest_path(dir), &manifest.encode())
     }
 
@@ -273,7 +299,16 @@ impl EdgeStore {
     }
 
     /// Load an incremental checkpoint. Directories in the old single-file
-    /// layout are rejected explicitly.
+    /// layout and version 1 metadata without a commit tail are rejected
+    /// explicitly, never converted.
+    ///
+    /// Damage detection only: version, section, trailing-byte and
+    /// manifest-tail mismatches fail the load. Crash consistency comes from
+    /// the commit protocol (groups and properties before metadata, manifest
+    /// published last with its tail embedded in `meta.bin`), covered by the
+    /// crash-injection tests below instead of by the orphan audit. The
+    /// orphan audit stays as file-damage detection: a nonzero mismatch
+    /// means torn or corrupt files, not a recoverable crash window.
     pub(crate) fn load_incremental(&mut self, dir: &Path) -> StorageResult<()> {
         let manifest_file = manifest_path(dir);
         if !manifest_file.exists() {
@@ -298,7 +333,7 @@ impl EdgeStore {
             )));
         }
 
-        self.load_metadata_file(dir)?;
+        self.load_metadata_file(dir, &manifest)?;
         self.out_csr.resize_groups(manifest.out_groups as usize)?;
         self.in_csr.resize_groups(manifest.in_groups as usize)?;
         self.load_group_set(dir, true, manifest.out_groups as usize)?;
@@ -314,6 +349,10 @@ impl EdgeStore {
                 .unwrap_or(0);
             self.next_edge_id = graphdb_core::types::EdgeId(max_id);
         }
+        // Damage detection, not crash recovery: with the manifest-tail commit
+        // protocol a torn write fails earlier on the tail mismatch. A nonzero
+        // count here means corrupt or regressed files and the load stays
+        // fail-closed.
         let (orphan_mappings, orphan_csr_rows) = self.loaded_copy_mismatches();
         let live_orphans = self.live_authority_orphans();
         if orphan_mappings + orphan_csr_rows + live_orphans > 0 {
@@ -339,7 +378,11 @@ impl EdgeStore {
         Ok(())
     }
 
-    fn load_metadata_file(&mut self, dir: &Path) -> StorageResult<()> {
+    fn load_metadata_file(
+        &mut self,
+        dir: &Path,
+        manifest: &TableShardManifest,
+    ) -> StorageResult<()> {
         use std::io::Read;
         let meta_path = dir.join("meta.bin");
         let (meta_data, _meta_rows) = persistence::read_pages_from_file(&meta_path)?;
@@ -361,6 +404,12 @@ impl EdgeStore {
         let mut version_bytes = [0u8; 4];
         meta_cursor.read_exact(&mut version_bytes)?;
         let version = u32::from_le_bytes(version_bytes);
+        if version == 1 {
+            return Err(StorageError::deserialize_error(
+                "legacy edge meta version 1 without a manifest commit tail is not supported"
+                    .to_string(),
+            ));
+        }
         if version != persistence::EDGE_META_VERSION {
             return Err(StorageError::deserialize_error(format!(
                 "unsupported edge meta version: {}",
@@ -369,6 +418,17 @@ impl EdgeStore {
         }
 
         let meta = persistence::load_metadata(&mut meta_cursor)?;
+        let embedded = TableShardManifest::decode(meta_cursor).map_err(|_| {
+            StorageError::deserialize_error(
+                "edge meta missing manifest commit tail: torn write or legacy file".to_string(),
+            )
+        })?;
+        if embedded != *manifest {
+            return Err(StorageError::deserialize_error(format!(
+                "manifest commit tail mismatch: meta carries {:?}, manifest file holds {:?}",
+                embedded, manifest
+            )));
+        }
         self.label = meta.label;
         self.src_label = meta.src_label;
         self.dst_label = meta.dst_label;
@@ -859,7 +919,7 @@ mod tests {
         table
             .update_edge_property(0, 1, 0, "weight", &Value::Double(9.0), 200)
             .expect("property update should succeed");
-        assert!(!table.out_csr.column_dirty_group_ids().is_empty());
+        assert!(!table.out_csr.sampled_column_dirty_group_ids().is_empty());
         let kind = table
             .flush(
                 dir.path(),
@@ -933,5 +993,167 @@ mod tests {
                 .unwrap_or(0)
                 > 0
         );
+    }
+
+    #[test]
+    fn successful_flush_loads_consistent_triple() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        table
+            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 110)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+
+        let mut loaded = make_table();
+        loaded.load(dir.path()).expect("load should succeed");
+        assert!(loaded.has_edge(0, 1, 0, 200));
+        assert!(loaded.has_edge(0, 2, 0, 200));
+        let record = loaded.get_edge(0, 1, 0, 200).expect("edge survives");
+        assert!(record
+            .properties
+            .iter()
+            .any(|(k, v)| k == "weight" && *v == Value::Double(1.0)));
+        assert_eq!(
+            loaded.mvcc.creation_ts_of(graphdb_core::types::EdgeId(0)),
+            Some(100)
+        );
+        assert_eq!(
+            loaded.mvcc.creation_ts_of(graphdb_core::types::EdgeId(1)),
+            Some(110)
+        );
+        assert_eq!(loaded.edge_count(), 2);
+    }
+
+    #[test]
+    fn torn_manifest_tail_is_rejected_not_mixed() {
+        use crate::edge::node_group::TableShardManifest;
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+
+        // Simulate a crash between the metadata write and the manifest
+        // publish: metadata carries the new tail while the manifest file
+        // still holds the previous snapshot. The load must fail closed on
+        // the tail mismatch instead of presenting mixed topology plus
+        // timestamps.
+        let manifest_path = dir.path().join(GROUPS_MANIFEST_FILE);
+        let bytes = std::fs::read(&manifest_path).expect("manifest readable");
+        let mut manifest = TableShardManifest::decode(&bytes).expect("manifest decodes");
+        manifest.out_groups += 10;
+        crate::compression::write_shadow_file(&manifest_path, &manifest.encode())
+            .expect("torn manifest writable");
+
+        let mut loaded = make_table();
+        let err = loaded
+            .load(dir.path())
+            .expect_err("torn commit must be rejected");
+        assert!(err.to_string().contains("mismatch"));
+    }
+
+    #[test]
+    fn legacy_meta_without_tail_is_rejected() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+
+        // Strip the manifest commit tail and downgrade the version to mimic
+        // a version 1 file: the loader must reject it explicitly.
+        let meta_path = dir.path().join("meta.bin");
+        let (mut payload, _) =
+            persistence::read_pages_from_file(&meta_path).expect("meta readable");
+        assert!(payload.len() > 20);
+        payload.truncate(payload.len() - 16);
+        let header_len = crate::persistence::HEADER_SIZE;
+        payload[header_len..header_len + 4].copy_from_slice(&1u32.to_le_bytes());
+        persistence::write_pages_to_file(
+            &meta_path,
+            &payload,
+            crate::compression::DEFAULT_PAGE_SIZE,
+            3,
+            1,
+        )
+        .expect("legacy meta writable");
+
+        let mut loaded = make_table();
+        let err = loaded
+            .load(dir.path())
+            .expect_err("legacy meta must be rejected");
+        assert!(err.to_string().contains("legacy"));
+    }
+
+    #[test]
+    fn crash_before_manifest_publish_never_loads_mixed_snapshot() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("first flush should succeed");
+        let old_manifest = std::fs::read(dir.path().join(GROUPS_MANIFEST_FILE))
+            .expect("old manifest readable");
+
+        table
+            .insert_edge(5000, 6000, 0, &[("weight".to_string(), Value::Double(2.0))], 110)
+            .unwrap();
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("second flush should succeed");
+
+        // Crash between the second metadata write and its manifest publish:
+        // restore the old manifest file while the new metadata tail stays.
+        // Loading must fail on the mismatch rather than mix new timestamps
+        // with old topology.
+        std::fs::write(dir.path().join(GROUPS_MANIFEST_FILE), &old_manifest)
+            .expect("manifest restore works");
+        let mut loaded = make_table();
+        let err = loaded
+            .load(dir.path())
+            .expect_err("torn second commit must be rejected");
+        assert!(err.to_string().contains("mismatch"));
+
+        // Restoring the matching new manifest is out of scope for the loader;
+        // a clean retry of the whole flush from live memory publishes both.
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("retry flush should succeed");
+        let mut reloaded = make_table();
+        reloaded.load(dir.path()).expect("load should succeed");
+        assert!(reloaded.has_edge(0, 1, 0, 200));
+        assert!(reloaded.has_edge(5000, 6000, 0, 200));
     }
 }

@@ -48,10 +48,13 @@ pub struct EdgeStore {
 
     /// Edge property index for efficient property-based filtering.
     ///
-    /// Best-effort secondary structure: insert/delete failures are counted in
+    /// Best-effort asynchronous secondary structure, not a synchronous part
+    /// of the write: insert/delete failures are counted in
     /// `index_write_failures` and reported to the metrics registry, never
-    /// failing the primary write. Operators rebuild via
-    /// `build_property_index` once failures cross a chosen threshold.
+    /// failing the primary write. Primary data stays authoritative while the
+    /// index may lag; operators rebuild via `build_property_index` (or
+    /// `rebuild_property_index_on_failures`) once failures cross a chosen
+    /// threshold. A full streaming rebuild resets the lag baseline.
     pub property_index: Option<EdgePropertyIndex>,
     /// Secondary index write failures since the last rebuild or reset.
     /// Observability only; primary data stays authoritative.
@@ -211,7 +214,8 @@ impl EdgeStore {
     ///
     /// Returns true when a rebuild ran. Threshold policy lives with the
     /// operator; the store only guarantees the counter is monotonic between
-    /// resets.
+    /// resets. A rebuild scans all live edges, so the fresh index resets the
+    /// lag baseline to the build's own failure count.
     pub fn rebuild_property_index_on_failures(
         &mut self,
         threshold: u64,
@@ -221,20 +225,28 @@ impl EdgeStore {
             return Ok(false);
         }
         self.build_property_index(pool_capacity)?;
-        self.reset_index_failures();
         Ok(true)
     }
 
-    fn record_index_write_failure(&mut self) {
+    fn record_index_write_failure(&mut self, prop_name: &str) {
         self.index_write_failures = self.index_write_failures.saturating_add(1);
         if let Some(stats) = &self.stats_manager {
-            stats.record_index_operation(0, "edge-property", 0, false);
+            stats.record_index_operation(0, prop_name, 0, false);
         }
     }
 
     fn record_index_write_success(&self, prop_name: &str) {
         if let Some(stats) = &self.stats_manager {
             stats.record_index_operation(0, prop_name, 0, true);
+        }
+    }
+
+    /// Fold one secondary index write outcome into the lag counter and the
+    /// shared metrics registry. Primary data stays authoritative regardless.
+    fn note_index_result(&mut self, prop_name: &str, result: StorageResult<()>) {
+        match result {
+            Ok(()) => self.record_index_write_success(prop_name),
+            Err(_) => self.record_index_write_failure(prop_name),
         }
     }
 
@@ -902,9 +914,23 @@ impl EdgeStore {
             return Err(e);
         }
 
-        if let Some(ref mut index) = self.property_index {
-            for (prop_name, prop_value) in &converted_values {
-                let _ = index.insert(prop_name, prop_value, src, dst, rank, self.label, ts);
+        if self.property_index.is_some() {
+            let label = self.label;
+            let outcomes: Vec<(String, StorageResult<()>)> =
+                if let Some(ref mut index) = self.property_index {
+                    converted_values
+                        .iter()
+                        .map(|(prop_name, prop_value)| {
+                            let result =
+                                index.insert(prop_name, prop_value, src, dst, rank, label, ts);
+                            (prop_name.clone(), result)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+            for (prop_name, result) in outcomes {
+                self.note_index_result(&prop_name, result);
             }
         }
 
@@ -1006,9 +1032,21 @@ impl EdgeStore {
             self.properties.release_row(row);
         }
         self.mvcc.remove_edge_timestamps(edge_id);
-        if let Some(ref mut index) = self.property_index {
-            for (prop_name, prop_value) in &properties {
-                let _ = index.delete(prop_name, prop_value, src, dst, rank, ts);
+        if self.property_index.is_some() {
+            let outcomes: Vec<(String, StorageResult<()>)> =
+                if let Some(ref mut index) = self.property_index {
+                    properties
+                        .iter()
+                        .map(|(prop_name, prop_value)| {
+                            let result = index.delete(prop_name, prop_value, src, dst, rank, ts);
+                            (prop_name.clone(), result)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+            for (prop_name, result) in outcomes {
+                self.note_index_result(&prop_name, result);
             }
         }
         self.mark_properties_dirty();
@@ -1084,9 +1122,21 @@ impl EdgeStore {
             self.properties.release_row(row);
         }
         self.mvcc.remove_edge_timestamps(edge_id);
-        if let Some(ref mut index) = self.property_index {
-            for (prop_name, prop_value) in &properties {
-                let _ = index.delete(prop_name, prop_value, src, dst, rank, ts);
+        if self.property_index.is_some() {
+            let outcomes: Vec<(String, StorageResult<()>)> =
+                if let Some(ref mut index) = self.property_index {
+                    properties
+                        .iter()
+                        .map(|(prop_name, prop_value)| {
+                            let result = index.delete(prop_name, prop_value, src, dst, rank, ts);
+                            (prop_name.clone(), result)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+            for (prop_name, result) in outcomes {
+                self.note_index_result(&prop_name, result);
             }
         }
         self.debug_assert_copies_consistent(edge_id);
@@ -1115,12 +1165,26 @@ impl EdgeStore {
         rank: i64,
         ts: Timestamp,
     ) {
-        if let Some(ref mut index) = self.property_index {
-            if let Some(ref props) = properties {
-                for (prop_name, prop_value) in props {
-                    let _ = index.delete(prop_name, prop_value, src, dst, rank, ts);
-                }
-            }
+        let Some(ref props) = properties else {
+            return;
+        };
+        if self.property_index.is_none() {
+            return;
+        }
+        let outcomes: Vec<(String, StorageResult<()>)> =
+            if let Some(ref mut index) = self.property_index {
+                props
+                    .iter()
+                    .map(|(prop_name, prop_value)| {
+                        let result = index.delete(prop_name, prop_value, src, dst, rank, ts);
+                        (prop_name.clone(), result)
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        for (prop_name, result) in outcomes {
+            self.note_index_result(&prop_name, result);
         }
     }
 
@@ -1156,9 +1220,23 @@ impl EdgeStore {
         }
         let _ = self.properties.revert_deletion_for_edge(edge_id);
         let restored = self.properties_for_edge(edge_id, ts);
-        if let Some(ref mut index) = self.property_index {
-            for (prop_name, prop_value) in restored {
-                let _ = index.insert(&prop_name, &prop_value, src, dst, rank, self.label, ts);
+        if self.property_index.is_some() {
+            let label = self.label;
+            let outcomes: Vec<(String, StorageResult<()>)> =
+                if let Some(ref mut index) = self.property_index {
+                    restored
+                        .into_iter()
+                        .map(|(prop_name, prop_value)| {
+                            let result =
+                                index.insert(&prop_name, &prop_value, src, dst, rank, label, ts);
+                            (prop_name, result)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+            for (prop_name, result) in outcomes {
+                self.note_index_result(&prop_name, result);
             }
         }
         self.mark_properties_dirty();
@@ -1693,7 +1771,9 @@ impl EdgeStore {
     /// Estimate memory usage based on edge count and CSR strategy.
     ///
     /// Write-path fast path: counts plus per-shard sizes only, never a
-    /// full-table fragmentation walk.
+    /// full-table fragmentation walk. A zero per-edge measurement reports a
+    /// zero estimate explicitly; backpressure treats zero as no pressure and
+    /// never divides by the estimate.
     pub fn estimate_memory_usage(&self) -> usize {
         let out_edges = self.out_csr.edge_count() as usize;
         let in_edges = self.in_csr.edge_count() as usize;
@@ -1791,24 +1871,45 @@ impl EdgeStore {
     /// Build the property index by scanning all edges.
     /// Streams one record at a time so peak memory stays flat instead of
     /// materializing every live edge plus decoded properties at once.
+    /// The fresh scan resets the lag baseline: the failure counter ends at
+    /// the build's own failure count, never silently cleared to zero.
     pub(crate) fn build_property_index(&mut self, pool_capacity: u64) -> StorageResult<()> {
         let mut index = EdgePropertyIndex::new(pool_capacity);
         // MAX_TIMESTAMP satisfies `create_ts <= ts < delete_ts` for live
         // edges, so all non-tombstoned edges are scanned.
         let all_ts = graphdb_core::types::MAX_TIMESTAMP;
+        let label = self.label;
 
         let iter = EdgeTableScanIterator::new(self, all_ts);
+        let mut build_failures: u64 = 0;
         for edge in iter {
             let src_u32 = edge.src_vid.as_int64().unwrap_or(0) as u32;
             let dst_u32 = edge.dst_vid.as_int64().unwrap_or(0) as u32;
             for (prop_name, prop_value) in &edge.properties {
-                let _ = index.insert(
-                    prop_name, prop_value, src_u32, dst_u32, edge.rank, self.label, all_ts,
-                );
+                if index
+                    .insert(
+                        prop_name, prop_value, src_u32, dst_u32, edge.rank, label, all_ts,
+                    )
+                    .is_err()
+                {
+                    build_failures = build_failures.saturating_add(1);
+                }
             }
         }
 
         self.property_index = Some(index);
+        self.index_write_failures = build_failures;
+        if let Some(stats) = &self.stats_manager {
+            for _ in 0..build_failures {
+                stats.record_index_operation(0, "edge-property", 0, false);
+            }
+        }
+        if build_failures > 0 {
+            log::debug!(
+                "build_property_index: {} secondary writes failed, lag counter carries them",
+                build_failures
+            );
+        }
         Ok(())
     }
 
@@ -1860,9 +1961,12 @@ impl EdgeStore {
 
     /// Fail-closed cross-copy audit used by [`EdgeStore::load`].
     ///
-    /// Returns `(orphan property mappings, orphan CSR rows)`. A nonzero
-    /// count signals file corruption or a write-path regression; callers
-    /// reject the load.
+    /// Damage detection only: returns `(orphan property mappings, orphan CSR
+    /// rows)`. A nonzero count signals corrupt files or a write-path
+    /// regression; callers reject the load. Crash consistency itself comes
+    /// from the checkpoint commit protocol (groups before metadata,
+    /// manifest published last with its tail embedded in `meta.bin`), not
+    /// from this audit.
     ///
     /// Live-authority orphans (a live authority entry with no CSR row, as
     /// produced by a silent Single-slot overwrite) are reported separately

@@ -1,15 +1,18 @@
 //! Persistence operations: serialization and deserialization to/from disk.
 //!
 //! Node-group sharded layout, version 2:
-//! - `meta.bin`: header + label ids + label name + schema + next edge id +
-//!   row-level edge timestamps (creation/deletion authority).
+//! - `meta.bin`: header section (label ids, label name, schema, next edge
+//!   id) plus the row-level edge timestamps, with the manifest commit tail
+//!   appended so metadata and manifest share one atomic unit.
 //! - `groups_manifest.bin`: group address width plus out/in group counts.
 //! - `out_g{gid}.bin` / `in_g{gid}.bin`: header + one `CsrVariant` dump per
 //!   group, written only for dirty groups.
 //! - `properties.bin`: current property values plus row visibility.
 //!
-//! Old single-file layouts are rejected: loading requires the manifest, and
-//! trailing bytes after any payload fail loudly instead of loading partially.
+//! Old single-file layouts and version 1 metadata without a commit tail are
+//! rejected: loading requires the manifest, the embedded tail must equal the
+//! manifest file, and trailing bytes after any payload fail loudly instead
+//! of loading partially.
 
 use super::super::{CsrBase, CsrVariant};
 use super::mvcc::EdgeTimestamps;
@@ -24,7 +27,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-pub(crate) const EDGE_META_VERSION: u32 = 1;
+pub(crate) const EDGE_META_VERSION: u32 = 2;
 
 /// Deserialized edge table metadata returned by [`load_metadata`].
 pub(crate) struct EdgeMetadata {
@@ -38,7 +41,16 @@ pub(crate) struct EdgeMetadata {
     pub edge_timestamps: HashMap<EdgeId, EdgeTimestamps>,
 }
 
-/// Serialize edge table metadata to a buffer
+/// Serialize edge table metadata to a buffer.
+///
+/// Layout version 2: header section (label ids, label name, openness,
+/// schema, next edge id) followed by the timestamp section (authoritative
+/// edge timestamps). The header and timestamp sections are serialized by
+/// separate helpers so timestamps can split by group later without touching
+/// the header path; this revision keeps both sections in `meta.bin`. The
+/// caller appends the manifest commit tail after the timestamp section so
+/// metadata and manifest share one atomic unit. Version 1 payloads carry no
+/// commit tail and are rejected on load, never converted.
 #[allow(clippy::too_many_arguments)]
 pub fn flush_metadata(
     buf: &mut Vec<u8>,
@@ -52,6 +64,24 @@ pub fn flush_metadata(
     edge_timestamps: &HashMap<EdgeId, EdgeTimestamps>,
 ) -> StorageResult<()> {
     buf.extend_from_slice(&EDGE_META_VERSION.to_le_bytes());
+    write_metadata_header(buf, label, src_label, dst_label, label_name, is_open, schema)?;
+    write_metadata_next_edge_id(buf, next_edge_id);
+    write_metadata_timestamps(buf, edge_timestamps);
+    Ok(())
+}
+
+/// Header section: label identity, openness, schema and the edge-id counter.
+/// Timestamps live in the following section and may split by group later.
+#[allow(clippy::too_many_arguments)]
+fn write_metadata_header(
+    buf: &mut Vec<u8>,
+    label: u32,
+    src_label: u32,
+    dst_label: u32,
+    label_name: &str,
+    is_open: bool,
+    schema: &EdgeSchema,
+) -> StorageResult<()> {
     buf.extend_from_slice(&label.to_le_bytes());
     buf.extend_from_slice(&src_label.to_le_bytes());
     buf.extend_from_slice(&dst_label.to_le_bytes());
@@ -68,17 +98,25 @@ pub fn flush_metadata(
     let schema_bytes = schema_json.as_bytes();
     buf.extend_from_slice(&(schema_bytes.len() as u32).to_le_bytes());
     buf.extend_from_slice(schema_bytes);
+    Ok(())
+}
 
+fn write_metadata_next_edge_id(buf: &mut Vec<u8>, next_edge_id: EdgeId) {
     buf.extend_from_slice(&next_edge_id.0.to_le_bytes());
+}
 
+/// Timestamp section: authoritative creation/deletion stamps per edge.
+/// Serialized separately from the header as the future per-group split point.
+fn write_metadata_timestamps(
+    buf: &mut Vec<u8>,
+    edge_timestamps: &HashMap<EdgeId, EdgeTimestamps>,
+) {
     buf.extend_from_slice(&(edge_timestamps.len() as u64).to_le_bytes());
     for (edge_id, ts) in edge_timestamps {
         buf.extend_from_slice(&edge_id.0.to_le_bytes());
         buf.extend_from_slice(&ts.create_ts.to_le_bytes());
         buf.extend_from_slice(&ts.delete_ts.to_le_bytes());
     }
-
-    Ok(())
 }
 
 /// Serialize one sharded CSR to a buffer

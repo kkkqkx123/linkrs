@@ -64,7 +64,10 @@ pub fn validate_group_bits(group_bits: u32) -> StorageResult<()> {
 ///
 /// Topology checkpoints rewrite a group exactly when `inserted` or `deleted`
 /// is set; `column_updated` traces property-only writes to their owning
-/// groups for observability without forcing a topology rewrite.
+/// groups for observability without forcing a topology rewrite. The column
+/// trace is a sampled caliber only: vids outside the current group space
+/// leave no trace, and correctness never depends on it. The table-level
+/// property dirt alone guarantees the final property flush.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GroupDirty {
     pub inserted: bool,
@@ -77,6 +80,9 @@ impl GroupDirty {
         self.inserted || self.deleted
     }
 
+    /// Sampled column-dirt caliber, not a correctness signal. Topology
+    /// checkpoints never consult it; property flushing consults the
+    /// table-level flag.
     pub fn is_column_dirty(self) -> bool {
         self.column_updated
     }
@@ -279,8 +285,12 @@ impl CsrShardSet {
             .collect()
     }
 
-    /// Ids of groups holding uncheckpointed property-only writes.
-    pub fn column_dirty_group_ids(&self) -> Vec<usize> {
+    /// Ids of groups holding sampled property-only write traces.
+    ///
+    /// Sampled observability caliber, never a correctness basis: vids outside
+    /// the current group space leave no trace, and the property file flush
+    /// decision consults the table-level flag alone.
+    pub fn sampled_column_dirty_group_ids(&self) -> Vec<usize> {
         self.shards
             .iter()
             .enumerate()
@@ -300,8 +310,10 @@ impl CsrShardSet {
 
     /// Trace a property-only write to the group owning `vid`.
     ///
-    /// Best effort: vids outside the current group space leave no group
-    /// trace and rely on the table-level property dirt.
+    /// Sampled observability caliber: vids outside the current group space
+    /// leave no group trace and rely on the table-level property dirt, which
+    /// alone guarantees the final property flush. Never consulted for
+    /// correctness, only exposed via `sampled_column_dirty_group_ids`.
     pub fn mark_column_updated_for(&mut self, vid: u32) {
         let gid = group_id_for(vid, self.group_bits);
         if let Some(shard) = self.shards.get_mut(gid) {
@@ -507,29 +519,24 @@ impl CsrShardSet {
     }
 
     /// Average bytes per edge based on actual memory usage.
-    /// Empty tables report the fallback without log noise; only genuinely
-    /// degenerate non-empty measurements emit a debug line.
+    /// Measured value only, with no fallback: empty tables report zero, and
+    /// a degenerate zero measurement on a non-empty table reports zero with
+    /// a debug line. Callers handle zero explicitly.
     pub fn bytes_per_edge(&self) -> usize {
-        let edges = self.edge_count().max(1) as usize;
-        let bytes = self.used_memory_size();
-        let bpe = bytes / edges;
-        if bpe == 0 {
-            let fallback = match self.strategy {
-                EdgeStrategy::None => 0,
-                _ => std::mem::size_of::<Nbr>(),
-            };
-            if fallback > 0 {
-                log::debug!(
-                    "bytes_per_edge: computed bpe=0 ({} bytes / {} edges), using fallback {}",
-                    bytes,
-                    self.edge_count(),
-                    fallback
-                );
-            }
-            fallback
-        } else {
-            bpe
+        let edges = self.edge_count();
+        if edges == 0 {
+            return 0;
         }
+        let bytes = self.used_memory_size();
+        let bpe = bytes / edges as usize;
+        if bpe == 0 {
+            log::debug!(
+                "bytes_per_edge: measured zero ({} bytes / {} edges), reporting zero",
+                bytes,
+                edges,
+            );
+        }
+        bpe
     }
 
     /// Whole-set fragmentation statistics, summed across groups.
@@ -1162,10 +1169,18 @@ mod tests {
         set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
         set.clear_all_dirty();
         set.mark_column_updated_for(0);
-        assert!(set.column_dirty_group_ids() == vec![0]);
+        assert!(set.sampled_column_dirty_group_ids() == vec![0]);
         assert!(set.dirty_group_ids().is_empty());
         assert!(!set.needs_checkpoint(0));
         assert_eq!(set.checkpoint_kind(), EdgeCheckpointKind::AppendOnly);
+    }
+
+    #[test]
+    fn out_of_range_column_trace_leaves_no_sample() {
+        let mut set = multi_set();
+        assert_eq!(set.group_count(), 1);
+        set.mark_column_updated_for(9000);
+        assert!(set.sampled_column_dirty_group_ids().is_empty());
     }
 
     #[test]

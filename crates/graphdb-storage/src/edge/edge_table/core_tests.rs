@@ -1064,3 +1064,64 @@ fn test_fragmentation_ratio_unified() {
     };
     assert!((ratio - expected).abs() < f32::EPSILON);
 }
+
+#[test]
+fn test_index_success_records_metrics_without_failures() {
+    use graphdb_metrics::{MetricType, StatsManager};
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    let stats = std::sync::Arc::new(StatsManager::new());
+    table.set_stats_manager(stats.clone());
+    table.enable_property_index(1024).unwrap();
+    assert_eq!(table.index_failure_count(), 0);
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    assert_eq!(table.index_failure_count(), 0);
+    assert!(stats.get_value(MetricType::NumIndexOperations).unwrap_or(0) > 0);
+    assert_eq!(stats.get_value(MetricType::NumIndexErrors).unwrap_or(0), 0);
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+    assert_eq!(table.index_failure_count(), 0);
+}
+
+#[test]
+fn test_index_failure_counter_drives_threshold_rebuild() {
+    use graphdb_metrics::{MetricType, StatsManager};
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    let stats = std::sync::Arc::new(StatsManager::new());
+    table.set_stats_manager(stats.clone());
+    table.enable_property_index(1024).unwrap();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    table.note_index_result(
+        "weight",
+        Err(graphdb_core::StorageError::db_error(
+            "injected index failure",
+        )),
+    );
+    table.note_index_result(
+        "weight",
+        Err(graphdb_core::StorageError::db_error(
+            "injected index failure",
+        )),
+    );
+    assert_eq!(table.index_failure_count(), 2);
+    assert_eq!(stats.get_value(MetricType::NumIndexErrors).unwrap_or(0), 2);
+    assert!(!table.rebuild_property_index_on_failures(3, 1024).unwrap());
+    assert_eq!(table.index_failure_count(), 2);
+    assert!(table.rebuild_property_index_on_failures(2, 1024).unwrap());
+    assert_eq!(table.index_failure_count(), 0);
+    table.reset_index_failures();
+    assert_eq!(table.index_failure_count(), 0);
+}
+
+#[test]
+fn test_bytes_per_edge_reports_measured_zero_without_fallback() {
+    let schema = create_test_schema();
+    let table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    assert_eq!(table.out_csr.bytes_per_edge(), 0);
+    assert_eq!(table.in_csr.bytes_per_edge(), 0);
+    assert_eq!(table.estimate_memory_usage(), 0);
+}
