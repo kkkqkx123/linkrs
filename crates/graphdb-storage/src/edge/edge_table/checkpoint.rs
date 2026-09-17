@@ -1,41 +1,51 @@
-//! Incremental checkpoint: per-group topology files plus a manifest.
+//! Incremental checkpoint: per-group topology, timestamp and property shards
+//! plus a manifest.
 //!
-//! Layout of one edge-table directory, version 3:
-//! - `meta.bin`: header section (label ids, schema, next edge id) plus the
-//!   authoritative edge timestamps, with the manifest commit tail appended
-//!   so metadata and manifest share one atomic unit.
-//! - `groups_manifest.bin`: group address width plus out/in group counts.
+//! Layout of one edge-table directory, version 4:
+//! - `meta.bin`: header section only (label ids, schema, next edge id), with
+//!   the manifest commit tail appended so metadata and manifest share one
+//!   atomic unit.
+//! - `groups_manifest.bin`: address width plus existing out/in group id lists.
+//!   Missing groups read as empty and never produce files.
 //! - `out_g{gid}.bin` / `in_g{gid}.bin`: one page-compressed base payload per
-//!   group, each self-validated by its row header on load. Rewritten only
-//!   for groups carrying delete dirt (base merges) or missing files.
+//!   existing group, each self-validated by its row header on load. Rewritten
+//!   only for groups carrying delete dirt (base merges) or missing files.
 //! - `out_g{gid}.append.bin` / `in_g{gid}.append.bin`: committed append-log
 //!   sidecars holding the write-through delta since the group base rewrite.
 //!   Insert-only groups checkpoint by persisting the sidecar alone, so
 //!   flushed bytes stay proportional to the dirty regions instead of the
-//!   group size. The sidecar carries the active manifest and is rejected on
-//!   mismatch; it is cumulative across append-only flushes and deleted by
+//!   group size. The sidecar carries only the address width and is rejected
+//!   on mismatch; it is cumulative across append-only flushes and deleted by
 //!   the base merge that absorbs it.
-//! - `properties.bin`: property columns plus row visibility.
+//! - `ts_g{gid}.bin`: authoritative timestamps for the owning group's edges,
+//!   falling with the same dirt as the group. Small timestamp writes rewrite
+//!   only dirty owners, never the whole table.
+//! - `props_g{gid}.bin`: property rows for the owning group's edges, falling
+//!   with the same dirt as the group. Small property writes rewrite only
+//!   dirty owners, never the whole table.
 //!
-//! Commit protocol: group bases, sidecars and property payloads are written
-//! first (all through atomic shadow files), then the metadata file carrying
-//! the manifest tail, and the manifest file is published last as the
-//! snapshot commit point. Loading requires the manifest tail embedded in
-//! `meta.bin` to equal `groups_manifest.bin`; a mismatch means a torn
-//! commit or file damage and the load is rejected. The manifest epoch is
-//! the snapshot epoch: shadow (`.tmp`) files written before the manifest
-//! commit are discardable uncommitted state reclaimed at startup by the
-//! shadow cleanup. Only groups holding uncheckpointed writes are written;
-//! clean groups are skipped. Directories holding the old single-file layout
-//! (`out_csr.bin` without a manifest), version 1 `meta.bin` without a
-//! commit tail, or a pre-version-3 manifest are rejected explicitly, never
-//! converted.
+//! Commit protocol: group bases, sidecars, timestamp shards and property
+//! shards are written first (all through atomic shadow files), then the
+//! metadata file carrying the manifest tail, and the manifest file is
+//! published last as the snapshot commit point. Loading requires the manifest
+//! tail embedded in `meta.bin` to equal `groups_manifest.bin`; a mismatch
+//! means a torn commit or file damage and the load is rejected. The manifest
+//! epoch is the snapshot epoch: shadow (`.tmp`) files written before the
+//! manifest commit are discardable uncommitted state reclaimed at startup by
+//! the shadow cleanup. Only groups holding uncheckpointed writes are written;
+//! clean groups are skipped, so flushed bytes stay proportional to dirty
+//! groups rather than the table size. Directories holding the old single-file
+//! layout (`out_csr.bin` without a manifest), version 1 `meta.bin` without a
+//! commit tail, version 2 `meta.bin` with global timestamps, the legacy
+//! global `properties.bin`, or a pre-version-4 manifest are rejected
+//! explicitly, never converted.
 
 use super::core::EdgeStore;
 use super::persistence;
 use crate::edge::node_group::{decode_append_ops, encode_append_ops, EdgeCheckpointKind, TableShardManifest};
 use crate::edge::CsrBase;
 use graphdb_core::{StorageError, StorageResult};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Manifest file inside an edge-table directory.
@@ -43,6 +53,8 @@ pub const GROUPS_MANIFEST_FILE: &str = "groups_manifest.bin";
 /// Legacy single-file topology payloads, rejected when no manifest exists.
 pub const LEGACY_OUT_CSR_FILE: &str = "out_csr.bin";
 pub const LEGACY_IN_CSR_FILE: &str = "in_csr.bin";
+/// Legacy global property file, rejected when present.
+pub const LEGACY_PROPERTIES_FILE: &str = "properties.bin";
 
 pub fn out_group_file(group: usize) -> String {
     format!("out_g{}.bin", group)
@@ -58,6 +70,14 @@ pub fn out_append_file(group: usize) -> String {
 
 pub fn in_append_file(group: usize) -> String {
     format!("in_g{}.append.bin", group)
+}
+
+pub fn ts_group_file(group: u32) -> String {
+    format!("ts_g{}.bin", group)
+}
+
+pub fn props_group_file(group: u32) -> String {
+    format!("props_g{}.bin", group)
 }
 
 fn out_group_path(dir: &Path, group: usize) -> PathBuf {
@@ -76,8 +96,27 @@ fn in_append_path(dir: &Path, group: usize) -> PathBuf {
     dir.join(in_append_file(group))
 }
 
+fn ts_group_path(dir: &Path, group: u32) -> PathBuf {
+    dir.join(ts_group_file(group))
+}
+
+fn props_group_path(dir: &Path, group: u32) -> PathBuf {
+    dir.join(props_group_file(group))
+}
+
 fn manifest_path(dir: &Path) -> PathBuf {
     dir.join(GROUPS_MANIFEST_FILE)
+}
+
+/// Parse `"<prefix>{gid}.bin"` or `"<prefix>{gid}.append.bin"` into the gid.
+/// Returns `None` for foreign files so orphan cleanup never deletes them.
+fn parse_group_file(name: &str, prefix: &str) -> Option<u32> {
+    let rest = name.strip_prefix(prefix)?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<u32>().ok()
 }
 
 /// File size for checkpoint byte accounting. Metrics must never fail a
@@ -107,21 +146,23 @@ impl EdgeStore {
     }
 
     /// Flush dirty state incrementally: topology group bases or append
-    /// sidecars plus property columns first, metadata carrying the manifest
-    /// tail second, manifest last.
+    /// sidecars, per-group timestamp shards and per-group property shards
+    /// first, metadata carrying the manifest tail second, manifest last.
     ///
     /// Each group picks its own mode: groups carrying delete dirt rewrite
     /// the base and absorb (then delete) their sidecar; insert-only groups
     /// persist the cumulative append sidecar alone, so small writes never
     /// trigger a whole-group rewrite and flushed bytes stay proportional to
-    /// the dirty regions. In-memory append row indexes are dropped after the
-    /// flush that persists them; the on-disk sidecar stays cumulative until
-    /// a base merge absorbs it. Groups and properties land in shadow files
-    /// before the metadata commit so a crash before the manifest publish
-    /// leaves only discardable `.tmp` state plus the previous consistent
-    /// snapshot. Property statistics are refreshed before the property
-    /// payload is serialized so they follow the checkpoint. The checkpoint
-    /// kind is Rebalance when any group merged a base, AppendOnly otherwise.
+    /// the dirty regions. Timestamp and property shards fall with the same
+    /// dirt as their owner group, so small writes rewrite only dirty owners
+    /// rather than global files. In-memory append row indexes are dropped
+    /// after the flush that persists them; the on-disk sidecar stays
+    /// cumulative until a base merge absorbs it. Groups and shards land in
+    /// shadow files before the metadata commit so a crash before the manifest
+    /// publish leaves only discardable `.tmp` state plus the previous
+    /// consistent snapshot. Property statistics are refreshed before shards
+    /// are serialized so they follow the checkpoint. The checkpoint kind is
+    /// Rebalance when any group merged a base, AppendOnly otherwise.
     /// Flushed bytes, elapsed time and authority tombstone totals are
     /// reported to the shared metrics registry when one is set. Returns the
     /// checkpoint kind for engine-side logging.
@@ -137,13 +178,25 @@ impl EdgeStore {
 
         let manifest = TableShardManifest {
             group_bits: self.config.node_group_bits,
-            out_groups: self.out_csr.group_count() as u32,
-            in_groups: self.in_csr.group_count() as u32,
+            out_groups: self
+                .out_csr
+                .existing_group_ids()
+                .into_iter()
+                .map(|gid| gid as u32)
+                .collect(),
+            in_groups: self
+                .in_csr
+                .existing_group_ids()
+                .into_iter()
+                .map(|gid| gid as u32)
+                .collect(),
         };
         let dirty_groups =
             self.out_csr.dirty_group_ids().len() + self.in_csr.dirty_group_ids().len();
 
         let mut flushed_bytes = 0u64;
+        flushed_bytes += self.flush_timestamp_shards(dir, page_size, level)?;
+        flushed_bytes += self.flush_property_shards(dir, page_size, level)?;
         let (out_bytes, out_rebalanced) = self.flush_group_set(
             dir,
             page_size,
@@ -169,7 +222,6 @@ impl EdgeStore {
         } else {
             EdgeCheckpointKind::AppendOnly
         };
-        flushed_bytes += self.flush_properties_file(dir, page_size, level)?;
         flushed_bytes += self.flush_metadata_file(dir, page_size, level, &manifest)?;
         self.write_manifest(dir, &manifest)?;
         flushed_bytes += file_bytes(&manifest_path(dir));
@@ -209,14 +261,11 @@ impl EdgeStore {
         level: i32,
         manifest: &TableShardManifest,
     ) -> StorageResult<u64> {
-        // Meta stays a full rewrite: edge timestamps are a single global map
-        // with no column sharding yet, so any timestamp change needs the whole
-        // table. The header and timestamp sections are serialized separately
-        // inside `flush_metadata` as the future per-group split point; this
-        // revision keeps both sections in one file. The manifest commit tail
-        // is appended so metadata and manifest share one atomic unit: a lone
-        // new metadata file without its manifest commit is a torn write.
-        // Sharded or delta meta is future work once timestamps split by group.
+        // Header-only rewrite: timestamps live in per-group shards falling
+        // with the same dirt as their owner, so any timestamp change needs
+        // only dirty owners' shards. The manifest commit tail is appended so
+        // metadata and manifest share one atomic unit: a lone new metadata
+        // file without its manifest commit is a torn write.
         let mut meta_payload = Vec::new();
         crate::persistence::write_header_to(
             &mut meta_payload,
@@ -240,26 +289,199 @@ impl EdgeStore {
         Ok(file_bytes(&path))
     }
 
-    fn flush_properties_file(
+    /// Owner groups holding uncheckpointed timestamp writes: the owner
+    /// direction's topology dirt. Timestamps change only on insert and
+    /// delete, both of which dirty the owner topology group.
+    fn timestamp_dirty_owners(&self) -> Vec<u32> {
+        if self.schema.oe_strategy != crate::edge::EdgeStrategy::None {
+            self.out_csr
+                .dirty_group_ids()
+                .into_iter()
+                .map(|gid| gid as u32)
+                .collect()
+        } else if self.schema.ie_strategy != crate::edge::EdgeStrategy::None {
+            self.in_csr
+                .dirty_group_ids()
+                .into_iter()
+                .map(|gid| gid as u32)
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Owner groups whose timestamp or property shards must be rewritten.
+    /// Topology dirt always covers inserts and deletes; sampled column
+    /// traces cover property-only writes. When the table flag reports
+    /// property dirt but no group trace exists (sampled miss), every owner
+    /// rewrites so correctness never depends on the sample.
+    fn property_dirty_owners(&self) -> Vec<u32> {
+        let (dirty, sampled, existing) =
+            if self.schema.oe_strategy != crate::edge::EdgeStrategy::None {
+                (
+                    self.out_csr.dirty_group_ids(),
+                    self.out_csr.sampled_column_dirty_group_ids(),
+                    self.out_csr.existing_group_ids(),
+                )
+            } else if self.schema.ie_strategy != crate::edge::EdgeStrategy::None {
+                (
+                    self.in_csr.dirty_group_ids(),
+                    self.in_csr.sampled_column_dirty_group_ids(),
+                    self.in_csr.existing_group_ids(),
+                )
+            } else {
+                return Vec::new();
+            };
+        let mut set: HashSet<u32> = HashSet::new();
+        for gid in dirty.into_iter().chain(sampled.into_iter()) {
+            set.insert(gid as u32);
+        }
+        if set.is_empty() && self.properties_dirty {
+            for gid in existing {
+                set.insert(gid as u32);
+            }
+        }
+        let mut out: Vec<u32> = set.into_iter().collect();
+        out.sort_unstable();
+        out
+    }
+
+    /// Group authority entries by owning shard, falling back to the smallest
+    /// existing owner when the recorded owner is gone (reclaimed groups whose
+    /// tombstone survives). Missing owners read as empty shards.
+    fn grouped_timestamps(&self) -> HashMap<u32, Vec<(graphdb_core::types::EdgeId, crate::edge::edge_table::mvcc::EdgeTimestamps)>> {
+        let owners = self.owner_group_ids();
+        let fallback = owners.first().copied();
+        let live: HashSet<u32> = owners.into_iter().collect();
+        let mut grouped: HashMap<u32, Vec<(graphdb_core::types::EdgeId, crate::edge::edge_table::mvcc::EdgeTimestamps)>> =
+            HashMap::new();
+        for (edge_id, ts) in self.mvcc.edge_timestamps.iter() {
+            let owner = self.edge_owner.get(edge_id).copied().unwrap_or(0);
+            let gid = if live.contains(&owner) {
+                owner
+            } else {
+                fallback.unwrap_or(0)
+            };
+            grouped.entry(gid).or_default().push((*edge_id, *ts));
+        }
+        for entries in grouped.values_mut() {
+            entries.sort_by_key(|(edge_id, _)| edge_id.0);
+        }
+        grouped
+    }
+
+    fn flush_timestamp_shards(
+        &self,
+        dir: &Path,
+        page_size: usize,
+        level: i32,
+    ) -> StorageResult<u64> {
+        let dirty = self.timestamp_dirty_owners();
+        if dirty.is_empty() {
+            return Ok(0);
+        }
+        let grouped = self.grouped_timestamps();
+        let mut written = 0u64;
+        for gid in dirty {
+            let entries = grouped.get(&gid).cloned().unwrap_or_default();
+            let path = ts_group_path(dir, gid);
+            if entries.is_empty() {
+                if path.exists() {
+                    let _ = std::fs::remove_file(&path);
+                }
+                continue;
+            }
+            let mut payload = Vec::new();
+            persistence::serialize_timestamp_shard(
+                &entries,
+                crate::persistence::section::EDGE_TS_SHARD,
+                &mut payload,
+            )?;
+            persistence::write_pages_to_file(
+                &path,
+                &payload,
+                page_size,
+                level,
+                entries.len() as u32,
+            )?;
+            written += file_bytes(&path);
+        }
+        Ok(written)
+    }
+
+    fn flush_property_shards(
         &mut self,
         dir: &Path,
         page_size: usize,
         level: i32,
     ) -> StorageResult<u64> {
-        let path = dir.join("properties.bin");
-        if !self.properties_dirty && path.exists() {
+        use crate::edge::property_schema::PropertySchema;
+        if !self.properties_dirty {
             return Ok(0);
         }
-        // Column-level follow-up: only dirty columns recompute stats, clean
-        // columns keep persisted values. The file itself is still a full
-        // rewrite; per-column files are future work once properties split.
+        let dirty = self.property_dirty_owners();
+        if dirty.is_empty() {
+            return Ok(0);
+        }
         self.properties.refresh_column_stats();
-        let mut props_payload = Vec::new();
-        persistence::serialize_csr_properties(&self.properties, &mut props_payload)?;
-        let edge_count = self.properties.row_count() as u32;
-        persistence::write_pages_to_file(&path, &props_payload, page_size, level, edge_count)?;
+        let owners = self.owner_group_ids();
+        let fallback = owners.first().copied();
+        let live: HashSet<u32> = owners.into_iter().collect();
+        let mut by_owner: HashMap<u32, Vec<graphdb_core::types::EdgeId>> = HashMap::new();
+        for edge_id in self.properties.edge_ids() {
+            let owner = self.edge_owner.get(&edge_id).copied().unwrap_or(0);
+            let gid = if live.contains(&owner) {
+                owner
+            } else {
+                fallback.unwrap_or(0)
+            };
+            by_owner.entry(gid).or_default().push(edge_id);
+        }
+        let schema: Vec<PropertySchema> =
+            self.properties.property_schema().to_vec();
+        let mut written = 0u64;
+        for gid in dirty {
+            let path = props_group_path(dir, gid);
+            let edges = by_owner.get(&gid).cloned().unwrap_or_default();
+            if edges.is_empty() {
+                if path.exists() {
+                    let _ = std::fs::remove_file(&path);
+                }
+                continue;
+            }
+            let mut shard = crate::edge::CsrWithProperties::new(schema.clone());
+            for edge_id in edges {
+                if let Some((create_ts, delete_ts, values)) =
+                    self.properties.export_row(edge_id)
+                {
+                    let _ = shard.import_row(edge_id, create_ts, delete_ts, &values);
+                }
+            }
+            for column in schema.iter().map(|s| s.name.clone()).collect::<Vec<_>>() {
+                if let Some(enc) = self.properties.column_encoding_type(&column) {
+                    if enc != crate::encoding::EncodingType::None {
+                        let _ = shard.apply_encoding_to_column(&column, enc, 255);
+                    }
+                }
+            }
+            shard.refresh_column_stats();
+            let mut payload = Vec::new();
+            persistence::serialize_property_shard(
+                &shard,
+                crate::persistence::section::EDGE_PROPS_SHARD,
+                &mut payload,
+            )?;
+            persistence::write_pages_to_file(
+                &path,
+                &payload,
+                page_size,
+                level,
+                shard.row_count() as u32,
+            )?;
+            written += file_bytes(&path);
+        }
         self.properties.clear_dirty_columns();
-        Ok(file_bytes(&path))
+        Ok(written)
     }
 
     /// Write one direction group by group, each in its own mode.
@@ -280,14 +502,14 @@ impl EdgeStore {
         append_section_id: u32,
         manifest: &TableShardManifest,
     ) -> StorageResult<(u64, bool)> {
-        let group_count = if outgoing {
-            self.out_csr.group_count()
+        let existing: Vec<usize> = if outgoing {
+            self.out_csr.existing_group_ids()
         } else {
-            self.in_csr.group_count()
+            self.in_csr.existing_group_ids()
         };
         let mut written = 0u64;
         let mut rebalanced = false;
-        for gid in 0..group_count {
+        for gid in existing {
             let base_path = if outgoing {
                 out_group_path(dir, gid)
             } else {
@@ -419,43 +641,82 @@ impl EdgeStore {
     }
 
     fn remove_orphan_group_files(&self, dir: &Path) {
-        let mut gid = self.out_csr.group_count();
-        loop {
-            let base = out_group_path(dir, gid);
-            let append = out_append_path(dir, gid);
-            let base_gone = !base.exists() || std::fs::remove_file(&base).is_err();
-            if append.exists() {
-                let _ = std::fs::remove_file(&append);
+        let out_existing: HashSet<u32> = self
+            .out_csr
+            .existing_group_ids()
+            .into_iter()
+            .map(|gid| gid as u32)
+            .collect();
+        let in_existing: HashSet<u32> = self
+            .in_csr
+            .existing_group_ids()
+            .into_iter()
+            .map(|gid| gid as u32)
+            .collect();
+        let owner_existing: HashSet<u32> = if self.schema.oe_strategy
+            != crate::edge::EdgeStrategy::None
+        {
+            out_existing.clone()
+        } else {
+            in_existing.clone()
+        };
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let path = entry.path();
+                if name.starts_with("out_g") && name.ends_with(".bin") && !name.contains(".append") {
+                    if let Some(gid) = parse_group_file(&name, "out_g") {
+                        if !out_existing.contains(&gid) {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                } else if name.starts_with("in_g") && name.ends_with(".bin") && !name.contains(".append") {
+                    if let Some(gid) = parse_group_file(&name, "in_g") {
+                        if !in_existing.contains(&gid) {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                } else if name.starts_with("out_g") && name.contains(".append") {
+                    if let Some(gid) = parse_group_file(&name, "out_g") {
+                        if !out_existing.contains(&gid) {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                } else if name.starts_with("in_g") && name.contains(".append") {
+                    if let Some(gid) = parse_group_file(&name, "in_g") {
+                        if !in_existing.contains(&gid) {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                } else if name.starts_with("ts_g") && name.ends_with(".bin") {
+                    if let Some(gid) = parse_group_file(&name, "ts_g") {
+                        if !owner_existing.contains(&gid) {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                } else if name.starts_with("props_g") && name.ends_with(".bin") {
+                    if let Some(gid) = parse_group_file(&name, "props_g") {
+                        if !owner_existing.contains(&gid) {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                } else if name == LEGACY_PROPERTIES_FILE {
+                    let _ = std::fs::remove_file(&path);
+                }
             }
-            if base_gone {
-                break;
-            }
-            gid += 1;
-        }
-        let mut gid = self.in_csr.group_count();
-        loop {
-            let base = in_group_path(dir, gid);
-            let append = in_append_path(dir, gid);
-            let base_gone = !base.exists() || std::fs::remove_file(&base).is_err();
-            if append.exists() {
-                let _ = std::fs::remove_file(&append);
-            }
-            if base_gone {
-                break;
-            }
-            gid += 1;
         }
     }
 
     /// Load an incremental checkpoint. Directories in the old single-file
-    /// layout, version 1 metadata without a commit tail, and pre-version-3
-    /// manifests are rejected explicitly, never converted.
+    /// layout, version 1 metadata without a commit tail, version 2 metadata
+    /// with global timestamps, the legacy global `properties.bin` and
+    /// pre-version-4 manifests are rejected explicitly, never converted.
     ///
     /// Group bases load first, then append sidecars replay on top; sidecar
-    /// version, manifest, section and trailing-byte mismatches fail the
-    /// load. Damage detection only: version, section, trailing-byte and
+    /// version, width, section and trailing-byte mismatches fail the load.
+    /// Damage detection only: version, section, trailing-byte and
     /// manifest-tail mismatches fail the load. Crash consistency comes from
-    /// the commit protocol (group bases, sidecars and properties before
+    /// the commit protocol (group bases, sidecars and per-group shards before
     /// metadata, manifest published last with its tail embedded in
     /// `meta.bin`), covered by the crash-injection tests below instead of by
     /// the orphan audit. The orphan audit stays as file-damage detection: a
@@ -475,6 +736,12 @@ impl EdgeStore {
                 manifest_file.display()
             )));
         }
+        if dir.join(LEGACY_PROPERTIES_FILE).exists() {
+            return Err(StorageError::deserialize_error(
+                "legacy global properties.bin without per-group shards is not supported"
+                    .to_string(),
+            ));
+        }
         let manifest_bytes = std::fs::read(&manifest_file)
             .map_err(|e| StorageError::io_error(format!("Failed to read group manifest: {}", e)))?;
         let manifest = TableShardManifest::decode(&manifest_bytes)?;
@@ -486,11 +753,13 @@ impl EdgeStore {
         }
 
         self.load_metadata_file(dir, &manifest)?;
-        self.out_csr.resize_groups(manifest.out_groups as usize)?;
-        self.in_csr.resize_groups(manifest.in_groups as usize)?;
-        self.load_group_set(dir, true, manifest.out_groups as usize, &manifest)?;
-        self.load_group_set(dir, false, manifest.in_groups as usize, &manifest)?;
-        self.load_properties_file(dir)?;
+        self.out_csr.set_groups(&manifest.out_groups)?;
+        self.in_csr.set_groups(&manifest.in_groups)?;
+        self.load_group_set(dir, true, &manifest.out_groups, &manifest)?;
+        self.load_group_set(dir, false, &manifest.in_groups, &manifest)?;
+        self.load_timestamp_shards(dir, &manifest)?;
+        self.load_property_shards(dir, &manifest)?;
+        self.rebuild_owner_map();
 
         if self.next_edge_id.0 == 0 {
             let max_id = self
@@ -562,6 +831,12 @@ impl EdgeStore {
                     .to_string(),
             ));
         }
+        if version == 2 {
+            return Err(StorageError::deserialize_error(
+                "legacy edge meta version 2 with global timestamps is not supported"
+                    .to_string(),
+            ));
+        }
         if version != persistence::EDGE_META_VERSION {
             return Err(StorageError::deserialize_error(format!(
                 "unsupported edge meta version: {}",
@@ -575,7 +850,7 @@ impl EdgeStore {
                 "edge meta missing manifest commit tail: torn write or legacy file".to_string(),
             )
         })?;
-        if embedded != *manifest {
+        if &embedded != manifest {
             return Err(StorageError::deserialize_error(format!(
                 "manifest commit tail mismatch: meta carries {:?}, manifest file holds {:?}",
                 embedded, manifest
@@ -588,7 +863,7 @@ impl EdgeStore {
         self.is_open = meta.is_open;
         self.set_schema(meta.schema);
         self.next_edge_id = meta.next_edge_id;
-        self.mvcc.edge_timestamps = meta.edge_timestamps;
+        self.mvcc.edge_timestamps.clear();
         self.mvcc.min_active_snapshot_ts = graphdb_core::types::Timestamp::MAX;
         self.mvcc.active_snapshots.clear();
         Ok(())
@@ -598,7 +873,7 @@ impl EdgeStore {
         &mut self,
         dir: &Path,
         outgoing: bool,
-        count: usize,
+        listed: &[u32],
         manifest: &TableShardManifest,
     ) -> StorageResult<()> {
         let append_section = if outgoing {
@@ -606,7 +881,8 @@ impl EdgeStore {
         } else {
             crate::persistence::section::EDGE_IN_APPEND
         };
-        for gid in 0..count {
+        for gid_u32 in listed {
+            let gid = *gid_u32 as usize;
             let path = if outgoing {
                 out_group_path(dir, gid)
             } else {
@@ -645,23 +921,133 @@ impl EdgeStore {
         Ok(())
     }
 
-    fn load_properties_file(&mut self, dir: &Path) -> StorageResult<()> {
+    fn owner_list_for_load(&self, manifest: &TableShardManifest) -> Vec<u32> {
+        if self.schema.oe_strategy != crate::edge::EdgeStrategy::None {
+            manifest.out_groups.clone()
+        } else {
+            manifest.in_groups.clone()
+        }
+    }
+
+    fn load_timestamp_shards(
+        &mut self,
+        dir: &Path,
+        manifest: &TableShardManifest,
+    ) -> StorageResult<()> {
+        use std::io::Read as _;
+        self.mvcc.edge_timestamps.clear();
+        let owners = self.owner_list_for_load(manifest);
+        let owner_set: HashSet<u32> = owners.iter().copied().collect();
+        for gid in &owners {
+            let path = ts_group_path(dir, *gid);
+            if !path.exists() {
+                continue;
+            }
+            let entries = persistence::load_timestamp_shard(
+                &path,
+                crate::persistence::section::EDGE_TS_SHARD,
+            )?;
+            for (edge_id, ts) in entries {
+                if let Some(prev) = self.mvcc.edge_timestamps.get(&edge_id) {
+                    if prev.create_ts != ts.create_ts || prev.delete_ts != ts.delete_ts {
+                        return Err(StorageError::deserialize_error(format!(
+                            "duplicate timestamp shard entry for edge {:?}",
+                            edge_id
+                        )));
+                    }
+                    continue;
+                }
+                self.mvcc.edge_timestamps.insert(edge_id, ts);
+                self.edge_owner.entry(edge_id).or_insert(*gid);
+            }
+        }
+        let _ = owner_set;
+        Ok(())
+    }
+
+    fn load_property_shards(
+        &mut self,
+        dir: &Path,
+        manifest: &TableShardManifest,
+    ) -> StorageResult<()> {
         use crate::edge::property_schema::PropertySchema;
-        let props_path = dir.join("properties.bin");
-        self.properties = {
-            let prop_schemas: Vec<PropertySchema> = self
-                .schema
-                .properties
-                .iter()
-                .enumerate()
-                .map(|(i, p)| {
-                    PropertySchema::new(p.name.clone(), i as i32, p.data_type.clone())
-                        .nullable(p.nullable)
-                        .with_default_value(p.default_value.clone())
-                })
-                .collect();
-            persistence::load_csr_properties(&props_path, prop_schemas)?
-        };
+        use std::io::Read as _;
+        let prop_schemas: Vec<PropertySchema> = self
+            .schema
+            .properties
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                PropertySchema::new(p.name.clone(), i as i32, p.data_type.clone())
+                    .nullable(p.nullable)
+                    .with_default_value(p.default_value.clone())
+            })
+            .collect();
+        self.properties = crate::edge::CsrWithProperties::new(prop_schemas.clone());
+        let owners = self.owner_list_for_load(manifest);
+        let mut encodings: HashMap<String, crate::encoding::EncodingType> = HashMap::new();
+        let mut prop_ids: HashMap<String, i32> = HashMap::new();
+        for gid in &owners {
+            let path = props_group_path(dir, *gid);
+            if !path.exists() {
+                continue;
+            }
+            let (raw, _) = persistence::read_pages_from_file(&path)?;
+            let mut cursor = &raw[..];
+            let mut header_buf = [0u8; crate::persistence::HEADER_SIZE];
+            cursor.read_exact(&mut header_buf)?;
+            {
+                let mut slice = &header_buf[..];
+                let (_version, sid) = crate::persistence::read_header(&mut slice)?;
+                if sid != crate::persistence::section::EDGE_PROPS_SHARD {
+                    return Err(StorageError::deserialize_error(format!(
+                        "unexpected section id in props shard: expected {:#06x}, got {:#06x}",
+                        crate::persistence::section::EDGE_PROPS_SHARD,
+                        sid
+                    )));
+                }
+            }
+            let mut len_bytes = [0u8; 8];
+            cursor.read_exact(&mut len_bytes)?;
+            let len = u64::from_le_bytes(len_bytes) as usize;
+            let mut data = vec![0u8; len];
+            cursor.read_exact(&mut data)?;
+            if !cursor.is_empty() {
+                return Err(StorageError::deserialize_error(
+                    "unexpected trailing data in props shard".to_string(),
+                ));
+            }
+            let mut shard = crate::edge::CsrWithProperties::new(prop_schemas.clone());
+            shard.load(&data)?;
+            for column in shard.property_schema().iter().map(|s| s.name.clone()).collect::<Vec<_>>() {
+                if let Some(enc) = shard.column_encoding_type(&column) {
+                    if enc != crate::encoding::EncodingType::None {
+                        encodings.entry(column.clone()).or_insert(enc);
+                    }
+                }
+                if let Some(id) = shard.prop_id_of(&column) {
+                    prop_ids.entry(column).or_insert(id);
+                }
+            }
+            for edge_id in shard.edge_ids().collect::<Vec<_>>() {
+                if let Some((create_ts, delete_ts, values)) = shard.export_row(edge_id) {
+                    let _ = self
+                        .properties
+                        .import_row(edge_id, create_ts, delete_ts, &values);
+                    self.edge_owner.entry(edge_id).or_insert(*gid);
+                }
+            }
+        }
+        for (column, enc) in encodings {
+            if self.properties.has_property(&column) {
+                let _ = self
+                    .properties
+                    .apply_encoding_to_column(&column, enc, 255);
+            }
+        }
+        self.properties.restore_prop_ids(&prop_ids);
+        self.properties.refresh_column_stats();
+        self.properties.clear_dirty_columns();
         Ok(())
     }
 }
@@ -785,7 +1171,8 @@ mod tests {
                 crate::compression::CompressionType::Zstd { level: 3 },
             )
             .expect("flush should succeed");
-        let props = dir.path().join("properties.bin");
+        let props = dir.path().join(props_group_file(0));
+        assert!(props.exists());
         let stamp = props.metadata().unwrap().modified().unwrap();
         table
             .flush(
@@ -1232,7 +1619,7 @@ mod tests {
         let manifest_path = dir.path().join(GROUPS_MANIFEST_FILE);
         let bytes = std::fs::read(&manifest_path).expect("manifest readable");
         let mut manifest = TableShardManifest::decode(&bytes).expect("manifest decodes");
-        manifest.out_groups += 10;
+        manifest.out_groups.push(9999);
         crate::compression::write_shadow_file(&manifest_path, &manifest.encode())
             .expect("torn manifest writable");
 
@@ -1554,7 +1941,7 @@ mod tests {
     }
 
     #[test]
-    fn pre_v3_manifest_is_rejected() {
+    fn pre_v4_manifest_is_rejected() {
         let mut table = make_table();
         table
             .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
@@ -1566,8 +1953,8 @@ mod tests {
                 crate::compression::CompressionType::Zstd { level: 3 },
             )
             .expect("flush should succeed");
-        // Hand-craft a version 2 manifest: same body, old version.
-        let mut legacy = 2u32.to_le_bytes().to_vec();
+        // Hand-craft a version 3 manifest: same body, old version.
+        let mut legacy = 3u32.to_le_bytes().to_vec();
         let current = std::fs::read(dir.path().join(GROUPS_MANIFEST_FILE))
             .expect("manifest readable");
         legacy.extend_from_slice(&current[4..]);
@@ -1577,7 +1964,206 @@ mod tests {
         let mut loaded = make_table();
         let err = loaded
             .load(dir.path())
-            .expect_err("pre-v3 manifest must be rejected");
+            .expect_err("pre-v4 manifest must be rejected");
         assert!(err.to_string().contains("unsupported group manifest version"));
+    }
+
+    #[test]
+    fn legacy_global_properties_file_is_rejected() {
+        let mut table = make_table();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+        std::fs::write(dir.path().join(LEGACY_PROPERTIES_FILE), b"legacy")
+            .expect("legacy props writable");
+        let mut loaded = make_table();
+        let err = loaded
+            .load(dir.path())
+            .expect_err("legacy properties must be rejected");
+        assert!(err.to_string().contains("legacy global properties"));
+    }
+
+    #[test]
+    fn legacy_meta_v2_is_rejected() {
+        let mut table = make_table();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+        let meta_path = dir.path().join("meta.bin");
+        let (mut payload, _) =
+            persistence::read_pages_from_file(&meta_path).expect("meta readable");
+        let header_len = crate::persistence::HEADER_SIZE;
+        payload[header_len..header_len + 4].copy_from_slice(&2u32.to_le_bytes());
+        persistence::write_pages_to_file(
+            &meta_path,
+            &payload,
+            crate::compression::DEFAULT_PAGE_SIZE,
+            3,
+            1,
+        )
+        .expect("legacy meta writable");
+        let mut loaded = make_table();
+        let err = loaded
+            .load(dir.path())
+            .expect_err("legacy meta v2 must be rejected");
+        assert!(err.to_string().contains("version 2"));
+    }
+
+    #[test]
+    fn sparse_endpoints_produce_no_hole_files() {
+        let mut table = make_table();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        table.insert_edge(9000, 9001, 0, &[], 100).unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+        assert!(dir.path().join(out_group_file(0)).exists());
+        assert!(dir.path().join(out_group_file(2)).exists());
+        assert!(!dir.path().join(out_group_file(1)).exists());
+        assert!(!dir.path().join(ts_group_file(1)).exists());
+        assert!(!dir.path().join(props_group_file(1)).exists());
+        assert!(dir.path().join(ts_group_file(0)).exists());
+        assert!(dir.path().join(ts_group_file(2)).exists());
+        assert!(dir.path().join(props_group_file(0)).exists());
+        assert!(dir.path().join(props_group_file(2)).exists());
+
+        let mut loaded = make_table();
+        loaded.load(dir.path()).expect("load should succeed");
+        assert!(loaded.has_edge(0, 1, 0, 200));
+        assert!(loaded.has_edge(9000, 9001, 0, 200));
+        assert!(loaded.out_edges(5000, 200).is_empty());
+        assert_eq!(loaded.edge_count(), 2);
+    }
+
+    #[test]
+    fn small_timestamp_write_stays_proportional_to_dirty_owners() {
+        let mut table = make_table();
+        for i in 0..100u32 {
+            table
+                .insert_edge(i, i + 1000, 0, &[], 100)
+                .unwrap();
+        }
+        for i in 5000..5100u32 {
+            table.insert_edge(i, i + 1000, 0, &[], 100).unwrap();
+        }
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("baseline flush should succeed");
+        let baseline_ts: u64 = dir
+            .path()
+            .read_dir()
+            .expect("read dir")
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("ts_g")
+            })
+            .map(|entry| entry.metadata().map(|meta| meta.len()).unwrap_or(0))
+            .sum();
+        assert!(baseline_ts > 0);
+
+        table.insert_edge(0, 2001, 0, &[], 110).unwrap();
+        table.insert_edge(1, 2002, 0, &[], 110).unwrap();
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("small flush should succeed");
+        let small_ts = std::fs::metadata(dir.path().join(ts_group_file(0)))
+            .expect("dirty ts shard readable")
+            .len();
+        assert!(
+            (small_ts as f64) < (baseline_ts as f64),
+            "dirty ts shard {} must stay below baseline total {}",
+            small_ts,
+            baseline_ts
+        );
+        let mut loaded = make_table();
+        loaded.load(dir.path()).expect("load should succeed");
+        assert!(loaded.has_edge(0, 2001, 0, 200));
+        assert_eq!(
+            loaded.mvcc.creation_ts_of(graphdb_core::types::EdgeId(200)),
+            Some(110)
+        );
+    }
+
+    #[test]
+    fn reshard_roundtrip_preserves_snapshot() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        table.insert_edge(5000, 6000, 0, &[], 100).unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("baseline flush should succeed");
+        let stats = table.reshard(9).expect("reshard should succeed");
+        assert_eq!(stats.old_bits, 12);
+        assert_eq!(stats.new_bits, 9);
+        assert_eq!(stats.edges, 2);
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("post-reshard flush should succeed");
+
+        let mut loaded =
+            EdgeStore::with_config(
+                crate::edge::EdgeSchema {
+                    label_id: 0,
+                    label_name: "knows".to_string(),
+                    src_label: 0,
+                    dst_label: 0,
+                    properties: vec![crate::types::StoragePropertyDef {
+                        name: "weight".to_string(),
+                        data_type: graphdb_core::types::DataType::Double,
+                        nullable: false,
+                        default_value: Some(Value::Double(0.0)),
+                    }],
+                    oe_strategy: crate::edge::EdgeStrategy::Multiple,
+                    ie_strategy: crate::edge::EdgeStrategy::Multiple,
+                    schema_version: 1,
+                },
+                EdgeTableConfig {
+                    node_group_bits: 9,
+                    ..EdgeTableConfig::default()
+                },
+            )
+            .expect("table builds");
+        loaded.load(dir.path()).expect("load should succeed");
+        assert!(loaded.has_edge(0, 1, 0, 200));
+        assert!(loaded.has_edge(5000, 6000, 0, 200));
+        let record = loaded.get_edge(0, 1, 0, 200).expect("edge survives");
+        assert!(record
+            .properties
+            .iter()
+            .any(|(k, v)| k == "weight" && *v == Value::Double(1.0)));
+        assert_eq!(loaded.edge_count(), 2);
     }
 }

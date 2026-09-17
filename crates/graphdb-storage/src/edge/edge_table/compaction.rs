@@ -24,7 +24,7 @@ impl EdgeStore {
     /// A fragmented clean group still triggers, so a dirty group cannot
     /// drag clean groups into the rebuild set.
     pub fn has_fragmented_group(&self, threshold: f32) -> bool {
-        for gid in 0..self.out_csr.group_count() {
+        for gid in self.out_csr.existing_group_ids() {
             if self
                 .out_csr
                 .group_variant(gid)
@@ -33,7 +33,7 @@ impl EdgeStore {
                 return true;
             }
         }
-        for gid in 0..self.in_csr.group_count() {
+        for gid in self.in_csr.existing_group_ids() {
             if self
                 .in_csr
                 .group_variant(gid)
@@ -56,7 +56,7 @@ impl EdgeStore {
     ) -> usize {
         let cutoff = watermarks.safe_gc_timestamp_with_margin(margin);
         let mut removed_edges = std::collections::HashSet::new();
-        for gid in 0..self.out_csr.group_count() {
+        for gid in self.out_csr.existing_group_ids() {
             self.out_csr.compact_group_with_reporting(
                 gid,
                 cutoff,
@@ -67,7 +67,7 @@ impl EdgeStore {
                 },
             );
         }
-        for gid in 0..self.in_csr.group_count() {
+        for gid in self.in_csr.existing_group_ids() {
             self.in_csr.compact_group_with_reporting(
                 gid,
                 cutoff,
@@ -91,18 +91,22 @@ impl EdgeStore {
         if bound == Timestamp::MAX || max_vertices == 0 {
             return 0;
         }
-        let group_count = self.out_csr.group_count().max(self.in_csr.group_count());
+        let mut gids: Vec<usize> = self.out_csr.existing_group_ids();
+        for gid in self.in_csr.existing_group_ids() {
+            if !gids.contains(&gid) {
+                gids.push(gid);
+            }
+        }
+        gids.sort_unstable();
         let group_bits = self.out_csr.group_bits();
         let mut removed_edges = std::collections::HashSet::new();
         let mut visited = 0usize;
-        for gid in 0..group_count {
+        for gid in gids {
             if visited >= max_vertices {
                 break;
             }
-            let out_scan =
-                gid < self.out_csr.group_count() && self.out_csr.group_needs_reclaim_scan(gid);
-            let in_scan =
-                gid < self.in_csr.group_count() && self.in_csr.group_needs_reclaim_scan(gid);
+            let out_scan = self.out_csr.group_needs_reclaim_scan(gid);
+            let in_scan = self.in_csr.group_needs_reclaim_scan(gid);
             if !out_scan && !in_scan {
                 continue;
             }
@@ -116,19 +120,19 @@ impl EdgeStore {
                     break;
                 }
                 let vid = base.saturating_add(local as u32);
-                if out_scan && gid < self.out_csr.group_count() {
+                if out_scan {
                     let (_, dead, _) = self.out_csr.vertex_census(vid);
                     any_dead |= dead > 0;
                 }
-                if in_scan && gid < self.in_csr.group_count() {
+                if in_scan {
                     let (_, dead, _) = self.in_csr.vertex_census(vid);
                     any_dead |= dead > 0;
                 }
                 let mut needs = false;
-                if out_scan && gid < self.out_csr.group_count() {
+                if out_scan {
                     needs |= self.out_csr.vertex_needs_compact(vid, bound);
                 }
-                if !needs && in_scan && gid < self.in_csr.group_count() {
+                if !needs && in_scan {
                     needs |= self.in_csr.vertex_needs_compact(vid, bound);
                 }
                 if !needs {
@@ -199,10 +203,10 @@ impl EdgeStore {
         // scopes trigger on per-row reclaimable counts alone.
         let group_merge_allowed = |ratio: f32| ratio >= threshold;
         for outgoing in [true, false] {
-            let group_count = if outgoing {
-                self.out_csr.group_count()
+            let existing: Vec<usize> = if outgoing {
+                self.out_csr.existing_group_ids()
             } else {
-                self.in_csr.group_count()
+                self.in_csr.existing_group_ids()
             };
             let group_size = if outgoing {
                 self.out_csr.group_size()
@@ -210,7 +214,7 @@ impl EdgeStore {
                 self.in_csr.group_size()
             };
             let regions = crate::edge::node_group::regions_per_group(group_size);
-            for gid in 0..group_count {
+            for gid in existing {
                 for rid in 0..regions {
                     let shards = if outgoing {
                         &self.out_csr

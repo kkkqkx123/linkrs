@@ -2,12 +2,13 @@
 //!
 //! Organization:
 //! - `core`: EdgeStore operations (CRUD, properties, queries, persistence)
-//! - `checkpoint`: incremental per-group checkpoint (manifest, group files)
+//! - `checkpoint`: incremental per-group checkpoint (manifest, group files,
+//!   timestamp and property shards)
 //! - `compaction`: per-group CSR compaction and property cleanup
 //! - `iterator`: sharded scan iterator
 //! - `mvcc`: centralized timestamps, tombstones, and GC watermarks
-//! - `persistence`: version-2 serialization (flush/load)
-//! - `remap`: vertex ID remapping across node groups
+//! - `persistence`: version-4 serialization (flush/load)
+//! - `remap`: vertex ID remapping plus offline group-width resharding
 //! - `schema_add_column`: staged add-column state machine (prepare/fill/publish/abort)
 //! - `schema_drop_column`: staged drop-column state machine (prepare/publish/abort)
 //! - `stats`: tombstone and deletion statistics

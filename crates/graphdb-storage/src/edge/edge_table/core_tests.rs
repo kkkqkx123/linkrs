@@ -242,14 +242,17 @@ fn test_sparse_high_ids_keep_csr_rows_proportional() {
     table.insert_edge(50_000, 100_001, 0, &[], 100).unwrap();
     table.insert_edge(100_002, 0, 0, &[], 100).unwrap();
 
-    let max_id = 100_002usize;
+    // Sparse groups materialize only existing owners: capacity stays
+    // proportional to dirty groups rather than the endpoint span, holes read
+    // as empty and never produce state.
+    assert_eq!(table.out_csr.existing_group_ids().len(), 3);
+    assert_eq!(table.in_csr.existing_group_ids().len(), 2);
     let out_rows = table.out_csr.vertex_capacity();
     let in_rows = table.in_csr.vertex_capacity();
-
-    assert!(out_rows <= ((max_id + 1) as f64 * 1.25).ceil() as usize);
-    assert!(in_rows <= ((max_id + 1) as f64 * 1.25).ceil() as usize);
-    assert!(out_rows > max_id);
-    assert!(in_rows > max_id);
+    assert!(out_rows < 100_002);
+    assert!(in_rows < 100_002);
+    assert!(table.out_edges(1, 200).is_empty());
+    assert!(table.out_edges(60_000, 200).is_empty());
     assert!(table.out_csr.wasted_bytes_estimate() < 64 * 64);
     assert!(table.in_csr.wasted_bytes_estimate() < 64 * 64);
 }

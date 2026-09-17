@@ -12,7 +12,20 @@
 //! reclaim passes decide per region, so unchanged regions are skipped.
 //! Whole-group and whole-table ratios stay observability only.
 //!
-//! Properties and visibility stay global by edge id and are not sharded.
+//! Groups are sparse: only existing groups are materialized, the manifest
+//! records existing group ids rather than a contiguous count, missing groups
+//! read as empty and writes create them on demand, and no files are written
+//! for missing groups. Endpoints are expected dense; sparse large endpoints
+//! must be densified offline via vertex remapping before bulk load, otherwise
+//! the group span stays wide while only existing groups consume memory and
+//! files. The address width is locked at table creation; the only adjustment
+//! outlet is the offline reshard tool, there is no online width-change branch.
+//!
+//! Timestamps and properties are sharded on disk by owner group and fall with
+//! the same dirt as their group: small writes rewrite only dirty groups'
+//! timestamp and property shards, never the whole table. The in-memory
+//! visibility authority stays global by edge id; sharding changes only the
+//! flush unit.
 //!
 //! Each group additionally holds a committed append log: the write-through
 //! delta (inserts plus tombstone markers) since the last base rewrite.
@@ -22,6 +35,7 @@
 
 use graphdb_core::types::{EdgeId, EdgeStrategy, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
+use std::collections::BTreeMap;
 
 use super::csr_variant::CsrIterator;
 use super::mutable_csr::VertexEdgesIter;
@@ -38,15 +52,18 @@ pub const REGION_MERGE_MIN_DENSITY: f32 = 0.4;
 /// Group density at or above which a multi-region dirty span merges at
 /// group scope. Below it merges stay region-scoped.
 pub const GROUP_MERGE_MIN_DENSITY: f32 = 0.65;
-/// Container serialization version for a sharded direction. Version 2
-/// carries per-region dirt plus the append-log sidecar contract; version 1
-/// payloads are rejected, never converted.
-pub const SHARD_SET_FORMAT_VERSION: u32 = 2;
-/// Manifest version for the per-table group layout file. Version 3 admits
-/// per-group append sidecars; older manifests are rejected, never converted.
-pub const GROUP_MANIFEST_VERSION: u32 = 3;
-/// Wire version of one append-log sidecar payload.
-pub(crate) const APPEND_LOG_FORMAT_VERSION: u32 = 1;
+/// Container serialization version for a sharded direction. Version 3
+/// carries sparse group ids plus per-region dirt and the append-log sidecar
+/// contract; version 1 and 2 payloads are rejected, never converted.
+pub const SHARD_SET_FORMAT_VERSION: u32 = 3;
+/// Manifest version for the per-table group layout file. Version 4 records
+/// existing group ids rather than contiguous counts and admits per-group
+/// timestamp and property shards; older manifests are rejected, never converted.
+pub const GROUP_MANIFEST_VERSION: u32 = 4;
+/// Wire version of one append-log sidecar payload. Version 2 carries only the
+/// address width so group-set growth never invalidates clean groups' sidecars;
+/// version 1 payloads are rejected, never converted.
+pub(crate) const APPEND_LOG_FORMAT_VERSION: u32 = 2;
 
 /// Group index for a global vertex id.
 pub fn group_id_for(vid: u32, group_bits: u32) -> usize {
@@ -172,8 +189,9 @@ impl ShardAppendLog {
     }
 }
 
-/// Encode one append-op sequence for a sidecar. Carries the active manifest
-/// so a sidecar from a torn wider commit is rejected on load.
+/// Encode one append-op sequence for a sidecar. Carries only the address
+/// width so group-set growth never invalidates clean groups' sidecars; a
+/// width mismatch still fails closed on load.
 pub(crate) fn encode_append_ops(
     manifest: &TableShardManifest,
     inserts: &[AppendInsert],
@@ -181,7 +199,7 @@ pub(crate) fn encode_append_ops(
 ) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&APPEND_LOG_FORMAT_VERSION.to_le_bytes());
-    out.extend_from_slice(&manifest.encode());
+    out.extend_from_slice(&manifest.group_bits.to_le_bytes());
     out.extend_from_slice(&(inserts.len() as u64).to_le_bytes());
     for insert in inserts {
         out.extend_from_slice(&insert.local.to_le_bytes());
@@ -200,7 +218,7 @@ pub(crate) fn encode_append_ops(
     out
 }
 
-/// Decode one append-op sequence. Fails closed on version, manifest,
+/// Decode one append-op sequence. Fails closed on version, address-width,
 /// section-size or trailing-byte mismatches.
 pub(crate) fn decode_append_ops(
     data: &[u8],
@@ -228,12 +246,15 @@ pub(crate) fn decode_append_ops(
             version
         )));
     }
-    let manifest_bytes = take(data, &mut cursor, 16)?;
-    let carried = TableShardManifest::decode(&manifest_bytes)?;
-    if carried != *manifest {
+    let carried_bits = u32::from_le_bytes(
+        take(data, &mut cursor, 4)?
+            .try_into()
+            .map_err(|_| StorageError::deserialize_error("append log width too short"))?,
+    );
+    if carried_bits != manifest.group_bits {
         return Err(StorageError::deserialize_error(format!(
-            "append log manifest mismatch: log carries {:?}, table holds {:?}",
-            carried, manifest
+            "append log width mismatch: log carries {}, table holds {}",
+            carried_bits, manifest.group_bits
         )));
     }
     let insert_count = u64::from_le_bytes(
@@ -352,31 +373,48 @@ pub struct NodeGroupStats {
 
 
 /// Per-table group layout shared by both directions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Version 4 records existing group ids rather than contiguous counts:
+/// sparse endpoints materialize only groups holding rows, missing groups
+/// read as empty and never produce files.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableShardManifest {
     pub group_bits: u32,
-    pub out_groups: u32,
-    pub in_groups: u32,
+    pub out_groups: Vec<u32>,
+    pub in_groups: Vec<u32>,
 }
 
 impl TableShardManifest {
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(16);
+        let mut out_groups = self.out_groups.clone();
+        out_groups.sort_unstable();
+        out_groups.dedup();
+        let mut in_groups = self.in_groups.clone();
+        in_groups.sort_unstable();
+        in_groups.dedup();
+        let mut out =
+            Vec::with_capacity(16 + (out_groups.len() + in_groups.len()) * 4);
         out.extend_from_slice(&GROUP_MANIFEST_VERSION.to_le_bytes());
         out.extend_from_slice(&self.group_bits.to_le_bytes());
-        out.extend_from_slice(&self.out_groups.to_le_bytes());
-        out.extend_from_slice(&self.in_groups.to_le_bytes());
+        out.extend_from_slice(&(out_groups.len() as u32).to_le_bytes());
+        for gid in &out_groups {
+            out.extend_from_slice(&gid.to_le_bytes());
+        }
+        out.extend_from_slice(&(in_groups.len() as u32).to_le_bytes());
+        for gid in &in_groups {
+            out.extend_from_slice(&gid.to_le_bytes());
+        }
         out
     }
 
     pub fn decode(data: &[u8]) -> StorageResult<Self> {
-        if data.len() != 16 {
+        let bad_slice = || StorageError::deserialize_error("group manifest slice too short");
+        if data.len() < 12 {
             return Err(StorageError::deserialize_error(format!(
-                "group manifest must be 16 bytes, got {}",
+                "group manifest too short: got {}",
                 data.len()
             )));
         }
-        let bad_slice = || StorageError::deserialize_error("group manifest slice too short");
         let version = u32::from_le_bytes(data[0..4].try_into().map_err(|_| bad_slice())?);
         if version != GROUP_MANIFEST_VERSION {
             return Err(StorageError::deserialize_error(format!(
@@ -386,8 +424,45 @@ impl TableShardManifest {
         }
         let group_bits = u32::from_le_bytes(data[4..8].try_into().map_err(|_| bad_slice())?);
         validate_group_bits(group_bits)?;
-        let out_groups = u32::from_le_bytes(data[8..12].try_into().map_err(|_| bad_slice())?);
-        let in_groups = u32::from_le_bytes(data[12..16].try_into().map_err(|_| bad_slice())?);
+        let mut cursor = 8usize;
+        let take_u32 = |data: &[u8], cursor: &mut usize| -> StorageResult<u32> {
+            if data.len() - *cursor < 4 {
+                return Err(StorageError::deserialize_error(
+                    "group manifest slice too short",
+                ));
+            }
+            let value =
+                u32::from_le_bytes(data[*cursor..*cursor + 4].try_into().map_err(|_| bad_slice())?);
+            *cursor += 4;
+            Ok(value)
+        };
+        let out_len = take_u32(data, &mut cursor)? as usize;
+        if data.len() - cursor < out_len * 4 + 4 {
+            return Err(StorageError::deserialize_error(format!(
+                "group manifest too short for {} out groups",
+                out_len
+            )));
+        }
+        let mut out_groups = Vec::with_capacity(out_len);
+        for _ in 0..out_len {
+            out_groups.push(take_u32(data, &mut cursor)?);
+        }
+        let in_len = take_u32(data, &mut cursor)? as usize;
+        if data.len() - cursor != in_len * 4 {
+            return Err(StorageError::deserialize_error(format!(
+                "group manifest trailing bytes: expected {} in groups, {} bytes remain",
+                in_len,
+                data.len() - cursor
+            )));
+        }
+        let mut in_groups = Vec::with_capacity(in_len);
+        for _ in 0..in_len {
+            in_groups.push(take_u32(data, &mut cursor)?);
+        }
+        out_groups.sort_unstable();
+        out_groups.dedup();
+        in_groups.sort_unstable();
+        in_groups.dedup();
         Ok(Self {
             group_bits,
             out_groups,
@@ -435,7 +510,7 @@ pub struct CsrShardSet {
     strategy: EdgeStrategy,
     group_bits: u32,
     overflow_chunk_edges: usize,
-    shards: Vec<Shard>,
+    shards: BTreeMap<usize, Shard>,
 }
 
 impl CsrShardSet {
@@ -454,16 +529,19 @@ impl CsrShardSet {
             strategy,
             group_bits,
             overflow_chunk_edges,
-            shards: Vec::new(),
+            shards: BTreeMap::new(),
         };
         if strategy != EdgeStrategy::None {
-            set.shards.push(Shard {
-                variant: set.fresh_variant()?,
-                dirty: GroupDirty::default(),
-                regions: vec![RegionDirty::default(); regions_per_group(set.group_size())],
-                append: ShardAppendLog::default(),
-                reclaim_hint: false,
-            });
+            set.shards.insert(
+                0,
+                Shard {
+                    variant: set.fresh_variant()?,
+                    dirty: GroupDirty::default(),
+                    regions: vec![RegionDirty::default(); regions_per_group(set.group_size())],
+                    append: ShardAppendLog::default(),
+                    reclaim_hint: false,
+                },
+            );
         }
         Ok(set)
     }
@@ -484,6 +562,19 @@ impl CsrShardSet {
         self.shards.len()
     }
 
+    /// Sorted existing group ids. Sparse holes are absent: they read as
+    /// empty, never consume memory and never produce files.
+    pub fn existing_group_ids(&self) -> Vec<usize> {
+        self.shards.keys().copied().collect()
+    }
+
+    /// One past the largest materialized group, or zero when empty. Only for
+    /// diagnostics; flush and reclaim paths iterate existing ids alone so a
+    /// wide sparse span never drags holes along.
+    pub fn group_span(&self) -> usize {
+        self.shards.keys().next_back().map_or(0, |max| max + 1)
+    }
+
     fn fresh_variant(&self) -> StorageResult<CsrVariant> {
         CsrVariant::from_strategy_with_overflow(
             self.strategy,
@@ -500,39 +591,66 @@ impl CsrShardSet {
             ));
         }
         let gid = group_id_for(vid, self.group_bits);
-        while self.shards.len() <= gid {
-            self.shards.push(Shard {
-                variant: self.fresh_variant()?,
-                dirty: GroupDirty::default(),
-                regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
-                append: ShardAppendLog::default(),
-                reclaim_hint: false,
-            });
+        if !self.shards.contains_key(&gid) {
+            self.shards.insert(
+                gid,
+                Shard {
+                    variant: self.fresh_variant()?,
+                    dirty: GroupDirty::default(),
+                    regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
+                    append: ShardAppendLog::default(),
+                    reclaim_hint: false,
+                },
+            );
         }
         Ok(gid)
+    }
+
+    /// Ensure one group exists without routing a vertex id. Used when loading
+    /// an explicit existing-group list and when orphan timestamp shards fall
+    /// back to group zero.
+    pub fn ensure_group_id(&mut self, gid: usize) -> StorageResult<()> {
+        if self.strategy == EdgeStrategy::None {
+            return Err(StorageError::invalid_operation(
+                "no edges stored for this edge type".to_string(),
+            ));
+        }
+        if !self.shards.contains_key(&gid) {
+            self.shards.insert(
+                gid,
+                Shard {
+                    variant: self.fresh_variant()?,
+                    dirty: GroupDirty::default(),
+                    regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
+                    append: ShardAppendLog::default(),
+                    reclaim_hint: false,
+                },
+            );
+        }
+        Ok(())
     }
 
     fn route(&self, vid: u32) -> Option<(usize, u32)> {
         let gid = group_id_for(vid, self.group_bits);
         self.shards
-            .get(gid)
+            .get(&gid)
             .map(|_| (gid, local_vid(vid, self.group_bits)))
     }
 
     /// Borrow one persisted group for checkpoint writes.
     pub fn group_variant(&self, gid: usize) -> Option<&CsrVariant> {
-        self.shards.get(gid).map(|shard| &shard.variant)
+        self.shards.get(&gid).map(|shard| &shard.variant)
     }
 
     /// Mutably borrow one group for checkpoint loads.
     pub fn group_variant_mut(&mut self, gid: usize) -> Option<&mut CsrVariant> {
-        self.shards.get_mut(gid).map(|shard| &mut shard.variant)
+        self.shards.get_mut(&gid).map(|shard| &mut shard.variant)
     }
 
     /// Dirt of one group; missing groups report clean.
     pub fn group_dirty(&self, gid: usize) -> GroupDirty {
         self.shards
-            .get(gid)
+            .get(&gid)
             .map(|shard| shard.dirty)
             .unwrap_or_default()
     }
@@ -541,8 +659,7 @@ impl CsrShardSet {
     pub fn dirty_group_ids(&self) -> Vec<usize> {
         self.shards
             .iter()
-            .enumerate()
-            .filter_map(|(gid, shard)| shard.dirty.is_dirty().then_some(gid))
+            .filter_map(|(gid, shard)| shard.dirty.is_dirty().then_some(*gid))
             .collect()
     }
 
@@ -554,14 +671,13 @@ impl CsrShardSet {
     pub fn sampled_column_dirty_group_ids(&self) -> Vec<usize> {
         self.shards
             .iter()
-            .enumerate()
-            .filter_map(|(gid, shard)| shard.dirty.is_column_dirty().then_some(gid))
+            .filter_map(|(gid, shard)| shard.dirty.is_column_dirty().then_some(*gid))
             .collect()
     }
 
     /// Checkpoint class for the current dirt without clearing it.
     pub fn checkpoint_kind(&self) -> EdgeCheckpointKind {
-        let rebalance = self.shards.iter().any(|shard| shard.dirty.deleted);
+        let rebalance = self.shards.values().any(|shard| shard.dirty.deleted);
         if rebalance {
             EdgeCheckpointKind::Rebalance
         } else {
@@ -578,7 +694,7 @@ impl CsrShardSet {
     pub fn mark_column_updated_for(&mut self, vid: u32) {
         let gid = group_id_for(vid, self.group_bits);
         let rid = region_id_for_local(local_vid(vid, self.group_bits));
-        if let Some(shard) = self.shards.get_mut(gid) {
+        if let Some(shard) = self.shards.get_mut(&gid) {
             shard.dirty.column_updated = true;
             if let Some(region) = shard.regions.get_mut(rid) {
                 region.column_updated = true;
@@ -587,7 +703,7 @@ impl CsrShardSet {
     }
 
     pub fn clear_group_dirty(&mut self, gid: usize) {
-        if let Some(shard) = self.shards.get_mut(gid) {
+        if let Some(shard) = self.shards.get_mut(&gid) {
             shard.dirty = GroupDirty::default();
             for region in shard.regions.iter_mut() {
                 *region = RegionDirty::default();
@@ -596,7 +712,7 @@ impl CsrShardSet {
     }
 
     pub fn clear_all_dirty(&mut self) {
-        for shard in &mut self.shards {
+        for shard in self.shards.values_mut() {
             shard.dirty = GroupDirty::default();
             for region in shard.regions.iter_mut() {
                 *region = RegionDirty::default();
@@ -607,7 +723,7 @@ impl CsrShardSet {
     /// Clear sampled column-only traces after a flush. Insert and delete
     /// dirt is owned by the per-group flush above and never touched here.
     pub fn clear_all_column_dirty(&mut self) {
-        for shard in &mut self.shards {
+        for shard in self.shards.values_mut() {
             shard.dirty.column_updated = false;
             for region in shard.regions.iter_mut() {
                 region.column_updated = false;
@@ -619,7 +735,7 @@ impl CsrShardSet {
     /// direction. Used after topology-wide rebuilds such as vertex remapping,
     /// where clean-group skipping would otherwise persist stale group files.
     pub fn mark_all_dirty(&mut self) {
-        for shard in &mut self.shards {
+        for shard in self.shards.values_mut() {
             shard.dirty = GroupDirty {
                 inserted: true,
                 deleted: true,
@@ -648,16 +764,53 @@ impl CsrShardSet {
             self.shards.clear();
             return Ok(());
         }
-        while self.shards.len() < count {
-            self.shards.push(Shard {
-                variant: self.fresh_variant()?,
-                dirty: GroupDirty::default(),
-                regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
-                append: ShardAppendLog::default(),
-                reclaim_hint: false,
-            });
+        let ids: Vec<u32> = (0..count).map(|gid| gid as u32).collect();
+        self.set_groups(&ids)
+    }
+
+    /// Materialize exactly the listed groups for loading a sparse manifest.
+    /// Missing groups stay absent: they read as empty and never produce
+    /// files. Unlisted materialized groups are dropped.
+    pub fn set_groups(&mut self, ids: &[u32]) -> StorageResult<()> {
+        if self.strategy == EdgeStrategy::None {
+            if !ids.is_empty() {
+                return Err(StorageError::deserialize_error(format!(
+                    "group list {:?} does not match no-edge strategy",
+                    ids
+                )));
+            }
+            self.shards.clear();
+            return Ok(());
         }
-        self.shards.truncate(count);
+        let mut wanted: Vec<usize> = ids.iter().map(|id| *id as usize).collect();
+        wanted.sort_unstable();
+        wanted.dedup();
+        let mut fresh = BTreeMap::new();
+        for gid in wanted {
+            fresh.insert(
+                gid,
+                Shard {
+                    variant: self.fresh_variant()?,
+                    dirty: GroupDirty::default(),
+                    regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
+                    append: ShardAppendLog::default(),
+                    reclaim_hint: false,
+                },
+            );
+        }
+        if fresh.is_empty() {
+            fresh.insert(
+                0,
+                Shard {
+                    variant: self.fresh_variant()?,
+                    dirty: GroupDirty::default(),
+                    regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
+                    append: ShardAppendLog::default(),
+                    reclaim_hint: false,
+                },
+            );
+        }
+        self.shards = fresh;
         self.clear_all_dirty();
         Ok(())
     }
@@ -666,7 +819,7 @@ impl CsrShardSet {
     /// stays set: loaded groups may hold tombstones the next reclaim pass
     /// must inspect once.
     pub fn load_group(&mut self, gid: usize, data: &[u8]) -> StorageResult<()> {
-        let shard = self.shards.get_mut(gid).ok_or_else(|| {
+        let shard = self.shards.get_mut(&gid).ok_or_else(|| {
             StorageError::deserialize_error(format!("group {} out of range on load", gid))
         })?;
         shard.variant.load(data)?;
@@ -679,21 +832,44 @@ impl CsrShardSet {
         Ok(())
     }
 
-    /// Drop trailing groups holding no physical entries. Tombstone-only tail
-    /// groups are retained so snapshot history before the cutoff survives.
-    /// Non-empty strategies keep at least one group so an empty table stays
-    /// addressable.
+    /// Drop groups holding no physical entries. Tombstone-bearing groups are
+    /// retained so snapshot history before the cutoff survives. Non-empty
+    /// strategies keep at least group zero so an empty table stays
+    /// addressable. Intermediate holes are never materialized, so only
+    /// existing empty groups are dropped and no empty files are produced.
     pub fn truncate_trailing_empty_groups(&mut self) {
-        let mut keep = 0usize;
-        for (gid, shard) in self.shards.iter().enumerate() {
-            if shard.variant.iter_all().next().is_some() {
-                keep = gid + 1;
+        let empty: Vec<usize> = self
+            .shards
+            .iter()
+            .filter_map(|(gid, shard)| {
+                shard
+                    .variant
+                    .iter_all()
+                    .next()
+                    .is_none()
+                    .then_some(*gid)
+            })
+            .collect();
+        for gid in empty {
+            if self.shards.len() <= 1 {
+                break;
+            }
+            self.shards.remove(&gid);
+        }
+        if self.strategy != EdgeStrategy::None && self.shards.is_empty() {
+            if let Ok(variant) = self.fresh_variant() {
+                self.shards.insert(
+                    0,
+                    Shard {
+                        variant,
+                        dirty: GroupDirty::default(),
+                        regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
+                        append: ShardAppendLog::default(),
+                        reclaim_hint: false,
+                    },
+                );
             }
         }
-        if self.strategy != EdgeStrategy::None {
-            keep = keep.max(1);
-        }
-        self.shards.truncate(keep);
     }
 
     /// Whether the primary row of one vertex holds `edge_id`.
@@ -701,7 +877,9 @@ impl CsrShardSet {
         let Some((gid, local)) = self.route(src_vid) else {
             return false;
         };
-        self.shards[gid].variant.primary_contains(local, edge_id)
+        self.shards
+            .get(&gid)
+            .is_some_and(|shard| shard.variant.primary_contains(local, edge_id))
     }
 
     /// Visit every physically stored entry of one vertex without allocating.
@@ -712,7 +890,9 @@ impl CsrShardSet {
         let Some((gid, local)) = self.route(src_vid) else {
             return;
         };
-        self.shards[gid].variant.visit_physical(local, f);
+        if let Some(shard) = self.shards.get(&gid) {
+            shard.variant.visit_physical(local, f);
+        }
     }
 
     /// Set the reclaim hint for the group owning `vid`.
@@ -721,7 +901,7 @@ impl CsrShardSet {
     /// delete side effects.
     pub fn mark_reclaim_hint_for(&mut self, vid: u32) {
         let gid = group_id_for(vid, self.group_bits);
-        if let Some(shard) = self.shards.get_mut(gid) {
+        if let Some(shard) = self.shards.get_mut(&gid) {
             shard.reclaim_hint = true;
         }
     }
@@ -729,20 +909,20 @@ impl CsrShardSet {
     /// Whether a group may hold tombstones worth a reclaim scan.
     pub fn group_needs_reclaim_scan(&self, gid: usize) -> bool {
         self.shards
-            .get(gid)
+            .get(&gid)
             .map(|shard| shard.reclaim_hint)
             .unwrap_or(false)
     }
 
     /// Clear the reclaim hint after a pass visited the whole group.
     pub fn clear_reclaim_hint(&mut self, gid: usize) {
-        if let Some(shard) = self.shards.get_mut(gid) {
+        if let Some(shard) = self.shards.get_mut(&gid) {
             shard.reclaim_hint = false;
         }
     }
 
     fn mark_region_insert(&mut self, gid: usize, local: u32) {
-        if let Some(shard) = self.shards.get_mut(gid) {
+        if let Some(shard) = self.shards.get_mut(&gid) {
             shard.dirty.inserted = true;
             let rid = region_id_for_local(local);
             if let Some(region) = shard.regions.get_mut(rid) {
@@ -752,7 +932,7 @@ impl CsrShardSet {
     }
 
     fn mark_region_delete(&mut self, gid: usize, local: u32) {
-        if let Some(shard) = self.shards.get_mut(gid) {
+        if let Some(shard) = self.shards.get_mut(&gid) {
             shard.dirty.deleted = true;
             let rid = region_id_for_local(local);
             if let Some(region) = shard.regions.get_mut(rid) {
@@ -764,7 +944,7 @@ impl CsrShardSet {
     /// Dirt of one leaf region; missing groups or regions report clean.
     pub fn region_dirty(&self, gid: usize, region: usize) -> RegionDirty {
         self.shards
-            .get(gid)
+            .get(&gid)
             .and_then(|shard| shard.regions.get(region))
             .copied()
             .unwrap_or_default()
@@ -773,7 +953,7 @@ impl CsrShardSet {
     /// Ids of dirty leaf regions inside one group.
     pub fn dirty_region_ids(&self, gid: usize) -> Vec<usize> {
         self.shards
-            .get(gid)
+            .get(&gid)
             .map(|shard| {
                 shard
                     .regions
@@ -797,7 +977,7 @@ impl CsrShardSet {
     }
 
     pub fn clear_region_dirty(&mut self, gid: usize, region: usize) {
-        if let Some(shard) = self.shards.get_mut(gid) {
+        if let Some(shard) = self.shards.get_mut(&gid) {
             if let Some(slot) = shard.regions.get_mut(region) {
                 *slot = RegionDirty::default();
             }
@@ -814,7 +994,7 @@ impl CsrShardSet {
     /// Physical census of one leaf region: `(live, dead, capacity)` summed
     /// over its rows in global-vid order.
     pub fn region_census(&self, gid: usize, region: usize) -> (usize, usize, usize) {
-        let Some(shard) = self.shards.get(gid) else {
+        let Some(shard) = self.shards.get(&gid) else {
             return (0, 0, 0);
         };
         let (start, end) = region_local_range(region, self.group_size());
@@ -845,7 +1025,7 @@ impl CsrShardSet {
         if cutoff == Timestamp::MAX {
             return 0;
         }
-        let Some(shard) = self.shards.get(gid) else {
+        let Some(shard) = self.shards.get(&gid) else {
             return 0;
         };
         let (start, end) = region_local_range(region, self.group_size());
@@ -903,7 +1083,7 @@ impl CsrShardSet {
     ) -> usize {
         let group_size = self.group_size();
         let (start, end) = region_local_range(region, group_size);
-        let Some(shard) = self.shards.get_mut(gid) else {
+        let Some(shard) = self.shards.get_mut(&gid) else {
             return 0;
         };
         let mut removed = 0usize;
@@ -927,7 +1107,7 @@ impl CsrShardSet {
 
     /// Record a committed insert in the group append log.
     pub(crate) fn record_append_insert(&mut self, gid: usize, local: u32, nbr: Nbr) {
-        if let Some(shard) = self.shards.get_mut(gid) {
+        if let Some(shard) = self.shards.get_mut(&gid) {
             shard.append.inserts.push(AppendInsert { local, nbr });
         }
     }
@@ -940,7 +1120,7 @@ impl CsrShardSet {
         edge_id: EdgeId,
         delete_ts: Timestamp,
     ) {
-        if let Some(shard) = self.shards.get_mut(gid) {
+        if let Some(shard) = self.shards.get_mut(&gid) {
             shard.append.deletes.push(AppendDelete {
                 local,
                 edge_id,
@@ -952,14 +1132,14 @@ impl CsrShardSet {
     /// Whether a group holds append-log deltas not yet merged into a base.
     pub fn group_has_append_log(&self, gid: usize) -> bool {
         self.shards
-            .get(gid)
+            .get(&gid)
             .is_some_and(|shard| !shard.append.is_empty())
     }
 
     /// Committed op count held in one group append log.
     pub fn group_append_op_count(&self, gid: usize) -> usize {
         self.shards
-            .get(gid)
+            .get(&gid)
             .map_or(0, |shard| shard.append.op_count())
     }
 
@@ -969,7 +1149,7 @@ impl CsrShardSet {
         gid: usize,
     ) -> (Vec<AppendInsert>, Vec<AppendDelete>) {
         self.shards
-            .get(gid)
+            .get(&gid)
             .map(|shard| (shard.append.inserts.clone(), shard.append.deletes.clone()))
             .unwrap_or_default()
     }
@@ -977,7 +1157,7 @@ impl CsrShardSet {
     /// Drop one group append log after its states merged into a base.
     /// The row index is memory only; base files plus later logs rebuild it.
     pub fn clear_group_append_log(&mut self, gid: usize) {
-        if let Some(shard) = self.shards.get_mut(gid) {
+        if let Some(shard) = self.shards.get_mut(&gid) {
             shard.append.clear();
         }
     }
@@ -985,7 +1165,7 @@ impl CsrShardSet {
     /// Drop every group append log, e.g. after a topology-wide rebuild
     /// whose base rewrite already carries all states.
     pub fn clear_all_append_logs(&mut self) {
-        for shard in &mut self.shards {
+        for shard in self.shards.values_mut() {
             shard.append.clear();
         }
     }
@@ -997,19 +1177,20 @@ impl CsrShardSet {
     }
 
     /// Encode one group append log for an append-only checkpoint. Carries
-    /// the active manifest so a sidecar from a torn wider commit is
-    /// rejected on load instead of replayed against the wrong base.
+    /// only the address width so group-set growth never invalidates clean
+    /// groups' sidecars; a width mismatch is rejected on load instead of
+    /// replayed against the wrong base.
     pub fn encode_group_append_log(&self, gid: usize, manifest: &TableShardManifest) -> Vec<u8> {
         let (inserts, deletes): (Vec<AppendInsert>, Vec<AppendDelete>) = self
             .shards
-            .get(gid)
+            .get(&gid)
             .map(|shard| (shard.append.inserts.clone(), shard.append.deletes.clone()))
             .unwrap_or_default();
         encode_append_ops(manifest, &inserts, &deletes)
     }
 
     /// Replay one append-log payload into a group base. Fails closed on
-    /// version, manifest, section-size or trailing-byte mismatches.
+    /// version, address-width, section-size or trailing-byte mismatches.
     pub fn replay_group_append_log(
         &mut self,
         gid: usize,
@@ -1017,7 +1198,7 @@ impl CsrShardSet {
         manifest: &TableShardManifest,
     ) -> StorageResult<()> {
         let (inserts, deletes) = decode_append_ops(data, manifest)?;
-        let shard = self.shards.get_mut(gid).ok_or_else(|| {
+        let shard = self.shards.get_mut(&gid).ok_or_else(|| {
             StorageError::deserialize_error(format!("group {} out of range on append replay", gid))
         })?;
         for insert in inserts {
@@ -1059,7 +1240,7 @@ impl CsrShardSet {
         reserve_ratio: f32,
         on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
     ) -> usize {
-        let Some(shard) = self.shards.get_mut(gid) else {
+        let Some(shard) = self.shards.get_mut(&gid) else {
             return 0;
         };
         let removed =
@@ -1077,7 +1258,7 @@ impl CsrShardSet {
 
     /// Observability view of one group.
     pub fn group_stats(&self, gid: usize) -> Option<NodeGroupStats> {
-        let shard = self.shards.get(gid)?;
+        let shard = self.shards.get(&gid)?;
         let live = shard.variant.edge_count();
         let capacity = shard
             .variant
@@ -1101,7 +1282,8 @@ impl CsrShardSet {
     }
 
     pub fn all_group_stats(&self) -> Vec<NodeGroupStats> {
-        (0..self.shards.len())
+        self.existing_group_ids()
+            .into_iter()
             .filter_map(|gid| self.group_stats(gid))
             .collect()
     }
@@ -1114,7 +1296,7 @@ impl CsrShardSet {
     /// Clear all edges, keeping the group space. Marks surviving groups
     /// dirty so the next checkpoint persists the cleared state.
     pub fn clear(&mut self) {
-        for shard in &mut self.shards {
+        for shard in self.shards.values_mut() {
             shard.variant.clear();
             shard.dirty = GroupDirty {
                 inserted: false,
@@ -1164,7 +1346,7 @@ impl CsrShardSet {
         let mut reachable_edges = 0usize;
         let mut dead_entries = 0usize;
         let mut wasted_capacity = 0usize;
-        for shard in &self.shards {
+        for shard in self.shards.values() {
             if let Some(stats) = shard.variant.fragmentation_stats() {
                 total_capacity += stats.total_capacity;
                 reachable_edges += stats.reachable_edges;
@@ -1188,7 +1370,7 @@ impl CsrShardSet {
         }
         let mut total_capacity = 0usize;
         let mut wasted = 0usize;
-        for shard in &self.shards {
+        for shard in self.shards.values() {
             if let Some(stats) = shard.variant.fragmentation_stats() {
                 total_capacity += stats.total_capacity;
                 wasted += stats.wasted_capacity;
@@ -1204,7 +1386,7 @@ impl CsrShardSet {
     /// Estimate wasted bytes due to fragmentation, summed across groups.
     pub fn wasted_bytes_estimate(&self) -> usize {
         self.shards
-            .iter()
+            .values()
             .map(|shard| shard.variant.wasted_bytes_estimate())
             .sum()
     }
@@ -1219,7 +1401,7 @@ impl CsrShardSet {
         on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
     ) -> usize {
         let mut removed = 0usize;
-        for shard in &mut self.shards {
+        for shard in self.shards.values_mut() {
             let before = removed;
             removed +=
                 shard
@@ -1239,7 +1421,7 @@ impl CsrShardSet {
     /// Test-only row-stamp filtered iterator; production scans go through the version authority.
     pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> Option<VertexEdgesIter<'_>> {
         let (gid, local) = self.route(src_vid)?;
-        self.shards[gid].variant.iter_edges_of(local, ts)
+        self.shards.get(&gid)?.variant.iter_edges_of(local, ts)
     }
 
     /// Iterate all live edges across groups in group order.
@@ -1253,13 +1435,15 @@ impl CsrShardSet {
         ShardCsrIterator::new(&self.shards, self.group_bits, 0, true)
     }
 
-    /// Approximate memory usage in bytes, summed across groups.
+    /// Approximate memory usage in bytes, summed across existing groups.
+    /// Missing groups consume nothing, so sparse tables stay proportional to
+    /// materialized groups rather than the endpoint span.
     pub fn used_memory_size(&self) -> usize {
         if self.strategy == EdgeStrategy::None {
             return std::mem::size_of::<Self>();
         }
         self.shards
-            .iter()
+            .values()
             .map(|shard| shard.variant.used_memory_size())
             .sum::<usize>()
             + std::mem::size_of::<Self>()
@@ -1273,7 +1457,7 @@ impl CsrBase for CsrShardSet {
 
     fn edge_count(&self) -> u64 {
         self.shards
-            .iter()
+            .values()
             .map(|shard| shard.variant.edge_count())
             .sum()
     }
@@ -1283,7 +1467,8 @@ impl CsrBase for CsrShardSet {
         out.extend_from_slice(&SHARD_SET_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&self.group_bits.to_le_bytes());
         out.extend_from_slice(&(self.shards.len() as u32).to_le_bytes());
-        for shard in &self.shards {
+        for (gid, shard) in self.shards.iter() {
+            out.extend_from_slice(&(*gid as u32).to_le_bytes());
             let payload = shard.variant.dump();
             out.extend_from_slice(&(payload.len() as u64).to_le_bytes());
             out.extend_from_slice(&payload);
@@ -1329,14 +1514,24 @@ impl CsrBase for CsrShardSet {
             .try_into()
             .map_err(|_| StorageError::deserialize_error("shard set count too short"))?;
         let count = u32::from_le_bytes(count_bytes) as usize;
-        self.resize_groups(count)?;
-        for gid in 0..count {
+        let mut ids = Vec::with_capacity(count);
+        let mut payloads = Vec::with_capacity(count);
+        for _ in 0..count {
+            let gid_bytes: [u8; 4] = take_bytes(data, &mut cursor, 4)?
+                .try_into()
+                .map_err(|_| StorageError::deserialize_error("shard group id too short"))?;
+            let gid = u32::from_le_bytes(gid_bytes);
             let len_bytes: [u8; 8] = take_bytes(data, &mut cursor, 8)?
                 .try_into()
                 .map_err(|_| StorageError::deserialize_error("shard payload length too short"))?;
             let len = u64::from_le_bytes(len_bytes) as usize;
             let payload = take_bytes(data, &mut cursor, len)?.to_vec();
-            self.load_group(gid, &payload)?;
+            ids.push(gid);
+            payloads.push(payload);
+        }
+        self.set_groups(&ids)?;
+        for (gid, payload) in ids.into_iter().zip(payloads.into_iter()) {
+            self.load_group(gid as usize, &payload)?;
         }
         if cursor != data.len() {
             return Err(StorageError::deserialize_error(
@@ -1362,7 +1557,11 @@ impl MutableCsrTrait for CsrShardSet {
     ) -> StorageResult<()> {
         let gid = self.ensure_group_for(src_vid)?;
         let local = local_vid(src_vid, self.group_bits);
-        self.shards[gid]
+        self.shards
+            .get_mut(&gid)
+            .ok_or_else(|| {
+                StorageError::invalid_operation(format!("missing group {} on insert", gid))
+            })?
             .variant
             .insert_edge(local, dst, edge_id, ts)?;
         let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
@@ -1377,11 +1576,18 @@ impl MutableCsrTrait for CsrShardSet {
         let Some((gid, local)) = self.route(src_vid) else {
             return Err(no_edges_error());
         };
-        let deleted = self.shards[gid].variant.delete_edge(local, edge_id, ts)?;
+        let deleted = self
+            .shards
+            .get_mut(&gid)
+            .ok_or_else(no_edges_error)?
+            .variant
+            .delete_edge(local, edge_id, ts)?;
         if deleted {
             self.mark_region_delete(gid, local);
             self.record_append_delete(gid, local, edge_id, ts);
-            self.shards[gid].reclaim_hint = true;
+            if let Some(shard) = self.shards.get_mut(&gid) {
+                shard.reclaim_hint = true;
+            }
         }
         Ok(deleted)
     }
@@ -1392,25 +1598,37 @@ impl MutableCsrTrait for CsrShardSet {
         };
         let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
         let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
-        let doomed: Vec<EdgeId> = self.shards[gid]
-            .variant
-            .physical_edges_of(local)
-            .into_iter()
-            .filter(|nbr| {
-                nbr.endpoint == decoded_endpoint
-                    && nbr.rank == decoded_rank
-                    && nbr.delete_ts == Timestamp::MAX
-                    && nbr.create_ts <= ts
+        let doomed: Vec<EdgeId> = self
+            .shards
+            .get(&gid)
+            .map(|shard| {
+                shard
+                    .variant
+                    .physical_edges_of(local)
+                    .into_iter()
+                    .filter(|nbr| {
+                        nbr.endpoint == decoded_endpoint
+                            && nbr.rank == decoded_rank
+                            && nbr.delete_ts == Timestamp::MAX
+                            && nbr.create_ts <= ts
+                    })
+                    .map(|nbr| nbr.edge_id)
+                    .collect()
             })
-            .map(|nbr| nbr.edge_id)
-            .collect();
-        let deleted = self.shards[gid].variant.delete_edge_by_dst(local, dst, ts);
+            .unwrap_or_default();
+        let deleted = self
+            .shards
+            .get_mut(&gid)
+            .map(|shard| shard.variant.delete_edge_by_dst(local, dst, ts))
+            .unwrap_or(0);
         if deleted > 0 {
             self.mark_region_delete(gid, local);
             for edge_id in doomed {
                 self.record_append_delete(gid, local, edge_id, ts);
             }
-            self.shards[gid].reclaim_hint = true;
+            if let Some(shard) = self.shards.get_mut(&gid) {
+                shard.reclaim_hint = true;
+            }
         }
         deleted
     }
@@ -1424,8 +1642,14 @@ impl MutableCsrTrait for CsrShardSet {
         let Some((gid, local)) = self.route(src_vid) else {
             return Ok(false);
         };
-        let before = self.shards[gid].variant.nbr_at_offset(local, offset);
-        let deleted = self.shards[gid]
+        let before = self
+            .shards
+            .get(&gid)
+            .and_then(|shard| shard.variant.nbr_at_offset(local, offset));
+        let deleted = self
+            .shards
+            .get_mut(&gid)
+            .ok_or_else(no_edges_error)?
             .variant
             .delete_edge_by_offset(local, offset, ts)?;
         if deleted {
@@ -1433,49 +1657,66 @@ impl MutableCsrTrait for CsrShardSet {
             if let Some(nbr) = before {
                 self.record_append_delete(gid, local, nbr.edge_id, ts);
             }
-            self.shards[gid].reclaim_hint = true;
+            if let Some(shard) = self.shards.get_mut(&gid) {
+                shard.reclaim_hint = true;
+            }
         }
         Ok(deleted)
     }
 
     fn nbr_at_offset(&self, src_vid: u32, offset: i32) -> Option<Nbr> {
         let (gid, local) = self.route(src_vid)?;
-        self.shards[gid].variant.nbr_at_offset(local, offset)
+        self.shards
+            .get(&gid)?
+            .variant
+            .nbr_at_offset(local, offset)
     }
 
     fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
         let (gid, local) = self.route(src_vid)?;
-        self.shards[gid].variant.get_edge_physical(local, dst)
+        self.shards
+            .get(&gid)?
+            .variant
+            .get_edge_physical(local, dst)
     }
 
     fn physical_edges_of(&self, src_vid: u32) -> Vec<Nbr> {
         let Some((gid, local)) = self.route(src_vid) else {
             return Vec::new();
         };
-        self.shards[gid].variant.physical_edges_of(local)
+        self.shards
+            .get(&gid)
+            .map(|shard| shard.variant.physical_edges_of(local))
+            .unwrap_or_default()
     }
 
     fn has_physical_entries(&self, vid: u32) -> bool {
         let Some((gid, local)) = self.route(vid) else {
             return false;
         };
-        self.shards[gid].variant.has_physical_entries(local)
+        self.shards
+            .get(&gid)
+            .is_some_and(|shard| shard.variant.has_physical_entries(local))
     }
 
     fn primary_contains(&self, src_vid: u32, edge_id: EdgeId) -> bool {
         let Some((gid, local)) = self.route(src_vid) else {
             return false;
         };
-        self.shards[gid].variant.primary_contains(local, edge_id)
+        self.shards
+            .get(&gid)
+            .is_some_and(|shard| shard.variant.primary_contains(local, edge_id))
     }
 
     fn revert_delete_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool {
         let Some((gid, local)) = self.route(src_vid) else {
             return false;
         };
-        let reverted = self.shards[gid]
-            .variant
-            .revert_delete_by_offset(local, offset, ts);
+        let reverted = self
+            .shards
+            .get_mut(&gid)
+            .map(|shard| shard.variant.revert_delete_by_offset(local, offset, ts))
+            .unwrap_or(false);
         if reverted {
             self.mark_region_delete(gid, local);
         }
@@ -1486,7 +1727,11 @@ impl MutableCsrTrait for CsrShardSet {
         let Some((gid, local)) = self.route(src_vid) else {
             return false;
         };
-        let removed = self.shards[gid].variant.remove_edge(local, edge_id);
+        let removed = self
+            .shards
+            .get_mut(&gid)
+            .map(|shard| shard.variant.remove_edge(local, edge_id))
+            .unwrap_or(false);
         if removed {
             self.mark_region_delete(gid, local);
         }
@@ -1497,9 +1742,11 @@ impl MutableCsrTrait for CsrShardSet {
         let Some((gid, local)) = self.route(src_vid) else {
             return false;
         };
-        let reverted = self.shards[gid]
-            .variant
-            .revert_delete_by_edge_id(local, edge_id, ts);
+        let reverted = self
+            .shards
+            .get_mut(&gid)
+            .map(|shard| shard.variant.revert_delete_by_edge_id(local, edge_id, ts))
+            .unwrap_or(false);
         if reverted {
             self.mark_region_delete(gid, local);
         }
@@ -1508,19 +1755,22 @@ impl MutableCsrTrait for CsrShardSet {
 
     fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
         let (gid, local) = self.route(src_vid)?;
-        self.shards[gid].variant.get_edge(local, dst, ts)
+        self.shards.get(&gid)?.variant.get_edge(local, dst, ts)
     }
 
     fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr> {
         let Some((gid, local)) = self.route(src_vid) else {
             return Vec::new();
         };
-        self.shards[gid].variant.edges_of(local, ts)
+        self.shards
+            .get(&gid)
+            .map(|shard| shard.variant.edges_of(local, ts))
+            .unwrap_or_default()
     }
 
     fn compact_with_ts(&mut self, ts: Timestamp, reserve_ratio: f32) -> usize {
         let mut removed = 0usize;
-        for shard in &mut self.shards {
+        for shard in self.shards.values_mut() {
             let n = shard.variant.compact_with_ts(ts, reserve_ratio);
             if n > 0 {
                 shard.dirty.deleted = true;
@@ -1542,10 +1792,15 @@ impl MutableCsrTrait for CsrShardSet {
         let Some((gid, local)) = self.route(vid) else {
             return 0;
         };
-        let removed =
-            self.shards[gid]
-                .variant
-                .compact_vertex_with_reporting(local, cutoff, on_edge_removed);
+        let removed = self
+            .shards
+            .get_mut(&gid)
+            .map(|shard| {
+                shard
+                    .variant
+                    .compact_vertex_with_reporting(local, cutoff, on_edge_removed)
+            })
+            .unwrap_or(0);
         if removed > 0 {
             self.mark_region_delete(gid, local);
         }
@@ -1556,42 +1811,59 @@ impl MutableCsrTrait for CsrShardSet {
         let Some((gid, local)) = self.route(vid) else {
             return 0;
         };
-        self.shards[gid].variant.reclaimable_count(local, cutoff)
+        self.shards
+            .get(&gid)
+            .map(|shard| shard.variant.reclaimable_count(local, cutoff))
+            .unwrap_or(0)
     }
 
     fn vertex_needs_compact(&self, vid: u32, cutoff: Timestamp) -> bool {
         let Some((gid, local)) = self.route(vid) else {
             return false;
         };
-        self.shards[gid].variant.vertex_needs_compact(local, cutoff)
+        self.shards
+            .get(&gid)
+            .is_some_and(|shard| shard.variant.vertex_needs_compact(local, cutoff))
     }
 
     fn vertex_census(&self, vid: u32) -> (usize, usize, usize) {
         let Some((gid, local)) = self.route(vid) else {
             return (0, 0, 0);
         };
-        self.shards[gid].variant.vertex_census(local)
+        self.shards
+            .get(&gid)
+            .map(|shard| shard.variant.vertex_census(local))
+            .unwrap_or((0, 0, 0))
     }
 
     fn row_gap(&self, vid: u32) -> usize {
         let Some((gid, local)) = self.route(vid) else {
             return 0;
         };
-        self.shards[gid].variant.row_gap(local)
+        self.shards
+            .get(&gid)
+            .map(|shard| shard.variant.row_gap(local))
+            .unwrap_or(0)
     }
 
     fn row_density(&self, vid: u32) -> f32 {
         let Some((gid, local)) = self.route(vid) else {
             return 1.0;
         };
-        self.shards[gid].variant.row_density(local)
+        self.shards
+            .get(&gid)
+            .map(|shard| shard.variant.row_density(local))
+            .unwrap_or(1.0)
     }
 
     fn rebalance_row(&mut self, vid: u32) -> bool {
         let Some((gid, local)) = self.route(vid) else {
             return true;
         };
-        self.shards[gid].variant.rebalance_row(local)
+        self.shards
+            .get_mut(&gid)
+            .map(|shard| shard.variant.rebalance_row(local))
+            .unwrap_or(true)
     }
 
     fn used_memory_size(&self) -> usize {
@@ -1599,12 +1871,13 @@ impl MutableCsrTrait for CsrShardSet {
     }
 }
 
-/// Iterator chaining every group in group order, translating local rows to
-/// global vertex ids.
+/// Iterator chaining every existing group in group order, translating local
+/// rows to global vertex ids. Missing groups are absent and never visited.
 pub struct ShardCsrIterator<'a> {
-    shards: &'a [Shard],
+    shards: &'a BTreeMap<usize, Shard>,
+    order: Vec<usize>,
     group_bits: u32,
-    group_idx: usize,
+    group_pos: usize,
     base: u32,
     inner: CsrIterator<'a>,
     include_deleted: bool,
@@ -1612,11 +1885,17 @@ pub struct ShardCsrIterator<'a> {
 }
 
 impl<'a> ShardCsrIterator<'a> {
-    fn new(shards: &'a [Shard], group_bits: u32, ts: Timestamp, include_deleted: bool) -> Self {
+    fn new(
+        shards: &'a BTreeMap<usize, Shard>,
+        group_bits: u32,
+        ts: Timestamp,
+        include_deleted: bool,
+    ) -> Self {
         Self {
             shards,
+            order: shards.keys().copied().collect(),
             group_bits,
-            group_idx: 0,
+            group_pos: 0,
             base: 0,
             inner: CsrIterator::None,
             include_deleted,
@@ -1625,14 +1904,16 @@ impl<'a> ShardCsrIterator<'a> {
     }
 
     fn advance_group(&mut self) -> bool {
-        let shards: &'a [Shard] = self.shards;
-        if self.group_idx >= shards.len() {
+        if self.group_pos >= self.order.len() {
             return false;
         }
-        let gid = self.group_idx;
-        self.group_idx += 1;
+        let gid = self.order[self.group_pos];
+        self.group_pos += 1;
         self.base = group_base(gid, self.group_bits);
-        let variant = &shards[gid].variant;
+        let Some(shard) = self.shards.get(&gid) else {
+            return self.advance_group();
+        };
+        let variant = &shard.variant;
         self.inner = if self.include_deleted {
             variant.iter_all()
         } else {
@@ -1763,10 +2044,11 @@ mod tests {
     }
 
     #[test]
-    fn manifest_rejects_bad_version_and_trailing() {        let manifest = TableShardManifest {
+    fn manifest_rejects_bad_version_and_trailing() {
+        let manifest = TableShardManifest {
             group_bits: 12,
-            out_groups: 2,
-            in_groups: 1,
+            out_groups: vec![0, 1],
+            in_groups: vec![0],
         };
         let payload = manifest.encode();
         assert_eq!(TableShardManifest::decode(&payload).unwrap(), manifest);
@@ -1777,6 +2059,29 @@ mod tests {
         trailing.push(0);
         assert!(TableShardManifest::decode(&trailing).is_err());
         assert!(TableShardManifest::decode(&payload[..8]).is_err());
+    }
+
+    #[test]
+    fn manifest_v3_counts_are_rejected() {
+        let mut legacy = Vec::new();
+        legacy.extend_from_slice(&3u32.to_le_bytes());
+        legacy.extend_from_slice(&12u32.to_le_bytes());
+        legacy.extend_from_slice(&2u32.to_le_bytes());
+        legacy.extend_from_slice(&1u32.to_le_bytes());
+        assert!(TableShardManifest::decode(&legacy).is_err());
+    }
+
+    #[test]
+    fn sparse_holes_stay_absent_until_written() {
+        let mut set = multi_set();
+        set.insert_edge(9000, endpoint(1, 0), EdgeId(0), 100)
+            .unwrap();
+        assert_eq!(set.existing_group_ids(), vec![0, 2]);
+        assert_eq!(set.group_count(), 2);
+        assert!(set.get_edge(5000, endpoint(9, 0), 200).is_none());
+        assert_eq!(set.existing_group_ids(), vec![0, 2]);
+        assert!(set.edges_of(5000, 200).is_empty());
+        assert_eq!(set.existing_group_ids(), vec![0, 2]);
     }
 
     #[test]
@@ -1794,7 +2099,7 @@ mod tests {
         let mut set = multi_set();
         set.insert_edge(9000, endpoint(1, 0), EdgeId(0), 100)
             .unwrap();
-        assert_eq!(set.group_count(), 3);
+        assert_eq!(set.existing_group_ids(), vec![0, 2]);
         assert!(set.remove_edge(9000, EdgeId(0)));
         set.truncate_trailing_empty_groups();
         assert_eq!(set.group_count(), 1);
@@ -1805,11 +2110,12 @@ mod tests {
         let mut set = multi_set();
         set.insert_edge(9000, endpoint(1, 0), EdgeId(0), 100)
             .unwrap();
-        assert_eq!(set.group_count(), 3);
+        assert_eq!(set.existing_group_ids(), vec![0, 2]);
         assert!(set.delete_edge(9000, EdgeId(0), 150).unwrap());
         assert_eq!(set.edge_count(), 0);
         set.truncate_trailing_empty_groups();
-        assert_eq!(set.group_count(), 3);
+        assert_eq!(set.group_count(), 1);
+        assert_eq!(set.existing_group_ids(), vec![2]);
     }
 
     #[test]
@@ -1960,8 +2266,8 @@ mod tests {
         assert_eq!(set.group_append_op_count(0), 2);
         let manifest = TableShardManifest {
             group_bits: 9,
-            out_groups: 1,
-            in_groups: 1,
+            out_groups: vec![0],
+            in_groups: vec![0],
         };
         let payload = set.encode_group_append_log(0, &manifest);
 
@@ -1980,8 +2286,8 @@ mod tests {
         set.insert_edge(10, endpoint(1, 0), EdgeId(0), 100).unwrap();
         let manifest = TableShardManifest {
             group_bits: 9,
-            out_groups: 1,
-            in_groups: 1,
+            out_groups: vec![0],
+            in_groups: vec![0],
         };
         let payload = set.encode_group_append_log(0, &manifest);
 
@@ -1991,9 +2297,9 @@ mod tests {
         assert!(loaded.replay_group_append_log(0, &bad, &manifest).is_err());
 
         let other = TableShardManifest {
-            group_bits: 9,
-            out_groups: 2,
-            in_groups: 1,
+            group_bits: 10,
+            out_groups: vec![0],
+            in_groups: vec![0],
         };
         assert!(loaded.replay_group_append_log(0, &payload, &other).is_err());
 

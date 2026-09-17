@@ -67,6 +67,12 @@ pub struct EdgeStore {
     /// In-flight staged drop-column change. Memory-only, same crash contract
     /// as the staged add: at most one schema change is pending at a time.
     pub(crate) pending_drop_column: Option<PendingDropColumn>,
+    /// Owner group for timestamp and property sharding, keyed by edge id.
+    /// The owner is the out group when out edges exist, otherwise the in
+    /// group. Shard files follow the owner groups with the same dirt, so
+    /// small writes rewrite only dirty owners. Rebuilt on load, remap and
+    /// reshard; orphan timestamps without topology fall back to group zero.
+    pub(crate) edge_owner: HashMap<EdgeId, u32>,
 }
 
 impl std::fmt::Debug for EdgeStore {
@@ -167,7 +173,60 @@ impl EdgeStore {
             index_write_failures: 0,
             pending_add_column: None,
             pending_drop_column: None,
+            edge_owner: HashMap::new(),
         })
+    }
+
+    /// Owner group for one edge write. Out groups own when out edges exist,
+    /// otherwise in groups own. The owner decides which timestamp and
+    /// property shard carries the edge with the same dirt as its topology.
+    pub(crate) fn owner_gid_for(&self, src: u32, dst: u32) -> u32 {
+        if self.schema.oe_strategy != super::super::EdgeStrategy::None {
+            crate::edge::node_group::group_id_for(src, self.config.node_group_bits) as u32
+        } else {
+            crate::edge::node_group::group_id_for(dst, self.config.node_group_bits) as u32
+        }
+    }
+
+    /// Existing owner groups in group order. Timestamp and property shards
+    /// follow exactly these groups; missing groups have no shard files.
+    pub(crate) fn owner_group_ids(&self) -> Vec<u32> {
+        let owner = if self.schema.oe_strategy != super::super::EdgeStrategy::None {
+            &self.out_csr
+        } else {
+            &self.in_csr
+        };
+        owner
+            .existing_group_ids()
+            .into_iter()
+            .map(|gid| gid as u32)
+            .collect()
+    }
+
+    /// Rebuild the owner map from topology plus authority leftovers.
+    /// Topology edges take their current owner; timestamps or property rows
+    /// without topology (reclaimed physical rows whose authority tombstone
+    /// survives) fall back to the smallest materialized owner so they stay
+    /// in an existing shard.
+    pub(crate) fn rebuild_owner_map(&mut self) {
+        self.edge_owner.clear();
+        let use_out = self.schema.oe_strategy != super::super::EdgeStrategy::None;
+        let owner = if use_out { &self.out_csr } else { &self.in_csr };
+        let existing = owner.existing_group_ids();
+        for gid in &existing {
+            if let Some(variant) = owner.group_variant(*gid) {
+                for (_, nbr) in variant.iter_all() {
+                    self.edge_owner.insert(nbr.edge_id, *gid as u32);
+                }
+            }
+        }
+        let fallback = existing.first().copied().unwrap_or(0) as u32;
+        for edge_id in self.mvcc.edge_timestamps.keys() {
+            self.edge_owner.entry(*edge_id).or_insert(fallback);
+        }
+        for edge_id in self.properties.edge_ids() {
+            self.edge_owner.entry(edge_id).or_insert(fallback);
+        }
     }
 
     pub(crate) fn edge_endpoint_key(endpoint: u32, rank: i64) -> VertexId {
@@ -935,6 +994,8 @@ impl EdgeStore {
         }
 
         self.mark_properties_dirty();
+        self.edge_owner
+            .insert(edge_id, self.owner_gid_for(src, dst));
         self.debug_assert_copies_consistent(edge_id);
         Ok(edge_id)
     }
@@ -1032,6 +1093,7 @@ impl EdgeStore {
             self.properties.release_row(row);
         }
         self.mvcc.remove_edge_timestamps(edge_id);
+        self.edge_owner.remove(&edge_id);
         if self.property_index.is_some() {
             let outcomes: Vec<(String, StorageResult<()>)> =
                 if let Some(ref mut index) = self.property_index {
@@ -1122,6 +1184,7 @@ impl EdgeStore {
             self.properties.release_row(row);
         }
         self.mvcc.remove_edge_timestamps(edge_id);
+        self.edge_owner.remove(&edge_id);
         if self.property_index.is_some() {
             let outcomes: Vec<(String, StorageResult<()>)> =
                 if let Some(ref mut index) = self.property_index {

@@ -9,6 +9,14 @@ pub struct EdgeTableConfig {
     /// Address bits per topology node group: one group covers
     /// `1 << node_group_bits` bound-endpoint rows. Out groups partition by
     /// source, in groups by destination.
+    ///
+    /// Locked at table creation: there is no online width-change branch.
+    /// The only adjustment outlet is the offline `EdgeStore::reshard` tool,
+    /// which rebuilds the table group by group and switches the manifest on
+    /// the next checkpoint. Endpoints are expected dense; sparse large
+    /// endpoints must be densified offline via vertex remapping first,
+    /// otherwise only existing groups consume memory and files while the
+    /// span stays wide.
     pub node_group_bits: u32,
     /// Write backpressure: max size of the node-group CSR (in bytes)
     /// before background compaction is requested. Set to 0 to disable.

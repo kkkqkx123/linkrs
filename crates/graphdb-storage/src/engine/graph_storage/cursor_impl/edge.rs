@@ -269,10 +269,10 @@ fn scan_mutable(args: ScanArgs) {
         }
     };
 
-    let group_count = args.store.out_csr.group_count();
+    let existing = args.store.out_csr.existing_group_ids();
     let group_bits = args.store.out_csr.group_bits();
-    let start_group = args.state.resume_group.min(group_count);
-    for gid in start_group..group_count {
+    let start_pos = existing.partition_point(|gid| *gid < args.state.resume_group);
+    for gid in existing.into_iter().skip(start_pos) {
         let Some(variant) = args.store.out_csr.group_variant(gid) else {
             args.state.resume_group = gid + 1;
             args.state.skip_in_group = 0;

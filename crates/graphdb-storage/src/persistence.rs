@@ -33,6 +33,10 @@ pub mod section {
     pub const EDGE_OUT_APPEND: u32 = 0x0205;
     /// Committed append-log sidecar of one in group since its base rewrite.
     pub const EDGE_IN_APPEND: u32 = 0x0206;
+    /// Per-group timestamp shard owned by one endpoint group.
+    pub const EDGE_TS_SHARD: u32 = 0x0207;
+    /// Per-group property shard owned by one endpoint group.
+    pub const EDGE_PROPS_SHARD: u32 = 0x0208;
 
     #[allow(unused)]
     // reserved for future property-table file

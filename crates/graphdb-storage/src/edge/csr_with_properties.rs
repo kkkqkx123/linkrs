@@ -1325,6 +1325,97 @@ impl CsrWithProperties {
         self.mark_column_dirty(column);
         Ok(())
     }
+
+    /// Restore stable column identifiers from shard payloads after a merge.
+    ///
+    /// Shard dumps carry the flushed identifiers; the fresh merge target
+    /// starts from dense indexes, so identifiers are re-applied here to keep
+    /// undo parameters keyed by id valid across checkpoints. Unknown names
+    /// are skipped. The allocator moves past the maximum restored id.
+    pub fn restore_prop_ids(&mut self, ids: &HashMap<String, i32>) {
+        for (idx, schema) in self.property_schema.iter_mut().enumerate() {
+            if let Some(id) = ids.get(&schema.name) {
+                schema.prop_id = *id;
+                if let Some(col) = self.property_columns.get_mut(idx) {
+                    col.col_id = *id;
+                }
+            }
+        }
+        let max_id = self.property_schema.iter().map(|s| s.prop_id).max().unwrap_or(-1);
+        self.next_prop_id = max_id.saturating_add(1).max(self.property_schema.len() as i32);
+    }
+
+    /// Stable identifier for one column in this shard, if present.
+    pub fn prop_id_of(&self, name: &str) -> Option<i32> {
+        self.property_schema
+            .iter()
+            .find(|s| s.name == name)
+            .map(|s| s.prop_id)
+    }
+
+    /// Export one edge row for per-group property sharding.
+    ///
+    /// Returns the row visibility plus current values for every schema
+    /// column (nulls as `None`). Unknown edges yield `None`. The export
+    /// carries plain values only; version history stays memory-only and is
+    /// collapsed on checkpoint, matching the whole-file dump contract.
+    pub fn export_row(
+        &self,
+        edge_id: EdgeId,
+    ) -> Option<(Timestamp, Option<Timestamp>, Vec<(String, Option<Value>)>)> {
+        let pos = *self.edge_to_row.get(&edge_id)? as usize;
+        let vis = *self.visibility.get(pos)?;
+        let values = self
+            .property_schema
+            .iter()
+            .enumerate()
+            .map(|(idx, schema)| {
+                let current = self
+                    .property_columns
+                    .get(idx)
+                    .and_then(|col| col.get(pos));
+                (schema.name.clone(), current)
+            })
+            .collect();
+        Some((vis.create_ts, vis.delete_ts, values))
+    }
+
+    /// Import one exported row into this store for shard merge.
+    ///
+    /// Unknown columns in `values` are skipped so shards written under an
+    /// older published schema still merge; missing columns keep their
+    /// defaults via the fresh insert path. Nulls are materialized
+    /// explicitly so a shard null never becomes a default on merge.
+    pub fn import_row(
+        &mut self,
+        edge_id: EdgeId,
+        create_ts: Timestamp,
+        delete_ts: Option<Timestamp>,
+        values: &[(String, Option<Value>)],
+    ) -> StorageResult<()> {
+        if self.edge_to_row.contains_key(&edge_id) {
+            return Ok(());
+        }
+        let mut present: Vec<(String, Value)> = Vec::new();
+        let mut nulls: Vec<String> = Vec::new();
+        for (name, opt) in values {
+            if !self.has_property(name) {
+                continue;
+            }
+            match opt {
+                Some(value) => present.push((name.clone(), value.clone())),
+                None => nulls.push(name.clone()),
+            }
+        }
+        self.insert_for_edge(edge_id, &present, create_ts)?;
+        for name in nulls {
+            let _ = self.set_property_for_edge(edge_id, &name, None, create_ts);
+        }
+        if let Some(delete) = delete_ts {
+            let _ = self.mark_deleted(edge_id, delete);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

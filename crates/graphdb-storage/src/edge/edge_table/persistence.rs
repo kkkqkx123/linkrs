@@ -1,18 +1,23 @@
 //! Persistence operations: serialization and deserialization to/from disk.
 //!
-//! Node-group sharded layout, version 2:
-//! - `meta.bin`: header section (label ids, label name, schema, next edge
-//!   id) plus the row-level edge timestamps, with the manifest commit tail
-//!   appended so metadata and manifest share one atomic unit.
-//! - `groups_manifest.bin`: group address width plus out/in group counts.
+//! Node-group sharded layout, version 4:
+//! - `meta.bin`: header section only (label ids, label name, schema, next
+//!   edge id), with the manifest commit tail appended so metadata and
+//!   manifest share one atomic unit.
+//! - `groups_manifest.bin`: address width plus existing out/in group id lists.
 //! - `out_g{gid}.bin` / `in_g{gid}.bin`: header + one `CsrVariant` dump per
-//!   group, written only for dirty groups.
-//! - `properties.bin`: current property values plus row visibility.
+//!   existing group, written only for dirty groups; missing groups read as
+//!   empty and never produce files.
+//! - `ts_g{gid}.bin`: authoritative timestamps for the owning group's edges,
+//!   falling with the same dirt as the group.
+//! - `props_g{gid}.bin`: property rows for the owning group's edges,
+//!   falling with the same dirt as the group.
 //!
-//! Old single-file layouts and version 1 metadata without a commit tail are
-//! rejected: loading requires the manifest, the embedded tail must equal the
-//! manifest file, and trailing bytes after any payload fail loudly instead
-//! of loading partially.
+//! Old single-file layouts, version 1 metadata without a commit tail,
+//! version 2 metadata with global timestamps, pre-version-4 manifests and
+//! the legacy global `properties.bin` are rejected: loading requires the
+//! manifest, the embedded tail must equal the manifest file, and trailing
+//! bytes after any payload fail loudly instead of loading partially.
 
 use super::super::{CsrBase, CsrVariant};
 use super::mvcc::EdgeTimestamps;
@@ -27,9 +32,11 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-pub(crate) const EDGE_META_VERSION: u32 = 2;
+pub(crate) const EDGE_META_VERSION: u32 = 3;
 
 /// Deserialized edge table metadata returned by [`load_metadata`].
+/// Version 3 carries the header only; authoritative timestamps live in
+/// per-group timestamp shards and are merged on load.
 pub(crate) struct EdgeMetadata {
     pub label: u32,
     pub src_label: u32,
@@ -38,19 +45,17 @@ pub(crate) struct EdgeMetadata {
     pub is_open: bool,
     pub schema: EdgeSchema,
     pub next_edge_id: EdgeId,
-    pub edge_timestamps: HashMap<EdgeId, EdgeTimestamps>,
 }
 
 /// Serialize edge table metadata to a buffer.
 ///
-/// Layout version 2: header section (label ids, label name, openness,
-/// schema, next edge id) followed by the timestamp section (authoritative
-/// edge timestamps). The header and timestamp sections are serialized by
-/// separate helpers so timestamps can split by group later without touching
-/// the header path; this revision keeps both sections in `meta.bin`. The
-/// caller appends the manifest commit tail after the timestamp section so
-/// metadata and manifest share one atomic unit. Version 1 payloads carry no
-/// commit tail and are rejected on load, never converted.
+/// Layout version 3: header section only (label ids, label name, openness,
+/// schema, next edge id). Timestamps are sharded per owner group in
+/// `ts_g{gid}.bin` files falling with the same dirt as their topology group;
+/// `meta.bin` never carries timestamps. The caller appends the manifest
+/// commit tail after the header so metadata and manifest share one atomic
+/// unit. Version 1 payloads (no tail) and version 2 payloads (global
+/// timestamps) are rejected on load, never converted.
 #[allow(clippy::too_many_arguments)]
 pub fn flush_metadata(
     buf: &mut Vec<u8>,
@@ -61,12 +66,11 @@ pub fn flush_metadata(
     is_open: bool,
     schema: &EdgeSchema,
     next_edge_id: EdgeId,
-    edge_timestamps: &HashMap<EdgeId, EdgeTimestamps>,
+    _edge_timestamps: &HashMap<EdgeId, EdgeTimestamps>,
 ) -> StorageResult<()> {
     buf.extend_from_slice(&EDGE_META_VERSION.to_le_bytes());
     write_metadata_header(buf, label, src_label, dst_label, label_name, is_open, schema)?;
     write_metadata_next_edge_id(buf, next_edge_id);
-    write_metadata_timestamps(buf, edge_timestamps);
     Ok(())
 }
 
@@ -105,18 +109,86 @@ fn write_metadata_next_edge_id(buf: &mut Vec<u8>, next_edge_id: EdgeId) {
     buf.extend_from_slice(&next_edge_id.0.to_le_bytes());
 }
 
-/// Timestamp section: authoritative creation/deletion stamps per edge.
-/// Serialized separately from the header as the future per-group split point.
-fn write_metadata_timestamps(
+/// Timestamp shard payload: authoritative stamps for one owner group.
+/// Serialized as count plus `(edge_id, create_ts, delete_ts)` triples.
+pub fn serialize_timestamp_shard(
+    entries: &[(EdgeId, EdgeTimestamps)],
+    section_id: u32,
     buf: &mut Vec<u8>,
-    edge_timestamps: &HashMap<EdgeId, EdgeTimestamps>,
-) {
-    buf.extend_from_slice(&(edge_timestamps.len() as u64).to_le_bytes());
-    for (edge_id, ts) in edge_timestamps {
+) -> StorageResult<()> {
+    write_header_to(buf, section_id)
+        .map_err(|e| StorageError::io_error(format!("Failed to write ts shard header: {}", e)))?;
+    buf.extend_from_slice(&(entries.len() as u64).to_le_bytes());
+    for (edge_id, ts) in entries {
         buf.extend_from_slice(&edge_id.0.to_le_bytes());
         buf.extend_from_slice(&ts.create_ts.to_le_bytes());
         buf.extend_from_slice(&ts.delete_ts.to_le_bytes());
     }
+    Ok(())
+}
+
+/// Load one timestamp shard payload, failing closed on section, length or
+/// trailing-byte mismatches.
+pub fn load_timestamp_shard(
+    path: &Path,
+    expected_section: u32,
+) -> StorageResult<Vec<(EdgeId, EdgeTimestamps)>> {
+    let (raw_data, _) = read_pages_from_file(path)?;
+    let mut cursor = &raw_data[..];
+    let mut header_buf = [0u8; HEADER_SIZE];
+    cursor.read_exact(&mut header_buf)?;
+    {
+        let mut slice = &header_buf[..];
+        let (_version, sid) = read_header(&mut slice)?;
+        if sid != expected_section {
+            return Err(StorageError::deserialize_error(format!(
+                "unexpected section id in ts shard: expected {:#06x}, got {:#06x}",
+                expected_section, sid
+            )));
+        }
+    }
+    let mut len_bytes = [0u8; 8];
+    cursor.read_exact(&mut len_bytes)?;
+    let len = u64::from_le_bytes(len_bytes) as usize;
+    let mut out = Vec::with_capacity(len);
+    for _ in 0..len {
+        let mut edge_id_bytes = [0u8; 8];
+        cursor.read_exact(&mut edge_id_bytes)?;
+        let mut create_bytes = [0u8; 8];
+        cursor.read_exact(&mut create_bytes)?;
+        let mut delete_bytes = [0u8; 8];
+        cursor.read_exact(&mut delete_bytes)?;
+        out.push((
+            EdgeId(u64::from_le_bytes(edge_id_bytes)),
+            EdgeTimestamps {
+                create_ts: u64::from_le_bytes(create_bytes),
+                delete_ts: u64::from_le_bytes(delete_bytes),
+            },
+        ));
+    }
+    if !cursor.is_empty() {
+        return Err(StorageError::deserialize_error(
+            "unexpected trailing data in ts shard".to_string(),
+        ));
+    }
+    Ok(out)
+}
+
+/// Serialize one sharded property payload with an explicit section id.
+/// The payload is a `CsrWithProperties` dump for the owning group's edges
+/// only; column encoding and statistics travel with the shard and are
+/// recomputed globally after the merge on load.
+pub fn serialize_property_shard(
+    properties: &CsrWithProperties,
+    section_id: u32,
+    buf: &mut Vec<u8>,
+) -> StorageResult<()> {
+    write_header_to(buf, section_id)
+        .map_err(|e| StorageError::io_error(format!("Failed to write props shard header: {}", e)))?;
+    let data = properties.dump();
+    buf.extend_from_slice(&(data.len() as u64).to_le_bytes());
+    buf.extend_from_slice(&data);
+    Ok(())
 }
 
 /// Serialize one sharded CSR to a buffer
@@ -184,34 +256,6 @@ pub(crate) fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
     cursor.read_exact(&mut next_edge_id_bytes)?;
     let next_edge_id = EdgeId(u64::from_le_bytes(next_edge_id_bytes));
 
-    // edge_timestamps: creation + deletion timestamps per edge
-    let edge_timestamps = if !cursor.is_empty() {
-        let mut et_count_bytes = [0u8; 8];
-        cursor.read_exact(&mut et_count_bytes)?;
-        let et_count = u64::from_le_bytes(et_count_bytes) as usize;
-        let mut edge_timestamps = HashMap::with_capacity(et_count);
-        for _ in 0..et_count {
-            let mut edge_id_bytes = [0u8; 8];
-            cursor.read_exact(&mut edge_id_bytes)?;
-            let mut create_ts_bytes = [0u8; 8];
-            cursor.read_exact(&mut create_ts_bytes)?;
-            let mut delete_ts_bytes = [0u8; 8];
-            cursor.read_exact(&mut delete_ts_bytes)?;
-            let create_ts = u64::from_le_bytes(create_ts_bytes);
-            let delete_ts = u64::from_le_bytes(delete_ts_bytes);
-            edge_timestamps.insert(
-                EdgeId(u64::from_le_bytes(edge_id_bytes)),
-                EdgeTimestamps {
-                    create_ts,
-                    delete_ts,
-                },
-            );
-        }
-        edge_timestamps
-    } else {
-        HashMap::new()
-    };
-
     Ok(EdgeMetadata {
         label,
         src_label,
@@ -220,7 +264,6 @@ pub(crate) fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
         is_open,
         schema,
         next_edge_id,
-        edge_timestamps,
     })
 }
 

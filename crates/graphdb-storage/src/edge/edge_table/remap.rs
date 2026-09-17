@@ -114,8 +114,9 @@ fn remap_direction(
     }
     // Drain per group so a single group never has to hold the whole table;
     // routing decides the target group of each translated entry, which may
-    // differ from its source group after densification.
-    for gid in 0..old.group_count() {
+    // differ from its source group after densification. Sparse holes are
+    // never visited.
+    for gid in old.existing_group_ids() {
         let entries: Vec<(u32, Nbr)> = old
             .group_variant(gid)
             .map(|variant| {
@@ -168,7 +169,75 @@ fn remap_direction(
     Ok(rebuilt)
 }
 
+/// Offline reshard statistics for one width change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReshardStats {
+    pub old_bits: u32,
+    pub new_bits: u32,
+    pub out_groups: usize,
+    pub in_groups: usize,
+    pub edges: u64,
+}
+
 impl EdgeStore {
+    /// Offline group-width change: the only adjustment outlet for the locked
+    /// address width. Reads the old width group by group and writes the new
+    /// width, then switches the manifest on the next checkpoint. There is no
+    /// online width-change branch: callers must hold exclusive access and
+    /// checkpoint after a successful reshard. Vertex ids are unchanged, so
+    /// the property index needs no rebuild. Widths outside `1..=20` are
+    /// rejected; the current width is a no-op success.
+    pub fn reshard(&mut self, new_group_bits: u32) -> StorageResult<ReshardStats> {
+        crate::edge::node_group::validate_group_bits(new_group_bits)?;
+        let old_bits = self.config.node_group_bits;
+        if new_group_bits == old_bits {
+            return Ok(ReshardStats {
+                old_bits,
+                new_bits: new_group_bits,
+                out_groups: self.out_csr.group_count(),
+                in_groups: self.in_csr.group_count(),
+                edges: self.edge_count(),
+            });
+        }
+        let mut stats = RemapStats::default();
+        self.out_csr = remap_direction(
+            &self.out_csr,
+            None,
+            None,
+            self.schema.oe_strategy,
+            new_group_bits,
+            self.config.overflow_chunk_edges,
+            &mut stats,
+        )?;
+        self.in_csr = remap_direction(
+            &self.in_csr,
+            None,
+            None,
+            self.schema.ie_strategy,
+            new_group_bits,
+            self.config.overflow_chunk_edges,
+            &mut stats,
+        )?;
+        self.config.node_group_bits = new_group_bits;
+        self.rebuild_owner_map();
+        log::debug!(
+            "EdgeTable[{}] resharded width {} -> {}; out_groups={}, in_groups={}, edges={}",
+            self.label,
+            old_bits,
+            new_group_bits,
+            self.out_csr.group_count(),
+            self.in_csr.group_count(),
+            self.edge_count(),
+        );
+        Ok(ReshardStats {
+            old_bits,
+            new_bits: new_group_bits,
+            out_groups: self.out_csr.group_count(),
+            in_groups: self.in_csr.group_count(),
+            edges: self.edge_count(),
+        })
+    }
+
     /// Propagate vertex compaction old-to-new internal ID mappings into this
     /// edge table.
     ///
@@ -234,6 +303,7 @@ impl EdgeStore {
                 .unwrap_or(1024);
             self.build_property_index(pool_capacity)?;
         }
+        self.rebuild_owner_map();
 
         log::debug!(
             "EdgeTable[{}] remapped vertex IDs (src_mapping={}, dst_mapping={}); out_groups={}, in_groups={}, row_misses={}, neighbor_misses={}, entries={}",
