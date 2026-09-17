@@ -128,17 +128,18 @@ pub trait MutableCsrTrait: CsrBase {
     }
 
     /// Get a specific edge by source and destination.
+    /// Test-only row-stamp filter; production reads go through the version authority.
     fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr>;
 
     /// Get all valid edges of a vertex at the given timestamp.
+    /// Test-only row-stamp filter; production reads go through the version authority.
     fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr>;
 
     /// Compact with timestamp threshold and reserve ratio.
     ///
     /// Returns the number of removed edges.
-    ///
-    /// - `MutableCsr`: removes edges with timestamp > `ts`, reserves `reserve_ratio` free space.
-    /// - `SingleMutableCsr`: no-op, returns 0.
+    /// Test-only direct row-stamp filter; production visibility goes through
+    /// the version authority plus `compact_with_ts_reporting`.
     fn compact_with_ts(&mut self, _ts: Timestamp, _reserve_ratio: f32) -> usize {
         0
     }

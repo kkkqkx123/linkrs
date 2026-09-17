@@ -1,7 +1,7 @@
 //! Statistics structures for observability and monitoring.
 //!
 //! Provides statistics for tombstones and deletions to help track
-//! single-segment edge table behavior.
+//! node-group sharded edge table behavior.
 
 use graphdb_core::types::Timestamp;
 
@@ -19,13 +19,13 @@ pub struct TombstoneStats {
 }
 
 impl TombstoneStats {
-    /// Estimate memory usage: EdgeId(u64) + Timestamp(u32) = 12 bytes per entry
+    /// Estimate memory usage: EdgeId(u64) + Timestamp(u64) = 16 bytes per entry
     pub fn estimate_memory(count: usize) -> usize {
         count * std::mem::size_of::<(u64, u32)>()
     }
 }
 
-/// Statistics about deletions in the single CSR for observability.
+/// Statistics about deletions in the sharded table for observability.
 ///
 /// Tracks deletion patterns to help identify when the table has significant
 /// deletion activity, useful for deciding when to compact.
@@ -35,10 +35,6 @@ pub struct DeletionStats {
     pub total_deleted_edges: u64,
     /// Total live edges (for percentage calculation)
     pub total_live_edges: u64,
-    /// Oldest deletion timestamp
-    pub oldest_deletion_ts: Option<Timestamp>,
-    /// Newest deletion timestamp
-    pub newest_deletion_ts: Option<Timestamp>,
 }
 
 impl DeletionStats {

@@ -73,8 +73,6 @@ pub struct PropertyCompactionStats {
     /// Number of live (non-deleted) records
     /// Equal to total_records - tombstone_count
     pub live_records: usize,
-    /// Size of the free list (reusable slots)
-    pub free_list_size: usize,
     /// Estimated bytes that could be recovered through compaction
     pub reclaimable_bytes: usize,
 }
@@ -89,39 +87,4 @@ impl PropertyCompactionStats {
         }
     }
 
-    /// Get fragmentation percentage (0-100)
-    pub fn fragmentation_percentage(&self) -> f64 {
-        self.fragmentation_ratio() * 100.0
-    }
-
-    /// Check if compaction should be triggered
-    ///
-    /// Compaction is beneficial when:
-    /// - Record-level fragmentation exceeds threshold, OR
-    /// - Reclaimable bytes exceed a significant portion of live data
-    ///
-    /// This combines both metrics for a more robust decision.
-    pub fn should_compact(&self, fragmentation_threshold: f64) -> bool {
-        let record_fragmentation = if self.total_records == 0 {
-            0.0
-        } else {
-            self.tombstone_count as f64 / self.total_records as f64
-        };
-
-        if record_fragmentation > fragmentation_threshold {
-            return true;
-        }
-
-        if self.live_records > 0 && self.reclaimable_bytes > 0 {
-            // Estimate per-record overhead in columnar layout (row metadata: create_ts + delete_ts + free_list slot)
-            const ESTIMATED_BYTES_PER_RECORD: usize = 32;
-            let total_size =
-                self.live_records * ESTIMATED_BYTES_PER_RECORD + self.reclaimable_bytes;
-            if total_size > 0 && (self.reclaimable_bytes as f64 / total_size as f64) > 0.5 {
-                return true;
-            }
-        }
-
-        false
-    }
 }

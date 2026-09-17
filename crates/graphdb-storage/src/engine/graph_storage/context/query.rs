@@ -102,7 +102,7 @@ impl GraphStorageContext {
                 let table = arc.read();
                 let gate = crate::mvcc_visibility::PendingGate::new(&version_manager, own_write);
                 table
-                    .scan_with_gate(ts, &gate)
+                    .scan_with_gate_projected(ts, &gate, Some(&[]))
                     .into_iter()
                     .map(|edge_record| (key.src_label, key.dst_label, key.edge_label, edge_record))
                     .collect::<Vec<_>>()

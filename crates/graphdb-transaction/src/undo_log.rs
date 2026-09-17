@@ -84,8 +84,6 @@ pub struct InsertEdgeUndo {
     pub rank: i64,
     pub src_vid: VertexId,
     pub dst_vid: VertexId,
-    pub oe_offset: i32,
-    pub ie_offset: i32,
 }
 
 /// Undo log for restoring an edge removed by a transaction.
@@ -133,8 +131,6 @@ impl InsertEdgeUndo {
             dst_vid: self.dst_vid,
             edge_label: self.edge_label,
             rank: self.rank,
-            oe_offset: self.oe_offset,
-            ie_offset: self.ie_offset,
             timestamp: ts,
         }))
     }
@@ -218,8 +214,6 @@ pub struct RelatedEdgeInfo {
     pub src_vid: VertexId,
     pub dst_vid: VertexId,
     pub rank: i64,
-    pub oe_offset: i32,
-    pub ie_offset: i32,
 }
 
 /// Undo log for remove vertex operation
@@ -243,8 +237,6 @@ impl RemoveVertexUndo {
                     dst_vid: edge.dst_vid,
                     edge_label: *edge_label,
                     rank: edge.rank,
-                    oe_offset: edge.oe_offset,
-                    ie_offset: edge.ie_offset,
                     timestamp: ts,
                 }))?;
             }
@@ -272,8 +264,6 @@ pub struct RemoveEdgeUndo {
     pub dst_vid: VertexId,
     pub edge_label: LabelId,
     pub rank: i64,
-    pub oe_offset: i32,
-    pub ie_offset: i32,
 }
 
 impl RemoveEdgeUndo {
@@ -285,8 +275,6 @@ impl RemoveEdgeUndo {
             dst_vid: self.dst_vid,
             edge_label: self.edge_label,
             rank: self.rank,
-            oe_offset: self.oe_offset,
-            ie_offset: self.ie_offset,
             timestamp: ts,
         }))
     }
@@ -363,8 +351,6 @@ pub struct AddInsertEdgeParams {
     pub rank: i64,
     pub src_vid: VertexId,
     pub dst_vid: VertexId,
-    pub oe_offset: i32,
-    pub ie_offset: i32,
 }
 
 /// Parameters for add_update_edge_prop operation
@@ -411,8 +397,6 @@ impl UndoLogManager {
             rank: params.rank,
             src_vid: params.src_vid,
             dst_vid: params.dst_vid,
-            oe_offset: params.oe_offset,
-            ie_offset: params.ie_offset,
         }))
     }
 
@@ -606,8 +590,6 @@ mod tests {
                 rank: 0,
                 src_vid: VertexId::from_int64(100),
                 dst_vid: VertexId::from_int64(200),
-                oe_offset: 0,
-                ie_offset: 0,
             })
             .expect("Failed to append undo log");
 
@@ -666,8 +648,6 @@ mod tests {
             rank: 0,
             src_vid: VertexId::from_int64(100),
             dst_vid: VertexId::from_int64(200),
-            oe_offset: 0,
-            ie_offset: 0,
         };
 
         let target = MockUndoTarget;
@@ -717,8 +697,6 @@ mod tests {
                     src_vid: VertexId::from_int64(100),
                     dst_vid: VertexId::from_int64(200),
                     rank: 0,
-                    oe_offset: 0,
-                    ie_offset: 0,
                 }],
             )],
         };
@@ -737,8 +715,6 @@ mod tests {
             dst_vid: VertexId::from_int64(200),
             edge_label: 3,
             rank: 0,
-            oe_offset: 0,
-            ie_offset: 0,
         };
 
         let target = MockUndoTarget;
@@ -782,8 +758,6 @@ mod tests {
                 rank: 0,
                 src_vid: VertexId::from_int64(100),
                 dst_vid: VertexId::from_int64(200),
-                oe_offset: 0,
-                ie_offset: 0,
             })
             .expect("Failed to append undo log");
 

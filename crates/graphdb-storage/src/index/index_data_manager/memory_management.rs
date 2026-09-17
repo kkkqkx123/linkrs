@@ -205,6 +205,23 @@ impl IndexDataManagerImpl {
             .sum()
     }
 
+    /// Export aggregated bloom counters from all runtimes into the
+    /// StatsManager. Called by periodic metric refresh so the collected
+    /// per-shard pre-check counters reach dashboards.
+    pub fn export_bloom_stats(&self) {
+        let Some(stats) = &self.stats_manager else {
+            return;
+        };
+        let mut queries = 0u64;
+        let mut hits = 0u64;
+        for runtime in self.runtimes.read().values() {
+            let (q, h, _) = runtime.bloom_stats();
+            queries = queries.saturating_add(q);
+            hits = hits.saturating_add(h);
+        }
+        stats.record_bloom_snapshot(queries, hits);
+    }
+
     /// Cheap O(1) snapshot of index memory usage maintained by
     /// publish/retire/split paths via `sync_memory_usage`.
     ///

@@ -128,12 +128,6 @@ impl CsrWithProperties {
         self.dirty_columns.insert(name.to_string());
     }
 
-    fn mark_all_columns_dirty(&mut self) {
-        for schema in &self.property_schema {
-            self.dirty_columns.insert(schema.name.clone());
-        }
-    }
-
     /// Clear per-column dirt after a successful checkpoint.
     pub fn clear_dirty_columns(&mut self) {
         self.dirty_columns.clear();
@@ -260,6 +254,7 @@ impl CsrWithProperties {
     /// column, `Some(&[])` decodes none (topology-only read). Unknown names
     /// are skipped. Visibility is still enforced: an invisible edge yields
     /// `None`, a visible one yields `Some` (possibly empty).
+    /// Test-only row-stamp filtered read; production uses physical read plus authority gate.
     pub fn get_projected_by_edge_id(
         &self,
         edge_id: EdgeId,
@@ -302,6 +297,7 @@ impl CsrWithProperties {
     }
 
     /// Insert properties for an edge and associate the row with `edge_id`.
+    /// Test-only row-stamp filtered read; production uses physical read plus authority gate.
     pub fn get_by_edge_id(
         &self,
         edge_id: EdgeId,
@@ -685,7 +681,6 @@ impl CsrWithProperties {
             tombstone_count,
             total_records: self.visibility.len(),
             live_records,
-            free_list_size: self.free_list.len(),
             reclaimable_bytes,
         }
     }
@@ -1675,7 +1670,7 @@ mod tests {
                 .expect("encoded row should stay readable");
             assert!(got
                 .iter()
-                .any(|(k, v)| k == "count" && v == &Some(Value::Int(i as i32))));
+                .any(|(k, v)| k == "count" && v == &Some(Value::Int(i))));
             assert!(got
                 .iter()
                 .any(|(k, v)| k == "flag" && v == &Some(Value::Bool(i % 2 == 0))));

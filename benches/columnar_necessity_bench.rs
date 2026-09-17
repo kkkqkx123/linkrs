@@ -436,8 +436,8 @@ fn filter_scalar(values: &[i64]) -> usize {
 #[inline(never)]
 fn filter_unrolled4(values: &[i64]) -> usize {
     let mut count = 0usize;
-    let mut chunks = values.chunks_exact(4);
-    for c in &mut chunks {
+    let chunks = values.as_chunks::<4>();
+    for c in chunks.0 {
         if c[0] > 500 {
             count += 1;
         }
@@ -451,7 +451,7 @@ fn filter_unrolled4(values: &[i64]) -> usize {
             count += 1;
         }
     }
-    for x in chunks.remainder() {
+    for x in chunks.1 {
         if *x > 500 {
             count += 1;
         }

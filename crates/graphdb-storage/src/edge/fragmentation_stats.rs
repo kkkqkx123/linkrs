@@ -28,17 +28,6 @@ pub struct FragmentationStats {
 }
 
 impl FragmentationStats {
-    /// Create basic stats without dead-entry information.
-    /// Use `compute()` for full analysis including dead entries.
-    pub fn new(total_capacity: usize, reachable_edges: usize) -> Self {
-        Self {
-            total_capacity,
-            reachable_edges,
-            dead_entries: 0,
-            wasted_capacity: 0,
-        }
-    }
-
     /// Compute detailed fragmentation stats from edge counts.
     pub fn with_dead_info(
         total_capacity: usize,
@@ -68,28 +57,6 @@ impl FragmentationStats {
         } else {
             self.wasted_capacity as f32 / self.total_capacity as f32
         }
-    }
-
-    /// Unused capacity in currently allocated nbr_list
-    pub fn unused_capacity(&self) -> usize {
-        self.total_capacity.saturating_sub(self.reachable_edges)
-    }
-
-    /// Space efficiency: reachable_edges / total_capacity
-    ///
-    /// - 1.0 = perfect efficiency (no fragmentation)
-    /// - 0.5 = 50% efficiency (half the space is unused)
-    pub fn space_efficiency(&self) -> f32 {
-        if self.total_capacity == 0 {
-            1.0
-        } else {
-            self.reachable_edges as f32 / self.total_capacity as f32
-        }
-    }
-
-    /// Estimated space reclamation if compacted
-    pub fn reclamation_potential(&self) -> usize {
-        self.unused_capacity()
     }
 
     /// Check if compaction is recommended
@@ -153,8 +120,6 @@ mod tests {
         };
 
         assert_eq!(stats.fragmentation_ratio(), 0.0);
-        assert_eq!(stats.space_efficiency(), 1.0);
-        assert_eq!(stats.unused_capacity(), 0);
         assert!(!stats.should_compact(2.0));
     }
 
@@ -168,8 +133,6 @@ mod tests {
         };
 
         assert_eq!(stats.fragmentation_ratio(), 0.5);
-        assert_eq!(stats.space_efficiency(), 0.3);
-        assert_eq!(stats.unused_capacity(), 70);
         assert!(!stats.should_compact(2.0));
     }
 
@@ -183,18 +146,14 @@ mod tests {
         };
 
         assert_eq!(stats.fragmentation_ratio(), 2.5);
-        assert_eq!(stats.space_efficiency(), 0.2);
-        assert_eq!(stats.unused_capacity(), 80);
         assert!(stats.should_compact(2.0));
     }
 
     #[test]
     fn test_fragmentation_stats_empty() {
-        let stats = FragmentationStats::new(0, 0);
+        let stats = FragmentationStats::with_dead_info(0, 0, 0, 0);
 
         assert_eq!(stats.fragmentation_ratio(), 0.0);
-        assert_eq!(stats.space_efficiency(), 1.0);
-        assert_eq!(stats.unused_capacity(), 0);
     }
 
     #[test]

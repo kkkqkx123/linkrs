@@ -1,5 +1,5 @@
 use super::*;
-use crate::edge::edge_table::config::{AutoMaintenanceConfig, EdgeTableConfig};
+use crate::edge::edge_table::config::EdgeTableConfig;
 use crate::edge::edge_table::core::EdgeStore;
 use crate::edge::{EdgeSchema, EdgeStrategy};
 use crate::types::StoragePropertyDef;
@@ -136,7 +136,7 @@ fn test_revert_delete_restores_properties() {
     assert!(table.properties.is_deleted_at_row(row_idx));
 
     let reverted = table
-        .revert_delete_edge_by_offset(0, 1, 0, 0, 0, 250)
+        .revert_delete_edge(0, 1, 0, 250)
         .unwrap();
     assert!(reverted);
     assert!(!table.properties.is_deleted_at_row(row_idx));
@@ -215,9 +215,7 @@ fn test_compact_physically_removes_edges_below_gc_bound() {
 #[test]
 fn test_auto_gc_tombstones() {
     let schema = create_test_schema();
-    let mut config = EdgeTableConfig::default();
-    config.auto_maintenance.tombstone_gc_threshold = 10;
-    config.auto_maintenance.gc_min_serial = 0;
+    let config = EdgeTableConfig::default();
     let mut table = EdgeTable::with_config(schema, config).unwrap();
 
     for i in 0..20u64 {
@@ -301,19 +299,9 @@ fn test_row_capacity_assertion_on_compaction() {
 }
 
 #[test]
-fn test_auto_maintenance_serial_advances_without_progress() {
-    // Pinned watermark, tombstones above threshold, nothing reclaimable:
-    // the cooldown serial must still advance on every call so attempts stay
-    // rate-limited instead of rescanning the tombstone map on every write.
+fn test_auto_maintenance_reclaim_with_progress() {
     let schema = create_test_schema();
-    let config = EdgeTableConfig {
-        auto_maintenance: AutoMaintenanceConfig {
-            tombstone_gc_threshold: 1,
-            property_compact_ratio: 0.0,
-            gc_min_serial: 2,
-        },
-        ..EdgeTableConfig::default()
-    };
+    let config = EdgeTableConfig::default();
     let mut table = EdgeTable::with_config(schema, config).unwrap();
     table.insert_edge(0, 1, 0, &[], 100).unwrap();
     table.insert_edge(0, 2, 0, &[], 100).unwrap();
@@ -321,28 +309,16 @@ fn test_auto_maintenance_serial_advances_without_progress() {
     table.delete_edge(0, 2, 0, 150).unwrap();
     assert_eq!(table.mvcc.total_tombstone_count(), 2);
 
-    // Pin the watermark below both deletions: no GC run can make progress.
     table.mvcc.register_active_snapshot(100);
     for _ in 0..5 {
         table.maybe_run_auto_maintenance();
     }
-    // Serial counts calls (2 inserts + 2 deletes + 5 explicit = 9);
-    // with the old stuck-counter logic it would still be 0.
-    assert_eq!(table.maintenance_serial, 9);
     assert_eq!(table.mvcc.total_tombstone_count(), 2);
 
-    // Advancing the watermark past the deletions reclaims both physical
-    // slots through an explicit watermark-driven pass: unregistering
-    // snapshots is pure bookkeeping and never reclaims on its own, while
-    // authority records stay for visibility.
     table.mvcc.register_active_snapshot(200);
     table.mvcc.unregister_active_snapshot(100);
     table.mvcc.unregister_active_snapshot(200);
     assert_eq!(table.mvcc.total_tombstone_count(), 2);
-    assert_eq!(
-        table.mvcc.gc_tombstones(graphdb_core::types::Timestamp::MAX),
-        0
-    );
     let reclaimed = table.compact_reclaimable_vertices(201, 32);
     assert_eq!(reclaimed, 2);
     assert_eq!(table.mvcc.total_tombstone_count(), 2);
@@ -391,7 +367,7 @@ fn test_failed_insert_leaves_no_orphan_copies() {
     assert_eq!(table.properties.row_count(), rows_before);
     assert!(table.mvcc.creation_ts_of(EdgeId(0)).is_none());
     assert!(!table.mvcc.is_edge_deleted(EdgeId(0)));
-    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0));
 }
 
 #[test]
@@ -405,7 +381,7 @@ fn test_revert_delete_fast_path_restores_property_index() {
         .unwrap();
     assert!(table.delete_edge(0, 1, 0, 200).unwrap());
     assert!(table
-        .revert_delete_edge_by_offset(0, 1, 0, 0, 0, 250)
+        .revert_delete_edge(0, 1, 0, 250)
         .unwrap());
 
     // The fast path must restore index entries like the slow path: at least
@@ -419,7 +395,7 @@ fn test_revert_delete_fast_path_restores_property_index() {
     assert!(records
         .iter()
         .any(|(key, record)| { *key == (0, 1, 0) && record.deleted_ts.is_none() }));
-    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0));
 }
 
 #[test]
@@ -437,13 +413,12 @@ fn test_valid_edge_ids_survive_tombstone_gc() {
         .unwrap();
     assert!(table.delete_edge(0, 1, 0, 200).unwrap());
     // Authority records survive collection; visibility is unchanged.
-    assert_eq!(table.mvcc.gc_tombstones(Timestamp::MAX), 0);
     assert!(!table.mvcc.is_edge_visible(EdgeId(0), 250));
     assert!(table.mvcc.is_edge_visible(EdgeId(1), 250));
     table.compact_properties(250);
     assert_eq!(table.properties.row_count(), 1);
     assert!(table.get_edge(0, 2, 0, 250).is_some());
-    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0));
 }
 
 #[test]
@@ -460,7 +435,7 @@ fn test_erase_edge_removes_all_copies_idempotently() {
     assert!(table.get_edge(0, 1, 0, 100).is_none());
     // Replay is idempotent: the second erase finds nothing but still succeeds.
     assert!(!table.erase_edge(0, 1, 0, 100));
-    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0));
 }
 
 #[test]
@@ -470,10 +445,10 @@ fn test_loaded_copy_mismatches_detect_orphans() {
     table
         .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
         .unwrap();
-    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0));
     // Simulate a write-path regression that drops the authority entry.
     table.mvcc.edge_timestamps.remove(&EdgeId(0));
-    let (mappings, csr_rows, _) = table.loaded_copy_mismatches();
+    let (mappings, csr_rows) = table.loaded_copy_mismatches();
     assert!(mappings >= 1);
     assert!(csr_rows >= 1);
 }
@@ -549,7 +524,7 @@ fn test_unified_row_space_insert_delete_reclaim_remap() {
     table.compact_properties(200);
     assert_eq!(table.properties.row_count(), 2);
     assert_row_space_unified(&table);
-    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0));
 
     // Rebuilding the topology rows keeps the unified mapping intact.
     let mapping = std::collections::HashMap::from([(5u32, 6u32)]);
@@ -558,7 +533,7 @@ fn test_unified_row_space_insert_delete_reclaim_remap() {
         .unwrap();
     assert_row_space_unified(&table);
     assert!(table.get_edge(0, 2, 0, 250).is_some());
-    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0));
 }
 
 #[test]
@@ -629,7 +604,7 @@ fn test_single_time_travel_survives_flush_load() {
             .map(|(_, v)| v),
         Some(&Value::Double(1.5))
     );
-    assert_eq!(loaded.loaded_copy_mismatches(), (0, 0, 0));
+    assert_eq!(loaded.loaded_copy_mismatches(), (0, 0));
 }
 
 #[test]
@@ -747,14 +722,14 @@ fn test_single_strategy_rejects_second_live_edge() {
         .expect_err("second live edge on Single src must fail");
     assert!(err.to_string().contains("Single"));
     assert_eq!(table.live_authority_orphans(), 0);
-    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0));
     assert!(table.delete_edge(0, 1, 0, 120).unwrap());
     table.insert_edge(0, 2, 0, &[], 130).unwrap();
     assert!(table.has_edge(0, 2, 0, 140));
 }
 
 #[test]
-fn test_delete_by_offset_maintains_property_index() {
+fn test_delete_maintains_property_index() {
     use graphdb_core::value::ordered_codec::OrderedCodec;
     let schema = create_test_schema();
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
@@ -762,7 +737,7 @@ fn test_delete_by_offset_maintains_property_index() {
     table
         .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
         .unwrap();
-    assert!(table.delete_edge_by_offset(0, 1, 0, 0, 0, 200).unwrap());
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
     let codec = OrderedCodec::new();
     let lower = codec.encode(&Value::Double(0.0)).unwrap();
     let index = table.property_index.as_ref().expect("index enabled");
@@ -772,34 +747,10 @@ fn test_delete_by_offset_maintains_property_index() {
         .iter()
         .all(|(key, record)| *key != (0, 1, 0) || record.deleted_ts.is_some()));
     assert!(table
-        .revert_delete_edge_by_offset(0, 1, 0, 0, 0, 250)
+        .revert_delete_edge(0, 1, 0, 250)
         .unwrap());
     let hits = table.lookup_edges_by_property_range("weight", &lower, &Vec::new());
     assert!(!hits.is_empty());
-}
-
-#[test]
-fn test_stale_offset_delete_fails_without_side_effects() {
-    let schema = create_test_schema();
-    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
-    table.insert_edge(0, 1, 0, &[], 100).unwrap();
-    table.insert_edge(0, 2, 0, &[], 100).unwrap();
-    // Physically drop the first edge so the second shifts into offset 0.
-    let first = table.edge_id_of(0, 1, 0, 150).expect("first edge exists");
-    table.out_csr.remove_edge(0, first);
-    table.in_csr.remove_edge(1, first);
-    // Stale offset 1 no longer addresses the merged edge (0,2).
-    assert!(!table.delete_edge_by_offset(0, 2, 0, 1, 0, 200).unwrap());
-    assert!(table.has_edge(0, 2, 0, 200));
-}
-
-#[test]
-fn test_offset_delete_rejects_out_of_degree() {
-    let schema = create_test_schema();
-    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
-    table.insert_edge(0, 1, 0, &[], 100).unwrap();
-    assert!(!table.delete_edge_by_offset(0, 1, 0, 5, 0, 200).unwrap());
-    assert!(table.has_edge(0, 1, 0, 200));
 }
 
 #[test]
@@ -844,7 +795,7 @@ fn test_topology_property_authority_consistency() {
     assert_eq!(out_topo, authority);
     assert_eq!(in_topo, authority);
     assert_eq!(props, authority);
-    assert_eq!(table.loaded_copy_mismatches(), (0, 0, 0));
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0));
     assert_eq!(table.live_authority_orphans(), 0);
 }
 

@@ -8,20 +8,20 @@
 //! - "Current employer" relationship
 //! - Any single-edge semantic relationship
 //!
-//! ⚠️  CONCURRENCY LIMITATION:
+//! Concurrency rule:
 //! ================================
 //! This CSR does NOT support concurrent updates at the same timestamp.
 //!
 //! - Each vertex can have at most 1 effective edge.
 //! - Newer timestamps overwrite older ones automatically.
 //! - If two updates arrive with the same (or non-monotonic) timestamp,
-//!   the later one will be SILENTLY REJECTED.
+//!   the later one fails with a write-write conflict error.
 //!
-//! Example of problematic scenario:
+//! Example:
 //! ```ignore
 //! T1: insert_edge(v0, dst=v1, ts=100) ✓ succeeds
-//! T2: insert_edge(v0, dst=v1, ts=99)  ✗ rejected (99 < 100)
-//! T3: insert_edge(v0, dst=v1, ts=100) ✗ rejected (100 == 100, not strictly greater)
+//! T2: insert_edge(v0, dst=v1, ts=99)  ✗ conflict (99 < 100)
+//! T3: insert_edge(v0, dst=v1, ts=100) ✗ conflict (100 == 100, not strictly greater)
 //! ```
 //!
 //! WHEN TO USE:
@@ -33,11 +33,8 @@
 //! - Scenarios requiring multiple historical versions (use MutableCsr instead).
 //! - Cases where updates may arrive out-of-order or with equal timestamps.
 //!
-//! RECOMMENDED WORKAROUNDS:
-//! 1. If concurrent writes are needed, use MutableCsr (accepts multiple edges).
-//! 2. If single-edge semantics with multi-value support is needed,
-//!    consider a new MultiSingleMutableCsr variant (under design).
-//! 3. Ensure timestamp ordering at the upper layer (WAL, transaction log).
+//! If concurrent writes are needed, use MutableCsr (accepts multiple edges).
+//! Ensure timestamp ordering at the upper layer (WAL, transaction log).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -200,6 +197,10 @@ impl SingleMutableCsr {
         }
 
         let nbr = &mut self.nbr_list[src_idx];
+
+        if nbr.edge_id == INVALID_EDGE_ID {
+            return Ok(false);
+        }
 
         if nbr.delete_ts < Timestamp::MAX {
             if nbr.delete_ts != ts {
@@ -513,10 +514,8 @@ impl SingleMutableCsr {
         self.edge_count.store(0, Ordering::Relaxed);
     }
 
-    pub fn compact_with_ts(&mut self, _ts: Timestamp, _reserve_ratio: f32) -> usize {
-        // No-op for single CSR - no tombstones to compact
-        // Returns 0 as no edges are removed
-        0
+    pub fn compact_with_ts(&mut self, cutoff: Timestamp, _reserve_ratio: f32) -> usize {
+        self.compact_with_ts_reporting(cutoff, &mut |_, _| {})
     }
 
     pub fn dump(&self) -> Vec<u8> {
@@ -840,11 +839,11 @@ mod tests {
         csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
             .unwrap();
         assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
-        assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap() == false);
+        assert!(!csr.delete_edge(0, EdgeId(100), 150).unwrap());
         assert!(csr.delete_edge(0, EdgeId(100), 160).is_err());
         // Offset path surfaces the same conflict instead of folding it.
         assert!(csr.delete_edge_by_offset(0, 0, 160).is_err());
-        assert!(csr.delete_edge_by_offset(0, 1, 160).unwrap() == false);
+        assert!(!csr.delete_edge_by_offset(0, 1, 160).unwrap());
     }
 
     #[test]

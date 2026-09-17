@@ -174,8 +174,6 @@ fn record_edge_insert(
                 dst_vid: edge.dst_vid,
                 edge_label: edge.edge_label,
                 rank: edge.rank,
-                oe_offset: -1,
-                ie_offset: -1,
             })),
             redo_entry,
             modified_table: Some("edge".to_string()),

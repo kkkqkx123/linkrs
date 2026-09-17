@@ -103,6 +103,23 @@ impl IndexRuntime {
             .sum()
     }
 
+    /// Aggregate bloom counters across all generations: `(queries, hits, hit_rate)`.
+    pub(crate) fn bloom_stats(&self) -> (u64, u64, f64) {
+        let mut queries = 0u64;
+        let mut hits = 0u64;
+        for generation in self.generations.read().values() {
+            let (q, h, _) = generation.bloom_stats();
+            queries = queries.saturating_add(q);
+            hits = hits.saturating_add(h);
+        }
+        let rate = if queries == 0 {
+            0.0
+        } else {
+            hits as f64 / queries as f64
+        };
+        (queries, hits, rate)
+    }
+
     /// Evict cold chunks from old (non-active) generations only.
     /// The active generation (highest number) is never evicted to avoid data loss.
     pub(crate) fn evict_cold_chunks(

@@ -53,6 +53,14 @@ impl RangeBloom {
         true
     }
 
+    pub(crate) fn queries(&self) -> u64 {
+        self.queries
+    }
+
+    pub(crate) fn hits(&self) -> u64 {
+        self.hits
+    }
+
     /// Share of queries answered positive, 0.0 when never queried.
     pub(crate) fn hit_rate(&self) -> f64 {
         if self.queries == 0 {

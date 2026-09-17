@@ -81,7 +81,7 @@ pub fn flush_metadata(
     Ok(())
 }
 
-/// Serialize one single-segment CSR to a buffer
+/// Serialize one sharded CSR to a buffer
 pub fn serialize_csr(csr: &CsrVariant, section_id: u32, buf: &mut Vec<u8>) -> StorageResult<()> {
     write_header_to(buf, section_id)
         .map_err(|e| StorageError::io_error(format!("Failed to write CSR header: {}", e)))?;
@@ -186,9 +186,15 @@ pub(crate) fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
     })
 }
 
-/// Load one single-segment CSR from file. Trailing bytes are rejected so old
+/// Load one sharded CSR from file. Trailing bytes are rejected so old
 /// multi-segment payloads fail loudly instead of loading partially.
-pub fn load_csr(path: &Path, csr: &mut CsrVariant) -> StorageResult<()> {
+/// `expected_section` must match the file section id; out/in files are not
+/// interchangeable.
+pub fn load_csr(
+    path: &Path,
+    csr: &mut CsrVariant,
+    expected_section: u32,
+) -> StorageResult<()> {
     let (raw_data, total_rows) = read_pages_from_file(path)?;
     let mut cursor = &raw_data[..];
     let mut header_buf = [0u8; HEADER_SIZE];
@@ -196,12 +202,10 @@ pub fn load_csr(path: &Path, csr: &mut CsrVariant) -> StorageResult<()> {
     {
         let mut slice = &header_buf[..];
         let (_version, sid) = read_header(&mut slice)?;
-        if sid != section::EDGE_OUT_CSR && sid != section::EDGE_IN_CSR {
+        if sid != expected_section {
             return Err(StorageError::deserialize_error(format!(
-                "unexpected section id in edge CSR: expected {:#06x} or {:#06x}, got {:#06x}",
-                section::EDGE_OUT_CSR,
-                section::EDGE_IN_CSR,
-                sid
+                "unexpected section id in edge CSR: expected {:#06x}, got {:#06x}",
+                expected_section, sid
             )));
         }
     }

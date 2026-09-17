@@ -1,3 +1,4 @@
+use crate::engine::cache_manager::VertexSeed;
 use crate::mvcc_visibility::PendingGate;
 use crate::vertex::{ShardedVertexTable, VertexRecord};
 use graphdb_core::types::{LabelId, Timestamp, VertexId};
@@ -287,11 +288,13 @@ impl GraphStorageContext {
                     self.persistent.cache_manager.cache_vertex(
                         label,
                         internal_id,
-                        external.cache_key(),
-                        record.properties.clone(),
-                        read_ts,
-                        create_ts,
-                        starts,
+                        VertexSeed {
+                            external_id: &external.cache_key(),
+                            properties: &record.properties,
+                            read_ts,
+                            create_ts,
+                            column_starts: &starts,
+                        },
                     );
                 }
             }
@@ -341,11 +344,13 @@ impl GraphStorageContext {
                         self.persistent.cache_manager.cache_vertex(
                             label,
                             internal_id,
-                            external_id,
-                            record.properties.clone(),
-                            read_ts,
-                            create_ts,
-                            starts,
+                            VertexSeed {
+                                external_id: &external_id,
+                                properties: &record.properties,
+                                read_ts,
+                                create_ts,
+                                column_starts: &starts,
+                            },
                         );
                     }
                 }
@@ -945,11 +950,13 @@ mod revalidation_tests {
         ctx.persistent.cache_manager.cache_vertex(
             label,
             internal_id,
-            "alice".to_string(),
-            seeded.properties.clone(),
-            first,
-            seeded.create_ts,
-            seeded.column_starts.clone(),
+            VertexSeed {
+                external_id: "alice",
+                properties: &seeded.properties,
+                read_ts: first,
+                create_ts: seeded.create_ts,
+                column_starts: &seeded.column_starts,
+            },
         );
 
         // Hit revalidation must observe the drifted column fence and serve B.

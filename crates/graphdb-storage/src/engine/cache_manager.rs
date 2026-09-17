@@ -17,6 +17,16 @@ pub struct CacheManager {
     accounting: Arc<MemoryAccounting>,
 }
 
+/// Resolved vertex snapshot passed to [`CacheManager::cache_vertex`].
+pub struct VertexSeed<'a> {
+    pub external_id: &'a str,
+    pub properties: &'a [(String, graphdb_core::Value)],
+    /// Timestamp the record was read at (stored as `cached_at_ts`).
+    pub read_ts: Timestamp,
+    pub create_ts: Timestamp,
+    pub column_starts: &'a [Timestamp],
+}
+
 impl CacheManager {
     pub fn new(
         enable_cache: bool,
@@ -129,25 +139,20 @@ impl CacheManager {
         })
     }
 
-    pub fn cache_vertex(
-        &self,
-        label: LabelId,
-        internal_id: u32,
-        external_id: String,
-        properties: Vec<(String, graphdb_core::Value)>,
-        ts: Timestamp,
-        create_ts: Timestamp,
-        column_starts: Vec<Timestamp>,
-    ) {
+    /// Seed the vertex cache from a resolved record snapshot.
+    ///
+    /// `cached_at_ts`/`create_ts`/`column_starts` are grouped in
+    /// [`VertexSeed`] because they describe the same versioned read.
+    pub fn cache_vertex(&self, label: LabelId, internal_id: u32, seed: VertexSeed<'_>) {
         if let Some(ref rc) = self.record_cache {
             let key = VertexCacheKey::new(label, internal_id);
             let cached = CachedVertex {
                 internal_id,
-                external_id,
-                properties,
-                cached_at_ts: ts,
-                create_ts,
-                column_starts,
+                external_id: seed.external_id.to_string(),
+                properties: seed.properties.to_vec(),
+                cached_at_ts: seed.read_ts,
+                create_ts: seed.create_ts,
+                column_starts: seed.column_starts.to_vec(),
                 generation: 0,
             };
             rc.insert_vertex(key, cached);

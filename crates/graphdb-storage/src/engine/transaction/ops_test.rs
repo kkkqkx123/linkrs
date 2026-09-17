@@ -14,8 +14,7 @@ mod tests {
 
     use crate::engine::transaction::ops::{
         create_edge_type_undo, create_vertex_type_undo, delete_edge_type, delete_vertex_type,
-        AddEdgeParams, DeleteEdgeParams, DeleteEdgeTypeParams, RevertDeleteEdgeParams,
-        TransactionOps,
+        AddEdgeParams, DeleteEdgeTypeParams, RevertDeleteEdgeParams, TransactionOps,
     };
 
     fn create_vertex_table(label: LabelId, name: &str) -> Arc<ShardedVertexTable> {
@@ -396,15 +395,13 @@ mod tests {
         };
         TransactionOps::add_edge(&mut edge_tables, &vertex_tables, add_params, &[], 1).unwrap();
 
-        let del_params = DeleteEdgeParams {
-            src_label: 0,
-            src_vid: src_internal,
-            dst_label: 0,
-            dst_vid: dst_internal,
-            edge_label: 0,
-            rank: 0,
-        };
-        TransactionOps::delete_edge(&mut edge_tables, del_params, 0i32, 0i32, 2).unwrap();
+        {
+            let table = edge_tables.get(&EdgeTableKey::new(0, 0, 0)).unwrap();
+            let mut edge_store = table.write();
+            edge_store
+                .delete_edge(src_internal, dst_internal, 0, 2)
+                .unwrap();
+        }
 
         let revert_params = RevertDeleteEdgeParams {
             src_vid: src_internal,
@@ -413,11 +410,9 @@ mod tests {
         };
         let table = edge_tables.get(&EdgeTableKey::new(0, 0, 0)).unwrap();
         let mut edge_store = table.write();
-        let result = TransactionOps::revert_delete_edge_single(
+        let result = TransactionOps::revert_delete_edge_single_by_key(
             &mut edge_store,
             revert_params,
-            0i32,
-            0i32,
             3,
         );
         assert!(result.is_ok());

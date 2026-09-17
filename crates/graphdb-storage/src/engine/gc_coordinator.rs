@@ -100,9 +100,7 @@ impl GcCoordinator {
         let dir = self.manifest_dir.as_ref()?;
         let manifest = CheckpointManifestManager::new(dir).load_latest().ok()??;
         let snapshot = manifest.snapshot_timestamp;
-        if snapshot.is_none() {
-            return None;
-        }
+        snapshot?;
         Some((snapshot, Some(manifest.safe_lsn)))
     }
 

@@ -679,7 +679,7 @@ fn encode_decimal(
     })?;
     let (whole, fractional) = mantissa
         .split_once('.')
-        .map_or((mantissa, ""), |parts| parts);
+        .unwrap_or((mantissa, ""));
     let mut digits = whole.bytes().chain(fractional.bytes()).collect::<Vec<_>>();
     if digits.is_empty() || digits.iter().any(|digit| !digit.is_ascii_digit()) {
         return Err(StorageError::serialize_error(format!(

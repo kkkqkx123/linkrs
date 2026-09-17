@@ -103,7 +103,22 @@ impl GraphStorageContext {
                         ));
                         let mut table = edge_table.write();
                         table.maybe_compact_for_flush_with_watermarks(&wm, margin, 2.0);
-                        table.flush(&table_dir, compression)?;
+                        let kind = table.flush(&table_dir, compression)?;
+                        log::info!(
+                            "Edge flush {}_{}_{} kind={:?}",
+                            key.src_label,
+                            key.dst_label,
+                            key.edge_label,
+                            kind
+                        );
+                        if let Some(stats) = self.persistent.stats_manager.as_ref() {
+                            stats.record_checkpoint_strategy_by_name(match kind {
+                                crate::edge::EdgeCheckpointKind::AppendOnly => {
+                                    "edge-append-only"
+                                }
+                                crate::edge::EdgeCheckpointKind::Rebalance => "edge-rebalance",
+                            });
+                        }
                         Ok(())
                     })?;
                 Ok(())
@@ -294,7 +309,22 @@ impl GraphStorageContext {
                         ));
                         let mut table = edge_table.write();
                         table.maybe_compact_for_flush_with_watermarks(&wm, margin, 2.0);
-                        table.flush(&table_dir, compression)?;
+                        let kind = table.flush(&table_dir, compression)?;
+                        log::info!(
+                            "Edge flush {}_{}_{} kind={:?}",
+                            key.src_label,
+                            key.dst_label,
+                            key.edge_label,
+                            kind
+                        );
+                        if let Some(stats) = self.persistent.stats_manager.as_ref() {
+                            stats.record_checkpoint_strategy_by_name(match kind {
+                                crate::edge::EdgeCheckpointKind::AppendOnly => {
+                                    "edge-append-only"
+                                }
+                                crate::edge::EdgeCheckpointKind::Rebalance => "edge-rebalance",
+                            });
+                        }
                         Ok(())
                     })?;
                 Ok(())

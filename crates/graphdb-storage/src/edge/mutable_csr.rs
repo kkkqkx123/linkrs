@@ -10,7 +10,7 @@
 //!
 //! Primary blocks are allocated lazily on the first edge of a vertex. A vertex without
 //! edges holds no slots in `nbr_list`, and overflow chunks are stored sparsely in a
-//! sorted-vector map keyed by vertex id. This keeps the per-row fixed cost to 12 bytes
+//! HashMap keyed by vertex id. This keeps the per-row fixed cost to 12 bytes
 //! (offset + degree + capacity) and eliminates HashMap fragmentation.
 
 use std::collections::{HashMap, HashSet};
@@ -27,7 +27,7 @@ pub mod overflow;
 pub mod serialization;
 
 pub use iter::{MutableCsrIterator, VertexEdgesIter};
-pub use overflow::{OverflowIndex, OverflowIndexStats, OverflowStorage, SequentialRun};
+pub use overflow::OverflowStorage;
 pub(crate) use serialization::{read_nbr, write_nbr};
 
 use overflow::MAX_OVERFLOW_CHUNKS_PER_VERTEX;
@@ -52,7 +52,6 @@ pub struct MutableCsr {
 
     overflow_chunks: OverflowStorage,
     overflow_chunk_edges: usize,
-    overflow_index: OverflowIndex,
     /// Live endpoint set for overflow vertices: (endpoint, rank) of edges
     /// whose `delete_ts == MAX`. Enables O(1) duplicate detection for
     /// high-degree vertices instead of scanning all overflow blocks.
@@ -75,7 +74,6 @@ impl Clone for MutableCsr {
             primary_capacities: self.primary_capacities.clone(),
             overflow_chunks: self.overflow_chunks.clone(),
             overflow_chunk_edges: self.overflow_chunk_edges,
-            overflow_index: self.overflow_index.clone(),
             overflow_live_sets: self.overflow_live_sets.clone(),
             primary_live_sets: self.primary_live_sets.clone(),
             edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
@@ -122,7 +120,6 @@ impl MutableCsr {
             primary_capacities: vec![0; vertex_cap],
             overflow_chunks: OverflowStorage::new(),
             overflow_chunk_edges: overflow_chunk_edges.max(1),
-            overflow_index: OverflowIndex::new(),
             overflow_live_sets: HashMap::new(),
             primary_live_sets: HashMap::new(),
             edge_count: AtomicU64::new(0),
@@ -159,47 +156,9 @@ impl MutableCsr {
         }
     }
 
-    // ── Overflow Index (Sequential CSR Index) ──
-
-    /// Rebuild overflow index, detecting sequential runs of vertices with uniform chunk counts.
-    pub fn rebuild_overflow_index(&mut self) {
-        self.overflow_index = OverflowIndex::rebuild_from_storage(&self.overflow_chunks);
-    }
-
-    /// Get overflow chunks for a vertex, transparent to sequential index.
+    /// Get overflow chunks for a vertex.
     pub fn get_overflow_chunks(&self, vid: u32) -> Option<&Vec<Vec<Nbr>>> {
         self.overflow_chunks.get(&vid)
-    }
-
-    /// Access the overflow index metadata.
-    pub fn overflow_index(&self) -> &OverflowIndex {
-        &self.overflow_index
-    }
-
-    /// Check if a vertex belongs to a sequential run.
-    pub fn is_overflow_sequential(&self, vid: u32) -> bool {
-        self.overflow_index.is_sequential(vid)
-    }
-
-    /// Overflow index statistics.
-    pub fn overflow_index_stats(&self) -> OverflowIndexStats {
-        let total = self.overflow_chunks.len();
-        let sequential_runs = self.overflow_index.len();
-        let sequential_vertices: usize = self
-            .overflow_index
-            .sequential_runs()
-            .iter()
-            .map(|r| r.vertex_count as usize)
-            .sum();
-        let sparse_vertices = total.saturating_sub(sequential_vertices);
-        let saved = self.overflow_index.metadata_bytes_saved(total);
-        OverflowIndexStats {
-            total_overflow_vertices: total,
-            sequential_runs,
-            sequential_vertices,
-            sparse_vertices,
-            metadata_bytes_saved: saved,
-        }
     }
 
     fn rebuild_overflow_live_sets(&mut self) {
@@ -1038,6 +997,7 @@ impl MutableCsr {
     }
 
     /// Iterate edges of a vertex without collecting into a Vec.
+    /// Test-only row-stamp filtered iterator; production scans go through the version authority.
     pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> VertexEdgesIter<'_> {
         VertexEdgesIter::new(self, src_vid, ts)
     }
@@ -1103,11 +1063,8 @@ impl MutableCsr {
 
     /// Clear all edges
     pub fn clear(&mut self) {
-        for degree in &mut self.degrees {
-            *degree = 0;
-        }
+        self.degrees.fill(0);
         self.overflow_chunks.clear();
-        self.overflow_index.clear();
         self.overflow_live_sets.clear();
         self.primary_live_sets.clear();
         self.total_edge_capacity = self
@@ -1259,7 +1216,6 @@ impl MutableCsr {
         self.degrees = degrees;
         self.primary_capacities = primary_capacities;
         self.overflow_chunks = overflow_chunks;
-        self.overflow_index = OverflowIndex::rebuild_from_storage(&self.overflow_chunks);
         self.overflow_chunk_edges = overflow_chunk_edges;
         self.nbr_list = nbr_list;
         self.edge_count.store(edge_count, Ordering::Relaxed);
@@ -1378,7 +1334,6 @@ impl MutableCsr {
         self.total_edge_capacity = new_total_edge_capacity;
 
         self.overflow_chunks = OverflowStorage::new();
-        self.overflow_index.clear();
         self.overflow_live_sets.clear();
         self.rebuild_primary_live_sets();
 
@@ -2186,36 +2141,8 @@ mod tests {
     }
 
     #[test]
-    fn test_overflow_index_sequential_run_detection() {
+    fn test_overflow_storage_lookup() {
         let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
-        // Create 20 vertices (0..20) each with exactly 2 overflow chunk allocations
-        // Primary capacity is 4, so after 4 edges primary full, next edges go to overflow.
-        // With chunk size 2, inserting 8 edges per vertex -> 4 primary + 4 overflow (2 chunks)
-        for vid in 0..20u32 {
-            for i in 0..8 {
-                let dst = VertexId::from_int64((vid as i64 + 1) * 100 + i as i64);
-                csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1)
-                    .unwrap();
-            }
-        }
-        csr.rebuild_overflow_index();
-        let stats = csr.overflow_index_stats();
-        assert_eq!(stats.sequential_runs, 1);
-        assert_eq!(stats.sequential_vertices, 20);
-        assert_eq!(stats.sparse_vertices, 0);
-        // Verify sequential check
-        assert!(csr.is_overflow_sequential(5));
-        assert!(csr.is_overflow_sequential(19));
-        let runs = csr.overflow_index().sequential_runs();
-        assert_eq!(runs[0].start_vid, 0);
-        assert_eq!(runs[0].vertex_count, 20);
-        assert_eq!(runs[0].chunk_count, 2);
-    }
-
-    #[test]
-    fn test_overflow_index_sparse_fallback() {
-        let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
-        // 5 vertices with same pattern (< threshold) -> no sequential run
         for vid in 0..5u32 {
             for i in 0..6 {
                 let dst = VertexId::from_int64((vid as i64 + 1) * 100 + i as i64);
@@ -2223,29 +2150,12 @@ mod tests {
                     .unwrap();
             }
         }
-        // Add vertices with different chunk counts (non-uniform)
-        for vid in 10..15u32 {
-            let chunk_cnt = if vid % 2 == 0 { 1 } else { 2 };
-            let edges_needed = 4 + chunk_cnt * 2;
-            for i in 0..edges_needed {
-                let dst = VertexId::from_int64((vid as i64 + 1) * 100 + i as i64);
-                csr.insert_edge(vid, dst, EdgeId(1000 + vid as u64 * 10 + i as u64), 1)
-                    .unwrap();
-            }
-        }
-        csr.rebuild_overflow_index();
-        let stats = csr.overflow_index_stats();
-        // 5 vertices <16 threshold -> no run, mixed chunk counts -> no run
-        assert_eq!(stats.sequential_runs, 0);
-        assert!(!csr.is_overflow_sequential(0));
-        // Sparse lookup still works
         assert!(csr.get_overflow_chunks(0).is_some());
-        assert!(csr.get_overflow_chunks(10).is_some());
         assert!(csr.get_overflow_chunks(999).is_none());
     }
 
     #[test]
-    fn test_overflow_index_get_chunks_transparent() {
+    fn test_overflow_get_chunks_transparent() {
         let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
         for vid in 0..20u32 {
             for i in 0..6 {
@@ -2254,14 +2164,12 @@ mod tests {
                     .unwrap();
             }
         }
-        csr.rebuild_overflow_index();
         // All chunks should still be accessible via get_overflow_chunks
         for vid in 0..20u32 {
             let chunks = csr.get_overflow_chunks(vid).expect("should have overflow");
-            assert_eq!(chunks.len(), 1); // 2 overflow edges -> 1 chunk of size 2
+            assert_eq!(chunks.len(), 1);
             assert_eq!(chunks[0].len(), 2);
         }
-        // Verify edges_of still works for sequential vertices
         for vid in 0..20u32 {
             let edges = csr.edges_of(vid, 1);
             assert_eq!(edges.len(), 6);
@@ -2269,7 +2177,7 @@ mod tests {
     }
 
     #[test]
-    fn test_overflow_index_rebuild_after_compact() {
+    fn test_overflow_cleared_after_compact() {
         let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
         for vid in 0..20u32 {
             for i in 0..8 {
@@ -2278,13 +2186,10 @@ mod tests {
                     .unwrap();
             }
         }
-        csr.rebuild_overflow_index();
-        assert_eq!(csr.overflow_index_stats().sequential_runs, 1);
-        // Compact merges overflow back into primary, should clear index
+        assert!(!csr.overflow_chunks.is_empty());
         let mut removed = Vec::new();
         csr.compact_with_ts_reporting(2, 0.0, &mut |id, ts| removed.push((id, ts)));
-        assert!(csr.overflow_index().is_empty());
-        assert_eq!(csr.overflow_index_stats().total_overflow_vertices, 0);
+        assert!(csr.overflow_chunks.is_empty());
     }
 
     #[test]

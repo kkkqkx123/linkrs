@@ -108,7 +108,7 @@ pub(crate) fn scan_edge_serial_column(
                 continue;
             }
             let table = arc.read();
-            for record in table.scan(ts) {
+            for record in table.scan_projected(ts, Some(vec![prop_name.to_string()])) {
                 if let Some((_, value)) =
                     record.properties.iter().find(|(name, _)| name == prop_name)
                 {

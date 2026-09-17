@@ -524,34 +524,6 @@ impl EdgeKey {
     }
 }
 
-/// Edge location for identifying a specific edge instance with offsets
-#[derive(Debug, Clone)]
-pub struct EdgeLocation {
-    pub src_vid: VertexId,
-    pub dst_vid: VertexId,
-    pub edge_label: LabelId,
-    pub oe_offset: i32,
-    pub ie_offset: i32,
-}
-
-impl EdgeLocation {
-    pub fn new(
-        src_vid: VertexId,
-        dst_vid: VertexId,
-        edge_label: LabelId,
-        oe_offset: i32,
-        ie_offset: i32,
-    ) -> Self {
-        Self {
-            src_vid,
-            dst_vid,
-            edge_label,
-            oe_offset,
-            ie_offset,
-        }
-    }
-}
-
 /// Edge identifier for fully identifying an edge instance
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EdgeIdentifier {
@@ -644,12 +616,10 @@ impl EdgePropertyUpdateContext {
     }
 }
 
-/// Edge deletion context with offsets
+/// Edge deletion context keyed by edge identifier
 #[derive(Debug, Clone)]
 pub struct EdgeDeletionContext {
     pub edge_id: EdgeIdentifier,
-    pub oe_offset: i32,
-    pub ie_offset: i32,
     pub timestamp: Timestamp,
 }
 
@@ -661,8 +631,6 @@ pub struct EdgeDeletionContextParams {
     pub dst_vid: VertexId,
     pub edge_label: LabelId,
     pub rank: i64,
-    pub oe_offset: i32,
-    pub ie_offset: i32,
     pub timestamp: Timestamp,
 }
 
@@ -677,8 +645,6 @@ impl EdgeDeletionContext {
                 params.edge_label,
                 params.rank,
             ),
-            oe_offset: params.oe_offset,
-            ie_offset: params.ie_offset,
             timestamp: params.timestamp,
         }
     }

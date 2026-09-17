@@ -112,7 +112,10 @@ macro_rules! dispatch_immutable {
 #[derive(Debug, Clone)]
 pub enum CsrVariant {
     /// Multi-edge mutable CSR: each vertex can have multiple outgoing edges
-    Multiple(MutableCsr),
+    ///
+    /// Boxed so the much smaller `Single`/`None` variants do not pay the
+    /// 264-byte size of `MutableCsr` in every enum value.
+    Multiple(Box<MutableCsr>),
     /// Single-edge mutable CSR: each vertex has at most one outgoing edge
     Single(SingleMutableCsr),
     /// No-edge placeholder: vertices exist but have no outgoing edges
@@ -128,10 +131,12 @@ impl CsrVariant {
     ) -> StorageResult<Self> {
         match strategy {
             EdgeStrategy::Multiple => {
-                Ok(CsrVariant::Multiple(MutableCsr::with_overflow_chunk_edges(
-                    vertex_capacity,
-                    edge_capacity,
-                    overflow_chunk_edges,
+                Ok(CsrVariant::Multiple(Box::new(
+                    MutableCsr::with_overflow_chunk_edges(
+                        vertex_capacity,
+                        edge_capacity,
+                        overflow_chunk_edges,
+                    ),
                 )))
             }
             EdgeStrategy::Single => Ok(CsrVariant::Single(SingleMutableCsr::with_capacity(
@@ -274,7 +279,7 @@ impl CsrBase for CsrVariant {
             1 => {
                 let mut csr = MutableCsr::new();
                 csr.load(&data[1..])?;
-                *self = CsrVariant::Multiple(csr);
+                *self = CsrVariant::Multiple(Box::new(csr));
                 Ok(())
             }
             2 => {
@@ -434,6 +439,7 @@ impl MutableCsrTrait for CsrVariant {
 
 impl CsrVariant {
     /// Iterate edges of a vertex without allocating (only for Multiple strategy).
+    /// Test-only row-stamp filtered iterator; production scans go through the version authority.
     pub fn iter_edges_of(
         &self,
         src_vid: u32,
@@ -517,20 +523,6 @@ impl CsrVariant {
         }
     }
 
-    /// Rebuild overflow index for sequential detection (Multiple strategy only).
-    pub fn rebuild_overflow_index(&mut self) {
-        if let CsrVariant::Multiple(csr) = self {
-            csr.rebuild_overflow_index();
-        }
-    }
-
-    /// Overflow index stats (if Multiple).
-    pub fn overflow_index_stats(&self) -> Option<super::mutable_csr::OverflowIndexStats> {
-        match self {
-            CsrVariant::Multiple(csr) => Some(csr.overflow_index_stats()),
-            _ => None,
-        }
-    }
 }
 
 /// Iterator over CSR edges, supporting multiple implementation types

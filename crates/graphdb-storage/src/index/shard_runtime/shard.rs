@@ -303,6 +303,20 @@ impl ShardRuntime {
         }
         merged.into_iter().collect()
     }
+    /// Snapshot of bloom counters for metric export: `(queries, hits, hit_rate)`.
+    pub(crate) fn bloom_stats(&self) -> (u64, u64, f64) {
+        let fq = self.forward_bloom.lock();
+        let rq = self.reverse_bloom.lock();
+        let queries = fq.queries().saturating_add(rq.queries());
+        let hits = fq.hits().saturating_add(rq.hits());
+        let hit_rate = if queries == 0 {
+            0.0
+        } else {
+            hits as f64 / queries as f64
+        };
+        (queries, hits, hit_rate)
+    }
+
     /// Quick check: does this shard possibly have forward entries in [lower, upper)?
     pub(crate) fn forward_may_have_range(&self, lower: &[u8], upper: &[u8]) -> bool {
         let (lower_suffix, upper_suffix) = self.strip_bounds(lower, upper, self.prefix_forward_len);

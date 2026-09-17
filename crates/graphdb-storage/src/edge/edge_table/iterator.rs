@@ -61,21 +61,6 @@ impl<'a> EdgeTableScanIterator<'a> {
         }
     }
 
-    pub fn with_limit_and_projection(
-        table: &'a EdgeStore,
-        ts: Timestamp,
-        max_records: Option<usize>,
-        projection: Option<Vec<String>>,
-    ) -> Self {
-        Self {
-            table,
-            inner: table.out_csr.iter_all(),
-            ts,
-            max_records,
-            current_count: 0,
-            projection,
-        }
-    }
 }
 
 impl<'a> Iterator for EdgeTableScanIterator<'a> {

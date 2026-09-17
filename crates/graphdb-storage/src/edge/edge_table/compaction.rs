@@ -79,34 +79,6 @@ impl EdgeStore {
         removed_edges.len()
     }
 
-    /// Compact one row in place, sharing the pass cutoff.
-    ///
-    /// Only the given vertex is touched; every other row keeps its offsets
-    /// and data. Deletions are promoted into the tombstone layer.
-    pub fn compact_vertex_with_watermarks(
-        &mut self,
-        vid: u32,
-        watermarks: &graphdb_transaction::MvccWatermarks,
-        margin: Timestamp,
-    ) -> usize {
-        let cutoff = watermarks.safe_gc_timestamp_with_margin(margin);
-        if cutoff == Timestamp::MAX {
-            return 0;
-        }
-        let mut removed_edges = std::collections::HashSet::new();
-        self.out_csr
-            .compact_vertex_with_reporting(vid, cutoff, &mut |edge_id, delete_ts| {
-                removed_edges.insert(edge_id);
-                self.mvcc.record_deletion(edge_id, delete_ts);
-            });
-        self.in_csr
-            .compact_vertex_with_reporting(vid, cutoff, &mut |edge_id, delete_ts| {
-                removed_edges.insert(edge_id);
-                self.mvcc.record_deletion(edge_id, delete_ts);
-            });
-        removed_edges.len()
-    }
-
     /// Reclaim rows holding entries eligible at `bound`, visiting at most
     /// `max_vertices` rows.
     ///
@@ -283,8 +255,6 @@ impl EdgeStore {
         DeletionStats {
             total_live_edges: self.out_csr.edge_count(),
             total_deleted_edges: stats.count as u64,
-            oldest_deletion_ts: stats.oldest_delete_ts,
-            newest_deletion_ts: stats.newest_delete_ts,
         }
     }
 }

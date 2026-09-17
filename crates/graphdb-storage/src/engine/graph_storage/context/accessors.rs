@@ -489,6 +489,12 @@ impl GraphStorageContext {
             .resource_accounting
             .report_usage(MemoryCategory::Mvcc, tombstone_memory_bytes);
         let _ = self.persistent.cache_manager.refresh_memory_usage();
+        // Periodic export point: push collected bloom pre-check counters to
+        // the StatsManager alongside the other resource metrics.
+        self.persistent
+            .index_data_manager
+            .read()
+            .export_bloom_stats();
         let mut snapshot = self.persistent.resource_accounting.snapshot();
         snapshot.active_snapshots = self
             .persistent

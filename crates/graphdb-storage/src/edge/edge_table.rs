@@ -34,7 +34,7 @@ pub mod staging;
 pub mod stats;
 
 // Re-export commonly used types
-pub use core::{EdgeStore, UpdateEdgePropertyByOffsetParams};
+pub use core::{EdgeStore, UpdateEdgePropertyByKeyParams};
 pub use staging::{EdgeStagingBatch, StagedDelete, StagedInsert};
 pub use stats::{DeletionStats, TombstoneStats};
 

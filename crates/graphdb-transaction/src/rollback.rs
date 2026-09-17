@@ -17,27 +17,12 @@ pub use crate::undo_log::{
 /// This is the primary rollback mechanism for NeuG architecture.
 pub(crate) trait UndoLogContext {
     fn execute_undo_logs<T: UndoTarget + ?Sized>(&self, target: &T) -> Result<(), StorageError>;
-    #[allow(dead_code)]
-    fn execute_undo_logs_from_index<T: UndoTarget + ?Sized>(
-        &self,
-        target: &T,
-        start_index: usize,
-    ) -> Result<(), StorageError>;
     fn clear_undo_logs(&self) -> Result<(), StorageError>;
 }
 
 impl UndoLogContext for crate::context::TransactionContext {
     fn execute_undo_logs<T: UndoTarget + ?Sized>(&self, target: &T) -> Result<(), StorageError> {
         self.execute_undo_logs(target)
-            .map_err(|e| StorageError::db_error(e.to_string()))
-    }
-
-    fn execute_undo_logs_from_index<T: UndoTarget + ?Sized>(
-        &self,
-        target: &T,
-        start_index: usize,
-    ) -> Result<(), StorageError> {
-        self.execute_undo_logs_from_index(target, start_index)
             .map_err(|e| StorageError::db_error(e.to_string()))
     }
 
@@ -106,8 +91,6 @@ pub struct CreateRemoveEdgeUndoParams {
     pub dst_vid: u64,
     pub edge_label: LabelId,
     pub rank: i64,
-    pub oe_offset: i32,
-    pub ie_offset: i32,
 }
 
 impl RollbackHelper {
@@ -162,8 +145,6 @@ impl RollbackHelper {
             dst_vid: VertexId::from_u64(params.dst_vid),
             edge_label: params.edge_label,
             rank: params.rank,
-            oe_offset: params.oe_offset,
-            ie_offset: params.ie_offset,
         })
     }
 
@@ -214,17 +195,6 @@ mod tests {
                 .map_err(|error| StorageError::db_error(error.to_string()))
         }
 
-        fn execute_undo_logs_from_index<T: UndoTarget + ?Sized>(
-            &self,
-            _target: &T,
-            _start_index: usize,
-        ) -> Result<(), StorageError> {
-            self.logs
-                .borrow_mut()
-                .clear()
-                .map_err(|error| StorageError::db_error(error.to_string()))
-        }
-
         fn clear_undo_logs(&self) -> Result<(), StorageError> {
             self.logs
                 .borrow_mut()
@@ -261,8 +231,6 @@ mod tests {
             dst_vid: 200,
             edge_label: 3,
             rank: 0,
-            oe_offset: 0,
-            ie_offset: 0,
         });
         assert!(undo.description().contains("RemoveEdgeUndo"));
 

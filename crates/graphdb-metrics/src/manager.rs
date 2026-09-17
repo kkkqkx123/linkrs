@@ -203,6 +203,10 @@ pub enum MetricType {
     FactorizationFlattenTotal,
     FactorizationFallbackTotal,
     FactorizationPhysicalMappingFallbackTotal,
+    // Bloom filter metrics (range-scan skip)
+    BloomQueries,
+    BloomHits,
+    BloomHitRatePermille,
 }
 
 /// Reason a checkpoint was triggered.
@@ -1034,6 +1038,39 @@ impl StatsManager {
             self.add_value(MetricType::StorageCacheHitCount);
         } else {
             self.add_value(MetricType::StorageCacheMissCount);
+        }
+    }
+
+    /// Record a bloom pre-check query and whether it was positive.
+    /// Hit rate derives from `BloomHits / BloomQueries`; permille is exported
+    /// for dashboards via `BloomHitRatePermille`.
+    pub fn record_bloom_query(&self, hit: bool) {
+        self.add_value(MetricType::BloomQueries);
+        if hit {
+            self.add_value(MetricType::BloomHits);
+        }
+        if let (Some(queries), Some(hits)) = (
+            self.get_value(MetricType::BloomQueries),
+            self.get_value(MetricType::BloomHits),
+        ) {
+            if queries > 0 {
+                let permille = hits.saturating_mul(1000) / queries.max(1);
+                self.set_value(MetricType::BloomHitRatePermille, permille);
+            }
+        }
+    }
+
+    /// Snapshot-export bloom counters from a shard runtime.
+    pub fn record_bloom_snapshot(&self, queries: u64, hits: u64) {
+        self.add_value_with_amount(MetricType::BloomQueries, queries);
+        self.add_value_with_amount(MetricType::BloomHits, hits);
+        let total_queries = self.get_value(MetricType::BloomQueries).unwrap_or(0);
+        let total_hits = self.get_value(MetricType::BloomHits).unwrap_or(0);
+        if total_queries > 0 {
+            self.set_value(
+                MetricType::BloomHitRatePermille,
+                total_hits.saturating_mul(1000) / total_queries.max(1),
+            );
         }
     }
 

@@ -215,8 +215,158 @@ impl GraphStorageContext {
         }
     }
 
+    /// Projected point lookup: same pending-aware recheck as `get_edge`
+    /// but decodes only `projection` (`None` = all columns, `Some(&[])` =
+    /// topology only). Empty query projection means all columns; topology-only
+    /// is requested explicitly with an empty slice via batch/cursor paths.
+    pub fn get_edge_projected(
+        &self,
+        params: &EdgeOperationParams,
+        ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Option<EdgeRecord> {
+        if !self.persistent.is_open.load(std::sync::atomic::Ordering::Acquire) {
+            return None;
+        }
+        let (src_internal, dst_internal, key) = self.persistent.data_store.with_vertex_tables(
+            |vertex_tables| -> Option<(u32, u32, EdgeTableKey)> {
+                let src_internal = super::helpers::resolve_internal_id(
+                    self,
+                    vertex_tables,
+                    params.src_label,
+                    params.src_id,
+                    ts,
+                )?;
+                let dst_internal = super::helpers::resolve_internal_id(
+                    self,
+                    vertex_tables,
+                    params.dst_label,
+                    params.dst_id,
+                    ts,
+                )?;
+                let key = Self::resolve_edge_table_key(EdgeLabelLookupCtx {
+                    vertex_tables,
+                    src_id: &params.src_id,
+                    src_label: params.src_label,
+                    dst_id: &params.dst_id,
+                    dst_label: params.dst_label,
+                    edge_label: params.edge_label,
+                    ts,
+                });
+                Some((src_internal, dst_internal, key))
+            },
+        )?;
+        let own_write = self
+            .operation_context
+            .as_ref()
+            .and_then(|context| context.write_timestamp);
+        let gate = PendingGate::new(&self.persistent.version_manager, own_write);
+        let mut cur = ts;
+        loop {
+            let record = self.persistent.data_store.with_edge_tables(|edge_tables| {
+                edge_tables.get(&key).and_then(|arc| {
+                    arc.read().get_edge_with_gate_projected(
+                        src_internal,
+                        dst_internal,
+                        params.rank,
+                        cur,
+                        &gate,
+                        projection,
+                    )
+                })
+            });
+            let edge_id = self.persistent.data_store.with_edge_tables(|edge_tables| {
+                edge_tables.get(&key).and_then(|arc| {
+                    arc.read()
+                        .edge_id_of(src_internal, dst_internal, params.rank, cur)
+                })
+            });
+            let Some(edge_id) = edge_id else {
+                return record;
+            };
+            let visible = self.persistent.data_store.with_edge_tables(|edge_tables| {
+                edge_tables.get(&key).map(|arc| {
+                    arc.read()
+                        .mvcc
+                        .is_edge_visible_with_gate(edge_id, cur, &gate)
+                })
+            });
+            if visible == Some(true) && record.is_some() {
+                return record;
+            }
+            if record.is_some() {
+                return None;
+            }
+            let delete_ts = self.persistent.data_store.with_edge_tables(|edge_tables| {
+                edge_tables
+                    .get(&key)
+                    .and_then(|arc| arc.read().mvcc.deletion_ts_of(edge_id))
+            });
+            if let Some(delete_ts) = delete_ts {
+                if delete_ts <= cur && gate.is_foreign_pending(cur, delete_ts) && delete_ts > 0 {
+                    cur = delete_ts - 1;
+                    continue;
+                }
+            }
+            return None;
+        }
+    }
+
     pub fn delete_edge(&self, params: &EdgeOperationParams, ts: Timestamp) -> StorageResult<bool> {
-        self.delete_edge_impl(params, None, None, ts)
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return Err(StorageError::storage_not_open());
+        }
+
+        let Some((src_internal, dst_internal, key)) = self
+            .persistent
+            .data_store
+            .with_vertex_tables(|vertex_tables| {
+                let src_internal = helpers::resolve_internal_id(
+                    self,
+                    vertex_tables,
+                    params.src_label,
+                    params.src_id,
+                    ts,
+                )
+                .or_else(|| {
+                    helpers::resolve_internal_id_any(vertex_tables, params.src_label, params.src_id)
+                })?;
+                let dst_internal = helpers::resolve_internal_id(
+                    self,
+                    vertex_tables,
+                    params.dst_label,
+                    params.dst_id,
+                    ts,
+                )
+                .or_else(|| {
+                    helpers::resolve_internal_id_any(vertex_tables, params.dst_label, params.dst_id)
+                })?;
+                let key = Self::resolve_edge_table_key(EdgeLabelLookupCtx {
+                    vertex_tables,
+                    src_id: &params.src_id,
+                    src_label: params.src_label,
+                    dst_id: &params.dst_id,
+                    dst_label: params.dst_label,
+                    edge_label: params.edge_label,
+                    ts,
+                });
+                Some((src_internal, dst_internal, key))
+            })
+        else {
+            return Ok(false);
+        };
+
+        let deleted = self
+            .persistent
+            .data_store
+            .with_single_edge_table_mut(&key, |edge_table| {
+                edge_table.delete_edge(src_internal, dst_internal, params.rank, ts)
+            })?;
+        if deleted {
+            self.mark_edge_modified(params.edge_label);
+        }
+
+        Ok(deleted)
     }
 
     /// Physically erase an edge created by an uncommitted insert.
@@ -289,78 +439,6 @@ impl GraphStorageContext {
             self.mark_edge_modified(params.edge_label);
         }
         Ok(erased)
-    }
-
-    fn delete_edge_impl(
-        &self,
-        params: &EdgeOperationParams,
-        oe_offset: Option<i32>,
-        ie_offset: Option<i32>,
-        ts: Timestamp,
-    ) -> StorageResult<bool> {
-        if !self.persistent.is_open.load(Ordering::Acquire) {
-            return Err(StorageError::storage_not_open());
-        }
-
-        let Some((src_internal, dst_internal, key)) = self
-            .persistent
-            .data_store
-            .with_vertex_tables(|vertex_tables| {
-                let src_internal = helpers::resolve_internal_id(
-                    self,
-                    vertex_tables,
-                    params.src_label,
-                    params.src_id,
-                    ts,
-                )
-                .or_else(|| {
-                    helpers::resolve_internal_id_any(vertex_tables, params.src_label, params.src_id)
-                })?;
-                let dst_internal = helpers::resolve_internal_id(
-                    self,
-                    vertex_tables,
-                    params.dst_label,
-                    params.dst_id,
-                    ts,
-                )
-                .or_else(|| {
-                    helpers::resolve_internal_id_any(vertex_tables, params.dst_label, params.dst_id)
-                })?;
-                let key = Self::resolve_edge_table_key(EdgeLabelLookupCtx {
-                    vertex_tables,
-                    src_id: &params.src_id,
-                    src_label: params.src_label,
-                    dst_id: &params.dst_id,
-                    dst_label: params.dst_label,
-                    edge_label: params.edge_label,
-                    ts,
-                });
-                Some((src_internal, dst_internal, key))
-            })
-        else {
-            // Deleting an edge whose endpoints do not exist is a no-op.
-            return Ok(false);
-        };
-
-        let deleted =
-            self.persistent
-                .data_store
-                .with_single_edge_table_mut(&key, |edge_table| match (oe_offset, ie_offset) {
-                    (Some(oe), Some(ie)) => edge_table.delete_edge_by_offset(
-                        src_internal,
-                        dst_internal,
-                        params.rank,
-                        oe,
-                        ie,
-                        ts,
-                    ),
-                    _ => edge_table.delete_edge(src_internal, dst_internal, params.rank, ts),
-                })?;
-        if deleted {
-            self.mark_edge_modified(params.edge_label);
-        }
-
-        Ok(deleted)
     }
 
     pub fn out_edges(
@@ -536,4 +614,197 @@ impl GraphStorageContext {
         });
         Some((dst_internal, nbrs))
     }
+
+    pub fn out_edges_projected(
+        &self,
+        edge_label: LabelId,
+        src_label: LabelId,
+        src_id: VertexId,
+        ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Option<Vec<EdgeRecord>> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return None;
+        }
+        let (src_internal, actual_src) =
+            self.persistent
+                .data_store
+                .with_vertex_tables(|vertex_tables| {
+                    let src_internal =
+                        helpers::resolve_internal_id(self, vertex_tables, src_label, src_id, ts)?;
+                    let actual_src = if src_label == 0 {
+                        helpers::resolve_internal_id_label(vertex_tables, &src_id, ts)
+                            .unwrap_or(src_label)
+                    } else {
+                        src_label
+                    };
+                    Some((src_internal, actual_src))
+                })?;
+        let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
+            let mut records = Vec::new();
+            let gate = self.pending_gate();
+            for table in edge_tables
+                .values()
+                .map(|arc| arc.read())
+                .filter(|t| t.label() == edge_label && t.src_label() == actual_src)
+            {
+                records.extend(table.out_edges_with_gate_projected(
+                    src_internal,
+                    ts,
+                    &gate,
+                    projection,
+                ));
+            }
+            records
+        });
+        Some(records)
+    }
+
+    pub fn in_edges_projected(
+        &self,
+        edge_label: LabelId,
+        dst_label: LabelId,
+        dst_id: VertexId,
+        ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Option<Vec<EdgeRecord>> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return None;
+        }
+        let (dst_internal, actual_dst) =
+            self.persistent
+                .data_store
+                .with_vertex_tables(|vertex_tables| {
+                    let dst_internal =
+                        helpers::resolve_internal_id(self, vertex_tables, dst_label, dst_id, ts)?;
+                    let actual_dst = if dst_label == 0 {
+                        helpers::resolve_internal_id_label(vertex_tables, &dst_id, ts)
+                            .unwrap_or(dst_label)
+                    } else {
+                        dst_label
+                    };
+                    Some((dst_internal, actual_dst))
+                })?;
+        let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
+            let mut records = Vec::new();
+            let gate = self.pending_gate();
+            for table in edge_tables
+                .values()
+                .map(|arc| arc.read())
+                .filter(|t| t.label() == edge_label && t.dst_label() == actual_dst)
+            {
+                records.extend(table.in_edges_with_gate_projected(
+                    dst_internal,
+                    ts,
+                    &gate,
+                    projection,
+                ));
+            }
+            records
+        });
+        Some(records)
+    }
+
+    pub fn out_edges_projected_limit(
+        &self,
+        edge_label: LabelId,
+        src_label: LabelId,
+        src_id: VertexId,
+        ts: Timestamp,
+        projection: Option<&[String]>,
+        limit: usize,
+    ) -> Option<Vec<EdgeRecord>> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return None;
+        }
+        let (src_internal, actual_src) =
+            self.persistent
+                .data_store
+                .with_vertex_tables(|vertex_tables| {
+                    let src_internal =
+                        helpers::resolve_internal_id(self, vertex_tables, src_label, src_id, ts)?;
+                    let actual_src = if src_label == 0 {
+                        helpers::resolve_internal_id_label(vertex_tables, &src_id, ts)
+                            .unwrap_or(src_label)
+                    } else {
+                        src_label
+                    };
+                    Some((src_internal, actual_src))
+                })?;
+        let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
+            let mut records = Vec::new();
+            let gate = self.pending_gate();
+            for table in edge_tables
+                .values()
+                .map(|arc| arc.read())
+                .filter(|t| t.label() == edge_label && t.src_label() == actual_src)
+            {
+                let remaining = limit.saturating_sub(records.len());
+                if remaining == 0 {
+                    break;
+                }
+                records.extend(table.out_edges_with_gate_projected_limit(
+                    src_internal,
+                    ts,
+                    &gate,
+                    projection,
+                    remaining,
+                ));
+            }
+            records
+        });
+        Some(records)
+    }
+
+    pub fn in_edges_projected_limit(
+        &self,
+        edge_label: LabelId,
+        dst_label: LabelId,
+        dst_id: VertexId,
+        ts: Timestamp,
+        projection: Option<&[String]>,
+        limit: usize,
+    ) -> Option<Vec<EdgeRecord>> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return None;
+        }
+        let (dst_internal, actual_dst) =
+            self.persistent
+                .data_store
+                .with_vertex_tables(|vertex_tables| {
+                    let dst_internal =
+                        helpers::resolve_internal_id(self, vertex_tables, dst_label, dst_id, ts)?;
+                    let actual_dst = if dst_label == 0 {
+                        helpers::resolve_internal_id_label(vertex_tables, &dst_id, ts)
+                            .unwrap_or(dst_label)
+                    } else {
+                        dst_label
+                    };
+                    Some((dst_internal, actual_dst))
+                })?;
+        let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
+            let mut records = Vec::new();
+            let gate = self.pending_gate();
+            for table in edge_tables
+                .values()
+                .map(|arc| arc.read())
+                .filter(|t| t.label() == edge_label && t.dst_label() == actual_dst)
+            {
+                let remaining = limit.saturating_sub(records.len());
+                if remaining == 0 {
+                    break;
+                }
+                records.extend(table.in_edges_with_gate_projected_limit(
+                    dst_internal,
+                    ts,
+                    &gate,
+                    projection,
+                    remaining,
+                ));
+            }
+            records
+        });
+        Some(records)
+    }
+
 }

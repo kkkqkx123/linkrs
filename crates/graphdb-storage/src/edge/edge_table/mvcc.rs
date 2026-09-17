@@ -31,7 +31,7 @@ impl EdgeTimestamps {
     }
 }
 
-/// MVCC and snapshot management for the single-segment edge table.
+/// MVCC and snapshot management for the node-group sharded edge table.
 ///
 /// Single authority for edge visibility. `active_snapshots` /
 /// `min_active_snapshot_ts` are a per-table pin cache; the GC truth source
@@ -71,26 +71,6 @@ impl MVCCManager {
         self.edge_timestamps
             .get(&edge_id)
             .is_some_and(|info| info.delete_ts != Timestamp::MAX && info.delete_ts <= ts)
-    }
-
-    /// Drop tombstones eligible under `Visibility::is_gc_eligible`.
-    ///
-    /// The authority records stay for visibility; there is no second table
-    /// to clean, so collection is a no-op returning zero. Physical slot
-    /// reclamation happens through the CSR reclaim passes.
-    pub fn gc_tombstones(&mut self, _min_active_snapshot_ts: Timestamp) -> usize {
-        0
-    }
-
-    /// Inspect at most `batch_size` tombstones.
-    ///
-    /// No-op for the same reason as [`Self::gc_tombstones`].
-    pub fn gc_tombstones_batch(
-        &mut self,
-        _min_active_snapshot_ts: Timestamp,
-        _batch_size: usize,
-    ) -> usize {
-        0
     }
 
     /// Register a new active snapshot at the given timestamp.
@@ -190,14 +170,6 @@ impl MVCCManager {
         if let Some(info) = self.edge_timestamps.get_mut(&edge_id) {
             info.delete_ts = info.delete_ts.min(delete_ts);
         }
-    }
-
-    /// Undo of [`Self::record_deletion`].
-    ///
-    /// Authority clearing is done by the caller through the timestamp record;
-    /// there is no second table, so this is a no-op returning false.
-    pub fn remove_deletion(&mut self, _edge_id: EdgeId) -> bool {
-        false
     }
 
     /// Get number of active snapshots (for testing and debugging)
@@ -338,37 +310,6 @@ mod tests {
     }
 
     #[test]
-    fn test_gc_is_noop_and_preserves_visibility() {
-        let mut table = create_edge_table_with_props();
-
-        table.insert_edge(0, 1, 0, &[], 100).unwrap();
-        let edge_id = EdgeId(0);
-        table.mvcc.record_edge_deletion(edge_id, 200);
-
-        assert!(table.mvcc.is_edge_visible(edge_id, 199));
-        assert!(!table.mvcc.is_edge_visible(edge_id, 200));
-        assert!(!table.mvcc.is_edge_visible(edge_id, 201));
-
-        // Authority records stay for visibility; collection only reclaims
-        // physical slots through the CSR passes.
-        assert_eq!(table.mvcc.gc_tombstones(200), 0);
-        assert_eq!(table.mvcc.total_tombstone_count(), 1);
-        assert!(table.mvcc.is_edge_visible(edge_id, 199));
-        assert!(!table.mvcc.is_edge_visible(edge_id, 200));
-        assert!(!table.mvcc.is_edge_visible(edge_id, 201));
-    }
-
-    #[test]
-    fn test_gc_batch_is_noop() {
-        let mut manager = MVCCManager::new();
-        manager.record_creation(EdgeId(0), 100);
-        manager.record_edge_deletion(EdgeId(0), 200);
-        assert_eq!(manager.gc_tombstones_batch(300, 11), 0);
-        assert_eq!(manager.total_tombstone_count(), 1);
-        assert!(!manager.is_edge_visible(EdgeId(0), 200));
-    }
-
-    #[test]
     fn test_authority_stats_derive_from_records() {
         let mut table = create_edge_table_with_props();
         table.insert_edge(0, 1, 0, &[], 100).unwrap();
@@ -411,8 +352,6 @@ mod tests {
         let stats_after_unregister = table.mvcc.tombstone_stats();
         assert_eq!(stats_after_unregister.count, 1);
 
-        // Authority records survive explicit collection; visibility is unchanged.
-        assert_eq!(table.mvcc.gc_tombstones(Timestamp::MAX), 0);
         let stats_after_gc = table.mvcc.tombstone_stats();
         assert_eq!(stats_after_gc.count, 1);
     }
@@ -452,9 +391,6 @@ mod tests {
 
         assert_eq!(table.mvcc.total_tombstone_count(), 2);
 
-        // Authority deletions stay observable; collection only reclaims
-        // physical slots through the CSR passes.
-        assert_eq!(table.mvcc.gc_tombstones(3), 0);
         assert_eq!(table.mvcc.total_tombstone_count(), 2);
     }
 

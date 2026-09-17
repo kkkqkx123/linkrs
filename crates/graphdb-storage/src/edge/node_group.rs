@@ -15,16 +15,14 @@ use graphdb_core::types::{EdgeId, EdgeStrategy, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
 
 use super::csr_variant::CsrIterator;
-use super::mutable_csr::{OverflowIndexStats, VertexEdgesIter};
+use super::mutable_csr::VertexEdgesIter;
 use super::{CsrBase, CsrVariant, FragmentationStats, MutableCsrTrait, Nbr};
 
 /// Default address bits per node group: 12 bits cover 4096 rows.
 pub const DEFAULT_NODE_GROUP_BITS: u32 = 12;
 /// Rows per leaf region inside a group, for density observability.
-pub const NODE_GROUP_LEAF_ROWS: usize = 256;
 /// Density floor below which a group is reported as sparse.
 /// Mirrors the packed-row density target of the underlying CSR.
-pub const NODE_GROUP_DENSITY_FLOOR: f32 = super::mutable_csr::PACKED_CSR_DENSITY;
 /// Container serialization version for a sharded direction.
 pub const SHARD_SET_FORMAT_VERSION: u32 = 1;
 /// Manifest version for the per-table group layout file. Old single-file
@@ -83,9 +81,6 @@ impl GroupDirty {
         self.column_updated
     }
 
-    pub fn has_any_dirt(self) -> bool {
-        self.inserted || self.deleted || self.column_updated
-    }
 }
 
 /// Checkpoint class derived from group dirt before it is cleared.
@@ -111,25 +106,6 @@ pub struct NodeGroupStats {
     pub dirty: GroupDirty,
 }
 
-impl NodeGroupStats {
-    pub fn needs_checkpoint(self) -> bool {
-        self.dirty.is_dirty()
-    }
-
-    pub fn is_sparse(self) -> bool {
-        self.density < NODE_GROUP_DENSITY_FLOOR
-    }
-}
-
-/// Density view of one fixed row window inside a group.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LeafDensity {
-    pub leaf: usize,
-    pub base: u32,
-    pub live_edges: usize,
-    pub capacity: usize,
-    pub density: f32,
-}
 
 /// Per-table group layout shared by both directions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -396,16 +372,6 @@ impl CsrShardSet {
         Ok(())
     }
 
-    /// Dump one group payload for checkpoint writes.
-    pub fn dump_group(&self, gid: usize) -> StorageResult<Vec<u8>> {
-        self.shards
-            .get(gid)
-            .map(|shard| shard.variant.dump())
-            .ok_or_else(|| {
-                StorageError::deserialize_error(format!("group {} out of range on dump", gid))
-            })
-    }
-
     /// Drop trailing groups holding no physical entries. Tombstone-only tail
     /// groups are retained so snapshot history before the cutoff survives.
     /// Non-empty strategies keep at least one group so an empty table stays
@@ -519,68 +485,6 @@ impl CsrShardSet {
         (0..self.shards.len())
             .filter_map(|gid| self.group_stats(gid))
             .collect()
-    }
-
-    /// Ids of groups denser than nothing: live edges per reserved capacity
-    /// below the packed-row density floor. Observation only; collection
-    /// triggers use per-vertex reclaimable counts.
-    pub fn sparse_group_ids(&self) -> Vec<usize> {
-        self.all_group_stats()
-            .into_iter()
-            .filter(|stats| stats.is_sparse())
-            .map(|stats| stats.group)
-            .collect()
-    }
-
-    /// Per-leaf density report of one group over fixed row windows.
-    ///
-    /// Windows cover `NODE_GROUP_LEAF_ROWS` consecutive rows; the last
-    /// window may be shorter. Counts come from the same per-row census
-    /// backing the incremental collection trigger.
-    pub fn group_leaf_densities(&self, gid: usize) -> Vec<LeafDensity> {
-        let Some(base) = self
-            .shards
-            .get(gid)
-            .map(|_| group_base(gid, self.group_bits))
-        else {
-            return Vec::new();
-        };
-        let rows = self.group_size();
-        let mut out = Vec::new();
-        let mut start = 0usize;
-        while start < rows {
-            let end = (start + NODE_GROUP_LEAF_ROWS).min(rows);
-            let mut live = 0usize;
-            let mut capacity = 0usize;
-            for local in start..end {
-                let vid = base.saturating_add(local as u32);
-                let (row_live, _, row_cap) = self.vertex_census(vid);
-                live += row_live;
-                capacity += row_cap;
-            }
-            let density = if capacity == 0 {
-                1.0
-            } else {
-                live as f32 / capacity as f32
-            };
-            out.push(LeafDensity {
-                leaf: start / NODE_GROUP_LEAF_ROWS,
-                base: base.saturating_add(start as u32),
-                live_edges: live,
-                capacity,
-                density,
-            });
-            start = end;
-        }
-        out
-    }
-
-    /// Number of leaf windows of one group below the density floor.
-    pub fn sparse_leaf_count(&self, gid: usize) -> usize {
-        self.group_leaf_densities(gid)
-            .into_iter()
-            .filter(|leaf| leaf.density < NODE_GROUP_DENSITY_FLOOR)
-            .count()
     }
 
     /// Whether a group holds uncheckpointed writes.
@@ -706,36 +610,8 @@ impl CsrShardSet {
         removed
     }
 
-    /// Rebuild overflow indexes of every group.
-    pub fn rebuild_overflow_index(&mut self) {
-        for shard in &mut self.shards {
-            shard.variant.rebuild_overflow_index();
-        }
-    }
-
-    /// Overflow index statistics summed across groups.
-    pub fn overflow_index_stats(&self) -> Option<OverflowIndexStats> {
-        let mut acc: Option<OverflowIndexStats> = None;
-        for shard in &self.shards {
-            if let Some(stats) = shard.variant.overflow_index_stats() {
-                acc = Some(match acc {
-                    None => stats,
-                    Some(prev) => OverflowIndexStats {
-                        total_overflow_vertices: prev.total_overflow_vertices
-                            + stats.total_overflow_vertices,
-                        sequential_runs: prev.sequential_runs + stats.sequential_runs,
-                        sequential_vertices: prev.sequential_vertices + stats.sequential_vertices,
-                        sparse_vertices: prev.sparse_vertices + stats.sparse_vertices,
-                        metadata_bytes_saved: prev.metadata_bytes_saved
-                            + stats.metadata_bytes_saved,
-                    },
-                });
-            }
-        }
-        acc
-    }
-
     /// Iterate edges of a vertex without allocating (Multiple only).
+    /// Test-only row-stamp filtered iterator; production scans go through the version authority.
     pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> Option<VertexEdgesIter<'_>> {
         let (gid, local) = self.route(src_vid)?;
         self.shards[gid].variant.iter_edges_of(local, ts)
@@ -1266,7 +1142,7 @@ mod tests {
     fn offset_delete_rejects_out_of_degree() {
         let mut set = multi_set();
         set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
-        assert!(set.delete_edge_by_offset(0, 5, 150).unwrap() == false);
+        assert!(!set.delete_edge_by_offset(0, 5, 150).unwrap());
         assert!(set.delete_edge_by_offset(0, 0, 150).unwrap());
     }
 
@@ -1305,15 +1181,4 @@ mod tests {
         assert_eq!(set.checkpoint_kind(), EdgeCheckpointKind::Rebalance);
     }
 
-    #[test]
-    fn leaf_density_windows_cover_group_rows() {
-        let mut set = multi_set();
-        set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
-        let leaves = set.group_leaf_densities(0);
-        assert_eq!(leaves.len(), set.group_size() / NODE_GROUP_LEAF_ROWS);
-        assert_eq!(leaves[0].base, 0);
-        let total_live: usize = leaves.iter().map(|leaf| leaf.live_edges).sum();
-        assert_eq!(total_live, set.edge_count() as usize);
-        assert!(set.group_leaf_densities(99).is_empty());
-    }
 }

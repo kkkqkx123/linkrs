@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::edge::UpdateEdgePropertyByOffsetParams;
+use crate::edge::UpdateEdgePropertyByKeyParams;
 use graphdb_core::types::{ColumnId, LabelId, Timestamp, VertexId};
 use graphdb_core::Value;
 use graphdb_transaction::undo_log::{UndoLogError, UndoLogResult};
@@ -19,17 +19,6 @@ use crate::vertex::ShardedVertexTable;
 
 /// Parameters for add_edge operation
 pub struct AddEdgeParams {
-    pub src_label: LabelId,
-    pub src_vid: u32,
-    pub dst_label: LabelId,
-    pub dst_vid: u32,
-    pub edge_label: LabelId,
-    pub rank: i64,
-}
-
-/// Parameters for delete_edge operation
-#[cfg(test)]
-pub struct DeleteEdgeParams {
     pub src_label: LabelId,
     pub src_vid: u32,
     pub dst_label: LabelId,
@@ -217,31 +206,6 @@ impl TransactionOps {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub fn delete_edge(
-        edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
-        params: DeleteEdgeParams,
-        oe_offset: i32,
-        ie_offset: i32,
-        ts: Timestamp,
-    ) -> UndoLogResult<()> {
-        let key = EdgeTableKey::new(params.src_label, params.dst_label, params.edge_label);
-        if let Some(arc) = edge_tables.get_mut(&key) {
-            let mut table = arc.write();
-            table
-                .delete_edge_by_offset(
-                    params.src_vid,
-                    params.dst_vid,
-                    params.rank,
-                    oe_offset,
-                    ie_offset,
-                    ts,
-                )
-                .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
-        }
-        Ok(())
-    }
-
     pub fn update_vertex_property_by_vid(
         vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         label: LabelId,
@@ -339,7 +303,7 @@ impl TransactionOps {
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         table
-            .update_edge_property_by_offset(UpdateEdgePropertyByOffsetParams {
+            .update_edge_property_by_key(UpdateEdgePropertyByKeyParams {
                 src: params.src_vid,
                 dst: params.dst_vid,
                 rank: params.rank,
@@ -347,28 +311,6 @@ impl TransactionOps {
                 value: old_value,
                 ts,
             })
-            .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
-        Ok(())
-    }
-
-    /// Single-table version of `revert_delete_edge`.
-    /// Operates on a single `EdgeStore` instead of the full catalog HashMap.
-    pub fn revert_delete_edge_single(
-        table: &mut EdgeStore,
-        params: RevertDeleteEdgeParams,
-        oe_offset: i32,
-        ie_offset: i32,
-        ts: Timestamp,
-    ) -> UndoLogResult<()> {
-        table
-            .revert_delete_edge_by_offset(
-                params.src_vid,
-                params.dst_vid,
-                params.rank,
-                oe_offset,
-                ie_offset,
-                ts,
-            )
             .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
         Ok(())
     }

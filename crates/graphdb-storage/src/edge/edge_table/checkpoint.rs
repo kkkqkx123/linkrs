@@ -250,7 +250,7 @@ impl EdgeStore {
             out_groups: self.out_csr.group_count() as u32,
             in_groups: self.in_csr.group_count() as u32,
         };
-        crate::compression::write_shadow_file(&manifest_path(dir), &manifest.encode())
+        crate::compression::write_shadow_file(manifest_path(dir), &manifest.encode())
     }
 
     fn remove_orphan_group_files(&self, dir: &Path) {
@@ -314,18 +314,16 @@ impl EdgeStore {
                 .unwrap_or(0);
             self.next_edge_id = graphdb_core::types::EdgeId(max_id);
         }
-        let (orphan_mappings, orphan_csr_rows, tombstone_mismatches) =
-            self.loaded_copy_mismatches();
+        let (orphan_mappings, orphan_csr_rows) = self.loaded_copy_mismatches();
         let live_orphans = self.live_authority_orphans();
-        if orphan_mappings + orphan_csr_rows + tombstone_mismatches + live_orphans > 0 {
+        if orphan_mappings + orphan_csr_rows + live_orphans > 0 {
             return Err(crate::StorageError::db_error(format!(
                 "edge table {} loaded with copy mismatches: \
                  orphan property mappings={}, orphan CSR rows={}, \
-                 tombstone/authority mismatches={}, live authority orphans={}",
+                 live authority orphans={}",
                 self.label_name,
                 orphan_mappings,
                 orphan_csr_rows,
-                tombstone_mismatches,
                 live_orphans,
             )));
         }
@@ -391,6 +389,11 @@ impl EdgeStore {
             } else {
                 in_group_path(dir, gid)
             };
+            let expected = if outgoing {
+                crate::persistence::section::EDGE_OUT_CSR
+            } else {
+                crate::persistence::section::EDGE_IN_CSR
+            };
             let shards = if outgoing {
                 &mut self.out_csr
             } else {
@@ -399,7 +402,7 @@ impl EdgeStore {
             let variant = shards.group_variant_mut(gid).ok_or_else(|| {
                 StorageError::deserialize_error(format!("group {} missing on load", gid))
             })?;
-            persistence::load_csr(&path, variant)?;
+            persistence::load_csr(&path, variant, expected)?;
             shards.clear_group_dirty(gid);
         }
         Ok(())

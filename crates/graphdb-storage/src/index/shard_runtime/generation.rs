@@ -185,6 +185,23 @@ impl GenerationRuntime {
         self.shards.values().map(|sr| sr.memory_usage_bytes()).sum()
     }
 
+    /// Aggregate bloom counters across all shards: `(queries, hits, hit_rate)`.
+    pub(crate) fn bloom_stats(&self) -> (u64, u64, f64) {
+        let mut queries = 0u64;
+        let mut hits = 0u64;
+        for sr in self.shards.values() {
+            let (q, h, _) = sr.bloom_stats();
+            queries = queries.saturating_add(q);
+            hits = hits.saturating_add(h);
+        }
+        let rate = if queries == 0 {
+            0.0
+        } else {
+            hits as f64 / queries as f64
+        };
+        (queries, hits, rate)
+    }
+
     /// Evict cold chunks from all shards in this generation.
     /// Returns total bytes evicted.
     pub(crate) fn evict_cold_chunks(&self, target_bytes: u64) -> u64 {

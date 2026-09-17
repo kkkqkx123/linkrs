@@ -40,7 +40,7 @@ use crate::types::StoragePropertyDef;
 pub use csr_trait::{CsrBase, MutableCsrTrait};
 pub use csr_variant::CsrVariant;
 pub use csr_with_properties::CsrWithProperties;
-pub use edge_table::core::UpdateEdgePropertyByOffsetParams;
+pub use edge_table::core::UpdateEdgePropertyByKeyParams;
 pub use edge_table::EdgeStore;
 pub use fragmentation_stats::{FragmentationStats, VertexFragmentation};
 pub use graphdb_core::types::EdgeStrategy;
@@ -48,9 +48,8 @@ use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use graphdb_core::{Edge, Value};
 pub use mutable_csr::{MutableCsr, MutableCsrIterator};
 pub use node_group::{
-    CsrShardSet, EdgeCheckpointKind, GroupDirty, LeafDensity, NodeGroupStats, ShardCsrIterator,
-    TableShardManifest, DEFAULT_NODE_GROUP_BITS, GROUP_MANIFEST_VERSION, NODE_GROUP_DENSITY_FLOOR,
-    NODE_GROUP_LEAF_ROWS,
+    CsrShardSet, EdgeCheckpointKind, GroupDirty, NodeGroupStats, ShardCsrIterator,
+    TableShardManifest, DEFAULT_NODE_GROUP_BITS, GROUP_MANIFEST_VERSION,
 };
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 

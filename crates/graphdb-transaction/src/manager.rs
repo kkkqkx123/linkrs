@@ -924,8 +924,8 @@ impl TransactionManager {
             .is_some_and(|entry| {
                 entry.value().has_pessimistic_lock() && entry.value().state().can_execute()
             });
-        if !alive {
-            if self
+        if !alive
+            && self
                 .write_exclusion_owner
                 .compare_exchange(owner, 0, Ordering::SeqCst, Ordering::SeqCst)
                 .is_ok()
@@ -935,7 +935,6 @@ impl TransactionManager {
                     owner
                 );
             }
-        }
     }
 
     /// Whether a checkpoint should be triggered after the latest commit.
