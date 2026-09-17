@@ -1,5 +1,6 @@
+use super::super::csr_shared::is_reclaimable_slot;
+use super::super::{EdgeId, Nbr, Timestamp};
 use super::MutableCsr;
-use super::super::{Nbr, Timestamp};
 
 /// Target density for packed rows: live entries per unit of reserved row
 /// capacity. Rebuilds size rows to `ceil(live / PACKED_CSR_DENSITY)` so
@@ -180,34 +181,49 @@ impl MutableCsr {
         self.overflow_chunks.get(&vid).is_none_or(Vec::is_empty)
     }
 
-    pub(crate) fn compact_overflow_for_vertex(&mut self, vid: u32) {
+    pub(crate) fn compact_overflow_for_vertex(
+        &mut self,
+        vid: u32,
+        cutoff: Timestamp,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+    ) {
         let Some(chunks) = self.overflow_chunks.get(&vid).cloned() else {
             return;
         };
-        let mut live: Vec<Nbr> = Vec::new();
+        let old_cap: usize = chunks.iter().map(|c| c.capacity()).sum();
+        let removals_enabled = cutoff != Timestamp::MAX;
+        let mut kept: Vec<Nbr> = Vec::new();
         for chunk in &chunks {
             for nbr in chunk {
-                if nbr.delete_ts == Timestamp::MAX {
-                    live.push(*nbr);
+                if removals_enabled && is_reclaimable_slot(nbr, cutoff) {
+                    on_edge_removed(nbr.edge_id, nbr.delete_ts);
+                } else {
+                    kept.push(*nbr);
                 }
             }
         }
-        if live.is_empty() {
+        if kept.is_empty() {
             // Remove empty overflow entry entirely to reclaim metadata.
             self.overflow_chunks.remove(&vid);
+            self.total_edge_capacity = self.total_edge_capacity.saturating_sub(old_cap);
             self.rebuild_live_set_for_vertex(vid);
             return;
         }
-        // Repack live entries into fresh graded chunks.
-        let chunk_edges = self.effective_chunk_edges(live.len());
+        // Repack kept entries (live plus pinned tombstones) into fresh
+        // graded chunks. Grading stays by live width so tiers match the
+        // steady-state layout.
+        let live_kept = kept
+            .iter()
+            .filter(|nbr| nbr.delete_ts == Timestamp::MAX)
+            .count();
+        let chunk_edges = self.effective_chunk_edges(live_kept.max(1));
         let mut new_chunks: Vec<Vec<Nbr>> = Vec::new();
-        for chunk in live.chunks(chunk_edges) {
+        for chunk in kept.chunks(chunk_edges) {
             let mut v = Vec::with_capacity(chunk_edges);
             v.extend_from_slice(chunk);
             new_chunks.push(v);
         }
         // Update capacity accounting: old capacity vs new.
-        let old_cap: usize = chunks.iter().map(|c| c.capacity()).sum();
         let new_cap: usize = new_chunks.iter().map(|c| c.capacity()).sum();
         self.total_edge_capacity = self
             .total_edge_capacity

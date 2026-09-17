@@ -46,7 +46,13 @@ impl MutableCsr {
                     .filter(|nbr| nbr.delete_ts != Timestamp::MAX)
                     .count();
                 if dead > 0 {
-                    self.compact_overflow_for_vertex(src_vid);
+                    // Hot write path carries no watermark capture, so repack
+                    // only moves entries and preserves pinned tombstones
+                    // without dropping. Watermark-confirmed reclaim runs
+                    // through the vertex-level reporting passes that promote
+                    // deletions to the authority.
+                    let mut noop = |_id: EdgeId, _ts: Timestamp| {};
+                    self.compact_overflow_for_vertex(src_vid, Timestamp::MAX, &mut noop);
                 } else {
                     log::debug!(
                         "MutableCsr vertex {} holds {} overflow chunks of live entries; row rebalance or compaction will merge them",
@@ -291,6 +297,20 @@ impl MutableCsr {
             return Ok(false);
         }
         let nbr = &mut self.nbr_list[idx];
+        // Tombstone timestamp check mirrors the other delete entries: a
+        // repeat at the same timestamp stays idempotent while a different
+        // timestamp surfaces as a write-write conflict instead of folding
+        // into not-found.
+        if nbr.delete_ts != Timestamp::MAX {
+            match decide_slot_delete(nbr, nbr.edge_id, ts)? {
+                DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated => {
+                    return Ok(false);
+                }
+                DeleteSlotOutcome::Stamped => {
+                    return Ok(false);
+                }
+            }
+        }
         if nbr.delete_ts == Timestamp::MAX {
             let create_ts = nbr.create_ts;
             if create_ts <= ts {

@@ -1109,7 +1109,12 @@ impl EdgeStore {
                 // Roll back the out-direction deletion to keep both sides
                 // consistent. Count reconciliation: expected exactly one
                 // in-direction match for the out edge just deleted.
-                self.out_csr.revert_delete_by_edge_id(src, edge_id, ts);
+                if !self.out_csr.revert_delete_by_edge_id(src, edge_id, ts) {
+                    return Err(StorageError::invalid_operation(format!(
+                        "delete rollback failed for edge {:?}: out-direction revert missed",
+                        edge_id
+                    )));
+                }
                 return Ok(None);
             }
             if in_deleted > 1 {
@@ -1131,14 +1136,22 @@ impl EdgeStore {
         }
 
         // Missed the merged read: distinguish absent edges from conflicting
-        // re-deletes. A physically present edge whose authority deletion stamp
-        // differs from this timestamp is a write-write conflict.
-        if let Some(slot) = self.out_csr.get_edge_physical(src, dst_key) {
-            if let Some(info) = self.mvcc.edge_timestamps.get(&slot.edge_id) {
+        // re-deletes. Scan every physical generation sharing the endpoint
+        // key and check each against the authority, so a stale tombstone
+        // generation never masks the visible generation.
+        let mut candidates: Vec<EdgeId> = Vec::new();
+        self.out_csr.visit_physical(src, |nbr| {
+            if nbr.to_vertex_id() == dst_key {
+                candidates.push(nbr.edge_id);
+            }
+            true
+        });
+        for candidate in candidates {
+            if let Some(info) = self.mvcc.edge_timestamps.get(&candidate) {
                 if info.delete_ts != Timestamp::MAX && info.delete_ts != ts {
                     return Err(StorageError::write_write_conflict(format!(
                         "edge {:?} already deleted at ts={}, attempted delete at ts={}",
-                        slot.edge_id, info.delete_ts, ts
+                        candidate, info.delete_ts, ts
                     )));
                 }
             }
@@ -1191,10 +1204,24 @@ impl EdgeStore {
         self.debug_assert_copies_consistent(edge_id);
     }
 
+    /// Shared gate for authority revival on delete rollback.
+    ///
+    /// Authority may only return to live when both directions physically
+    /// reverted. A partial revert keeps the authority deletion mark so a
+    /// future timestamp tombstone can never coexist with a live authority
+    /// record.
+    #[inline]
+    fn fully_reverted(out_ok: bool, in_ok: bool) -> bool {
+        out_ok && in_ok
+    }
+
     /// Revert one batch-applied delete during batch rollback.
     fn revert_applied_delete(&mut self, src: u32, dst: u32, edge_id: EdgeId, ts: Timestamp) {
-        self.out_csr.revert_delete_by_edge_id(src, edge_id, ts);
-        self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts);
+        let out_ok = self.out_csr.revert_delete_by_edge_id(src, edge_id, ts);
+        let in_ok = self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts);
+        if !Self::fully_reverted(out_ok, in_ok) {
+            return;
+        }
         if let Some(ts_info) = self.mvcc.edge_timestamps.get_mut(&edge_id) {
             ts_info.delete_ts = Timestamp::MAX;
         }
@@ -1329,8 +1356,11 @@ impl EdgeStore {
 
     /// Revert a deletion by edge key without offsets.
     ///
-    /// Undo path for transaction rollback: locates the edge physically, verifies
-    /// this undo owns the deletion, then reverts both directions by edge id.
+    /// Undo path for transaction rollback: scans every physical generation
+    /// sharing the endpoint key, verifies this undo owns the deletion
+    /// through the authority, then reverts both directions by edge id.
+    /// Authority revival requires both directions to revert; a partial
+    /// revert keeps the deletion mark and reports an error.
     pub fn revert_delete_edge(
         &mut self,
         src: u32,
@@ -1342,18 +1372,35 @@ impl EdgeStore {
             return Err(StorageError::storage_not_open());
         }
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        let Some(slot) = self.out_csr.get_edge_physical(src, dst_key) else {
+        let mut candidates: Vec<EdgeId> = Vec::new();
+        self.out_csr.visit_physical(src, |nbr| {
+            if nbr.to_vertex_id() == dst_key {
+                candidates.push(nbr.edge_id);
+            }
+            true
+        });
+        let mut edge_id = None;
+        for candidate in candidates {
+            match self.mvcc.edge_timestamps.get(&candidate) {
+                Some(info) if info.delete_ts != Timestamp::MAX && info.delete_ts <= ts => {
+                    edge_id = Some(candidate);
+                    break;
+                }
+                _ => continue,
+            }
+        }
+        let Some(edge_id) = edge_id else {
             return Ok(false);
         };
-        let edge_id = slot.edge_id;
-        match self.mvcc.edge_timestamps.get(&edge_id) {
-            Some(info) if info.delete_ts != Timestamp::MAX && info.delete_ts <= ts => {}
-            _ => return Ok(false),
-        }
         if !self.out_csr.revert_delete_by_edge_id(src, edge_id, ts) {
             return Ok(false);
         }
-        self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts);
+        if !self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts) {
+            return Err(StorageError::invalid_operation(format!(
+                "delete rollback failed for edge {:?}: in-direction revert missed",
+                edge_id
+            )));
+        }
         if let Some(ts_info) = self.mvcc.edge_timestamps.get_mut(&edge_id) {
             ts_info.delete_ts = Timestamp::MAX;
         }

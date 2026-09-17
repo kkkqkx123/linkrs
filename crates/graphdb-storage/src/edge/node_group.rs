@@ -751,9 +751,11 @@ impl CsrShardSet {
         }
     }
 
-    /// Resize the group space for loading: grows with fresh variants,
-    /// shrinks by dropping trailing groups.
-    pub fn resize_groups(&mut self, count: usize) -> StorageResult<()> {
+    /// Resize the group space for construction only: grows with fresh
+    /// variants, shrinks by dropping trailing groups. Construction and load
+    /// paths only; normal writes grow through the routed insert path and
+    /// never reset whole groups.
+    pub(crate) fn resize_groups(&mut self, count: usize) -> StorageResult<()> {
         if self.strategy == EdgeStrategy::None {
             if count != 0 {
                 return Err(StorageError::deserialize_error(format!(
@@ -770,8 +772,10 @@ impl CsrShardSet {
 
     /// Materialize exactly the listed groups for loading a sparse manifest.
     /// Missing groups stay absent: they read as empty and never produce
-    /// files. Unlisted materialized groups are dropped.
-    pub fn set_groups(&mut self, ids: &[u32]) -> StorageResult<()> {
+    /// files. Unlisted materialized groups are dropped. Construction and
+    /// load paths only; callers must go through the normal group migration
+    /// path instead of resetting a non-empty table.
+    pub(crate) fn set_groups(&mut self, ids: &[u32]) -> StorageResult<()> {
         if self.strategy == EdgeStrategy::None {
             if !ids.is_empty() {
                 return Err(StorageError::deserialize_error(format!(

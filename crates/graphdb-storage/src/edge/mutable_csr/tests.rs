@@ -823,3 +823,69 @@ use super::super::{EdgeId, Nbr, Timestamp, VertexId};
         let mut csr = MutableCsr::new();
         assert!(csr.load(&payload).is_err());
     }
+
+    #[test]
+    fn test_offset_delete_propagates_conflict() {
+        let mut csr = MutableCsr::with_capacity(10, 100);
+        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        assert!(csr.delete_edge(0u32, EdgeId(100), 150).unwrap());
+        assert!(!csr.delete_edge(0u32, EdgeId(100), 150).unwrap());
+        assert!(csr.delete_edge(0u32, EdgeId(100), 160).is_err());
+        assert!(csr.delete_edge_by_offset(0, 0, 160).is_err());
+        assert!(!csr.delete_edge_by_offset(0, 1, 160).unwrap());
+        assert!(!csr.delete_edge_by_offset(0, 0, 150).unwrap());
+    }
+
+    #[test]
+    fn test_single_generic_delete_consistency_on_missing_id() {
+        let mut multi = MutableCsr::with_capacity(10, 100);
+        multi
+            .insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        assert!(multi.delete_edge(0u32, EdgeId(100), 150).unwrap());
+        assert!(!multi.delete_edge(0u32, EdgeId(999), 160).unwrap());
+
+        let mut single = crate::edge::SingleMutableCsr::with_capacity(4);
+        single
+            .insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        assert!(single.delete_edge(0, EdgeId(100), 150).unwrap());
+        assert!(!single.delete_edge(0, EdgeId(999), 160).unwrap());
+    }
+
+    #[test]
+    fn test_overflow_repack_preserves_unexpired_tombstones() {
+        let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+        for i in 0..8u64 {
+            csr.insert_edge(0u32, VertexId::from_int64(100 + i as i64), EdgeId(i), 1)
+                .unwrap();
+        }
+        assert!(csr.delete_edge(0u32, EdgeId(6), 10).unwrap());
+        assert!(csr.delete_edge(0u32, EdgeId(7), 10).unwrap());
+        let overflow_before: usize = csr
+            .get_overflow_chunks(0)
+            .map(|chunks| chunks.iter().map(Vec::len).sum())
+            .unwrap_or(0);
+        assert!(overflow_before > 0);
+
+        let mut reported = Vec::new();
+        csr.compact_overflow_for_vertex(0, Timestamp::MAX, &mut |id, ts| {
+            reported.push((id, ts))
+        });
+        assert!(reported.is_empty());
+        let kept: usize = csr
+            .get_overflow_chunks(0)
+            .map(|chunks| chunks.iter().map(Vec::len).sum())
+            .unwrap_or(0);
+        assert_eq!(kept, overflow_before);
+
+        let mut reported = Vec::new();
+        csr.compact_overflow_for_vertex(0, 10, &mut |id, ts| reported.push((id, ts)));
+        assert_eq!(reported.len(), 2);
+        let kept: usize = csr
+            .get_overflow_chunks(0)
+            .map(|chunks| chunks.iter().map(Vec::len).sum())
+            .unwrap_or(0);
+        assert_eq!(kept, overflow_before - 2);
+    }

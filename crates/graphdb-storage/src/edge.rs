@@ -109,12 +109,14 @@ pub struct EdgeSchema {
 
 impl EdgeSchema {
     /// Validate that the schema has compatible CSR strategies.
-    /// At least one of out-edge or in-edge must be enabled (not None).
+    /// Both directions must be enabled: the write path performs
+    /// unconditional double writes, so a single-direction table would
+    /// construct successfully yet fail every write on the disabled leg.
     pub fn validate(&self) -> graphdb_core::StorageResult<()> {
-        if self.oe_strategy == EdgeStrategy::None && self.ie_strategy == EdgeStrategy::None {
+        if self.oe_strategy == EdgeStrategy::None || self.ie_strategy == EdgeStrategy::None {
             return Err(graphdb_core::StorageError::invalid_operation(format!(
-                "EdgeSchema '{}': both oe_strategy and ie_strategy are None. \
-                         At least one direction must be enabled",
+                "EdgeSchema '{}': oe_strategy and ie_strategy must both be enabled. \
+                         Single-direction tables are not supported",
                 self.label_name
             )));
         }
@@ -332,7 +334,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("both oe_strategy and ie_strategy are None"));
+            .contains("must both be enabled"));
     }
 
     #[test]
@@ -349,7 +351,7 @@ mod tests {
         };
 
         let result = schema.validate();
-        assert!(result.is_ok());
+        assert!(result.is_err());
     }
 
     #[test]
@@ -366,7 +368,7 @@ mod tests {
         };
 
         let result = schema.validate();
-        assert!(result.is_ok());
+        assert!(result.is_err());
     }
 
     #[test]

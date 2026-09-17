@@ -173,14 +173,14 @@ impl SingleMutableCsr {
             return Ok(false);
         }
 
+        if nbr.edge_id != edge_id {
+            return Ok(false);
+        }
+
         if matches!(
             decide_slot_delete(nbr, nbr.edge_id, ts)?,
             DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated
         ) {
-            return Ok(false);
-        }
-
-        if nbr.edge_id != edge_id {
             return Ok(false);
         }
 
@@ -795,6 +795,17 @@ mod tests {
             .delete_edge(0, crate::edge::INVALID_EDGE_ID, 150)
             .unwrap());
         assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
+    }
+
+    #[test]
+    fn test_delete_missing_id_on_tombstone_returns_not_found() {
+        let mut csr = SingleMutableCsr::with_capacity(4);
+        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
+        assert!(!csr.delete_edge(0, EdgeId(999), 160).unwrap());
+        assert!(csr.delete_edge(0, EdgeId(100), 160).is_err());
+        assert!(!csr.delete_edge(0, EdgeId(100), 150).unwrap());
     }
 
     #[test]

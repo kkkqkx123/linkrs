@@ -356,19 +356,13 @@ fn test_csr_timestamps_agree_with_mvcc() {
 
 #[test]
 fn test_failed_insert_leaves_no_orphan_copies() {
-    // In-direction strategy None forces the in-CSR leg to fail after the
-    // out-CSR leg and the property row succeeded: the rollback must release
-    // the property row for reuse and drop the authority entry.
+    // Single-direction schemas are rejected at construction: the write path
+    // assumes unconditional double writes, so the illegal combination must
+    // surface here instead of failing mid-write with a self-rollback.
     let mut schema = create_test_schema();
     schema.ie_strategy = EdgeStrategy::None;
-    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
-    let rows_before = table.properties.row_count();
-    let result = table.insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100);
+    let result = EdgeTable::with_config(schema, EdgeTableConfig::default());
     assert!(result.is_err());
-    assert_eq!(table.properties.row_count(), rows_before);
-    assert!(table.mvcc.creation_ts_of(EdgeId(0)).is_none());
-    assert!(!table.mvcc.is_edge_deleted(EdgeId(0)));
-    assert_eq!(table.loaded_copy_mismatches(), (0, 0));
 }
 
 #[test]
@@ -1348,4 +1342,39 @@ fn test_topology_encoding_report_uses_integer_path() {
     for (_, _, plain, encoded) in &report {
         assert!(encoded <= plain);
     }
+}
+
+#[test]
+fn test_delete_conflict_survives_merged_miss() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    assert!(table.delete_edge(0, 1, 0, 150).unwrap());
+    assert!(table.delete_edge(0, 1, 0, 160).is_err());
+    assert!(!table.delete_edge(0, 1, 0, 150).unwrap());
+}
+
+#[test]
+fn test_revert_delete_keeps_authority_on_partial_failure() {
+    use crate::edge::MutableCsrTrait;
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    assert!(table.delete_edge(0, 1, 0, 150).unwrap());
+    assert!(table.in_csr.remove_edge(1, EdgeId(0)));
+    assert!(table.revert_delete_edge(0, 1, 0, 150).is_err());
+    assert!(table.mvcc.is_edge_deleted(EdgeId(0)));
+    assert!(!table.has_edge(0, 1, 0, 200));
+}
+
+#[test]
+fn test_single_direction_schema_rejected_at_construction() {
+    let mut schema = create_test_schema();
+    schema.oe_strategy = EdgeStrategy::Multiple;
+    schema.ie_strategy = EdgeStrategy::None;
+    assert!(EdgeTable::with_config(schema, EdgeTableConfig::default()).is_err());
+    let mut schema = create_test_schema();
+    schema.oe_strategy = EdgeStrategy::None;
+    schema.ie_strategy = EdgeStrategy::Multiple;
+    assert!(EdgeTable::with_config(schema, EdgeTableConfig::default()).is_err());
 }
