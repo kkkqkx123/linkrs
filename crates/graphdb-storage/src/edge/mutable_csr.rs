@@ -567,16 +567,19 @@ impl MutableCsr {
         Ok(false)
     }
 
-    /// Delete edge by destination vertex
-    pub fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> bool {
+    /// Delete edges by destination vertex with full-match semantics.
+    ///
+    /// Deletes every live match and returns the deleted count so table
+    /// rollback can reconcile by count. One call deletes the whole match.
+    pub fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> usize {
         let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
         let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
-            return false;
+            return 0;
         }
 
-        let mut deleted = false;
+        let mut deleted = 0usize;
 
         // Scan primary
         let degree = self.degrees[src_idx] as usize;
@@ -592,7 +595,7 @@ impl MutableCsr {
                     nbr.delete_ts = ts;
                     self.edge_count.fetch_sub(1, Ordering::Relaxed);
                     self.track_primary_live_remove(src_vid, decoded_endpoint, decoded_rank);
-                    deleted = true;
+                    deleted += 1;
                 }
             }
         }
@@ -612,7 +615,7 @@ impl MutableCsr {
                         nbr.delete_ts = ts;
                         self.edge_count.fetch_sub(1, Ordering::Relaxed);
                         overflow_deleted_endpoints.push((ep, rk));
-                        deleted = true;
+                        deleted += 1;
                     }
                 }
             }
@@ -1622,7 +1625,7 @@ impl MutableCsrTrait for MutableCsr {
         MutableCsr::delete_edge(self, src_vid, edge_id, ts)
     }
 
-    fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> bool {
+    fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> usize {
         MutableCsr::delete_edge_by_dst(self, src_vid, dst, ts)
     }
 

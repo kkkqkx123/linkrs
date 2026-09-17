@@ -29,8 +29,9 @@ pub trait MutableCsrTrait: CsrBase {
     /// - `MutableCsr`: checks for duplicate (neighbor + valid timestamp) across primary and overflow,
     ///   writes to primary if space available, otherwise spills to overflow with auto-expansion.
     ///   Returns `EdgeAlreadyExists` on duplicate.
-    /// - `SingleMutableCsr`: overwrites based on timestamp ordering (only if new ts > existing ts).
-    ///   Returns `Conflict` on timestamp conflict.
+    /// - `SingleMutableCsr`: rejects a second live edge in an occupied slot
+    ///   with `Conflict`, matching the table-layer Single contract. No silent
+    ///   overwrite exists.
     fn insert_edge(
         &mut self,
         src_vid: u32,
@@ -50,15 +51,20 @@ pub trait MutableCsrTrait: CsrBase {
     ///   but was deleted at a **different** timestamp.
     ///
     /// - `MutableCsr`: uses `edge_id` to locate and delete the specific edge.
-    /// - `SingleMutableCsr`: the stored edge id must match unless the caller
-    ///   passes the wildcard (`u64::MAX`), which addresses the single slot.
+    /// - `SingleMutableCsr`: the stored edge id must match exactly. No wildcard
+    ///   edge id is supported; callers pass the precise id or use endpoint
+    ///   addressing.
     fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool>;
 
-    /// Delete all edges matching (src, dst).
+    /// Delete all edges matching (src, dst) with full-match semantics.
+    ///
+    /// One call deletes every live match; no first-only variant exists.
+    /// Returns the deleted count so table rollback can reconcile by count and
+    /// tombstone metrics can observe multi-match rows.
     ///
     /// - `MutableCsr`: scans primary and overflow, deletes **all** matching edges.
-    /// - `SingleMutableCsr`: deletes the single edge if dst matches.
-    fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> bool;
+    /// - `SingleMutableCsr`: deletes the single edge if dst matches (0 or 1).
+    fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> usize;
 
     /// Delete an edge by its offset position in the primary block.
     ///

@@ -15,6 +15,18 @@
 //! two separate mappings: one for its `src_label` space and one for its
 //! `dst_label` space. Out rows and in neighbors live in the src space; in
 //! rows and out neighbors live in the dst space.
+//!
+//! Observability: row and neighbor mapping misses are counted and debug
+//! logged. Unmapped endpoints keep their original value. Misses never decide
+//! correctness; they only expose caller mapping construction defects.
+//!
+//! Edge-id counter discipline: `next_edge_id` only guarantees monotonicity
+//! without collision, never crash-to-crash stability. Empty-table reload falls
+//! back to max id plus one; tests must assert monotonicity, never exact values.
+//!
+//! Complexity: linear in physical rows including tombstones. Per-group drain
+//! keeps peak memory bounded to one group; large-table compaction belongs in a
+//! maintenance window. Property index rebuild reuses the streaming build.
 
 use super::core::EdgeStore;
 use crate::edge::csr_trait::MutableCsrTrait;
@@ -23,8 +35,17 @@ use graphdb_core::types::{Timestamp, VertexId};
 use graphdb_core::StorageResult;
 use std::collections::HashMap;
 
+/// Remap miss counters for one rebuild call.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RemapStats {
+    pub row_misses: usize,
+    pub neighbor_misses: usize,
+    pub entries: usize,
+}
+
 /// Translate an encoded `(endpoint_internal_id, rank)` neighbor key using the
-/// old-to-new internal ID mapping. Unmapped endpoints are returned unchanged.
+/// old-to-new internal ID mapping. Unmapped endpoints are returned unchanged
+/// and counted as misses by the caller.
 pub(crate) fn remap_endpoint_key(key: VertexId, mapping: Option<&HashMap<u32, u32>>) -> VertexId {
     let (endpoint, rank) = EdgeStore::decode_edge_endpoint(key);
     match endpoint.as_int64() {
@@ -36,17 +57,48 @@ pub(crate) fn remap_endpoint_key(key: VertexId, mapping: Option<&HashMap<u32, u3
     }
 }
 
-fn remapped_row(id: u32, mapping: Option<&HashMap<u32, u32>>) -> u32 {
+fn remapped_row_counted(
+    id: u32,
+    mapping: Option<&HashMap<u32, u32>>,
+    misses: &mut usize,
+) -> u32 {
     match mapping {
-        Some(m) => m.get(&id).copied().unwrap_or(id),
+        Some(m) => match m.get(&id).copied() {
+            Some(new_id) => new_id,
+            None => {
+                *misses += 1;
+                id
+            }
+        },
         None => id,
+    }
+}
+
+fn remap_endpoint_key_counted(
+    key: VertexId,
+    mapping: Option<&HashMap<u32, u32>>,
+    misses: &mut usize,
+) -> VertexId {
+    let (endpoint, rank) = EdgeStore::decode_edge_endpoint(key);
+    match endpoint.as_int64() {
+        Some(id) if id >= 0 => match mapping {
+            Some(m) => match m.get(&(id as u32)).copied() {
+                Some(new_id) => EdgeStore::edge_endpoint_key(new_id, rank),
+                None => {
+                    *misses += 1;
+                    key
+                }
+            },
+            None => key,
+        },
+        _ => key,
     }
 }
 
 /// Rebuild one direction into a fresh shard set with translated rows and
 /// neighbors. Tombstoned entries are re-marked so snapshot visibility is
 /// preserved. Trailing empty groups are dropped; non-empty strategies keep
-/// at least one group.
+/// at least one group. Miss counters observe unmapped rows and neighbors.
 fn remap_direction(
     old: &CsrShardSet,
     row_mapping: Option<&HashMap<u32, u32>>,
@@ -54,6 +106,7 @@ fn remap_direction(
     strategy: EdgeStrategy,
     group_bits: u32,
     overflow_chunk_edges: usize,
+    stats: &mut RemapStats,
 ) -> StorageResult<CsrShardSet> {
     let mut rebuilt = CsrShardSet::new(strategy, group_bits, overflow_chunk_edges)?;
     if strategy == EdgeStrategy::None {
@@ -77,8 +130,14 @@ fn remap_direction(
             })
             .unwrap_or_default();
         for (src, nbr) in entries {
-            let new_src = remapped_row(src, row_mapping);
-            let new_neighbor = remap_endpoint_key(nbr.to_vertex_id(), neighbor_mapping);
+            let mut row_miss = 0usize;
+            let mut nbr_miss = 0usize;
+            let new_src = remapped_row_counted(src, row_mapping, &mut row_miss);
+            let new_neighbor =
+                remap_endpoint_key_counted(nbr.to_vertex_id(), neighbor_mapping, &mut nbr_miss);
+            stats.row_misses += row_miss;
+            stats.neighbor_misses += nbr_miss;
+            stats.entries += 1;
             let (ep_vid, ep_rank) = new_neighbor.decode_edge_endpoint();
             let new_nbr = Nbr {
                 endpoint: ep_vid.as_int64().unwrap_or(0) as u32,
@@ -116,21 +175,33 @@ impl EdgeStore {
     ///
     /// Both directions are rebuilt group by group with trailing empty groups
     /// dropped. The property index encodes (src, dst) internal IDs in its keys
-    /// and is rebuilt from the remapped data when enabled.
+    /// and is rebuilt from the remapped data when enabled. Unmapped endpoints
+    /// keep their original value; misses are debug logged only.
     pub fn remap_vertex_ids(
         &mut self,
         src_mapping: Option<&HashMap<u32, u32>>,
         dst_mapping: Option<&HashMap<u32, u32>>,
     ) -> StorageResult<()> {
+        self.remap_vertex_ids_with_stats(src_mapping, dst_mapping)
+            .map(|_| ())
+    }
+
+    /// Same as `remap_vertex_ids` but returns miss counters for tests.
+    pub fn remap_vertex_ids_with_stats(
+        &mut self,
+        src_mapping: Option<&HashMap<u32, u32>>,
+        dst_mapping: Option<&HashMap<u32, u32>>,
+    ) -> StorageResult<RemapStats> {
         if src_mapping.is_none() && dst_mapping.is_none() {
-            return Ok(());
+            return Ok(RemapStats::default());
         }
         let src_empty = src_mapping.is_none_or(|m| m.is_empty());
         let dst_empty = dst_mapping.is_none_or(|m| m.is_empty());
         if src_empty && dst_empty {
-            return Ok(());
+            return Ok(RemapStats::default());
         }
 
+        let mut stats = RemapStats::default();
         self.out_csr = remap_direction(
             &self.out_csr,
             src_mapping,
@@ -138,6 +209,7 @@ impl EdgeStore {
             self.schema.oe_strategy,
             self.config.node_group_bits,
             self.config.overflow_chunk_edges,
+            &mut stats,
         )?;
         self.in_csr = remap_direction(
             &self.in_csr,
@@ -146,6 +218,7 @@ impl EdgeStore {
             self.schema.ie_strategy,
             self.config.node_group_bits,
             self.config.overflow_chunk_edges,
+            &mut stats,
         )?;
 
         // The property index encodes (src, dst) internal IDs in its keys;
@@ -160,15 +233,18 @@ impl EdgeStore {
         }
 
         log::debug!(
-            "EdgeTable[{}] remapped vertex IDs (src_mapping={}, dst_mapping={}); out_groups={}, in_groups={}",
+            "EdgeTable[{}] remapped vertex IDs (src_mapping={}, dst_mapping={}); out_groups={}, in_groups={}, row_misses={}, neighbor_misses={}, entries={}",
             self.label,
             src_mapping.map(|m| m.len()).unwrap_or(0),
             dst_mapping.map(|m| m.len()).unwrap_or(0),
             self.out_csr.group_count(),
             self.in_csr.group_count(),
+            stats.row_misses,
+            stats.neighbor_misses,
+            stats.entries,
         );
 
-        Ok(())
+        Ok(stats)
     }
 }
 
@@ -363,5 +439,62 @@ mod tests {
         assert!(loaded.get_edge(1, 2, 0, 200).is_some());
         assert!(loaded.get_edge(5000, 6000, 0, 200).is_none());
         assert_eq!(loaded.edge_count(), 2);
+    }
+
+    #[test]
+    fn test_remap_compaction_reports_zero_misses() {
+        let mut table = make_table();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        table.insert_edge(1, 0, 0, &[], 100).unwrap();
+        let mapping = HashMap::from([(0u32, 0u32), (1u32, 1u32)]);
+        let stats = table
+            .remap_vertex_ids_with_stats(Some(&mapping), Some(&mapping))
+            .unwrap();
+        assert_eq!(stats.row_misses, 0);
+        assert_eq!(stats.neighbor_misses, 0);
+        assert!(table.get_edge(0, 1, 0, 200).is_some());
+        assert!(table.get_edge(1, 0, 0, 200).is_some());
+        assert_eq!(table.live_authority_orphans(), 0);
+    }
+
+    #[test]
+    fn test_remap_partial_mapping_reports_expected_misses() {
+        let mut table = make_table();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        let mapping = HashMap::from([(99u32, 100u32)]);
+        let stats = table
+            .remap_vertex_ids_with_stats(Some(&mapping), Some(&mapping))
+            .unwrap();
+        assert!(stats.row_misses > 0);
+        assert!(stats.neighbor_misses > 0);
+        assert!(table.get_edge(0, 1, 0, 200).is_some());
+    }
+
+    #[test]
+    fn test_edge_id_counter_monotonic_across_reload() {
+        let mut table = make_table();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        table.insert_edge(0, 2, 0, &[], 110).unwrap();
+        table.delete_edge(0, 2, 0, 150).unwrap();
+        let before = table.next_edge_id;
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+        let mut loaded = make_table();
+        loaded.load(dir.path()).expect("load should succeed");
+        assert!(loaded.next_edge_id >= before);
+        let mut out_seen = std::collections::HashSet::new();
+        for (_, nbr) in loaded.out_csr.iter_all() {
+            assert!(out_seen.insert(nbr.edge_id));
+        }
+        let mut in_seen = std::collections::HashSet::new();
+        for (_, nbr) in loaded.in_csr.iter_all() {
+            assert!(in_seen.insert(nbr.edge_id));
+        }
+        assert_eq!(out_seen, in_seen);
     }
 }

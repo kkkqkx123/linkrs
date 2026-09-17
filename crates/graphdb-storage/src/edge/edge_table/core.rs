@@ -47,8 +47,15 @@ pub struct EdgeStore {
     pub property_index_cache: HashMap<String, usize>,
 
     /// Edge property index for efficient property-based filtering.
-    /// When set, insert/delete operations automatically maintain the index.
+    ///
+    /// Best-effort secondary structure: insert/delete failures are counted in
+    /// `index_write_failures` and reported to the metrics registry, never
+    /// failing the primary write. Operators rebuild via
+    /// `build_property_index` once failures cross a chosen threshold.
     pub property_index: Option<EdgePropertyIndex>,
+    /// Secondary index write failures since the last rebuild or reset.
+    /// Observability only; primary data stays authoritative.
+    pub index_write_failures: u64,
 
     /// In-flight staged add-column change. Memory-only: a crash before
     /// publishing is equivalent to aborting, because reload rebuilds the
@@ -154,6 +161,7 @@ impl EdgeStore {
             version_history,
             property_index_cache,
             property_index: None,
+            index_write_failures: 0,
             pending_add_column: None,
             pending_drop_column: None,
         })
@@ -189,10 +197,54 @@ impl EdgeStore {
         self.stats_manager = Some(stats);
     }
 
+    /// Secondary index write failures since the last rebuild or reset.
+    pub fn index_failure_count(&self) -> u64 {
+        self.index_write_failures
+    }
+
+    /// Reset the secondary index failure counter, typically after a rebuild.
+    pub fn reset_index_failures(&mut self) {
+        self.index_write_failures = 0;
+    }
+
+    /// Rebuild the property index when failures cross `threshold`.
+    ///
+    /// Returns true when a rebuild ran. Threshold policy lives with the
+    /// operator; the store only guarantees the counter is monotonic between
+    /// resets.
+    pub fn rebuild_property_index_on_failures(
+        &mut self,
+        threshold: u64,
+        pool_capacity: u64,
+    ) -> StorageResult<bool> {
+        if self.property_index.is_none() || self.index_write_failures < threshold {
+            return Ok(false);
+        }
+        self.build_property_index(pool_capacity)?;
+        self.reset_index_failures();
+        Ok(true)
+    }
+
+    fn record_index_write_failure(&mut self) {
+        self.index_write_failures = self.index_write_failures.saturating_add(1);
+        if let Some(stats) = &self.stats_manager {
+            stats.record_index_operation(0, "edge-property", 0, false);
+        }
+    }
+
+    fn record_index_write_success(&self, prop_name: &str) {
+        if let Some(stats) = &self.stats_manager {
+            stats.record_index_operation(0, prop_name, 0, true);
+        }
+    }
+
     /// Single row-location entry for point lookups: physical topology lookup
     /// plus the authoritative MVCC visibility check. Adjacency, existence
     /// and record reads must funnel through here rather than reading CSR
-    /// timestamps directly; row stamps exist only for collection.
+    /// timestamps directly; row stamps exist only for collection. Scans all
+    /// physical matches for the key so a delete-then-rebuild pair (old
+    /// tombstone plus new live row sharing one endpoint key) resolves to the
+    /// visible live row instead of the first physical slot.
     fn merged_get_edge(
         &self,
         csr: &CsrShardSet,
@@ -200,12 +252,16 @@ impl EdgeStore {
         dst: VertexId,
         ts: Timestamp,
     ) -> Option<Nbr> {
-        let nbr = csr.get_edge_physical(src, dst)?;
-        if self.mvcc.is_edge_visible(nbr.edge_id, ts) {
-            Some(nbr)
-        } else {
-            None
-        }
+        let mut found = None;
+        csr.visit_physical(src, |nbr| {
+            if nbr.to_vertex_id() == dst && self.mvcc.is_edge_visible(nbr.edge_id, ts) {
+                found = Some(nbr);
+                false
+            } else {
+                true
+            }
+        });
+        found
     }
 
     fn merged_edges_of(&self, csr: &CsrShardSet, src: u32, ts: Timestamp) -> Vec<Nbr> {
@@ -540,14 +596,19 @@ impl EdgeStore {
 
     /// Commit one staging batch atomically.
     ///
-    /// Entries are prevalidated before any mutation, then moved into the
-    /// committed topology, property rows, and visibility records in order.
-    /// Prevalidation failures leave committed state untouched. When a late
-    /// failure still occurs, only the entries this batch already applied are
-    /// rolled back; committed data from other batches is never touched.
-    /// Dropping a batch without committing discards it with no residue.
+    /// Entries apply in stage order with batch prefix effects: a later entry
+    /// observes earlier entries of the same batch. An insert cancelled by a
+    /// later delete of the same key leaves no tombstone and no visible edge;
+    /// a delete followed by an insert of the same key rebuilds. Staged writes
+    /// stay invisible to every read until commit. Prevalidation failures leave
+    /// committed state untouched. When a late failure still occurs, only the
+    /// entries this batch already applied are rolled back; committed data from
+    /// other batches is never touched. Dropping a batch without committing
+    /// discards it with no residue. Cancelled inserts consume at most the
+    /// monotonic edge-id counter, never visible state.
     ///
-    /// Returns the number of applied entries (inserts plus deletes).
+    /// Returns the number of net applied entries (inserts plus deletes,
+    /// excluding batch-cancelled pairs).
     pub fn commit_staging_batch(&mut self, mut batch: EdgeStagingBatch) -> StorageResult<usize> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
@@ -561,48 +622,64 @@ impl EdgeStore {
         let max_ts = batch.max_timestamp();
         let inserts = batch.take_inserts();
         let deletes = batch.take_deletes();
-        if inserts.is_empty() && deletes.is_empty() {
+        let order = batch.take_order();
+        if order.is_empty() {
             return Ok(0);
         }
 
         let mut applied_inserts: Vec<(u32, u32, i64, EdgeId, Timestamp)> =
             Vec::with_capacity(inserts.len());
-        for ins in &inserts {
-            match self.apply_staged_insert(
-                ins.src,
-                ins.dst,
-                ins.rank,
-                &ins.properties,
-                ins.create_ts,
-            ) {
-                Ok(edge_id) => {
-                    applied_inserts.push((ins.src, ins.dst, ins.rank, edge_id, ins.create_ts));
-                }
-                Err(e) => {
-                    for (src, dst, rank, edge_id, ts) in applied_inserts {
-                        self.erase_applied_insert(src, dst, rank, edge_id, ts);
-                    }
-                    return Err(e);
-                }
-            }
-        }
-
+        let mut insert_by_key: HashMap<(u32, u32, i64), (u32, u32, i64, EdgeId, Timestamp)> =
+            HashMap::with_capacity(inserts.len());
         let mut applied_deletes: Vec<(u32, u32, i64, EdgeId, Timestamp)> =
             Vec::with_capacity(deletes.len());
-        for del in &deletes {
-            match self.apply_staged_delete(del.src, del.dst, del.rank, del.delete_ts) {
-                Ok(Some(edge_id)) => {
-                    applied_deletes.push((del.src, del.dst, del.rank, edge_id, del.delete_ts));
+        for ord in &order {
+            if ord.is_insert {
+                let ins = &inserts[ord.slot];
+                match self.apply_staged_insert(
+                    ins.src,
+                    ins.dst,
+                    ins.rank,
+                    &ins.properties,
+                    ins.create_ts,
+                ) {
+                    Ok(edge_id) => {
+                        let entry = (ins.src, ins.dst, ins.rank, edge_id, ins.create_ts);
+                        applied_inserts.push(entry);
+                        insert_by_key.insert((ins.src, ins.dst, ins.rank), entry);
+                    }
+                    Err(e) => {
+                        for (src, dst, _rank, edge_id, ts) in applied_deletes {
+                            self.revert_applied_delete(src, dst, edge_id, ts);
+                        }
+                        for (src, dst, rank, edge_id, ts) in applied_inserts {
+                            self.erase_applied_insert(src, dst, rank, edge_id, ts);
+                        }
+                        return Err(e);
+                    }
                 }
-                Ok(None) => {}
-                Err(e) => {
-                    for (src, dst, _rank, edge_id, ts) in applied_deletes {
-                        self.revert_applied_delete(src, dst, edge_id, ts);
+            } else {
+                let del = &deletes[ord.slot];
+                let key = (del.src, del.dst, del.rank);
+                if let Some((src, dst, rank, edge_id, ts)) = insert_by_key.remove(&key) {
+                    self.erase_applied_insert(src, dst, rank, edge_id, ts);
+                    applied_inserts.retain(|(_, _, _, eid, _)| *eid != edge_id);
+                    continue;
+                }
+                match self.apply_staged_delete(del.src, del.dst, del.rank, del.delete_ts) {
+                    Ok(Some(edge_id)) => {
+                        applied_deletes.push((del.src, del.dst, del.rank, edge_id, del.delete_ts));
                     }
-                    for (src, dst, rank, edge_id, ts) in applied_inserts {
-                        self.erase_applied_insert(src, dst, rank, edge_id, ts);
+                    Ok(None) => {}
+                    Err(e) => {
+                        for (src, dst, _rank, edge_id, ts) in applied_deletes {
+                            self.revert_applied_delete(src, dst, edge_id, ts);
+                        }
+                        for (src, dst, rank, edge_id, ts) in applied_inserts {
+                            self.erase_applied_insert(src, dst, rank, edge_id, ts);
+                        }
+                        return Err(e);
                     }
-                    return Err(e);
                 }
             }
         }
@@ -644,44 +721,100 @@ impl EdgeStore {
 
     fn prevalidate_staging_batch(&self, batch: &EdgeStagingBatch) -> StorageResult<()> {
         use std::collections::HashSet;
-        let mut seen: HashSet<(u32, u32, i64)> = HashSet::new();
-        for ins in batch.staged_inserts() {
-            for (name, _) in &ins.properties {
-                if !self.property_index_cache.contains_key(name) {
-                    return Err(StorageError::column_not_found(name.clone()));
+        let mut seen_inserts: HashSet<(u32, u32, i64)> = HashSet::new();
+        let mut seen_deletes: HashSet<(u32, u32, i64)> = HashSet::new();
+        let mut seen_single_src: HashSet<u32> = HashSet::new();
+        let mut seen_single_dst: HashSet<u32> = HashSet::new();
+        let single_out = self.schema.oe_strategy == super::super::EdgeStrategy::Single;
+        let single_in = self.schema.ie_strategy == super::super::EdgeStrategy::Single;
+        for ord in batch.ordered() {
+            if ord.is_insert {
+                let ins = &batch.staged_inserts()[ord.slot];
+                for (name, _) in &ins.properties {
+                    if !self.property_index_cache.contains_key(name) {
+                        return Err(StorageError::column_not_found(name.clone()));
+                    }
                 }
-            }
-            if !seen.insert((ins.src, ins.dst, ins.rank)) {
-                return Err(StorageError::edge_already_exists(format!(
-                    "{} -> {}@{}",
-                    ins.src, ins.dst, ins.rank
-                )));
-            }
-            if self.has_edge(ins.src, ins.dst, ins.rank, ins.create_ts) {
-                return Err(StorageError::edge_already_exists(format!(
-                    "{} -> {}@{}",
-                    ins.src, ins.dst, ins.rank
-                )));
-            }
-            if self.schema.oe_strategy == super::super::EdgeStrategy::Single
-                && !self
-                    .merged_edges_of(&self.out_csr, ins.src, ins.create_ts)
-                    .is_empty()
-            {
-                return Err(StorageError::invalid_operation(format!(
-                    "Single out-edge strategy already holds a live edge for src={}",
-                    ins.src
-                )));
-            }
-            if self.schema.ie_strategy == super::super::EdgeStrategy::Single
-                && !self
-                    .merged_edges_of(&self.in_csr, ins.dst, ins.create_ts)
-                    .is_empty()
-            {
-                return Err(StorageError::invalid_operation(format!(
-                    "Single in-edge strategy already holds a live edge for dst={}",
-                    ins.dst
-                )));
+                let key = (ins.src, ins.dst, ins.rank);
+                if seen_inserts.contains(&key) {
+                    return Err(StorageError::edge_already_exists(format!(
+                        "{} -> {}@{}",
+                        ins.src, ins.dst, ins.rank
+                    )));
+                }
+                if single_out && seen_single_src.contains(&ins.src) {
+                    return Err(StorageError::invalid_operation(format!(
+                        "Single out-edge strategy already holds a live edge for src={}",
+                        ins.src
+                    )));
+                }
+                if single_in && seen_single_dst.contains(&ins.dst) {
+                    return Err(StorageError::invalid_operation(format!(
+                        "Single in-edge strategy already holds a live edge for dst={}",
+                        ins.dst
+                    )));
+                }
+                if single_out {
+                    let live = self.merged_edges_of(&self.out_csr, ins.src, ins.create_ts);
+                    let covered = !live.is_empty()
+                        && live.iter().all(|nbr| {
+                            seen_deletes.contains(&(ins.src, nbr.endpoint, nbr.rank))
+                        });
+                    if !live.is_empty() && !covered {
+                        return Err(StorageError::invalid_operation(format!(
+                            "Single out-edge strategy already holds a live edge for src={}",
+                            ins.src
+                        )));
+                    }
+                }
+                if single_in {
+                    let live = self.merged_edges_of(&self.in_csr, ins.dst, ins.create_ts);
+                    let covered = !live.is_empty()
+                        && live.iter().all(|nbr| {
+                            seen_deletes.contains(&(nbr.endpoint, ins.dst, nbr.rank))
+                        });
+                    if !live.is_empty() && !covered {
+                        return Err(StorageError::invalid_operation(format!(
+                            "Single in-edge strategy already holds a live edge for dst={}",
+                            ins.dst
+                        )));
+                    }
+                }
+                if !seen_deletes.contains(&key)
+                    && self.has_edge(ins.src, ins.dst, ins.rank, ins.create_ts)
+                {
+                    return Err(StorageError::edge_already_exists(format!(
+                        "{} -> {}@{}",
+                        ins.src, ins.dst, ins.rank
+                    )));
+                }
+                if seen_deletes.contains(&key) {
+                    seen_deletes.remove(&key);
+                }
+                seen_inserts.insert(key);
+                if single_out {
+                    seen_single_src.insert(ins.src);
+                }
+                if single_in {
+                    seen_single_dst.insert(ins.dst);
+                }
+            } else {
+                let del = &batch.staged_deletes()[ord.slot];
+                let key = (del.src, del.dst, del.rank);
+                if seen_inserts.remove(&key) {
+                    if single_out
+                        && !seen_inserts.iter().any(|(s, _, _)| *s == del.src)
+                    {
+                        seen_single_src.remove(&del.src);
+                    }
+                    if single_in
+                        && !seen_inserts.iter().any(|(_, d, _)| *d == del.dst)
+                    {
+                        seen_single_dst.remove(&del.dst);
+                    }
+                } else {
+                    seen_deletes.insert(key);
+                }
             }
         }
         Ok(())
@@ -782,7 +915,10 @@ impl EdgeStore {
 
     /// Move one staged delete into the committed structures.
     ///
-    /// Returns the deleted edge id, or `None` when no edge matched.
+    /// Full-match endpoint semantics: one call deletes every live match for
+    /// the endpoint key and reports the deleted count for rollback
+    /// reconciliation. Returns the deleted edge id, or `None` when no edge
+    /// matched.
     fn apply_staged_delete(
         &mut self,
         src: u32,
@@ -805,11 +941,22 @@ impl EdgeStore {
             if !self.out_csr.delete_edge(src, edge_id, ts)? {
                 return Ok(None);
             }
-            if !self.in_csr.delete_edge_by_dst(dst, src_key, ts) {
+            let in_deleted = self.in_csr.delete_edge_by_dst(dst, src_key, ts);
+            if in_deleted == 0 {
                 // Roll back the out-direction deletion to keep both sides
-                // consistent.
+                // consistent. Count reconciliation: expected exactly one
+                // in-direction match for the out edge just deleted.
                 self.out_csr.revert_delete_by_edge_id(src, edge_id, ts);
                 return Ok(None);
+            }
+            if in_deleted > 1 {
+                log::debug!(
+                    "apply_staged_delete multi-match: ({}, {}, {}) in_deleted={}",
+                    src,
+                    dst,
+                    rank,
+                    in_deleted
+                );
             }
 
             self.mvcc.record_edge_deletion(edge_id, ts);

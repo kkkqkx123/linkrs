@@ -756,12 +756,12 @@ impl MutableCsrTrait for CsrShardSet {
         Ok(deleted)
     }
 
-    fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> bool {
+    fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> usize {
         let Some((gid, local)) = self.route(src_vid) else {
-            return false;
+            return 0;
         };
         let deleted = self.shards[gid].variant.delete_edge_by_dst(local, dst, ts);
-        if deleted {
+        if deleted > 0 {
             self.shards[gid].dirty.deleted = true;
             self.shards[gid].reclaim_hint = true;
         }
@@ -1112,7 +1112,7 @@ mod tests {
         assert_eq!(set.vertex_capacity(), 0);
         assert!(set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).is_err());
         assert!(set.delete_edge(0, EdgeId(0), 100).is_err());
-        assert!(!set.delete_edge_by_dst(0, endpoint(1, 0), 100));
+        assert_eq!(set.delete_edge_by_dst(0, endpoint(1, 0), 100), 0);
     }
 
     #[test]

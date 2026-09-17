@@ -318,8 +318,8 @@ impl MutableCsrTrait for CsrVariant {
         )))
     }
 
-    fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> bool {
-        dispatch!(self, delete_edge_by_dst(src_vid, dst, ts) -> false)
+    fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> usize {
+        dispatch!(self, delete_edge_by_dst(src_vid, dst, ts) -> 0)
     }
 
     fn delete_edge_by_offset(
@@ -601,7 +601,7 @@ mod tests {
 
         // None variant should reject all deletions
         assert!(csr.delete_edge(0, EdgeId(100), 1).is_err());
-        assert!(!csr.delete_edge_by_dst(0, VertexId::from_int64(1), 1));
+        assert_eq!(csr.delete_edge_by_dst(0, VertexId::from_int64(1), 1), 0);
         assert!(!csr.revert_delete_by_offset(0, 0, 1));
 
         // None variant should return None for get_edge

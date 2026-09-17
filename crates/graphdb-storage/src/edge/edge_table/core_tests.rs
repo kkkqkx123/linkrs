@@ -678,9 +678,137 @@ fn test_staging_batch_multi_entry_commits_together() {
     assert!(batch.contains_insert(0, 1, 0));
     batch.stage_delete(0, 1, 0, 150);
     let applied = table.commit_staging_batch(batch).unwrap();
-    assert_eq!(applied, 3);
+    assert_eq!(applied, 1);
     assert!(!table.has_edge(0, 1, 0, 200));
     assert!(table.has_edge(0, 2, 0, 200));
+    assert_eq!(table.mvcc.total_tombstone_count(), 0);
+    assert_eq!(table.live_authority_orphans(), 0);
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0));
+}
+
+#[test]
+fn test_batch_insert_insert_same_key_rejected() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    let mut batch = EdgeTable::staging_batch();
+    batch.stage_insert(0, 1, 0, &[], 100);
+    batch.stage_insert(0, 1, 0, &[], 110);
+    assert!(table.commit_staging_batch(batch).is_err());
+    assert!(!table.has_edge(0, 1, 0, 200));
+    assert_eq!(table.live_authority_orphans(), 0);
+}
+
+#[test]
+fn test_batch_delete_insert_same_key_rebuilds() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    let mut batch = EdgeTable::staging_batch();
+    batch.stage_delete(0, 1, 0, 150);
+    batch.stage_insert(0, 1, 0, &[], 160);
+    let applied = table.commit_staging_batch(batch).unwrap();
+    assert_eq!(applied, 2);
+    assert!(table.has_edge(0, 1, 0, 200));
+    assert_eq!(table.live_authority_orphans(), 0);
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0));
+}
+
+#[test]
+fn test_batch_insert_delete_same_key_cancels_without_tombstone() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    let mut batch = EdgeTable::staging_batch();
+    batch.stage_insert(0, 1, 0, &[], 100);
+    batch.stage_delete(0, 1, 0, 150);
+    let applied = table.commit_staging_batch(batch).unwrap();
+    assert_eq!(applied, 0);
+    assert!(!table.has_edge(0, 1, 0, 200));
+    assert_eq!(table.mvcc.total_tombstone_count(), 0);
+    assert_eq!(table.live_authority_orphans(), 0);
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0));
+}
+
+#[test]
+fn test_batch_delete_delete_same_key_idempotent() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    let mut batch = EdgeTable::staging_batch();
+    batch.stage_delete(0, 1, 0, 150);
+    batch.stage_delete(0, 1, 0, 150);
+    let applied = table.commit_staging_batch(batch).unwrap();
+    assert_eq!(applied, 1);
+    assert!(!table.has_edge(0, 1, 0, 200));
+    assert_eq!(table.live_authority_orphans(), 0);
+}
+
+#[test]
+fn test_batch_single_slot_second_insert_rejected() {
+    let mut schema = create_test_schema();
+    schema.oe_strategy = EdgeStrategy::Single;
+    schema.ie_strategy = EdgeStrategy::Single;
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    let mut batch = EdgeTable::staging_batch();
+    batch.stage_insert(0, 1, 0, &[], 100);
+    batch.stage_insert(0, 2, 0, &[], 110);
+    assert!(table.commit_staging_batch(batch).is_err());
+    assert!(!table.has_edge(0, 1, 0, 200));
+    assert!(!table.has_edge(0, 2, 0, 200));
+    assert_eq!(table.live_authority_orphans(), 0);
+}
+
+#[test]
+fn test_single_csr_and_table_reject_second_live_edge_with_same_error() {
+    use crate::edge::{CsrBase, MutableCsrTrait};
+    let mut schema = create_test_schema();
+    schema.oe_strategy = EdgeStrategy::Single;
+    schema.ie_strategy = EdgeStrategy::Single;
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    let table_err = table
+        .insert_edge(0, 2, 0, &[], 110)
+        .expect_err("table must reject second live edge");
+    assert!(table_err.to_string().contains("Single"));
+    let mut csr = crate::edge::SingleMutableCsr::with_capacity(4);
+    csr.insert_edge(
+        0u32,
+        VertexId::edge_endpoint_key(1, 0),
+        EdgeId(0),
+        100,
+    )
+    .unwrap();
+    let csr_err = csr
+        .insert_edge(0u32, VertexId::edge_endpoint_key(2, 0), EdgeId(1), 200)
+        .expect_err("csr must reject second live edge");
+    assert!(csr_err.to_string().contains("conflict"));
+    assert_eq!(table.live_authority_orphans(), 0);
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0));
+}
+
+#[test]
+fn test_delete_by_dst_count_observable_and_rollback_reconciles() {
+    use crate::edge::MutableCsrTrait;
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    let src_key = EdgeTable::edge_endpoint_key(0, 0);
+    assert_eq!(table.in_csr.delete_edge_by_dst(1, src_key, 150), 1);
+    table
+        .in_csr
+        .revert_delete_by_edge_id(1, EdgeId(0), 150);
+    assert!(table.has_edge(0, 1, 0, 200));
+    let mut csr = crate::edge::MutableCsr::new();
+    csr.insert_edge(0, VertexId::edge_endpoint_key(1, 0), EdgeId(0), 100)
+        .unwrap();
+    assert_eq!(
+        csr.delete_edge_by_dst(0, VertexId::edge_endpoint_key(1, 0), 150),
+        1
+    );
+    assert_eq!(
+        csr.delete_edge_by_dst(0, VertexId::edge_endpoint_key(1, 0), 150),
+        0
+    );
+    assert_eq!(table.live_authority_orphans(), 0);
 }
 
 #[test]

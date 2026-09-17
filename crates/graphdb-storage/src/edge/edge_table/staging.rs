@@ -2,9 +2,18 @@
 //!
 //! A batch holds inserts and deletes without touching the committed
 //! topology, property rows, or visibility records. Committing assigns edge
-//! identifiers and moves every entry into the committed structures in one
-//! pass; a failure rolls back only the entries this batch already applied.
+//! identifiers and moves every entry into the committed structures in order;
+//! a failure rolls back only the entries this batch already applied.
 //! Dropping a batch discards it without any compensation work.
+//!
+//! Commit contract, frozen for all callers:
+//! - Entries apply in stage order. Callers own batch ordering.
+//! - Staged writes stay invisible to every read until commit.
+//! - Failure rolls back only entries this batch already applied.
+//! - An insert cancelled by a later delete of the same key in the same batch
+//!   leaves no tombstone and no visible edge. The monotonic edge-id counter
+//!   only guarantees monotonicity without collision; callers must not rely on
+//!   exact values across cancel or crash reload.
 
 use graphdb_core::types::Timestamp;
 use graphdb_core::Value;
@@ -28,15 +37,32 @@ pub struct StagedDelete {
     pub delete_ts: Timestamp,
 }
 
+/// Position of one staged entry inside its insert/delete store.
+///
+/// Preserves stage order across the split insert/delete vectors so commit can
+/// apply entries sequentially and prevalidation can compute the batch net
+/// effect. `slot` indexes into the matching vector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StagedOrder {
+    pub src: u32,
+    pub dst: u32,
+    pub rank: i64,
+    pub is_insert: bool,
+    pub slot: usize,
+}
+
 /// Isolated buffer for one atomic group of edge writes.
 ///
-/// Entries stay invisible to reads until committed. Committing applies the
-/// whole group or reports the failure with no partial residue from this
-/// batch left behind.
+/// Entries stay invisible to reads until committed. Committing applies entries
+/// in stage order or reports the failure with no partial residue from this
+/// batch left behind. An insert followed by a delete of the same key cancels
+/// without a tombstone; a delete followed by an insert of the same key
+/// rebuilds.
 #[derive(Debug, Clone, Default)]
 pub struct EdgeStagingBatch {
     inserts: Vec<StagedInsert>,
     deletes: Vec<StagedDelete>,
+    order: Vec<StagedOrder>,
 }
 
 impl EdgeStagingBatch {
@@ -53,6 +79,7 @@ impl EdgeStagingBatch {
         properties: &[(String, Value)],
         create_ts: Timestamp,
     ) {
+        let slot = self.inserts.len();
         self.inserts.push(StagedInsert {
             src,
             dst,
@@ -60,15 +87,30 @@ impl EdgeStagingBatch {
             properties: properties.to_vec(),
             create_ts,
         });
+        self.order.push(StagedOrder {
+            src,
+            dst,
+            rank,
+            is_insert: true,
+            slot,
+        });
     }
 
     /// Buffer one delete. No shared state is touched.
     pub fn stage_delete(&mut self, src: u32, dst: u32, rank: i64, delete_ts: Timestamp) {
+        let slot = self.deletes.len();
         self.deletes.push(StagedDelete {
             src,
             dst,
             rank,
             delete_ts,
+        });
+        self.order.push(StagedOrder {
+            src,
+            dst,
+            rank,
+            is_insert: false,
+            slot,
         });
     }
 
@@ -107,6 +149,10 @@ impl EdgeStagingBatch {
 
     /// Read-your-write check before commit: does the batch hold an insert
     /// for `(src, dst, rank)`?
+    ///
+    /// Pre-commit helper only, never a read-path merge. Commit prevalidation
+    /// uses the same net-effect view over stage order, so these helpers stay
+    /// consistent with commit decisions instead of misleading callers.
     pub fn contains_insert(&self, src: u32, dst: u32, rank: i64) -> bool {
         self.inserts
             .iter()
@@ -114,10 +160,18 @@ impl EdgeStagingBatch {
     }
 
     /// Check whether the batch holds a delete for `(src, dst, rank)`.
+    ///
+    /// Same pre-commit scope as `contains_insert`: no read-path visibility,
+    /// only batch net-effect inspection.
     pub fn contains_delete(&self, src: u32, dst: u32, rank: i64) -> bool {
         self.deletes
             .iter()
             .any(|del| del.src == src && del.dst == dst && del.rank == rank)
+    }
+
+    /// Stage order for sequential commit and net-effect prevalidation.
+    pub(crate) fn ordered(&self) -> &[StagedOrder] {
+        &self.order
     }
 
     pub(crate) fn take_inserts(&mut self) -> Vec<StagedInsert> {
@@ -126,6 +180,10 @@ impl EdgeStagingBatch {
 
     pub(crate) fn take_deletes(&mut self) -> Vec<StagedDelete> {
         std::mem::take(&mut self.deletes)
+    }
+
+    pub(crate) fn take_order(&mut self) -> Vec<StagedOrder> {
+        std::mem::take(&mut self.order)
     }
 }
 

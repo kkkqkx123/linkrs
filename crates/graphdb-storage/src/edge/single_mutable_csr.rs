@@ -8,33 +8,19 @@
 //! - "Current employer" relationship
 //! - Any single-edge semantic relationship
 //!
-//! Concurrency rule:
-//! ================================
-//! This CSR does NOT support concurrent updates at the same timestamp.
-//!
-//! - Each vertex can have at most 1 effective edge.
-//! - Newer timestamps overwrite older ones automatically.
-//! - If two updates arrive with the same (or non-monotonic) timestamp,
-//!   the later one fails with a write-write conflict error.
-//!
-//! Example:
-//! ```ignore
-//! T1: insert_edge(v0, dst=v1, ts=100) ✓ succeeds
-//! T2: insert_edge(v0, dst=v1, ts=99)  ✗ conflict (99 < 100)
-//! T3: insert_edge(v0, dst=v1, ts=100) ✗ conflict (100 == 100, not strictly greater)
-//! ```
-//!
-//! WHEN TO USE:
-//! - Strictly one-to-one relationships where updates are ordered by global timestamp.
-//! - Systems where timestamp monotonicity is guaranteed by upstream layers (WAL, MVCC).
-//!
-//! WHEN NOT TO USE:
-//! - Distributed systems with concurrent writes from multiple clients.
-//! - Scenarios requiring multiple historical versions (use MutableCsr instead).
-//! - Cases where updates may arrive out-of-order or with equal timestamps.
+//! Contract, unified with the table layer:
+//! - Each vertex holds at most one live edge. A second live insert into an
+//!   occupied slot is rejected with a conflict error, never silently
+//!   overwritten. Callers must delete before rebuilding.
+//! - Deletion requires the exact edge id; endpoint plus rank addressing goes
+//!   through `delete_edge_by_dst`. No wildcard edge id is supported.
+//! - `delete_edge_by_dst` deletes the single matching live entry and reports
+//!   the deleted count (0 or 1) so callers can reconcile.
+//! - Resurrection of a tombstoned slot still requires a timestamp past both
+//!   creation and deletion stamps; live-slot rejection needs no monotonicity
+//!   assumption.
 //!
 //! If concurrent writes are needed, use MutableCsr (accepts multiple edges).
-//! Ensure timestamp ordering at the upper layer (WAL, transaction log).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -153,12 +139,13 @@ impl SingleMutableCsr {
 
         let nbr = &mut self.nbr_list[src_idx];
 
-        // Reject if there's an active edge with newer or equal timestamp
-        if nbr.delete_ts == Timestamp::MAX && nbr.edge_id != INVALID_EDGE_ID && ts <= nbr.create_ts
-        {
+        // Reject any second live edge in the same slot, regardless of timestamp.
+        // Matches the table-layer Single contract; no silent overwrite and no
+        // monotonicity assumption for the live case.
+        if nbr.delete_ts == Timestamp::MAX && nbr.edge_id != INVALID_EDGE_ID {
             return Err(StorageError::conflict(format!(
-                "[SingleMutableCsr] insert conflict on src={}: ts={} <= existing create_ts={}",
-                src, ts, nbr.create_ts
+                "[SingleMutableCsr] insert conflict on src={}: slot holds live edge {:?}",
+                src, nbr.edge_id
             )));
         }
         // Resurrection follows the same monotonicity as live writes: the new
@@ -218,7 +205,7 @@ impl SingleMutableCsr {
             return Ok(false);
         }
 
-        if edge_id.0 != u64::MAX && nbr.edge_id != edge_id {
+        if nbr.edge_id != edge_id {
             return Ok(false);
         }
 
@@ -227,29 +214,37 @@ impl SingleMutableCsr {
         Ok(true)
     }
 
-    pub fn delete_edge_by_dst(&mut self, src: u32, dst: VertexId, ts: Timestamp) -> bool {
+    /// Delete the single matching live entry for full-match endpoint semantics.
+    ///
+    /// Returns the deleted count (0 or 1) so table rollback can reconcile by
+    /// count. One call deletes the whole match; no first-only variant exists.
+    pub fn delete_edge_by_dst(&mut self, src: u32, dst: VertexId, ts: Timestamp) -> usize {
         let src_idx = src as usize;
 
         if src_idx >= self.vertex_capacity() {
-            return false;
+            return 0;
         }
 
         let (dst_ep_vid, dst_rank) = dst.decode_edge_endpoint();
         let dst_ep = dst_ep_vid.as_int64().unwrap_or(0) as u32;
         let nbr = &mut self.nbr_list[src_idx];
 
-        if nbr.endpoint != dst_ep || nbr.rank != dst_rank || nbr.delete_ts < Timestamp::MAX {
-            return false;
+        if nbr.edge_id == INVALID_EDGE_ID
+            || nbr.endpoint != dst_ep
+            || nbr.rank != dst_rank
+            || nbr.delete_ts < Timestamp::MAX
+        {
+            return 0;
         }
 
         let create_ts = nbr.create_ts;
         if create_ts > ts {
-            return false;
+            return 0;
         }
 
         nbr.delete_ts = ts;
         self.edge_count.fetch_sub(1, Ordering::Relaxed);
-        true
+        1
     }
 
     pub fn get_edge(&self, src: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
@@ -374,7 +369,7 @@ impl SingleMutableCsr {
         if slot.edge_id == INVALID_EDGE_ID {
             return false;
         }
-        if edge_id.0 != u64::MAX && slot.edge_id != edge_id {
+        if slot.edge_id != edge_id {
             return false;
         }
         let was_live = slot.delete_ts == Timestamp::MAX;
@@ -394,7 +389,7 @@ impl SingleMutableCsr {
         if slot.edge_id == INVALID_EDGE_ID {
             return false;
         }
-        if edge_id.0 != u64::MAX && slot.edge_id != edge_id {
+        if slot.edge_id != edge_id {
             return false;
         }
         if slot.delete_ts != Timestamp::MAX && slot.delete_ts <= ts {
@@ -680,7 +675,7 @@ impl MutableCsrTrait for SingleMutableCsr {
         SingleMutableCsr::delete_edge(self, src, edge_id, ts)
     }
 
-    fn delete_edge_by_dst(&mut self, src: u32, dst: VertexId, ts: Timestamp) -> bool {
+    fn delete_edge_by_dst(&mut self, src: u32, dst: VertexId, ts: Timestamp) -> usize {
         SingleMutableCsr::delete_edge_by_dst(self, src, dst, ts)
     }
 
@@ -772,10 +767,58 @@ mod tests {
         assert!(csr
             .insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 99)
             .is_err());
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(102), 101)
-            .unwrap();
+        assert!(csr
+            .insert_edge(0u32, VertexId::from_int64(2), EdgeId(102), 101)
+            .is_err());
 
         assert_eq!(csr.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_second_live_edge_rejected_at_csr_layer() {
+        let mut csr = SingleMutableCsr::with_capacity(4);
+        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        let err = csr
+            .insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 200)
+            .expect_err("second live edge must be rejected");
+        assert!(err.to_string().contains("conflict"));
+        assert_eq!(csr.edge_count(), 1);
+        assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
+        csr.insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 151)
+            .unwrap();
+        assert_eq!(csr.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_exact_edge_id_required_for_delete() {
+        let mut csr = SingleMutableCsr::with_capacity(4);
+        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        assert!(!csr.delete_edge(0, EdgeId(999), 150).unwrap());
+        assert!(!csr
+            .delete_edge(0, crate::edge::INVALID_EDGE_ID, 150)
+            .unwrap());
+        assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
+    }
+
+    #[test]
+    fn test_delete_by_dst_reports_count() {
+        let mut csr = SingleMutableCsr::with_capacity(4);
+        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        assert_eq!(
+            csr.delete_edge_by_dst(0, VertexId::from_int64(11), 150),
+            0
+        );
+        assert_eq!(
+            csr.delete_edge_by_dst(0, VertexId::from_int64(10), 150),
+            1
+        );
+        assert_eq!(
+            csr.delete_edge_by_dst(0, VertexId::from_int64(10), 150),
+            0
+        );
     }
 
     #[test]
