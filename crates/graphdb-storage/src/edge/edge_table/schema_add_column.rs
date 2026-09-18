@@ -120,7 +120,9 @@ impl EdgeStore {
     /// memory-only immediate adds.
     pub fn durable_pending_add_property(&mut self) -> StorageResult<()> {
         let pending = self.pending_add_column.as_ref().ok_or_else(|| {
-            StorageError::invalid_operation("no pending add-column change to mark durable".to_string())
+            StorageError::invalid_operation(
+                "no pending add-column change to mark durable".to_string(),
+            )
         })?;
         if pending.state != PendingAddColumnState::Filled {
             return Err(StorageError::invalid_operation(

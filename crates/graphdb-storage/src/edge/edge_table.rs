@@ -1,7 +1,10 @@
 //! Edge table module: node-group sharded CSR with row-level timestamps.
 //!
 //! Organization:
-//! - `core`: EdgeStore operations (CRUD, properties, queries, persistence)
+//! - `core`: EdgeStore table definition plus per-responsibility operation
+//!   modules (`core/store`, `core/owner`, `core/reads`, `core/writes`,
+//!   `core/index`, `core/query`, `core/schema_ops`, `core/maintenance`,
+//!   `core/recovery`)
 //! - `checkpoint`: incremental per-group checkpoint (manifest, group files,
 //!   timestamp and property shards)
 //! - `compaction`: per-group CSR compaction and property cleanup

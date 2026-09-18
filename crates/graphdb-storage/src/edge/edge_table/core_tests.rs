@@ -1,7 +1,7 @@
 use super::*;
 use crate::edge::edge_table::config::EdgeTableConfig;
 use crate::edge::edge_table::core::EdgeStore;
-use crate::edge::{EdgeSchema, EdgeStrategy};
+use crate::edge::{CsrBase, EdgeSchema, EdgeStrategy, MutableCsrTrait};
 use crate::types::StoragePropertyDef;
 use graphdb_core::types::{CommitLsn, DataType, EdgeId, Timestamp, VertexId};
 use graphdb_core::Value;

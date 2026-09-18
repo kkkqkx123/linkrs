@@ -84,7 +84,10 @@ impl EdgeStagingBatch {
             properties: properties.to_vec(),
             create_ts,
         });
-        self.order.push(StagedOrder { is_insert: true, slot });
+        self.order.push(StagedOrder {
+            is_insert: true,
+            slot,
+        });
     }
 
     /// Buffer one delete. No shared state is touched.

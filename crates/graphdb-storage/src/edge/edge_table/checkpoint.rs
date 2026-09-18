@@ -519,7 +519,12 @@ impl EdgeStore {
             .dirty_group_ids()
             .into_iter()
             .map(|gid| gid as u32)
-            .chain(self.in_csr.dirty_group_ids().into_iter().map(|gid| gid as u32))
+            .chain(
+                self.in_csr
+                    .dirty_group_ids()
+                    .into_iter()
+                    .map(|gid| gid as u32),
+            )
             .collect();
         let mut written = 0u64;
         for gid in dirty {
@@ -632,8 +637,7 @@ impl EdgeStore {
         if shard.load(&data).is_err() {
             return Ok(None);
         }
-        let shard_edges: HashSet<graphdb_core::types::EdgeId> =
-            shard.edge_ids().collect();
+        let shard_edges: HashSet<graphdb_core::types::EdgeId> = shard.edge_ids().collect();
         let live_set: HashSet<graphdb_core::types::EdgeId> = edges.iter().copied().collect();
         if shard_edges != live_set {
             return Ok(None);

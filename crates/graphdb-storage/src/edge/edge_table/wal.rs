@@ -10,8 +10,8 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use graphdb_core::{StorageError, StorageResult, Value};
 use graphdb_core::types::Timestamp;
+use graphdb_core::{StorageError, StorageResult, Value};
 
 pub(crate) const EDGE_WAL_VERSION: u32 = 1;
 
@@ -68,22 +68,22 @@ pub(crate) fn append_ops(dir: &Path, ops: &[EdgeWalOp]) -> StorageResult<()> {
         .append(true)
         .open(&path)
         .map_err(|e| StorageError::io_error(format!("Failed to open edge WAL: {}", e)))?;
-    if file
-        .metadata()
-        .map(|meta| meta.len())
-        .unwrap_or(0)
-        == 0
-    {
+    if file.metadata().map(|meta| meta.len()).unwrap_or(0) == 0 {
         file.write_all(&EDGE_WAL_VERSION.to_le_bytes())
-            .map_err(|e| StorageError::io_error(format!("Failed to write edge WAL header: {}", e)))?;
+            .map_err(|e| {
+                StorageError::io_error(format!("Failed to write edge WAL header: {}", e))
+            })?;
     }
     for op in ops {
-        let bytes = postcard::to_allocvec(op)
-            .map_err(|e| StorageError::serialize_error(e.to_string()))?;
+        let bytes =
+            postcard::to_allocvec(op).map_err(|e| StorageError::serialize_error(e.to_string()))?;
         file.write_all(&(bytes.len() as u64).to_le_bytes())
-            .map_err(|e| StorageError::io_error(format!("Failed to write edge WAL entry: {}", e)))?;
-        file.write_all(&bytes)
-            .map_err(|e| StorageError::io_error(format!("Failed to write edge WAL entry: {}", e)))?;
+            .map_err(|e| {
+                StorageError::io_error(format!("Failed to write edge WAL entry: {}", e))
+            })?;
+        file.write_all(&bytes).map_err(|e| {
+            StorageError::io_error(format!("Failed to write edge WAL entry: {}", e))
+        })?;
     }
     file.sync_all()
         .map_err(|e| StorageError::io_error(format!("Failed to sync edge WAL: {}", e)))?;
@@ -132,11 +132,11 @@ pub(crate) fn read_ops(dir: &Path) -> StorageResult<Vec<EdgeWalOp>> {
             )));
         }
         let mut data = vec![0u8; len];
-        file.read_exact(&mut data).map_err(|_| {
-            StorageError::deserialize_error("torn edge WAL tail entry".to_string())
+        file.read_exact(&mut data)
+            .map_err(|_| StorageError::deserialize_error("torn edge WAL tail entry".to_string()))?;
+        let op: EdgeWalOp = postcard::from_bytes(&data).map_err(|e| {
+            StorageError::deserialize_error(format!("edge WAL entry corrupt: {}", e))
         })?;
-        let op: EdgeWalOp = postcard::from_bytes(&data)
-            .map_err(|e| StorageError::deserialize_error(format!("edge WAL entry corrupt: {}", e)))?;
         ops.push(op);
     }
     let mut trailer = [0u8; 1];
