@@ -480,6 +480,40 @@ pub fn region_local_range(region: usize, group_size: usize) -> (u32, u32) {
     (start, end)
 }
 
+/// Leaf-level density ceiling of the packed-CSR calibrator tree: leaf
+/// regions may pack full, higher levels grade down toward the packed target.
+pub const LEAF_HIGH_CSR_DENSITY: f32 = 1.0;
+
+/// Height of the density calibrator tree for one address width: group rows
+/// halve down to leaf regions, so the height is the group-bits minus the
+/// leaf-region-rows log2.
+pub fn calibrator_tree_height(group_bits: u32) -> u32 {
+    group_bits.saturating_sub(LEAF_REGION_ROWS.trailing_zeros())
+}
+
+/// Density ceiling for one calibrator-tree level: full at the leaf level,
+/// grading linearly down to the packed row target at the top. Levels above
+/// the top clamp to the packed target.
+pub fn calibrator_max_density(level: u32, tree_height: u32) -> f32 {
+    if level == 0 || tree_height == 0 {
+        return LEAF_HIGH_CSR_DENSITY;
+    }
+    let step =
+        (LEAF_HIGH_CSR_DENSITY - super::mutable_csr::PACKED_CSR_DENSITY) / tree_height as f32;
+    super::mutable_csr::PACKED_CSR_DENSITY
+        + step * tree_height.saturating_sub(level.min(tree_height)) as f32
+}
+
+/// Reserved tail gap for a region holding `live` entries at the packed
+/// density target. Empty regions hold no gap; gaps live at the region tail,
+/// never inside rows.
+pub fn region_tail_gap(live: usize) -> usize {
+    if live == 0 {
+        return 0;
+    }
+    ((live as f32 / super::mutable_csr::PACKED_CSR_DENSITY).ceil() as usize).saturating_sub(live)
+}
+
 #[derive(Debug, Clone)]
 struct Shard {
     variant: CsrVariant,
@@ -502,6 +536,9 @@ pub struct CsrShardSet {
     strategy: EdgeStrategy,
     group_bits: u32,
     overflow_chunk_edges: usize,
+    /// Current hot-path tombstone reuse cutoff, refreshed by the table
+    /// maintenance pass and seeded into every freshly created group.
+    tombstone_reuse_cutoff: Timestamp,
     shards: BTreeMap<usize, Shard>,
 }
 
@@ -521,6 +558,7 @@ impl CsrShardSet {
             strategy,
             group_bits,
             overflow_chunk_edges,
+            tombstone_reuse_cutoff: Timestamp::MAX,
             shards: BTreeMap::new(),
         };
         if strategy != EdgeStrategy::None {
@@ -583,12 +621,24 @@ impl CsrShardSet {
     }
 
     fn fresh_variant(&self) -> StorageResult<CsrVariant> {
-        CsrVariant::from_strategy_with_overflow(
+        let mut variant = CsrVariant::from_strategy_with_overflow(
             self.strategy,
             self.group_size(),
             0,
             self.overflow_chunk_edges,
-        )
+        )?;
+        variant.set_tombstone_reuse_cutoff(self.tombstone_reuse_cutoff);
+        Ok(variant)
+    }
+
+    /// Refresh the hot-path tombstone reuse cutoff on every group. The
+    /// table maintenance pass calls this with its watermark-derived bound;
+    /// the sentinel disables reuse.
+    pub fn set_tombstone_reuse_cutoff(&mut self, cutoff: Timestamp) {
+        self.tombstone_reuse_cutoff = cutoff;
+        for shard in self.shards.values_mut() {
+            shard.variant.set_tombstone_reuse_cutoff(cutoff);
+        }
     }
 
     fn ensure_group_for(&mut self, vid: u32) -> StorageResult<usize> {
@@ -732,7 +782,7 @@ impl CsrShardSet {
         }
     }
 
-    /// Clear sampled column-only traces after a flush. Insert and delete
+    /// Clear precise column-only traces after a flush. Insert and delete
     /// dirt is owned by the per-group flush above and never touched here.
     pub fn clear_all_column_dirty(&mut self) {
         for shard in self.shards.values_mut() {
@@ -933,6 +983,46 @@ impl CsrShardSet {
         }
     }
 
+    /// Fill a caller buffer with every physically stored entry of one vertex.
+    ///
+    /// Same content as the allocating trait accessor, without the per-vertex
+    /// allocation. Missing groups read as empty and never create groups.
+    pub fn fill_physical_into(&self, src_vid: u32, out: &mut Vec<Nbr>) {
+        let Some((gid, local)) = self.route(src_vid) else {
+            out.clear();
+            return;
+        };
+        match self.shards.get(&gid) {
+            Some(shard) => shard.variant.fill_physical_into(local, out),
+            None => out.clear(),
+        }
+    }
+
+    /// Fill one shared buffer with the physical entries of many vertices.
+    ///
+    /// Records one start offset per vertex plus a trailing end offset, so
+    /// `out[offsets[i]..offsets[i + 1]]` is vertex `vids[i]` in order. One
+    /// pass over the vertices, no per-vertex allocation; missing groups and
+    /// empty rows contribute empty slices. Read paths never create groups.
+    pub fn fill_physical_batch_into(
+        &self,
+        vids: &[u32],
+        out: &mut Vec<Nbr>,
+        offsets: &mut Vec<usize>,
+    ) {
+        out.clear();
+        offsets.clear();
+        offsets.reserve(vids.len() + 1);
+        for vid in vids {
+            offsets.push(out.len());
+            self.visit_physical(*vid, |nbr| {
+                out.push(nbr);
+                true
+            });
+        }
+        offsets.push(out.len());
+    }
+
     /// Set the reclaim hint for the group owning `vid`.
     ///
     /// Used by remap to preserve the hint explicitly instead of relying on
@@ -1058,6 +1148,20 @@ impl CsrShardSet {
         }
     }
 
+    /// Live entries of one leaf region summed over its rows.
+    pub fn region_live(&self, gid: usize, region: usize) -> usize {
+        self.region_census(gid, region).0
+    }
+
+    /// Reserved capacity minus live entries of one leaf region.
+    ///
+    /// Steady-state write room under the current per-row reservation; the
+    /// region-tail gap model derives the same room from the live count alone.
+    pub fn region_gap(&self, gid: usize, region: usize) -> usize {
+        let (live, _, capacity) = self.region_census(gid, region);
+        capacity.saturating_sub(live)
+    }
+
     /// Entries of one leaf region reclaimable at `cutoff`.
     pub fn region_reclaimable_count(&self, gid: usize, region: usize, cutoff: Timestamp) -> usize {
         if cutoff == Timestamp::MAX {
@@ -1075,12 +1179,16 @@ impl CsrShardSet {
     /// Merge scope for one leaf region. The trigger is always the per-row
     /// reclaimable count; density only widens the scope, and larger scopes
     /// require higher density. Returns `None` when the region holds nothing
-    /// reclaimable and carries no delete dirt.
+    /// reclaimable and carries no delete dirt. Thresholds come from the
+    /// table configuration so measured write amplification can guide them;
+    /// the module constants back the configuration defaults.
     pub fn select_merge_scope(
         &self,
         gid: usize,
         region: usize,
         cutoff: Timestamp,
+        region_min_density: f32,
+        group_min_density: f32,
     ) -> Option<RegionMergeScope> {
         if self.region_reclaimable_count(gid, region, cutoff) == 0
             && !self.region_needs_rebalance(gid, region)
@@ -1088,7 +1196,7 @@ impl CsrShardSet {
             return None;
         }
         let region_density = self.region_density(gid, region);
-        if region_density < REGION_MERGE_MIN_DENSITY {
+        if region_density < region_min_density {
             return Some(RegionMergeScope::Row);
         }
         let group_live = self
@@ -1101,7 +1209,7 @@ impl CsrShardSet {
                 }
             })
             .unwrap_or(1.0);
-        if self.dirty_region_ids(gid).len() > 1 && group_live >= GROUP_MERGE_MIN_DENSITY {
+        if self.dirty_region_ids(gid).len() > 1 && group_live >= group_min_density {
             return Some(RegionMergeScope::Group);
         }
         Some(RegionMergeScope::Region)
@@ -1673,6 +1781,10 @@ impl MutableCsrTrait for CsrShardSet {
             .unwrap_or_default()
     }
 
+    fn fill_physical_into(&self, src_vid: u32, out: &mut Vec<Nbr>) {
+        CsrShardSet::fill_physical_into(self, src_vid, out)
+    }
+
     fn has_physical_entries(&self, vid: u32) -> bool {
         let Some((gid, local)) = self.route(vid) else {
             return false;
@@ -2073,6 +2185,71 @@ mod tests {
     }
 
     #[test]
+    fn fill_physical_into_matches_allocating_accessor() {
+        let mut set = multi_set();
+        set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
+        set.insert_edge(0, endpoint(2, 0), EdgeId(1), 100).unwrap();
+        set.insert_edge(5000, endpoint(3, 0), EdgeId(2), 100)
+            .unwrap();
+        let mut buf = Vec::new();
+        for vid in [0u32, 1, 5000, 9000] {
+            set.fill_physical_into(vid, &mut buf);
+            assert_eq!(buf, set.physical_edges_of(vid));
+        }
+    }
+
+    #[test]
+    fn fill_physical_batch_slices_per_vertex() {
+        let mut set = multi_set();
+        set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
+        set.insert_edge(0, endpoint(2, 0), EdgeId(1), 100).unwrap();
+        set.insert_edge(5000, endpoint(3, 0), EdgeId(2), 100)
+            .unwrap();
+        let vids = vec![0u32, 1, 5000, 9000];
+        let mut out = Vec::new();
+        let mut offsets = Vec::new();
+        set.fill_physical_batch_into(&vids, &mut out, &mut offsets);
+        assert_eq!(offsets.len(), vids.len() + 1);
+        assert_eq!(*offsets.last().unwrap(), out.len());
+        for (i, vid) in vids.iter().enumerate() {
+            assert_eq!(out[offsets[i]..offsets[i + 1]], set.physical_edges_of(*vid));
+        }
+        assert_eq!(set.existing_group_ids(), vec![0, 1]);
+    }
+
+    #[test]
+    fn calibrator_density_grades_downward() {
+        let height = calibrator_tree_height(DEFAULT_NODE_GROUP_BITS);
+        assert_eq!(height, 4);
+        assert!((calibrator_max_density(0, height) - 1.0).abs() < f32::EPSILON);
+        assert!((calibrator_max_density(height, height) - 0.8).abs() < 1e-6);
+        let mut prev = f32::INFINITY;
+        for level in 0..=height {
+            let density = calibrator_max_density(level, height);
+            assert!(density <= prev);
+            prev = density;
+        }
+        assert!((calibrator_max_density(height + 2, height) - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn region_tail_gap_follows_packed_density() {
+        assert_eq!(region_tail_gap(0), 0);
+        assert_eq!(region_tail_gap(8), 2);
+        assert_eq!(region_tail_gap(4), 1);
+    }
+
+    #[test]
+    fn region_live_and_gap_agree_with_census() {
+        let mut set = multi_set();
+        set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
+        set.insert_edge(1, endpoint(2, 0), EdgeId(1), 100).unwrap();
+        let (live, _, capacity) = set.region_census(0, 0);
+        assert_eq!(set.region_live(0, 0), live);
+        assert_eq!(set.region_gap(0, 0), capacity.saturating_sub(live));
+    }
+
+    #[test]
     fn sparse_span_covers_holes_while_capacity_counts_materialized() {
         let mut set = multi_set();
         set.insert_edge(9000, endpoint(1, 0), EdgeId(0), 100)
@@ -2131,7 +2308,7 @@ mod tests {
         let mut set = multi_set();
         set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
         assert!(set.delete_edge(0, EdgeId(0), 150).unwrap());
-        assert!(set.get_edge_physical(0, endpoint(1, 0)).is_some());
+        assert!(set.get_edge_physical(0, endpoint(1, 0)).is_none());
         assert_eq!(set.physical_edges_of(0).len(), 1);
         assert!(set.has_physical_entries(0));
     }
@@ -2232,15 +2409,37 @@ mod tests {
         let mut set = narrow_set();
         set.insert_edge(10, endpoint(1, 0), EdgeId(0), 100).unwrap();
         // No tombstone and no delete dirt: nothing to merge at any cutoff.
-        assert_eq!(set.select_merge_scope(0, 0, 200), None);
+        assert_eq!(
+            set.select_merge_scope(0, 0, 200, REGION_MERGE_MIN_DENSITY, GROUP_MERGE_MIN_DENSITY),
+            None
+        );
         assert!(set.delete_edge(10, EdgeId(0), 150).unwrap());
         // Delete dirt alone selects a scope; density only widens it.
-        let scope = set.select_merge_scope(0, 0, 140);
+        let scope =
+            set.select_merge_scope(0, 0, 140, REGION_MERGE_MIN_DENSITY, GROUP_MERGE_MIN_DENSITY);
         assert!(scope.is_some());
         // Below the deletion stamp nothing is reclaimable and the region
         // carries delete dirt, so the narrow row scope holds.
         assert_eq!(
-            set.select_merge_scope(0, 0, 140),
+            set.select_merge_scope(0, 0, 140, REGION_MERGE_MIN_DENSITY, GROUP_MERGE_MIN_DENSITY),
+            Some(RegionMergeScope::Row)
+        );
+    }
+
+    #[test]
+    fn merge_scope_thresholds_drive_widening() {
+        let mut set = narrow_set();
+        set.insert_edge(10, endpoint(1, 0), EdgeId(0), 100).unwrap();
+        set.insert_edge(11, endpoint(2, 0), EdgeId(1), 100).unwrap();
+        assert!(set.delete_edge(10, EdgeId(0), 150).unwrap());
+        // A zero region bar widens to the region scope on density alone.
+        assert_eq!(
+            set.select_merge_scope(0, 0, 200, 0.0, GROUP_MERGE_MIN_DENSITY),
+            Some(RegionMergeScope::Region)
+        );
+        // An unreachable region bar keeps the narrow row scope.
+        assert_eq!(
+            set.select_merge_scope(0, 0, 200, 1.0, GROUP_MERGE_MIN_DENSITY),
             Some(RegionMergeScope::Row)
         );
     }

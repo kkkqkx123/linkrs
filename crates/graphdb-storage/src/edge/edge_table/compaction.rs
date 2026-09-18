@@ -177,6 +177,11 @@ impl EdgeStore {
         if bound == Timestamp::MAX {
             return false;
         }
+        // Refresh the hot-path reuse hint from the same watermark-derived
+        // bound, even when the pass below gates itself off: a skipped pass
+        // still advances provably reclaimable history for future inserts.
+        self.out_csr.set_tombstone_reuse_cutoff(bound);
+        self.in_csr.set_tombstone_reuse_cutoff(bound);
         let threshold = self.config.auto_maintenance.reclaim_tombstone_threshold;
         let tombstones = self.mvcc.total_tombstone_count();
         if tombstones == 0
@@ -211,6 +216,12 @@ impl EdgeStore {
         // rebuilt rows keep everyday-write gaps instead of packing full.
         const RESERVE_RATIO: f32 = 1.0 - crate::edge::mutable_csr::PACKED_CSR_DENSITY;
         let cutoff = watermarks.safe_gc_timestamp_with_margin(margin);
+        // The flush entry also refreshes the reuse hint: flush-time
+        // compactions may run without a preceding write-path reclaim pass.
+        if cutoff != Timestamp::MAX {
+            self.out_csr.set_tombstone_reuse_cutoff(cutoff);
+            self.in_csr.set_tombstone_reuse_cutoff(cutoff);
+        }
         // Group-scope merges stay behind the caller fragmentation gate so a
         // small flush never triggers an unbounded rebuild; row and region
         // scopes trigger on per-row reclaimable counts alone.
@@ -234,7 +245,13 @@ impl EdgeStore {
                     } else {
                         &self.in_csr
                     };
-                    let scope = shards.select_merge_scope(gid, rid, cutoff);
+                    let scope = shards.select_merge_scope(
+                        gid,
+                        rid,
+                        cutoff,
+                        self.config.region_merge_min_density,
+                        self.config.group_merge_min_density,
+                    );
                     match scope {
                         None => continue,
                         Some(crate::edge::node_group::RegionMergeScope::Group) => {

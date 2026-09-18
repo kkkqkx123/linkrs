@@ -22,11 +22,13 @@ impl MutableCsr {
         self.nbr_list.get(idx).copied()
     }
 
-    /// Locate one edge by endpoint without consulting timestamps.
+    /// Locate the first live edge by endpoint without consulting snapshots.
     ///
-    /// Physical addressing only; visibility is decided by the version
-    /// authority above this layer.
+    /// Physical addressing only; tombstoned and gap slots are skipped.
+    /// Snapshot visibility is decided by the version authority above this
+    /// layer, while tombstone access uses the full physical views.
     pub fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
+        use super::super::INVALID_EDGE_ID;
         let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
@@ -36,7 +38,11 @@ impl MutableCsr {
         let offset = self.adj_offsets[src_idx] as usize;
         for i in 0..degree {
             if let Some(nbr) = self.nbr_list.get(offset + i) {
-                if nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank {
+                if nbr.endpoint == decoded_endpoint
+                    && nbr.rank == decoded_rank
+                    && nbr.edge_id != INVALID_EDGE_ID
+                    && nbr.delete_ts == Timestamp::MAX
+                {
                     return Some(*nbr);
                 }
             }
@@ -44,7 +50,11 @@ impl MutableCsr {
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for chunk in chunks {
                 for nbr in chunk {
-                    if nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank {
+                    if nbr.endpoint == decoded_endpoint
+                        && nbr.rank == decoded_rank
+                        && nbr.edge_id != INVALID_EDGE_ID
+                        && nbr.delete_ts == Timestamp::MAX
+                    {
                         return Some(*nbr);
                     }
                 }
@@ -57,13 +67,25 @@ impl MutableCsr {
     ///
     /// Visibility is decided by the version authority above this layer.
     pub fn physical_edges_of(&self, src_vid: u32) -> Vec<Nbr> {
+        let mut out = Vec::new();
+        self.fill_physical_into(src_vid, &mut out);
+        out
+    }
+
+    /// Fill a caller buffer with every physically stored entry of one vertex.
+    ///
+    /// Same content as the allocating accessor above, without the per-vertex
+    /// allocation. Batch scans reuse one buffer across vertices and slice it
+    /// per vertex instead of collecting one vector per vertex.
+    pub fn fill_physical_into(&self, src_vid: u32, out: &mut Vec<Nbr>) {
+        out.clear();
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
-            return Vec::new();
+            return;
         }
         let degree = self.degrees[src_idx] as usize;
         let offset = self.adj_offsets[src_idx] as usize;
-        let mut out = Vec::new();
+        out.reserve(degree);
         for i in 0..degree {
             if let Some(nbr) = self.nbr_list.get(offset + i) {
                 out.push(*nbr);
@@ -74,7 +96,6 @@ impl MutableCsr {
                 out.extend_from_slice(chunk);
             }
         }
-        out
     }
 
     /// Visit every physically stored entry of one vertex without allocating.

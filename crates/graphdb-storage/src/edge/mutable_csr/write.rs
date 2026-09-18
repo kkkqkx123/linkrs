@@ -1,8 +1,6 @@
-use std::collections::HashSet;
-use std::sync::atomic::Ordering;
-
 use super::super::csr_shared::{
-    can_revert_delete, decide_slot_delete, decode_endpoint_pair, DeleteSlotOutcome,
+    can_revert_delete, decide_slot_delete, decode_endpoint_pair, is_reclaimable_slot,
+    DeleteSlotOutcome,
 };
 use super::super::{EdgeId, Nbr, Timestamp, VertexId};
 use super::overflow::OVERFLOW_REPACK_CHUNKS_PER_VERTEX;
@@ -11,11 +9,7 @@ use graphdb_core::{StorageError, StorageResult};
 
 impl MutableCsr {
     fn append_overflow(&mut self, src_vid: u32, nbr: Nbr) {
-        let live_hint = self
-            .live_sets
-            .get(&src_vid)
-            .map_or(1, HashSet::len)
-            .saturating_add(1);
+        let live_hint = self.live_key_count(src_vid).saturating_add(1);
         let chunk_edges = self.effective_chunk_edges(live_hint);
         // A chunk is full at its created capacity, so earlier small-tier
         // chunks never stretch into later tiers.
@@ -98,11 +92,7 @@ impl MutableCsr {
         // overflow. The set is authoritative: it is rebuilt on load and
         // compact and updated on every write, so no linear scan fallback
         // exists.
-        if self
-            .live_sets
-            .get(&src_vid)
-            .is_some_and(|set| set.contains(&(decoded_endpoint, decoded_rank)))
-        {
+        if self.live_key_present(src_vid, decoded_endpoint, decoded_rank) {
             return Err(StorageError::edge_already_exists(format!(
                 "{} -> {:?}",
                 src_vid, dst
@@ -122,12 +112,35 @@ impl MutableCsr {
             self.nbr_list[base + degree] = nbr_with_ts;
             self.degrees[src_idx] += 1;
             self.track_live_insert(src_vid, decoded_endpoint, decoded_rank);
-            self.edge_count.fetch_add(1, Ordering::Relaxed);
+            self.edge_count += 1;
             return Ok(());
         }
 
+        // Full row: with a watermark-derived reuse cutoff, reclaim one
+        // GC-eligible primary tombstone in place instead of growing
+        // overflow. The eligibility predicate matches the maintenance
+        // compaction exactly, so the hot path never drops a tombstone the
+        // reclaim pass would keep. Overflow tombstones stay for the region
+        // compaction; the scan stays bounded by the row degree.
+        if self.tombstone_reuse_cutoff != Timestamp::MAX {
+            let base = self.adj_offsets[src_idx] as usize;
+            let cutoff = self.tombstone_reuse_cutoff;
+            for i in 0..degree {
+                let reclaimable = self
+                    .nbr_list
+                    .get(base + i)
+                    .is_some_and(|nbr| is_reclaimable_slot(nbr, cutoff));
+                if reclaimable {
+                    self.nbr_list[base + i] = nbr_with_ts;
+                    self.track_live_insert(src_vid, decoded_endpoint, decoded_rank);
+                    self.edge_count += 1;
+                    return Ok(());
+                }
+            }
+        }
+
         self.append_overflow(src_vid, nbr_with_ts);
-        self.edge_count.fetch_add(1, Ordering::Relaxed);
+        self.edge_count += 1;
         Ok(())
     }
 
@@ -180,7 +193,7 @@ impl MutableCsr {
                 }
                 let (endpoint, rank) = (nbr.endpoint, nbr.rank);
                 nbr.delete_ts = ts;
-                self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                self.edge_count -= 1;
                 self.track_live_remove(src_vid, endpoint, rank);
                 return Ok(true);
             }
@@ -203,7 +216,7 @@ impl MutableCsr {
                     DeleteSlotOutcome::Stamped => {}
                 }
                 nbr.delete_ts = ts;
-                self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                self.edge_count -= 1;
                 self.track_live_remove(src_vid, endpoint, rank);
                 return Ok(true);
             }
@@ -247,7 +260,7 @@ impl MutableCsr {
             {
                 let edge_id = nbr.edge_id;
                 nbr.delete_ts = ts;
-                self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                self.edge_count -= 1;
                 on_deleted(edge_id);
                 deleted += 1;
             }
@@ -264,7 +277,7 @@ impl MutableCsr {
                     {
                         let edge_id = nbr.edge_id;
                         nbr.delete_ts = ts;
-                        self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                        self.edge_count -= 1;
                         on_deleted(edge_id);
                         deleted += 1;
                     }
@@ -327,7 +340,7 @@ impl MutableCsr {
             if create_ts <= ts {
                 let (endpoint, rank) = (nbr.endpoint, nbr.rank);
                 nbr.delete_ts = ts;
-                self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                self.edge_count -= 1;
                 self.track_live_remove(src_vid, endpoint, rank);
                 return Ok(true);
             }
@@ -365,7 +378,7 @@ impl MutableCsr {
         if can_revert_delete(nbr, ts) {
             let (endpoint, rank) = (nbr.endpoint, nbr.rank);
             nbr.delete_ts = Timestamp::MAX;
-            self.edge_count.fetch_add(1, Ordering::Relaxed);
+            self.edge_count += 1;
             self.track_live_insert(src_vid, endpoint, rank);
             return true;
         }
@@ -400,7 +413,7 @@ impl MutableCsr {
                 self.degrees[src_idx] -= 1;
                 if was_live {
                     self.track_live_remove(src_vid, endpoint, rank);
-                    self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                    self.edge_count -= 1;
                 }
                 return true;
             }
@@ -440,7 +453,7 @@ impl MutableCsr {
                     // The unified live set still covers primary rows, so
                     // rebuild it instead of dropping the whole entry.
                     if was_live {
-                        self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                        self.edge_count -= 1;
                     }
                     self.overflow_chunks.remove(&src_vid);
                     self.rebuild_live_set_for_vertex(src_vid);
@@ -449,7 +462,7 @@ impl MutableCsr {
             }
             if was_live {
                 self.track_live_remove(src_vid, endpoint, rank);
-                self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                self.edge_count -= 1;
             }
             return true;
         }
@@ -481,7 +494,7 @@ impl MutableCsr {
             if nbr.edge_id == edge_id && can_revert_delete(nbr, ts) {
                 let (endpoint, rank) = (nbr.endpoint, nbr.rank);
                 nbr.delete_ts = Timestamp::MAX;
-                self.edge_count.fetch_add(1, Ordering::Relaxed);
+                self.edge_count += 1;
                 self.track_live_insert(src_vid, endpoint, rank);
                 return true;
             }
@@ -498,7 +511,7 @@ impl MutableCsr {
                 let nbr = &mut chunks[chunk_idx][edge_idx];
                 if can_revert_delete(nbr, ts) {
                     nbr.delete_ts = Timestamp::MAX;
-                    self.edge_count.fetch_add(1, Ordering::Relaxed);
+                    self.edge_count += 1;
                     self.track_live_insert(src_vid, endpoint, rank);
                     return true;
                 }

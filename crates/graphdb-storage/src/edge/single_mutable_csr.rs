@@ -16,13 +16,10 @@
 //!   through `delete_edge_by_dst`. No wildcard edge id is supported.
 //! - `delete_edge_by_dst` deletes the single matching live entry and reports
 //!   the deleted count (0 or 1) so callers can reconcile.
-//! - Resurrection of a tombstoned slot still requires a timestamp past both
-//!   creation and deletion stamps; live-slot rejection needs no monotonicity
-//!   assumption.
+//! - Rebuilding a tombstoned slot needs no timestamp ordering at this layer;
+//!   snapshot visibility is decided by the version authority above.
 //!
 //! If concurrent writes are needed, use MutableCsr (accepts multiple edges).
-
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::persistence::{read_u32_le, read_u64_le};
 use graphdb_core::{StorageError, StorageResult};
@@ -49,14 +46,14 @@ fn empty_slot() -> Nbr {
 
 pub struct SingleMutableCsr {
     nbr_list: Vec<Nbr>,
-    edge_count: AtomicU64,
+    edge_count: u64,
 }
 
 impl Clone for SingleMutableCsr {
     fn clone(&self) -> Self {
         Self {
             nbr_list: self.nbr_list.clone(),
-            edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
+            edge_count: self.edge_count,
         }
     }
 }
@@ -65,7 +62,7 @@ impl std::fmt::Debug for SingleMutableCsr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SingleMutableCsr")
             .field("vertex_capacity", &self.vertex_capacity())
-            .field("edge_count", &self.edge_count.load(Ordering::Relaxed))
+            .field("edge_count", &self.edge_count)
             .finish_non_exhaustive()
     }
 }
@@ -81,7 +78,7 @@ impl SingleMutableCsr {
 
         Self {
             nbr_list,
-            edge_count: AtomicU64::new(0),
+            edge_count: 0,
         }
     }
 
@@ -90,7 +87,7 @@ impl SingleMutableCsr {
     }
 
     pub fn edge_count(&self) -> u64 {
-        self.edge_count.load(Ordering::Relaxed)
+        self.edge_count
     }
 
     pub fn resize(&mut self, new_vertex_capacity: usize) {
@@ -124,24 +121,14 @@ impl SingleMutableCsr {
 
         let nbr = &mut self.nbr_list[src_idx];
 
-        // Reject any second live edge in the same slot, regardless of timestamp.
-        // Matches the table-layer Single contract; no silent overwrite and no
-        // monotonicity assumption for the live case.
+        // Physical uniqueness only: a live slot rejects the second insert
+        // regardless of timestamp, while a tombstoned or empty slot accepts
+        // any timestamp. Snapshot visibility is decided by the version
+        // authority above this layer.
         if nbr.delete_ts == Timestamp::MAX && nbr.edge_id != INVALID_EDGE_ID {
             return Err(StorageError::conflict(format!(
                 "[SingleMutableCsr] insert conflict on src={}: slot holds live edge {:?}",
                 src, nbr.edge_id
-            )));
-        }
-        // Resurrection follows the same monotonicity as live writes: the new
-        // timestamp must advance past both the creation and deletion stamps.
-        if nbr.delete_ts != Timestamp::MAX
-            && nbr.edge_id != INVALID_EDGE_ID
-            && (ts <= nbr.create_ts || ts <= nbr.delete_ts)
-        {
-            return Err(StorageError::conflict(format!(
-                "[SingleMutableCsr] resurrect conflict on src={}: ts={} <= create_ts={} or delete_ts={}",
-                src, ts, nbr.create_ts, nbr.delete_ts
             )));
         }
 
@@ -154,7 +141,7 @@ impl SingleMutableCsr {
         nbr.delete_ts = Timestamp::MAX;
 
         if was_empty {
-            self.edge_count.fetch_add(1, Ordering::Relaxed);
+            self.edge_count += 1;
         }
 
         Ok(())
@@ -185,7 +172,7 @@ impl SingleMutableCsr {
         }
 
         nbr.delete_ts = ts;
-        self.edge_count.fetch_sub(1, Ordering::Relaxed);
+        self.edge_count -= 1;
         Ok(true)
     }
 
@@ -225,7 +212,7 @@ impl SingleMutableCsr {
 
         let edge_id = nbr.edge_id;
         nbr.delete_ts = ts;
-        self.edge_count.fetch_sub(1, Ordering::Relaxed);
+        self.edge_count -= 1;
         on_deleted(edge_id);
         1
     }
@@ -275,7 +262,7 @@ impl SingleMutableCsr {
         // Only revert deletions that happened at or before rollback time.
         if can_revert_delete(nbr, ts) {
             nbr.delete_ts = Timestamp::MAX;
-            self.edge_count.fetch_add(1, Ordering::Relaxed);
+            self.edge_count += 1;
             return true;
         }
 
@@ -308,7 +295,7 @@ impl SingleMutableCsr {
 
     pub fn get_edge_physical(&self, src: u32, dst: VertexId) -> Option<Nbr> {
         let slot = self.nbr_list.get(src as usize)?;
-        if slot.edge_id == INVALID_EDGE_ID {
+        if slot.edge_id == INVALID_EDGE_ID || slot.delete_ts != Timestamp::MAX {
             return None;
         }
         let (dst_ep, dst_rank) = decode_endpoint_pair(dst);
@@ -320,9 +307,21 @@ impl SingleMutableCsr {
     }
 
     pub fn physical_edges_of(&self, src: u32) -> Vec<Nbr> {
-        match self.nbr_list.get(src as usize) {
-            Some(nbr) if nbr.edge_id != INVALID_EDGE_ID => vec![*nbr],
-            _ => Vec::new(),
+        let mut out = Vec::new();
+        self.fill_physical_into(src, &mut out);
+        out
+    }
+
+    /// Fill a caller buffer with the physically stored entry of one slot.
+    ///
+    /// Same content as the allocating accessor above, without the per-vertex
+    /// allocation. Lets batch scans share one buffer across vertices.
+    pub fn fill_physical_into(&self, src: u32, out: &mut Vec<Nbr>) {
+        out.clear();
+        if let Some(nbr) = self.nbr_list.get(src as usize) {
+            if nbr.edge_id != INVALID_EDGE_ID {
+                out.push(*nbr);
+            }
         }
     }
 
@@ -364,7 +363,7 @@ impl SingleMutableCsr {
         let was_live = slot.delete_ts == Timestamp::MAX;
         *slot = empty_slot();
         if was_live {
-            self.edge_count.fetch_sub(1, Ordering::Relaxed);
+            self.edge_count -= 1;
         }
         true
     }
@@ -383,7 +382,7 @@ impl SingleMutableCsr {
         }
         if can_revert_delete(slot, ts) {
             slot.delete_ts = Timestamp::MAX;
-            self.edge_count.fetch_add(1, Ordering::Relaxed);
+            self.edge_count += 1;
             return true;
         }
         false
@@ -505,7 +504,7 @@ impl SingleMutableCsr {
         for nbr in &mut self.nbr_list {
             *nbr = empty_slot();
         }
-        self.edge_count.store(0, Ordering::Relaxed);
+        self.edge_count = 0;
     }
 
     /// Dump with integer column encoding for neighbor and edge-id columns.
@@ -523,7 +522,7 @@ impl SingleMutableCsr {
     /// Borrow-based dump into `out`, byte-identical to `dump`.
     pub fn dump_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&SINGLE_CSR_FORMAT_VERSION.to_le_bytes());
-        out.extend_from_slice(&self.edge_count.load(Ordering::Relaxed).to_le_bytes());
+        out.extend_from_slice(&self.edge_count.to_le_bytes());
         out.extend_from_slice(&(self.nbr_list.len() as u64).to_le_bytes());
 
         {
@@ -610,6 +609,16 @@ impl SingleMutableCsr {
             nbr.create_ts = create_stamps[index];
             nbr_list.push(nbr);
         }
+        let recomputed = nbr_list
+            .iter()
+            .filter(|nbr| nbr.edge_id != INVALID_EDGE_ID && nbr.delete_ts == Timestamp::MAX)
+            .count() as u64;
+        if recomputed != edge_count {
+            return Err(StorageError::deserialize_error(format!(
+                "Single CSR edge count mismatch: stored={}, recomputed={}",
+                edge_count, recomputed
+            )));
+        }
         if offset != data.len() {
             return Err(StorageError::deserialize_error(
                 "Single CSR has trailing bytes: unsupported format",
@@ -617,7 +626,7 @@ impl SingleMutableCsr {
         }
 
         self.nbr_list = nbr_list;
-        self.edge_count.store(edge_count, Ordering::Relaxed);
+        self.edge_count = edge_count;
 
         Ok(())
     }
@@ -697,7 +706,7 @@ impl CsrBase for SingleMutableCsr {
     }
 
     fn edge_count(&self) -> u64 {
-        self.edge_count.load(Ordering::Relaxed)
+        self.edge_count
     }
 
     fn dump(&self) -> Vec<u8> {
@@ -765,6 +774,10 @@ impl MutableCsrTrait for SingleMutableCsr {
 
     fn physical_edges_of(&self, src: u32) -> Vec<Nbr> {
         SingleMutableCsr::physical_edges_of(self, src)
+    }
+
+    fn fill_physical_into(&self, src: u32, out: &mut Vec<Nbr>) {
+        SingleMutableCsr::fill_physical_into(self, src, out)
     }
 
     fn has_physical_entries(&self, vid: u32) -> bool {
@@ -854,6 +867,16 @@ mod tests {
     }
 
     #[test]
+    fn test_physical_lookup_skips_tombstone() {
+        let mut csr = SingleMutableCsr::with_capacity(4);
+        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
+        assert!(csr.get_edge_physical(0, VertexId::from_int64(10)).is_none());
+        assert_eq!(csr.physical_edges_of(0).len(), 1);
+    }
+
+    #[test]
     fn test_exact_edge_id_required_for_delete() {
         let mut csr = SingleMutableCsr::with_capacity(4);
         csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
@@ -908,6 +931,25 @@ mod tests {
     }
 
     #[test]
+    fn test_load_rejects_tampered_edge_count() {
+        let mut csr1 = SingleMutableCsr::with_capacity(10);
+        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        csr1.insert_edge(1u32, VertexId::from_int64(20), EdgeId(101), 100)
+            .unwrap();
+        let data = csr1.dump();
+        let mut ok = SingleMutableCsr::new();
+        ok.load(&data).expect("normal payload must load");
+
+        let mut tampered = data.clone();
+        let stored = u64::from_le_bytes(tampered[4..12].try_into().unwrap());
+        tampered[4..12].copy_from_slice(&(stored + 1).to_le_bytes());
+        let mut csr2 = SingleMutableCsr::new();
+        let err = csr2.load(&tampered).expect_err("tampered count must fail");
+        assert!(err.to_string().contains("edge count mismatch"));
+    }
+
+    #[test]
     fn test_dump_and_load_preserves_create_ts() {
         let mut csr1 = SingleMutableCsr::with_capacity(10);
         csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
@@ -955,18 +997,23 @@ mod tests {
     }
 
     #[test]
-    fn test_resurrect_requires_monotonic_timestamp() {
+    fn test_resurrect_allows_any_timestamp() {
         let mut csr = SingleMutableCsr::with_capacity(4);
         csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
             .unwrap();
         assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
-        assert!(csr
-            .insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 140)
-            .is_err());
-        assert!(csr
-            .insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 150)
-            .is_err());
-        csr.insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 151)
+        csr.insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 140)
+            .unwrap();
+        assert_eq!(csr.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_resurrect_with_equal_timestamp() {
+        let mut csr = SingleMutableCsr::with_capacity(4);
+        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
+        csr.insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 150)
             .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }

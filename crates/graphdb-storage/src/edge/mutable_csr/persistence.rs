@@ -1,6 +1,4 @@
-use std::sync::atomic::Ordering;
-
-use super::super::{EdgeId, Nbr};
+use super::super::{EdgeId, Nbr, Timestamp, INVALID_EDGE_ID};
 use super::overflow::OverflowStorage;
 use super::serialization::{
     decode_overflow_chunk, decode_topology_i64_column, decode_topology_u32_column,
@@ -49,7 +47,7 @@ impl MutableCsr {
     pub fn dump_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&MUTABLE_CSR_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&(self.adj_offsets.len() as u64).to_le_bytes());
-        out.extend_from_slice(&self.edge_count.load(Ordering::Relaxed).to_le_bytes());
+        out.extend_from_slice(&self.edge_count.to_le_bytes());
         out.extend_from_slice(&(self.nbr_list.len() as u64).to_le_bytes());
         out.extend_from_slice(&(self.overflow_chunk_edges as u64).to_le_bytes());
 
@@ -247,6 +245,34 @@ impl MutableCsr {
             }
         }
 
+        let mut recomputed: u64 = 0;
+        for vid in 0..vertex_capacity {
+            let row_offset = adj_offsets[vid] as usize;
+            let degree = degrees[vid] as usize;
+            for i in 0..degree {
+                if let Some(nbr) = nbr_list.get(row_offset + i) {
+                    if nbr.edge_id != INVALID_EDGE_ID && nbr.delete_ts == Timestamp::MAX {
+                        recomputed += 1;
+                    }
+                }
+            }
+        }
+        for (_, chunks) in overflow_chunks.iter() {
+            for chunk in chunks {
+                for nbr in chunk {
+                    if nbr.edge_id != INVALID_EDGE_ID && nbr.delete_ts == Timestamp::MAX {
+                        recomputed += 1;
+                    }
+                }
+            }
+        }
+        if recomputed != edge_count {
+            return Err(StorageError::deserialize_error(format!(
+                "Mutable CSR edge count mismatch: stored={}, recomputed={}",
+                edge_count, recomputed
+            )));
+        }
+
         self.total_edge_capacity = nbr_list.len().saturating_add(overflow_capacity);
         self.adj_offsets = adj_offsets;
         self.degrees = degrees;
@@ -254,7 +280,7 @@ impl MutableCsr {
         self.overflow_chunks = overflow_chunks;
         self.overflow_chunk_edges = overflow_chunk_edges;
         self.nbr_list = nbr_list;
-        self.edge_count.store(edge_count, Ordering::Relaxed);
+        self.edge_count = edge_count;
         self.rebuild_live_sets();
         if offset != data.len() {
             return Err(StorageError::deserialize_error(

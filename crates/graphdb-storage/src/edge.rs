@@ -221,9 +221,9 @@ impl EdgeSchema {
 
 /// Compact CSR edge entry.
 ///
-/// Stores the neighbor as a packed `(endpoint: u32, rank: i64)` pair instead of a
-/// full [`VertexId`] (33 bytes). This reduces per-edge overhead from 41 to 20 bytes
-/// in the mutable CSR, and from 49 to 20 bytes in the immutable CSR.
+/// Stores the neighbor as a packed `(endpoint: u32, rank: i64)` pair plus the
+/// edge id and the creation/deletion stamps. The exact in-memory size follows
+/// the measured struct size.
 ///
 /// The `endpoint` is the internal vertex ID of the neighbor. The `rank` is the
 /// edge multiplicity index (typically 0 for simple edges).

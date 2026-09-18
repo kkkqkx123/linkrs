@@ -1,7 +1,5 @@
-use std::collections::HashSet;
-use std::sync::atomic::Ordering;
-
 use super::super::Nbr;
+use super::live_set::LiveKeySet;
 use super::MutableCsr;
 use crate::edge::FragmentationStats;
 
@@ -24,10 +22,11 @@ impl MutableCsr {
             .sum();
         let overflow_entries = self.overflow_chunks.len()
             * (std::mem::size_of::<u32>() + std::mem::size_of::<Vec<Vec<Nbr>>>());
-        let live_entries: usize = self.live_sets.values().map(HashSet::len).sum();
+        let live_entries: usize = self.live_sets.values().map(LiveKeySet::len).sum();
+        let live_heap: usize = self.live_sets.values().map(LiveKeySet::heap_bytes).sum();
         let live_sets = self.live_sets.len()
-            * (std::mem::size_of::<u32>() + std::mem::size_of::<HashSet<(u32, i64)>>())
-            + live_entries * (std::mem::size_of::<(u32, i64)>() + 8);
+            * (std::mem::size_of::<u32>() + std::mem::size_of::<LiveKeySet>())
+            + live_heap;
         arrays
             + overflow_reserved * std::mem::size_of::<Nbr>()
             + overflow_entries
@@ -45,14 +44,14 @@ impl MutableCsr {
         if self.total_edge_capacity == 0 {
             return 0.0;
         }
-        let active_edges = self.edge_count.load(Ordering::Relaxed) as usize;
+        let active_edges = self.edge_count as usize;
         self.total_edge_capacity.saturating_sub(active_edges) as f32
             / self.total_edge_capacity as f32
     }
 
     /// Estimate wasted memory due to fragmentation (in bytes)
     pub(crate) fn wasted_bytes_estimate(&self) -> usize {
-        let active_edges = self.edge_count.load(Ordering::Relaxed) as usize;
+        let active_edges = self.edge_count as usize;
         self.total_edge_capacity.saturating_sub(active_edges) * std::mem::size_of::<Nbr>()
     }
 
@@ -63,7 +62,7 @@ impl MutableCsr {
     /// overflow dead entries), and wasted capacity is the reserved capacity
     /// minus live edges (row gaps plus tombstone slots).
     pub fn get_fragmentation_stats(&self) -> FragmentationStats {
-        let live_edges = self.edge_count.load(Ordering::Relaxed) as usize;
+        let live_edges = self.edge_count as usize;
 
         let mut physical_entries = 0usize;
         for vid in 0..self.vertex_capacity() {

@@ -82,6 +82,25 @@ fn test_dump_and_load() {
 }
 
 #[test]
+fn test_load_rejects_tampered_edge_count() {
+    let mut csr1 = MutableCsr::with_capacity(10, 100);
+    csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    csr1.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+        .unwrap();
+    let data = csr1.dump();
+    let mut ok = MutableCsr::new();
+    ok.load(&data).expect("normal payload must load");
+
+    let mut tampered = data.clone();
+    let stored = u64::from_le_bytes(tampered[12..20].try_into().unwrap());
+    tampered[12..20].copy_from_slice(&(stored + 1).to_le_bytes());
+    let mut csr2 = MutableCsr::new();
+    let err = csr2.load(&tampered).expect_err("tampered count must fail");
+    assert!(err.to_string().contains("edge count mismatch"));
+}
+
+#[test]
 fn test_resize() {
     let mut csr = MutableCsr::with_capacity(2, 10);
 
@@ -645,10 +664,24 @@ fn test_physical_reads_ignore_timestamps() {
     assert!(csr.delete_edge(0u32, EdgeId(100), 20).unwrap());
     assert!(csr
         .get_edge_physical(0u32, VertexId::from_int64(1))
-        .is_some());
+        .is_none());
     assert_eq!(csr.physical_edges_of(0u32).len(), 1);
     assert!(csr.has_physical_entries(0u32));
     assert!(!csr.has_physical_entries(1u32));
+}
+
+#[test]
+fn test_physical_lookup_returns_rebuilt_live_edge() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 10)
+        .unwrap();
+    assert!(csr.delete_edge(0u32, EdgeId(100), 20).unwrap());
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(101), 30)
+        .unwrap();
+    let found = csr
+        .get_edge_physical(0u32, VertexId::from_int64(1))
+        .expect("rebuilt live edge must be found");
+    assert_eq!(found.edge_id, EdgeId(101));
 }
 
 #[test]
@@ -889,4 +922,91 @@ fn test_overflow_repack_preserves_unexpired_tombstones() {
         .map(|chunks| chunks.iter().map(Vec::len).sum())
         .unwrap_or(0);
     assert_eq!(kept, overflow_before - 2);
+}
+
+#[test]
+fn insert_reuses_gc_eligible_primary_tombstone() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(4, 16, 8);
+    for i in 0..4i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(100 + i as u64), 1)
+            .unwrap();
+    }
+    assert!(csr.delete_edge(0u32, EdgeId(100), 10).unwrap());
+    assert!(csr.delete_edge(0u32, EdgeId(101), 10).unwrap());
+    assert_eq!(csr.edge_count(), 2);
+    csr.set_tombstone_reuse_cutoff(10);
+    csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(200), 11)
+        .unwrap();
+    assert_eq!(csr.edge_count(), 3);
+    assert!(csr.get_overflow_chunks(0).is_none());
+    let found = csr
+        .get_edge_physical(0u32, VertexId::from_int64(10))
+        .expect("reused slot holds the new edge");
+    assert_eq!(found.edge_id, EdgeId(200));
+}
+
+#[test]
+fn insert_without_reuse_cutoff_spills_to_overflow() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(4, 16, 8);
+    for i in 0..4i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(100 + i as u64), 1)
+            .unwrap();
+    }
+    assert!(csr.delete_edge(0u32, EdgeId(100), 10).unwrap());
+    assert!(csr.delete_edge(0u32, EdgeId(101), 10).unwrap());
+    csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(200), 11)
+        .unwrap();
+    assert_eq!(csr.edge_count(), 3);
+    let spilled: usize = csr
+        .get_overflow_chunks(0)
+        .map(|chunks| chunks.iter().map(Vec::len).sum())
+        .unwrap_or(0);
+    assert_eq!(spilled, 1);
+}
+
+#[test]
+fn insert_keeps_pinned_tombstone_when_cutoff_below_delete_ts() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(4, 16, 8);
+    for i in 0..4i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(100 + i as u64), 1)
+            .unwrap();
+    }
+    assert!(csr.delete_edge(0u32, EdgeId(100), 10).unwrap());
+    csr.set_tombstone_reuse_cutoff(9);
+    csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(200), 11)
+        .unwrap();
+    let spilled: usize = csr
+        .get_overflow_chunks(0)
+        .map(|chunks| chunks.iter().map(Vec::len).sum())
+        .unwrap_or(0);
+    assert_eq!(spilled, 1);
+    let tombstone = csr
+        .physical_edges_of(0u32)
+        .into_iter()
+        .find(|nbr| nbr.edge_id == EdgeId(100))
+        .expect("pinned tombstone stays in the primary row");
+    assert_eq!(tombstone.delete_ts, 10);
+}
+
+#[test]
+fn live_set_upgrades_past_sorted_bound() {
+    use super::live_set::{LiveKeySet, LIVE_SET_SORTED_BOUND};
+    let mut csr = MutableCsr::with_overflow_chunk_edges(4, 64, 64);
+    for i in 0..=(LIVE_SET_SORTED_BOUND as i64) {
+        csr.insert_edge(
+            0u32,
+            VertexId::from_int64(1000 + i),
+            EdgeId(500 + i as u64),
+            1,
+        )
+        .unwrap();
+    }
+    assert_eq!(csr.live_key_count(0), LIVE_SET_SORTED_BOUND + 1);
+    assert!(matches!(csr.live_sets.get(&0), Some(LiveKeySet::Hashed(_))));
+    assert!(csr
+        .insert_edge(0u32, VertexId::from_int64(1000), EdgeId(999), 1)
+        .is_err());
+    csr.insert_edge(1u32, VertexId::from_int64(1), EdgeId(1), 1)
+        .unwrap();
+    assert!(matches!(csr.live_sets.get(&1), Some(LiveKeySet::Sorted(_))));
 }

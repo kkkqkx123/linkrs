@@ -61,6 +61,61 @@ impl EdgeStore {
         });
     }
 
+    /// Fill one shared buffer with the visible neighbors of many vertices.
+    ///
+    /// Records one start offset per vertex plus a trailing end offset, so
+    /// `out[offsets[i]..offsets[i + 1]]` is vertex `vids[i]` in order. One
+    /// pass over the vertices with a single reused buffer instead of one
+    /// allocation per vertex; visibility is still decided per edge by the
+    /// version authority.
+    pub(crate) fn fill_visible_batch_into(
+        &self,
+        csr: &CsrShardSet,
+        vids: &[u32],
+        ts: Timestamp,
+        out: &mut Vec<Nbr>,
+        offsets: &mut Vec<usize>,
+    ) {
+        out.clear();
+        offsets.clear();
+        offsets.reserve(vids.len() + 1);
+        for vid in vids {
+            offsets.push(out.len());
+            csr.visit_physical(*vid, |nbr| {
+                if self.is_visible(nbr.edge_id, ts) {
+                    out.push(nbr);
+                }
+                true
+            });
+        }
+        offsets.push(out.len());
+    }
+
+    /// Pending-aware variant of the shared multi-vertex batch fill.
+    pub(crate) fn fill_visible_batch_into_with_gate(
+        &self,
+        csr: &CsrShardSet,
+        vids: &[u32],
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+        out: &mut Vec<Nbr>,
+        offsets: &mut Vec<usize>,
+    ) {
+        out.clear();
+        offsets.clear();
+        offsets.reserve(vids.len() + 1);
+        for vid in vids {
+            offsets.push(out.len());
+            csr.visit_physical(*vid, |nbr| {
+                if self.is_visible_with_gate(nbr.edge_id, ts, gate) {
+                    out.push(nbr);
+                }
+                true
+            });
+        }
+        offsets.push(out.len());
+    }
+
     /// Single row-location entry for point lookups: physical topology lookup
     /// plus the authoritative MVCC visibility check. Adjacency, existence
     /// and record reads must funnel through here rather than reading CSR

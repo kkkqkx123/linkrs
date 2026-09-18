@@ -113,6 +113,15 @@ impl CsrVariant {
         }
     }
 
+    /// Refresh the hot-path tombstone reuse cutoff. Only the multi-edge
+    /// store reuses primary tombstones; single-slot rows overwrite in place
+    /// already and hold no overflow, so other variants ignore the hint.
+    pub fn set_tombstone_reuse_cutoff(&mut self, cutoff: Timestamp) {
+        if let CsrVariant::Multiple(csr) = self {
+            csr.set_tombstone_reuse_cutoff(cutoff);
+        }
+    }
+
     /// Get fragmentation ratio for diagnostics
     ///
     /// Returns:
@@ -328,6 +337,14 @@ impl MutableCsrTrait for CsrVariant {
         dispatch!(self, physical_edges_of(src_vid) -> Vec::new())
     }
 
+    fn fill_physical_into(&self, src_vid: u32, out: &mut Vec<Nbr>) {
+        match self {
+            CsrVariant::Multiple(csr) => csr.fill_physical_into(src_vid, out),
+            CsrVariant::Single(csr) => csr.fill_physical_into(src_vid, out),
+            CsrVariant::None { .. } => out.clear(),
+        }
+    }
+
     fn has_physical_entries(&self, vid: u32) -> bool {
         match self {
             CsrVariant::Multiple(csr) => csr.has_physical_entries(vid),
@@ -502,6 +519,18 @@ impl CsrVariant {
             CsrVariant::Multiple(csr) => csr.visit_physical(src_vid, f),
             CsrVariant::Single(csr) => csr.visit_physical(src_vid, f),
             CsrVariant::None { .. } => {}
+        }
+    }
+
+    /// Fill a caller buffer with every physically stored entry of one vertex.
+    ///
+    /// Same content as the allocating trait accessor, without the per-vertex
+    /// allocation. Batch scans reuse one buffer across vertices.
+    pub fn fill_physical_into(&self, src_vid: u32, out: &mut Vec<Nbr>) {
+        match self {
+            CsrVariant::Multiple(csr) => csr.fill_physical_into(src_vid, out),
+            CsrVariant::Single(csr) => csr.fill_physical_into(src_vid, out),
+            CsrVariant::None { .. } => out.clear(),
         }
     }
 }

@@ -26,11 +26,12 @@
 //! - `trait_impl` adapts the type to CSR traits.
 //! - `overflow` and `serialization` stay as storage primitives.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::Nbr;
+use super::{Nbr, Timestamp};
+
+use live_set::LiveKeySet;
 
 pub(crate) mod compaction;
 pub(crate) mod core;
@@ -64,10 +65,15 @@ pub struct MutableCsr {
     /// Single live-endpoint set per vertex covering primary and overflow:
     /// (endpoint, rank) of edges whose `delete_ts == MAX`. One set replaces
     /// the former primary/overflow pair, so duplicate checks never consult
-    /// two heaps and never fall back to linear scans.
-    live_sets: HashMap<u32, HashSet<(u32, i64)>>,
+    /// two heaps and never fall back to linear scans. Narrow rows hold a
+    /// sorted inline array, wide rows a hash set; see `live_set`.
+    live_sets: HashMap<u32, LiveKeySet>,
+    /// Watermark-derived cutoff for hot-path tombstone reuse, refreshed by
+    /// the table maintenance pass. The sentinel disables reuse. Memory-only:
+    /// never persisted, rebuilt to the default on construction.
+    tombstone_reuse_cutoff: Timestamp,
 
-    edge_count: AtomicU64,
+    edge_count: u64,
     total_edge_capacity: usize,
 }
 
@@ -81,7 +87,8 @@ impl Clone for MutableCsr {
             overflow_chunks: self.overflow_chunks.clone(),
             overflow_chunk_edges: self.overflow_chunk_edges,
             live_sets: self.live_sets.clone(),
-            edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
+            tombstone_reuse_cutoff: self.tombstone_reuse_cutoff,
+            edge_count: self.edge_count,
             total_edge_capacity: self.total_edge_capacity,
         }
     }
@@ -92,7 +99,7 @@ impl fmt::Debug for MutableCsr {
         f.debug_struct("MutableCsr")
             .field("vertex_capacity", &self.vertex_capacity())
             .field("total_edge_capacity", &self.total_edge_capacity)
-            .field("edge_count", &self.edge_count.load(Ordering::Relaxed))
+            .field("edge_count", &self.edge_count)
             .finish_non_exhaustive()
     }
 }

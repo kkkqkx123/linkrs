@@ -1,5 +1,3 @@
-use std::sync::atomic::Ordering;
-
 use super::super::{CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId};
 use super::MutableCsr;
 use graphdb_core::StorageResult;
@@ -10,7 +8,7 @@ impl CsrBase for MutableCsr {
     }
 
     fn edge_count(&self) -> u64 {
-        self.edge_count.load(Ordering::Relaxed)
+        self.edge_count
     }
 
     fn dump(&self) -> Vec<u8> {
@@ -78,6 +76,10 @@ impl MutableCsrTrait for MutableCsr {
 
     fn physical_edges_of(&self, src_vid: u32) -> Vec<Nbr> {
         MutableCsr::physical_edges_of(self, src_vid)
+    }
+
+    fn fill_physical_into(&self, src_vid: u32, out: &mut Vec<Nbr>) {
+        MutableCsr::fill_physical_into(self, src_vid, out)
     }
 
     fn has_physical_entries(&self, vid: u32) -> bool {

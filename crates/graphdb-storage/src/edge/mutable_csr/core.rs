@@ -1,8 +1,7 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::super::csr_shared::{grown_vertex_capacity, DEFAULT_VERTEX_CAPACITY};
-use super::super::Nbr;
+use super::super::{Nbr, Timestamp};
 use super::overflow::OverflowStorage;
 use super::MutableCsr;
 
@@ -39,9 +38,18 @@ impl MutableCsr {
             overflow_chunks: OverflowStorage::new(),
             overflow_chunk_edges: overflow_chunk_edges.max(1),
             live_sets: HashMap::new(),
-            edge_count: AtomicU64::new(0),
+            tombstone_reuse_cutoff: Timestamp::MAX,
+            edge_count: 0,
             total_edge_capacity: 0,
         }
+    }
+
+    /// Watermark-derived cutoff gating hot-path tombstone reuse. The table
+    /// maintenance pass refreshes it from its watermark capture; the
+    /// sentinel disables reuse. A stale value only narrows reuse, never
+    /// widens it, so a missed refresh degrades to the pre-reuse behavior.
+    pub fn set_tombstone_reuse_cutoff(&mut self, cutoff: Timestamp) {
+        self.tombstone_reuse_cutoff = cutoff;
     }
 
     pub fn vertex_capacity(&self) -> usize {
@@ -49,7 +57,7 @@ impl MutableCsr {
     }
 
     pub fn edge_count(&self) -> u64 {
-        self.edge_count.load(Ordering::Relaxed)
+        self.edge_count
     }
 
     /// Resize vertex capacity (requires exclusive access)
@@ -111,7 +119,7 @@ impl MutableCsr {
             .iter()
             .map(|cap| *cap as usize)
             .sum();
-        self.edge_count.store(0, Ordering::Relaxed);
+        self.edge_count = 0;
     }
 }
 

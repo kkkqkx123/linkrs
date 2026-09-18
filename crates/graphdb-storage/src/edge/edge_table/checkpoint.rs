@@ -259,11 +259,12 @@ impl EdgeStore {
             .map(|(_, _, plain, encoded)| plain.saturating_sub(*encoded))
             .sum();
         log::debug!(
-            "EdgeTable[{}] checkpoint kind={:?} dirty_groups={} bytes={} encoding_saved={}",
+            "EdgeTable[{}] checkpoint kind={:?} dirty_groups={} bytes={} live_edges={} encoding_saved={}",
             self.label,
             kind,
             dirty_groups,
             flushed_bytes,
+            self.out_csr.edge_count() + self.in_csr.edge_count(),
             encoding_saved
         );
         if let Some(stats) = &self.stats_manager {
@@ -803,8 +804,11 @@ impl EdgeStore {
     /// delete) their append sidecar. Insert-only groups persist the
     /// cumulative append sidecar alone: the on-disk sidecar is read back,
     /// merged with the in-memory log, and rewritten, then the memory row
-    /// index is dropped. Clean groups whose base files exist are skipped
-    /// and contribute zero bytes. Returns `(bytes, rebalanced_any)`.
+    /// index is dropped. When the merged op count reaches the configured
+    /// per-group append bound, the group rewrites the base instead so the
+    /// sidecar stays bounded; the bound-triggered rewrite never marks the
+    /// checkpoint as rebalanced. Clean groups whose base files exist are
+    /// skipped and contribute zero bytes. Returns `(bytes, rebalanced_any)`.
     fn flush_group_set(
         &mut self,
         dir: &Path,
@@ -888,29 +892,56 @@ impl EdgeStore {
                 let (mem_inserts, mem_deletes) = shards.group_append_ops(gid);
                 merged_inserts.extend(mem_inserts);
                 merged_deletes.extend(mem_deletes);
-                let ops = encode_append_ops(manifest, &merged_inserts, &merged_deletes);
-                let mut payload = Vec::new();
-                crate::persistence::write_header_to(&mut payload, append_section_id).map_err(
-                    |e| StorageError::io_error(format!("Failed to write append header: {}", e)),
-                )?;
-                payload.extend_from_slice(&(ops.len() as u64).to_le_bytes());
-                payload.extend_from_slice(&ops);
                 let op_count = merged_inserts.len() + merged_deletes.len();
-                persistence::write_pages_to_file(
-                    &append_path,
-                    &payload,
-                    page_size,
-                    level,
-                    op_count as u32,
-                )?;
-                written += file_bytes(&append_path);
-                let shards = if outgoing {
-                    &mut self.out_csr
+                let bound = self.config.max_append_ops_per_group;
+                if bound != 0 && op_count >= bound {
+                    let variant = shards.group_variant(gid).ok_or_else(|| {
+                        StorageError::deserialize_error(format!("group {} missing on flush", gid))
+                    })?;
+                    let mut payload = Vec::new();
+                    persistence::serialize_csr(variant, section_id, &mut payload)?;
+                    persistence::write_pages_to_file(
+                        &base_path,
+                        &payload,
+                        page_size,
+                        level,
+                        variant.edge_count() as u32,
+                    )?;
+                    written += file_bytes(&base_path);
+                    if append_path.exists() {
+                        let _ = std::fs::remove_file(&append_path);
+                    }
+                    let shards = if outgoing {
+                        &mut self.out_csr
+                    } else {
+                        &mut self.in_csr
+                    };
+                    shards.clear_group_dirty(gid);
+                    shards.clear_group_append_log(gid);
                 } else {
-                    &mut self.in_csr
-                };
-                shards.clear_group_dirty(gid);
-                shards.clear_group_append_log(gid);
+                    let ops = encode_append_ops(manifest, &merged_inserts, &merged_deletes);
+                    let mut payload = Vec::new();
+                    crate::persistence::write_header_to(&mut payload, append_section_id).map_err(
+                        |e| StorageError::io_error(format!("Failed to write append header: {}", e)),
+                    )?;
+                    payload.extend_from_slice(&(ops.len() as u64).to_le_bytes());
+                    payload.extend_from_slice(&ops);
+                    persistence::write_pages_to_file(
+                        &append_path,
+                        &payload,
+                        page_size,
+                        level,
+                        op_count as u32,
+                    )?;
+                    written += file_bytes(&append_path);
+                    let shards = if outgoing {
+                        &mut self.out_csr
+                    } else {
+                        &mut self.in_csr
+                    };
+                    shards.clear_group_dirty(gid);
+                    shards.clear_group_append_log(gid);
+                }
             }
         }
         Ok((written, rebalanced))
@@ -2671,6 +2702,84 @@ mod tests {
             .properties
             .iter()
             .any(|(k, v)| k == "weight" && *v == Value::Double(1.0)));
+        assert_eq!(loaded.edge_count(), 2);
+    }
+
+    fn make_bounded_table(bound: usize) -> EdgeStore {
+        let schema = EdgeSchema {
+            label_id: 0,
+            label_name: "knows".to_string(),
+            src_label: 0,
+            dst_label: 0,
+            properties: vec![],
+            oe_strategy: EdgeStrategy::Multiple,
+            ie_strategy: EdgeStrategy::Multiple,
+            schema_version: 1,
+        };
+        let config = EdgeTableConfig {
+            max_append_ops_per_group: bound,
+            ..EdgeTableConfig::default()
+        };
+        EdgeStore::with_config(schema, config).unwrap()
+    }
+
+    #[test]
+    fn append_bound_forces_base_merge() {
+        let mut table = make_bounded_table(4);
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        table.insert_edge(0, 2, 0, &[], 100).unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("baseline flush should succeed");
+        for i in 3..8u32 {
+            table.insert_edge(0, i, 0, &[], 110).unwrap();
+        }
+        let before = table.edge_count();
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("bound flush should succeed");
+        assert!(dir.path().join(out_group_file(0)).exists());
+        assert!(!dir.path().join(out_append_file(0)).exists());
+        assert_eq!(table.edge_count(), before);
+        let mut loaded = make_bounded_table(4);
+        loaded.load(dir.path()).expect("load should succeed");
+        assert_eq!(loaded.edge_count(), before);
+        assert!(loaded.has_edge(0, 1, 0, 200));
+        assert!(loaded.has_edge(0, 7, 0, 200));
+    }
+
+    #[test]
+    fn under_bound_stays_sidecar() {
+        let mut table = make_bounded_table(16);
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("baseline flush should succeed");
+        let base_path = dir.path().join(out_group_file(0));
+        assert!(base_path.exists());
+        let stamp = base_path.metadata().unwrap().modified().unwrap();
+        table.insert_edge(0, 2, 0, &[], 110).unwrap();
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("small flush should succeed");
+        assert!(dir.path().join(out_append_file(0)).exists());
+        assert_eq!(base_path.metadata().unwrap().modified().unwrap(), stamp);
+        let mut loaded = make_bounded_table(16);
+        loaded.load(dir.path()).expect("load should succeed");
         assert_eq!(loaded.edge_count(), 2);
     }
 }

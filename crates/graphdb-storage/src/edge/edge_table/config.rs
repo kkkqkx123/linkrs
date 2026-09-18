@@ -21,6 +21,19 @@ pub struct EdgeTableConfig {
     /// Write backpressure: max size of the node-group CSR (in bytes)
     /// before background compaction is requested. Set to 0 to disable.
     pub max_mutable_csr_bytes: usize,
+    /// Bound for one group append sidecar: disk plus memory op count at or
+    /// above this limit forces a base rewrite on the next checkpoint. Set to
+    /// 0 to disable, leaving sidecar growth unbounded.
+    pub max_append_ops_per_group: usize,
+    /// Region density at or above which a dirty region merges as a whole.
+    /// Below it only rows holding reclaimable entries are visited. Tune
+    /// against checkpoint flushed bytes per live edge; raising it narrows
+    /// merges and never changes the live set.
+    pub region_merge_min_density: f32,
+    /// Group density at or above which a multi-region dirty span merges at
+    /// group scope. Below it merges stay region-scoped. Same tuning source
+    /// and safety as the region threshold.
+    pub group_merge_min_density: f32,
     /// Automatic maintenance: property compaction on the
     /// write path when the configured thresholds are exceeded.
     pub auto_maintenance: AutoMaintenanceConfig,
@@ -54,6 +67,9 @@ impl Default for EdgeTableConfig {
             overflow_chunk_edges: 4096,
             node_group_bits: crate::edge::node_group::DEFAULT_NODE_GROUP_BITS,
             max_mutable_csr_bytes: 100 * 1024 * 1024,
+            max_append_ops_per_group: 4096,
+            region_merge_min_density: crate::edge::node_group::REGION_MERGE_MIN_DENSITY,
+            group_merge_min_density: crate::edge::node_group::GROUP_MERGE_MIN_DENSITY,
             auto_maintenance: AutoMaintenanceConfig::default(),
         }
     }

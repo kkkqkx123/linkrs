@@ -31,13 +31,17 @@ pub trait MutableCsrTrait: CsrBase {
     /// topology (neighbor, edge_id, timestamps). Properties are stored
     /// separately indexed by `EdgeId`.
     ///
+    /// Physical uniqueness only, without timestamp ordering checks. Snapshot
+    /// visibility is decided by the version authority above this layer.
+    ///
     /// Returns `Ok(())` on success, or an error explaining why insertion failed:
     ///
-    /// - `MutableCsr`: checks for duplicate (neighbor + valid timestamp) across primary and overflow,
+    /// - `MutableCsr`: checks for duplicate live (neighbor) keys across primary and overflow,
     ///   writes to primary if space available, otherwise spills to overflow with auto-expansion.
     ///   Returns `EdgeAlreadyExists` on duplicate.
     /// - `SingleMutableCsr`: rejects a second live edge in an occupied slot
-    ///   with `Conflict`, matching the table-layer Single contract. No silent
+    ///   with `Conflict`, matching the table-layer Single contract. A
+    ///   tombstoned slot accepts a rebuild at any timestamp. No silent
     ///   overwrite exists.
     fn insert_edge(
         &mut self,
@@ -113,10 +117,11 @@ pub trait MutableCsrTrait: CsrBase {
         None
     }
 
-    /// Locate one edge by endpoint without consulting timestamps.
+    /// Locate the first live edge by endpoint without consulting snapshots.
     ///
-    /// Physical addressing only; visibility is decided by the version
-    /// authority above this layer.
+    /// Physical addressing only; tombstoned and gap slots are skipped.
+    /// Snapshot visibility still needs the version authority above this
+    /// layer, while tombstone access uses the full physical views.
     fn get_edge_physical(&self, _src_vid: u32, _dst: VertexId) -> Option<Nbr> {
         None
     }
@@ -124,6 +129,16 @@ pub trait MutableCsrTrait: CsrBase {
     /// Every physically stored entry of one vertex without timestamp filtering.
     fn physical_edges_of(&self, _src_vid: u32) -> Vec<Nbr> {
         Vec::new()
+    }
+
+    /// Fill a caller buffer with every physically stored entry of one vertex.
+    ///
+    /// Same content as the allocating accessor above, without the per-vertex
+    /// allocation. The default forwards to the allocating accessor; row
+    /// stores override it with a direct fill.
+    fn fill_physical_into(&self, src_vid: u32, out: &mut Vec<Nbr>) {
+        out.clear();
+        out.extend_from_slice(&self.physical_edges_of(src_vid));
     }
 
     /// Whether one vertex holds any physically stored entry.
