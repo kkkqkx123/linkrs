@@ -71,7 +71,7 @@ impl EdgeStore {
             .filter(|edge_id| {
                 self.edge_owner
                     .get(edge_id)
-                    .is_none_or(|owner| !pruned.contains(owner))
+                    .is_none_or(|owner| !pruned.contains(&owner))
             })
             .collect();
         self.properties
@@ -189,9 +189,9 @@ impl EdgeStore {
         // and file each edge into its dirty group slot, so the grouping pass
         // touches one map entry per edge with no second lookup and decodes
         // properties for dirty groups only below.
-        for (edge_id, owner) in &self.edge_owner {
-            if let Some(slot) = by_owner.get_mut(owner) {
-                slot.push(*edge_id);
+        for (edge_id, owner) in self.edge_owner.iter() {
+            if let Some(slot) = by_owner.get_mut(&owner) {
+                slot.push(edge_id);
             }
         }
         for group in group_ids {

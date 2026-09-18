@@ -11,6 +11,111 @@ use super::stats::TombstoneStats;
 use graphdb_core::types::{EdgeId, Timestamp};
 use std::collections::HashMap;
 
+/// Dense per-edge visibility authority keyed by edge id.
+///
+/// Edge ids are assigned monotonically per table, so authority records are
+/// addressed by direct subscript instead of hashing. Slots of removed edges
+/// hold `None` and read as absent (fail closed: invisible). The middle of the
+/// array is never compacted; only trailing holes are truncated on reclaim.
+#[derive(Debug, Clone, Default)]
+pub struct AuthorityMap {
+    slots: Vec<Option<EdgeTimestamps>>,
+    live: usize,
+}
+
+impl AuthorityMap {
+    pub fn new() -> Self {
+        Self {
+            slots: Vec::new(),
+            live: 0,
+        }
+    }
+
+    pub fn get(&self, edge_id: &EdgeId) -> Option<&EdgeTimestamps> {
+        self.slots.get(edge_id.0 as usize)?.as_ref()
+    }
+
+    pub fn get_mut(&mut self, edge_id: &EdgeId) -> Option<&mut EdgeTimestamps> {
+        self.slots.get_mut(edge_id.0 as usize)?.as_mut()
+    }
+
+    pub fn insert(&mut self, edge_id: EdgeId, ts: EdgeTimestamps) {
+        let idx = edge_id.0 as usize;
+        if self.slots.len() <= idx {
+            self.slots.resize(idx + 1, None);
+        }
+        if self.slots[idx].is_none() {
+            self.live += 1;
+        }
+        self.slots[idx] = Some(ts);
+    }
+
+    pub fn remove(&mut self, edge_id: &EdgeId) {
+        let idx = edge_id.0 as usize;
+        if idx < self.slots.len() && self.slots[idx].is_some() {
+            self.slots[idx] = None;
+            self.live = self.live.saturating_sub(1);
+        }
+    }
+
+    pub fn contains_key(&self, edge_id: &EdgeId) -> bool {
+        self.get(edge_id).is_some()
+    }
+
+    pub fn len(&self) -> usize {
+        self.live
+    }
+
+    pub fn clear(&mut self) {
+        self.slots.clear();
+        self.live = 0;
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &EdgeTimestamps> {
+        self.slots.iter().filter_map(|slot| slot.as_ref())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (EdgeId, &EdgeTimestamps)> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, slot)| slot.as_ref().map(|ts| (EdgeId(idx as u64), ts)))
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = EdgeId> + '_ {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.is_some())
+            .map(|(idx, _)| EdgeId(idx as u64))
+    }
+
+    /// Drop records deleted before `watermark` whose rows are gone.
+    ///
+    /// Returns the reclaimed count and truncates trailing holes so a
+    /// delete-heavy table does not hold an ever-longer tail of empty slots.
+    pub fn reclaim_where(
+        &mut self,
+        watermark: Timestamp,
+        is_gone: impl Fn(EdgeId) -> bool,
+    ) -> usize {
+        let mut reclaimed = 0usize;
+        for (idx, slot) in self.slots.iter_mut().enumerate() {
+            let eligible =
+                slot.is_some_and(|ts| ts.delete_ts != Timestamp::MAX && ts.delete_ts < watermark);
+            if eligible && is_gone(EdgeId(idx as u64)) {
+                *slot = None;
+                reclaimed += 1;
+            }
+        }
+        self.live = self.live.saturating_sub(reclaimed);
+        while self.slots.last().is_some_and(Option::is_none) {
+            self.slots.pop();
+        }
+        reclaimed
+    }
+}
+
 /// Per-edge creation and deletion timestamps.
 #[derive(Debug, Clone, Copy)]
 pub struct EdgeTimestamps {
@@ -40,7 +145,7 @@ impl EdgeTimestamps {
 /// watermarks, never from this cache alone.
 pub struct MVCCManager {
     /// Per-edge creation/deletion timestamps (visibility authority).
-    pub edge_timestamps: HashMap<EdgeId, EdgeTimestamps>,
+    pub edge_timestamps: AuthorityMap,
     /// Minimum timestamp of all active snapshots.
     pub min_active_snapshot_ts: Timestamp,
     /// Active snapshot timestamps and their reference count.
@@ -57,7 +162,7 @@ impl MVCCManager {
     /// Create a new MVCC manager
     pub fn new() -> Self {
         Self {
-            edge_timestamps: HashMap::new(),
+            edge_timestamps: AuthorityMap::new(),
             min_active_snapshot_ts: Timestamp::MAX,
             active_snapshots: HashMap::new(),
         }
@@ -281,17 +386,7 @@ impl MVCCManager {
         if watermark == Timestamp::MAX {
             return 0;
         }
-        let mut reclaimed = 0usize;
-        self.edge_timestamps.retain(|edge_id, ts| {
-            let eligible = ts.delete_ts != Timestamp::MAX && ts.delete_ts < watermark;
-            if eligible && is_gone(*edge_id) {
-                reclaimed += 1;
-                false
-            } else {
-                true
-            }
-        });
-        reclaimed
+        self.edge_timestamps.reclaim_where(watermark, is_gone)
     }
 }
 

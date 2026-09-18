@@ -7,6 +7,24 @@ use super::overflow::OVERFLOW_REPACK_CHUNKS_PER_VERTEX;
 use super::MutableCsr;
 use graphdb_core::{StorageError, StorageResult};
 
+/// Hot-path bound for the tombstone-reuse scan. Rows wider than this leave
+/// leftover reclaimable slots to the maintenance pass instead of scanning
+/// the whole row on every insert.
+const TOMBSTONE_REUSE_SCAN_BOUND: usize = 64;
+
+/// Physical position of one stored edge inside its row.
+///
+/// Primary positions address the primary block by slot index; overflow
+/// positions address a chunk and a slot inside it. Positions are valid only
+/// while the row is untouched by compaction, rebalance, repack or removal:
+/// every positional write revalidates the expected edge id first and
+/// refuses stale positions instead of touching the wrong edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgePosition {
+    Primary { slot: u32 },
+    Overflow { chunk: u32, slot: u32 },
+}
+
 impl MutableCsr {
     fn append_overflow(&mut self, src_vid: u32, nbr: Nbr) {
         let live_hint = self.live_key_count(src_vid).saturating_add(1);
@@ -37,32 +55,16 @@ impl MutableCsr {
         if nbr.delete_ts == Timestamp::MAX {
             self.track_live_insert(src_vid, nbr.endpoint, nbr.rank);
         }
-        // Per-vertex overflow bound: single benchmarked threshold. Past the
-        // limit with dead entries the row is repacked; past the limit with
-        // only live entries the row waits for a region or full compaction
-        // instead of repeatedly repacking live data.
+        // Per-vertex overflow bound: past the limit the row is repacked into
+        // graded chunks whether or not it holds dead entries, so skewed rows
+        // cannot grow unbounded pointer chains. The repack preserves every
+        // entry (no watermark here); watermark-confirmed reclaim runs
+        // through the vertex-level reporting passes. Repacking collapses the
+        // chain back to one or two chunks, so the cost stays amortized.
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             if chunks.len() > OVERFLOW_REPACK_CHUNKS_PER_VERTEX {
-                let dead = chunks
-                    .iter()
-                    .flat_map(|c| c.iter())
-                    .filter(|nbr| nbr.delete_ts != Timestamp::MAX)
-                    .count();
-                if dead > 0 {
-                    // Hot write path carries no watermark capture, so repack
-                    // only moves entries and preserves pinned tombstones
-                    // without dropping. Watermark-confirmed reclaim runs
-                    // through the vertex-level reporting passes that promote
-                    // deletions to the authority.
-                    let mut noop = |_id: EdgeId, _ts: Timestamp| {};
-                    self.compact_overflow_for_vertex(src_vid, Timestamp::MAX, &mut noop);
-                } else {
-                    log::debug!(
-                        "MutableCsr vertex {} holds {} overflow chunks of live entries; row rebalance or compaction will merge them",
-                        src_vid,
-                        chunks.len()
-                    );
-                }
+                let mut noop = |_id: EdgeId, _ts: Timestamp| {};
+                self.compact_overflow_for_vertex(src_vid, Timestamp::MAX, &mut noop);
             }
         }
     }
@@ -121,11 +123,13 @@ impl MutableCsr {
         // overflow. The eligibility predicate matches the maintenance
         // compaction exactly, so the hot path never drops a tombstone the
         // reclaim pass would keep. Overflow tombstones stay for the region
-        // compaction; the scan stays bounded by the row degree.
+        // compaction; the scan is bounded to a fixed prefix so high-degree
+        // rows never pay O(degree) per insert.
         if self.tombstone_reuse_cutoff != Timestamp::MAX {
             let base = self.adj_offsets[src_idx] as usize;
             let cutoff = self.tombstone_reuse_cutoff;
-            for i in 0..degree {
+            let bound = degree.min(TOMBSTONE_REUSE_SCAN_BOUND);
+            for i in 0..bound {
                 let reclaimable = self
                     .nbr_list
                     .get(base + i)
@@ -240,6 +244,25 @@ impl MutableCsr {
         ts: Timestamp,
         on_deleted: &mut dyn FnMut(EdgeId),
     ) -> usize {
+        let mut noop_pos = |edge_id: EdgeId, _position: EdgePosition| {
+            on_deleted(edge_id);
+        };
+        self.delete_edge_by_dst_reporting_positioned(src_vid, dst, ts, &mut noop_pos)
+    }
+
+    /// Position-reporting form of [`Self::delete_edge_by_dst_reporting`].
+    ///
+    /// Same single stamping pass, but each stamped id arrives with its row
+    /// position so the caller can revert or re-delete the exact slot without
+    /// rescanning. Positions are row-local and expire on the next compaction,
+    /// rebalance, repack or removal of the row.
+    pub fn delete_edge_by_dst_reporting_positioned(
+        &mut self,
+        src_vid: u32,
+        dst: VertexId,
+        ts: Timestamp,
+        on_deleted: &mut dyn FnMut(EdgeId, EdgePosition),
+    ) -> usize {
         let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
@@ -261,15 +284,15 @@ impl MutableCsr {
                 let edge_id = nbr.edge_id;
                 nbr.delete_ts = ts;
                 self.edge_count -= 1;
-                on_deleted(edge_id);
+                on_deleted(edge_id, EdgePosition::Primary { slot: i as u32 });
                 deleted += 1;
             }
         }
 
         // Stamp overflow matches in the same pass.
         if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
-            for chunk in chunks.iter_mut() {
-                for nbr in chunk.iter_mut() {
+            for (chunk_idx, chunk) in chunks.iter_mut().enumerate() {
+                for (slot_idx, nbr) in chunk.iter_mut().enumerate() {
                     if nbr.endpoint == decoded_endpoint
                         && nbr.rank == decoded_rank
                         && nbr.delete_ts == Timestamp::MAX
@@ -278,7 +301,13 @@ impl MutableCsr {
                         let edge_id = nbr.edge_id;
                         nbr.delete_ts = ts;
                         self.edge_count -= 1;
-                        on_deleted(edge_id);
+                        on_deleted(
+                            edge_id,
+                            EdgePosition::Overflow {
+                                chunk: chunk_idx as u32,
+                                slot: slot_idx as u32,
+                            },
+                        );
                         deleted += 1;
                     }
                 }
@@ -519,5 +548,222 @@ impl MutableCsr {
         }
 
         false
+    }
+
+    /// Reserve primary capacity for a batch of `(src, count)` pairs.
+    ///
+    /// Each touched row is sized once at the packed density target for its
+    /// current live width plus the incoming count, so the following inserts
+    /// land in reserved gaps instead of allocating chunk by chunk. Rows not
+    /// listed are untouched. Live sets are left alone; per-edge inserts keep
+    /// maintaining them incrementally.
+    pub fn reserve_for_batch(&mut self, counts: &[(u32, usize)]) {
+        for (src_vid, incoming) in counts {
+            let src_idx = *src_vid as usize;
+            if src_idx >= self.vertex_capacity() {
+                self.ensure_vertex_capacity(src_idx + 1);
+            }
+            if self.primary_capacities[src_idx] == 0 {
+                self.allocate_primary_block(src_idx);
+            }
+            let live = self.live_key_count(*src_vid);
+            let want = Self::sized_row_capacity(live.saturating_add(*incoming));
+            let have = self.primary_capacities[src_idx] as usize;
+            if want > have {
+                let base = self.adj_offsets[src_idx] as usize;
+                let degree = self.degrees[src_idx] as usize;
+                let extra = want - have;
+                let insert_at = base + have;
+                self.nbr_list.splice(
+                    insert_at..insert_at,
+                    std::iter::repeat(Nbr::dead_gap()).take(extra),
+                );
+                for offset in self.adj_offsets.iter_mut() {
+                    if *offset as usize > base {
+                        *offset = offset.saturating_add(extra as u32);
+                    }
+                }
+                self.primary_capacities[src_idx] = want as u32;
+                self.add_capacity(extra);
+                let _ = degree;
+            }
+        }
+    }
+
+    /// Bulk insert pre-grouped edges: `groups` holds one `(src, batch)` per
+    /// touched row with decoded `(endpoint, rank, edge_id, create_ts)` tuples.
+    ///
+    /// Each row is reserved once at the packed density target, written in a
+    /// single pass, and has its live set rebuilt once instead of per edge.
+    /// Duplicate keys inside or against the row are rejected before any write
+    /// when `check_duplicates` is set; otherwise the caller guarantees
+    /// uniqueness. Returns the inserted edge count.
+    pub fn batch_put_edges(
+        &mut self,
+        groups: &[(u32, Vec<(u32, i64, EdgeId, Timestamp)>)],
+        check_duplicates: bool,
+    ) -> StorageResult<usize> {
+        if check_duplicates {
+            for (src_vid, batch) in groups {
+                let mut seen = std::collections::HashSet::with_capacity(batch.len());
+                for (endpoint, rank, _, _) in batch {
+                    if !seen.insert((*endpoint, *rank)) {
+                        return Err(StorageError::edge_already_exists(format!(
+                            "duplicate key in bulk batch for vertex {}",
+                            src_vid
+                        )));
+                    }
+                    if self.live_key_present(*src_vid, *endpoint, *rank) {
+                        return Err(StorageError::edge_already_exists(format!(
+                            "{} -> ({}, {})",
+                            src_vid, endpoint, rank
+                        )));
+                    }
+                }
+            }
+        }
+        let counts: Vec<(u32, usize)> = groups
+            .iter()
+            .map(|(src, batch)| (*src, batch.len()))
+            .collect();
+        self.reserve_for_batch(&counts);
+        let mut inserted = 0usize;
+        for (src_vid, batch) in groups {
+            let src_idx = *src_vid as usize;
+            for (endpoint, rank, edge_id, create_ts) in batch {
+                let nbr = Nbr::with_create_ts(*endpoint, *rank, *edge_id, *create_ts);
+                let degree = self.degrees[src_idx] as usize;
+                let cap = self.primary_capacities[src_idx] as usize;
+                if degree < cap {
+                    let base = self.adj_offsets[src_idx] as usize;
+                    self.nbr_list[base + degree] = nbr;
+                    self.degrees[src_idx] += 1;
+                } else {
+                    self.append_overflow(*src_vid, nbr);
+                }
+                self.edge_count += 1;
+                inserted += 1;
+            }
+            self.rebuild_live_set_for_vertex(*src_vid);
+        }
+        Ok(inserted)
+    }
+
+    /// Delete the edge at `position` when it still holds `expected` id.
+    ///
+    /// Stale positions (row moved since the read) are refused with `Ok(false)`
+    /// instead of touching the wrong edge. Timestamp conflicts follow the
+    /// same state machine as the edge-id path.
+    pub fn delete_edge_at_position(
+        &mut self,
+        src_vid: u32,
+        position: EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
+        match position {
+            EdgePosition::Primary { slot } => {
+                let src_idx = src_vid as usize;
+                if src_idx >= self.vertex_capacity() {
+                    return Ok(false);
+                }
+                if slot as usize >= self.degrees[src_idx] as usize {
+                    return Ok(false);
+                }
+                let idx = self.adj_offsets[src_idx] as usize + slot as usize;
+                let nbr = &mut self.nbr_list[idx];
+                if nbr.edge_id != expected {
+                    return Ok(false);
+                }
+                match decide_slot_delete(nbr, expected, ts)? {
+                    DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated => {
+                        return Ok(false)
+                    }
+                    DeleteSlotOutcome::Stamped => {}
+                }
+                let (endpoint, rank) = (nbr.endpoint, nbr.rank);
+                nbr.delete_ts = ts;
+                self.edge_count -= 1;
+                self.track_live_remove(src_vid, endpoint, rank);
+                Ok(true)
+            }
+            EdgePosition::Overflow { chunk, slot } => {
+                let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) else {
+                    return Ok(false);
+                };
+                let Some(chunk) = chunks.get_mut(chunk as usize) else {
+                    return Ok(false);
+                };
+                let Some(nbr) = chunk.get_mut(slot as usize) else {
+                    return Ok(false);
+                };
+                if nbr.edge_id != expected {
+                    return Ok(false);
+                }
+                match decide_slot_delete(nbr, expected, ts)? {
+                    DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated => {
+                        return Ok(false)
+                    }
+                    DeleteSlotOutcome::Stamped => {}
+                }
+                let (endpoint, rank) = (nbr.endpoint, nbr.rank);
+                nbr.delete_ts = ts;
+                self.edge_count -= 1;
+                self.track_live_remove(src_vid, endpoint, rank);
+                Ok(true)
+            }
+        }
+    }
+
+    /// Revert the deletion at `position` when it still holds `expected` id
+    /// and the tombstone predates `ts`. Stale positions are refused with
+    /// `false`.
+    pub fn revert_delete_at_position(
+        &mut self,
+        src_vid: u32,
+        position: EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+    ) -> bool {
+        match position {
+            EdgePosition::Primary { slot } => {
+                let src_idx = src_vid as usize;
+                if src_idx >= self.vertex_capacity() {
+                    return false;
+                }
+                if slot as usize >= self.degrees[src_idx] as usize {
+                    return false;
+                }
+                let idx = self.adj_offsets[src_idx] as usize + slot as usize;
+                let nbr = &mut self.nbr_list[idx];
+                if nbr.edge_id != expected || !can_revert_delete(nbr, ts) {
+                    return false;
+                }
+                let (endpoint, rank) = (nbr.endpoint, nbr.rank);
+                nbr.delete_ts = Timestamp::MAX;
+                self.edge_count += 1;
+                self.track_live_insert(src_vid, endpoint, rank);
+                true
+            }
+            EdgePosition::Overflow { chunk, slot } => {
+                let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) else {
+                    return false;
+                };
+                let Some(chunk) = chunks.get_mut(chunk as usize) else {
+                    return false;
+                };
+                let Some(nbr) = chunk.get_mut(slot as usize) else {
+                    return false;
+                };
+                if nbr.edge_id != expected || !can_revert_delete(nbr, ts) {
+                    return false;
+                }
+                let (endpoint, rank) = (nbr.endpoint, nbr.rank);
+                nbr.delete_ts = Timestamp::MAX;
+                self.edge_count += 1;
+                self.track_live_insert(src_vid, endpoint, rank);
+                true
+            }
+        }
     }
 }

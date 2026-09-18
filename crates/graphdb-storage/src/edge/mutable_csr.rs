@@ -13,8 +13,7 @@
 //! HashMap keyed by vertex id. This keeps the per-row fixed cost to 12 bytes
 //! (offset + degree + capacity) and eliminates HashMap fragmentation.
 //!
-//! Layout by responsibility (`mutable_csr/` subdirectory):
-//! - `core` holds lifecycle and capacity management.
+//! Layout by responsibility (`mutable_csr/` subdirectory)://! - `core` holds lifecycle and capacity management.
 //! - `live_set` maintains the live endpoint index.
 //! - `row` handles density tiering, gaps and rebalance.
 //! - `write` implements the mutation path.
@@ -26,12 +25,11 @@
 //! - `trait_impl` adapts the type to CSR traits.
 //! - `overflow` and `serialization` stay as storage primitives.
 
-use std::collections::HashMap;
 use std::fmt;
 
 use super::{Nbr, Timestamp};
 
-use live_set::LiveKeySet;
+use live_set::LiveSetStorage;
 
 pub(crate) mod compaction;
 pub(crate) mod core;
@@ -51,6 +49,7 @@ mod tests;
 
 pub use iter::{MutableCsrIterator, VertexEdgesIter};
 pub use overflow::OverflowStorage;
+pub use write::EdgePosition;
 
 pub(crate) use row::PACKED_CSR_DENSITY;
 
@@ -66,8 +65,9 @@ pub struct MutableCsr {
     /// (endpoint, rank) of edges whose `delete_ts == MAX`. One set replaces
     /// the former primary/overflow pair, so duplicate checks never consult
     /// two heaps and never fall back to linear scans. Narrow rows hold a
-    /// sorted inline array, wide rows a hash set; see `live_set`.
-    live_sets: HashMap<u32, LiveKeySet>,
+    /// sorted inline array, wide rows a hash set; see `live_set`. Rows are
+    /// addressed by dense subscript; empty rows hold no set.
+    live_sets: LiveSetStorage,
     /// Watermark-derived cutoff for hot-path tombstone reuse, refreshed by
     /// the table maintenance pass. The sentinel disables reuse. Memory-only:
     /// never persisted, rebuilt to the default on construction.

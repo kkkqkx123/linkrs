@@ -1,5 +1,6 @@
 use super::super::csr_shared::decode_endpoint_pair;
 use super::super::{EdgeId, Nbr, Timestamp, VertexId};
+use super::write::EdgePosition;
 use super::MutableCsr;
 
 impl MutableCsr {
@@ -128,6 +129,64 @@ impl MutableCsr {
                 }
             }
         }
+    }
+
+    /// Visit every physically stored entry with its row position.
+    ///
+    /// Same walk as [`Self::visit_physical`] but the visitor also receives
+    /// the [`EdgePosition`] of each entry, so a later delete or revert can
+    /// address the slot directly instead of rescanning the row. Positions
+    /// stay valid only until the next compaction, rebalance, repack or
+    /// removal of this row; positional writes revalidate the edge id.
+    pub fn visit_physical_with_position<F>(&self, src_vid: u32, mut f: F)
+    where
+        F: FnMut(EdgePosition, Nbr) -> bool,
+    {
+        let src_idx = src_vid as usize;
+        if src_idx >= self.vertex_capacity() {
+            return;
+        }
+        let degree = self.degrees[src_idx] as usize;
+        let offset = self.adj_offsets[src_idx] as usize;
+        for i in 0..degree {
+            if let Some(nbr) = self.nbr_list.get(offset + i) {
+                if !f(EdgePosition::Primary { slot: i as u32 }, *nbr) {
+                    return;
+                }
+            }
+        }
+        if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
+            for (chunk_idx, chunk) in chunks.iter().enumerate() {
+                for (slot_idx, nbr) in chunk.iter().enumerate() {
+                    if !f(
+                        EdgePosition::Overflow {
+                            chunk: chunk_idx as u32,
+                            slot: slot_idx as u32,
+                        },
+                        *nbr,
+                    ) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Locate the first entry with `edge_id`, returning its position and copy.
+    ///
+    /// Single scan shared by delete and revert callers that then act on the
+    /// position directly.
+    pub fn locate_edge(&self, src_vid: u32, edge_id: EdgeId) -> Option<(EdgePosition, Nbr)> {
+        let mut found = None;
+        self.visit_physical_with_position(src_vid, |position, nbr| {
+            if nbr.edge_id == edge_id {
+                found = Some((position, nbr));
+                false
+            } else {
+                true
+            }
+        });
+        found
     }
 
     /// Whether the primary row of one vertex holds `edge_id`.

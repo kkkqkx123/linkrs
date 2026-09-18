@@ -97,7 +97,7 @@ impl EdgeStore {
             pending_add_column: None,
             pending_drop_column: None,
             pending_rename_column: None,
-            edge_owner: HashMap::new(),
+            edge_owner: super::owner::EdgeOwnerMap::new(),
             segment_stats: HashMap::new(),
             commit_scratch: super::super::staging::CommitScratch::default(),
             last_reclaim_bound: Timestamp::MAX,

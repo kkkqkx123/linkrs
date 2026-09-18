@@ -19,8 +19,9 @@
 use graphdb_core::{StorageError, StorageResult};
 
 use super::{
-    CsrBase, EdgeId, EdgeStrategy, FragmentationStats, MutableCsr, MutableCsrIterator,
-    MutableCsrTrait, Nbr, SingleMutableCsr, SingleMutableCsrIterator, Timestamp, VertexId,
+    CsrBase, EdgeId, EdgePosition, EdgeStrategy, FragmentationStats, MutableCsr,
+    MutableCsrIterator, MutableCsrTrait, Nbr, SingleMutableCsr, SingleMutableCsrIterator,
+    Timestamp, VertexId,
 };
 
 /// Macro for dispatching method calls to the underlying CSR variant.
@@ -305,6 +306,63 @@ impl MutableCsrTrait for CsrVariant {
                 csr.delete_edge_by_dst_reporting(src_vid, dst, ts, on_deleted)
             }
             CsrVariant::None { .. } => 0,
+        }
+    }
+
+    fn delete_edge_by_dst_reporting_positioned(
+        &mut self,
+        src_vid: u32,
+        dst: VertexId,
+        ts: Timestamp,
+        on_deleted: &mut dyn FnMut(EdgeId, Option<EdgePosition>),
+    ) -> usize {
+        match self {
+            CsrVariant::Multiple(csr) => csr.delete_edge_by_dst_reporting_positioned(
+                src_vid,
+                dst,
+                ts,
+                &mut |edge_id, position| on_deleted(edge_id, Some(position)),
+            ),
+            _ => self.delete_edge_by_dst_reporting(src_vid, dst, ts, &mut |edge_id| {
+                on_deleted(edge_id, None)
+            }),
+        }
+    }
+
+    fn locate_edge(&self, src_vid: u32, edge_id: EdgeId) -> Option<(EdgePosition, Nbr)> {
+        match self {
+            CsrVariant::Multiple(csr) => csr.locate_edge(src_vid, edge_id),
+            _ => None,
+        }
+    }
+
+    fn delete_edge_at_position(
+        &mut self,
+        src_vid: u32,
+        position: EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
+        match self {
+            CsrVariant::Multiple(csr) => {
+                csr.delete_edge_at_position(src_vid, position, expected, ts)
+            }
+            _ => self.delete_edge(src_vid, expected, ts),
+        }
+    }
+
+    fn revert_delete_at_position(
+        &mut self,
+        src_vid: u32,
+        position: EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+    ) -> bool {
+        match self {
+            CsrVariant::Multiple(csr) => {
+                csr.revert_delete_at_position(src_vid, position, expected, ts)
+            }
+            _ => self.revert_delete_by_edge_id(src_vid, expected, ts),
         }
     }
 

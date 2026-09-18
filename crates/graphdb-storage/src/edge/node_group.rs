@@ -40,7 +40,7 @@ use std::collections::BTreeMap;
 
 use super::csr_variant::CsrIterator;
 use super::mutable_csr::VertexEdgesIter;
-use super::{CsrBase, CsrVariant, FragmentationStats, MutableCsrTrait, Nbr};
+use super::{CsrBase, CsrVariant, EdgePosition, FragmentationStats, MutableCsrTrait, Nbr};
 
 /// Default address bits per node group: 12 bits cover 4096 rows.
 pub const DEFAULT_NODE_GROUP_BITS: u32 = 12;
@@ -692,6 +692,101 @@ impl CsrShardSet {
         self.shards
             .get(&gid)
             .map(|_| (gid, local_vid(vid, self.group_bits)))
+    }
+
+    /// Bulk insert pre-grouped edges with one reservation per touched row.
+    ///
+    /// Input is `(src, dst, edge_id)` triples at global addresses; rows are
+    /// grouped by shard, each `Multiple` group is written through its bulk
+    /// path (single reservation, single live-set rebuild per row), and
+    /// `Single` groups fall back to per-edge inserts. Dirt and append-log
+    /// entries are recorded per inserted edge exactly like the single-edge
+    /// path. Duplicate keys are rejected before any write when
+    /// `check_duplicates` is set.
+    pub fn batch_put_edges(
+        &mut self,
+        edges: &[(u32, VertexId, EdgeId)],
+        ts: Timestamp,
+        check_duplicates: bool,
+    ) -> StorageResult<usize> {
+        if self.strategy == EdgeStrategy::None {
+            return Err(StorageError::invalid_operation(
+                "no edges stored for this edge type".to_string(),
+            ));
+        }
+        use std::collections::BTreeMap;
+        let mut by_group: BTreeMap<usize, Vec<(u32, VertexId, EdgeId)>> = BTreeMap::new();
+        for (src, dst, edge_id) in edges {
+            let gid = group_id_for(*src, self.group_bits);
+            by_group
+                .entry(gid)
+                .or_default()
+                .push((*src, *dst, *edge_id));
+        }
+        let mut inserted = 0usize;
+        for (gid, group_edges) in by_group {
+            let group_bits = self.group_bits;
+            self.ensure_group_id(gid)?;
+            let is_multiple = matches!(
+                self.shards.get(&gid).map(|shard| &shard.variant),
+                Some(CsrVariant::Multiple(_))
+            );
+            if is_multiple {
+                let batch: Vec<(u32, Vec<(u32, i64, EdgeId, Timestamp)>)> = {
+                    use std::collections::BTreeMap as Map;
+                    let mut rows: Map<u32, Vec<(u32, i64, EdgeId, Timestamp)>> = Map::new();
+                    for (src, dst, edge_id) in &group_edges {
+                        let local = local_vid(*src, group_bits);
+                        let (vid, rank) = dst.decode_edge_endpoint();
+                        let endpoint = vid.as_u64().unwrap_or(0) as u32;
+                        rows.entry(local)
+                            .or_default()
+                            .push((endpoint, rank, *edge_id, ts));
+                    }
+                    rows.into_iter().collect()
+                };
+                {
+                    let shard = self.shards.get_mut(&gid).ok_or_else(|| {
+                        StorageError::invalid_operation(format!("missing group {} on insert", gid))
+                    })?;
+                    let CsrVariant::Multiple(csr) = &mut shard.variant else {
+                        return Err(StorageError::invalid_operation(format!(
+                            "missing group {} on insert",
+                            gid
+                        )));
+                    };
+                    inserted += csr.batch_put_edges(&batch, check_duplicates)?;
+                }
+                for (src, dst, edge_id) in &group_edges {
+                    let local = local_vid(*src, group_bits);
+                    let (vid, rank) = dst.decode_edge_endpoint();
+                    let endpoint = vid.as_u64().unwrap_or(0) as u32;
+                    let nbr = Nbr::with_create_ts(endpoint, rank, *edge_id, ts);
+                    self.mark_region_insert(gid, local);
+                    self.record_append_insert(gid, local, nbr);
+                }
+            } else {
+                for (src, dst, edge_id) in group_edges {
+                    let local = local_vid(src, group_bits);
+                    {
+                        let shard = self.shards.get_mut(&gid).ok_or_else(|| {
+                            StorageError::invalid_operation(format!(
+                                "missing group {} on insert",
+                                gid
+                            ))
+                        })?;
+                        shard.variant.insert_edge(local, dst, edge_id, ts)?;
+                    }
+                    let (vid, rank) = dst.decode_edge_endpoint();
+                    let endpoint = vid.as_u64().unwrap_or(0) as u32;
+                    let nbr = Nbr::with_create_ts(endpoint, rank, edge_id, ts);
+                    self.mark_region_insert(gid, local);
+                    self.record_append_insert(gid, local, nbr);
+                    inserted += 1;
+                }
+            }
+        }
+        Ok(inserted)
     }
 
     /// Borrow one persisted group for checkpoint writes.
@@ -1728,6 +1823,97 @@ impl MutableCsrTrait for CsrShardSet {
             }
         }
         deleted
+    }
+
+    fn delete_edge_by_dst_reporting_positioned(
+        &mut self,
+        src_vid: u32,
+        dst: VertexId,
+        ts: Timestamp,
+        on_deleted: &mut dyn FnMut(EdgeId, Option<EdgePosition>),
+    ) -> usize {
+        let Some((gid, local)) = self.route(src_vid) else {
+            return 0;
+        };
+        let mut doomed: Vec<(EdgeId, Option<EdgePosition>)> = Vec::new();
+        let deleted = self
+            .shards
+            .get_mut(&gid)
+            .map(|shard| {
+                shard.variant.delete_edge_by_dst_reporting_positioned(
+                    local,
+                    dst,
+                    ts,
+                    &mut |edge_id: EdgeId, position: Option<EdgePosition>| {
+                        on_deleted(edge_id, position);
+                        doomed.push((edge_id, position));
+                    },
+                )
+            })
+            .unwrap_or(0);
+        if deleted > 0 {
+            self.mark_region_delete(gid, local);
+            for (edge_id, _) in doomed {
+                self.record_append_delete(gid, local, edge_id, ts);
+            }
+            if let Some(shard) = self.shards.get_mut(&gid) {
+                shard.reclaim_hint = true;
+            }
+        }
+        deleted
+    }
+
+    fn locate_edge(&self, src_vid: u32, edge_id: EdgeId) -> Option<(EdgePosition, Nbr)> {
+        let (gid, local) = self.route(src_vid)?;
+        self.shards
+            .get(&gid)
+            .and_then(|shard| shard.variant.locate_edge(local, edge_id))
+    }
+
+    fn delete_edge_at_position(
+        &mut self,
+        src_vid: u32,
+        position: EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
+        let Some((gid, local)) = self.route(src_vid) else {
+            return Ok(false);
+        };
+        let deleted = self
+            .shards
+            .get_mut(&gid)
+            .ok_or_else(no_edges_error)?
+            .variant
+            .delete_edge_at_position(local, position, expected, ts)?;
+        if deleted {
+            self.mark_region_delete(gid, local);
+            self.record_append_delete(gid, local, expected, ts);
+            if let Some(shard) = self.shards.get_mut(&gid) {
+                shard.reclaim_hint = true;
+            }
+        }
+        Ok(deleted)
+    }
+
+    fn revert_delete_at_position(
+        &mut self,
+        src_vid: u32,
+        position: EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+    ) -> bool {
+        let Some((gid, local)) = self.route(src_vid) else {
+            return false;
+        };
+        self.shards
+            .get_mut(&gid)
+            .map(|shard| {
+                shard
+                    .variant
+                    .revert_delete_at_position(local, position, expected, ts)
+            })
+            .unwrap_or(false)
     }
 
     fn delete_edge_by_offset(

@@ -10,29 +10,21 @@ pub(crate) const PACKED_CSR_DENSITY: f32 = 0.8;
 /// rows still hold a small write gap without another allocation.
 pub(crate) const MIN_ROW_CAPACITY: usize = 4;
 
-/// Density-graded overflow tiers, single benchmarked set. Small rows stay on
-/// small chunks for scan locality; only very large rows use full chunks.
-/// The effective chunk size is `min(configured, graded(live))` so explicit
-/// test configurations keep their exact size.
-pub(crate) const OVERFLOW_CHUNK_SMALL: usize = 256;
-pub(crate) const OVERFLOW_CHUNK_MEDIUM: usize = 1024;
-pub(crate) const OVERFLOW_CHUNK_LARGE: usize = 4096;
+/// Proportional overflow sizing, single benchmarked scheme. Chunk sizes
+/// grow geometrically with live row width from a small floor, so a 5-edge
+/// row reserves 8 slots instead of 256. The effective size is
+/// `min(configured, graded(live))` so explicit test configurations keep
+/// their exact size.
+pub(crate) const OVERFLOW_CHUNK_MIN: usize = 8;
+pub(crate) const OVERFLOW_CHUNK_MAX: usize = 4096;
 
-/// Live edges at or below this count use the small overflow tier.
-pub(crate) const OVERFLOW_SMALL_LIVE_BOUND: usize = 64;
-/// Live edges at or below this count use the medium overflow tier.
-pub(crate) const OVERFLOW_MEDIUM_LIVE_BOUND: usize = 1024;
-
-/// Overflow chunk size graded by live row width. Converged single scheme:
-/// no per-table alternative set is retained beyond the configured maximum.
+/// Overflow chunk size proportional to live row width: the next power of two
+/// above `live` with a small floor and a hard cap. Monotonic in `live`, so
+/// rows never shrink their chunk size as they grow.
 pub(crate) fn graded_overflow_chunk_edges(live: usize) -> usize {
-    if live <= OVERFLOW_SMALL_LIVE_BOUND {
-        OVERFLOW_CHUNK_SMALL
-    } else if live <= OVERFLOW_MEDIUM_LIVE_BOUND {
-        OVERFLOW_CHUNK_MEDIUM
-    } else {
-        OVERFLOW_CHUNK_LARGE
-    }
+    live.next_power_of_two()
+        .max(OVERFLOW_CHUNK_MIN)
+        .min(OVERFLOW_CHUNK_MAX)
 }
 
 impl MutableCsr {

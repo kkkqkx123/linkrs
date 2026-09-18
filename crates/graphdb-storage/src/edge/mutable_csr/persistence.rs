@@ -1,4 +1,5 @@
 use super::super::{EdgeId, Nbr, Timestamp, INVALID_EDGE_ID};
+use super::live_set::LiveKeySet;
 use super::overflow::OverflowStorage;
 use super::serialization::{
     decode_overflow_chunk, decode_topology_i64_column, decode_topology_u32_column,
@@ -9,6 +10,46 @@ use super::serialization::{
 use super::MutableCsr;
 use crate::persistence::{read_u32_le, read_u64_le};
 use graphdb_core::{StorageError, StorageResult};
+
+/// Reusable neighbor-column buffers for checkpoint dumps.
+///
+/// One scratch serves a whole checkpoint: each group clears and refills the
+/// buffers instead of allocating five temporary columns, so repeated dumps
+/// keep peak allocation to one column set.
+#[derive(Debug, Default)]
+pub struct CsrDumpScratch {
+    endpoints: Vec<u32>,
+    ranks: Vec<i64>,
+    edge_ids: Vec<u64>,
+    creates: Vec<u64>,
+    deletes: Vec<u64>,
+}
+
+impl CsrDumpScratch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn fill_from(&mut self, nbr_list: &[Nbr]) {
+        self.endpoints.clear();
+        self.ranks.clear();
+        self.edge_ids.clear();
+        self.creates.clear();
+        self.deletes.clear();
+        self.endpoints.reserve(nbr_list.len());
+        self.ranks.reserve(nbr_list.len());
+        self.edge_ids.reserve(nbr_list.len());
+        self.creates.reserve(nbr_list.len());
+        self.deletes.reserve(nbr_list.len());
+        for nbr in nbr_list {
+            self.endpoints.push(nbr.endpoint);
+            self.ranks.push(nbr.rank);
+            self.edge_ids.push(nbr.edge_id.0);
+            self.creates.push(nbr.create_ts);
+            self.deletes.push(nbr.delete_ts);
+        }
+    }
+}
 
 impl MutableCsr {
     /// Dump to bytes, version 4.
@@ -45,6 +86,17 @@ impl MutableCsr {
     /// Byte-identical to `dump`; checkpoint writes use this so no whole-group
     /// clone or temporary dump buffer is needed.
     pub fn dump_into(&self, out: &mut Vec<u8>) {
+        let mut scratch = CsrDumpScratch::new();
+        self.dump_into_with_scratch(out, &mut scratch);
+    }
+
+    /// Dump reusing caller-owned column buffers.
+    ///
+    /// Same bytes as [`Self::dump_into`] but the five neighbor-column
+    /// buffers are cleared and refilled instead of reallocated, so a
+    /// checkpoint over many groups pays one allocation per column instead
+    /// of one per group. The scratch holds no state between calls.
+    pub fn dump_into_with_scratch(&self, out: &mut Vec<u8>, scratch: &mut CsrDumpScratch) {
         out.extend_from_slice(&MUTABLE_CSR_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&(self.adj_offsets.len() as u64).to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
@@ -58,31 +110,17 @@ impl MutableCsr {
         let (_, caps_payload) = encode_topology_u32_column(&self.primary_capacities);
         out.extend_from_slice(&caps_payload);
 
-        {
-            let endpoints: Vec<u32> = self.nbr_list.iter().map(|nbr| nbr.endpoint).collect();
-            let (_, endpoints_payload) = encode_topology_u32_column(&endpoints);
-            out.extend_from_slice(&endpoints_payload);
-        }
-        {
-            let ranks: Vec<i64> = self.nbr_list.iter().map(|nbr| nbr.rank).collect();
-            let (_, ranks_payload) = encode_topology_i64_column(&ranks);
-            out.extend_from_slice(&ranks_payload);
-        }
-        {
-            let edge_ids: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.edge_id.0).collect();
-            let (_, edge_ids_payload) = encode_topology_u64_column(&edge_ids);
-            out.extend_from_slice(&edge_ids_payload);
-        }
-        {
-            let create_stamps: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.create_ts).collect();
-            let (_, create_payload) = encode_topology_u64_column(&create_stamps);
-            out.extend_from_slice(&create_payload);
-        }
-        {
-            let delete_stamps: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.delete_ts).collect();
-            let (_, delete_payload) = encode_topology_u64_column(&delete_stamps);
-            out.extend_from_slice(&delete_payload);
-        }
+        scratch.fill_from(&self.nbr_list);
+        let (_, endpoints_payload) = encode_topology_u32_column(&scratch.endpoints);
+        out.extend_from_slice(&endpoints_payload);
+        let (_, ranks_payload) = encode_topology_i64_column(&scratch.ranks);
+        out.extend_from_slice(&ranks_payload);
+        let (_, edge_ids_payload) = encode_topology_u64_column(&scratch.edge_ids);
+        out.extend_from_slice(&edge_ids_payload);
+        let (_, create_payload) = encode_topology_u64_column(&scratch.creates);
+        out.extend_from_slice(&create_payload);
+        let (_, delete_payload) = encode_topology_u64_column(&scratch.deletes);
+        out.extend_from_slice(&delete_payload);
 
         for vid in 0..self.adj_offsets.len() {
             let chunks = self.overflow_chunks.get(&(vid as u32));
@@ -227,6 +265,26 @@ impl MutableCsr {
 
         let mut overflow_chunks = OverflowStorage::new();
         let mut overflow_capacity = 0usize;
+        let mut live_keys: Vec<Vec<(u32, i64)>> = vec![Vec::new(); vertex_capacity];
+        let mut recomputed: u64 = 0;
+        for index in 0..primary_len {
+            let nbr = &nbr_list[index];
+            if nbr.edge_id != INVALID_EDGE_ID && nbr.delete_ts == Timestamp::MAX {
+                recomputed += 1;
+            }
+        }
+        for vid in 0..vertex_capacity {
+            let row_offset = adj_offsets[vid] as usize;
+            let degree = degrees[vid] as usize;
+            let keys = &mut live_keys[vid];
+            for i in 0..degree {
+                if let Some(nbr) = nbr_list.get(row_offset + i) {
+                    if nbr.edge_id != INVALID_EDGE_ID && nbr.delete_ts == Timestamp::MAX {
+                        keys.push((nbr.endpoint, nbr.rank));
+                    }
+                }
+            }
+        }
         for vid in 0..vertex_capacity {
             let chunk_count = read_u32_le(data, &mut offset)? as usize;
             let mut chunks = Vec::with_capacity(chunk_count);
@@ -237,6 +295,12 @@ impl MutableCsr {
                         "Mutable CSR overflow chunk exceeds configured chunk size",
                     ));
                 }
+                for nbr in &chunk {
+                    if nbr.edge_id != INVALID_EDGE_ID && nbr.delete_ts == Timestamp::MAX {
+                        recomputed += 1;
+                        live_keys[vid].push((nbr.endpoint, nbr.rank));
+                    }
+                }
                 overflow_capacity = overflow_capacity.saturating_add(chunk.capacity().max(1));
                 chunks.push(chunk);
             }
@@ -245,27 +309,6 @@ impl MutableCsr {
             }
         }
 
-        let mut recomputed: u64 = 0;
-        for vid in 0..vertex_capacity {
-            let row_offset = adj_offsets[vid] as usize;
-            let degree = degrees[vid] as usize;
-            for i in 0..degree {
-                if let Some(nbr) = nbr_list.get(row_offset + i) {
-                    if nbr.edge_id != INVALID_EDGE_ID && nbr.delete_ts == Timestamp::MAX {
-                        recomputed += 1;
-                    }
-                }
-            }
-        }
-        for (_, chunks) in overflow_chunks.iter() {
-            for chunk in chunks {
-                for nbr in chunk {
-                    if nbr.edge_id != INVALID_EDGE_ID && nbr.delete_ts == Timestamp::MAX {
-                        recomputed += 1;
-                    }
-                }
-            }
-        }
         if recomputed != edge_count {
             return Err(StorageError::deserialize_error(format!(
                 "Mutable CSR edge count mismatch: stored={}, recomputed={}",
@@ -281,7 +324,14 @@ impl MutableCsr {
         self.overflow_chunk_edges = overflow_chunk_edges;
         self.nbr_list = nbr_list;
         self.edge_count = edge_count;
-        self.rebuild_live_sets();
+        self.live_sets.clear();
+        self.live_sets.ensure_capacity(vertex_capacity);
+        for (vid, keys) in live_keys.into_iter().enumerate() {
+            if !keys.is_empty() {
+                self.live_sets
+                    .insert(vid as u32, LiveKeySet::from_keys(keys));
+            }
+        }
         if offset != data.len() {
             return Err(StorageError::deserialize_error(
                 "unexpected trailing data in mutable CSR payload",

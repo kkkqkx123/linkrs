@@ -1,8 +1,7 @@
 use super::super::{EdgeId, Nbr, Timestamp, VertexId};
 use super::overflow::OVERFLOW_REPACK_CHUNKS_PER_VERTEX;
 use super::row::{
-    graded_overflow_chunk_edges, OVERFLOW_CHUNK_LARGE, OVERFLOW_CHUNK_MEDIUM, OVERFLOW_CHUNK_SMALL,
-    OVERFLOW_MEDIUM_LIVE_BOUND, OVERFLOW_SMALL_LIVE_BOUND, PACKED_CSR_DENSITY,
+    graded_overflow_chunk_edges, OVERFLOW_CHUNK_MAX, OVERFLOW_CHUNK_MIN, PACKED_CSR_DENSITY,
 };
 use super::MutableCsr;
 
@@ -384,6 +383,9 @@ fn test_compact_reduces_fragmentation() {
         let dst = VertexId::from_int64(i as i64);
         csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
     }
+    for i in 1..=3 {
+        csr.delete_edge(0u32, EdgeId(i as u64), 2).unwrap();
+    }
 
     let ratio_before = csr.fragmentation_ratio();
     assert!(
@@ -391,7 +393,7 @@ fn test_compact_reduces_fragmentation() {
         "Setup failed: insufficient fragmentation"
     );
 
-    csr.compact_with_ts_reporting(1, 0.25, &mut |_, _| {});
+    csr.compact_with_ts_reporting(100, 0.25, &mut |_, _| {});
 
     let ratio_after = csr.fragmentation_ratio();
     assert!(
@@ -740,23 +742,14 @@ fn test_single_live_set_rejects_duplicates_across_tiers() {
 
 #[test]
 fn test_graded_overflow_tiers_bound_small_row_chunks() {
-    assert_eq!(graded_overflow_chunk_edges(0), OVERFLOW_CHUNK_SMALL);
-    assert_eq!(
-        graded_overflow_chunk_edges(OVERFLOW_SMALL_LIVE_BOUND),
-        OVERFLOW_CHUNK_SMALL
-    );
-    assert_eq!(
-        graded_overflow_chunk_edges(OVERFLOW_SMALL_LIVE_BOUND + 1),
-        OVERFLOW_CHUNK_MEDIUM
-    );
-    assert_eq!(
-        graded_overflow_chunk_edges(OVERFLOW_MEDIUM_LIVE_BOUND),
-        OVERFLOW_CHUNK_MEDIUM
-    );
-    assert_eq!(
-        graded_overflow_chunk_edges(OVERFLOW_MEDIUM_LIVE_BOUND + 1),
-        OVERFLOW_CHUNK_LARGE
-    );
+    assert_eq!(graded_overflow_chunk_edges(0), OVERFLOW_CHUNK_MIN);
+    assert_eq!(graded_overflow_chunk_edges(1), OVERFLOW_CHUNK_MIN);
+    assert_eq!(graded_overflow_chunk_edges(5), OVERFLOW_CHUNK_MIN);
+    assert_eq!(graded_overflow_chunk_edges(64), 64);
+    assert_eq!(graded_overflow_chunk_edges(65), 128);
+    assert_eq!(graded_overflow_chunk_edges(1024), 1024);
+    assert_eq!(graded_overflow_chunk_edges(1025), 2048);
+    assert_eq!(graded_overflow_chunk_edges(1 << 20), OVERFLOW_CHUNK_MAX);
 
     // Small rows allocate small chunks: 300 edges stay far below the old
     // fixed 4096-edge reservation per chunk.
@@ -766,12 +759,12 @@ fn test_graded_overflow_tiers_bound_small_row_chunks() {
             .unwrap();
     }
     let chunks = csr.get_overflow_chunks(0).expect("vertex 0 has overflow");
-    assert_eq!(chunks[0].capacity(), OVERFLOW_CHUNK_SMALL);
+    assert_eq!(chunks[0].capacity(), OVERFLOW_CHUNK_MIN);
     assert!(
         chunks
             .iter()
-            .all(|chunk| chunk.capacity() <= OVERFLOW_CHUNK_MEDIUM),
-        "graded chunks must stay at or below the medium tier for 300 live edges"
+            .all(|chunk| chunk.capacity() <= OVERFLOW_CHUNK_MAX),
+        "graded chunks must stay at or below the cap for 300 live edges"
     );
     assert_eq!(csr.edges_of(0u32, 1).len(), 300);
     // Single repack bound: small-row chunk counts stay bounded.
@@ -1009,4 +1002,86 @@ fn live_set_upgrades_past_sorted_bound() {
     csr.insert_edge(1u32, VertexId::from_int64(1), EdgeId(1), 1)
         .unwrap();
     assert!(matches!(csr.live_sets.get(&1), Some(LiveKeySet::Sorted(_))));
+}
+
+#[test]
+fn dense_slots_reused_after_remove_and_reinsert() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(4, 64, 8);
+    for i in 0..10i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
+            .unwrap();
+    }
+    assert!(csr.get_overflow_chunks(0).is_some());
+    for i in 0..10u64 {
+        assert!(csr.remove_edge(0u32, EdgeId(i)));
+    }
+    assert!(csr.get_overflow_chunks(0).is_none_or(Vec::is_empty));
+    assert_eq!(csr.live_key_count(0), 0);
+    assert_eq!(csr.edge_count(), 0);
+    for i in 0..6i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(100 + i), EdgeId(100 + i as u64), 1)
+            .unwrap();
+    }
+    let seen: Vec<EdgeId> = csr
+        .physical_edges_of(0u32)
+        .into_iter()
+        .map(|nbr| nbr.edge_id)
+        .collect();
+    assert_eq!(seen.len(), 6);
+    assert_eq!(csr.live_key_count(0), 6);
+    let visited = {
+        let mut count = 0usize;
+        for (_, _) in csr.iter_all() {
+            count += 1;
+        }
+        count
+    };
+    assert_eq!(visited, 6);
+}
+
+#[test]
+fn bulk_insert_matches_sequential_inserts() {
+    let mut sequential = MutableCsr::with_capacity(16, 64);
+    let mut bulk = MutableCsr::with_capacity(16, 64);
+    let mut groups: Vec<(u32, Vec<(u32, i64, EdgeId, u64)>)> = Vec::new();
+    for src in 0..4u32 {
+        let mut batch = Vec::new();
+        for k in 0..20u64 {
+            let edge_id = EdgeId(src as u64 * 100 + k);
+            sequential
+                .insert_edge(src, VertexId::from_int64(k as i64), edge_id, 1)
+                .unwrap();
+            batch.push((k as u32, 0, edge_id, 1));
+        }
+        groups.push((src, batch));
+    }
+    let count = bulk.batch_put_edges(&groups, true).unwrap();
+    assert_eq!(count, 80);
+    assert_eq!(bulk.edge_count(), sequential.edge_count());
+    for src in 0..4u32 {
+        let mut a = sequential.physical_edges_of(src);
+        let mut b = bulk.physical_edges_of(src);
+        a.sort_by_key(|nbr| nbr.edge_id.0);
+        b.sort_by_key(|nbr| nbr.edge_id.0);
+        assert_eq!(a, b);
+    }
+}
+
+#[test]
+fn positional_delete_and_revert_roundtrip() {
+    use super::EdgePosition;
+    let mut csr = MutableCsr::with_overflow_chunk_edges(4, 64, 8);
+    for i in 0..10i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
+            .unwrap();
+    }
+    let (position, nbr) = csr.locate_edge(0u32, EdgeId(7)).expect("edge present");
+    assert!(matches!(position, EdgePosition::Overflow { .. }));
+    assert!(csr.delete_edge_at_position(0u32, position, nbr.edge_id, 2).unwrap());
+    assert!(!csr.live_key_present(0, nbr.endpoint, nbr.rank));
+    assert!(csr.revert_delete_at_position(0u32, position, nbr.edge_id, 2));
+    assert!(csr.live_key_present(0, nbr.endpoint, nbr.rank));
+    assert!(!csr
+        .delete_edge_at_position(0u32, position, EdgeId(999), 3)
+        .unwrap());
 }

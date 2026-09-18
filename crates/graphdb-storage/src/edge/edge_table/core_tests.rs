@@ -482,7 +482,7 @@ fn assert_row_space_unified(table: &EdgeTable) {
     for (edge_id, ts) in table.mvcc.edge_timestamps.iter() {
         if ts.delete_ts == Timestamp::MAX {
             assert!(
-                table.properties.get_row_for_edge(*edge_id).is_some(),
+                table.properties.get_row_for_edge(edge_id).is_some(),
                 "live edge {:?} without property row",
                 edge_id
             );
@@ -905,7 +905,7 @@ fn test_topology_property_authority_consistency() {
     in_topo.sort();
     let mut props: Vec<EdgeId> = table.properties.edge_ids().collect();
     props.sort();
-    let mut authority: Vec<EdgeId> = table.mvcc.edge_timestamps.keys().copied().collect();
+    let mut authority: Vec<EdgeId> = table.mvcc.edge_timestamps.keys().collect();
     authority.sort();
     assert_eq!(out_topo, authority);
     assert_eq!(in_topo, authority);

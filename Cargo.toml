@@ -302,3 +302,7 @@ harness = false
 [[bench]]
 name = "rollback_bench"
 harness = false
+
+[[bench]]
+name = "csr_perf_bench"
+harness = false

@@ -195,6 +195,12 @@ impl EdgeStore {
     }
 
     fn prevalidate_staging_batch(&self, batch: &EdgeStagingBatch) -> StorageResult<()> {
+        // Insert-only batches skip the order-sensitive cancel bookkeeping:
+        // without deletes no insert can cancel, so sorted duplicate scans
+        // replace the per-batch hash sets.
+        if batch.staged_deletes().is_empty() && !batch.staged_inserts().is_empty() {
+            return self.prevalidate_inserts_sorted(batch);
+        }
         use std::collections::HashSet;
         let mut seen_inserts: HashSet<(u32, u32, i64)> = HashSet::new();
         let mut seen_deletes: HashSet<(u32, u32, i64)> = HashSet::new();
@@ -300,6 +306,103 @@ impl EdgeStore {
                 } else {
                     seen_deletes.insert(key);
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate an insert-only staging batch without per-batch hash sets.
+    ///
+    /// With no deletes in the batch, inserts cannot cancel each other, so
+    /// intra-batch duplicates and Single-slot conflicts reduce to sorted
+    /// adjacency checks. Existence and occupancy checks against committed
+    /// state are unchanged from the general path.
+    fn prevalidate_inserts_sorted(&self, batch: &EdgeStagingBatch) -> StorageResult<()> {
+        let inserts = batch.staged_inserts();
+        for ins in inserts {
+            for (name, _) in &ins.properties {
+                if !self.property_index_cache.contains_key(name) {
+                    return Err(StorageError::column_not_found(name.clone()));
+                }
+            }
+        }
+        let mut by_key: Vec<(u32, u32, i64)> = inserts
+            .iter()
+            .map(|ins| (ins.src, ins.dst, ins.rank))
+            .collect();
+        by_key.sort_unstable();
+        for window in by_key.windows(2) {
+            if window[0] == window[1] {
+                return Err(StorageError::edge_already_exists(format!(
+                    "{} -> {}@{}",
+                    window[1].0, window[1].1, window[1].2
+                )));
+            }
+        }
+        let single_out = self.schema.oe_strategy == super::super::super::EdgeStrategy::Single;
+        let single_in = self.schema.ie_strategy == super::super::super::EdgeStrategy::Single;
+        if single_out {
+            let mut by_src: Vec<u32> = inserts.iter().map(|ins| ins.src).collect();
+            by_src.sort_unstable();
+            for window in by_src.windows(2) {
+                if window[0] == window[1] {
+                    return Err(StorageError::conflict(format!(
+                        "Single out-edge strategy already holds a live edge for src={}",
+                        window[1]
+                    )));
+                }
+            }
+        }
+        if single_in {
+            let mut by_dst: Vec<u32> = inserts.iter().map(|ins| ins.dst).collect();
+            by_dst.sort_unstable();
+            for window in by_dst.windows(2) {
+                if window[0] == window[1] {
+                    return Err(StorageError::conflict(format!(
+                        "Single in-edge strategy already holds a live edge for dst={}",
+                        window[1]
+                    )));
+                }
+            }
+        }
+        for ins in inserts {
+            if single_out {
+                let mut occupied = false;
+                self.out_csr.visit_physical(ins.src, |nbr| {
+                    if self.is_visible(nbr.edge_id, ins.create_ts) {
+                        occupied = true;
+                        return false;
+                    }
+                    true
+                });
+                if occupied {
+                    return Err(StorageError::conflict(format!(
+                        "Single out-edge strategy already holds a live edge for src={}",
+                        ins.src
+                    )));
+                }
+            }
+            if single_in {
+                let mut occupied = false;
+                self.in_csr.visit_physical(ins.dst, |nbr| {
+                    if self.is_visible(nbr.edge_id, ins.create_ts) {
+                        occupied = true;
+                        return false;
+                    }
+                    true
+                });
+                if occupied {
+                    return Err(StorageError::conflict(format!(
+                        "Single in-edge strategy already holds a live edge for dst={}",
+                        ins.dst
+                    )));
+                }
+            }
+            if self.has_edge(ins.src, ins.dst, ins.rank, ins.create_ts) {
+                return Err(StorageError::edge_already_exists(format!(
+                    "{} -> {}@{}",
+                    ins.src, ins.dst, ins.rank
+                )));
             }
         }
         Ok(())
@@ -418,19 +521,23 @@ impl EdgeStore {
         };
 
         // Single-pass out-direction delete: stamp live matches in place while
-        // collecting the first stamped id, so the merged read above (for the
-        // index snapshot) is the only extra locate. A zero count falls through
-        // to the miss path below which distinguishes absence from conflict.
-        let mut first_out_id = None;
-        let out_deleted =
-            self.out_csr
-                .delete_edge_by_dst_reporting(src, dst_key, ts, &mut |edge_id| {
-                    if first_out_id.is_none() {
-                        first_out_id = Some(edge_id);
-                    }
-                });
+        // collecting the first stamped id and its row position, so the merged
+        // read above (for the index snapshot) is the only extra locate. A
+        // zero count falls through to the miss path below which distinguishes
+        // absence from conflict.
+        let mut first_out: Option<(EdgeId, Option<crate::edge::EdgePosition>)> = None;
+        let out_deleted = self.out_csr.delete_edge_by_dst_reporting_positioned(
+            src,
+            dst_key,
+            ts,
+            &mut |edge_id, position| {
+                if first_out.is_none() {
+                    first_out = Some((edge_id, position));
+                }
+            },
+        );
         if out_deleted > 0 {
-            let edge_id = first_out_id.expect("reported delete carries an id");
+            let (edge_id, position) = first_out.expect("reported delete carries an id");
             if out_deleted > 1 {
                 log::debug!(
                     "apply_staged_delete multi-match: ({}, {}, {}) out_deleted={}",
@@ -444,8 +551,16 @@ impl EdgeStore {
             if in_deleted == 0 {
                 // Roll back the out-direction deletion to keep both sides
                 // consistent. Count reconciliation: expected exactly one
-                // in-direction match for the out edge just deleted.
-                if !self.out_csr.revert_delete_by_edge_id(src, edge_id, ts) {
+                // in-direction match for the out edge just deleted. The
+                // position captured by the reporting pass addresses the slot
+                // directly; without one the edge-id scan is the fallback.
+                let reverted = match position {
+                    Some(slot) => self
+                        .out_csr
+                        .revert_delete_at_position(src, slot, edge_id, ts),
+                    None => self.out_csr.revert_delete_by_edge_id(src, edge_id, ts),
+                };
+                if !reverted {
                     return Err(StorageError::invalid_operation(format!(
                         "delete rollback failed for edge {:?}: out-direction revert missed",
                         edge_id

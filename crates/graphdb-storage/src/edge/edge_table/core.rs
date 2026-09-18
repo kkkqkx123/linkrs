@@ -80,7 +80,7 @@ pub struct EdgeStore {
     /// group. Shard files follow the owner groups with the same dirt, so
     /// small writes rewrite only dirty owners. Rebuilt on load, remap and
     /// reshard; orphan timestamps without topology fall back to group zero.
-    pub(crate) edge_owner: HashMap<EdgeId, u32>,
+    pub(crate) edge_owner: owner::EdgeOwnerMap,
     /// Per-group segment statistics for scan pruning, collected at each
     /// checkpoint and restored on load. Bounds widen monotonically so pruning
     /// stays conservative for every snapshot; counts are exact-current for
@@ -130,7 +130,7 @@ impl std::fmt::Debug for EdgeStore {
 
 mod index;
 mod maintenance;
-mod owner;
+pub(crate) mod owner;
 mod query;
 mod reads;
 mod recovery;

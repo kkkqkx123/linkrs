@@ -49,7 +49,7 @@ pub use fragmentation_stats::{
 pub use graphdb_core::types::EdgeStrategy;
 use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use graphdb_core::{Edge, Value};
-pub use mutable_csr::{MutableCsr, MutableCsrIterator};
+pub use mutable_csr::{EdgePosition, MutableCsr, MutableCsrIterator};
 pub use node_group::{
     region_id_for_local, region_local_range, regions_per_group, CsrShardSet, EdgeCheckpointKind,
     GroupDirty, NodeGroupStats, RegionDirty, RegionMergeScope, ShardCsrIterator,

@@ -1,7 +1,6 @@
-use std::collections::HashMap;
-
 use super::super::csr_shared::{grown_vertex_capacity, DEFAULT_VERTEX_CAPACITY};
 use super::super::{Nbr, Timestamp};
+use super::live_set::LiveSetStorage;
 use super::overflow::OverflowStorage;
 use super::MutableCsr;
 
@@ -37,7 +36,7 @@ impl MutableCsr {
             primary_capacities: vec![0; vertex_cap],
             overflow_chunks: OverflowStorage::new(),
             overflow_chunk_edges: overflow_chunk_edges.max(1),
-            live_sets: HashMap::new(),
+            live_sets: LiveSetStorage::new(),
             tombstone_reuse_cutoff: Timestamp::MAX,
             edge_count: 0,
             total_edge_capacity: 0,
@@ -70,6 +69,8 @@ impl MutableCsr {
         self.adj_offsets.resize(new_vertex_capacity, tail);
         self.degrees.resize(new_vertex_capacity, 0);
         self.primary_capacities.resize(new_vertex_capacity, 0);
+        self.overflow_chunks.ensure_capacity(new_vertex_capacity);
+        self.live_sets.ensure_capacity(new_vertex_capacity);
     }
 
     /// Ensure vertex capacity (grows if needed)

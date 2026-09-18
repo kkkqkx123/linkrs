@@ -2,7 +2,71 @@
 
 use super::EdgeStore;
 use graphdb_core::types::{EdgeId, VertexId};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+
+/// Dense owner-group index keyed by edge id.
+///
+/// Edge ids are assigned monotonically per table, so the owner of every edge
+/// is addressed by direct subscript instead of hashing. Unassigned slots
+/// hold a sentinel and read as absent.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct EdgeOwnerMap {
+    slots: Vec<u32>,
+}
+
+impl EdgeOwnerMap {
+    pub(crate) const UNASSIGNED: u32 = u32::MAX;
+
+    pub(crate) fn new() -> Self {
+        Self { slots: Vec::new() }
+    }
+
+    pub(crate) fn get(&self, edge_id: &EdgeId) -> Option<u32> {
+        self.slots
+            .get(edge_id.0 as usize)
+            .copied()
+            .filter(|owner| *owner != Self::UNASSIGNED)
+    }
+
+    pub(crate) fn insert(&mut self, edge_id: EdgeId, owner: u32) {
+        let idx = edge_id.0 as usize;
+        if self.slots.len() <= idx {
+            self.slots.resize(idx + 1, Self::UNASSIGNED);
+        }
+        self.slots[idx] = owner;
+    }
+
+    pub(crate) fn or_insert(&mut self, edge_id: EdgeId, owner: u32) {
+        let idx = edge_id.0 as usize;
+        if self.slots.len() <= idx {
+            self.slots.resize(idx + 1, Self::UNASSIGNED);
+        }
+        if self.slots[idx] == Self::UNASSIGNED {
+            self.slots[idx] = owner;
+        }
+    }
+
+    pub(crate) fn remove(&mut self, edge_id: &EdgeId) {
+        let idx = edge_id.0 as usize;
+        if idx < self.slots.len() {
+            self.slots[idx] = Self::UNASSIGNED;
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        for slot in self.slots.iter_mut() {
+            *slot = Self::UNASSIGNED;
+        }
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (EdgeId, u32)> + '_ {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, owner)| **owner != Self::UNASSIGNED)
+            .map(|(idx, owner)| (EdgeId(idx as u64), *owner))
+    }
+}
 
 impl EdgeStore {
     /// Owner group for one edge write. Out groups own when out edges exist,
@@ -50,10 +114,10 @@ impl EdgeStore {
         }
         let fallback = existing.first().copied().unwrap_or(0) as u32;
         for edge_id in self.mvcc.edge_timestamps.keys() {
-            self.edge_owner.entry(*edge_id).or_insert(fallback);
+            self.edge_owner.or_insert(edge_id, fallback);
         }
         for edge_id in self.properties.edge_ids() {
-            self.edge_owner.entry(edge_id).or_insert(fallback);
+            self.edge_owner.or_insert(edge_id, fallback);
         }
     }
 
@@ -63,11 +127,11 @@ impl EdgeStore {
 
     pub(crate) fn resolve_owner_gid(
         edge_id: &EdgeId,
-        edge_owner: &HashMap<EdgeId, u32>,
+        edge_owner: &EdgeOwnerMap,
         live: &HashSet<u32>,
         fallback: Option<u32>,
     ) -> (u32, bool) {
-        let owner = edge_owner.get(edge_id).copied().unwrap_or(0);
+        let owner = edge_owner.get(edge_id).unwrap_or(0);
         if live.contains(&owner) {
             (owner, false)
         } else {

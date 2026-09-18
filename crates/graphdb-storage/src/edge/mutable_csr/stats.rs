@@ -1,5 +1,4 @@
 use super::super::Nbr;
-use super::live_set::LiveKeySet;
 use super::MutableCsr;
 use crate::edge::FragmentationStats;
 
@@ -20,16 +19,11 @@ impl MutableCsr {
             .iter()
             .map(|(_, chunks)| chunks.iter().map(Vec::capacity).sum::<usize>())
             .sum();
-        let overflow_entries = self.overflow_chunks.len()
-            * (std::mem::size_of::<u32>() + std::mem::size_of::<Vec<Vec<Nbr>>>());
-        let live_entries: usize = self.live_sets.values().map(LiveKeySet::len).sum();
-        let live_heap: usize = self.live_sets.values().map(LiveKeySet::heap_bytes).sum();
-        let live_sets = self.live_sets.len()
-            * (std::mem::size_of::<u32>() + std::mem::size_of::<LiveKeySet>())
-            + live_heap;
+        let live_heap: usize = self.live_sets.heap_bytes_total();
+        let live_sets = self.live_sets.index_bytes() + live_heap;
         arrays
             + overflow_reserved * std::mem::size_of::<Nbr>()
-            + overflow_entries
+            + self.overflow_chunks.index_bytes()
             + live_sets
             + std::mem::size_of::<Self>()
     }

@@ -1,4 +1,4 @@
-use super::super::{CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId};
+use super::super::{CsrBase, EdgeId, EdgePosition, MutableCsrTrait, Nbr, Timestamp, VertexId};
 use super::MutableCsr;
 use graphdb_core::StorageResult;
 
@@ -51,6 +51,46 @@ impl MutableCsrTrait for MutableCsr {
         on_deleted: &mut dyn FnMut(EdgeId),
     ) -> usize {
         MutableCsr::delete_edge_by_dst_reporting(self, src_vid, dst, ts, on_deleted)
+    }
+
+    fn delete_edge_by_dst_reporting_positioned(
+        &mut self,
+        src_vid: u32,
+        dst: VertexId,
+        ts: Timestamp,
+        on_deleted: &mut dyn FnMut(EdgeId, Option<EdgePosition>),
+    ) -> usize {
+        MutableCsr::delete_edge_by_dst_reporting_positioned(
+            self,
+            src_vid,
+            dst,
+            ts,
+            &mut |edge_id, position| on_deleted(edge_id, Some(position)),
+        )
+    }
+
+    fn locate_edge(&self, src_vid: u32, edge_id: EdgeId) -> Option<(EdgePosition, Nbr)> {
+        MutableCsr::locate_edge(self, src_vid, edge_id)
+    }
+
+    fn delete_edge_at_position(
+        &mut self,
+        src_vid: u32,
+        position: EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
+        MutableCsr::delete_edge_at_position(self, src_vid, position, expected, ts)
+    }
+
+    fn revert_delete_at_position(
+        &mut self,
+        src_vid: u32,
+        position: EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+    ) -> bool {
+        MutableCsr::revert_delete_at_position(self, src_vid, position, expected, ts)
     }
 
     fn delete_edge_by_offset(

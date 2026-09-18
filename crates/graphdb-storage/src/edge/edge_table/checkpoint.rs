@@ -427,10 +427,10 @@ impl EdgeStore {
         let mut fallback_hits = 0usize;
         for (edge_id, ts) in self.mvcc.edge_timestamps.iter() {
             let (gid, fell_back) =
-                Self::resolve_owner_gid(edge_id, &self.edge_owner, &live, fallback);
+                Self::resolve_owner_gid(&edge_id, &self.edge_owner, &live, fallback);
             fallback_hits += usize::from(fell_back);
             if wanted.contains(&gid) {
-                grouped.entry(gid).or_default().push((*edge_id, *ts));
+                grouped.entry(gid).or_default().push((edge_id, *ts));
             }
         }
         if fallback_hits > 0 {
@@ -1336,7 +1336,7 @@ impl EdgeStore {
                     continue;
                 }
                 self.mvcc.edge_timestamps.insert(edge_id, ts);
-                self.edge_owner.entry(edge_id).or_insert(*gid);
+                self.edge_owner.or_insert(edge_id, *gid);
             }
         }
         Ok(())
@@ -1432,7 +1432,7 @@ impl EdgeStore {
                     }
                     self.properties
                         .import_row(edge_id, create_ts, delete_ts, &values)?;
-                    self.edge_owner.entry(edge_id).or_insert(*gid);
+                    self.edge_owner.or_insert(edge_id, *gid);
                 }
             }
         }

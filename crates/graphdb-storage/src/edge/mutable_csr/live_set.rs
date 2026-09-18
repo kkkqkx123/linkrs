@@ -27,7 +27,7 @@ impl Default for LiveKeySet {
 }
 
 impl LiveKeySet {
-    fn from_keys(mut keys: Vec<(u32, i64)>) -> Self {
+    pub(crate) fn from_keys(mut keys: Vec<(u32, i64)>) -> Self {
         if keys.len() <= LIVE_SET_SORTED_BOUND {
             keys.sort_unstable();
             keys.dedup();
@@ -98,15 +98,116 @@ impl LiveKeySet {
     }
 }
 
+/// Dense per-vertex live-key index.
+///
+/// Row addresses inside one CSR are dense vertex ids, so sets are addressed
+/// by direct subscript instead of hashing. Empty rows hold `None` and cost
+/// only the slot. Lifetimes match the overflow index: created on the first
+/// live edge, dropped when the row goes empty.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LiveSetStorage {
+    slots: Vec<Option<LiveKeySet>>,
+    live_rows: usize,
+}
+
+impl LiveSetStorage {
+    pub(crate) fn new() -> Self {
+        Self {
+            slots: Vec::new(),
+            live_rows: 0,
+        }
+    }
+
+    pub(crate) fn ensure_capacity(&mut self, vertex_capacity: usize) {
+        if self.slots.len() < vertex_capacity {
+            self.slots.resize_with(vertex_capacity, || None);
+        }
+    }
+
+    pub(crate) fn get(&self, vid: &u32) -> Option<&LiveKeySet> {
+        self.slots.get(*vid as usize)?.as_ref()
+    }
+
+    pub(crate) fn insert(&mut self, vid: u32, set: LiveKeySet) {
+        let idx = vid as usize;
+        if self.slots.len() <= idx {
+            self.slots.resize_with(idx + 1, || None);
+        }
+        if self.slots[idx].is_none() {
+            self.live_rows += 1;
+        }
+        self.slots[idx] = Some(set);
+    }
+
+    pub(crate) fn remove(&mut self, vid: &u32) {
+        let idx = *vid as usize;
+        if idx < self.slots.len() && self.slots[idx].is_some() {
+            self.slots[idx] = None;
+            self.live_rows = self.live_rows.saturating_sub(1);
+        }
+    }
+
+    pub(crate) fn insert_key(&mut self, vid: u32, key: (u32, i64)) {
+        let idx = vid as usize;
+        if self.slots.len() <= idx {
+            self.slots.resize_with(idx + 1, || None);
+        }
+        match &mut self.slots[idx] {
+            Some(set) => set.insert(key),
+            slot @ None => {
+                *slot = Some(LiveKeySet::from_keys(vec![key]));
+                self.live_rows += 1;
+            }
+        }
+    }
+
+    pub(crate) fn remove_key(&mut self, vid: u32, key: &(u32, i64)) {
+        let idx = vid as usize;
+        if idx >= self.slots.len() {
+            return;
+        }
+        let emptied = match &mut self.slots[idx] {
+            Some(set) => {
+                set.remove(key);
+                set.is_empty()
+            }
+            None => return,
+        };
+        if emptied {
+            self.slots[idx] = None;
+            self.live_rows = self.live_rows.saturating_sub(1);
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        for slot in self.slots.iter_mut() {
+            *slot = None;
+        }
+        self.live_rows = 0;
+    }
+
+    pub(crate) fn heap_bytes_total(&self) -> usize {
+        self.slots
+            .iter()
+            .filter_map(|slot| slot.as_ref().map(LiveKeySet::heap_bytes))
+            .sum()
+    }
+
+    pub(crate) fn index_bytes(&self) -> usize {
+        self.slots.capacity() * std::mem::size_of::<Option<LiveKeySet>>()
+            + self.live_rows * (std::mem::size_of::<u32>() + std::mem::size_of::<LiveKeySet>())
+    }
+}
+
 impl MutableCsr {
     pub(crate) fn rebuild_live_sets(&mut self) {
         let capacity = self.vertex_capacity() as u32;
         self.live_sets.clear();
+        self.live_sets.ensure_capacity(self.vertex_capacity());
         for vid in 0..capacity {
             self.rebuild_live_set_for_vertex(vid);
         }
     }
-
     /// Whether one vertex currently holds a live entry for `key`.
     pub(crate) fn live_key_present(&self, vid: u32, endpoint: u32, rank: i64) -> bool {
         self.live_sets
@@ -120,19 +221,11 @@ impl MutableCsr {
     }
 
     pub(crate) fn track_live_insert(&mut self, vid: u32, endpoint: u32, rank: i64) {
-        self.live_sets
-            .entry(vid)
-            .or_default()
-            .insert((endpoint, rank));
+        self.live_sets.insert_key(vid, (endpoint, rank));
     }
 
     pub(crate) fn track_live_remove(&mut self, vid: u32, endpoint: u32, rank: i64) {
-        if let Some(set) = self.live_sets.get_mut(&vid) {
-            set.remove(&(endpoint, rank));
-            if set.is_empty() {
-                self.live_sets.remove(&vid);
-            }
-        }
+        self.live_sets.remove_key(vid, &(endpoint, rank));
     }
 
     pub(crate) fn rebuild_live_set_for_vertex(&mut self, vid: u32) {

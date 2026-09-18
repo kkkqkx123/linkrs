@@ -5,6 +5,7 @@
 
 use graphdb_core::StorageResult;
 
+use super::mutable_csr::EdgePosition;
 use super::{EdgeId, Nbr, Timestamp, VertexId};
 
 pub trait CsrBase: std::fmt::Debug + Send + Sync {
@@ -92,6 +93,68 @@ pub trait MutableCsrTrait: CsrBase {
         _on_deleted: &mut dyn FnMut(EdgeId),
     ) -> usize {
         self.delete_edge_by_dst(src_vid, dst, ts)
+    }
+
+    /// Delete all edges matching (src, dst), reporting each stamped id with
+    /// its row position.
+    ///
+    /// Same single-pass semantics as `delete_edge_by_dst_reporting`, plus the
+    /// position of each stamped entry so the caller can revert or re-delete
+    /// the exact slot without rescanning the row. Positions are row-local and
+    /// valid only until the next compaction, rebalance, repack or removal of
+    /// the row; every positional write revalidates the edge id. Stores
+    /// without positional addressing report `None` and the caller falls back
+    /// to the edge-id path. The default adapts the id-only pass.
+    fn delete_edge_by_dst_reporting_positioned(
+        &mut self,
+        src_vid: u32,
+        dst: VertexId,
+        ts: Timestamp,
+        on_deleted: &mut dyn FnMut(EdgeId, Option<EdgePosition>),
+    ) -> usize {
+        let mut count = 0usize;
+        let deleted = self.delete_edge_by_dst_reporting(src_vid, dst, ts, &mut |edge_id| {
+            on_deleted(edge_id, None);
+            count += 1;
+        });
+        let _ = count;
+        deleted
+    }
+
+    /// Locate one stored edge, returning its row position and copy.
+    ///
+    /// The default reports no position; row stores override it with a single
+    /// scan shared by delete and revert callers.
+    fn locate_edge(&self, _src_vid: u32, _edge_id: EdgeId) -> Option<(EdgePosition, Nbr)> {
+        None
+    }
+
+    /// Delete the edge at `position` when it still holds `expected` id.
+    ///
+    /// Stale positions are refused with `Ok(false)`. The default falls back
+    /// to the edge-id path; row stores override it with a direct slot write.
+    fn delete_edge_at_position(
+        &mut self,
+        src_vid: u32,
+        _position: EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
+        self.delete_edge(src_vid, expected, ts)
+    }
+
+    /// Revert the deletion at `position` when it still holds `expected` id.
+    ///
+    /// Stale positions are refused with `false`. The default falls back to
+    /// the edge-id path.
+    fn revert_delete_at_position(
+        &mut self,
+        src_vid: u32,
+        _position: EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+    ) -> bool {
+        self.revert_delete_by_edge_id(src_vid, expected, ts)
     }
 
     /// Delete an edge by its offset position in the primary block.
