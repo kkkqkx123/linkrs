@@ -1,6 +1,6 @@
 //! Read-only paths: visibility, adjacency, point lookups and scans.
 
-use super::super::super::{CsrBase, CsrShardSet, EdgeRecord, MutableCsrTrait, Nbr};
+use super::super::super::{CsrBase, CsrShardSet, EdgeRecord, Nbr};
 use super::EdgeStore;
 use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 use graphdb_core::Value;
@@ -8,20 +8,6 @@ use graphdb_core::Value;
 use super::super::iterator::EdgeTableScanIterator;
 
 impl EdgeStore {
-    /// Shared physical row location for point lookups: one physical topology
-    /// address plus the authoritative MVCC check. Adjacency batches, full
-    /// scans and point lookups all resolve rows through this routing instead
-    /// of duplicating group arithmetic; scans additionally share
-    /// [`EdgeStore::is_visible`] as the single visibility gate.
-    pub(crate) fn physical_location(
-        &self,
-        csr: &CsrShardSet,
-        src: u32,
-        dst: VertexId,
-    ) -> Option<Nbr> {
-        csr.get_edge_physical(src, dst)
-    }
-
     /// Single visibility gate for topology reads. Row stamps never decide
     /// visibility; only the version authority does.
     pub(crate) fn is_visible(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
@@ -92,6 +78,28 @@ impl EdgeStore {
         let mut found = None;
         csr.visit_physical(src, |nbr| {
             if nbr.to_vertex_id() == dst && self.is_visible(nbr.edge_id, ts) {
+                found = Some(nbr);
+                false
+            } else {
+                true
+            }
+        });
+        found
+    }
+
+    /// Pending-aware merged point lookup: scans every physical generation for
+    /// the endpoint key and returns the first one passing the pending gate.
+    pub(crate) fn merged_get_edge_with_gate(
+        &self,
+        csr: &CsrShardSet,
+        src: u32,
+        dst: VertexId,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) -> Option<Nbr> {
+        let mut found = None;
+        csr.visit_physical(src, |nbr| {
+            if nbr.to_vertex_id() == dst && self.is_visible_with_gate(nbr.edge_id, ts, gate) {
                 found = Some(nbr);
                 false
             } else {
@@ -449,10 +457,7 @@ impl EdgeStore {
             return None;
         }
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        let nbr = self.physical_location(&self.out_csr, src, dst_key)?;
-        if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
-            return None;
-        }
+        let nbr = self.merged_get_edge_with_gate(&self.out_csr, src, dst_key, ts, gate)?;
         let properties = self.properties_for_edge(nbr.edge_id, ts);
         Some(EdgeRecord {
             src_vid: VertexId::from_int64(src as i64),
@@ -475,10 +480,7 @@ impl EdgeStore {
             return None;
         }
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        let nbr = self.physical_location(&self.out_csr, src, dst_key)?;
-        if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
-            return None;
-        }
+        let nbr = self.merged_get_edge_with_gate(&self.out_csr, src, dst_key, ts, gate)?;
         let properties = self.properties_for_edge_projected(nbr.edge_id, ts, projection);
         Some(EdgeRecord {
             src_vid: VertexId::from_int64(src as i64),

@@ -43,7 +43,9 @@ pub use csr_variant::CsrVariant;
 pub use csr_with_properties::CsrWithProperties;
 pub use edge_table::core::UpdateEdgePropertyByKeyParams;
 pub use edge_table::EdgeStore;
-pub use fragmentation_stats::{FragmentationStats, VertexFragmentation};
+pub use fragmentation_stats::{
+    FragmentationStats, VertexFragmentation, GROUP_FRAGMENTATION_THRESHOLD,
+};
 pub use graphdb_core::types::EdgeStrategy;
 use graphdb_core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use graphdb_core::{Edge, Value};

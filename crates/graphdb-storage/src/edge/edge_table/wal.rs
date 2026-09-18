@@ -52,6 +52,10 @@ pub(crate) enum EdgeWalOp {
     SchemaDrop {
         name: String,
     },
+    SchemaRename {
+        old_name: String,
+        new_name: String,
+    },
 }
 
 /// Append `ops` to the table log, creating it with a version header when

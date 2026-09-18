@@ -1,4 +1,3 @@
-use super::*;
 use crate::edge::edge_table::config::EdgeTableConfig;
 use crate::edge::edge_table::core::EdgeStore;
 use crate::edge::{CsrBase, EdgeSchema, EdgeStrategy, MutableCsrTrait};
@@ -1379,4 +1378,103 @@ fn test_single_direction_schema_rejected_at_construction() {
     schema.oe_strategy = EdgeStrategy::None;
     schema.ie_strategy = EdgeStrategy::Multiple;
     assert!(EdgeTable::with_config(schema, EdgeTableConfig::default()).is_err());
+}
+
+#[test]
+fn test_gated_point_lookup_resolves_visible_generation() {
+    use crate::mvcc_visibility::PendingGate;
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    // Same key rebuilt: tombstone generation first, live generation after.
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .unwrap();
+    assert!(table.delete_edge(0, 1, 0, 150).unwrap());
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(2.0))], 200)
+        .unwrap();
+
+    let vm = graphdb_transaction::VersionManager::new();
+    let gate = PendingGate::new(&vm, None);
+    // The first physical slot is the old tombstone carrying value 1.0; a
+    // first-match lookup would report absence or the stale generation here.
+    let record = table
+        .get_edge_with_gate(0, 1, 0, 250, &gate)
+        .expect("merged gate lookup must find the visible generation");
+    assert!(record
+        .properties
+        .iter()
+        .any(|(k, v)| k == "weight" && *v == Value::Double(2.0)));
+    let projected = table
+        .get_edge_with_gate_projected(0, 1, 0, 250, &gate, Some(&[]))
+        .expect("projected variant must resolve the same generation");
+    assert!(projected.properties.is_empty());
+    assert!(!table.has_edge(0, 1, 0, 175));
+    assert!(table.has_edge(0, 1, 0, 250));
+}
+
+#[test]
+fn test_group_reset_refuses_non_empty_shards() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    assert!(table.out_csr.resize_groups(2).is_err());
+    assert!(table.out_csr.set_groups(&[0, 1]).is_err());
+    // Empty tables still reset through the construction and load paths.
+    let mut empty =
+        EdgeTable::with_config(create_test_schema(), EdgeTableConfig::default()).unwrap();
+    assert!(empty.out_csr.resize_groups(2).is_ok());
+}
+
+#[test]
+fn test_background_maintenance_reclaims_gone_authority() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    table.insert_edge(2, 3, 0, &[], 100).unwrap();
+    assert!(table.delete_edge(0, 1, 0, 150).unwrap());
+    assert_eq!(table.mvcc.edge_timestamps.len(), 2);
+
+    // Watermark past the deletion: rows become physically reclaimable, then
+    // the wired authority reclaim must drop the now row-less entry.
+    let wm = watermark_at(300);
+    let ran = table.maybe_run_auto_maintenance_with_watermarks(&wm, 0);
+    assert!(ran > 0);
+    assert_eq!(table.mvcc.edge_timestamps.len(), 1);
+    assert!(!table.mvcc.edge_timestamps.contains_key(&EdgeId(0)));
+    assert!(table.mvcc.edge_timestamps.contains_key(&EdgeId(1)));
+    // The surviving edge stays readable; the reclaimed one was already
+    // invisible at any post-watermark snapshot by convention.
+    assert!(table.has_edge(2, 3, 0, 200));
+}
+
+#[test]
+fn test_property_fallback_counter_stays_flat_under_normal_load() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .unwrap();
+    table
+        .update_edge_property(0, 1, 0, "weight", &Value::Double(2.0), 120)
+        .unwrap();
+    let dir = tempfile::tempdir().expect("temporary edge table directory");
+    table
+        .flush(
+            dir.path(),
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .unwrap();
+    assert_eq!(table.property_fallback_rewrites(), 0);
+
+    // Insurance path: dirt with no group trace rewrites all owners and is
+    // counted exactly once per such checkpoint.
+    table.properties_dirty = true;
+    table
+        .flush(
+            dir.path(),
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .unwrap();
+    assert_eq!(table.property_fallback_rewrites(), 1);
 }

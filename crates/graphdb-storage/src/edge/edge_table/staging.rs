@@ -212,6 +212,17 @@ impl EdgeStagingBatch {
     pub(crate) fn take_order(&mut self) -> Vec<StagedOrder> {
         std::mem::take(&mut self.order)
     }
+
+    /// Clear all buffered entries for caller-side reuse.
+    ///
+    /// Discards the net effect without touching committed state so a hot
+    /// caller can stage the next batch into the same allocation instead of
+    /// building a new batch per commit.
+    pub fn clear(&mut self) {
+        self.inserts.clear();
+        self.deletes.clear();
+        self.order.clear();
+    }
 }
 
 /// Reusable commit working buffers owned by the table.

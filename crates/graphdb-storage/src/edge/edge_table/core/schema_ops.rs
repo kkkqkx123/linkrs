@@ -95,50 +95,26 @@ impl EdgeStore {
     }
 
     pub fn rename_property(&mut self, old_name: &str, new_name: &str) -> StorageResult<()> {
-        if !self.is_open {
-            return Err(StorageError::storage_not_open());
-        }
-
-        if self
-            .schema
-            .properties
-            .iter()
-            .any(|prop| prop.name == new_name)
-        {
-            return Err(StorageError::column_already_exists(new_name.to_string()));
-        }
-
-        let index = self
-            .schema
-            .properties
-            .iter()
-            .position(|prop| prop.name == old_name)
-            .ok_or_else(|| StorageError::column_not_found(old_name.to_string()))?;
-
-        // Rename in properties first (potentially failing operation)
-        self.properties.rename_property(old_name, new_name)?;
-        // Only modify schema if properties rename succeeded
-        self.schema.properties[index].name = new_name.to_string();
-        // Update cache: rename key, keep index
-        if let Some(idx) = self.property_index_cache.remove(old_name) {
-            self.property_index_cache.insert(new_name.to_string(), idx);
-        }
-
-        if let Err(error) = self.record_schema_change(ChangeDetails::PropertyRenamed {
-            old_name: old_name.to_string(),
-            new_name: new_name.to_string(),
-        }) {
-            // History is the last step: rename everything back so no
-            // half-renamed state survives a history failure.
-            let _ = self.properties.rename_property(new_name, old_name);
-            self.schema.properties[index].name = old_name.to_string();
-            if let Some(idx) = self.property_index_cache.remove(new_name) {
-                self.property_index_cache.insert(old_name.to_string(), idx);
-            }
+        // Single code path: the immediate rename is prepare + publish of the
+        // staged state machine, so no second column-rename implementation
+        // exists. Publish restores from its snapshot when history recording
+        // fails; other failures leave storage untouched.
+        let old = old_name.to_string();
+        let new = new_name.to_string();
+        self.prepare_rename_property(&old, &new)?;
+        if let Err(error) = self.publish_pending_rename_property() {
+            let _ = self.abort_pending_rename_property();
             return Err(error);
         }
-        self.mark_properties_dirty();
-
         Ok(())
+    }
+
+    /// Table-level property fallback rewrites since creation.
+    ///
+    /// Counts checkpoints where property dirt carried no group trace and every
+    /// owner rewrote as insurance. Flat under normal load; growth points at a
+    /// missing write-time mark.
+    pub fn property_fallback_rewrites(&self) -> u64 {
+        self.property_fallback_rewrites
     }
 }

@@ -553,6 +553,13 @@ impl SingleMutableCsr {
         }
     }
 
+    /// Reserved slot memory plus struct overhead.
+    ///
+    /// Per-shape accounting by design: the single-slot layout owns no offset
+    /// arrays, live sets or overflow maps, so its shard-level total is
+    /// narrower than the multi-edge layout. Cross-shape comparison belongs at
+    /// the table layer after the shared authority estimate is added, never at
+    /// the shard level directly.
     pub fn used_memory_size(&self) -> usize {
         self.nbr_list.capacity() * std::mem::size_of::<Nbr>() + std::mem::size_of::<Self>()
     }

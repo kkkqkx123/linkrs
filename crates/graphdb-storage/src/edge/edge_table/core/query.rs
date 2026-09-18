@@ -148,10 +148,10 @@ impl EdgeStore {
         for gid in self.in_csr.dirty_group_ids() {
             dirty.insert(gid as u32);
         }
-        for gid in self.out_csr.sampled_column_dirty_group_ids() {
+        for gid in self.out_csr.column_dirty_group_ids() {
             dirty.insert(gid as u32);
         }
-        for gid in self.in_csr.sampled_column_dirty_group_ids() {
+        for gid in self.in_csr.column_dirty_group_ids() {
             dirty.insert(gid as u32);
         }
         for gid in &existing {
@@ -185,10 +185,13 @@ impl EdgeStore {
         for group in &group_ids {
             by_owner.insert(*group, Vec::new());
         }
-        for edge_id in self.properties.edge_ids() {
-            let owner = self.edge_owner.get(&edge_id).copied().unwrap_or(0);
-            if let Some(slot) = by_owner.get_mut(&owner) {
-                slot.push(edge_id);
+        // Group only the dirty owners: iterate the authority owner map once
+        // and file each edge into its dirty group slot, so the grouping pass
+        // touches one map entry per edge with no second lookup and decodes
+        // properties for dirty groups only below.
+        for (edge_id, owner) in &self.edge_owner {
+            if let Some(slot) = by_owner.get_mut(owner) {
+                slot.push(*edge_id);
             }
         }
         for group in group_ids {

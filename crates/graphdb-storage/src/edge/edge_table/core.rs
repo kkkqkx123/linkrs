@@ -101,6 +101,17 @@ pub struct EdgeStore {
     /// truncate it after the new snapshot is durable. `None` before the first
     /// checkpoint, when redo has no home yet.
     pub(crate) wal_dir: Option<std::path::PathBuf>,
+    /// Table-level property fallback rewrites since creation.
+    ///
+    /// Counts checkpoints where property dirt carried no group trace and every
+    /// owner rewrote as insurance. The regular path always carries a trace,
+    /// so this counter stays flat under normal load and any growth points at
+    /// a missing write-time mark.
+    pub(crate) property_fallback_rewrites: u64,
+    /// In-flight staged rename-column change. Memory-only, same crash contract
+    /// as the staged add and drop: at most one schema change is pending at a
+    /// time and a crash before publishing is equivalent to aborting.
+    pub(crate) pending_rename_column: Option<super::schema_rename_column::PendingRenameColumn>,
 }
 
 impl std::fmt::Debug for EdgeStore {

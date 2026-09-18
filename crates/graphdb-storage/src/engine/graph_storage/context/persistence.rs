@@ -102,7 +102,11 @@ impl GraphStorageContext {
                             key.src_label, key.dst_label, key.edge_label
                         ));
                         let mut table = edge_table.write();
-                        table.maybe_compact_for_flush_with_watermarks(&wm, margin, 2.0);
+                        table.maybe_compact_for_flush_with_watermarks(
+                            &wm,
+                            margin,
+                            crate::edge::GROUP_FRAGMENTATION_THRESHOLD,
+                        );
                         let kind = table.flush(&table_dir, compression)?;
                         log::info!(
                             "Edge flush {}_{}_{} kind={:?}",
@@ -306,7 +310,11 @@ impl GraphStorageContext {
                             key.src_label, key.dst_label, key.edge_label
                         ));
                         let mut table = edge_table.write();
-                        table.maybe_compact_for_flush_with_watermarks(&wm, margin, 2.0);
+                        table.maybe_compact_for_flush_with_watermarks(
+                            &wm,
+                            margin,
+                            crate::edge::GROUP_FRAGMENTATION_THRESHOLD,
+                        );
                         let kind = table.flush(&table_dir, compression)?;
                         log::info!(
                             "Edge flush {}_{}_{} kind={:?}",

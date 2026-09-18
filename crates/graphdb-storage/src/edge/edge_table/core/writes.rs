@@ -67,20 +67,24 @@ impl EdgeStore {
             ));
         }
         self.prevalidate_staging_batch(&batch)?;
+        let max_ts = batch.max_timestamp();
+        let mut inserts = batch.take_inserts();
+        let deletes = batch.take_deletes();
+        let order = batch.take_order();
         if let Some(dir) = self.wal_dir.clone() {
-            let mut ops = Vec::with_capacity(batch.len());
-            for ord in batch.ordered() {
+            let mut ops = Vec::with_capacity(order.len());
+            for ord in &order {
                 if ord.is_insert {
-                    let ins = &batch.staged_inserts()[ord.slot];
+                    let ins = &mut inserts[ord.slot];
                     ops.push(super::super::wal::EdgeWalOp::Insert {
                         src: ins.src,
                         dst: ins.dst,
                         rank: ins.rank,
-                        properties: ins.properties.clone(),
+                        properties: std::mem::take(&mut ins.properties),
                         create_ts: ins.create_ts,
                     });
                 } else {
-                    let del = &batch.staged_deletes()[ord.slot];
+                    let del = &deletes[ord.slot];
                     ops.push(super::super::wal::EdgeWalOp::Delete {
                         src: del.src,
                         dst: del.dst,
@@ -91,10 +95,6 @@ impl EdgeStore {
             }
             super::super::wal::append_ops(&dir, &ops)?;
         }
-        let max_ts = batch.max_timestamp();
-        let inserts = batch.take_inserts();
-        let deletes = batch.take_deletes();
-        let order = batch.take_order();
         if order.is_empty() {
             return Ok(0);
         }
@@ -122,14 +122,9 @@ impl EdgeStore {
                         insert_by_key.insert((ins.src, ins.dst, ins.rank), entry);
                     }
                     Err(e) => {
-                        for (src, dst, _rank, edge_id, ts) in applied_deletes.drain(..) {
-                            self.revert_applied_delete(src, dst, edge_id, ts);
-                        }
-                        for (src, dst, rank, edge_id, ts) in applied_inserts.drain(..) {
-                            self.erase_applied_insert(src, dst, rank, edge_id, ts);
-                        }
+                        let err = self.rollback_applied_batch(applied_deletes, applied_inserts, e);
                         self.commit_scratch = scratch;
-                        return Err(e);
+                        return Err(err);
                     }
                 }
             } else {
@@ -146,14 +141,9 @@ impl EdgeStore {
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        for (src, dst, _rank, edge_id, ts) in applied_deletes.drain(..) {
-                            self.revert_applied_delete(src, dst, edge_id, ts);
-                        }
-                        for (src, dst, rank, edge_id, ts) in applied_inserts.drain(..) {
-                            self.erase_applied_insert(src, dst, rank, edge_id, ts);
-                        }
+                        let err = self.rollback_applied_batch(applied_deletes, applied_inserts, e);
                         self.commit_scratch = scratch;
-                        return Err(e);
+                        return Err(err);
                     }
                 }
             }
@@ -240,12 +230,19 @@ impl EdgeStore {
                     )));
                 }
                 if single_out {
-                    let live = self.merged_edges_of(&self.out_csr, ins.src, ins.create_ts);
-                    let covered = !live.is_empty()
-                        && live
-                            .iter()
-                            .all(|nbr| seen_deletes.contains(&(ins.src, nbr.endpoint, nbr.rank)));
-                    if !live.is_empty() && !covered {
+                    let mut uncovered = false;
+                    let mut any_live = false;
+                    self.out_csr.visit_physical(ins.src, |nbr| {
+                        if self.is_visible(nbr.edge_id, ins.create_ts) {
+                            any_live = true;
+                            if !seen_deletes.contains(&(ins.src, nbr.endpoint, nbr.rank)) {
+                                uncovered = true;
+                                return false;
+                            }
+                        }
+                        true
+                    });
+                    if any_live && uncovered {
                         return Err(StorageError::conflict(format!(
                             "Single out-edge strategy already holds a live edge for src={}",
                             ins.src
@@ -253,12 +250,19 @@ impl EdgeStore {
                     }
                 }
                 if single_in {
-                    let live = self.merged_edges_of(&self.in_csr, ins.dst, ins.create_ts);
-                    let covered = !live.is_empty()
-                        && live
-                            .iter()
-                            .all(|nbr| seen_deletes.contains(&(nbr.endpoint, ins.dst, nbr.rank)));
-                    if !live.is_empty() && !covered {
+                    let mut uncovered = false;
+                    let mut any_live = false;
+                    self.in_csr.visit_physical(ins.dst, |nbr| {
+                        if self.is_visible(nbr.edge_id, ins.create_ts) {
+                            any_live = true;
+                            if !seen_deletes.contains(&(nbr.endpoint, ins.dst, nbr.rank)) {
+                                uncovered = true;
+                                return false;
+                            }
+                        }
+                        true
+                    });
+                    if any_live && uncovered {
                         return Err(StorageError::conflict(format!(
                             "Single in-edge strategy already holds a live edge for dst={}",
                             ins.dst
@@ -413,11 +417,28 @@ impl EdgeStore {
             None
         };
 
-        if let Some(nbr) = self.merged_get_edge(&self.out_csr, src, dst_key, ts) {
-            let edge_id = nbr.edge_id;
-
-            if !self.out_csr.delete_edge(src, edge_id, ts)? {
-                return Ok(None);
+        // Single-pass out-direction delete: stamp live matches in place while
+        // collecting the first stamped id, so the merged read above (for the
+        // index snapshot) is the only extra locate. A zero count falls through
+        // to the miss path below which distinguishes absence from conflict.
+        let mut first_out_id = None;
+        let out_deleted =
+            self.out_csr
+                .delete_edge_by_dst_reporting(src, dst_key, ts, &mut |edge_id| {
+                    if first_out_id.is_none() {
+                        first_out_id = Some(edge_id);
+                    }
+                });
+        if out_deleted > 0 {
+            let edge_id = first_out_id.expect("reported delete carries an id");
+            if out_deleted > 1 {
+                log::debug!(
+                    "apply_staged_delete multi-match: ({}, {}, {}) out_deleted={}",
+                    src,
+                    dst,
+                    rank,
+                    out_deleted
+                );
             }
             let in_deleted = self.in_csr.delete_edge_by_dst(dst, src_key, ts);
             if in_deleted == 0 {
@@ -532,19 +553,81 @@ impl EdgeStore {
         out_ok && in_ok
     }
 
+    #[inline]
+    fn partial_revert_error(edge_id: EdgeId) -> StorageError {
+        StorageError::invalid_operation(format!(
+            "delete rollback failed for edge {:?}: partial direction revert",
+            edge_id
+        ))
+    }
+
+    /// Revive the authority record after both directions reverted.
+    ///
+    /// Shared by the batch rollback and the single-key undo so the two paths
+    /// cannot drift apart. Returns true when the record was revived and false
+    /// when neither direction held a tombstone to revert. A partial revert
+    /// keeps the deletion mark and reports an error.
+    fn revive_authority_after_revert(
+        &mut self,
+        edge_id: EdgeId,
+        out_ok: bool,
+        in_ok: bool,
+    ) -> StorageResult<bool> {
+        if Self::fully_reverted(out_ok, in_ok) {
+            if let Some(ts_info) = self.mvcc.edge_timestamps.get_mut(&edge_id) {
+                ts_info.delete_ts = Timestamp::MAX;
+            }
+            let _ = self.properties.revert_deletion_for_edge(edge_id);
+            self.mark_properties_dirty();
+            self.debug_assert_copies_consistent(edge_id);
+            return Ok(true);
+        }
+        if !out_ok && !in_ok {
+            return Ok(false);
+        }
+        Err(Self::partial_revert_error(edge_id))
+    }
+
     /// Revert one batch-applied delete during batch rollback.
-    fn revert_applied_delete(&mut self, src: u32, dst: u32, edge_id: EdgeId, ts: Timestamp) {
+    fn revert_applied_delete(
+        &mut self,
+        src: u32,
+        dst: u32,
+        edge_id: EdgeId,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
         let out_ok = self.out_csr.revert_delete_by_edge_id(src, edge_id, ts);
         let in_ok = self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts);
-        if !Self::fully_reverted(out_ok, in_ok) {
-            return;
+        self.revive_authority_after_revert(edge_id, out_ok, in_ok)?;
+        Ok(())
+    }
+
+    /// Roll back everything this batch applied, then report the failure.
+    ///
+    /// Deletes revert first through the shared partial-revert gate, inserts
+    /// erase afterwards, and every entry is drained on both paths so a batch
+    /// reported as failed never leaves visible residue. A failed revert keeps
+    /// its authority deletion mark; the first revert error is returned with
+    /// priority over the original error so the caller cannot mistake the
+    /// half-reverted state for a clean commit failure.
+    fn rollback_applied_batch(
+        &mut self,
+        applied_deletes: &mut Vec<(u32, u32, i64, EdgeId, Timestamp)>,
+        applied_inserts: &mut Vec<(u32, u32, i64, EdgeId, Timestamp)>,
+        original: StorageError,
+    ) -> StorageError {
+        let mut revert_error: Option<StorageError> = None;
+        for (src, dst, _rank, edge_id, ts) in applied_deletes.drain(..) {
+            if let Err(revert_err) = self.revert_applied_delete(src, dst, edge_id, ts) {
+                if revert_error.is_none() {
+                    revert_error = Some(revert_err);
+                }
+            }
         }
-        if let Some(ts_info) = self.mvcc.edge_timestamps.get_mut(&edge_id) {
-            ts_info.delete_ts = Timestamp::MAX;
+        for (src, dst, rank, edge_id, ts) in applied_inserts.drain(..) {
+            self.erase_applied_insert(src, dst, rank, edge_id, ts);
         }
-        let _ = self.properties.revert_deletion_for_edge(edge_id);
-        self.mark_properties_dirty();
-        self.debug_assert_copies_consistent(edge_id);
+        revert_error.unwrap_or(original)
     }
 
     pub fn delete_edge(
@@ -663,19 +746,11 @@ impl EdgeStore {
         let Some(edge_id) = edge_id else {
             return Ok(false);
         };
-        if !self.out_csr.revert_delete_by_edge_id(src, edge_id, ts) {
+        let out_ok = self.out_csr.revert_delete_by_edge_id(src, edge_id, ts);
+        let in_ok = self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts);
+        if !self.revive_authority_after_revert(edge_id, out_ok, in_ok)? {
             return Ok(false);
         }
-        if !self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts) {
-            return Err(StorageError::invalid_operation(format!(
-                "delete rollback failed for edge {:?}: in-direction revert missed",
-                edge_id
-            )));
-        }
-        if let Some(ts_info) = self.mvcc.edge_timestamps.get_mut(&edge_id) {
-            ts_info.delete_ts = Timestamp::MAX;
-        }
-        let _ = self.properties.revert_deletion_for_edge(edge_id);
         let restored = self.properties_for_edge(edge_id, ts);
         if self.property_index.is_some() {
             let label = self.label;

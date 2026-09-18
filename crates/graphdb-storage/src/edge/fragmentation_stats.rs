@@ -14,6 +14,11 @@
 //! exactly when it holds entries eligible at the current cutoff. Whole-table
 //! ratios below are observation metrics, not collection triggers.
 
+/// Group merge gate on the wasted-share caliber: a group whose wasted share
+/// reaches this level is worth a group-scope merge. Row and region scopes
+/// trigger on per-vertex reclaimable counts alone.
+pub const GROUP_FRAGMENTATION_THRESHOLD: f32 = 0.5;
+
 #[derive(Debug, Clone, Copy)]
 pub struct FragmentationStats {
     /// Total reserved capacity (primary rows plus overflow chunks).
@@ -132,7 +137,7 @@ mod tests {
         };
 
         assert_eq!(stats.fragmentation_ratio(), 0.0);
-        assert!(stats.fragmentation_ratio() < 2.0);
+        assert!(stats.fragmentation_ratio() < GROUP_FRAGMENTATION_THRESHOLD);
     }
 
     #[test]
@@ -145,7 +150,7 @@ mod tests {
         };
 
         assert_eq!(stats.fragmentation_ratio(), 0.5);
-        assert!(stats.fragmentation_ratio() < 2.0);
+        assert!(stats.fragmentation_ratio() >= GROUP_FRAGMENTATION_THRESHOLD);
     }
 
     #[test]
@@ -154,11 +159,11 @@ mod tests {
             total_capacity: 100,
             reachable_edges: 20,
             dead_entries: 3,
-            wasted_capacity: 250, // 250% overhead
+            wasted_capacity: 80,
         };
 
-        assert_eq!(stats.fragmentation_ratio(), 2.5);
-        assert!(stats.fragmentation_ratio() >= 2.0);
+        assert_eq!(stats.fragmentation_ratio(), 0.8);
+        assert!(stats.fragmentation_ratio() >= GROUP_FRAGMENTATION_THRESHOLD);
     }
 
     #[test]
@@ -174,11 +179,11 @@ mod tests {
             total_capacity: 100,
             reachable_edges: 50,
             dead_entries: 1,
-            wasted_capacity: 150,
+            wasted_capacity: 60,
         };
 
-        assert!(stats.fragmentation_ratio() >= 1.0); // ratio = 1.5, threshold = 1.0
-        assert!(stats.fragmentation_ratio() < 2.0); // ratio = 1.5, threshold = 2.0
+        assert!(stats.fragmentation_ratio() >= GROUP_FRAGMENTATION_THRESHOLD);
+        assert!(stats.fragmentation_ratio() <= 1.0);
     }
 
     #[test]

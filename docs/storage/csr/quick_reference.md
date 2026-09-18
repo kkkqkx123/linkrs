@@ -1,5 +1,10 @@
 # CSR Quick Reference
 
+> **Historical document.** The selection guide and examples below predate the
+> restructure: `LabeledMutableCsr`, `MultiSingleMutableCsr`, the immutable
+> `Csr`, the `prop_offset` insert parameter and `from_strategy` no longer
+> exist. Current API surface — see [overview.md](overview.md) and the code.
+
 ## Variant Selection Guide
 
 ```
@@ -117,9 +122,9 @@ csr.revert_delete_by_offset(0u32, 0, 5);
 ### Compaction & Maintenance
 
 ```rust
-// Check fragmentation
+// Check fragmentation (wasted share of reserved capacity)
 let ratio = csr.fragmentation_ratio();
-println!("Fragmentation: {:.2}x", ratio);
+println!("Fragmentation waste share: {:.2}", ratio);
 
 // Manual compact (Multiple variant only does real compaction)
 let removed = csr.compact_with_ts(5, 0.25);

@@ -1,167 +1,94 @@
 # CSR Architecture Overview
 
+> 当前结构以本文件为准。variants.md、dispatch.md、quick_reference.md 的正文
+> 含已删除的历史形态（`MultiSingle`、`Labeled`、immutable `Csr`、`prop_offset`），
+> 阅读时以代码与本文对齐。
+
 ## What is CSR?
 
-**CSR** (Compressed Sparse Row) is a column-oriented graph edge storage format used throughout GraphDB for efficient space utilization and fast neighbor traversal.
+**CSR** (Compressed Sparse Row) is the column-oriented edge storage format used
+for adjacency: an offset array per row, a flattened neighbor list, a degree
+array per row, giving O(V + E) space instead of O(V²).
 
-Instead of storing edges as a dense adjacency matrix, CSR stores them as:
-- **Adjacency offset array**: where each vertex's edges start in the flattened edge list
-- **Flattened edge list**: all edges for all vertices packed contiguously
-- **Degree array**: how many edges each vertex has
+## Current Layout
 
-This reduces memory usage from O(V²) to O(V + E).
+One edge label maps to one sharded edge table (`EdgeStore`): a node-group
+sharded topology per direction (`CsrShardSet`), a centralized authority
+timestamp table (`MVCCManager`), a columnar property store
+(`CsrWithProperties`), an edge-owner map, and per-group segment statistics.
+Grouping partitions bound endpoints by interval; each group keeps one
+`CsrVariant` plus leaf-region dirt driving incremental checkpoints.
 
 ## CSR Variants
 
-GraphDB supports CSR variants, selected per relationship type:
+| Variant | Use Case | Structure |
+|---------|----------|-----------|
+| `Multiple` (`MutableCsr`) | general multi-edge rows | primary rows with density-target gaps plus graded per-vertex overflow chunks |
+| `Single` (`SingleMutableCsr`) | one edge per vertex | direct slot array, empty slots use the never-alive sentinel |
+| `None` | direction stores nothing | placeholder |
 
-| Variant | Type | Use Case | Complexity | Key Feature |
-|---------|------|----------|-----------|-------------|
-| `Multiple` | Mutable | Multi-edge relationships (general case) | O(degree) lookup | Two-level (primary + overflow) |
-| `Single` | Mutable | One-to-one relationships | O(1) lookup | Direct array indexing |
-| `MultiSingle` | Mutable | Multi-edge with limited capacity | O(degree) lookup | Fixed-size slots per vertex |
-| `Labeled` | Mutable | Multi-label edges | O(log K) label lookup | Label-grouped storage |
-| `None` | Placeholder | No edges stored | - | Zero memory overhead |
-| `Immutable` (Csr) | Read-only | Snapshots & batch-loaded data | O(degree) lookup | Flat layout, no fragmentation |
-
-The first 5 variants are part of `CsrVariant` enum. The immutable `Csr` is used separately by `EdgeTable` for frozen segments.
-
-## Selection via EdgeStrategy
-
-The `EdgeStrategy` enum controls which variant is created for each direction (outgoing/incoming):
-
-```rust
-pub enum EdgeStrategy {
-    None,                    // No edges stored
-    Single,                  // Use SingleMutableCsr (one edge per vertex)
-    #[default]
-    Multiple,                // Use MutableCsr (multi-edge)
-    MultiSingle { max_edges: usize },  // Use MultiSingleMutableCsr (bounded capacity)
-    Labeled,                 // Use LabeledMutableCsr (label-aware)
-}
-```
-
-Relationships are created with both outgoing (`oe_strategy`) and incoming (`ie_strategy`) strategies:
-
-```rust
-pub struct EdgeSchema {
-    pub oe_strategy: EdgeStrategy,  // How to store outgoing edges
-    pub ie_strategy: EdgeStrategy,  // How to store incoming edges
-    // ...
-}
-```
+`EdgeStrategy` selects the variant per direction, and `EdgeSchema::validate`
+requires both directions to use the same non-`None` strategy (single-direction
+tables are rejected at construction). The `dispatch!` macro in `csr_variant.rs`
+routes trait calls to the concrete shape without `dyn`.
 
 ## Trait Hierarchy
 
-### CsrBase (Fundamental)
-Shared interface for all CSR types:
-- `vertex_capacity()` - max vertices
-- `edge_count()` - total edges
-- `dump()` / `load()` - serialization
+### CsrBase
+`vertex_capacity()`, `edge_count()`, `dump()`, `dump_into()`, `load()`.
+`CsrShardSet` fails closed on whole-direction dump/load: persistence moves
+through the per-group incremental protocol only.
 
-### MutableCsrTrait (Edit Operations)
-Extended by all mutable variants:
-- `insert_edge()` - add edge
-- `delete_edge()` - remove by ID
-- `delete_edge_by_dst()` - remove by destination
-- `delete_edge_by_offset()` - remove by position
-- `revert_delete_by_offset()` - undo deletion
-- `get_edge()` - lookup
-- `edges_of()` - get all neighbors
-- `compact_with_ts()` - defragmentation
-- `used_memory_size()` - memory estimation
+### MutableCsrTrait
+Insert, delete by id / by dst / by offset, reverts, physical and visible reads,
+per-vertex reclaim probing (`reclaimable_count`, `vertex_reclaim_probe`),
+row-level compaction with removal reporting, and memory accounting.
+Timestamp-filtered row reads (`get_edge`, `edges_of`, `get_edge_physical`) are
+test-only primitives; production visibility goes through the version
+authority (`MVCCManager`) via the merged lookup in the table layer.
 
-### Csr (Immutable)
-Read-only `CsrBase` implementation (no mutations):
-- `get_edge()` - lookup
-- `edges_of()` - get all neighbors
-- `dump()` / `load()` - serialization
+## Timestamp & Visibility
 
-## Runtime Polymorphism: CsrVariant
-
-All 5 mutable variants are wrapped in a single enum `CsrVariant` for runtime dispatch:
-
-```rust
-pub enum CsrVariant {
-    Multiple(MutableCsr),
-    Single(SingleMutableCsr),
-    MultiSingle(MultiSingleMutableCsr),
-    Labeled(LabeledMutableCsr),
-    None { vertex_capacity: usize },
-}
+```
+Nbr { endpoint: u32, rank: i64, edge_id: EdgeId, create_ts, delete_ts }
 ```
 
-This design:
-- Avoids `dyn` trait objects (no vtable overhead)
-- Enables inline branching (compiler can optimize)
-- Preserves type safety at compile time
-- Allows runtime selection per relationship
-
-Dispatch is implemented via a single `dispatch!` macro to minimize boilerplate.
-
-## Timestamp & Versioning
-
-All mutable CSRs support **versioned edges** via timestamps:
-
-```rust
-pub struct Nbr {
-    pub neighbor: VertexId,
-    pub edge_id: EdgeId,
-    pub prop_offset: u32,
-    pub create_ts: Timestamp,      // When edge was created
-    pub delete_ts: Timestamp,      // When edge was deleted (u32::MAX = active)
-}
-```
-
-Queries filter edges by timestamp:
-```rust
-csr.edges_of(src_vid, ts)  // Only edges valid at timestamp ts
-```
-
-This enables:
-- Time-travel queries ("what was the graph at time T?")
-- MVCC-based concurrency control
-- Edge deletion via soft-delete (mark with delete_ts)
+Row stamps are physical projections for collection only. Visibility authority
+is `edge_timestamps`: an edge is visible when `create_ts <= ts < delete_ts`.
+Gap-fill uses `Nbr::dead_gap()` (invalid edge id, never-alive window) so an
+overrun scan reports absence instead of a ghost live edge. Properties keep
+their own per-column version chains for time-travel reads, collapsed to
+current values on checkpoint.
 
 ## Fragmentation Management
 
-**Mutable CSR** (Multiple variant) uses two-level storage:
-- **Primary block**: fixed-size slot per vertex
-- **Overflow block**: append-only expansion when primary fills
-
-Over time, repeated expansions create **internal fragmentation** (zombie blocks in `nbr_list`).
-
-Recovery via `compact_with_ts()`:
-- Merges primary + overflow into flat CSR
-- Removes soft-deleted edges
-- Reclaims all wasted space
-- O(V + E) cost, requires exclusive write access
-
-See [Fragmentation & Compaction](fragmentation.md) for details.
+Primary rows keep density-target gaps for everyday writes; deleted entries
+wait for the collection cutoff. Waste is therefore gaps plus tombstone slots:
+`fragmentation_ratio()` reports the wasted share of reserved capacity
+(0.0–1.0) and is observation only. Collection triggers consult per-vertex
+reclaimable counts; group merges stay behind the caller fragmentation gate.
+Recovery paths compact with per-edge removal reporting and always pass a
+watermark cutoff; rows below the watermark keep their tombstones.
 
 ## File Organization
 
 ```
-crates/graphdb-storage/src/storage/edge/
-├── csr_trait.rs              # Trait definitions (CsrBase, MutableCsrTrait)
-├── csr_variant.rs            # Enum wrapper, dispatch logic, dispatch macros
-├── mutable_csr.rs            # Multiple variant (two-level with overflow)
-├── single_mutable_csr.rs     # Single variant (O(1) direct array)
-├── multi_single_mutable_csr.rs  # MultiSingle variant (fixed slots)
-├── labeled_mutable_csr.rs    # Labeled variant (label-grouped)
-├── csr.rs                    # Immutable variant (flat, read-only)
-├── fragmentation_stats.rs    # Metrics reporting
-├── edge_table/               # EdgeTable (combines out/in CSRs + properties)
-│   ├── mod.rs
-│   ├── core.rs
-│   ├── segment.rs
-│   └── snapshot.rs
-├── property_table.rs         # Edge property storage
-└── mod.rs                    # Module root, re-exports
+crates/graphdb-storage/src/edge/
+├── csr_shared.rs             # shared slot decision for delete paths
+├── csr_trait.rs              # CsrBase, MutableCsrTrait
+├── csr_variant.rs            # Multiple/Single/None enum, dispatch macro
+├── csr_with_properties.rs    # columnar property store
+├── edge.rs (parent)          # Nbr, EdgeSchema, EdgeRecord, strategies
+├── edge_table/               # sharded table, staging commit, checkpoint,
+│   │                         # compaction, MVCC, WAL, schema state machines
+├── fragmentation_stats.rs    # wasted-share caliber stats, group merge gate
+├── mutable_csr/              # Multiple variant (row, overflow, merge, read)
+├── node_group.rs             # group shard set, dirt, append log, manifest
+├── property_schema.rs        # property schema entries
+└── single_mutable_csr.rs     # Single variant
 ```
 
-## Next Steps
+## Related Docs
 
-- [Variant Details](variants.md) - deep dive into each CSR implementation
-- [Dispatch Logic](dispatch.md) - how CSR is selected and created
-- [Fragmentation & Compaction](fragmentation.md) - memory management
+- [Fragmentation & Compaction](fragmentation.md) — measurement and recovery details
+- [docs/plan/csr-design-review.md](../../plan/csr-design-review.md) — current design review

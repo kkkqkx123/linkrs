@@ -96,12 +96,14 @@ impl EdgeStore {
             index_write_failures: 0,
             pending_add_column: None,
             pending_drop_column: None,
+            pending_rename_column: None,
             edge_owner: HashMap::new(),
             segment_stats: HashMap::new(),
             commit_scratch: super::super::staging::CommitScratch::default(),
             last_reclaim_bound: Timestamp::MAX,
             last_reclaim_tombstones: 0,
             wal_dir: None,
+            property_fallback_rewrites: 0,
         })
     }
 

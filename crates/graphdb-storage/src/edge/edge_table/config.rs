@@ -32,12 +32,17 @@ pub struct AutoMaintenanceConfig {
     /// Run property compaction when deleted-but-not-reclaimed property rows
     /// exceed this ratio of total rows. Set to 0.0 to disable.
     pub property_compact_ratio: f32,
+    /// Minimum tracked tombstones arming the write-path reclaim pass when the
+    /// watermark did not advance. Below this count with an unchanged watermark
+    /// the commit skips the group scan entirely.
+    pub reclaim_tombstone_threshold: usize,
 }
 
 impl Default for AutoMaintenanceConfig {
     fn default() -> Self {
         Self {
             property_compact_ratio: 0.15,
+            reclaim_tombstone_threshold: 4,
         }
     }
 }

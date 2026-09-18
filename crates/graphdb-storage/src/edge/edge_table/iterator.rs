@@ -111,12 +111,22 @@ impl<'a> AdjacencyBatchAccessor<'a> {
         }
     }
 
-    /// Point lookup through the shared row-location logic.
+    /// Point lookup through the shared merged row-location logic.
     pub fn lookup(&self, src: u32, dst: u32, rank: i64) -> Option<Nbr> {
         let key = EdgeStore::edge_endpoint_key(dst, rank);
-        self.table
-            .physical_location(self.csr(), src, key)
-            .filter(|nbr| self.table.is_visible(nbr.edge_id, self.ts))
+        let csr = self.csr();
+        let ts = self.ts;
+        let table = self.table;
+        let mut found = None;
+        csr.visit_physical(src, |nbr| {
+            if nbr.to_vertex_id() == key && table.is_visible(nbr.edge_id, ts) {
+                found = Some(nbr);
+                false
+            } else {
+                true
+            }
+        });
+        found
     }
 }
 

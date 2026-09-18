@@ -177,10 +177,10 @@ impl EdgeStore {
         if bound == Timestamp::MAX {
             return false;
         }
-        const MIN_RECLAIM_TOMBSTONES: usize = 4;
+        let threshold = self.config.auto_maintenance.reclaim_tombstone_threshold;
         let tombstones = self.mvcc.total_tombstone_count();
         if tombstones == 0
-            || (tombstones < MIN_RECLAIM_TOMBSTONES
+            || (tombstones < threshold
                 && bound == self.last_reclaim_bound
                 && tombstones <= self.last_reclaim_tombstones)
         {

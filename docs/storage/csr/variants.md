@@ -1,4 +1,9 @@
-# CSR Variants: Implementation Details
+# CSR Variants
+
+> **Historical document.** Describes the pre-restructure variant set.
+> `MultiSingleMutableCsr`, `LabeledMutableCsr` and the immutable `Csr` have
+> been removed; `Nbr.prop_offset` no longer exists. Current variants are
+> `Multiple`, `Single` and `None` only — see [overview.md](overview.md).: Implementation Details
 
 ## 1. MutableCsr (Multiple Variant)
 
@@ -73,7 +78,7 @@ insert_edge(src, dst, edge_id, prop_offset, ts):
 
 **Detection**:
 ```rust
-csr.fragmentation_ratio()  // Returns nbr_list.len() / active_edges
+csr.fragmentation_ratio()  // Returns wasted_capacity / total_capacity
 ```
 
 ### Compaction

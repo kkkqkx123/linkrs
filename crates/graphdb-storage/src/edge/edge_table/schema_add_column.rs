@@ -53,7 +53,10 @@ impl EdgeStore {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
         }
-        if self.pending_add_column.is_some() || self.pending_drop_column.is_some() {
+        if self.pending_add_column.is_some()
+            || self.pending_drop_column.is_some()
+            || self.pending_rename_column.is_some()
+        {
             return Err(StorageError::invalid_operation(
                 "another schema change is already pending".to_string(),
             ));

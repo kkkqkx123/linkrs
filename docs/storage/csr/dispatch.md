@@ -1,5 +1,10 @@
 # CSR Dispatch & Selection Logic
 
+> **Historical document.** The dispatch set below predates the restructure.
+> `MultiSingle`, `Labeled` and the immutable `Csr` have been removed, and
+> `EdgeStrategy` now rejects single-direction schemas at construction.
+> Current selection and dispatch — see [overview.md](overview.md).
+
 ## Overview
 
 CSR selection happens at relationship creation time via the `EdgeStrategy` enum. All strategies map to different CSR implementations, and all are wrapped in a single `CsrVariant` enum for runtime dispatch without virtual function overhead.

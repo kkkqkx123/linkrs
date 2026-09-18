@@ -684,11 +684,6 @@ impl CsrShardSet {
             .collect()
     }
 
-    /// Ids of groups holding property-only write traces.
-    pub fn sampled_column_dirty_group_ids(&self) -> Vec<usize> {
-        self.column_dirty_group_ids()
-    }
-
     /// Checkpoint class for the current dirt without clearing it.
     pub fn checkpoint_kind(&self) -> EdgeCheckpointKind {
         let rebalance = self.shards.values().any(|shard| shard.dirty.deleted);
@@ -771,8 +766,15 @@ impl CsrShardSet {
     /// Resize the group space for construction only: grows with fresh
     /// variants, shrinks by dropping trailing groups. Construction and load
     /// paths only; normal writes grow through the routed insert path and
-    /// never reset whole groups.
+    /// never reset whole groups. Refuses to run on a table holding physical
+    /// rows so a mistaken call cannot silently discard data.
     pub(crate) fn resize_groups(&mut self, count: usize) -> StorageResult<()> {
+        if self.has_physical_rows() {
+            return Err(StorageError::invalid_operation(
+                "refusing to reset groups of a non-empty table; use group migration instead"
+                    .to_string(),
+            ));
+        }
         if self.strategy == EdgeStrategy::None {
             if count != 0 {
                 return Err(StorageError::deserialize_error(format!(
@@ -787,12 +789,25 @@ impl CsrShardSet {
         self.set_groups(&ids)
     }
 
+    /// Whether any shard holds a physical row, live or tombstoned.
+    fn has_physical_rows(&self) -> bool {
+        self.shards
+            .values()
+            .any(|shard| shard.variant.iter_all().next().is_some())
+    }
+
     /// Materialize exactly the listed groups for loading a sparse manifest.
     /// Missing groups stay absent: they read as empty and never produce
     /// files. Unlisted materialized groups are dropped. Construction and
     /// load paths only; callers must go through the normal group migration
     /// path instead of resetting a non-empty table.
     pub(crate) fn set_groups(&mut self, ids: &[u32]) -> StorageResult<()> {
+        if self.has_physical_rows() {
+            return Err(StorageError::invalid_operation(
+                "refusing to reset groups of a non-empty table; use group migration instead"
+                    .to_string(),
+            ));
+        }
         if self.strategy == EdgeStrategy::None {
             if !ids.is_empty() {
                 return Err(StorageError::deserialize_error(format!(
@@ -1202,7 +1217,9 @@ impl CsrShardSet {
     /// without cloning it into temporaries.
     pub fn encode_group_append_log(&self, gid: usize, manifest: &TableShardManifest) -> Vec<u8> {
         match self.shards.get(&gid) {
-            Some(shard) => encode_append_ops(manifest, &shard.append.inserts, &shard.append.deletes),
+            Some(shard) => {
+                encode_append_ops(manifest, &shard.append.inserts, &shard.append.deletes)
+            }
             None => encode_append_ops(manifest, &[], &[]),
         }
     }
@@ -1398,23 +1415,12 @@ impl CsrShardSet {
 
     /// Whole-set fragmentation ratio, summed across groups.
     /// Observation metric only; collection triggers use per-vertex counts.
+    /// Shares the single wasted-share caliber through the summed snapshot
+    /// below instead of a second aggregation loop.
     pub fn fragmentation_ratio(&self) -> f32 {
-        if self.strategy != EdgeStrategy::Multiple {
-            return 0.0;
-        }
-        let mut total_capacity = 0usize;
-        let mut wasted = 0usize;
-        for shard in self.shards.values() {
-            if let Some(stats) = shard.variant.fragmentation_stats() {
-                total_capacity += stats.total_capacity;
-                wasted += stats.wasted_capacity;
-            }
-        }
-        if total_capacity == 0 {
-            0.0
-        } else {
-            wasted as f32 / total_capacity as f32
-        }
+        self.fragmentation_stats()
+            .map(|stats| stats.fragmentation_ratio())
+            .unwrap_or(0.0)
     }
 
     /// Estimate wasted bytes due to fragmentation, summed across groups.
@@ -1501,12 +1507,18 @@ impl CsrBase for CsrShardSet {
             .sum()
     }
 
+    /// Whole-direction dump is rejected by design: persistence moves through
+    /// the per-group incremental protocol only, so a whole-direction payload
+    /// would silently bypass group dirt, append sidecars and shard manifests.
+    /// The trait method stays as a fail-closed guard, never as a working path.
     fn dump(&self) -> Vec<u8> {
         Vec::new()
     }
 
     fn dump_into(&self, _out: &mut Vec<u8>) {}
 
+    /// Whole-direction load is rejected by design, mirroring the dump guard
+    /// above. Group payloads load through the per-group path instead.
     fn load(&mut self, _data: &[u8]) -> StorageResult<()> {
         Err(StorageError::deserialize_error(
             "whole-direction shard dump removed: use per-group incremental protocol".to_string(),
@@ -1907,8 +1919,8 @@ impl<'a> Iterator for ShardCsrIterator<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::{CsrBase, MutableCsrTrait};
+    use super::*;
 
     fn multi_set() -> CsrShardSet {
         CsrShardSet::new(EdgeStrategy::Multiple, DEFAULT_NODE_GROUP_BITS, 4096).unwrap()
@@ -2001,7 +2013,15 @@ mod tests {
         set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
         set.insert_edge(5000, endpoint(2, 0), EdgeId(1), 100)
             .unwrap();
+        // Mirror the production load order: materialize the manifest group
+        // list first, then fill each group payload.
         let mut loaded = multi_set();
+        let gids: Vec<u32> = set
+            .existing_group_ids()
+            .into_iter()
+            .map(|gid| gid as u32)
+            .collect();
+        loaded.set_groups(&gids).unwrap();
         for gid in set.existing_group_ids() {
             let payload = set.group_variant(gid).expect("group must exist").dump();
             loaded.load_group(gid, &payload).unwrap();
@@ -2050,6 +2070,18 @@ mod tests {
         assert_eq!(set.existing_group_ids(), vec![0, 2]);
         assert!(set.edges_of(5000, 200).is_empty());
         assert_eq!(set.existing_group_ids(), vec![0, 2]);
+    }
+
+    #[test]
+    fn sparse_span_covers_holes_while_capacity_counts_materialized() {
+        let mut set = multi_set();
+        set.insert_edge(9000, endpoint(1, 0), EdgeId(0), 100)
+            .unwrap();
+        assert_eq!(set.existing_group_ids(), vec![0, 2]);
+        let group_size = set.group_size();
+        assert_eq!(set.vertex_capacity(), 2 * group_size);
+        assert_eq!(set.address_span_rows(), 3 * group_size);
+        assert!(set.address_span_rows() > set.vertex_capacity());
     }
 
     #[test]
@@ -2110,18 +2142,21 @@ mod tests {
         set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
         set.clear_all_dirty();
         set.mark_column_updated_for(0);
-        assert!(set.sampled_column_dirty_group_ids() == vec![0]);
+        assert!(set.column_dirty_group_ids() == vec![0]);
         assert!(set.dirty_group_ids().is_empty());
         assert!(!set.needs_checkpoint(0));
         assert_eq!(set.checkpoint_kind(), EdgeCheckpointKind::AppendOnly);
     }
 
     #[test]
-    fn out_of_range_column_trace_leaves_no_sample() {
+    fn column_trace_materializes_missing_owner_group() {
         let mut set = multi_set();
         assert_eq!(set.group_count(), 1);
         set.mark_column_updated_for(9000);
-        assert!(set.sampled_column_dirty_group_ids().is_empty());
+        // Precise write-time marking never drops a trace: the owning group
+        // is materialized so the property-only write reaches the flush set.
+        assert_eq!(set.column_dirty_group_ids(), vec![2]);
+        assert_eq!(set.dirty_group_ids(), Vec::<usize>::new());
     }
 
     #[test]

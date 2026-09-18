@@ -41,8 +41,10 @@ impl TombstoneStats {
 
 /// Statistics about deletions in the sharded table for observability.
 ///
-/// Tracks deletion patterns to help identify when the table has significant
-/// deletion activity, useful for deciding when to compact.
+/// Tracks the deletion share over tracked edges. This is a separate dimension
+/// from the wasted-share fragmentation ratio: deletion share drives freeze
+/// interest while fragmentation waste drives group merges. The two must never
+/// share a threshold.
 #[derive(Debug, Clone, Default)]
 pub struct DeletionStats {
     /// Total edges deleted and still tracked

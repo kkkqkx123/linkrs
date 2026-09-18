@@ -80,9 +80,10 @@ impl EdgeStore {
     ///
     /// Called only during load recovery with `wal_dir` cleared so replayed
     /// commits never append back to the log. Inserts skip on
-    /// `EdgeAlreadyExists`, deletes treat missing edges as done, updates
-    /// overwrite the same value, and schema changes skip when already
-    /// applied, so a repeated replay yields the same state.
+    /// `EdgeAlreadyExists`, deletes treat a missing edge (no match) as done
+    /// and keep cross-timestamp conflicts as errors, updates overwrite the
+    /// same value, and schema changes skip when already applied, so a
+    /// repeated replay yields the same state.
     pub(crate) fn replay_one_wal_op(
         &mut self,
         op: super::super::wal::EdgeWalOp,
@@ -167,6 +168,16 @@ impl EdgeStore {
                     }
                     Err(e) => Err(e),
                 }
+            }
+            super::super::wal::EdgeWalOp::SchemaRename { old_name, new_name } => {
+                // Already-applied (published then truncated window) skips;
+                // any other missing column is genuine damage and propagates.
+                if self.properties.has_property(&new_name)
+                    && !self.properties.has_property(&old_name)
+                {
+                    return Ok(());
+                }
+                self.rename_property(&old_name, &new_name)
             }
         }
     }

@@ -171,6 +171,9 @@ pub enum MetricType {
     TombstoneOldestTsMin,
     TombstoneNewestTsMax,
     TombstoneActiveSnapshots,
+    // Storage fragmentation metrics (single wasted-share caliber)
+    FragmentationRatioPermille,
+    TopologyWastedBytes,
     // Migration metrics
     MigrationTotalCount,
     MigrationRowsMigrated,
@@ -1249,6 +1252,16 @@ impl StatsManager {
         if let Some(ts) = newest_ts_max {
             self.set_value(MetricType::TombstoneNewestTsMax, ts as u64);
         }
+    }
+
+    /// Record storage fragmentation on the single wasted-share caliber.
+    pub fn record_fragmentation_stats(&self, ratio: f32, wasted_bytes: u64) {
+        let clamped = ratio.clamp(0.0, 1.0);
+        self.set_value(
+            MetricType::FragmentationRatioPermille,
+            (clamped * 1000.0) as u64,
+        );
+        self.set_value(MetricType::TopologyWastedBytes, wasted_bytes);
     }
 
     // ========== Migration Metrics ==========

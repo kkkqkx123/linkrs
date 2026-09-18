@@ -198,7 +198,7 @@ impl GraphStorageContext {
                     // stays an observation metric (0.5 wasted share is the
                     // documented rebuild-worthy level, applied per group).
                     let needs_reclaim = table.deletion_stats().total_deleted_edges > 0
-                        || table.has_fragmented_group(0.5);
+                        || table.has_fragmented_group(crate::edge::GROUP_FRAGMENTATION_THRESHOLD);
                     if !needs_reclaim {
                         return Ok(());
                     }

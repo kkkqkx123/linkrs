@@ -279,6 +279,26 @@ impl EdgeStore {
                 saturate(tombstones.newest_delete_ts),
                 active_snapshots,
             );
+            // Single-caliber fragmentation observability: the trigger gate in
+            // the compaction module consumes the same ratio, so the panel and
+            // the trigger can never disagree on the value.
+            let mut total_capacity = 0usize;
+            let mut wasted_capacity = 0usize;
+            for shard in [&self.out_csr, &self.in_csr] {
+                if let Some(fragment) = shard.fragmentation_stats() {
+                    total_capacity += fragment.total_capacity;
+                    wasted_capacity += fragment.wasted_capacity;
+                }
+            }
+            let ratio = if total_capacity == 0 {
+                0.0
+            } else {
+                wasted_capacity as f32 / total_capacity as f32
+            };
+            stats.record_fragmentation_stats(
+                ratio,
+                (self.out_csr.wasted_bytes_estimate() + self.in_csr.wasted_bytes_estimate()) as u64,
+            );
         }
         self.wal_dir = Some(dir.to_path_buf());
         let _ = super::wal::truncate(dir);
@@ -344,43 +364,48 @@ impl EdgeStore {
     /// Topology dirt always covers inserts and deletes; precise column
     /// traces cover property-only writes. When the table flag reports
     /// property dirt but no group trace exists, every owner rewrites as a
-    /// correctness insurance that the regular path never needs.
-    fn property_dirty_owners(&self) -> Vec<u32> {
-        let (dirty, sampled, existing) =
+    /// correctness insurance that the regular path never needs. Each
+    /// insurance rewrite increments the fallback counter for observability.
+    fn property_dirty_owners(&mut self) -> Vec<u32> {
+        let (dirty, column_traced, existing) =
             if self.schema.oe_strategy != crate::edge::EdgeStrategy::None {
                 (
                     self.out_csr.dirty_group_ids(),
-                    self.out_csr.sampled_column_dirty_group_ids(),
+                    self.out_csr.column_dirty_group_ids(),
                     self.out_csr.existing_group_ids(),
                 )
             } else if self.schema.ie_strategy != crate::edge::EdgeStrategy::None {
                 (
                     self.in_csr.dirty_group_ids(),
-                    self.in_csr.sampled_column_dirty_group_ids(),
+                    self.in_csr.column_dirty_group_ids(),
                     self.in_csr.existing_group_ids(),
                 )
             } else {
                 return Vec::new();
             };
         let mut set: HashSet<u32> = HashSet::new();
-        for gid in dirty.into_iter().chain(sampled.into_iter()) {
+        for gid in dirty.into_iter().chain(column_traced.into_iter()) {
             set.insert(gid as u32);
         }
         if set.is_empty() && self.properties_dirty {
             for gid in existing {
                 set.insert(gid as u32);
             }
+            self.property_fallback_rewrites += 1;
         }
         let mut out: Vec<u32> = set.into_iter().collect();
         out.sort_unstable();
         out
     }
 
-    /// Group authority entries by owning shard, falling back to the smallest
-    /// existing owner when the recorded owner is gone (reclaimed groups whose
-    /// tombstone survives). Missing owners read as empty shards.
+    /// Group authority entries of the wanted shards by owning shard, falling
+    /// back to the smallest existing owner when the recorded owner is gone
+    /// (reclaimed groups whose tombstone survives). Missing owners read as
+    /// empty shards. Grouping memory follows the wanted set rather than the
+    /// table size.
     fn grouped_timestamps(
         &self,
+        wanted: &HashSet<u32>,
     ) -> HashMap<
         u32,
         Vec<(
@@ -403,7 +428,9 @@ impl EdgeStore {
             let (gid, fell_back) =
                 Self::resolve_owner_gid(edge_id, &self.edge_owner, &live, fallback);
             fallback_hits += usize::from(fell_back);
-            grouped.entry(gid).or_default().push((*edge_id, *ts));
+            if wanted.contains(&gid) {
+                grouped.entry(gid).or_default().push((*edge_id, *ts));
+            }
         }
         if fallback_hits > 0 {
             log::debug!(
@@ -438,9 +465,9 @@ impl EdgeStore {
         if dirty_set.is_empty() {
             return Ok(0);
         }
-        let mut dirty: Vec<u32> = dirty_set.into_iter().collect();
+        let mut dirty: Vec<u32> = dirty_set.iter().copied().collect();
         dirty.sort_unstable();
-        let grouped = self.grouped_timestamps();
+        let grouped = self.grouped_timestamps(&dirty_set);
         let mut written = 0u64;
         for gid in dirty {
             let entries = grouped.get(&gid).cloned().unwrap_or_default();
@@ -498,13 +525,19 @@ impl EdgeStore {
         let owners = self.owner_group_ids();
         let fallback = owners.first().copied();
         let live: HashSet<u32> = owners.into_iter().collect();
+        // Group dirty owners only: the single owner-map pass files each row
+        // into its dirty shard slot, so grouping memory follows the dirty set
+        // rather than the table size. Clean groups reuse their files untouched.
+        let wanted: HashSet<u32> = dirty.iter().copied().collect();
         let mut by_owner: HashMap<u32, Vec<graphdb_core::types::EdgeId>> = HashMap::new();
         let mut fallback_hits = 0usize;
         for edge_id in self.properties.edge_ids() {
             let (gid, fell_back) =
                 Self::resolve_owner_gid(&edge_id, &self.edge_owner, &live, fallback);
             fallback_hits += usize::from(fell_back);
-            by_owner.entry(gid).or_default().push(edge_id);
+            if wanted.contains(&gid) {
+                by_owner.entry(gid).or_default().push(edge_id);
+            }
         }
         if fallback_hits > 0 {
             log::debug!(
@@ -1050,6 +1083,20 @@ impl EdgeStore {
         } else {
             file_manifest
         };
+        // Load replaces the table contents: drain topology rows first so the
+        // non-empty guard on group reset only rejects mistaken resets, never
+        // an intentional reload. Authority and property rows are rebuilt from
+        // the shards below.
+        for gid in self.out_csr.existing_group_ids() {
+            if let Some(variant) = self.out_csr.group_variant_mut(gid) {
+                variant.clear();
+            }
+        }
+        for gid in self.in_csr.existing_group_ids() {
+            if let Some(variant) = self.in_csr.group_variant_mut(gid) {
+                variant.clear();
+            }
+        }
         self.out_csr.set_groups(&manifest.out_groups)?;
         self.in_csr.set_groups(&manifest.in_groups)?;
         self.load_group_set(dir, true, &manifest.out_groups, &manifest)?;
@@ -1088,6 +1135,7 @@ impl EdgeStore {
         // rebuilt from the published schema below.
         self.pending_add_column = None;
         self.pending_drop_column = None;
+        self.pending_rename_column = None;
         self.wal_dir = None;
         let wal_ops = super::wal::read_ops(dir)?;
         for op in wal_ops {
@@ -1237,7 +1285,6 @@ impl EdgeStore {
     ) -> StorageResult<()> {
         self.mvcc.edge_timestamps.clear();
         let owners = self.owner_list_for_load(manifest);
-        let owner_set: HashSet<u32> = owners.iter().copied().collect();
         for gid in &owners {
             let path = ts_group_path(dir, *gid);
             if !path.exists() {
@@ -1261,7 +1308,6 @@ impl EdgeStore {
                 self.edge_owner.entry(edge_id).or_insert(*gid);
             }
         }
-        let _ = owner_set;
         Ok(())
     }
 
@@ -1378,6 +1424,7 @@ mod tests {
     use crate::edge::{EdgeSchema, EdgeStrategy};
     use crate::types::StoragePropertyDef;
     use graphdb_core::Value;
+    use std::io::Write as _;
 
     fn make_table() -> EdgeStore {
         let schema = EdgeSchema {
@@ -1802,7 +1849,7 @@ mod tests {
         table
             .update_edge_property(0, 1, 0, "weight", &Value::Double(9.0), 200)
             .expect("property update should succeed");
-        assert!(!table.out_csr.sampled_column_dirty_group_ids().is_empty());
+        assert!(!table.out_csr.column_dirty_group_ids().is_empty());
         let kind = table
             .flush(
                 dir.path(),
@@ -2492,6 +2539,81 @@ mod tests {
             .properties
             .iter()
             .any(|(k, v)| k == "weight" && *v == Value::Double(9.0)));
+    }
+
+    #[test]
+    fn wal_recovers_committed_unflushed_writes_idempotently() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("baseline flush should succeed");
+
+        // Committed after the checkpoint, never flushed: redo log owns them.
+        table
+            .insert_edge(2, 3, 0, &[("weight".to_string(), Value::Double(2.0))], 200)
+            .unwrap();
+        assert!(table.delete_edge(0, 1, 0, 210).unwrap());
+        drop(table);
+
+        let mut recovered = make_table();
+        recovered.load(dir.path()).expect("load replays the log");
+        assert!(!recovered.has_edge(0, 1, 0, 300));
+        assert!(recovered.has_edge(2, 3, 0, 300));
+
+        // Log survives until the next checkpoint: a repeated replay of the
+        // same ops (insert then delete) must land in the identical state.
+        let mut second = make_table();
+        second.load(dir.path()).expect("second load replays again");
+        assert_eq!(second.edge_count(), recovered.edge_count());
+        assert!(!second.has_edge(0, 1, 0, 300));
+        assert!(second.has_edge(2, 3, 0, 300));
+        let (mappings, rows, live_orphans) = second.copy_audit();
+        assert_eq!((mappings, rows, live_orphans), (0, 0, 0));
+
+        // Checkpoint truncates the log: afterwards recovery needs no replay.
+        second
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .unwrap();
+        assert!(!crate::edge::edge_table::wal::wal_path(dir.path()).exists());
+    }
+
+    #[test]
+    fn torn_edge_wal_tail_rejects_load() {
+        let mut table = make_table();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .unwrap();
+        table.insert_edge(2, 3, 0, &[], 200).unwrap();
+        // Simulate a torn tail: an entry header claiming more bytes than the
+        // file holds after the last durable commit.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(crate::edge::edge_table::wal::wal_path(dir.path()))
+            .expect("wal exists after the second commit")
+            .write_all(&64u64.to_le_bytes())
+            .expect("append torn header");
+        drop(table);
+
+        let mut recovered = make_table();
+        let err = recovered
+            .load(dir.path())
+            .expect_err("torn edge WAL tail must fail closed");
+        assert!(err.to_string().contains("edge WAL"));
     }
 
     #[test]

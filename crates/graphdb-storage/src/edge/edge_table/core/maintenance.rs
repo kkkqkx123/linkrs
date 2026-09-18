@@ -131,14 +131,20 @@ impl EdgeStore {
     }
 
     /// Background variant: bound comes from one per-pass watermark capture
-    /// shared across all tables.
+    /// shared across all tables. Also reclaims authority tombstones whose
+    /// physical rows are gone in both directions, so the authority map stays
+    /// proportional to live edges rather than historical totals.
     pub fn maybe_run_auto_maintenance_with_watermarks(
         &mut self,
         watermarks: &graphdb_transaction::MvccWatermarks,
         margin: Timestamp,
     ) -> usize {
         let bound = watermarks.safe_gc_timestamp_with_margin(margin);
-        self.run_auto_maintenance_pass(bound)
+        let mut ran = self.run_auto_maintenance_pass(bound);
+        if self.reclaim_authority_with_watermarks(watermarks, margin) > 0 {
+            ran += 1;
+        }
+        ran
     }
 
     // ── Edge Property Index ──

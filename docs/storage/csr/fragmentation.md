@@ -7,39 +7,41 @@
 MutableCsr uses a two-level approach to avoid O(n) reshuffling:
 
 ```
-Initial State (primary blocks contiguous):
+Initial State (primary rows reserve gaps for everyday writes):
 +---------------------------------+
-|V0: [E0, E1] | V1: [E2] | V2: []|  Primary blocks
+|V0: [E0, E1] | V1: [E2] | V2: []|  Primary rows
 +---------------------------------+
 
-After V0 fills up (overflow allocated):
-+---------------------------------+
-|V0: [E0, E1] | V1: [E2] | V2: []|  Primary
-+---------------------------------+
-                    +---> [E3] (overflow appended)
-
-After V0 overflows again (re-expansion):
+After V0 fills up (overflow chunks appended per vertex):
 +---------------------------------+
 |V0: [E0, E1] | V1: [E2] | V2: []|  Primary (unchanged)
 +---------------------------------+
-     +--------------------> [E3] <- zombie (unreachable)
-                    +---> [E3, E4, E5] (new overflow)
+     +---> [E3, ...] chunk 1
+     +---> [E7, ...] chunk 2        graded overflow blocks
+
+Past a per-vertex chunk bound a row holding dead entries is repacked on
+the write path; removal detaches emptied chunks immediately.
 ```
 
 ### Root Cause
 
-Each vertex expansion allocates new space at **end of `nbr_list`**:
-1. Old overflow block address becomes unreachable
-2. `overflow_starts[v]` updated to new location
-3. Old space never reclaimed -> internal fragmentation
+Waste accumulates from two sources, not from unreachable blocks:
+1. Primary rows reserve gaps up to the packed density target; unfilled gap
+   slots stay unused until everyday writes or a merge consumes them.
+2. Deleted entries remain physically present until the collection cutoff
+   passes, so their slots count as waste in the meantime.
+
+High-degree vertices spill into graded overflow chunks. Empty chunks are
+detached immediately on the removal path, so no unreachable-block accounting
+remains in the structure.
 
 ### Cumulative Effect
 
-After many vertex expansions:
-- `nbr_list` contains both live and dead edges
-- Serialization dumps **entire** list including zombie blocks
-- Queries unaffected (always use current `overflow_starts` pointer)
-- Memory wasted but correctness preserved
+Over time:
+- Tombstone slots and unfilled gaps dominate `wasted_capacity`
+- Whole-table ratio is an observation metric only; collection triggers use
+  per-vertex reclaimable counts
+- Group merges tighten live entries and restore the density-target reserve
 
 ---
 
@@ -47,25 +49,26 @@ After many vertex expansions:
 
 ### Fragmentation Ratio
 
-**Definition**:
+**Definition** (single wasted-share caliber shared by all triggers and panels):
 ```
-fragmentation_ratio = nbr_list.len() / active_edges
+fragmentation_ratio = wasted_capacity / total_capacity
 ```
 
 **Examples**:
-- `1.0`: No wasted space (perfectly packed)
-- `2.0`: 50% wasted (2x the space needed)
-- `5.0`: 80% wasted (very fragmented)
+- `0.0`: No wasted space (perfectly packed)
+- `0.5`: 50% wasted (group merge gate level)
+- `1.0`: All reserved capacity is waste
 
 **Location**: `MutableCsr::fragmentation_ratio()`
 
 ```rust
 pub fn fragmentation_ratio(&self) -> f32 {
     let active_edges = self.edge_count.load(Ordering::Relaxed) as usize;
-    if active_edges == 0 {
+    if self.total_edge_capacity == 0 {
         return 0.0;
     }
-    self.nbr_list.len() as f32 / active_edges as f32
+    self.total_edge_capacity.saturating_sub(active_edges) as f32
+        / self.total_edge_capacity as f32
 }
 ```
 
@@ -73,8 +76,8 @@ pub fn fragmentation_ratio(&self) -> f32 {
 
 ```rust
 let ratio = csr.fragmentation_ratio();
-if ratio > 2.5 {
-    println!("High fragmentation: {:.2}x", ratio);
+if ratio >= GROUP_FRAGMENTATION_THRESHOLD {
+    println!("High fragmentation: {:.2}", ratio);
 }
 ```
 
@@ -87,33 +90,43 @@ if ratio > 2.5 {
 Merge primary + overflow blocks into **flat CSR** layout:
 - Removes all zombie blocks
 - Removes soft-deleted edges (where `delete_ts < u32::MAX`)
-- Restores `fragmentation_ratio()` to ~1.0 + reserve
+- Restores `fragmentation_ratio()` to ~0.0 + reserve
 - Reduces serialization size
 
 ### Method Signature
 
 ```rust
-pub fn compact_with_ts(&mut self, _ts: u32, reserve_ratio: f32) -> usize
+pub fn compact_with_ts_reporting(
+    &mut self,
+    cutoff: Timestamp,
+    reserve_ratio: f32,
+    on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+) -> usize
 ```
 
 **Parameters**:
-- `_ts`: Reserved for future use (currently **ignored** by MutableCsr). All edges with `delete_ts == u32::MAX` are kept regardless of ts.
+- `cutoff`: GC watermark. Tombstones with `delete_ts < cutoff` are dropped and
+  reported; tombstones at or above the cutoff are kept so snapshot history
+  survives. `Timestamp::MAX` means "move only, discard nothing".
 - `reserve_ratio`: Reserve fraction for future growth
   - `0.25` = reserve 25% extra capacity
   - Reduces need for immediate re-expansion
+- `on_edge_removed`: one call per discarded tombstone carrying `(edge_id,
+  delete_ts)` so the caller promotes the deletion centrally.
 
-**Returns**: Number of edges removed (soft-deleted)
+**Returns**: Number of edges removed (reclaimable soft-deleted)
 
 ### Algorithm
 
 ```
-compact_with_ts(ts, reserve_ratio):
+compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed):
   1. Allocate new edge list
   2. For each vertex v:
      a. Iterate primary block [offset[v], offset[v] + degree[v])
-     b. Iterate overflow block (if exists)
-     c. Filter: keep only edges where delete_ts == u32::MAX (active)
-     d. Append valid edges to new list
+     b. Iterate overflow blocks (if any)
+     c. Keep live entries and tombstones at or above the cutoff
+     d. Drop entries below the cutoff and report each one
+     e. Append kept entries to new list
   3. Build new offsets, degrees, capacities with reserve
   4. Clear all overflow pointers
   5. Replace nbr_list with compacted version
@@ -130,14 +143,15 @@ compact_with_ts(ts, reserve_ratio):
 
 ```rust
 // Before compaction
-let ratio = csr.fragmentation_ratio();  // 3.2x
+let ratio = csr.fragmentation_ratio();  // 0.8
 
-// Compact: remove deleted edges, keep 25% reserve
-let removed = csr.compact_with_ts(1000, 0.25);
-println!("Removed {} edges", removed);
+// Compact: drop reclaimable tombstones below the cutoff, keep 25% reserve
+let removed = csr.compact_with_ts_reporting(500, 0.25, &mut |edge_id, ts| {
+    println!("promoted tombstone {:?} at {}", edge_id, ts);
+});
 
 // After compaction
-let ratio = csr.fragmentation_ratio();  // ~1.25x (25% reserve)
+let ratio = csr.fragmentation_ratio();  // ~0.2 (25% reserve)
 ```
 
 ---
@@ -148,12 +162,12 @@ let ratio = csr.fragmentation_ratio();  // ~1.25x (25% reserve)
 
 ```rust
 // Check and compact if needed
-if csr.fragmentation_ratio() > 2.5 {
+if csr.fragmentation_ratio() >= GROUP_FRAGMENTATION_THRESHOLD {
     csr.compact_with_ts(current_ts, 0.25);
 }
 
 // Before persistent snapshot
-if csr.fragmentation_ratio() > 1.5 {
+if csr.fragmentation_ratio() >= GROUP_FRAGMENTATION_THRESHOLD {
     csr.compact_with_ts(snapshot_ts, 0.1);
 }
 ```
@@ -199,28 +213,16 @@ if csr.fragmentation_ratio() > 1.5 {
 
 ---
 
-## Compaction in Other Variants
+## Compaction in Current Variants
 
 ### MutableCsr (Multiple)
 - Full compaction supported
-- Removes soft-deleted edges (delete_ts < u32::MAX)
-- Merges overflow blocks into flat layout
+- Drops tombstones below the cutoff and reports each removal
+- Merges primary + overflow into flat layout with density-target reserve
 
 ### SingleMutableCsr
-- No-op (returns 0)
-- Rationale: O(1) direct access, no overflow, no fragmentation
-
-### MultiSingleMutableCsr
-- Removes tombstoned edges by shifting valid edges within fixed blocks
-- Does not change block capacity (max_edges_per_vertex is fixed)
-
-### LabeledMutableCsr
-- Full compaction via `Vec::retain()` on nbr_list
-- Rebuilds label ranges after compaction (partial: labels reset to 0)
-
-### Immutable Csr
-- No-op (read-only snapshot already flat)
-- Rationale: Immutable data, no mutations possible
+- Drops the single tombstone entry once it is below the cutoff
+- Rationale: O(1) direct access, one slot per vertex, no overflow
 
 ### None
 - No-op (zero edges)
@@ -233,13 +235,16 @@ if csr.fragmentation_ratio() > 1.5 {
 
 ```rust
 pub struct Nbr {
-    pub neighbor: VertexId,
+    pub endpoint: u32,
+    pub rank: i64,
     pub edge_id: EdgeId,
-    pub prop_offset: u32,
     pub create_ts: Timestamp,      // When added
-    pub delete_ts: Timestamp,      // When soft-deleted (u32::MAX = active)
+    pub delete_ts: Timestamp,      // When soft-deleted (MAX = alive)
 }
 ```
+
+Row stamps are physical projections for collection only; query visibility is
+decided by the version authority above this layer.
 
 ### Visibility Window
 
@@ -252,7 +257,8 @@ create_ts <= T && T < delete_ts
 
 1. **Delete operation**: Set `delete_ts = current_ts`
 2. **Query**: Filters out edges where `delete_ts <= query_ts`
-3. **Compaction**: Removes edges where `delete_ts < u32::MAX` (hard-delete)
+3. **Collection**: Drops edges whose `delete_ts` is below the GC cutoff,
+   reporting each removal so the tombstone layer learns it
 
 **Benefits**:
 - Fast deletion (no reallocation)
@@ -264,26 +270,25 @@ create_ts <= T && T < delete_ts
 
 ## Serialization & Fragmentation
 
-### dump() includes fragmentation
+### dump() persists per-group columnar payloads
 
 ```rust
-fn dump(&self) -> Vec<u8> {
-    // Serializes entire nbr_list including zombie blocks!
-    // Vertex capacities, overflow metadata all preserved
+fn dump_into(&self, out: &mut Vec<u8>) {
+    // Borrows the live topology and encodes column by column, so the peak
+    // stays at one materialized column plus the output buffer.
 }
 ```
 
 **Impact**:
-- Fragmented CSR serializes at 2-5x size
-- Network transfer cost increases
-- Disk storage inflated
+- Fragmented groups persist their gaps until merged
+- Per-group merge before checkpoint keeps payloads tight
 
 **Mitigation**:
-- Compact before serialization if `ratio > 1.5`
+- Compact before serialization if `ratio >= GROUP_FRAGMENTATION_THRESHOLD`
 
 ### load() reconstructs fragmented state
 
-Deserializes the exact fragmentation state from the snapshot. After loading, consider checking `fragmentation_ratio()` and compacting if > 2.0.
+Deserializes the exact fragmentation state from the snapshot. After loading, consider checking `fragmentation_ratio()` and compacting if above the group gate.
 
 ---
 
