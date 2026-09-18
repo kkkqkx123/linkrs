@@ -158,9 +158,8 @@ impl EdgeStore {
     ///
     /// Property-only writes leave topology files untouched, so the group
     /// trace records column dirt only and never forces a topology rewrite.
-    /// The group trace is a sampled observability caliber: out-of-range
-    /// endpoints leave no group trace, and the table-level flag alone
-    /// guarantees the final property flush.
+    /// The trace is precise: every write marks its owning group, and the
+    /// table-level flag remains only as a correctness insurance.
     pub(crate) fn mark_properties_dirty_for_edge(&mut self, src: u32, dst: u32) {
         self.properties_dirty = true;
         self.out_csr.mark_column_updated_for(src);
@@ -254,12 +253,18 @@ impl EdgeStore {
         self.out_csr.clear_all_column_dirty();
         self.in_csr.clear_all_column_dirty();
         self.remove_orphan_group_files(dir);
+        let encoding_saved: usize = self
+            .topology_encoding_report()
+            .iter()
+            .map(|(_, _, plain, encoded)| plain.saturating_sub(*encoded))
+            .sum();
         log::debug!(
-            "EdgeTable[{}] checkpoint kind={:?} dirty_groups={} bytes={}",
+            "EdgeTable[{}] checkpoint kind={:?} dirty_groups={} bytes={} encoding_saved={}",
             self.label,
             kind,
             dirty_groups,
-            flushed_bytes
+            flushed_bytes,
+            encoding_saved
         );
         if let Some(stats) = &self.stats_manager {
             stats.record_incremental_checkpoint(started.elapsed(), flushed_bytes);
@@ -275,6 +280,8 @@ impl EdgeStore {
                 active_snapshots,
             );
         }
+        self.wal_dir = Some(dir.to_path_buf());
+        let _ = super::wal::truncate(dir);
         Ok(kind)
     }
 
@@ -305,7 +312,6 @@ impl EdgeStore {
             self.is_open,
             &self.schema,
             self.next_edge_id,
-            &self.mvcc.edge_timestamps,
         )?;
         meta_payload.extend_from_slice(&manifest.encode());
         let path = dir.join("meta.bin");
@@ -335,10 +341,10 @@ impl EdgeStore {
     }
 
     /// Owner groups whose timestamp or property shards must be rewritten.
-    /// Topology dirt always covers inserts and deletes; sampled column
+    /// Topology dirt always covers inserts and deletes; precise column
     /// traces cover property-only writes. When the table flag reports
-    /// property dirt but no group trace exists (sampled miss), every owner
-    /// rewrites so correctness never depends on the sample.
+    /// property dirt but no group trace exists, every owner rewrites as a
+    /// correctness insurance that the regular path never needs.
     fn property_dirty_owners(&self) -> Vec<u32> {
         let (dirty, sampled, existing) =
             if self.schema.oe_strategy != crate::edge::EdgeStrategy::None {
@@ -507,6 +513,14 @@ impl EdgeStore {
             );
         }
         let schema: Vec<PropertySchema> = self.properties.property_schema().to_vec();
+        let dirty_columns: Vec<String> = self.properties.dirty_column_names();
+        let topology_dirty: HashSet<u32> = self
+            .out_csr
+            .dirty_group_ids()
+            .into_iter()
+            .map(|gid| gid as u32)
+            .chain(self.in_csr.dirty_group_ids().into_iter().map(|gid| gid as u32))
+            .collect();
         let mut written = 0u64;
         for gid in dirty {
             let path = props_group_path(dir, gid);
@@ -516,6 +530,27 @@ impl EdgeStore {
                     let _ = std::fs::remove_file(&path);
                 }
                 continue;
+            }
+            if !topology_dirty.contains(&gid) && path.exists() && !dirty_columns.is_empty() {
+                let incremental = Self::flush_property_shard_incremental(
+                    &mut self.properties,
+                    &path,
+                    &schema,
+                    &edges,
+                    &dirty_columns,
+                )
+                .unwrap_or(None);
+                if let Some(bytes) = incremental {
+                    persistence::write_pages_to_file(
+                        &path,
+                        &bytes,
+                        page_size,
+                        level,
+                        edges.len() as u32,
+                    )?;
+                    written += file_bytes(&path);
+                    continue;
+                }
             }
             let mut shard = crate::edge::CsrWithProperties::new(schema.clone());
             for edge_id in edges {
@@ -548,6 +583,107 @@ impl EdgeStore {
         }
         self.properties.clear_dirty_columns();
         Ok(written)
+    }
+
+    /// Incremental property-shard rewrite for property-only dirt.
+    ///
+    /// Loads the last flushed shard, patches only `dirty_columns` from the
+    /// live property store, re-encodes only those columns and refreshes only
+    /// their statistics. Clean columns reuse the last flushed bytes without
+    /// re-export or re-encode, so checkpoint work follows dirty columns
+    /// rather than the full row. Returns `Ok(None)` when the row set or
+    /// schema changed, signalling the caller to take the full rewrite path
+    /// rather than risking a missed write.
+    fn flush_property_shard_incremental(
+        live: &mut crate::edge::CsrWithProperties,
+        path: &Path,
+        schema: &[crate::edge::property_schema::PropertySchema],
+        edges: &[graphdb_core::types::EdgeId],
+        dirty_columns: &[String],
+    ) -> StorageResult<Option<Vec<u8>>> {
+        use std::io::Read as _;
+        let Ok((raw, _)) = persistence::read_pages_from_file(path) else {
+            return Ok(None);
+        };
+        let mut cursor = &raw[..];
+        let mut header_buf = [0u8; crate::persistence::HEADER_SIZE];
+        if cursor.read_exact(&mut header_buf).is_err() {
+            return Ok(None);
+        }
+        {
+            let mut slice = &header_buf[..];
+            let Ok((_version, sid)) = crate::persistence::read_header(&mut slice) else {
+                return Ok(None);
+            };
+            if sid != crate::persistence::section::EDGE_PROPS_SHARD {
+                return Ok(None);
+            }
+        }
+        let mut len_bytes = [0u8; 8];
+        if cursor.read_exact(&mut len_bytes).is_err() {
+            return Ok(None);
+        }
+        let len = u64::from_le_bytes(len_bytes) as usize;
+        let mut data = vec![0u8; len];
+        if cursor.read_exact(&mut data).is_err() || !cursor.is_empty() {
+            return Ok(None);
+        }
+        let mut shard = crate::edge::CsrWithProperties::new(schema.to_vec());
+        if shard.load(&data).is_err() {
+            return Ok(None);
+        }
+        let shard_edges: HashSet<graphdb_core::types::EdgeId> =
+            shard.edge_ids().collect();
+        let live_set: HashSet<graphdb_core::types::EdgeId> = edges.iter().copied().collect();
+        if shard_edges != live_set {
+            return Ok(None);
+        }
+        let shard_cols: HashSet<String> = shard
+            .property_schema()
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
+        for name in dirty_columns {
+            if !shard_cols.contains(name) {
+                return Ok(None);
+            }
+        }
+        for edge_id in edges {
+            let Some((_, _, values)) = live.export_row(*edge_id) else {
+                return Ok(None);
+            };
+            let value_map: HashMap<&String, &Option<graphdb_core::Value>> =
+                values.iter().map(|(name, value)| (name, value)).collect();
+            for name in dirty_columns {
+                let value = value_map.get(name).and_then(|cell| (*cell).clone());
+                if shard
+                    .set_property_for_edge(
+                        *edge_id,
+                        name,
+                        value,
+                        graphdb_core::types::MAX_TIMESTAMP,
+                    )
+                    .is_err()
+                {
+                    return Ok(None);
+                }
+            }
+        }
+        for name in dirty_columns {
+            if let Some(enc) = live.column_encoding_type(name) {
+                if enc != crate::encoding::EncodingType::None {
+                    let _ = shard.apply_encoding_to_column(name, enc, 255);
+                }
+            }
+            shard.refresh_column_stats_for(name);
+        }
+        let mut payload = Vec::new();
+        persistence::serialize_property_shard(
+            &shard,
+            crate::persistence::section::EDGE_PROPS_SHARD,
+            &mut payload,
+        )?;
+        Ok(Some(payload))
     }
 
     /// Persist the checkpoint-collected segment statistics snapshot.
@@ -673,11 +809,11 @@ impl EdgeStore {
             }
             if shards.group_needs_rebalance(gid) || !base_path.exists() {
                 let had_delete_dirt = shards.group_needs_rebalance(gid);
-                let variant = shards.group_variant(gid).cloned().ok_or_else(|| {
+                let variant = shards.group_variant(gid).ok_or_else(|| {
                     StorageError::deserialize_error(format!("group {} missing on flush", gid))
                 })?;
                 let mut payload = Vec::new();
-                persistence::serialize_csr(&variant, section_id, &mut payload)?;
+                persistence::serialize_csr(variant, section_id, &mut payload)?;
                 persistence::write_pages_to_file(
                     &base_path,
                     &payload,
@@ -948,6 +1084,21 @@ impl EdgeStore {
         // rebuilt from the published schema below.
         self.pending_add_column = None;
         self.pending_drop_column = None;
+        self.wal_dir = None;
+        let wal_ops = super::wal::read_ops(dir)?;
+        for op in wal_ops {
+            self.replay_one_wal_op(op)?;
+        }
+        let (orphan_mappings, orphan_csr_rows, live_orphans) = self.copy_audit();
+        if orphan_mappings + orphan_csr_rows + live_orphans > 0 {
+            return Err(crate::StorageError::db_error(format!(
+                "edge table {} replayed WAL with copy mismatches: \
+                 orphan property mappings={}, orphan CSR rows={}, \
+                 live authority orphans={}",
+                self.label_name, orphan_mappings, orphan_csr_rows, live_orphans,
+            )));
+        }
+        self.wal_dir = Some(dir.to_path_buf());
         self.is_open = true;
         Ok(())
     }

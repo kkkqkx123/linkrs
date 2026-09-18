@@ -2,11 +2,12 @@
 //!
 //! Adding a column moves through explicit states so every step can roll back:
 //! `prepare` validates without touching storage, `fill` builds the physical
-//! column (backfilling the default when one is given), `publish` activates the
-//! schema entry and records history, and `abort` drops the pending change at
-//! any point before publishing. Pending state lives only in memory: a crash
-//! before publishing is equivalent to an abort because reload rebuilds the
-//! property store from the published schema.
+//! column (backfilling the default when one is given), `durable` marks the
+//! filled column checkpoint-durable after a checkpoint has flushed it, and
+//! `publish` activates the schema entry and records history. `abort` drops
+//! the pending change at any point before publishing. Pending state lives
+//! only in memory: a crash before publishing is equivalent to an abort
+//! because reload rebuilds the property store from the published schema.
 
 use graphdb_core::{DataType, StorageError, StorageResult, Value};
 
@@ -21,6 +22,8 @@ pub enum PendingAddColumnState {
     Prepared,
     /// Physical column built (and default backfilled when given).
     Filled,
+    /// Filled column flushed by a checkpoint; safe to publish durably.
+    Durable,
 }
 
 /// One in-flight add-column change.
@@ -108,18 +111,50 @@ impl EdgeStore {
         Ok(())
     }
 
+    /// Mark the filled change checkpoint-durable.
+    ///
+    /// Requires a checkpoint since the fill: the pending column must carry no
+    /// dirt and the table must carry no property dirt, proving the filled
+    /// column reached the last checkpoint. Publishing from `Durable` is the
+    /// durable path; publishing directly from `Filled` stays available for
+    /// memory-only immediate adds.
+    pub fn durable_pending_add_property(&mut self) -> StorageResult<()> {
+        let pending = self.pending_add_column.as_ref().ok_or_else(|| {
+            StorageError::invalid_operation("no pending add-column change to mark durable".to_string())
+        })?;
+        if pending.state != PendingAddColumnState::Filled {
+            return Err(StorageError::invalid_operation(
+                "pending add-column change must be filled before marking durable".to_string(),
+            ));
+        }
+        if self.properties_dirty || self.properties.has_column_dirt(&pending.name) {
+            return Err(StorageError::invalid_operation(
+                "checkpoint required before marking add-column durable".to_string(),
+            ));
+        }
+        if let Some(pending) = self.pending_add_column.as_mut() {
+            pending.state = PendingAddColumnState::Durable;
+        }
+        Ok(())
+    }
+
     /// Activate the filled change: schema entry, name cache, history record.
     ///
     /// Publishing is the durability boundary; the pending slot is cleared so
     /// a later crash replays the published schema only.
     pub fn publish_pending_add_property(&mut self) -> StorageResult<()> {
         let (name, data_type, nullable, default_value) = match self.pending_add_column.as_ref() {
-            Some(pending) if pending.state == PendingAddColumnState::Filled => (
-                pending.name.clone(),
-                pending.data_type.clone(),
-                pending.nullable,
-                pending.default_value.clone(),
-            ),
+            Some(pending)
+                if pending.state == PendingAddColumnState::Filled
+                    || pending.state == PendingAddColumnState::Durable =>
+            {
+                (
+                    pending.name.clone(),
+                    pending.data_type.clone(),
+                    pending.nullable,
+                    pending.default_value.clone(),
+                )
+            }
             Some(_) => {
                 return Err(StorageError::invalid_operation(
                     "pending add-column change must be filled before publishing".to_string(),
@@ -131,6 +166,17 @@ impl EdgeStore {
                 ));
             }
         };
+        if let Some(dir) = self.wal_dir.clone() {
+            super::wal::append_ops(
+                &dir,
+                &[super::wal::EdgeWalOp::SchemaAdd {
+                    name: name.clone(),
+                    data_type: data_type.clone(),
+                    nullable,
+                    default: default_value.clone(),
+                }],
+            )?;
+        }
         let prop_def = StoragePropertyDef::new(name.clone(), data_type.clone());
         let new_idx = self.schema.properties.len();
         self.schema.properties.push(prop_def);
@@ -153,12 +199,15 @@ impl EdgeStore {
     /// Drop the pending change, removing the physical column when filled.
     ///
     /// Never touches published schema or history: prepared changes built
-    /// nothing, filled changes only built the unpublished physical column.
+    /// nothing, filled and durable changes only built the unpublished
+    /// physical column.
     pub fn abort_pending_add_property(&mut self) -> StorageResult<()> {
         let pending = self.pending_add_column.take().ok_or_else(|| {
             StorageError::invalid_operation("no pending add-column change to abort".to_string())
         })?;
-        if pending.state == PendingAddColumnState::Filled {
+        if pending.state == PendingAddColumnState::Filled
+            || pending.state == PendingAddColumnState::Durable
+        {
             self.properties.remove_property(&pending.name)?;
         }
         Ok(())

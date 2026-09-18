@@ -64,31 +64,11 @@ macro_rules! dispatch {
 
 /// Polymorphic CSR wrapper supporting multiple implementation strategies.
 ///
-/// Combines mutable and immutable CSR implementations into a single enum,
-/// allowing runtime selection without virtual function overhead.
+/// Combines mutable CSR implementations into a single enum for runtime
+/// selection without generic monomorphization.
 ///
-/// # Design Rationale
-///
-/// **Why not generic?** While a fully generic `EdgeTableCore<C: MutableCsrTrait>` would eliminate
-/// runtime dispatch, it would cause:
-/// - Compilation-time bloat from monomorphization (5+ copies of EdgeTableCore)
-/// - Inability to store heterogeneous edge types in the same collection
-/// - Significant increase in binary size without proportional performance gain (1% dispatch overhead is negligible)
-///
-/// The enum dispatch via `CsrVariant` provides an optimal balance:
-/// - Zero compilation overhead (no monomorphization)
-/// - Support for mixed CSR types in collections
-/// - Minimal runtime cost (~1% for typical edge operations)
-///
-/// # Example
-///
-/// ```ignore
-/// // Create a multi-edge CSR
-/// let csr = CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 1000, 10000)?;
-///
-/// // Use the same interface for all variants
-/// let edges = csr.edges_of(vertex_id, timestamp);
-/// ```
+/// The enum dispatch via `CsrVariant` keeps one implementation per trait
+/// method; callers use the trait interface so behavior stays in one place.
 #[derive(Debug, Clone)]
 pub enum CsrVariant {
     /// Multi-edge mutable CSR: each vertex can have multiple outgoing edges
@@ -214,6 +194,23 @@ impl CsrBase for CsrVariant {
                 let mut result = vec![2u8];
                 result.extend(csr.dump());
                 result
+            }
+        }
+    }
+
+    fn dump_into(&self, out: &mut Vec<u8>) {
+        match self {
+            CsrVariant::None { vertex_capacity } => {
+                out.push(0u8);
+                out.extend((*vertex_capacity as u64).to_le_bytes());
+            }
+            CsrVariant::Multiple(csr) => {
+                out.push(1u8);
+                csr.dump_into(out);
+            }
+            CsrVariant::Single(csr) => {
+                out.push(2u8);
+                csr.dump_into(out);
             }
         }
     }
@@ -493,24 +490,6 @@ impl CsrVariant {
             }
             CsrVariant::Single(csr) => csr.compact_with_ts_reporting(cutoff, on_edge_removed),
             CsrVariant::None { .. } => 0,
-        }
-    }
-
-    /// Whether one row holds any physically stored entry.
-    pub fn has_physical_entries(&self, vid: u32) -> bool {
-        match self {
-            CsrVariant::Multiple(csr) => csr.has_physical_entries(vid),
-            CsrVariant::Single(csr) => csr.has_physical_entries(vid),
-            CsrVariant::None { .. } => false,
-        }
-    }
-
-    /// Whether the primary row of one vertex holds `edge_id`.
-    pub fn primary_contains(&self, src_vid: u32, edge_id: EdgeId) -> bool {
-        match self {
-            CsrVariant::Multiple(csr) => csr.primary_contains(src_vid, edge_id),
-            CsrVariant::Single(csr) => csr.primary_contains(src_vid, edge_id),
-            CsrVariant::None { .. } => false,
         }
     }
 

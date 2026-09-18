@@ -15,6 +15,13 @@ pub trait CsrBase: std::fmt::Debug + Send + Sync {
     fn dump(&self) -> Vec<u8>;
 
     fn load(&mut self, data: &[u8]) -> StorageResult<()>;
+
+    /// Append the same bytes as `dump` into `out` without an intermediate
+    /// owned buffer, so checkpoint writes borrow the live topology instead
+    /// of cloning it for serialization.
+    fn dump_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.dump());
+    }
 }
 
 pub trait MutableCsrTrait: CsrBase {

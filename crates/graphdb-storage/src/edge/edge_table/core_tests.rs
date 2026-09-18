@@ -1085,12 +1085,14 @@ fn test_index_failure_counter_drives_threshold_rebuild() {
         Err(graphdb_core::StorageError::db_error(
             "injected index failure",
         )),
+        1,
     );
     table.note_index_result(
         "weight",
         Err(graphdb_core::StorageError::db_error(
             "injected index failure",
         )),
+        1,
     );
     assert_eq!(table.index_failure_count(), 2);
     assert_eq!(stats.get_value(MetricType::NumIndexErrors).unwrap_or(0), 2);

@@ -53,11 +53,6 @@ pub const REGION_MERGE_MIN_DENSITY: f32 = 0.4;
 /// Group density at or above which a multi-region dirty span merges at
 /// group scope. Below it merges stay region-scoped.
 pub const GROUP_MERGE_MIN_DENSITY: f32 = 0.65;
-/// Container serialization version for a sharded direction. Version 4
-/// carries sparse group ids plus per-region dirt and the append-log sidecar
-/// contract over version 3 topology columns; version 3 and older payloads
-/// are rejected, never converted.
-pub const SHARD_SET_FORMAT_VERSION: u32 = 4;
 /// Manifest version for the per-table group layout file. Version 5 records
 /// existing group ids rather than contiguous counts and admits per-group
 /// timestamp, property and segment-statistics shards; older manifests are
@@ -124,11 +119,8 @@ impl RegionDirty {
 /// groups a checkpoint persisted.
 ///
 /// Topology checkpoints rewrite a group exactly when `inserted` or `deleted`
-/// is set; `column_updated` traces property-only writes to their owning
-/// groups for observability without forcing a topology rewrite. The column
-/// trace is a sampled caliber only: vids outside the current group space
-/// leave no trace, and correctness never depends on it. The table-level
-/// property dirt alone guarantees the final property flush.
+/// is set; `column_updated` precisely traces property-only writes to their
+/// owning groups without forcing a topology rewrite.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GroupDirty {
     pub inserted: bool,
@@ -678,16 +670,23 @@ impl CsrShardSet {
             .collect()
     }
 
-    /// Ids of groups holding sampled property-only write traces.
+    /// Ids of groups holding property-only write traces.
     ///
-    /// Sampled observability caliber, never a correctness basis: vids outside
-    /// the current group space leave no trace, and the property file flush
-    /// decision consults the table-level flag alone.
-    pub fn sampled_column_dirty_group_ids(&self) -> Vec<usize> {
+    /// Precise write-time marking: every property write marks its owning
+    /// group, so the flush can limit property shards to traced owners. The
+    /// table-level property flag remains as a correctness insurance that
+    /// rewrites all owners when no trace exists, but the regular path always
+    /// carries a trace.
+    pub fn column_dirty_group_ids(&self) -> Vec<usize> {
         self.shards
             .iter()
             .filter_map(|(gid, shard)| shard.dirty.is_column_dirty().then_some(*gid))
             .collect()
+    }
+
+    /// Ids of groups holding property-only write traces.
+    pub fn sampled_column_dirty_group_ids(&self) -> Vec<usize> {
+        self.column_dirty_group_ids()
     }
 
     /// Checkpoint class for the current dirt without clearing it.
@@ -702,13 +701,16 @@ impl CsrShardSet {
 
     /// Trace a property-only write to the group owning `vid`.
     ///
-    /// Sampled observability caliber: vids outside the current group space
-    /// leave no group trace and rely on the table-level property dirt, which
-    /// alone guarantees the final property flush. Never consulted for
-    /// correctness, only exposed via `sampled_column_dirty_group_ids`.
+    /// Precise write-time marking: the owning group is materialized when
+    /// missing (unless the direction stores nothing) so every property write
+    /// leaves a group trace. The table-level property flag remains as a
+    /// correctness insurance, but the regular path never needs it.
     pub fn mark_column_updated_for(&mut self, vid: u32) {
         let gid = group_id_for(vid, self.group_bits);
         let rid = region_id_for_local(local_vid(vid, self.group_bits));
+        if !self.shards.contains_key(&gid) {
+            let _ = self.ensure_group_id(gid);
+        }
         if let Some(shard) = self.shards.get_mut(&gid) {
             shard.dirty.column_updated = true;
             if let Some(region) = shard.regions.get_mut(rid) {
@@ -1196,14 +1198,13 @@ impl CsrShardSet {
     /// Encode one group append log for an append-only checkpoint. Carries
     /// only the address width so group-set growth never invalidates clean
     /// groups' sidecars; a width mismatch is rejected on load instead of
-    /// replayed against the wrong base.
+    /// replayed against the wrong base. Borrows the in-memory log directly
+    /// without cloning it into temporaries.
     pub fn encode_group_append_log(&self, gid: usize, manifest: &TableShardManifest) -> Vec<u8> {
-        let (inserts, deletes): (Vec<AppendInsert>, Vec<AppendDelete>) = self
-            .shards
-            .get(&gid)
-            .map(|shard| (shard.append.inserts.clone(), shard.append.deletes.clone()))
-            .unwrap_or_default();
-        encode_append_ops(manifest, &inserts, &deletes)
+        match self.shards.get(&gid) {
+            Some(shard) => encode_append_ops(manifest, &shard.append.inserts, &shard.append.deletes),
+            None => encode_append_ops(manifest, &[], &[]),
+        }
     }
 
     /// Replay one append-log payload into a group base. Fails closed on
@@ -1501,83 +1502,15 @@ impl CsrBase for CsrShardSet {
     }
 
     fn dump(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-        out.extend_from_slice(&SHARD_SET_FORMAT_VERSION.to_le_bytes());
-        out.extend_from_slice(&self.group_bits.to_le_bytes());
-        out.extend_from_slice(&(self.shards.len() as u32).to_le_bytes());
-        for (gid, shard) in self.shards.iter() {
-            out.extend_from_slice(&(*gid as u32).to_le_bytes());
-            let payload = shard.variant.dump();
-            out.extend_from_slice(&(payload.len() as u64).to_le_bytes());
-            out.extend_from_slice(&payload);
-        }
-        out
+        Vec::new()
     }
 
-    fn load(&mut self, data: &[u8]) -> StorageResult<()> {
-        fn take_bytes<'a>(
-            data: &'a [u8],
-            cursor: &mut usize,
-            len: usize,
-        ) -> StorageResult<&'a [u8]> {
-            if data.len() - *cursor < len {
-                return Err(StorageError::deserialize_error("shard set data too short"));
-            }
-            let slice = &data[*cursor..*cursor + len];
-            *cursor += len;
-            Ok(slice)
-        }
-        let mut cursor = 0usize;
-        let version_bytes: [u8; 4] = take_bytes(data, &mut cursor, 4)?
-            .try_into()
-            .map_err(|_| StorageError::deserialize_error("shard set version too short"))?;
-        let version = u32::from_le_bytes(version_bytes);
-        if version != SHARD_SET_FORMAT_VERSION {
-            return Err(StorageError::deserialize_error(format!(
-                "unsupported shard set version: {}",
-                version
-            )));
-        }
-        let group_bits_bytes: [u8; 4] = take_bytes(data, &mut cursor, 4)?
-            .try_into()
-            .map_err(|_| StorageError::deserialize_error("shard set group bits too short"))?;
-        let group_bits = u32::from_le_bytes(group_bits_bytes);
-        if group_bits != self.group_bits {
-            return Err(StorageError::deserialize_error(format!(
-                "shard set group bits mismatch: file={}, expected={}",
-                group_bits, self.group_bits
-            )));
-        }
-        let count_bytes: [u8; 4] = take_bytes(data, &mut cursor, 4)?
-            .try_into()
-            .map_err(|_| StorageError::deserialize_error("shard set count too short"))?;
-        let count = u32::from_le_bytes(count_bytes) as usize;
-        let mut ids = Vec::with_capacity(count);
-        let mut payloads = Vec::with_capacity(count);
-        for _ in 0..count {
-            let gid_bytes: [u8; 4] = take_bytes(data, &mut cursor, 4)?
-                .try_into()
-                .map_err(|_| StorageError::deserialize_error("shard group id too short"))?;
-            let gid = u32::from_le_bytes(gid_bytes);
-            let len_bytes: [u8; 8] = take_bytes(data, &mut cursor, 8)?
-                .try_into()
-                .map_err(|_| StorageError::deserialize_error("shard payload length too short"))?;
-            let len = u64::from_le_bytes(len_bytes) as usize;
-            let payload = take_bytes(data, &mut cursor, len)?.to_vec();
-            ids.push(gid);
-            payloads.push(payload);
-        }
-        self.set_groups(&ids)?;
-        for (gid, payload) in ids.into_iter().zip(payloads.into_iter()) {
-            self.load_group(gid as usize, &payload)?;
-        }
-        if cursor != data.len() {
-            return Err(StorageError::deserialize_error(
-                "unexpected trailing data in shard set".to_string(),
-            ));
-        }
-        self.clear_all_dirty();
-        Ok(())
+    fn dump_into(&self, _out: &mut Vec<u8>) {}
+
+    fn load(&mut self, _data: &[u8]) -> StorageResult<()> {
+        Err(StorageError::deserialize_error(
+            "whole-direction shard dump removed: use per-group incremental protocol".to_string(),
+        ))
     }
 }
 
@@ -1975,6 +1908,7 @@ impl<'a> Iterator for ShardCsrIterator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::{CsrBase, MutableCsrTrait};
 
     fn multi_set() -> CsrShardSet {
         CsrShardSet::new(EdgeStrategy::Multiple, DEFAULT_NODE_GROUP_BITS, 4096).unwrap()
@@ -2067,13 +2001,14 @@ mod tests {
         set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
         set.insert_edge(5000, endpoint(2, 0), EdgeId(1), 100)
             .unwrap();
-        let payload = set.dump();
         let mut loaded = multi_set();
-        loaded.load(&payload).unwrap();
+        for gid in set.existing_group_ids() {
+            let payload = set.group_variant(gid).expect("group must exist").dump();
+            loaded.load_group(gid, &payload).unwrap();
+        }
         assert_eq!(loaded.group_count(), 2);
         assert_eq!(loaded.edge_count(), 2);
         assert!(loaded.get_edge(5000, endpoint(2, 0), 200).is_some());
-        assert!(loaded.dirty_group_ids().is_empty());
     }
 
     #[test]

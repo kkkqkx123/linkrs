@@ -30,7 +30,6 @@ use crate::edge::EdgeSchema;
 use crate::persistence::{read_header, section, write_header_to, HEADER_SIZE};
 use graphdb_core::types::EdgeId;
 use graphdb_core::{StorageError, StorageResult};
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -69,7 +68,6 @@ pub fn flush_metadata(
     is_open: bool,
     schema: &EdgeSchema,
     next_edge_id: EdgeId,
-    _edge_timestamps: &HashMap<EdgeId, EdgeTimestamps>,
 ) -> StorageResult<()> {
     buf.extend_from_slice(&EDGE_META_VERSION.to_le_bytes());
     write_metadata_header(
@@ -202,9 +200,12 @@ pub fn serialize_csr(csr: &CsrVariant, section_id: u32, buf: &mut Vec<u8>) -> St
     write_header_to(buf, section_id)
         .map_err(|e| StorageError::io_error(format!("Failed to write CSR header: {}", e)))?;
 
-    let data = csr.dump();
-    buf.extend_from_slice(&(data.len() as u64).to_le_bytes());
-    buf.extend_from_slice(&data);
+    let len_pos = buf.len();
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    let start = buf.len();
+    csr.dump_into(buf);
+    let len = (buf.len() - start) as u64;
+    buf[len_pos..len_pos + 8].copy_from_slice(&len.to_le_bytes());
 
     Ok(())
 }

@@ -528,6 +528,11 @@ impl CsrWithProperties {
         Some(pos)
     }
 
+    /// Whether the store holds a row mapping for `edge_id`.
+    pub fn contains_edge(&self, edge_id: EdgeId) -> bool {
+        self.edge_to_row.contains_key(&edge_id)
+    }
+
     /// Edge-aware property update: lookup row via `edge_id`.
     pub fn set_property_for_edge(
         &mut self,
@@ -681,6 +686,13 @@ impl CsrWithProperties {
     /// Whether one column holds unrefreshed writes.
     pub fn has_column_dirt(&self, name: &str) -> bool {
         self.dirty_columns.contains(name)
+    }
+
+    /// Names of columns mutated since the last checkpoint. Drives
+    /// dirty-column incremental persistence: clean columns reuse the last
+    /// flushed encoding instead of paying re-export and re-encode.
+    pub fn dirty_column_names(&self) -> Vec<String> {
+        self.dirty_columns.iter().cloned().collect()
     }
 
     /// Put back a column removed by a failed drop publish at its exact
@@ -900,15 +912,24 @@ impl CsrWithProperties {
             buf.push(col.encoding_type().to_u8());
             let rows = self.visibility.len();
             buf.extend_from_slice(&(rows as u32).to_le_bytes());
+            buf.reserve(rows.saturating_mul(16));
+            let mut cell_scratch: Vec<u8> = Vec::with_capacity(64);
             for row_idx in 0..rows {
                 let val = col.get(row_idx);
                 if let Some(v) = val {
                     buf.push(1);
-                    if let Ok(bytes) = postcard::to_allocvec(&v) {
-                        buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-                        buf.extend_from_slice(&bytes);
-                    } else {
-                        buf.extend_from_slice(&0u32.to_le_bytes());
+                    cell_scratch.clear();
+                    let taken = std::mem::take(&mut cell_scratch);
+                    match postcard::to_extend(&v, taken) {
+                        Ok(encoded) => {
+                            buf.extend_from_slice(&(encoded.len() as u32).to_le_bytes());
+                            buf.extend_from_slice(&encoded);
+                            cell_scratch = encoded;
+                        }
+                        Err(_) => {
+                            buf.extend_from_slice(&0u32.to_le_bytes());
+                            cell_scratch = Vec::with_capacity(64);
+                        }
                     }
                 } else {
                     buf.push(0);

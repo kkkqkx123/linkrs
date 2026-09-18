@@ -2,12 +2,12 @@
 //!
 //! Dropping a column moves through explicit states so every step can roll
 //! back: `prepare` validates and snapshots the doomed column without touching
-//! storage, `publish` removes the physical column and the schema entry and
-//! records history (restoring from the snapshot when history recording
-//! fails), and `abort` drops the pending change before anything is removed.
-//! Pending state lives only in memory: a crash before publishing is
-//! equivalent to an abort because reload rebuilds the property store from
-//! the published schema.
+//! storage, `durable` marks the prepared snapshot checkpoint-durable, and
+//! `publish` removes the physical column and the schema entry and records
+//! history (restoring from the snapshot when history recording fails).
+//! `abort` drops the pending change before anything is removed. Pending state
+//! lives only in memory: a crash before publishing is equivalent to an abort
+//! because reload rebuilds the property store from the published schema.
 
 use graphdb_core::{StorageError, StorageResult};
 
@@ -16,6 +16,15 @@ use crate::edge::property_schema::PropertySchema;
 use crate::schema::ChangeDetails;
 use crate::types::StoragePropertyDef;
 use crate::vertex::column::Column;
+
+/// Lifecycle state of one pending drop-column change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingDropColumnState {
+    /// Validated and snapshotted, nothing removed.
+    Prepared,
+    /// Prepared snapshot covered by a checkpoint; safe to publish durably.
+    Durable,
+}
 
 /// One in-flight drop-column change.
 ///
@@ -30,6 +39,7 @@ pub struct PendingDropColumn {
     pub schema_def_backup: StoragePropertyDef,
     pub column_backup: Column,
     pub had_column_dirt: bool,
+    pub state: PendingDropColumnState,
 }
 
 impl EdgeStore {
@@ -78,7 +88,31 @@ impl EdgeStore {
             schema_def_backup,
             column_backup,
             had_column_dirt,
+            state: PendingDropColumnState::Prepared,
         });
+        Ok(())
+    }
+
+    /// Mark the prepared drop checkpoint-durable.
+    ///
+    /// The prepared snapshot touches no storage, so any checkpoint after
+    /// preparing covers it; publishing from `Durable` is the durable path
+    /// while publishing directly from `Prepared` stays available for
+    /// memory-only immediate drops.
+    pub fn durable_pending_drop_property(&mut self) -> StorageResult<()> {
+        let pending = self.pending_drop_column.as_ref().ok_or_else(|| {
+            StorageError::invalid_operation(
+                "no pending drop-column change to mark durable".to_string(),
+            )
+        })?;
+        if pending.state != PendingDropColumnState::Prepared {
+            return Err(StorageError::invalid_operation(
+                "pending drop-column change is already durable".to_string(),
+            ));
+        }
+        if let Some(pending) = self.pending_drop_column.as_mut() {
+            pending.state = PendingDropColumnState::Durable;
+        }
         Ok(())
     }
 
@@ -91,6 +125,14 @@ impl EdgeStore {
         let pending = self.pending_drop_column.clone().ok_or_else(|| {
             StorageError::invalid_operation("no pending drop-column change to publish".to_string())
         })?;
+        if let Some(dir) = self.wal_dir.clone() {
+            super::wal::append_ops(
+                &dir,
+                &[super::wal::EdgeWalOp::SchemaDrop {
+                    name: pending.name.clone(),
+                }],
+            )?;
+        }
         self.properties.remove_property(&pending.name)?;
         self.schema.properties.remove(pending.schema_index);
         self.property_index_cache.remove(&pending.name);

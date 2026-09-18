@@ -263,6 +263,36 @@ impl MVCCManager {
     pub fn remove_edge_timestamps(&mut self, edge_id: EdgeId) {
         self.edge_timestamps.remove(&edge_id);
     }
+
+    /// Reclaim authority records below a global watermark.
+    ///
+    /// Removes entries whose deletion timestamp is below `watermark` and for
+    /// which `is_gone` confirms both directions hold no physical row. The
+    /// watermark must come from the global snapshot tracker
+    /// (`MvccWatermarks::capture`), never from the table-local pin cache, so
+    /// no active snapshot of any table can still observe the removed
+    /// tombstone. Returns the reclaimed count so long-running tables stay
+    /// proportional to live edges rather than historical totals.
+    pub fn reclaim_below(
+        &mut self,
+        watermark: Timestamp,
+        is_gone: impl Fn(EdgeId) -> bool,
+    ) -> usize {
+        if watermark == Timestamp::MAX {
+            return 0;
+        }
+        let mut reclaimed = 0usize;
+        self.edge_timestamps.retain(|edge_id, ts| {
+            let eligible = ts.delete_ts != Timestamp::MAX && ts.delete_ts < watermark;
+            if eligible && is_gone(*edge_id) {
+                reclaimed += 1;
+                false
+            } else {
+                true
+            }
+        });
+        reclaimed
+    }
 }
 
 #[cfg(test)]

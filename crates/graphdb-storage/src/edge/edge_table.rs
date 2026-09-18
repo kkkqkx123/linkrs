@@ -33,6 +33,7 @@ pub mod schema_add_column;
 pub mod schema_drop_column;
 pub mod staging;
 pub mod stats;
+pub mod wal;
 
 // Re-export commonly used types
 pub use core::{EdgeStore, UpdateEdgePropertyByKeyParams};

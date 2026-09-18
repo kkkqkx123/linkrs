@@ -50,7 +50,6 @@ mod tests;
 
 pub use iter::{MutableCsrIterator, VertexEdgesIter};
 pub use overflow::OverflowStorage;
-pub(crate) use serialization::{read_nbr, write_nbr};
 
 pub(crate) use row::PACKED_CSR_DENSITY;
 

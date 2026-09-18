@@ -90,6 +90,11 @@ pub struct EdgeStore {
     /// Tombstone count seen by the last executed reclaim pass. Growth past
     /// this baseline re-arms the pass even when the watermark stands still.
     pub(crate) last_reclaim_tombstones: usize,
+    /// Directory of the last checkpoint or load, owning the write-ahead log.
+    /// Commits append logical redo here before returning success; checkpoints
+    /// truncate it after the new snapshot is durable. `None` before the first
+    /// checkpoint, when redo has no home yet.
+    pub(crate) wal_dir: Option<std::path::PathBuf>,
 }
 
 impl std::fmt::Debug for EdgeStore {
@@ -195,6 +200,7 @@ impl EdgeStore {
             commit_scratch: super::staging::CommitScratch::default(),
             last_reclaim_bound: Timestamp::MAX,
             last_reclaim_tombstones: 0,
+            wal_dir: None,
         })
     }
 
@@ -311,25 +317,30 @@ impl EdgeStore {
         Ok(true)
     }
 
-    fn record_index_write_failure(&mut self, prop_name: &str) {
+    fn record_index_write_failure(&mut self, prop_name: &str, latency_ms: u64) {
         self.index_write_failures = self.index_write_failures.saturating_add(1);
         if let Some(stats) = &self.stats_manager {
-            stats.record_index_operation(0, prop_name, 0, false);
+            stats.record_index_operation(self.label as u64, prop_name, latency_ms, false);
         }
     }
 
-    fn record_index_write_success(&self, prop_name: &str) {
+    fn record_index_write_success(&self, prop_name: &str, latency_ms: u64) {
         if let Some(stats) = &self.stats_manager {
-            stats.record_index_operation(0, prop_name, 0, true);
+            stats.record_index_operation(self.label as u64, prop_name, latency_ms, true);
         }
     }
 
     /// Fold one secondary index write outcome into the lag counter and the
     /// shared metrics registry. Primary data stays authoritative regardless.
-    fn note_index_result(&mut self, prop_name: &str, result: StorageResult<()>) {
+    fn note_index_result(
+        &mut self,
+        prop_name: &str,
+        result: StorageResult<()>,
+        latency_ms: u64,
+    ) {
         match result {
-            Ok(()) => self.record_index_write_success(prop_name),
-            Err(_) => self.record_index_write_failure(prop_name),
+            Ok(()) => self.record_index_write_success(prop_name, latency_ms),
+            Err(_) => self.record_index_write_failure(prop_name, latency_ms),
         }
     }
 
@@ -783,6 +794,30 @@ impl EdgeStore {
             ));
         }
         self.prevalidate_staging_batch(&batch)?;
+        if let Some(dir) = self.wal_dir.clone() {
+            let mut ops = Vec::with_capacity(batch.len());
+            for ord in batch.ordered() {
+                if ord.is_insert {
+                    let ins = &batch.staged_inserts()[ord.slot];
+                    ops.push(super::wal::EdgeWalOp::Insert {
+                        src: ins.src,
+                        dst: ins.dst,
+                        rank: ins.rank,
+                        properties: ins.properties.clone(),
+                        create_ts: ins.create_ts,
+                    });
+                } else {
+                    let del = &batch.staged_deletes()[ord.slot];
+                    ops.push(super::wal::EdgeWalOp::Delete {
+                        src: del.src,
+                        dst: del.dst,
+                        rank: del.rank,
+                        delete_ts: del.delete_ts,
+                    });
+                }
+            }
+            super::wal::append_ops(&dir, &ops)?;
+        }
         let max_ts = batch.max_timestamp();
         let inserts = batch.take_inserts();
         let deletes = batch.take_deletes();
@@ -1056,21 +1091,23 @@ impl EdgeStore {
 
         if self.property_index.is_some() {
             let label = self.label;
-            let outcomes: Vec<(String, StorageResult<()>)> = if let Some(ref mut index) =
+            let outcomes: Vec<(String, StorageResult<()>, u64)> = if let Some(ref mut index) =
                 self.property_index
             {
                 converted_values
                     .iter()
                     .map(|(prop_name, prop_value)| {
+                        let started = std::time::Instant::now();
                         let result = index.insert(prop_name, prop_value, src, dst, rank, label, ts);
-                        (prop_name.clone(), result)
+                        let latency = started.elapsed().as_millis() as u64;
+                        (prop_name.clone(), result, latency)
                     })
                     .collect()
             } else {
                 Vec::new()
             };
-            for (prop_name, result) in outcomes {
-                self.note_index_result(&prop_name, result);
+            for (prop_name, result, latency) in outcomes {
+                self.note_index_result(&prop_name, result, latency);
             }
         }
 
@@ -1189,20 +1226,22 @@ impl EdgeStore {
         self.mvcc.remove_edge_timestamps(edge_id);
         self.edge_owner.remove(&edge_id);
         if self.property_index.is_some() {
-            let outcomes: Vec<(String, StorageResult<()>)> =
+            let outcomes: Vec<(String, StorageResult<()>, u64)> =
                 if let Some(ref mut index) = self.property_index {
                     properties
                         .iter()
                         .map(|(prop_name, prop_value)| {
+                            let started = std::time::Instant::now();
                             let result = index.delete(prop_name, prop_value, src, dst, rank, ts);
-                            (prop_name.clone(), result)
+                            let latency = started.elapsed().as_millis() as u64;
+                            (prop_name.clone(), result, latency)
                         })
                         .collect()
                 } else {
                     Vec::new()
                 };
-            for (prop_name, result) in outcomes {
-                self.note_index_result(&prop_name, result);
+            for (prop_name, result, latency) in outcomes {
+                self.note_index_result(&prop_name, result, latency);
             }
         }
         self.mark_properties_dirty();
@@ -1294,20 +1333,22 @@ impl EdgeStore {
         self.mvcc.remove_edge_timestamps(edge_id);
         self.edge_owner.remove(&edge_id);
         if self.property_index.is_some() {
-            let outcomes: Vec<(String, StorageResult<()>)> =
+            let outcomes: Vec<(String, StorageResult<()>, u64)> =
                 if let Some(ref mut index) = self.property_index {
                     properties
                         .iter()
                         .map(|(prop_name, prop_value)| {
+                            let started = std::time::Instant::now();
                             let result = index.delete(prop_name, prop_value, src, dst, rank, ts);
-                            (prop_name.clone(), result)
+                            let latency = started.elapsed().as_millis() as u64;
+                            (prop_name.clone(), result, latency)
                         })
                         .collect()
                 } else {
                     Vec::new()
                 };
-            for (prop_name, result) in outcomes {
-                self.note_index_result(&prop_name, result);
+            for (prop_name, result, latency) in outcomes {
+                self.note_index_result(&prop_name, result, latency);
             }
         }
         self.debug_assert_copies_consistent(edge_id);
@@ -1342,20 +1383,22 @@ impl EdgeStore {
         if self.property_index.is_none() {
             return;
         }
-        let outcomes: Vec<(String, StorageResult<()>)> =
+        let outcomes: Vec<(String, StorageResult<()>, u64)> =
             if let Some(ref mut index) = self.property_index {
                 props
                     .iter()
                     .map(|(prop_name, prop_value)| {
+                        let started = std::time::Instant::now();
                         let result = index.delete(prop_name, prop_value, src, dst, rank, ts);
-                        (prop_name.clone(), result)
+                        let latency = started.elapsed().as_millis() as u64;
+                        (prop_name.clone(), result, latency)
                     })
                     .collect()
             } else {
                 Vec::new()
             };
-        for (prop_name, result) in outcomes {
-            self.note_index_result(&prop_name, result);
+        for (prop_name, result, latency) in outcomes {
+            self.note_index_result(&prop_name, result, latency);
         }
     }
 
@@ -1413,21 +1456,23 @@ impl EdgeStore {
         let restored = self.properties_for_edge(edge_id, ts);
         if self.property_index.is_some() {
             let label = self.label;
-            let outcomes: Vec<(String, StorageResult<()>)> =
+            let outcomes: Vec<(String, StorageResult<()>, u64)> =
                 if let Some(ref mut index) = self.property_index {
                     restored
                         .into_iter()
                         .map(|(prop_name, prop_value)| {
+                            let started = std::time::Instant::now();
                             let result =
                                 index.insert(&prop_name, &prop_value, src, dst, rank, label, ts);
-                            (prop_name, result)
+                            let latency = started.elapsed().as_millis() as u64;
+                            (prop_name, result, latency)
                         })
                         .collect()
                 } else {
                     Vec::new()
                 };
-            for (prop_name, result) in outcomes {
-                self.note_index_result(&prop_name, result);
+            for (prop_name, result, latency) in outcomes {
+                self.note_index_result(&prop_name, result, latency);
             }
         }
         self.mark_properties_dirty();
@@ -1758,12 +1803,14 @@ impl EdgeStore {
     }
 
     /// Collect fresh per-group segment statistics and widen the in-memory
-    /// snapshot. Runs at checkpoint time so flushed bytes stay proportional
-    /// to dirty groups while bounds stay conservative for every snapshot.
+    /// snapshot. Only groups touched since the last checkpoint are
+    /// recollected; clean groups keep their previous snapshot so checkpoint
+    /// cost follows dirty groups rather than table size. Bounds widen
+    /// monotonically so pruning stays conservative; counts are exact-current.
     pub(crate) fn refresh_segment_stats(&mut self) {
         use std::collections::{HashMap, HashSet};
         let use_out = self.schema.oe_strategy != super::super::EdgeStrategy::None;
-        let group_ids: Vec<u32> = if use_out {
+        let existing: Vec<u32> = if use_out {
             self.out_csr.existing_group_ids()
         } else {
             self.in_csr.existing_group_ids()
@@ -1771,6 +1818,32 @@ impl EdgeStore {
         .into_iter()
         .map(|gid| gid as u32)
         .collect();
+        let live_set: HashSet<u32> = existing.iter().copied().collect();
+        self.segment_stats
+            .retain(|group, _| live_set.contains(group));
+        let mut dirty: HashSet<u32> = HashSet::new();
+        for gid in self.out_csr.dirty_group_ids() {
+            dirty.insert(gid as u32);
+        }
+        for gid in self.in_csr.dirty_group_ids() {
+            dirty.insert(gid as u32);
+        }
+        for gid in self.out_csr.sampled_column_dirty_group_ids() {
+            dirty.insert(gid as u32);
+        }
+        for gid in self.in_csr.sampled_column_dirty_group_ids() {
+            dirty.insert(gid as u32);
+        }
+        for gid in &existing {
+            if !self.segment_stats.contains_key(gid) {
+                dirty.insert(*gid);
+            }
+        }
+        dirty.retain(|gid| live_set.contains(gid));
+        if dirty.is_empty() {
+            return;
+        }
+        let group_ids: Vec<u32> = dirty.into_iter().collect();
         let group_size = if use_out {
             self.out_csr.group_size()
         } else {
@@ -1789,9 +1862,14 @@ impl EdgeStore {
             }
         }
         let mut by_owner: HashMap<u32, Vec<EdgeId>> = HashMap::new();
+        for group in &group_ids {
+            by_owner.insert(*group, Vec::new());
+        }
         for edge_id in self.properties.edge_ids() {
             let owner = self.edge_owner.get(&edge_id).copied().unwrap_or(0);
-            by_owner.entry(owner).or_default().push(edge_id);
+            if let Some(slot) = by_owner.get_mut(&owner) {
+                slot.push(edge_id);
+            }
         }
         for group in group_ids {
             let gid = group as usize;
@@ -1848,16 +1926,6 @@ impl EdgeStore {
                 }
             }
         }
-        let live_set: HashSet<u32> = if use_out {
-            self.out_csr.existing_group_ids()
-        } else {
-            self.in_csr.existing_group_ids()
-        }
-        .into_iter()
-        .map(|gid| gid as u32)
-        .collect();
-        self.segment_stats
-            .retain(|group, _| live_set.contains(group));
     }
 
     /// Encoding report for the persisted topology columns of both
@@ -2143,6 +2211,19 @@ impl EdgeStore {
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
         if let Some(nbr) = self.merged_get_edge(&self.out_csr, src, dst_key, ts) {
+            if let Some(dir) = self.wal_dir.clone() {
+                super::wal::append_ops(
+                    &dir,
+                    &[super::wal::EdgeWalOp::PropertyUpdate {
+                        src,
+                        dst,
+                        rank,
+                        prop_name: prop_name.to_string(),
+                        value: value.clone(),
+                        ts,
+                    }],
+                )?;
+            }
             self.properties
                 .set_property_for_edge(nbr.edge_id, prop_name, Some(value.clone()), ts)
                 .map_err(|_| StorageError::column_not_found(prop_name.to_string()))?;
@@ -2164,6 +2245,26 @@ impl EdgeStore {
 
         let dst_key = Self::edge_endpoint_key(params.dst, params.rank);
         if let Some(nbr) = self.merged_get_edge(&self.out_csr, params.src, dst_key, params.ts) {
+            if let Some(dir) = self.wal_dir.clone() {
+                let prop_name = self
+                    .properties
+                    .property_schema()
+                    .iter()
+                    .find(|schema| schema.prop_id as u16 == params.prop_id)
+                    .map(|schema| schema.name.clone())
+                    .unwrap_or_else(|| format!("prop_id={}", params.prop_id));
+                super::wal::append_ops(
+                    &dir,
+                    &[super::wal::EdgeWalOp::PropertyUpdate {
+                        src: params.src,
+                        dst: params.dst,
+                        rank: params.rank,
+                        prop_name,
+                        value: params.value.clone(),
+                        ts: params.ts,
+                    }],
+                )?;
+            }
             self.properties
                 .set_property_by_id_for_edge(
                     nbr.edge_id,
@@ -2378,28 +2479,30 @@ impl EdgeStore {
 
         let iter = EdgeTableScanIterator::new(self, all_ts);
         let mut build_failures: u64 = 0;
+        let space_id = self.label as u64;
+        let stats_manager = self.stats_manager.clone();
         for edge in iter {
             let src_u32 = edge.src_vid.as_int64().unwrap_or(0) as u32;
             let dst_u32 = edge.dst_vid.as_int64().unwrap_or(0) as u32;
             for (prop_name, prop_value) in &edge.properties {
-                if index
-                    .insert(
-                        prop_name, prop_value, src_u32, dst_u32, edge.rank, label, all_ts,
-                    )
-                    .is_err()
-                {
+                let started = std::time::Instant::now();
+                let result = index.insert(
+                    prop_name, prop_value, src_u32, dst_u32, edge.rank, label, all_ts,
+                );
+                let latency = started.elapsed().as_millis() as u64;
+                if result.is_err() {
                     build_failures = build_failures.saturating_add(1);
+                    if let Some(stats) = &stats_manager {
+                        stats.record_index_operation(space_id, prop_name, latency, false);
+                    }
+                } else if let Some(stats) = &stats_manager {
+                    stats.record_index_operation(space_id, prop_name, latency, true);
                 }
             }
         }
 
         self.property_index = Some(index);
         self.index_write_failures = build_failures;
-        if let Some(stats) = &self.stats_manager {
-            for _ in 0..build_failures {
-                stats.record_index_operation(0, "edge-property", 0, false);
-            }
-        }
         if build_failures > 0 {
             log::debug!(
                 "build_property_index: {} secondary writes failed, lag counter carries them",
@@ -2508,6 +2611,101 @@ impl EdgeStore {
     pub fn live_authority_orphans(&self) -> usize {
         let (_, _, live_orphans) = self.copy_audit();
         live_orphans
+    }
+
+    /// Replay one write-ahead log operation idempotently.
+    ///
+    /// Called only during load recovery with `wal_dir` cleared so replayed
+    /// commits never append back to the log. Inserts skip on
+    /// `EdgeAlreadyExists`, deletes treat missing edges as done, updates
+    /// overwrite the same value, and schema changes skip when already
+    /// applied, so a repeated replay yields the same state.
+    pub(crate) fn replay_one_wal_op(
+        &mut self,
+        op: super::wal::EdgeWalOp,
+    ) -> StorageResult<()> {
+        match op {
+            super::wal::EdgeWalOp::Insert {
+                src,
+                dst,
+                rank,
+                properties,
+                create_ts,
+            } => match self.insert_edge(src, dst, rank, &properties, create_ts) {
+                Ok(()) => Ok(()),
+                Err(e)
+                    if e.kind()
+                        == graphdb_core::error::storage::StorageErrorKind::EdgeAlreadyExists =>
+                {
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            },
+            super::wal::EdgeWalOp::Delete {
+                src,
+                dst,
+                rank,
+                delete_ts,
+            } => match self.delete_edge(src, dst, rank, delete_ts) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            },
+            super::wal::EdgeWalOp::PropertyUpdate {
+                src,
+                dst,
+                rank,
+                prop_name,
+                value,
+                ts,
+            } => {
+                self.update_edge_property(src, dst, rank, &prop_name, &value, ts)?;
+                Ok(())
+            }
+            super::wal::EdgeWalOp::SchemaAdd {
+                name,
+                data_type,
+                nullable,
+                default,
+            } => {
+                if self.properties.has_property(&name) {
+                    return Ok(());
+                }
+                self.prepare_add_property(name.clone(), data_type, nullable, default)?;
+                if let Err(e) = self.fill_pending_add_property() {
+                    let _ = self.abort_pending_add_property();
+                    return Err(e);
+                }
+                match self.publish_pending_add_property() {
+                    Ok(()) => Ok(()),
+                    Err(e)
+                        if e.kind()
+                            == graphdb_core::error::storage::StorageErrorKind::ColumnAlreadyExists =>
+                    {
+                        let _ = self.abort_pending_add_property();
+                        Ok(())
+                    }
+                    Err(e) => {
+                        let _ = self.abort_pending_add_property();
+                        Err(e)
+                    }
+                }
+            }
+            super::wal::EdgeWalOp::SchemaDrop { name } => {
+                if !self.properties.has_property(&name) {
+                    return Ok(());
+                }
+                match self.remove_property(&name) {
+                    Ok(()) => Ok(()),
+                    Err(e)
+                        if e.kind()
+                            == graphdb_core::error::storage::StorageErrorKind::ColumnNotFound =>
+                    {
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+        }
     }
 }
 

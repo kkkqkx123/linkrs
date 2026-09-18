@@ -17,6 +17,10 @@ impl CsrBase for MutableCsr {
         MutableCsr::dump(self)
     }
 
+    fn dump_into(&self, out: &mut Vec<u8>) {
+        MutableCsr::dump_into(self, out)
+    }
+
     fn load(&mut self, data: &[u8]) -> StorageResult<()> {
         MutableCsr::load(self, data)
     }

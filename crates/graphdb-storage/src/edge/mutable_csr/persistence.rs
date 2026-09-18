@@ -3,28 +3,27 @@ use std::sync::atomic::Ordering;
 use super::super::{EdgeId, Nbr};
 use super::overflow::OverflowStorage;
 use super::serialization::{
-    decode_topology_i64_column, decode_topology_u32_column, decode_topology_u64_column,
-    encode_topology_i64_column, encode_topology_u32_column, encode_topology_u64_column,
-    TopologyColumnEncoding, MUTABLE_CSR_FORMAT_VERSION,
+    decode_overflow_chunk, decode_topology_i64_column, decode_topology_u32_column,
+    decode_topology_u64_column, encode_overflow_chunk, encode_topology_i64_column,
+    encode_topology_u32_column, encode_topology_u64_column, TopologyColumnEncoding,
+    MUTABLE_CSR_FORMAT_VERSION,
 };
 use super::MutableCsr;
-use super::{read_nbr, write_nbr};
 use crate::persistence::{read_u32_le, read_u64_le};
 use graphdb_core::{StorageError, StorageResult};
 
 impl MutableCsr {
-    /// Dump to bytes, version 3.
+    /// Dump to bytes, version 4.
     ///
     /// Header columns (offsets, degrees, capacities) and primary neighbor
     /// columns (endpoints, ranks, edge ids, stamps) persist through the
     /// integer column path with per-column bit-packing or run-length
-    /// encoding and a plain fallback when compression does not pay.
-    /// Overflow deltas stay plain: they are small append-only buffers where
-    /// an encoding dictionary would cost more than it saves. Version 2
-    /// payloads are rejected on load, never converted.
+    /// encoding and a narrow plain fallback. Overflow chunks use the same
+    /// column path per chunk instead of plain neighbor records. Version 3
+    /// and older payloads are rejected on load, never converted.
     ///
     /// Format:
-    /// - format_version (u32 = 3)
+    /// - format_version (u32 = 4)
     /// - vertex_capacity (u64)
     /// - edge_count (u64)
     /// - primary_len (u64)
@@ -37,53 +36,65 @@ impl MutableCsr {
     /// - encoded edge ids column
     /// - encoded create stamps column
     /// - encoded delete stamps column
-    /// - per-vertex overflow chunks (plain)
+    /// - per-vertex overflow chunks (column-encoded per chunk)
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
+        self.dump_into(&mut result);
+        result
+    }
 
-        result.extend_from_slice(&MUTABLE_CSR_FORMAT_VERSION.to_le_bytes());
-        result.extend_from_slice(&(self.adj_offsets.len() as u64).to_le_bytes());
-        result.extend_from_slice(&self.edge_count.load(Ordering::Relaxed).to_le_bytes());
-        result.extend_from_slice(&(self.nbr_list.len() as u64).to_le_bytes());
-        result.extend_from_slice(&(self.overflow_chunk_edges as u64).to_le_bytes());
+    /// Borrow-based dump into `out` without an intermediate owned buffer.
+    /// Byte-identical to `dump`; checkpoint writes use this so no whole-group
+    /// clone or temporary dump buffer is needed.
+    pub fn dump_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&MUTABLE_CSR_FORMAT_VERSION.to_le_bytes());
+        out.extend_from_slice(&(self.adj_offsets.len() as u64).to_le_bytes());
+        out.extend_from_slice(&self.edge_count.load(Ordering::Relaxed).to_le_bytes());
+        out.extend_from_slice(&(self.nbr_list.len() as u64).to_le_bytes());
+        out.extend_from_slice(&(self.overflow_chunk_edges as u64).to_le_bytes());
 
         let (_, offsets_payload) = encode_topology_u32_column(&self.adj_offsets);
-        result.extend_from_slice(&offsets_payload);
+        out.extend_from_slice(&offsets_payload);
         let (_, degrees_payload) = encode_topology_u32_column(&self.degrees);
-        result.extend_from_slice(&degrees_payload);
+        out.extend_from_slice(&degrees_payload);
         let (_, caps_payload) = encode_topology_u32_column(&self.primary_capacities);
-        result.extend_from_slice(&caps_payload);
+        out.extend_from_slice(&caps_payload);
 
-        let endpoints: Vec<u32> = self.nbr_list.iter().map(|nbr| nbr.endpoint).collect();
-        let ranks: Vec<i64> = self.nbr_list.iter().map(|nbr| nbr.rank).collect();
-        let edge_ids: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.edge_id.0).collect();
-        let create_stamps: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.create_ts).collect();
-        let delete_stamps: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.delete_ts).collect();
-        let (_, endpoints_payload) = encode_topology_u32_column(&endpoints);
-        result.extend_from_slice(&endpoints_payload);
-        let (_, ranks_payload) = encode_topology_i64_column(&ranks);
-        result.extend_from_slice(&ranks_payload);
-        let (_, edge_ids_payload) = encode_topology_u64_column(&edge_ids);
-        result.extend_from_slice(&edge_ids_payload);
-        let (_, create_payload) = encode_topology_u64_column(&create_stamps);
-        result.extend_from_slice(&create_payload);
-        let (_, delete_payload) = encode_topology_u64_column(&delete_stamps);
-        result.extend_from_slice(&delete_payload);
+        {
+            let endpoints: Vec<u32> = self.nbr_list.iter().map(|nbr| nbr.endpoint).collect();
+            let (_, endpoints_payload) = encode_topology_u32_column(&endpoints);
+            out.extend_from_slice(&endpoints_payload);
+        }
+        {
+            let ranks: Vec<i64> = self.nbr_list.iter().map(|nbr| nbr.rank).collect();
+            let (_, ranks_payload) = encode_topology_i64_column(&ranks);
+            out.extend_from_slice(&ranks_payload);
+        }
+        {
+            let edge_ids: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.edge_id.0).collect();
+            let (_, edge_ids_payload) = encode_topology_u64_column(&edge_ids);
+            out.extend_from_slice(&edge_ids_payload);
+        }
+        {
+            let create_stamps: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.create_ts).collect();
+            let (_, create_payload) = encode_topology_u64_column(&create_stamps);
+            out.extend_from_slice(&create_payload);
+        }
+        {
+            let delete_stamps: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.delete_ts).collect();
+            let (_, delete_payload) = encode_topology_u64_column(&delete_stamps);
+            out.extend_from_slice(&delete_payload);
+        }
 
         for vid in 0..self.adj_offsets.len() {
             let chunks = self.overflow_chunks.get(&(vid as u32));
-            result.extend_from_slice(&(chunks.map_or(0, Vec::len) as u32).to_le_bytes());
+            out.extend_from_slice(&(chunks.map_or(0, Vec::len) as u32).to_le_bytes());
             if let Some(chunks) = chunks {
                 for chunk in chunks {
-                    result.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
-                    for nbr in chunk {
-                        write_nbr(&mut result, nbr);
-                    }
+                    encode_overflow_chunk(chunk, out);
                 }
             }
         }
-
-        result
     }
 
     /// Encoding report for the persisted topology columns.
@@ -133,7 +144,7 @@ impl MutableCsr {
         ]
     }
 
-    /// Load from bytes, version 3 only.
+    /// Load from bytes, version 4 only.
     pub fn load(&mut self, data: &[u8]) -> StorageResult<()> {
         if data.len() < 36 {
             return Err(StorageError::deserialize_error(
@@ -222,17 +233,13 @@ impl MutableCsr {
             let chunk_count = read_u32_le(data, &mut offset)? as usize;
             let mut chunks = Vec::with_capacity(chunk_count);
             for _ in 0..chunk_count {
-                let chunk_len = read_u32_le(data, &mut offset)? as usize;
-                if chunk_len > overflow_chunk_edges {
+                let chunk = decode_overflow_chunk(data, &mut offset)?;
+                if chunk.len() > overflow_chunk_edges {
                     return Err(StorageError::deserialize_error(
                         "Mutable CSR overflow chunk exceeds configured chunk size",
                     ));
                 }
-                let mut chunk = Vec::with_capacity(chunk_len.max(1));
-                for _ in 0..chunk_len {
-                    chunk.push(read_nbr(data, &mut offset)?);
-                }
-                overflow_capacity = overflow_capacity.saturating_add(chunk.capacity());
+                overflow_capacity = overflow_capacity.saturating_add(chunk.capacity().max(1));
                 chunks.push(chunk);
             }
             if !chunks.is_empty() {

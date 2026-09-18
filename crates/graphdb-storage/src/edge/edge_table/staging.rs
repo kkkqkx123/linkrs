@@ -44,9 +44,6 @@ pub struct StagedDelete {
 /// effect. `slot` indexes into the matching vector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StagedOrder {
-    pub src: u32,
-    pub dst: u32,
-    pub rank: i64,
     pub is_insert: bool,
     pub slot: usize,
 }
@@ -87,13 +84,7 @@ impl EdgeStagingBatch {
             properties: properties.to_vec(),
             create_ts,
         });
-        self.order.push(StagedOrder {
-            src,
-            dst,
-            rank,
-            is_insert: true,
-            slot,
-        });
+        self.order.push(StagedOrder { is_insert: true, slot });
     }
 
     /// Buffer one delete. No shared state is touched.
@@ -106,9 +97,6 @@ impl EdgeStagingBatch {
             delete_ts,
         });
         self.order.push(StagedOrder {
-            src,
-            dst,
-            rank,
             is_insert: false,
             slot,
         });
@@ -155,21 +143,23 @@ impl EdgeStagingBatch {
     /// and a later insert rebuilds after a delete, matching commit decisions.
     pub fn contains_insert(&self, src: u32, dst: u32, rank: i64) -> bool {
         let mut net_insert = false;
-        let mut net_delete = false;
         for ord in &self.order {
-            if ord.src != src || ord.dst != dst || ord.rank != rank {
+            let (key_src, key_dst, key_rank) = if ord.is_insert {
+                let ins = &self.inserts[ord.slot];
+                (ins.src, ins.dst, ins.rank)
+            } else {
+                let del = &self.deletes[ord.slot];
+                (del.src, del.dst, del.rank)
+            };
+            if key_src != src || key_dst != dst || key_rank != rank {
                 continue;
             }
             if ord.is_insert {
                 net_insert = true;
-                net_delete = false;
             } else if net_insert {
                 net_insert = false;
-            } else {
-                net_delete = true;
             }
         }
-        let _ = net_delete;
         net_insert
     }
 
@@ -181,7 +171,14 @@ impl EdgeStagingBatch {
         let mut net_insert = false;
         let mut net_delete = false;
         for ord in &self.order {
-            if ord.src != src || ord.dst != dst || ord.rank != rank {
+            let (key_src, key_dst, key_rank) = if ord.is_insert {
+                let ins = &self.inserts[ord.slot];
+                (ins.src, ins.dst, ins.rank)
+            } else {
+                let del = &self.deletes[ord.slot];
+                (del.src, del.dst, del.rank)
+            };
+            if key_src != src || key_dst != dst || key_rank != rank {
                 continue;
             }
             if ord.is_insert {
@@ -193,7 +190,6 @@ impl EdgeStagingBatch {
                 net_delete = true;
             }
         }
-        let _ = net_insert;
         net_delete
     }
 

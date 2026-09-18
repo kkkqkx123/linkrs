@@ -360,6 +360,43 @@ impl EdgeStore {
         self.compact_properties(bound);
     }
 
+    /// Reclaim authority tombstones below a global watermark.
+    ///
+    /// Only entries whose topology rows are gone in both directions and whose
+    /// property row is gone are removed, and only when the deletion timestamp
+    /// is below the watermark-derived cutoff. The cutoff comes from the
+    /// shared watermark capture, never from the table-local pin. A nonzero
+    /// cross-copy audit aborts the reclaim so dangling references never lose
+    /// their authority record.
+    pub fn reclaim_authority_with_watermarks(
+        &mut self,
+        watermarks: &graphdb_transaction::MvccWatermarks,
+        margin: Timestamp,
+    ) -> usize {
+        let cutoff = watermarks.safe_gc_timestamp_with_margin(margin);
+        if cutoff == Timestamp::MAX {
+            return 0;
+        }
+        let (orphan_mappings, orphan_csr_rows, live_orphans) = self.copy_audit();
+        if orphan_mappings + orphan_csr_rows + live_orphans > 0 {
+            log::debug!(
+                "reclaim_authority: audit nonzero (mappings={}, csr_rows={}, live_orphans={}), skipping",
+                orphan_mappings,
+                orphan_csr_rows,
+                live_orphans
+            );
+            return 0;
+        }
+        let mut live_topology = std::collections::HashSet::new();
+        for (_, nbr) in self.out_csr.iter_all().chain(self.in_csr.iter_all()) {
+            live_topology.insert(nbr.edge_id);
+        }
+        let properties = &self.properties;
+        self.mvcc.reclaim_below(cutoff, |edge_id| {
+            !live_topology.contains(&edge_id) && !properties.contains_edge(edge_id)
+        })
+    }
+
     pub fn compact_properties(&mut self, bound: Timestamp) {
         let mut valid_edge_ids = std::collections::HashSet::new();
         for (edge_id, _pos) in self.properties.edge_mappings() {
