@@ -20,7 +20,9 @@
 
 use graphdb_core::{StorageError, StorageResult};
 
+use super::bundled_csr::BundledCsr;
 use super::mutable_csr::VertexEdgesIter;
+use super::pure_csr::PureTopologyCsr;
 use super::{
     CsrBase, EdgeId, EdgePosition, EdgeStrategy, FragmentationStats, FrozenRowIter, HotNbr,
     ImmutableCsr, ImmutableCsrIterator, MappedFrozen, MappedFrozenIterator, MappedFrozenRowIter,
@@ -53,6 +55,8 @@ macro_rules! dispatch {
         match $self {
             CsrVariant::Multiple(csr) => csr.$method($($arg),+),
             CsrVariant::Single(csr) => csr.$method($($arg),+),
+            CsrVariant::Pure(csr) => csr.$method($($arg),+),
+            CsrVariant::Bundled(csr) => csr.$method($($arg),+),
             CsrVariant::Frozen(csr) => csr.$method($($arg),+),
             CsrVariant::Mapped(csr) => csr.$method($($arg),+),
             CsrVariant::None { .. } => $default,
@@ -64,6 +68,8 @@ macro_rules! dispatch {
         match $self {
             CsrVariant::Multiple(csr) => csr.$method(),
             CsrVariant::Single(csr) => csr.$method(),
+            CsrVariant::Pure(csr) => csr.$method(),
+            CsrVariant::Bundled(csr) => csr.$method(),
             CsrVariant::Frozen(csr) => csr.$method(),
             CsrVariant::Mapped(csr) => csr.$method(),
             CsrVariant::None { .. } => $default,
@@ -81,22 +87,16 @@ macro_rules! dispatch {
 #[derive(Debug, Clone)]
 pub enum CsrVariant {
     /// Multi-edge mutable CSR: each vertex can have multiple outgoing edges
-    ///
-    /// Boxed so the much smaller `Single`/`None` variants do not pay the
-    /// 264-byte size of `MutableCsr` in every enum value.
     Multiple(Box<MutableCsr>),
     /// Single-edge mutable CSR: each vertex has at most one outgoing edge
     Single(SingleMutableCsr),
+    /// Pure topology CSR: 12 bytes/edge, no rank, no timestamps
+    Pure(Box<PureTopologyCsr>),
+    /// Bundled CSR: 20 bytes/edge, inline single scalar value column
+    Bundled(Box<BundledCsr>),
     /// Frozen packed CSR: read-only until explicitly unfrozen
-    ///
-    /// Boxed like `Multiple` so small variants never pay the packed segment
-    /// size in every enum value.
     Frozen(Box<ImmutableCsr>),
-    /// Memory-mapped frozen CSR: same read-only content as `Frozen`, served
-    /// straight from the serving file instead of the heap
-    ///
-    /// Clones share one mapping through the reference count. Checkpoints
-    /// treat it as frozen bytes: dumps are authoritative and identical.
+    /// Memory-mapped frozen CSR: same read-only content as `Frozen`
     Mapped(Box<MappedFrozen>),
     /// No-edge placeholder: vertices exist but have no outgoing edges
     None { vertex_capacity: usize },
@@ -136,6 +136,8 @@ impl CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.clear(),
             CsrVariant::Single(csr) => csr.clear(),
+            CsrVariant::Pure(csr) => csr.clear(),
+            CsrVariant::Bundled(csr) => csr.clear(),
             CsrVariant::Frozen(csr) => csr.clear(),
             CsrVariant::Mapped(_) => unreachable!("mapped view replaced above"),
             CsrVariant::None { .. } => {}
@@ -209,6 +211,8 @@ impl CsrBase for CsrVariant {
             CsrVariant::None { vertex_capacity } => *vertex_capacity,
             CsrVariant::Multiple(csr) => csr.vertex_capacity(),
             CsrVariant::Single(csr) => csr.vertex_capacity(),
+            CsrVariant::Pure(csr) => csr.vertex_capacity(),
+            CsrVariant::Bundled(csr) => csr.vertex_capacity(),
             CsrVariant::Frozen(csr) => csr.vertex_capacity(),
             CsrVariant::Mapped(csr) => csr.vertex_capacity(),
         }
@@ -245,6 +249,16 @@ impl CsrBase for CsrVariant {
                 result.extend(csr.dump());
                 result
             }
+            CsrVariant::Pure(csr) => {
+                let mut result = vec![4u8];
+                result.extend(csr.dump());
+                result
+            }
+            CsrVariant::Bundled(csr) => {
+                let mut result = vec![5u8];
+                result.extend(csr.dump());
+                result
+            }
         }
     }
 
@@ -268,6 +282,14 @@ impl CsrBase for CsrVariant {
             }
             CsrVariant::Mapped(csr) => {
                 out.push(3u8);
+                csr.dump_into(out);
+            }
+            CsrVariant::Pure(csr) => {
+                out.push(4u8);
+                csr.dump_into(out);
+            }
+            CsrVariant::Bundled(csr) => {
+                out.push(5u8);
                 csr.dump_into(out);
             }
         }
@@ -311,6 +333,18 @@ impl CsrBase for CsrVariant {
                 *self = CsrVariant::Frozen(Box::new(csr));
                 Ok(())
             }
+            4 => {
+                let mut csr = PureTopologyCsr::default();
+                csr.load(&data[1..])?;
+                *self = CsrVariant::Pure(Box::new(csr));
+                Ok(())
+            }
+            5 => {
+                let mut csr = BundledCsr::default();
+                csr.load(&data[1..])?;
+                *self = CsrVariant::Bundled(Box::new(csr));
+                Ok(())
+            }
             _ => Err(graphdb_core::StorageError::deserialize_error(
                 "Invalid CSR variant tag in serialized data",
             )),
@@ -349,6 +383,60 @@ impl CsrVariant {
                 out.push(3u8);
                 csr.dump_into(out);
             }
+            CsrVariant::Pure(csr) => {
+                out.push(4u8);
+                csr.dump_into(out);
+            }
+            CsrVariant::Bundled(csr) => {
+                out.push(5u8);
+                csr.dump_into(out);
+            }
+        }
+    }
+
+    /// Borrow-based direct dump reusing caller-owned column buffers.
+    ///
+    /// Same variant tagging as `dump_into_with_scratch`, but the multi-edge
+    /// form writes its topology columns at native widths (raw version
+    /// marker) instead of the integer column encoding. The single-edge and
+    /// frozen forms keep their own canonical bytes: the raw mode is defined
+    /// only for the multi-edge column layout, so other forms persist
+    /// unchanged rather than being forced through an encoding they do not
+    /// define. The loader dispatches every form by marker.
+    pub fn dump_into_with_scratch_raw(
+        &self,
+        out: &mut Vec<u8>,
+        scratch: &mut super::mutable_csr::persistence::CsrDumpScratch,
+    ) {
+        match self {
+            CsrVariant::None { vertex_capacity } => {
+                out.push(0u8);
+                out.extend((*vertex_capacity as u64).to_le_bytes());
+            }
+            CsrVariant::Multiple(csr) => {
+                out.push(1u8);
+                csr.dump_into_with_scratch_raw(out, scratch);
+            }
+            CsrVariant::Single(csr) => {
+                out.push(2u8);
+                csr.dump_into(out);
+            }
+            CsrVariant::Frozen(csr) => {
+                out.push(3u8);
+                csr.dump_into(out);
+            }
+            CsrVariant::Mapped(csr) => {
+                out.push(3u8);
+                csr.dump_into(out);
+            }
+            CsrVariant::Pure(csr) => {
+                out.push(4u8);
+                csr.dump_into(out);
+            }
+            CsrVariant::Bundled(csr) => {
+                out.push(5u8);
+                csr.dump_into(out);
+            }
         }
     }
 }
@@ -364,6 +452,8 @@ impl MutableCsrTrait for CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::Single(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
+            CsrVariant::Pure(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
+            CsrVariant::Bundled(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::Frozen(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::Mapped(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::None { .. } => Err(StorageError::invalid_operation(
@@ -396,6 +486,10 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Single(csr) => {
                 csr.delete_edge_by_dst_reporting(src_vid, dst, ts, on_deleted)
             }
+            CsrVariant::Pure(csr) => csr.delete_edge_by_dst_reporting(src_vid, dst, ts, on_deleted),
+            CsrVariant::Bundled(csr) => {
+                csr.delete_edge_by_dst_reporting(src_vid, dst, ts, on_deleted)
+            }
             CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => 0,
             CsrVariant::None { .. } => 0,
         }
@@ -415,6 +509,12 @@ impl MutableCsrTrait for CsrVariant {
                 ts,
                 &mut |edge_id, position| on_deleted(edge_id, Some(position)),
             ),
+            CsrVariant::Pure(csr) => {
+                csr.delete_edge_by_dst_reporting_positioned(src_vid, dst, ts, on_deleted)
+            }
+            CsrVariant::Bundled(csr) => {
+                csr.delete_edge_by_dst_reporting_positioned(src_vid, dst, ts, on_deleted)
+            }
             _ => self.delete_edge_by_dst_reporting(src_vid, dst, ts, &mut |edge_id| {
                 on_deleted(edge_id, None)
             }),
@@ -424,6 +524,8 @@ impl MutableCsrTrait for CsrVariant {
     fn locate_edge(&self, src_vid: u32, edge_id: EdgeId) -> Option<(EdgePosition, Nbr)> {
         match self {
             CsrVariant::Multiple(csr) => csr.locate_edge(src_vid, edge_id),
+            CsrVariant::Pure(csr) => csr.locate_edge(src_vid, edge_id),
+            CsrVariant::Bundled(csr) => csr.locate_edge(src_vid, edge_id),
             CsrVariant::Frozen(csr) => csr.locate_edge(src_vid, edge_id),
             CsrVariant::Mapped(csr) => csr.locate_edge(src_vid, edge_id),
             _ => None,
@@ -441,6 +543,10 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Multiple(csr) => {
                 csr.delete_edge_at_position(src_vid, position, expected, ts)
             }
+            CsrVariant::Pure(csr) => csr.delete_edge_at_position(src_vid, position, expected, ts),
+            CsrVariant::Bundled(csr) => {
+                csr.delete_edge_at_position(src_vid, position, expected, ts)
+            }
             _ => self.delete_edge(src_vid, expected, ts),
         }
     }
@@ -456,6 +562,10 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Multiple(csr) => {
                 csr.revert_delete_at_position(src_vid, position, expected, ts)
             }
+            CsrVariant::Pure(csr) => csr.revert_delete_at_position(src_vid, position, expected, ts),
+            CsrVariant::Bundled(csr) => {
+                csr.revert_delete_at_position(src_vid, position, expected, ts)
+            }
             _ => self.revert_delete_by_edge_id(src_vid, expected, ts),
         }
     }
@@ -469,6 +579,8 @@ impl MutableCsrTrait for CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
             CsrVariant::Single(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
+            CsrVariant::Pure(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
+            CsrVariant::Bundled(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
             CsrVariant::Frozen(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
             CsrVariant::Mapped(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
             CsrVariant::None { .. } => Ok(false),
@@ -495,6 +607,8 @@ impl MutableCsrTrait for CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::Single(csr) => csr.fill_physical_into(src_vid, out),
+            CsrVariant::Pure(csr) => csr.fill_physical_into(src_vid, out),
+            CsrVariant::Bundled(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::Frozen(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::Mapped(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::None { .. } => out.clear(),
@@ -505,6 +619,8 @@ impl MutableCsrTrait for CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.has_physical_entries(vid),
             CsrVariant::Single(csr) => csr.has_physical_entries(vid),
+            CsrVariant::Pure(csr) => csr.has_physical_entries(vid),
+            CsrVariant::Bundled(csr) => csr.has_physical_entries(vid),
             CsrVariant::Frozen(csr) => csr.has_physical_entries(vid),
             CsrVariant::Mapped(csr) => csr.has_physical_entries(vid),
             CsrVariant::None { .. } => false,
@@ -515,6 +631,8 @@ impl MutableCsrTrait for CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.primary_contains(src_vid, edge_id),
             CsrVariant::Single(csr) => csr.primary_contains(src_vid, edge_id),
+            CsrVariant::Pure(csr) => csr.primary_contains(src_vid, edge_id),
+            CsrVariant::Bundled(csr) => csr.primary_contains(src_vid, edge_id),
             CsrVariant::Frozen(csr) => csr.primary_contains(src_vid, edge_id),
             CsrVariant::Mapped(csr) => csr.primary_contains(src_vid, edge_id),
             CsrVariant::None { .. } => false,
@@ -550,6 +668,12 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Single(csr) => {
                 csr.compact_vertex_with_reporting(vid, cutoff, on_edge_removed)
             }
+            CsrVariant::Pure(csr) => {
+                csr.compact_vertex_with_reporting(vid, cutoff, on_edge_removed)
+            }
+            CsrVariant::Bundled(csr) => {
+                csr.compact_vertex_with_reporting(vid, cutoff, on_edge_removed)
+            }
             CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => 0,
             CsrVariant::None { .. } => 0,
         }
@@ -559,6 +683,8 @@ impl MutableCsrTrait for CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.reclaimable_count(vid, cutoff),
             CsrVariant::Single(csr) => csr.reclaimable_count(vid, cutoff),
+            CsrVariant::Pure(csr) => csr.reclaimable_count(vid, cutoff),
+            CsrVariant::Bundled(csr) => csr.reclaimable_count(vid, cutoff),
             CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => 0,
             CsrVariant::None { .. } => 0,
         }
@@ -568,6 +694,7 @@ impl MutableCsrTrait for CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.vertex_needs_compact(vid, cutoff),
             CsrVariant::Single(csr) => csr.reclaimable_count(vid, cutoff) > 0,
+            CsrVariant::Pure(_) | CsrVariant::Bundled(_) => false,
             CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => false,
             CsrVariant::None { .. } => false,
         }
@@ -577,6 +704,8 @@ impl MutableCsrTrait for CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.vertex_census(vid),
             CsrVariant::Single(csr) => csr.vertex_census(vid),
+            CsrVariant::Pure(csr) => csr.vertex_census(vid),
+            CsrVariant::Bundled(csr) => csr.vertex_census(vid),
             CsrVariant::Frozen(csr) => csr.vertex_census(vid),
             CsrVariant::Mapped(csr) => csr.vertex_census(vid),
             CsrVariant::None { .. } => (0, 0, 0),
@@ -587,6 +716,7 @@ impl MutableCsrTrait for CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.vertex_reclaim_probe(vid, cutoff),
             CsrVariant::Single(csr) => csr.vertex_reclaim_probe(vid, cutoff),
+            CsrVariant::Pure(_) | CsrVariant::Bundled(_) => (0, 0),
             CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => (0, 0),
             CsrVariant::None { .. } => (0, 0),
         }
@@ -595,6 +725,8 @@ impl MutableCsrTrait for CsrVariant {
     fn row_gap(&self, vid: u32) -> usize {
         match self {
             CsrVariant::Multiple(csr) => csr.row_gap(vid),
+            CsrVariant::Pure(csr) => csr.row_gap(vid),
+            CsrVariant::Bundled(csr) => csr.row_gap(vid),
             CsrVariant::Single(_)
             | CsrVariant::Frozen(_)
             | CsrVariant::Mapped(_)
@@ -605,6 +737,8 @@ impl MutableCsrTrait for CsrVariant {
     fn row_density(&self, vid: u32) -> f32 {
         match self {
             CsrVariant::Multiple(csr) => csr.row_density(vid),
+            CsrVariant::Pure(csr) => csr.row_density(vid),
+            CsrVariant::Bundled(csr) => csr.row_density(vid),
             CsrVariant::Single(_)
             | CsrVariant::Frozen(_)
             | CsrVariant::Mapped(_)
@@ -615,6 +749,8 @@ impl MutableCsrTrait for CsrVariant {
     fn rebalance_row(&mut self, vid: u32) -> bool {
         match self {
             CsrVariant::Multiple(csr) => csr.rebalance_row(vid),
+            CsrVariant::Pure(csr) => csr.rebalance_row(vid),
+            CsrVariant::Bundled(csr) => csr.rebalance_row(vid),
             CsrVariant::Single(_)
             | CsrVariant::Frozen(_)
             | CsrVariant::Mapped(_)
@@ -627,6 +763,8 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::None { .. } => std::mem::size_of::<Self>(),
             CsrVariant::Multiple(csr) => csr.used_memory_size(),
             CsrVariant::Single(csr) => csr.used_memory_size(),
+            CsrVariant::Pure(csr) => csr.used_memory_size(),
+            CsrVariant::Bundled(csr) => csr.used_memory_size(),
             CsrVariant::Frozen(csr) => csr.used_memory_size(),
             CsrVariant::Mapped(csr) => csr.used_memory_size(),
         }
@@ -645,6 +783,10 @@ impl CsrVariant {
             CsrVariant::Single(csr) => Some(CsrRowIter::Single(
                 csr.iter_edges_of(src_vid, ts).into_iter(),
             )),
+            CsrVariant::Pure(csr) => Some(CsrRowIter::Pure(csr.edges_of(src_vid, ts).into_iter())),
+            CsrVariant::Bundled(csr) => {
+                Some(CsrRowIter::Bundled(csr.edges_of(src_vid, ts).into_iter()))
+            }
             CsrVariant::Frozen(csr) => Some(CsrRowIter::Frozen(csr.iter_edges_of(src_vid, ts))),
             CsrVariant::Mapped(csr) => Some(CsrRowIter::Mapped(csr.iter_edges_of(src_vid, ts))),
             CsrVariant::None { .. } => None,
@@ -656,6 +798,32 @@ impl CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => CsrIterator::Multiple(csr.iter(ts)),
             CsrVariant::Single(csr) => CsrIterator::Single(csr.iter(ts)),
+            CsrVariant::Pure(csr) => {
+                let cap = csr.vertex_capacity();
+                CsrIterator::Pure(
+                    (0..cap as u32)
+                        .flat_map(move |vid| {
+                            csr.edges_of(vid, ts)
+                                .into_iter()
+                                .map(move |nbr| (VertexId::from_int64(vid as i64), nbr))
+                        })
+                        .collect::<Vec<_>>()
+                        .into_iter(),
+                )
+            }
+            CsrVariant::Bundled(csr) => {
+                let cap = csr.vertex_capacity();
+                CsrIterator::Bundled(
+                    (0..cap as u32)
+                        .flat_map(move |vid| {
+                            csr.edges_of(vid, ts)
+                                .into_iter()
+                                .map(move |nbr| (VertexId::from_int64(vid as i64), nbr))
+                        })
+                        .collect::<Vec<_>>()
+                        .into_iter(),
+                )
+            }
             CsrVariant::Frozen(csr) => CsrIterator::Frozen(csr.iter(ts)),
             CsrVariant::Mapped(csr) => CsrIterator::Mapped(csr.iter(ts)),
             CsrVariant::None { .. } => CsrIterator::None,
@@ -665,11 +833,42 @@ impl CsrVariant {
     /// Iterate over all physically present entries, including tombstoned ones.
     ///
     /// Used when rebuilding the CSR (e.g. vertex ID remapping) so entries
-    /// marked as deleted survive the rebuild.
+    /// marked as deleted survive the rebuild. Pure and bundled holes carry
+    /// the unassignable sentinel instead of an edge, so they are skipped:
+    /// no rebuild may resurrect a hole as a live edge.
     pub fn iter_all(&self) -> CsrIterator<'_> {
+        use graphdb_core::types::INVALID_EDGE_ID;
         match self {
             CsrVariant::Multiple(csr) => CsrIterator::Multiple(csr.iter_all()),
             CsrVariant::Single(csr) => CsrIterator::Single(csr.iter_all()),
+            CsrVariant::Pure(csr) => {
+                let cap = csr.vertex_capacity();
+                CsrIterator::Pure(
+                    (0..cap as u32)
+                        .flat_map(|vid| {
+                            csr.physical_edges_of(vid)
+                                .into_iter()
+                                .filter(|nbr| nbr.edge_id != INVALID_EDGE_ID)
+                                .map(move |nbr| (VertexId::from_int64(vid as i64), nbr))
+                        })
+                        .collect::<Vec<_>>()
+                        .into_iter(),
+                )
+            }
+            CsrVariant::Bundled(csr) => {
+                let cap = csr.vertex_capacity();
+                CsrIterator::Bundled(
+                    (0..cap as u32)
+                        .flat_map(|vid| {
+                            csr.physical_edges_of(vid)
+                                .into_iter()
+                                .filter(|nbr| nbr.edge_id != INVALID_EDGE_ID)
+                                .map(move |nbr| (VertexId::from_int64(vid as i64), nbr))
+                        })
+                        .collect::<Vec<_>>()
+                        .into_iter(),
+                )
+            }
             CsrVariant::Frozen(csr) => CsrIterator::Frozen(csr.iter_all()),
             CsrVariant::Mapped(csr) => CsrIterator::Mapped(csr.iter_all()),
             CsrVariant::None { .. } => CsrIterator::None,
@@ -691,6 +890,7 @@ impl CsrVariant {
                 csr.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed)
             }
             CsrVariant::Single(csr) => csr.compact_with_ts_reporting(cutoff, on_edge_removed),
+            CsrVariant::Pure(_) | CsrVariant::Bundled(_) => 0,
             CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => 0,
             CsrVariant::None { .. } => 0,
         }
@@ -704,6 +904,8 @@ impl CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.visit_physical(src_vid, f),
             CsrVariant::Single(csr) => csr.visit_physical(src_vid, f),
+            CsrVariant::Pure(csr) => csr.visit_physical(src_vid, f),
+            CsrVariant::Bundled(csr) => csr.visit_physical(src_vid, f),
             CsrVariant::Frozen(csr) => csr.visit_physical(src_vid, f),
             CsrVariant::Mapped(csr) => csr.visit_physical(src_vid, f),
             CsrVariant::None { .. } => {}
@@ -722,6 +924,8 @@ impl CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.visit_hot(src_vid, f),
             CsrVariant::Single(csr) => csr.visit_hot(src_vid, f),
+            CsrVariant::Pure(csr) => csr.visit_hot(src_vid, f),
+            CsrVariant::Bundled(csr) => csr.visit_hot(src_vid, f),
             CsrVariant::Frozen(csr) => csr.visit_hot(src_vid, f),
             CsrVariant::Mapped(csr) => csr.visit_hot(src_vid, f),
             CsrVariant::None { .. } => {}
@@ -736,9 +940,114 @@ impl CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::Single(csr) => csr.fill_physical_into(src_vid, out),
+            CsrVariant::Pure(csr) => csr.fill_physical_into(src_vid, out),
+            CsrVariant::Bundled(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::Frozen(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::Mapped(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::None { .. } => out.clear(),
+        }
+    }
+
+    /// Whether this group stores its single scalar inline.
+    pub fn is_bundled(&self) -> bool {
+        matches!(self, CsrVariant::Bundled(_))
+    }
+
+    /// Insert one edge carrying its inline value.
+    ///
+    /// Only the bundled form accepts a value; every other form rejects the
+    /// call instead of silently dropping the property.
+    pub fn insert_edge_with_value(
+        &mut self,
+        src_vid: u32,
+        dst: VertexId,
+        edge_id: EdgeId,
+        value: Option<u64>,
+    ) -> StorageResult<()> {
+        match self {
+            CsrVariant::Bundled(csr) => csr.insert_edge_with_value(src_vid, dst, edge_id, value),
+            _ => Err(StorageError::invalid_operation(
+                "inline values require the bundled record form".to_string(),
+            )),
+        }
+    }
+
+    /// Read one edge's inline value within its source row.
+    pub fn bundled_value_by_edge_id(&self, src_vid: u32, edge_id: EdgeId) -> Option<(u64, bool)> {
+        match self {
+            CsrVariant::Bundled(csr) => csr.value_by_edge_id(src_vid, edge_id),
+            _ => None,
+        }
+    }
+
+    /// Overwrite one edge's inline value within its source row.
+    pub fn bundled_set_value_by_edge_id(
+        &mut self,
+        src_vid: u32,
+        edge_id: EdgeId,
+        value: Option<u64>,
+    ) -> bool {
+        match self {
+            CsrVariant::Bundled(csr) => csr.set_value_by_edge_id(src_vid, edge_id, value),
+            _ => false,
+        }
+    }
+
+    /// Read the inline value of the live edge for one endpoint.
+    pub fn bundled_value_by_endpoint(&self, src_vid: u32, endpoint: u32) -> Option<(u64, bool)> {
+        match self {
+            CsrVariant::Bundled(csr) => csr.value_by_endpoint(src_vid, endpoint),
+            _ => None,
+        }
+    }
+
+    /// Overwrite the inline value of the live edge for one endpoint.
+    pub fn bundled_set_value_by_endpoint(
+        &mut self,
+        src_vid: u32,
+        endpoint: u32,
+        value: Option<u64>,
+    ) -> bool {
+        match self {
+            CsrVariant::Bundled(csr) => csr.set_value_by_endpoint(src_vid, endpoint, value),
+            _ => false,
+        }
+    }
+
+    /// Revert a deletion restoring the caller's value alongside the topology.
+    pub fn bundled_revert_with_value(
+        &mut self,
+        src_vid: u32,
+        position: EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+        value: Option<u64>,
+    ) -> bool {
+        match self {
+            CsrVariant::Bundled(csr) => {
+                csr.revert_delete_at_position_with_value(src_vid, position, expected, ts, value)
+            }
+            _ => false,
+        }
+    }
+
+    /// Visit every physically stored entry of one vertex with its inline
+    /// value (`None` for NULL slots). Non-bundled forms visit with `None`.
+    pub fn visit_physical_with_values<F>(&self, src_vid: u32, mut f: F)
+    where
+        F: FnMut(Nbr, Option<u64>) -> bool,
+    {
+        match self {
+            CsrVariant::Bundled(csr) => csr.visit_physical_with_values(src_vid, f),
+            _ => self.visit_physical(src_vid, |nbr| f(nbr, None)),
+        }
+    }
+
+    /// Whether any slot holds a valid inline value.
+    pub fn bundled_has_valid_values(&self) -> bool {
+        match self {
+            CsrVariant::Bundled(csr) => csr.any_valid_values(),
+            _ => false,
         }
     }
 }
@@ -749,6 +1058,10 @@ pub enum CsrIterator<'a> {
     Multiple(MutableCsrIterator<'a>),
     /// Iterator over single-edge CSR
     Single(SingleMutableCsrIterator<'a>),
+    /// Iterator over pure topology CSR
+    Pure(std::vec::IntoIter<(VertexId, Nbr)>),
+    /// Iterator over bundled CSR
+    Bundled(std::vec::IntoIter<(VertexId, Nbr)>),
     /// Iterator over frozen packed CSR
     Frozen(ImmutableCsrIterator<'a>),
     /// Iterator over memory-mapped frozen CSR (owns its mapping handle)
@@ -764,6 +1077,8 @@ impl<'a> Iterator for CsrIterator<'a> {
         match self {
             CsrIterator::Multiple(iter) => iter.next(),
             CsrIterator::Single(iter) => iter.next(),
+            CsrIterator::Pure(iter) => iter.next(),
+            CsrIterator::Bundled(iter) => iter.next(),
             CsrIterator::Frozen(iter) => iter.next(),
             CsrIterator::Mapped(iter) => iter.next(),
             CsrIterator::None => None,
@@ -783,6 +1098,10 @@ pub enum CsrRowIter<'a> {
     Multiple(VertexEdgesIter<'a>),
     /// Single-edge row: at most one assembled slot.
     Single(std::option::IntoIter<Nbr>),
+    /// Pure topology row: collected edge list.
+    Pure(std::vec::IntoIter<Nbr>),
+    /// Bundled row: collected edge list.
+    Bundled(std::vec::IntoIter<Nbr>),
     /// Frozen row: filtered packed-slice walk.
     Frozen(FrozenRowIter<'a>),
     /// Mapped frozen row: on-demand decode walk owning its mapping handle.
@@ -796,6 +1115,8 @@ impl<'a> Iterator for CsrRowIter<'a> {
         match self {
             CsrRowIter::Multiple(iter) => iter.next(),
             CsrRowIter::Single(iter) => iter.next(),
+            CsrRowIter::Pure(iter) => iter.next(),
+            CsrRowIter::Bundled(iter) => iter.next(),
             CsrRowIter::Frozen(iter) => iter.next(),
             CsrRowIter::Mapped(iter) => iter.next(),
         }
@@ -849,7 +1170,7 @@ mod tests {
 
     #[test]
     fn test_removed_variant_tags_are_rejected() {
-        for tag in [4u8, 5u8] {
+        for tag in [6u8, 7u8] {
             let mut payload = vec![tag];
             payload.extend_from_slice(&[0u8; 8]);
             let mut csr =

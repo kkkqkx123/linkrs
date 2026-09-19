@@ -61,7 +61,7 @@ impl EdgeStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::edge::{EdgeSchema, EdgeStrategy};
+    use crate::edge::{EdgeSchema, EdgeStrategy, RecordForm};
     use crate::types::StoragePropertyDef;
     use graphdb_core::types::{DataType, Timestamp, VertexId};
     use graphdb_core::Value;
@@ -83,6 +83,7 @@ mod tests {
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
+            record_form: RecordForm::default(),
         }
     }
 

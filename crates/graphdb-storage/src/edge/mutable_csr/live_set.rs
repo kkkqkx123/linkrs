@@ -1,53 +1,65 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use super::super::csr_shared::SegmentedTable;
+use super::write::EdgePosition;
 use super::MutableCsr;
 
 /// Live width at or below this bound keeps no index.
 pub(crate) const LIVE_SET_WIDTH_BOUND: usize = 8;
 
-/// Live endpoint keys of one wide vertex.
+/// Live endpoint keys of one wide vertex with row positions.
 ///
 /// Only rows wider than [`LIVE_SET_WIDTH_BOUND`] carry a set; narrow rows
 /// hold no index and answer through row scans. Sets are created on demand by
 /// the write path and dropped by rebuilds once the row narrows again, so
 /// widths oscillating around the bound cannot accumulate stale indexes.
+///
+/// Each key maps to its row-relative slot, so point lookups on wide rows
+/// address the slot directly instead of scanning the row. Positions stay
+/// valid until the next structural change of the row (compaction, rebalance,
+/// repack, gap-closing removal or reservation rebuild); every such path
+/// rebuilds the set for the touched row through the same maintenance hook
+/// that keeps the key membership exact.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LiveKeySet {
-    keys: HashSet<(u32, i64)>,
+    positions: HashMap<(u32, i64), EdgePosition>,
 }
 
 impl LiveKeySet {
-    pub(crate) fn from_keys(keys: Vec<(u32, i64)>) -> Self {
+    pub(crate) fn from_positions(positions: Vec<((u32, i64), EdgePosition)>) -> Self {
         Self {
-            keys: keys.into_iter().collect(),
+            positions: positions.into_iter().collect(),
         }
     }
 
     pub(crate) fn contains(&self, key: &(u32, i64)) -> bool {
-        self.keys.contains(key)
+        self.positions.contains_key(key)
+    }
+
+    pub(crate) fn position(&self, key: &(u32, i64)) -> Option<EdgePosition> {
+        self.positions.get(key).copied()
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.keys.len()
+        self.positions.len()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.keys.is_empty()
+        self.positions.is_empty()
     }
 
-    pub(crate) fn insert(&mut self, key: (u32, i64)) {
-        self.keys.insert(key);
+    pub(crate) fn insert(&mut self, key: (u32, i64), position: EdgePosition) {
+        self.positions.insert(key, position);
     }
 
     pub(crate) fn remove(&mut self, key: &(u32, i64)) {
-        self.keys.remove(key);
+        self.positions.remove(key);
     }
 
     /// Heap bytes held outside the struct itself, following the memory
     /// estimate caliber used by the row statistics.
     pub(crate) fn heap_bytes(&self) -> usize {
-        self.keys.len() * (std::mem::size_of::<(u32, i64)>() + 8)
+        self.positions.len() * (std::mem::size_of::<((u32, i64), EdgePosition)>() + 8)
     }
 }
 
@@ -95,12 +107,12 @@ impl LiveSetStorage {
         }
     }
 
-    pub(crate) fn insert_key(&mut self, vid: u32, key: (u32, i64)) {
+    pub(crate) fn insert_key(&mut self, vid: u32, key: (u32, i64), position: EdgePosition) {
         let slot = self.table.slot_mut(vid);
         match slot {
-            Some(set) => set.insert(key),
+            Some(set) => set.insert(key, position),
             slot @ None => {
-                *slot = Some(LiveKeySet::from_keys(vec![key]));
+                *slot = Some(LiveKeySet::from_positions(vec![(key, position)]));
                 self.live_rows += 1;
             }
         }
@@ -220,9 +232,15 @@ impl MutableCsr {
         live
     }
 
-    pub(crate) fn track_live_insert(&mut self, vid: u32, endpoint: u32, rank: i64) {
+    pub(crate) fn track_live_insert(
+        &mut self,
+        vid: u32,
+        endpoint: u32,
+        rank: i64,
+        position: EdgePosition,
+    ) {
         if self.live_sets.get(&vid).is_some() {
-            self.live_sets.insert_key(vid, (endpoint, rank));
+            self.live_sets.insert_key(vid, (endpoint, rank), position);
             return;
         }
         // Narrow rows stay set-free until the physical row width (primary
@@ -257,26 +275,38 @@ impl MutableCsr {
             return;
         }
         let (hot, cold) = self.primary_pair(idx);
-        let mut keys = Vec::new();
-        for (h, c) in hot.iter().zip(cold.iter()) {
+        let mut positioned = Vec::new();
+        for (slot, (h, c)) in hot.iter().zip(cold.iter()).enumerate() {
             if c.is_live() {
-                keys.push((h.endpoint, h.rank));
+                positioned.push((
+                    (h.endpoint, h.rank),
+                    EdgePosition::Primary { slot: slot as u32 },
+                ));
             }
         }
         if let Some(chunks) = self.overflow_chunks.get(&vid) {
-            for chunk in chunks {
-                for (hot, cold) in chunk.hot_slice().iter().zip(chunk.cold_slice()) {
+            for (chunk_idx, chunk) in chunks.iter().enumerate() {
+                for (slot_idx, (hot, cold)) in
+                    chunk.hot_slice().iter().zip(chunk.cold_slice()).enumerate()
+                {
                     if cold.is_live() {
-                        keys.push((hot.endpoint, hot.rank));
+                        positioned.push((
+                            (hot.endpoint, hot.rank),
+                            EdgePosition::Overflow {
+                                chunk: chunk_idx as u32,
+                                slot: slot_idx as u32,
+                            },
+                        ));
                     }
                 }
             }
         }
         // Narrow rows stay set-free; only wide rows pay for the index.
-        if keys.len() <= LIVE_SET_WIDTH_BOUND {
+        if positioned.len() <= LIVE_SET_WIDTH_BOUND {
             self.live_sets.remove(&vid);
         } else {
-            self.live_sets.insert(vid, LiveKeySet::from_keys(keys));
+            self.live_sets
+                .insert(vid, LiveKeySet::from_positions(positioned));
         }
     }
 }
@@ -287,9 +317,19 @@ mod tests {
 
     #[test]
     fn set_contains_and_removes() {
-        let mut set = LiveKeySet::from_keys(vec![(3, 0), (1, 0), (2, 0)]);
+        use super::super::write::EdgePosition;
+        let mut set = LiveKeySet::from_positions(vec![
+            ((3, 0), EdgePosition::Primary { slot: 0 }),
+            ((1, 0), EdgePosition::Primary { slot: 1 }),
+            ((2, 0), EdgePosition::Primary { slot: 2 }),
+        ]);
         assert!(set.contains(&(1, 0)));
+        assert_eq!(
+            set.position(&(1, 0)),
+            Some(EdgePosition::Primary { slot: 1 })
+        );
         assert!(!set.contains(&(9, 0)));
+        assert_eq!(set.position(&(9, 0)), None);
         set.remove(&(2, 0));
         assert!(!set.contains(&(2, 0)));
         assert_eq!(set.len(), 2);
@@ -297,12 +337,17 @@ mod tests {
 
     #[test]
     fn wide_rows_carry_a_set() {
+        use super::super::write::EdgePosition;
         let mut set = LiveKeySet::default();
         for i in 0..=(LIVE_SET_WIDTH_BOUND as u32) {
-            set.insert((i, 0));
+            set.insert((i, 0), EdgePosition::Primary { slot: i });
         }
         for i in 0..=(LIVE_SET_WIDTH_BOUND as u32) {
             assert!(set.contains(&(i, 0)));
+            assert_eq!(
+                set.position(&(i, 0)),
+                Some(EdgePosition::Primary { slot: i })
+            );
         }
         set.remove(&(0, 0));
         assert!(!set.contains(&(0, 0)));
@@ -310,9 +355,10 @@ mod tests {
 
     #[test]
     fn duplicate_inserts_stay_unique() {
+        use super::super::write::EdgePosition;
         let mut set = LiveKeySet::default();
-        set.insert((1, 5));
-        set.insert((1, 5));
+        set.insert((1, 5), EdgePosition::Primary { slot: 0 });
+        set.insert((1, 5), EdgePosition::Primary { slot: 0 });
         assert_eq!(set.len(), 1);
     }
 
@@ -325,7 +371,13 @@ mod tests {
         assert!(storage.get(&999_999).is_none());
         // Untouched segments allocate nothing: one indexed row far out must
         // not inflate the table beyond its own segment slab.
-        storage.insert(999_999, LiveKeySet::from_keys(vec![(7, 0)]));
+        storage.insert(
+            999_999,
+            LiveKeySet::from_positions(vec![(
+                (7, 0),
+                super::super::write::EdgePosition::Primary { slot: 0 },
+            )]),
+        );
         assert!(storage.get(&999_999).is_some());
         let _ = SEGMENT_SIZE;
     }
@@ -333,16 +385,17 @@ mod tests {
     #[test]
     fn sparse_rows_route_and_iterate_in_order() {
         use super::super::super::csr_shared::SEGMENT_SIZE;
+        use super::super::write::EdgePosition;
         let mut storage = LiveSetStorage::new();
         let seg = SEGMENT_SIZE as u32;
-        storage.insert_key(3 * seg + 7, (9, 0));
-        storage.insert_key(5, (1, 0));
-        storage.insert_key(seg, (2, 0));
+        storage.insert_key(3 * seg + 7, (9, 0), EdgePosition::Primary { slot: 0 });
+        storage.insert_key(5, (1, 0), EdgePosition::Primary { slot: 0 });
+        storage.insert_key(seg, (2, 0), EdgePosition::Primary { slot: 0 });
         assert!(storage.get(&seg).is_some_and(|set| set.contains(&(2, 0))));
         assert!(storage.get(&(seg - 1)).is_none());
         storage.remove_key(seg, &(2, 0));
         assert!(storage.get(&seg).is_none());
-        storage.insert_key(seg, (4, 0));
+        storage.insert_key(seg, (4, 0), EdgePosition::Primary { slot: 3 });
         assert!(storage.get(&seg).is_some_and(|set| set.contains(&(4, 0))));
     }
 }

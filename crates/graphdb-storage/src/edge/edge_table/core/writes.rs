@@ -4,6 +4,7 @@ use super::super::super::MutableCsrTrait;
 use super::super::config::UpdateEdgePropertyByKeyParams;
 use super::super::staging::{EdgeStagingBatch, StagedInsert};
 use super::EdgeStore;
+use crate::edge::bundled_csr::encode_scalar;
 use crate::types::PropertyId;
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
@@ -240,23 +241,31 @@ impl EdgeStore {
         let _ = self.in_csr.reserve_for_batch(&in_counts);
     }
 
-    fn convert_property_values(
+    /// Convert staged property values to column positions with cast values.
+    ///
+    /// Each name resolves once through the column index cache; the returned
+    /// positions feed the property store directly, so the per-edge insert
+    /// performs no further name lookup, string clone or string comparison.
+    /// Names for the secondary property index resolve from the schema by
+    /// the same positions at the call site.
+    pub(crate) fn convert_property_values(
         &self,
         property_values: &[(String, Value)],
-    ) -> StorageResult<Vec<(String, Value)>> {
-        let mut converted_values: Vec<(String, Value)> = Vec::with_capacity(property_values.len());
+    ) -> StorageResult<Vec<(usize, Value)>> {
+        let mut converted_values: Vec<(usize, Value)> = Vec::with_capacity(property_values.len());
         for (name, value) in property_values {
             let prop_idx = self
                 .property_index_cache
                 .get(name)
+                .copied()
                 .ok_or_else(|| StorageError::column_not_found(name.clone()))?;
-            let prop_def = &self.schema.properties[*prop_idx];
+            let prop_def = &self.schema.properties[prop_idx];
 
             if value.data_type() != prop_def.data_type {
                 let converted = value.try_cast_to(&prop_def.data_type)?;
-                converted_values.push((name.clone(), converted));
+                converted_values.push((prop_idx, converted));
             } else {
-                converted_values.push((name.clone(), value.clone()));
+                converted_values.push((prop_idx, value.clone()));
             }
         }
         Ok(converted_values)
@@ -488,6 +497,9 @@ impl EdgeStore {
         property_values: &[(String, Value)],
         ts: Timestamp,
     ) -> StorageResult<EdgeId> {
+        if self.is_bundled() {
+            return self.apply_staged_insert_bundled(src, dst, rank, property_values, ts);
+        }
         let converted_values = self.convert_property_values(property_values)?;
         let edge_id = self.next_edge_id.fetch_add();
 
@@ -502,7 +514,7 @@ impl EdgeStore {
 
         if let Err(e) = self
             .properties
-            .insert_for_edge(edge_id, &converted_values, ts)
+            .insert_for_edge_at(edge_id, &converted_values, ts)
         {
             self.mvcc.remove_edge_timestamps(edge_id);
             return Err(e);
@@ -544,8 +556,9 @@ impl EdgeStore {
             {
                 converted_values
                     .iter()
-                    .map(|(prop_name, prop_value)| {
+                    .map(|(prop_idx, prop_value)| {
                         let started = std::time::Instant::now();
+                        let prop_name = &self.schema.properties[*prop_idx].name;
                         let result = index.insert(prop_name, prop_value, src, dst, rank, label, ts);
                         let latency = started.elapsed().as_millis() as u64;
                         (prop_name.clone(), result, latency)
@@ -554,6 +567,134 @@ impl EdgeStore {
             } else {
                 Vec::new()
             };
+            for (prop_name, result, latency) in outcomes {
+                self.note_index_result(&prop_name, result, latency);
+            }
+        }
+
+        self.mark_properties_dirty();
+        self.edge_owner
+            .insert(edge_id, self.owner_gid_for(src, dst));
+        self.debug_assert_copies_consistent(edge_id);
+        Ok(edge_id)
+    }
+
+    /// Validate one staged insert against the bundled single-property shape
+    /// and encode it to its storage word (`None` for NULL/absent).
+    fn convert_bundled_value(
+        &self,
+        property_values: &[(String, Value)],
+    ) -> StorageResult<Option<u64>> {
+        if property_values.is_empty() {
+            return Ok(None);
+        }
+        if property_values.len() > 1 {
+            return Err(StorageError::invalid_operation(
+                "bundled record form stores exactly one property".to_string(),
+            ));
+        }
+        let Some(def) = self.schema.properties.first() else {
+            return Err(StorageError::column_not_found(property_values[0].0.clone()));
+        };
+        let (name, value) = &property_values[0];
+        if name != &def.name {
+            return Err(StorageError::column_not_found(name.clone()));
+        }
+        let cast = if value.data_type() != def.data_type {
+            value.try_cast_to(&def.data_type)?
+        } else {
+            value.clone()
+        };
+        match cast {
+            Value::Null(_) | Value::Empty => Ok(None),
+            _ => Ok(Some(encode_scalar(&cast))),
+        }
+    }
+
+    /// Decode one stored inline word back to its indexed pair.
+    fn bundled_index_pair(&self, inline_value: Option<u64>) -> Option<(String, Value)> {
+        let raw = inline_value?;
+        let prop = self.schema.properties.first()?;
+        Some((
+            prop.name.clone(),
+            super::super::super::bundled_csr::decode_scalar(raw, &prop.data_type),
+        ))
+    }
+
+    /// Index pairs sourced from the inline column for erase paths.
+    ///
+    /// Read before the physical removal: the columnar `read_properties_*`
+    /// helpers see no rows on inline tables, while the value column still
+    /// holds the last written word.
+    fn bundled_index_pairs_for_erase(&self, src: u32, edge_id: EdgeId) -> Vec<(String, Value)> {
+        let Some(prop) = self.schema.properties.first() else {
+            return Vec::new();
+        };
+        match self.out_csr.bundled_value_at(src, edge_id) {
+            Some((raw, true)) => vec![(
+                prop.name.clone(),
+                super::super::super::bundled_csr::decode_scalar(raw, &prop.data_type),
+            )],
+            _ => Vec::new(),
+        }
+    }
+
+    /// Bundled counterpart of [`Self::apply_staged_insert`]: the single
+    /// scalar rides the CSR value column in both directions and the
+    /// columnar store is never touched.
+    fn apply_staged_insert_bundled(
+        &mut self,
+        src: u32,
+        dst: u32,
+        rank: i64,
+        property_values: &[(String, Value)],
+        ts: Timestamp,
+    ) -> StorageResult<EdgeId> {
+        let inline_value = self.convert_bundled_value(property_values)?;
+        let edge_id = self.next_edge_id.fetch_add();
+
+        self.mvcc.record_creation(edge_id, ts);
+
+        let dst_key = Self::edge_endpoint_key(dst, rank);
+        let src_key = Self::edge_endpoint_key(src, rank);
+        if let Err(e) =
+            self.out_csr
+                .bundled_insert_with_value(src, dst_key, edge_id, ts, inline_value)
+        {
+            self.mvcc.remove_edge_timestamps(edge_id);
+            self.debug_assert_copies_consistent(edge_id);
+            return Err(e);
+        }
+
+        if let Err(e) =
+            self.in_csr
+                .bundled_insert_with_value(dst, src_key, edge_id, ts, inline_value)
+        {
+            if !self.out_csr.remove_edge(src, edge_id) {
+                let _ = self.out_csr.delete_edge(src, edge_id, ts);
+            }
+            self.mvcc.remove_edge_timestamps(edge_id);
+            self.debug_assert_copies_consistent(edge_id);
+            return Err(e);
+        }
+
+        if self.property_index.is_some() {
+            let label = self.label;
+            let pair = self.bundled_index_pair(inline_value);
+            let outcomes: Vec<(String, StorageResult<()>, u64)> =
+                if let Some(ref mut index) = self.property_index {
+                    pair.into_iter()
+                        .map(|(prop_name, prop_value)| {
+                            let started = std::time::Instant::now();
+                            let result =
+                                index.insert(&prop_name, &prop_value, src, dst, rank, label, ts);
+                            let latency = started.elapsed().as_millis() as u64;
+                            (prop_name, result, latency)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
             for (prop_name, result, latency) in outcomes {
                 self.note_index_result(&prop_name, result, latency);
             }
@@ -702,10 +843,13 @@ impl EdgeStore {
         edge_id: EdgeId,
         ts: Timestamp,
     ) {
-        let properties = self
-            .properties
-            .read_properties_by_edge_id(edge_id)
-            .unwrap_or_default();
+        let properties = if self.is_bundled() {
+            self.bundled_index_pairs_for_erase(src, edge_id)
+        } else {
+            self.properties
+                .read_properties_by_edge_id(edge_id)
+                .unwrap_or_default()
+        };
         self.out_csr.remove_edge(src, edge_id);
         self.in_csr.remove_edge(dst, edge_id);
         if let Some(row) = self.properties.remove_edge_mapping(edge_id) {
@@ -872,10 +1016,13 @@ impl EdgeStore {
         let Some(edge_id) = self.edge_id_of(src, dst, rank, ts) else {
             return false;
         };
-        let properties = self
-            .properties
-            .read_properties_by_edge_id(edge_id)
-            .unwrap_or_default();
+        let properties = if self.is_bundled() {
+            self.bundled_index_pairs_for_erase(src, edge_id)
+        } else {
+            self.properties
+                .read_properties_by_edge_id(edge_id)
+                .unwrap_or_default()
+        };
         self.out_csr.remove_edge(src, edge_id);
         self.in_csr.remove_edge(dst, edge_id);
         if let Some(row) = self.properties.remove_edge_mapping(edge_id) {
@@ -912,7 +1059,7 @@ impl EdgeStore {
     /// `debug_assert`. A property row mapping must never outlive its
     /// authority entry (orphan row). Called on insert success, delete
     /// success and delete-rollback success.
-    fn debug_assert_copies_consistent(&self, edge_id: EdgeId) {
+    pub(crate) fn debug_assert_copies_consistent(&self, edge_id: EdgeId) {
         debug_assert!(
             self.properties.get_row_for_edge(edge_id).is_none()
                 || self.mvcc.edge_timestamps.contains_key(&edge_id),
@@ -1023,15 +1170,64 @@ impl EdgeStore {
                     }],
                 )?;
             }
-            self.properties
-                .set_property_for_edge(nbr.edge_id, prop_name, Some(value.clone()), ts)
-                .map_err(|_| StorageError::column_not_found(prop_name.to_string()))?;
+            if self.is_bundled() {
+                self.write_bundled_property(src, dst, prop_name, value)?;
+            } else {
+                self.properties
+                    .set_property_for_edge(nbr.edge_id, prop_name, Some(value.clone()), ts)
+                    .map_err(|_| StorageError::column_not_found(prop_name.to_string()))?;
+            }
             self.mark_properties_dirty_for_edge(src, dst);
             self.maybe_run_auto_maintenance();
             return Ok(true);
         }
 
         Ok(false)
+    }
+
+    /// Bundled point write: encode the scalar and store it in both
+    /// directions' value columns. The property name must be the table's
+    /// single inline property.
+    fn write_bundled_property(
+        &mut self,
+        src: u32,
+        dst: u32,
+        prop_name: &str,
+        value: &Value,
+    ) -> StorageResult<()> {
+        let Some(def) = self.schema.properties.first() else {
+            return Err(StorageError::column_not_found(prop_name.to_string()));
+        };
+        if prop_name != def.name {
+            return Err(StorageError::column_not_found(prop_name.to_string()));
+        }
+        let cast = if value.data_type() != def.data_type {
+            value.try_cast_to(&def.data_type)?
+        } else {
+            value.clone()
+        };
+        let inline_value = match cast {
+            Value::Null(_) | Value::Empty => None,
+            _ => Some(encode_scalar(&cast)),
+        };
+        // Row endpoints, not key halves: bundled rows are keyed by the raw
+        // vertex id with rank pinned to zero.
+        if !self
+            .out_csr
+            .bundled_set_value_by_endpoint(src, dst, inline_value)
+        {
+            return Err(StorageError::column_not_found(prop_name.to_string()));
+        }
+        if !self
+            .in_csr
+            .bundled_set_value_by_endpoint(dst, src, inline_value)
+        {
+            return Err(StorageError::data_corruption(format!(
+                "bundled in-direction value missing for edge ({}, {})",
+                src, dst
+            )));
+        }
+        Ok(())
     }
 
     pub fn update_edge_property_by_key(
@@ -1047,10 +1243,8 @@ impl EdgeStore {
             if let Some(dir) = self.wal_dir.clone() {
                 let prop_name = self
                     .properties
-                    .property_schema()
-                    .iter()
-                    .find(|schema| schema.prop_id as u16 == params.prop_id)
-                    .map(|schema| schema.name.clone())
+                    .column_name_by_prop_id(params.prop_id as i32)
+                    .map(|name| name.to_string())
                     .unwrap_or_else(|| format!("prop_id={}", params.prop_id));
                 super::super::wal::append_ops(
                     &dir,
@@ -1064,16 +1258,27 @@ impl EdgeStore {
                     }],
                 )?;
             }
-            self.properties
-                .set_property_by_id_for_edge(
-                    nbr.edge_id,
-                    PropertyId(params.prop_id),
-                    Some(params.value.clone()),
-                    params.ts,
-                )
-                .map_err(|_| {
-                    StorageError::column_not_found(format!("prop_id={}", params.prop_id))
-                })?;
+            if self.is_bundled() {
+                let prop_name = self
+                    .properties
+                    .column_name_by_prop_id(params.prop_id as i32)
+                    .map(|name| name.to_string())
+                    .ok_or_else(|| {
+                        StorageError::column_not_found(format!("prop_id={}", params.prop_id))
+                    })?;
+                self.write_bundled_property(params.src, params.dst, &prop_name, &params.value)?;
+            } else {
+                self.properties
+                    .set_property_by_id_for_edge(
+                        nbr.edge_id,
+                        PropertyId(params.prop_id),
+                        Some(params.value.clone()),
+                        params.ts,
+                    )
+                    .map_err(|_| {
+                        StorageError::column_not_found(format!("prop_id={}", params.prop_id))
+                    })?;
+            }
             self.mark_properties_dirty_for_edge(params.src, params.dst);
 
             let src_key = Self::edge_endpoint_key(params.src, params.rank);

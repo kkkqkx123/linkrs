@@ -75,12 +75,21 @@ impl EdgeStore {
                     StorageError::deserialize_error(format!("group {} missing on flush", gid))
                 })?;
                 let mut payload = Vec::new();
-                super::super::persistence::serialize_csr_with_scratch(
-                    variant,
-                    section_id,
-                    &mut payload,
-                    &mut dump_scratch,
-                )?;
+                if self.config.csr_dump_raw {
+                    super::super::persistence::serialize_csr_with_scratch_raw(
+                        variant,
+                        section_id,
+                        &mut payload,
+                        &mut dump_scratch,
+                    )?;
+                } else {
+                    super::super::persistence::serialize_csr_with_scratch(
+                        variant,
+                        section_id,
+                        &mut payload,
+                        &mut dump_scratch,
+                    )?;
+                }
                 super::super::persistence::write_pages_to_file(
                     &base_path,
                     &payload,
@@ -126,12 +135,21 @@ impl EdgeStore {
                         StorageError::deserialize_error(format!("group {} missing on flush", gid))
                     })?;
                     let mut payload = Vec::new();
-                    super::super::persistence::serialize_csr_with_scratch(
-                        variant,
-                        section_id,
-                        &mut payload,
-                        &mut dump_scratch,
-                    )?;
+                    if self.config.csr_dump_raw {
+                        super::super::persistence::serialize_csr_with_scratch_raw(
+                            variant,
+                            section_id,
+                            &mut payload,
+                            &mut dump_scratch,
+                        )?;
+                    } else {
+                        super::super::persistence::serialize_csr_with_scratch(
+                            variant,
+                            section_id,
+                            &mut payload,
+                            &mut dump_scratch,
+                        )?;
+                    }
                     super::super::persistence::write_pages_to_file(
                         &base_path,
                         &payload,

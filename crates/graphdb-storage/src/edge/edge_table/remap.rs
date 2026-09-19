@@ -30,7 +30,7 @@
 
 use super::core::EdgeStore;
 use crate::edge::csr_trait::MutableCsrTrait;
-use crate::edge::{CsrShardSet, EdgeStrategy, Nbr};
+use crate::edge::{CsrShardSet, EdgeStrategy, Nbr, RecordForm};
 use graphdb_core::types::{Timestamp, VertexId};
 use graphdb_core::StorageResult;
 use std::collections::HashMap;
@@ -88,9 +88,10 @@ fn remap_direction(
     strategy: EdgeStrategy,
     group_bits: u32,
     overflow_chunk_edges: usize,
+    form: RecordForm,
     stats: &mut RemapStats,
 ) -> StorageResult<CsrShardSet> {
-    let mut rebuilt = CsrShardSet::new(strategy, group_bits, overflow_chunk_edges)?;
+    let mut rebuilt = CsrShardSet::new(strategy, group_bits, overflow_chunk_edges, form)?;
     if strategy == EdgeStrategy::None {
         return Ok(rebuilt);
     }
@@ -127,12 +128,33 @@ fn remap_direction(
                 rank: ep_rank,
                 ..nbr
             };
-            rebuilt.insert_edge(
-                new_src,
-                new_nbr.to_vertex_id(),
-                new_nbr.edge_id,
-                new_nbr.create_ts,
-            )?;
+            // Bundled values ride along keyed by edge id; other forms carry
+            // no inline state.
+            let inline_value = if form == RecordForm::Bundled {
+                let base = crate::edge::node_group::group_base(gid, old.group_bits());
+                let old_local = src.saturating_sub(base as u32);
+                old.group_variant(gid)
+                    .and_then(|variant| variant.bundled_value_by_edge_id(old_local, nbr.edge_id))
+                    .and_then(|(raw, valid)| valid.then_some(raw))
+            } else {
+                None
+            };
+            if form == RecordForm::Bundled {
+                rebuilt.bundled_insert_with_value(
+                    new_src,
+                    new_nbr.to_vertex_id(),
+                    new_nbr.edge_id,
+                    new_nbr.create_ts,
+                    inline_value,
+                )?;
+            } else {
+                rebuilt.insert_edge(
+                    new_src,
+                    new_nbr.to_vertex_id(),
+                    new_nbr.edge_id,
+                    new_nbr.create_ts,
+                )?;
+            }
             if new_nbr.delete_ts != Timestamp::MAX {
                 let _ = rebuilt.delete_edge(new_src, new_nbr.edge_id, new_nbr.delete_ts);
                 rebuilt.mark_reclaim_hint_for(new_src);
@@ -189,6 +211,7 @@ impl EdgeStore {
             self.schema.oe_strategy,
             new_group_bits,
             self.config.overflow_chunk_edges,
+            self.out_csr.record_form(),
             &mut stats,
         )?;
         self.in_csr = remap_direction(
@@ -198,6 +221,7 @@ impl EdgeStore {
             self.schema.ie_strategy,
             new_group_bits,
             self.config.overflow_chunk_edges,
+            self.in_csr.record_form(),
             &mut stats,
         )?;
         self.config.node_group_bits = new_group_bits;
@@ -263,6 +287,7 @@ impl EdgeStore {
             self.schema.oe_strategy,
             self.config.node_group_bits,
             self.config.overflow_chunk_edges,
+            self.out_csr.record_form(),
             &mut stats,
         )?;
         self.in_csr = remap_direction(
@@ -272,6 +297,7 @@ impl EdgeStore {
             self.schema.ie_strategy,
             self.config.node_group_bits,
             self.config.overflow_chunk_edges,
+            self.in_csr.record_form(),
             &mut stats,
         )?;
 
@@ -307,7 +333,7 @@ impl EdgeStore {
 mod tests {
     use super::*;
     use crate::edge::edge_table::config::EdgeTableConfig;
-    use crate::edge::{EdgeSchema, EdgeStrategy};
+    use crate::edge::{EdgeSchema, EdgeStrategy, RecordForm};
     use crate::types::StoragePropertyDef;
     use graphdb_core::Value;
 
@@ -326,6 +352,7 @@ mod tests {
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
+            record_form: RecordForm::default(),
         };
         EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
     }
@@ -351,6 +378,7 @@ mod tests {
             oe_strategy: EdgeStrategy::Single,
             ie_strategy: EdgeStrategy::Single,
             schema_version: 1,
+            record_form: RecordForm::default(),
         };
         EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
     }

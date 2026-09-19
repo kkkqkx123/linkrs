@@ -251,6 +251,9 @@ impl ImmutableCsr {
     }
 
     /// Timestamp-filtered read of one row.
+    ///
+    /// Test and offline use; production traversals use the row iterator or
+    /// caller-buffer fill paths instead of this allocating accessor.
     pub fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr> {
         let Some((start, end)) = self.row_window(src_vid) else {
             return Vec::new();
@@ -308,6 +311,9 @@ impl ImmutableCsr {
     }
 
     /// Every physically stored entry of one row without timestamp filtering.
+    ///
+    /// Test and offline use; production scans use `fill_physical_into` or
+    /// the row iterator instead of this allocating accessor.
     pub fn physical_edges_of(&self, src_vid: u32) -> Vec<Nbr> {
         let mut out = Vec::new();
         self.fill_physical_into(src_vid, &mut out);

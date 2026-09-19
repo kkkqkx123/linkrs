@@ -190,6 +190,9 @@ pub trait MutableCsrTrait: CsrBase {
     }
 
     /// Every physically stored entry of one vertex without timestamp filtering.
+    ///
+    /// Test and offline use; production scans use `fill_physical_into` or
+    /// the visitor paths instead of this allocating accessor.
     fn physical_edges_of(&self, _src_vid: u32) -> Vec<Nbr> {
         Vec::new()
     }
@@ -241,6 +244,8 @@ pub trait MutableCsrTrait: CsrBase {
 
     /// Get all valid edges of a vertex at the given timestamp.
     /// Test-only row-stamp filter; production reads go through the version authority.
+    /// Test and offline use; production traversals use the visitor or
+    /// caller-buffer fill paths instead of this allocating accessor.
     fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr>;
 
     /// Reclaim one vertex in place, dropping entries eligible for collection

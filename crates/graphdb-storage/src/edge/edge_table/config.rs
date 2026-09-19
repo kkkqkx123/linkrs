@@ -1,6 +1,8 @@
 use graphdb_core::types::Timestamp;
 use graphdb_core::Value;
 
+use crate::edge::RecordFormPreference;
+
 #[derive(Debug, Clone)]
 pub struct EdgeTableConfig {
     pub initial_vertex_capacity: usize,
@@ -37,6 +39,17 @@ pub struct EdgeTableConfig {
     /// Automatic maintenance: property compaction on the
     /// write path when the configured thresholds are exceeded.
     pub auto_maintenance: AutoMaintenanceConfig,
+    /// Checkpoint topology dump mode: when true, multi-edge groups persist
+    /// topology columns at native widths (raw direct dump) instead of the
+    /// integer column encoding. Speed-sensitive checkpoints only; files grow
+    /// since no bit-packing or run-length encoding applies. Safe to flip
+    /// between checkpoints: the dump version marker records the mode per
+    /// group file and loads dispatch by marker.
+    pub csr_dump_raw: bool,
+    /// User-facing preference for record form selection at table creation.
+    /// `Auto` lets the system pick Pure/Bundled/Columnar based on schema;
+    /// `Columnar` forces the standard multi/single/none strategy path.
+    pub record_form: RecordFormPreference,
 }
 
 /// Thresholds that trigger automatic maintenance on the write path.
@@ -71,6 +84,8 @@ impl Default for EdgeTableConfig {
             region_merge_min_density: crate::edge::node_group::REGION_MERGE_MIN_DENSITY,
             group_merge_min_density: crate::edge::node_group::GROUP_MERGE_MIN_DENSITY,
             auto_maintenance: AutoMaintenanceConfig::default(),
+            csr_dump_raw: false,
+            record_form: RecordFormPreference::default(),
         }
     }
 }

@@ -323,6 +323,101 @@ impl MappedFrozen {
             .expect("serving degree column validated at open")
     }
 
+    /// Raw little-endian bytes of one serving column.
+    ///
+    /// Column ranges are validated at open, so the slice always covers the
+    /// column. Row scans take these slices once per row and decode the row
+    /// window with chunk iteration instead of paying one bounds-checked
+    /// scalar read per slot.
+    #[inline]
+    fn column_bytes(&self, range: ColumnRange) -> &[u8] {
+        self.map
+            .get(range.start..range.end())
+            .expect("serving column range validated at open")
+    }
+
+    /// Raw bytes of one entry column restricted to a validated row window.
+    #[inline]
+    fn row_column_bytes(
+        &self,
+        range: ColumnRange,
+        width: usize,
+        start: usize,
+        end: usize,
+    ) -> &[u8] {
+        self.column_bytes(range)
+            .get(start * width..end * width)
+            .expect("serving row window validated against column ranges")
+    }
+
+    /// Fill a caller buffer with every hot half of one row.
+    ///
+    /// Hot-only counterpart of `fill_physical_into`: topology columns are
+    /// sliced once per row and decoded in tight chunk loops, so the stamp
+    /// columns stay out of cache on this walk.
+    pub fn fill_hot_into(&self, src_vid: u32, out: &mut Vec<HotNbr>) {
+        out.clear();
+        let Some((start, end)) = self.row_window(src_vid) else {
+            return;
+        };
+        if start == end {
+            return;
+        }
+        let endpoints = self.row_column_bytes(self.columns.endpoints, 4, start, end);
+        let ranks = self.row_column_bytes(self.columns.ranks, 8, start, end);
+        let edge_ids = self.row_column_bytes(self.columns.edge_ids, 8, start, end);
+        out.reserve(end - start);
+        let rank_chunks = ranks.chunks_exact(8);
+        let id_chunks = edge_ids.chunks_exact(8);
+        for (endpoint, rank, edge_id) in endpoints
+            .chunks_exact(4)
+            .zip(rank_chunks)
+            .zip(id_chunks)
+            .map(|((e, r), id)| {
+                (
+                    u32::from_le_bytes([e[0], e[1], e[2], e[3]]),
+                    i64::from_le_bytes([r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]]),
+                    u64::from_le_bytes([id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]]),
+                )
+            })
+        {
+            out.push(HotNbr {
+                endpoint,
+                rank,
+                edge_id: EdgeId(edge_id),
+            });
+        }
+    }
+
+    /// Fill a caller buffer with every cold half of one row.
+    ///
+    /// Stamp-only counterpart of `fill_physical_into` for maintenance walks
+    /// that never need topology.
+    pub fn fill_cold_into(&self, src_vid: u32, out: &mut Vec<ColdStamps>) {
+        out.clear();
+        let Some((start, end)) = self.row_window(src_vid) else {
+            return;
+        };
+        if start == end {
+            return;
+        }
+        let creates = self.row_column_bytes(self.columns.creates, 8, start, end);
+        let deletes = self.row_column_bytes(self.columns.deletes, 8, start, end);
+        out.reserve(end - start);
+        for (create, delete) in creates.chunks_exact(8).zip(deletes.chunks_exact(8)) {
+            out.push(ColdStamps {
+                create_ts: u64::from_le_bytes([
+                    create[0], create[1], create[2], create[3], create[4], create[5], create[6],
+                    create[7],
+                ]),
+                delete_ts: u64::from_le_bytes([
+                    delete[0], delete[1], delete[2], delete[3], delete[4], delete[5], delete[6],
+                    delete[7],
+                ]),
+            });
+        }
+    }
+
     #[inline]
     fn endpoint_at(&self, idx: usize) -> u32 {
         read_u32_le_at(&self.map, self.columns.endpoints.start + idx * 4)
@@ -437,19 +532,68 @@ impl MappedFrozen {
     }
 
     /// Timestamp-filtered read of one row.
+    ///
+    /// Test and offline use; production traversals use `iter_edges_of` or
+    /// `fill_physical_into` instead of this allocating accessor.
     pub fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr> {
-        let Some((start, end)) = self.row_window(src_vid) else {
-            return Vec::new();
-        };
         let mut out = Vec::new();
-        for idx in start..end {
-            if let Some(nbr) = self.slot_at(idx) {
-                if nbr.is_alive_at(ts) {
-                    out.push(nbr);
-                }
+        self.fill_visible_into(src_vid, ts, &mut out);
+        out
+    }
+
+    /// Fill a caller buffer with the timestamp-visible entries of one row.
+    ///
+    /// Same filtered content as `edges_of` without the per-row allocation.
+    /// Columns are sliced once per row and decoded in one pass.
+    pub fn fill_visible_into(&self, src_vid: u32, ts: Timestamp, out: &mut Vec<Nbr>) {
+        out.clear();
+        let Some((start, end)) = self.row_window(src_vid) else {
+            return;
+        };
+        if start == end {
+            return;
+        }
+        let endpoints = self.row_column_bytes(self.columns.endpoints, 4, start, end);
+        let ranks = self.row_column_bytes(self.columns.ranks, 8, start, end);
+        let edge_ids = self.row_column_bytes(self.columns.edge_ids, 8, start, end);
+        let creates = self.row_column_bytes(self.columns.creates, 8, start, end);
+        let deletes = self.row_column_bytes(self.columns.deletes, 8, start, end);
+        out.reserve(end - start);
+        let mut rank_chunks = ranks.chunks_exact(8);
+        let mut id_chunks = edge_ids.chunks_exact(8);
+        let mut create_chunks = creates.chunks_exact(8);
+        let mut delete_chunks = deletes.chunks_exact(8);
+        for endpoint in endpoints.chunks_exact(4) {
+            let rank = rank_chunks.next().expect("rank column matches row window");
+            let edge_id = id_chunks.next().expect("edge-id column matches row window");
+            let create = create_chunks
+                .next()
+                .expect("create column matches row window");
+            let delete = delete_chunks
+                .next()
+                .expect("delete column matches row window");
+            let nbr = Nbr {
+                endpoint: u32::from_le_bytes([endpoint[0], endpoint[1], endpoint[2], endpoint[3]]),
+                rank: i64::from_le_bytes([
+                    rank[0], rank[1], rank[2], rank[3], rank[4], rank[5], rank[6], rank[7],
+                ]),
+                edge_id: EdgeId(u64::from_le_bytes([
+                    edge_id[0], edge_id[1], edge_id[2], edge_id[3], edge_id[4], edge_id[5],
+                    edge_id[6], edge_id[7],
+                ])),
+                create_ts: u64::from_le_bytes([
+                    create[0], create[1], create[2], create[3], create[4], create[5], create[6],
+                    create[7],
+                ]),
+                delete_ts: u64::from_le_bytes([
+                    delete[0], delete[1], delete[2], delete[3], delete[4], delete[5], delete[6],
+                    delete[7],
+                ]),
+            };
+            if nbr.is_alive_at(ts) {
+                out.push(nbr);
             }
         }
-        out
     }
 
     /// First timestamp-visible entry matching an endpoint key: key-range
@@ -481,6 +625,9 @@ impl MappedFrozen {
     }
 
     /// Every physically stored entry of one row without timestamp filtering.
+    ///
+    /// Test and offline use; production scans use `fill_physical_into` or
+    /// the visitor paths instead of this allocating accessor.
     pub fn physical_edges_of(&self, src_vid: u32) -> Vec<Nbr> {
         let mut out = Vec::new();
         self.fill_physical_into(src_vid, &mut out);
@@ -488,20 +635,60 @@ impl MappedFrozen {
     }
 
     /// Fill a caller buffer with every physically stored entry of one row.
+    ///
+    /// Columns are sliced once per row and decoded in one pass instead of
+    /// one bounds-checked scalar read per slot.
     pub fn fill_physical_into(&self, src_vid: u32, out: &mut Vec<Nbr>) {
         out.clear();
         let Some((start, end)) = self.row_window(src_vid) else {
             return;
         };
+        if start == end {
+            return;
+        }
+        let endpoints = self.row_column_bytes(self.columns.endpoints, 4, start, end);
+        let ranks = self.row_column_bytes(self.columns.ranks, 8, start, end);
+        let edge_ids = self.row_column_bytes(self.columns.edge_ids, 8, start, end);
+        let creates = self.row_column_bytes(self.columns.creates, 8, start, end);
+        let deletes = self.row_column_bytes(self.columns.deletes, 8, start, end);
         out.reserve(end - start);
-        for idx in start..end {
-            if let Some(nbr) = self.slot_at(idx) {
-                out.push(nbr);
-            }
+        let mut rank_chunks = ranks.chunks_exact(8);
+        let mut id_chunks = edge_ids.chunks_exact(8);
+        let mut create_chunks = creates.chunks_exact(8);
+        let mut delete_chunks = deletes.chunks_exact(8);
+        for endpoint in endpoints.chunks_exact(4) {
+            let rank = rank_chunks.next().expect("rank column matches row window");
+            let edge_id = id_chunks.next().expect("edge-id column matches row window");
+            let create = create_chunks
+                .next()
+                .expect("create column matches row window");
+            let delete = delete_chunks
+                .next()
+                .expect("delete column matches row window");
+            out.push(Nbr {
+                endpoint: u32::from_le_bytes([endpoint[0], endpoint[1], endpoint[2], endpoint[3]]),
+                rank: i64::from_le_bytes([
+                    rank[0], rank[1], rank[2], rank[3], rank[4], rank[5], rank[6], rank[7],
+                ]),
+                edge_id: EdgeId(u64::from_le_bytes([
+                    edge_id[0], edge_id[1], edge_id[2], edge_id[3], edge_id[4], edge_id[5],
+                    edge_id[6], edge_id[7],
+                ])),
+                create_ts: u64::from_le_bytes([
+                    create[0], create[1], create[2], create[3], create[4], create[5], create[6],
+                    create[7],
+                ]),
+                delete_ts: u64::from_le_bytes([
+                    delete[0], delete[1], delete[2], delete[3], delete[4], delete[5], delete[6],
+                    delete[7],
+                ]),
+            });
         }
     }
 
     /// Visit every physically stored entry of one row without allocating.
+    ///
+    /// Decodes from one slice per column instead of one scalar read per slot.
     pub fn visit_physical<F>(&self, src_vid: u32, mut f: F)
     where
         F: FnMut(Nbr) -> bool,
@@ -509,17 +696,56 @@ impl MappedFrozen {
         let Some((start, end)) = self.row_window(src_vid) else {
             return;
         };
-        for idx in start..end {
-            if let Some(nbr) = self.slot_at(idx) {
-                if !f(nbr) {
-                    return;
-                }
+        if start == end {
+            return;
+        }
+        let endpoints = self.row_column_bytes(self.columns.endpoints, 4, start, end);
+        let ranks = self.row_column_bytes(self.columns.ranks, 8, start, end);
+        let edge_ids = self.row_column_bytes(self.columns.edge_ids, 8, start, end);
+        let creates = self.row_column_bytes(self.columns.creates, 8, start, end);
+        let deletes = self.row_column_bytes(self.columns.deletes, 8, start, end);
+        let mut rank_chunks = ranks.chunks_exact(8);
+        let mut id_chunks = edge_ids.chunks_exact(8);
+        let mut create_chunks = creates.chunks_exact(8);
+        let mut delete_chunks = deletes.chunks_exact(8);
+        for endpoint in endpoints.chunks_exact(4) {
+            let rank = rank_chunks.next().expect("rank column matches row window");
+            let edge_id = id_chunks.next().expect("edge-id column matches row window");
+            let create = create_chunks
+                .next()
+                .expect("create column matches row window");
+            let delete = delete_chunks
+                .next()
+                .expect("delete column matches row window");
+            let nbr = Nbr {
+                endpoint: u32::from_le_bytes([endpoint[0], endpoint[1], endpoint[2], endpoint[3]]),
+                rank: i64::from_le_bytes([
+                    rank[0], rank[1], rank[2], rank[3], rank[4], rank[5], rank[6], rank[7],
+                ]),
+                edge_id: EdgeId(u64::from_le_bytes([
+                    edge_id[0], edge_id[1], edge_id[2], edge_id[3], edge_id[4], edge_id[5],
+                    edge_id[6], edge_id[7],
+                ])),
+                create_ts: u64::from_le_bytes([
+                    create[0], create[1], create[2], create[3], create[4], create[5], create[6],
+                    create[7],
+                ]),
+                delete_ts: u64::from_le_bytes([
+                    delete[0], delete[1], delete[2], delete[3], delete[4], delete[5], delete[6],
+                    delete[7],
+                ]),
+            };
+            if !f(nbr) {
+                return;
             }
         }
     }
 
     /// Visit every physically stored hot half of one row without allocating
     /// and without touching the stamp columns.
+    ///
+    /// Decodes from one slice per topology column instead of one scalar read
+    /// per slot.
     pub fn visit_hot<F>(&self, src_vid: u32, mut f: F)
     where
         F: FnMut(HotNbr) -> bool,
@@ -527,11 +753,29 @@ impl MappedFrozen {
         let Some((start, end)) = self.row_window(src_vid) else {
             return;
         };
-        for idx in start..end {
-            if let Some(hot) = self.hot_at(idx) {
-                if !f(hot) {
-                    return;
-                }
+        if start == end {
+            return;
+        }
+        let endpoints = self.row_column_bytes(self.columns.endpoints, 4, start, end);
+        let ranks = self.row_column_bytes(self.columns.ranks, 8, start, end);
+        let edge_ids = self.row_column_bytes(self.columns.edge_ids, 8, start, end);
+        let mut rank_chunks = ranks.chunks_exact(8);
+        let mut id_chunks = edge_ids.chunks_exact(8);
+        for endpoint in endpoints.chunks_exact(4) {
+            let rank = rank_chunks.next().expect("rank column matches row window");
+            let edge_id = id_chunks.next().expect("edge-id column matches row window");
+            let hot = HotNbr {
+                endpoint: u32::from_le_bytes([endpoint[0], endpoint[1], endpoint[2], endpoint[3]]),
+                rank: i64::from_le_bytes([
+                    rank[0], rank[1], rank[2], rank[3], rank[4], rank[5], rank[6], rank[7],
+                ]),
+                edge_id: EdgeId(u64::from_le_bytes([
+                    edge_id[0], edge_id[1], edge_id[2], edge_id[3], edge_id[4], edge_id[5],
+                    edge_id[6], edge_id[7],
+                ])),
+            };
+            if !f(hot) {
+                return;
             }
         }
     }
@@ -611,7 +855,10 @@ impl MappedFrozen {
     }
 
     /// Encoding report for the persisted neighbor columns, same shape as the
-    /// heap frozen report. Cold path: decodes the columns once.
+    /// heap frozen report.
+    ///
+    /// Offline use only: decodes every column once. Never call on the query
+    /// path; row scans use the bulk slice fills instead.
     pub fn topology_encoding_report(
         &self,
     ) -> Vec<(

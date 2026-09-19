@@ -1136,3 +1136,159 @@ fn positional_delete_and_revert_roundtrip() {
         .delete_edge_at_position(0u32, position, EdgeId(999), 3)
         .unwrap());
 }
+
+#[test]
+fn wide_row_point_lookup_uses_location_index() {
+    let mut csr = MutableCsr::with_capacity(4, 64);
+    for i in 0..20i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(i + 1), EdgeId(i as u64 + 1), 1)
+            .unwrap();
+    }
+    assert!(csr.live_sets.get(&0).is_some());
+
+    let hit = csr
+        .get_edge(0u32, VertexId::from_int64(7), 1)
+        .expect("indexed edge present");
+    assert_eq!(hit.edge_id, EdgeId(7));
+    assert_eq!(
+        csr.get_edge_physical(0u32, VertexId::from_int64(7))
+            .expect("indexed physical hit")
+            .edge_id,
+        EdgeId(7)
+    );
+    assert!(csr
+        .get_edge(0u32, VertexId::from_int64(999), Timestamp::MAX)
+        .is_none());
+    assert!(csr
+        .get_edge_physical(0u32, VertexId::from_int64(999))
+        .is_none());
+
+    assert!(csr.delete_edge(0u32, EdgeId(7), 2).unwrap());
+    assert!(csr
+        .get_edge_physical(0u32, VertexId::from_int64(7))
+        .is_none());
+    assert_eq!(
+        csr.get_edge(0u32, VertexId::from_int64(7), 1)
+            .expect("pre-delete version stays visible historically")
+            .edge_id,
+        EdgeId(7)
+    );
+
+    assert!(csr.remove_edge(0u32, EdgeId(8)));
+    for endpoint in [1i64, 2, 3, 9, 20] {
+        let found = csr
+            .get_edge_physical(0u32, VertexId::from_int64(endpoint))
+            .expect("remaining edges stay addressable after gap close");
+        assert_eq!(found.edge_id, EdgeId(endpoint as u64));
+    }
+
+    let bytes = csr.dump();
+    let mut loaded = MutableCsr::new();
+    loaded.load(&bytes).unwrap();
+    assert!(loaded.live_sets.get(&0).is_some());
+    assert_eq!(
+        loaded
+            .get_edge_physical(0u32, VertexId::from_int64(9))
+            .expect("reloaded index hit")
+            .edge_id,
+        EdgeId(9)
+    );
+}
+
+#[test]
+fn consolidated_row_reads_single_block() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(2, 16, 8);
+    for i in 0..30i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(i + 1), EdgeId(i as u64 + 1), 1)
+            .unwrap();
+    }
+    csr.rebalance_row(0u32);
+    if let Some(chunks) = csr.overflow_chunks.get(&0) {
+        assert_eq!(chunks.len(), 1, "merged rows keep a single block");
+    }
+    let mut via_visit = Vec::new();
+    csr.visit_physical(0u32, |nbr| {
+        via_visit.push(nbr.edge_id);
+        true
+    });
+    let mut via_fill = Vec::new();
+    csr.fill_physical_into(0u32, &mut via_fill);
+    assert_eq!(via_visit.len(), 30);
+    assert_eq!(via_fill.len(), 30);
+    let hit = csr
+        .get_edge(0u32, VertexId::from_int64(17), 1)
+        .expect("single-block row answers point lookups");
+    assert_eq!(hit.edge_id, EdgeId(17));
+}
+
+#[test]
+fn raw_dump_load_roundtrip_matches_encoded_mode() {
+    use super::serialization::MUTABLE_CSR_FORMAT_RAW_VERSION;
+
+    let mut csr = MutableCsr::with_overflow_chunk_edges(2, 16, 8);
+    for i in 0..30i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(i + 1), EdgeId(i as u64 + 1), 1)
+            .unwrap();
+    }
+    for i in 1..10i64 {
+        csr.insert_edge(
+            1u32,
+            VertexId::from_int64(i + 100),
+            EdgeId(1000 + i as u64),
+            2,
+        )
+        .unwrap();
+    }
+    assert!(csr.delete_edge(0u32, EdgeId(5), 3).unwrap());
+
+    let raw = csr.dump_raw();
+    let marker = u32::from_le_bytes(raw[0..4].try_into().expect("raw header present"));
+    assert_eq!(marker, MUTABLE_CSR_FORMAT_RAW_VERSION);
+
+    let mut loaded = MutableCsr::new();
+    loaded.load(&raw).expect("raw dump loads by marker");
+    assert_eq!(loaded.edge_count(), csr.edge_count());
+
+    let mut expected = Vec::new();
+    csr.fill_physical_into(0u32, &mut expected);
+    let mut actual = Vec::new();
+    loaded.fill_physical_into(0u32, &mut actual);
+    assert_eq!(actual, expected);
+
+    let mut expected_one = Vec::new();
+    csr.fill_physical_into(1u32, &mut expected_one);
+    let mut actual_one = Vec::new();
+    loaded.fill_physical_into(1u32, &mut actual_one);
+    assert_eq!(actual_one, expected_one);
+
+    assert!(loaded
+        .get_edge(0u32, VertexId::from_int64(5), Timestamp::MAX)
+        .is_none());
+    assert_eq!(
+        loaded
+            .get_edge(0u32, VertexId::from_int64(5), 2)
+            .expect("pre-delete version stays visible")
+            .edge_id,
+        EdgeId(5)
+    );
+
+    // Encoded dumps still load: the loader accepts both markers.
+    let mut from_encoded = MutableCsr::new();
+    from_encoded.load(&csr.dump()).expect("encoded dump loads");
+    assert_eq!(from_encoded.edge_count(), csr.edge_count());
+}
+
+#[test]
+fn raw_dump_rejects_bad_marker_and_truncation() {
+    let mut csr = MutableCsr::with_capacity(4, 16);
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(7), 1)
+        .unwrap();
+
+    let mut bad_marker = csr.dump_raw();
+    bad_marker[0..4].copy_from_slice(&99u32.to_le_bytes());
+    assert!(MutableCsr::new().load(&bad_marker).is_err());
+
+    let raw = csr.dump_raw();
+    assert!(MutableCsr::new().load(&raw[..raw.len() - 1]).is_err());
+    assert!(MutableCsr::new().load(&[]).is_err());
+}

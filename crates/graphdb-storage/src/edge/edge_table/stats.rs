@@ -486,7 +486,7 @@ impl ScanPruneReport {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::{EdgeSchema, EdgeStrategy};
+    use super::super::super::{EdgeSchema, EdgeStrategy, RecordForm};
     use super::*;
     use crate::edge::edge_table::config::EdgeTableConfig;
     use crate::edge::edge_table::core::EdgeStore;
@@ -504,6 +504,7 @@ mod tests {
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
+            record_form: RecordForm::default(),
         };
         EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
     }
@@ -523,6 +524,7 @@ mod tests {
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
+            record_form: RecordForm::default(),
         };
         EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
     }

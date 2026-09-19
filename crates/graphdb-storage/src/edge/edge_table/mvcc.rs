@@ -507,6 +507,7 @@ mod tests {
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
+            record_form: RecordForm::default(),
         };
         EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
     }

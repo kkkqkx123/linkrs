@@ -33,6 +33,31 @@ impl MutableCsr {
         (&self.hot_list[start..end], &self.cold_list[start..end])
     }
 
+    /// Assembled slot copy at a wide-row index position.
+    ///
+    /// Row-relative addressing shared by the endpoint location fast paths:
+    /// primary positions index from the row start, overflow positions address
+    /// a chunk and a slot inside it. Returns `None` for out-of-range
+    /// positions so stale entries fall back to the row scan.
+    fn slot_at_position(
+        &self,
+        src_vid: u32,
+        src_idx: usize,
+        position: EdgePosition,
+    ) -> Option<Nbr> {
+        match position {
+            EdgePosition::Primary { slot } => {
+                let base = *self.adj_offsets.get(src_idx)? as usize;
+                self.slot_at(base + slot as usize)
+            }
+            EdgePosition::Overflow { chunk, slot } => self
+                .overflow_chunks
+                .get(&src_vid)?
+                .get(chunk as usize)?
+                .slot_at(slot as usize),
+        }
+    }
+
     /// Read-only view of one primary slot without mutating state.
     ///
     /// Used to verify that a caller-supplied offset still addresses the
@@ -57,12 +82,33 @@ impl MutableCsr {
     /// Physical addressing only; tombstoned and gap slots are skipped.
     /// Snapshot visibility is decided by the version authority above this
     /// layer, while tombstone access uses the full physical views.
+    ///
+    /// Wide rows answer from the endpoint location index: a present key
+    /// addresses its slot directly, an absent key returns without scanning.
+    /// Narrow rows without an index fall through to the linear walk.
     pub fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
         use super::super::INVALID_EDGE_ID;
         let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
             return None;
+        }
+        if let Some(set) = self.live_sets.get(&src_vid) {
+            let Some(position) = set.position(&(decoded_endpoint, decoded_rank)) else {
+                return None;
+            };
+            // Position mismatch means the row moved without a rebuild, which
+            // must not happen; fall back to the scan instead of answering
+            // from the wrong slot.
+            if let Some(nbr) = self.slot_at_position(src_vid, src_idx, position) {
+                if nbr.endpoint == decoded_endpoint
+                    && nbr.rank == decoded_rank
+                    && nbr.edge_id != INVALID_EDGE_ID
+                    && nbr.delete_ts == Timestamp::MAX
+                {
+                    return Some(nbr);
+                }
+            }
         }
         let (hot, cold) = self.primary_pair(src_idx);
         for (h, c) in hot.iter().zip(cold.iter()) {
@@ -73,6 +119,19 @@ impl MutableCsr {
             {
                 return Some(Nbr::from_parts(*h, *c));
             }
+        }
+        // Consolidated single-block rows skip the chain loop.
+        if let Some(single) = self.overflow_chunks.single_chunk(&src_vid) {
+            for (hot, cold) in single.hot_slice().iter().zip(single.cold_slice()) {
+                if hot.endpoint == decoded_endpoint
+                    && hot.rank == decoded_rank
+                    && hot.edge_id != INVALID_EDGE_ID
+                    && cold.is_live()
+                {
+                    return Some(Nbr::from_parts(*hot, *cold));
+                }
+            }
+            return None;
         }
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for chunk in chunks {
@@ -93,6 +152,8 @@ impl MutableCsr {
     /// Every physically stored entry of one vertex without timestamp filtering.
     ///
     /// Visibility is decided by the version authority above this layer.
+    /// Test and offline use; production scans use [`Self::fill_physical_into`]
+    /// or the visitor paths instead of this allocating accessor.
     pub fn physical_edges_of(&self, src_vid: u32) -> Vec<Nbr> {
         let mut out = Vec::new();
         self.fill_physical_into(src_vid, &mut out);
@@ -117,6 +178,15 @@ impl MutableCsr {
                 .zip(cold.iter())
                 .map(|(h, c)| Nbr::from_parts(*h, *c)),
         );
+        if let Some(single) = self.overflow_chunks.single_chunk(&src_vid) {
+            out.reserve(single.len());
+            for i in 0..single.len() {
+                if let Some(nbr) = single.slot_at(i) {
+                    out.push(nbr);
+                }
+            }
+            return;
+        }
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for chunk in chunks {
                 out.reserve(chunk.len());
@@ -134,7 +204,8 @@ impl MutableCsr {
     ///
     /// Hot-only counterpart of [`Self::visit_physical`] for traversals that
     /// resolve visibility through the version authority by `edge_id`. Stamps
-    /// stay out of cache on this walk.
+    /// stay out of cache on this walk. Consolidated rows read their single
+    /// overflow block without the chain loop.
     pub fn visit_hot<F>(&self, src_vid: u32, mut f: F)
     where
         F: FnMut(HotNbr) -> bool,
@@ -147,6 +218,14 @@ impl MutableCsr {
             if !f(*h) {
                 return;
             }
+        }
+        if let Some(single) = self.overflow_chunks.single_chunk(&src_vid) {
+            for h in single.hot_slice() {
+                if !f(*h) {
+                    return;
+                }
+            }
+            return;
         }
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for chunk in chunks {
@@ -162,7 +241,8 @@ impl MutableCsr {
     /// Visit every physically stored entry of one vertex without allocating.
     ///
     /// The visitor returns false to stop early. Visibility is decided by the
-    /// version authority above this layer.
+    /// version authority above this layer. Consolidated rows read their
+    /// single overflow block without the chain loop.
     pub fn visit_physical<F>(&self, src_vid: u32, mut f: F)
     where
         F: FnMut(Nbr) -> bool,
@@ -176,6 +256,16 @@ impl MutableCsr {
             if !f(Nbr::from_parts(*h, *c)) {
                 return;
             }
+        }
+        if let Some(single) = self.overflow_chunks.single_chunk(&src_vid) {
+            for i in 0..single.len() {
+                if let Some(nbr) = single.slot_at(i) {
+                    if !f(nbr) {
+                        return;
+                    }
+                }
+            }
+            return;
         }
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for chunk in chunks {
@@ -279,7 +369,10 @@ impl MutableCsr {
             .is_some_and(|chunks| chunks.iter().any(|c| !c.is_empty()))
     }
 
-    /// Get edges of a vertex at a given timestamp
+    /// Get edges of a vertex at a given timestamp.
+    ///
+    /// Test and offline use; production traversals use the visitor or
+    /// caller-buffer fill paths instead of this allocating accessor.
     pub fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr> {
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
@@ -315,6 +408,12 @@ impl MutableCsr {
     }
 
     /// Get a specific edge
+    ///
+    /// Wide rows consult the endpoint location index first: a present key
+    /// addresses its slot directly when the live entry covers `ts`. Absent
+    /// keys at the maximum timestamp return without scanning; any other
+    /// timestamp falls through to the row walk so historically visible
+    /// tombstoned versions are still found.
     pub fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
         let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
         let src_idx = src_vid as usize;
@@ -322,6 +421,23 @@ impl MutableCsr {
             return None;
         }
 
+        if let Some(set) = self.live_sets.get(&src_vid) {
+            match set.position(&(decoded_endpoint, decoded_rank)) {
+                Some(position) => {
+                    if let Some(nbr) = self.slot_at_position(src_vid, src_idx, position) {
+                        if nbr.endpoint == decoded_endpoint
+                            && nbr.rank == decoded_rank
+                            && nbr.delete_ts == Timestamp::MAX
+                            && nbr.create_ts <= ts
+                        {
+                            return Some(nbr);
+                        }
+                    }
+                }
+                None if ts == Timestamp::MAX => return None,
+                None => {}
+            }
+        }
         // Scan primary: compare the packed key halves directly and only
         // assemble the record on a key match.
         let (hot, cold) = self.primary_pair(src_idx);
@@ -334,7 +450,20 @@ impl MutableCsr {
             }
         }
 
-        // Scan overflow
+        // Scan overflow: consolidated single-block rows skip the chain loop.
+        if let Some(single) = self.overflow_chunks.single_chunk(&src_vid) {
+            for i in 0..single.len() {
+                if let Some(nbr) = single.slot_at(i) {
+                    if nbr.endpoint == decoded_endpoint
+                        && nbr.rank == decoded_rank
+                        && nbr.is_alive_at(ts)
+                    {
+                        return Some(nbr);
+                    }
+                }
+            }
+            return None;
+        }
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for chunk in chunks {
                 for i in 0..chunk.len() {

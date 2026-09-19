@@ -53,6 +53,14 @@ impl EdgeStore {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
         }
+        if matches!(
+            self.schema.record_form,
+            crate::edge::RecordForm::Pure | crate::edge::RecordForm::Bundled
+        ) {
+            return Err(StorageError::invalid_operation(
+                "schema change on an inline-form table requires an offline rebuild (migrate_record_form)".to_string(),
+            ));
+        }
         if self.pending_add_column.is_some()
             || self.pending_drop_column.is_some()
             || self.pending_rename_column.is_some()
@@ -224,7 +232,7 @@ mod tests {
     use super::*;
     use crate::edge::edge_table::config::EdgeTableConfig;
     use crate::edge::edge_table::iterator::EdgeTableScanIterator;
-    use crate::edge::{EdgeRecord, EdgeSchema, EdgeStrategy};
+    use crate::edge::{EdgeRecord, EdgeSchema, EdgeStrategy, RecordForm};
     use crate::types::StoragePropertyDef;
 
     fn make_table() -> EdgeStore {
@@ -240,6 +248,7 @@ mod tests {
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
+            record_form: RecordForm::default(),
         };
         EdgeStore::with_config(schema, EdgeTableConfig::default()).expect("table builds")
     }

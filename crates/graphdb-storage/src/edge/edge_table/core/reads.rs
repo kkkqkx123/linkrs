@@ -1,7 +1,8 @@
 //! Read-only paths: visibility, adjacency, point lookups and scans.
 
+use super::super::super::bundled_csr::decode_scalar;
 use super::super::super::csr_shared::decode_endpoint_pair;
-use super::super::super::{CsrBase, CsrShardSet, EdgeRecord, HotNbr, Nbr};
+use super::super::super::{CsrBase, CsrShardSet, EdgeRecord, HotNbr, Nbr, RecordForm};
 use super::EdgeStore;
 use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 use graphdb_core::Value;
@@ -268,6 +269,7 @@ impl EdgeStore {
                     hot.edge_id,
                     ts,
                     projection,
+                    true,
                 ));
             }
             true
@@ -305,6 +307,7 @@ impl EdgeStore {
                     hot.edge_id,
                     ts,
                     projection,
+                    false,
                 ));
             }
             true
@@ -328,7 +331,11 @@ impl EdgeStore {
             .map(|nbr| {
                 let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
                 let rank = nbr.rank;
-                let properties = self.properties_for_edge_projected(nbr.edge_id, ts, projection);
+                let properties = if self.is_bundled() {
+                    self.bundled_properties_at(true, src, nbr.edge_id, ts, projection)
+                } else {
+                    self.properties_for_edge_projected_columnar(nbr.edge_id, ts, projection)
+                };
                 EdgeRecord {
                     src_vid: VertexId::from_int64(src as i64),
                     dst_vid,
@@ -355,7 +362,11 @@ impl EdgeStore {
             .map(|nbr| {
                 let src_vid = VertexId::from_int64(nbr.endpoint as i64);
                 let rank = nbr.rank;
-                let properties = self.properties_for_edge_projected(nbr.edge_id, ts, projection);
+                let properties = if self.is_bundled() {
+                    self.bundled_properties_at(false, dst, nbr.edge_id, ts, projection)
+                } else {
+                    self.properties_for_edge_projected_columnar(nbr.edge_id, ts, projection)
+                };
                 EdgeRecord {
                     src_vid,
                     dst_vid: VertexId::from_int64(dst as i64),
@@ -382,9 +393,16 @@ impl EdgeStore {
         query_ts: Timestamp,
         projection: Option<&[String]>,
     ) -> EdgeRecord {
+        // The neighbors above always come from the out direction (table
+        // scans and out-row assembly), so the bundled fast path reads the
+        // out shard row directly.
+        let properties = if self.is_bundled() {
+            self.bundled_properties_at(true, src, nbr.edge_id, query_ts, projection)
+        } else {
+            self.properties_for_edge_projected_columnar(nbr.edge_id, query_ts, projection)
+        };
         let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
         let rank = nbr.rank;
-        let properties = self.properties_for_edge_projected(nbr.edge_id, query_ts, projection);
         EdgeRecord {
             src_vid: VertexId::from_int64(src as i64),
             dst_vid,
@@ -397,7 +415,8 @@ impl EdgeStore {
     ///
     /// Hot-only counterpart of [`Self::edge_record_from_nbr_projected`]
     /// for record paths that stream topology and resolve visibility by
-    /// edge id through the authority.
+    /// edge id through the authority. `outgoing` selects the shard row
+    /// holding the inline value for bundled tables.
     pub(crate) fn edge_record_from_hot_projected(
         &self,
         src_vid: VertexId,
@@ -406,14 +425,96 @@ impl EdgeStore {
         edge_id: EdgeId,
         query_ts: Timestamp,
         projection: Option<&[String]>,
+        outgoing: bool,
     ) -> EdgeRecord {
-        let properties = self.properties_for_edge_projected(edge_id, query_ts, projection);
+        let properties = if self.is_bundled() {
+            let row = if outgoing {
+                src_vid.as_int64().unwrap_or(0) as u32
+            } else {
+                dst_vid.as_int64().unwrap_or(0) as u32
+            };
+            self.bundled_properties_at(outgoing, row, edge_id, query_ts, projection)
+        } else {
+            self.properties_for_edge_projected_columnar(edge_id, query_ts, projection)
+        };
         EdgeRecord {
             src_vid,
             dst_vid,
             rank,
             properties,
         }
+    }
+
+    /// Whether this table stores its single scalar inline in the CSR.
+    pub(crate) fn is_bundled(&self) -> bool {
+        self.schema.record_form == RecordForm::Bundled
+    }
+
+    /// Decode the inline value of one edge from its shard row.
+    ///
+    /// Returns an empty vector for invisible edges, NULL slots, pure
+    /// topologies and projections excluding the single property, mirroring
+    /// the columnar contract that NULL reads as absent.
+    pub(crate) fn bundled_properties_at(
+        &self,
+        outgoing: bool,
+        row: u32,
+        edge_id: EdgeId,
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Vec<(String, Value)> {
+        if !self.is_visible(edge_id, query_ts) {
+            return Vec::new();
+        }
+        let Some(prop) = self.schema.properties.first() else {
+            return Vec::new();
+        };
+        if let Some(names) = projection {
+            if !names.iter().any(|n| n == &prop.name) {
+                return Vec::new();
+            }
+        }
+        let shards = if outgoing {
+            &self.out_csr
+        } else {
+            &self.in_csr
+        };
+        match shards.bundled_value_at(row, edge_id) {
+            Some((raw, true)) => vec![(prop.name.clone(), decode_scalar(raw, &prop.data_type))],
+            _ => Vec::new(),
+        }
+    }
+
+    /// Edge-id-only inline read for call sites without a row address.
+    ///
+    /// Scans the out direction (which mirrors every bundled value) for the
+    /// owning row. Rare-path fallback only; row-addressed reads use
+    /// [`Self::bundled_properties_at`].
+    pub(crate) fn bundled_scan_properties(
+        &self,
+        edge_id: EdgeId,
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Vec<(String, Value)> {
+        if !self.is_visible(edge_id, query_ts) {
+            return Vec::new();
+        }
+        for gid in self.out_csr.existing_group_ids() {
+            let base = crate::edge::node_group::group_base(gid, self.out_csr.group_bits());
+            let mut hit: Option<u32> = None;
+            if let Some(variant) = self.out_csr.group_variant(gid) {
+                for (local_vid, nbr) in variant.iter_all() {
+                    if nbr.edge_id == edge_id {
+                        hit = Some(base as u32 + local_vid.as_int64().unwrap_or(0) as u32);
+                        break;
+                    }
+                }
+            }
+            if let Some(src) = hit {
+                return self.bundled_properties_at(true, src, edge_id, query_ts, projection);
+            }
+        }
+        Vec::new()
     }
 
     pub(crate) fn properties_for_edge(
@@ -424,12 +525,32 @@ impl EdgeStore {
         self.properties_for_edge_projected(edge_id, query_ts, None)
     }
 
+    /// Topology-first property read with the record-form dispatch.
+    ///
+    /// Bundled tables decode the inline value column (scanning for the
+    /// owning row when the caller has no row address); every other form
+    /// reads the columnar store.
+    fn properties_for_edge_projected(
+        &self,
+        edge_id: EdgeId,
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Vec<(String, Value)> {
+        if self.is_bundled() {
+            return self.bundled_scan_properties(edge_id, query_ts, projection);
+        }
+        self.properties_for_edge_projected_columnar(edge_id, query_ts, projection)
+    }
+
     /// Topology-first property read: MVCC authority decides visibility,
     /// then only the projected columns are decoded. `None` decodes all
     /// columns, `Some(&[])` decodes none. Null-valued columns are filtered
     /// out, so callers cannot distinguish NULL from a missing column; the
     /// streaming cursor path shares this projection contract.
-    fn properties_for_edge_projected(
+    ///
+    /// Columnar body behind the record-form dispatch above; bundled tables
+    /// never reach here.
+    fn properties_for_edge_projected_columnar(
         &self,
         edge_id: EdgeId,
         query_ts: Timestamp,
@@ -473,7 +594,11 @@ impl EdgeStore {
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let nbr = self.merged_get_edge(&self.out_csr, src, dst_key, ts)?;
-        let properties = self.properties_for_edge(nbr.edge_id, ts);
+        let properties = if self.is_bundled() {
+            self.bundled_properties_at(true, src, nbr.edge_id, ts, None)
+        } else {
+            self.properties_for_edge(nbr.edge_id, ts)
+        };
 
         Some(EdgeRecord {
             src_vid: VertexId::from_int64(src as i64),
@@ -496,7 +621,11 @@ impl EdgeStore {
         }
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let nbr = self.merged_get_edge_with_gate(&self.out_csr, src, dst_key, ts, gate)?;
-        let properties = self.properties_for_edge(nbr.edge_id, ts);
+        let properties = if self.is_bundled() {
+            self.bundled_properties_at(true, src, nbr.edge_id, ts, None)
+        } else {
+            self.properties_for_edge(nbr.edge_id, ts)
+        };
         Some(EdgeRecord {
             src_vid: VertexId::from_int64(src as i64),
             dst_vid: VertexId::from_int64(dst as i64),
@@ -519,7 +648,11 @@ impl EdgeStore {
         }
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let nbr = self.merged_get_edge_with_gate(&self.out_csr, src, dst_key, ts, gate)?;
-        let properties = self.properties_for_edge_projected(nbr.edge_id, ts, projection);
+        let properties = if self.is_bundled() {
+            self.bundled_properties_at(true, src, nbr.edge_id, ts, projection)
+        } else {
+            self.properties_for_edge_projected_columnar(nbr.edge_id, ts, projection)
+        };
         Some(EdgeRecord {
             src_vid: VertexId::from_int64(src as i64),
             dst_vid: VertexId::from_int64(dst as i64),
@@ -555,6 +688,7 @@ impl EdgeStore {
                     hot.edge_id,
                     ts,
                     projection,
+                    true,
                 ));
             }
             true
@@ -599,6 +733,7 @@ impl EdgeStore {
                     hot.edge_id,
                     ts,
                     projection,
+                    false,
                 ));
             }
             true

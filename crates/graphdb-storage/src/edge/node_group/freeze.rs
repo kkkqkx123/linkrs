@@ -43,11 +43,9 @@ impl CsrShardSet {
     /// Reclaims first at `cutoff` through the shared group compaction when
     /// the caller passes an active cutoff, reporting removals through
     /// `on_edge_removed` for the authority above; a maximum cutoff packs
-    /// verbatim with no removals. Only `Multiple` and `Single` groups freeze;
-    /// missing groups, `None` groups and already-frozen groups are rejected.
-    /// The group's in-memory append log is discarded: its entries are already
-    /// reflected in the packed rows, and the deleted-dirt mark below makes
-    /// the next checkpoint rewrite the base and drop the sidecar.
+    /// verbatim with no removals. Only `Multiple`, `Single`, `Pure` and
+    /// `Bundled` groups freeze; missing groups, `None` groups and
+    /// already-frozen groups are rejected.
     pub fn freeze_group(
         &mut self,
         gid: usize,
@@ -61,8 +59,21 @@ impl CsrShardSet {
                 gid
             )));
         };
+        // The frozen packer stores topology only: freezing a bundled group
+        // with valid inline values would drop them, so it is rejected up
+        // front. Migrate to the columnar form first when a freeze is
+        // required; all-NULL bundled groups pack like pure topologies.
+        if shard.variant.bundled_has_valid_values() {
+            return Err(StorageError::invalid_operation(format!(
+                "group {} holds bundled inline values; migrate to columnar before freeze",
+                gid
+            )));
+        }
         match shard.variant {
-            CsrVariant::Multiple(_) | CsrVariant::Single(_) => {}
+            CsrVariant::Multiple(_)
+            | CsrVariant::Single(_)
+            | CsrVariant::Pure(_)
+            | CsrVariant::Bundled(_) => {}
             CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => {
                 return Err(StorageError::invalid_operation(format!(
                     "group {} is already frozen",
@@ -82,6 +93,34 @@ impl CsrShardSet {
         let frozen = match &shard.variant {
             CsrVariant::Multiple(csr) => ImmutableCsr::pack_from_mutable(csr),
             CsrVariant::Single(csr) => ImmutableCsr::pack_single_from(csr),
+            CsrVariant::Pure(csr) => {
+                let rows = csr.vertex_capacity();
+                let mut temp = super::super::MutableCsr::with_capacity(rows, 0);
+                for local in 0..rows as u32 {
+                    let edges = csr.physical_edges_of(local);
+                    for nbr in edges {
+                        if nbr.edge_id == INVALID_EDGE_ID {
+                            continue;
+                        }
+                        temp.insert_edge(local, nbr.to_vertex_id(), nbr.edge_id, 0)?;
+                    }
+                }
+                ImmutableCsr::pack_from_mutable(&temp)
+            }
+            CsrVariant::Bundled(csr) => {
+                let rows = csr.vertex_capacity();
+                let mut temp = super::super::MutableCsr::with_capacity(rows, 0);
+                for local in 0..rows as u32 {
+                    let edges = csr.physical_edges_of(local);
+                    for nbr in edges {
+                        if nbr.edge_id == INVALID_EDGE_ID {
+                            continue;
+                        }
+                        temp.insert_edge(local, nbr.to_vertex_id(), nbr.edge_id, 0)?;
+                    }
+                }
+                ImmutableCsr::pack_from_mutable(&temp)
+            }
             CsrVariant::Frozen(_) | CsrVariant::Mapped(_) | CsrVariant::None { .. } => {
                 return Err(StorageError::invalid_operation(format!(
                     "group {} changed under freeze",
@@ -183,9 +222,16 @@ mod tests {
 
     use super::super::DEFAULT_NODE_GROUP_BITS;
 
+    use super::super::RecordForm;
+
     fn sample_set() -> CsrShardSet {
-        let mut set =
-            CsrShardSet::new(EdgeStrategy::Multiple, DEFAULT_NODE_GROUP_BITS, 64).unwrap();
+        let mut set = CsrShardSet::new(
+            EdgeStrategy::Multiple,
+            DEFAULT_NODE_GROUP_BITS,
+            64,
+            RecordForm::Columnar,
+        )
+        .unwrap();
         for src in 0..32u32 {
             for k in 0..3u32 {
                 let dst = VertexId::edge_endpoint_key(src + k + 1, 0);
@@ -251,14 +297,24 @@ mod tests {
             .is_err());
         assert!(set.unfreeze_group(77).is_err());
 
-        let mut none_set =
-            CsrShardSet::new(EdgeStrategy::None, DEFAULT_NODE_GROUP_BITS, 64).unwrap();
+        let mut none_set = CsrShardSet::new(
+            EdgeStrategy::None,
+            DEFAULT_NODE_GROUP_BITS,
+            64,
+            RecordForm::Columnar,
+        )
+        .unwrap();
         assert!(none_set
             .freeze_group(0, Timestamp::MAX, 0.0, &mut |_, _| {})
             .is_err());
 
-        let mut single =
-            CsrShardSet::new(EdgeStrategy::Single, DEFAULT_NODE_GROUP_BITS, 64).unwrap();
+        let mut single = CsrShardSet::new(
+            EdgeStrategy::Single,
+            DEFAULT_NODE_GROUP_BITS,
+            64,
+            RecordForm::Columnar,
+        )
+        .unwrap();
         single
             .insert_edge(5, VertexId::edge_endpoint_key(6, 0), EdgeId(1), 1)
             .unwrap();

@@ -9,7 +9,7 @@ use graphdb_core::types::{EdgeId, EdgeStrategy, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
 use std::collections::BTreeMap;
 
-use super::super::{CsrBase, CsrVariant, MutableCsrTrait, Nbr};
+use super::super::{CsrBase, CsrVariant, MutableCsrTrait, Nbr, RecordForm};
 use super::{
     group_id_for, group_size, local_vid, regions_per_group, validate_group_bits, CsrShardSet,
     GroupDirty, RegionDirty, Shard, ShardAppendLog,
@@ -20,6 +20,7 @@ impl CsrShardSet {
         strategy: EdgeStrategy,
         group_bits: u32,
         overflow_chunk_edges: usize,
+        record_form: RecordForm,
     ) -> StorageResult<Self> {
         validate_group_bits(group_bits)?;
         if overflow_chunk_edges == 0 {
@@ -31,8 +32,10 @@ impl CsrShardSet {
             strategy,
             group_bits,
             overflow_chunk_edges,
+            record_form,
             tombstone_reuse_cutoff: Timestamp::MAX,
             shards: BTreeMap::new(),
+            route_cache: super::RouteCache::new(),
         };
         if strategy != EdgeStrategy::None {
             set.shards.insert(
@@ -51,6 +54,10 @@ impl CsrShardSet {
 
     pub fn strategy(&self) -> EdgeStrategy {
         self.strategy
+    }
+
+    pub fn record_form(&self) -> RecordForm {
+        self.record_form
     }
 
     pub fn group_bits(&self) -> u32 {
@@ -94,13 +101,32 @@ impl CsrShardSet {
     }
 
     pub(crate) fn fresh_variant(&self) -> StorageResult<CsrVariant> {
-        let mut variant = CsrVariant::from_strategy_with_overflow(
-            self.strategy,
-            self.group_size(),
-            0,
-            self.overflow_chunk_edges,
-        )?;
-        variant.set_tombstone_reuse_cutoff(self.tombstone_reuse_cutoff);
+        let variant = match self.record_form {
+            RecordForm::Pure => CsrVariant::Pure(Box::new(
+                super::super::pure_csr::PureTopologyCsr::with_overflow_chunk_edges(
+                    self.group_size(),
+                    0,
+                    self.overflow_chunk_edges,
+                ),
+            )),
+            RecordForm::Bundled => CsrVariant::Bundled(Box::new(
+                super::super::bundled_csr::BundledCsr::with_overflow_chunk_edges(
+                    self.group_size(),
+                    0,
+                    self.overflow_chunk_edges,
+                ),
+            )),
+            RecordForm::Columnar => {
+                let mut v = CsrVariant::from_strategy_with_overflow(
+                    self.strategy,
+                    self.group_size(),
+                    0,
+                    self.overflow_chunk_edges,
+                )?;
+                v.set_tombstone_reuse_cutoff(self.tombstone_reuse_cutoff);
+                return Ok(v);
+            }
+        };
         Ok(variant)
     }
 
@@ -160,11 +186,141 @@ impl CsrShardSet {
         Ok(())
     }
 
-    pub(super) fn route(&self, vid: u32) -> Option<(usize, u32)> {
-        let gid = group_id_for(vid, self.group_bits);
+    /// Whether this direction stores its single scalar inline.
+    pub fn is_bundled(&self) -> bool {
+        self.record_form == RecordForm::Bundled
+    }
+
+    /// Insert one edge carrying its inline value (`None` stores NULL).
+    ///
+    /// Dirt and append-log entries mirror the single-edge insert path. Only
+    /// bundled sets accept a value; anything else is rejected by the variant.
+    pub fn bundled_insert_with_value(
+        &mut self,
+        src_vid: u32,
+        dst: VertexId,
+        edge_id: EdgeId,
+        ts: Timestamp,
+        value: Option<u64>,
+    ) -> StorageResult<()> {
+        let gid = self.ensure_group_for(src_vid)?;
+        let local = local_vid(src_vid, self.group_bits);
         self.shards
-            .get(&gid)
-            .map(|_| (gid, local_vid(vid, self.group_bits)))
+            .get_mut(&gid)
+            .ok_or_else(|| {
+                StorageError::invalid_operation(format!("missing group {} on insert", gid))
+            })?
+            .variant
+            .insert_edge_with_value(local, dst, edge_id, value)?;
+        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
+        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
+        let nbr = Nbr::with_create_ts(decoded_endpoint, decoded_rank, edge_id, ts);
+        self.mark_region_insert(gid, local);
+        self.record_append_insert(gid, local, nbr);
+        Ok(())
+    }
+
+    /// Read one edge's inline value within its source row.
+    pub fn bundled_value_at(&self, src_vid: u32, edge_id: EdgeId) -> Option<(u64, bool)> {
+        let (gid, local) = self.route(src_vid)?;
+        self.shards
+            .get(&gid)?
+            .variant
+            .bundled_value_by_edge_id(local, edge_id)
+    }
+
+    /// Read the inline value of the live edge for one endpoint.
+    pub fn bundled_value_by_endpoint(&self, src_vid: u32, endpoint: u32) -> Option<(u64, bool)> {
+        let (gid, local) = self.route(src_vid)?;
+        self.shards
+            .get(&gid)?
+            .variant
+            .bundled_value_by_endpoint(local, endpoint)
+    }
+
+    /// Overwrite the inline value of the live edge for one endpoint.
+    ///
+    /// The value column rides the group base file rather than the append
+    /// sidecar, so the update takes delete dirt to force a base rewrite on
+    /// the next checkpoint. No append record is written: append replay only
+    /// expresses topology inserts and deletes.
+    pub fn bundled_set_value_by_endpoint(
+        &mut self,
+        src_vid: u32,
+        endpoint: u32,
+        value: Option<u64>,
+    ) -> bool {
+        let Some((gid, local)) = self.route(src_vid) else {
+            return false;
+        };
+        let updated = self
+            .shards
+            .get_mut(&gid)
+            .map(|shard| {
+                shard
+                    .variant
+                    .bundled_set_value_by_endpoint(local, endpoint, value)
+            })
+            .unwrap_or(false);
+        if updated {
+            self.mark_region_delete(gid, local);
+        }
+        updated
+    }
+
+    /// Revert a deletion restoring the caller's value alongside the topology.
+    pub fn bundled_revert_with_value(
+        &mut self,
+        src_vid: u32,
+        position: super::super::EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+        value: Option<u64>,
+    ) -> bool {
+        let Some((gid, local)) = self.route(src_vid) else {
+            return false;
+        };
+        self.shards
+            .get_mut(&gid)
+            .map(|shard| {
+                shard
+                    .variant
+                    .bundled_revert_with_value(local, position, expected, ts, value)
+            })
+            .unwrap_or(false)
+    }
+
+    /// Visit every physically stored entry of one vertex with its inline
+    /// value (`None` for NULL slots and non-bundled forms).
+    pub fn visit_physical_with_values<F>(&self, src_vid: u32, f: F)
+    where
+        F: FnMut(Nbr, Option<u64>) -> bool,
+    {
+        match self.route(src_vid) {
+            Some((gid, local)) => {
+                if let Some(shard) = self.shards.get(&gid) {
+                    shard.variant.visit_physical_with_values(local, f);
+                }
+            }
+            None => {}
+        }
+    }
+
+    pub(super) fn route(&self, vid: u32) -> Option<(usize, u32)> {
+        // Hot-row fast path: repeats skip the group map search. Cached
+        // triples are only stored for existing groups and removals
+        // invalidate, so a hit is authoritative without rechecking the map.
+        if let Some(hit) = self.route_cache.lookup(vid) {
+            return Some(hit);
+        }
+        let gid = group_id_for(vid, self.group_bits);
+        let local = local_vid(vid, self.group_bits);
+        if self.shards.contains_key(&gid) {
+            self.route_cache.insert(vid, gid, local);
+            Some((gid, local))
+        } else {
+            None
+        }
     }
 
     /// Bulk insert pre-grouped edges with one reservation per touched row.
@@ -322,6 +478,7 @@ impl CsrShardSet {
                 )));
             }
             self.shards.clear();
+            self.route_cache.clear();
             return Ok(());
         }
         let ids: Vec<u32> = (0..count).map(|gid| gid as u32).collect();
@@ -355,6 +512,7 @@ impl CsrShardSet {
                 )));
             }
             self.shards.clear();
+            self.route_cache.clear();
             return Ok(());
         }
         let mut wanted: Vec<usize> = ids.iter().map(|id| *id as usize).collect();
@@ -386,6 +544,7 @@ impl CsrShardSet {
             );
         }
         self.shards = fresh;
+        self.route_cache.clear();
         self.clear_all_dirty();
         Ok(())
     }
@@ -418,11 +577,13 @@ impl CsrShardSet {
             .iter()
             .filter_map(|(gid, shard)| shard.variant.iter_all().next().is_none().then_some(*gid))
             .collect();
+        let mut removed: Vec<usize> = Vec::new();
         for gid in empty {
             if self.shards.len() <= 1 {
                 break;
             }
             self.shards.remove(&gid);
+            removed.push(gid);
         }
         if self.strategy != EdgeStrategy::None && self.shards.is_empty() {
             if let Ok(variant) = self.fresh_variant() {
@@ -437,6 +598,12 @@ impl CsrShardSet {
                     },
                 );
             }
+        }
+        // Dropped groups change routing: invalidate their cached rows so
+        // later reads route to missing groups as empty instead of hitting
+        // stale triples.
+        for gid in removed {
+            self.route_cache.invalidate_gid(gid);
         }
     }
 

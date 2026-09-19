@@ -309,6 +309,16 @@ impl EdgeStore {
                     .with_default_value(p.default_value.clone())
             })
             .collect();
+        // Inline forms keep no columnar rows: values live in the CSR value
+        // column persisted with the group files, so the stub is restored and
+        // no shard files are read or merged.
+        if matches!(
+            self.schema.record_form,
+            crate::edge::RecordForm::Pure | crate::edge::RecordForm::Bundled
+        ) {
+            self.properties = crate::edge::CsrWithProperties::inline_stub(prop_schemas);
+            return Ok(());
+        }
         self.properties = crate::edge::CsrWithProperties::new(prop_schemas.clone());
         let owners = self.owner_list_for_load(manifest);
         let mut encodings: HashMap<String, crate::encoding::EncodingType> = HashMap::new();

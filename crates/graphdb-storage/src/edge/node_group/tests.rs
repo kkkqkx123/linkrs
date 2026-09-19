@@ -1,10 +1,17 @@
 use graphdb_core::types::{EdgeId, VertexId};
 
+use super::super::RecordForm;
 use super::super::{CsrBase, MutableCsrTrait};
 use super::*;
 
 fn multi_set() -> CsrShardSet {
-    CsrShardSet::new(EdgeStrategy::Multiple, DEFAULT_NODE_GROUP_BITS, 4096).unwrap()
+    CsrShardSet::new(
+        EdgeStrategy::Multiple,
+        DEFAULT_NODE_GROUP_BITS,
+        4096,
+        RecordForm::Columnar,
+    )
+    .unwrap()
 }
 
 fn endpoint(dst: u32, rank: i64) -> VertexId {
@@ -23,8 +30,8 @@ fn group_mapping_splits_at_group_boundary() {
 
 #[test]
 fn invalid_group_bits_rejected() {
-    assert!(CsrShardSet::new(EdgeStrategy::Multiple, 0, 4096).is_err());
-    assert!(CsrShardSet::new(EdgeStrategy::Multiple, 21, 4096).is_err());
+    assert!(CsrShardSet::new(EdgeStrategy::Multiple, 0, 4096, RecordForm::Columnar).is_err());
+    assert!(CsrShardSet::new(EdgeStrategy::Multiple, 21, 4096, RecordForm::Columnar).is_err());
 }
 
 #[test]
@@ -232,7 +239,7 @@ fn sparse_span_covers_holes_while_capacity_counts_materialized() {
 
 #[test]
 fn none_strategy_holds_no_groups() {
-    let mut set = CsrShardSet::new(EdgeStrategy::None, 12, 4096).unwrap();
+    let mut set = CsrShardSet::new(EdgeStrategy::None, 12, 4096, RecordForm::Columnar).unwrap();
     assert_eq!(set.group_count(), 0);
     assert_eq!(set.vertex_capacity(), 0);
     assert!(set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).is_err());
@@ -319,7 +326,7 @@ fn checkpoint_kind_turns_rebalance_on_delete_dirt() {
 }
 
 fn narrow_set() -> CsrShardSet {
-    CsrShardSet::new(EdgeStrategy::Multiple, 9, 4096).unwrap()
+    CsrShardSet::new(EdgeStrategy::Multiple, 9, 4096, RecordForm::Columnar).unwrap()
 }
 
 #[test]

@@ -109,6 +109,26 @@ impl EdgeStore {
         self.label_name = meta.label_name;
         self.is_open = meta.is_open;
         self.set_schema(meta.schema);
+        // Align the shard-set forms with the stored schema: a table built
+        // with a different preference loads the persisted form, never
+        // re-infers it. The sets are still empty here (groups materialize
+        // below), so replacing them drops nothing.
+        if self.out_csr.record_form() != self.schema.record_form {
+            self.out_csr = crate::edge::CsrShardSet::new(
+                self.schema.oe_strategy,
+                self.config.node_group_bits,
+                self.config.overflow_chunk_edges,
+                self.schema.record_form,
+            )?;
+        }
+        if self.in_csr.record_form() != self.schema.record_form {
+            self.in_csr = crate::edge::CsrShardSet::new(
+                self.schema.ie_strategy,
+                self.config.node_group_bits,
+                self.config.overflow_chunk_edges,
+                self.schema.record_form,
+            )?;
+        }
         self.next_edge_id = meta.next_edge_id;
         self.mvcc.edge_timestamps.clear();
         self.mvcc.min_active_snapshot_ts = graphdb_core::types::Timestamp::MAX;

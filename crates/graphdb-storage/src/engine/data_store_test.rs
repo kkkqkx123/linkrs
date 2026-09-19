@@ -2,7 +2,7 @@
 mod tests {
     use std::sync::Arc;
 
-    use crate::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
+    use crate::edge::{EdgeSchema, EdgeStore, EdgeStrategy, RecordForm};
     use crate::engine::data_store::{EdgeTableKey, GraphDataStore};
     use crate::vertex::{ShardedVertexTable, VertexSchema};
     use graphdb_core::{StorageError, StorageResult};
@@ -91,6 +91,7 @@ mod tests {
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
+            record_form: RecordForm::default(),
         })
         .expect("edge table should be valid")
     }

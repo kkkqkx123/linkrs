@@ -25,7 +25,11 @@ pub(crate) fn sync_serving_file(base_path: &Path, variant: &CsrVariant) -> Stora
             heap.load(&csr.dump())?;
             write_serving_file(&heap, &serving)
         }
-        CsrVariant::Multiple(_) | CsrVariant::Single(_) | CsrVariant::None { .. } => {
+        CsrVariant::Multiple(_)
+        | CsrVariant::Single(_)
+        | CsrVariant::Pure(_)
+        | CsrVariant::Bundled(_)
+        | CsrVariant::None { .. } => {
             let _ = std::fs::remove_file(&serving);
             Ok(())
         }
@@ -42,6 +46,10 @@ pub(crate) fn backfill_serving_file(base_path: &Path, variant: &CsrVariant) -> S
             }
             sync_serving_file(base_path, variant)
         }
-        CsrVariant::Multiple(_) | CsrVariant::Single(_) | CsrVariant::None { .. } => Ok(()),
+        CsrVariant::Multiple(_)
+        | CsrVariant::Single(_)
+        | CsrVariant::Pure(_)
+        | CsrVariant::Bundled(_)
+        | CsrVariant::None { .. } => Ok(()),
     }
 }

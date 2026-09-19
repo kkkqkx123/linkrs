@@ -28,6 +28,7 @@
 //! | `Single` | `SingleMutableCsr` | One-to-one relationships (spouse, current_employer) | O(1) |
 //! | `None` | - | No edges stored | - |
 
+pub(crate) mod bundled_csr;
 pub(crate) mod csr_shared;
 pub mod csr_trait;
 pub mod csr_variant;
@@ -39,6 +40,7 @@ pub mod immutable_csr;
 pub mod mutable_csr;
 pub mod node_group;
 pub mod property_schema;
+pub(crate) mod pure_csr;
 pub mod single_mutable_csr;
 
 use crate::types::StoragePropertyDef;
@@ -62,9 +64,68 @@ pub use node_group::{
 };
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
+pub use bundled_csr::{decode_scalar, encode_scalar, BundledCsr};
 pub use frozen_serving::{MappedFrozen, MappedFrozenIterator, MappedFrozenRowIter};
 pub use graphdb_core::types::INVALID_EDGE_ID;
 pub use immutable_csr::{FrozenRowIter, ImmutableCsr, ImmutableCsrIterator};
+pub use pure_csr::PureTopologyCsr;
+
+/// Resolved record form for an edge table, persisted in `meta.bin`.
+///
+/// Determined once at table creation by the selector; never re-inferred on
+/// load.  A schema change that breaks the form's preconditions requires an
+/// offline rebuild to a different form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum RecordForm {
+    /// Pure topology: 12 bytes/edge, no rank, no timestamps.
+    Pure,
+    /// Bundled: 20 bytes/edge, inline single scalar value column.
+    Bundled,
+    /// Standard columnar property storage (default / fallback).
+    Columnar,
+}
+
+impl Default for RecordForm {
+    fn default() -> Self {
+        RecordForm::Columnar
+    }
+}
+
+/// User-facing preference for record form selection at table creation time.
+///
+/// `Auto` lets the system pick the optimal form based on the schema;
+/// `Columnar` forces the standard multi/single/none strategy path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum RecordFormPreference {
+    /// Auto-select Pure/Bundled/Columnar based on schema properties.
+    Auto,
+    /// Force columnar storage regardless of schema.
+    Columnar,
+}
+
+impl Default for RecordFormPreference {
+    fn default() -> Self {
+        RecordFormPreference::Columnar
+    }
+}
+
+/// Check whether a `DataType` can be encoded as a 64-bit scalar for the
+/// `Bundled` record form.
+pub fn is_scalar_encodable(dt: &graphdb_core::DataType) -> bool {
+    use graphdb_core::DataType;
+    matches!(
+        dt,
+        DataType::Bool
+            | DataType::SmallInt
+            | DataType::Int
+            | DataType::BigInt
+            | DataType::Float
+            | DataType::Double
+            | DataType::Date
+            | DataType::Time
+            | DataType::DateTime
+    )
+}
 
 #[derive(Debug, Clone)]
 pub struct EdgeRecord {
@@ -113,6 +174,11 @@ pub struct EdgeSchema {
     pub oe_strategy: EdgeStrategy,
     pub ie_strategy: EdgeStrategy,
     pub schema_version: u64,
+    /// Persisted record form: how edges are stored on disk.
+    /// Determined once at table creation by the selector; never re-inferred
+    /// on load.  Default is `Columnar` for backward compatibility.
+    #[serde(default)]
+    pub record_form: RecordForm,
 }
 
 impl EdgeSchema {
@@ -231,6 +297,10 @@ impl EdgeSchema {
 /// resolve visibility through the version authority (by `edge_id`) walk this
 /// half only, so the cold timestamp lines stay out of the cache. Assembled
 /// back into [`Nbr`] at API boundaries through [`Nbr::from_parts`].
+///
+/// Rank keeps full 64-bit width: it is the caller-controlled multigraph
+/// multiplicity key, shared with endpoint key packing, WAL redo records and
+/// the query layer, so the store must hold any legal input value exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HotNbr {
     pub endpoint: u32,
@@ -245,6 +315,10 @@ pub struct HotNbr {
 /// paths must never decide visibility from these fields; the version
 /// authority owns that decision. Touched only by writes, deletes, rollback,
 /// compaction and persistence assembly, never by topology scans.
+///
+/// Both stamps stay in the row: point-in-time reads filter on them directly
+/// and the shared delete state machine orders on creation stamps, so moving
+/// them out would reroute every read through a per-edge authority lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColdStamps {
     pub create_ts: Timestamp,
@@ -427,8 +501,16 @@ mod tests {
 
     #[test]
     fn hot_half_stays_within_single_cache_line_budget() {
-        assert!(std::mem::size_of::<HotNbr>() <= 24);
-        assert!(std::mem::size_of::<ColdStamps>() <= 16);
+        // Per-edge memory budget, pinned exactly: 24-byte hot half plus
+        // 16-byte cold half is 40 bytes per edge with no padding waste.
+        // Rank stays 64-bit because it is a caller-controlled multigraph
+        // key shared with the query layer, WAL redo records and endpoint
+        // key packing; narrowing it would reject legal inputs instead of
+        // storing them. Both stamps stay because point-in-time reads and
+        // the write-path delete state machine serve directly from the row.
+        assert_eq!(std::mem::size_of::<HotNbr>(), 24);
+        assert_eq!(std::mem::size_of::<ColdStamps>(), 16);
+        assert_eq!(std::mem::size_of::<Nbr>(), 40);
     }
 
     #[test]
@@ -453,6 +535,7 @@ mod tests {
             oe_strategy: EdgeStrategy::None,
             ie_strategy: EdgeStrategy::None,
             schema_version: 1,
+            record_form: RecordForm::default(),
         };
 
         let result = schema.validate();
@@ -474,6 +557,7 @@ mod tests {
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::None,
             schema_version: 1,
+            record_form: RecordForm::default(),
         };
 
         let result = schema.validate();
@@ -491,6 +575,7 @@ mod tests {
             oe_strategy: EdgeStrategy::None,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
+            record_form: RecordForm::default(),
         };
 
         let result = schema.validate();
@@ -508,6 +593,7 @@ mod tests {
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Single,
             schema_version: 1,
+            record_form: RecordForm::default(),
         };
 
         let result = schema.validate();

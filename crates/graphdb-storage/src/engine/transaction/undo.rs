@@ -283,6 +283,7 @@ impl UndoTarget for GraphStorageContext {
                         oe_strategy: crate::edge::EdgeStrategy::Multiple,
                         ie_strategy: crate::edge::EdgeStrategy::Multiple,
                         schema_version: 1,
+                        record_form: crate::edge::RecordForm::default(),
                     };
                     crate::edge::EdgeStore::new(schema)
                 },

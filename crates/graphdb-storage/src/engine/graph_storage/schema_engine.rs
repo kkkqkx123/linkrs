@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use crate::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
+use crate::edge::{EdgeSchema, EdgeStore, EdgeStrategy, RecordForm};
 use crate::engine::params::CreateEdgeTypeParams;
 use crate::types::StoragePropertyDef;
 use crate::vertex::{ShardedVertexTable, VertexSchema};
@@ -127,6 +127,7 @@ pub fn create_edge_type(
                 oe_strategy,
                 ie_strategy,
                 schema_version: 1,
+                record_form: RecordForm::default(),
             };
             schema.validate_on_creation()?;
             let mut table = EdgeStore::new(schema)?;
@@ -170,6 +171,7 @@ pub fn create_edge_type_with_id(
                 oe_strategy,
                 ie_strategy,
                 schema_version: 1,
+                record_form: RecordForm::default(),
             };
             schema.validate_on_creation()?;
             let mut table = EdgeStore::new(schema)?;

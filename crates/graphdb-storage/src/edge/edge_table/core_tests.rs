@@ -1,6 +1,6 @@
 use crate::edge::edge_table::config::EdgeTableConfig;
 use crate::edge::edge_table::core::EdgeStore;
-use crate::edge::{CsrBase, EdgeSchema, EdgeStrategy, MutableCsrTrait};
+use crate::edge::{CsrBase, EdgeSchema, EdgeStrategy, MutableCsrTrait, RecordForm};
 use crate::types::StoragePropertyDef;
 use graphdb_core::types::{CommitLsn, DataType, EdgeId, Timestamp, VertexId};
 use graphdb_core::Value;
@@ -26,6 +26,7 @@ fn create_test_schema() -> EdgeSchema {
         oe_strategy: EdgeStrategy::Multiple,
         ie_strategy: EdgeStrategy::Multiple,
         schema_version: 1,
+        record_form: RecordForm::default(),
     }
 }
 
@@ -555,6 +556,7 @@ fn test_single_time_travel_survives_flush_load() {
         oe_strategy: EdgeStrategy::Single,
         ie_strategy: EdgeStrategy::Single,
         schema_version: 1,
+        record_form: RecordForm::default(),
     };
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table
@@ -583,6 +585,7 @@ fn test_single_time_travel_survives_flush_load() {
         oe_strategy: EdgeStrategy::Single,
         ie_strategy: EdgeStrategy::Single,
         schema_version: 1,
+        record_form: RecordForm::default(),
     };
     let mut loaded = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     loaded.load(temp_dir.path()).expect("load should succeed");
@@ -1222,6 +1225,7 @@ fn test_pushdown_null_cells_never_match() {
         oe_strategy: EdgeStrategy::Multiple,
         ie_strategy: EdgeStrategy::Multiple,
         schema_version: 1,
+        record_form: RecordForm::default(),
     };
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table.insert_edge(0, 1, 0, &[], 100).unwrap();

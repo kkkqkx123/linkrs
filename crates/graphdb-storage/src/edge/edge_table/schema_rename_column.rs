@@ -152,7 +152,7 @@ impl EdgeStore {
 mod tests {
     use super::*;
     use crate::edge::edge_table::config::EdgeTableConfig;
-    use crate::edge::{EdgeSchema, EdgeStrategy};
+    use crate::edge::{EdgeSchema, EdgeStrategy, RecordForm};
     use crate::types::StoragePropertyDef;
     use graphdb_core::Value;
 
@@ -169,6 +169,7 @@ mod tests {
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
+            record_form: RecordForm::default(),
         };
         EdgeStore::with_config(schema, EdgeTableConfig::default()).expect("table builds")
     }

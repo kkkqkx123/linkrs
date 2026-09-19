@@ -34,6 +34,7 @@ pub mod freeze;
 pub mod iterator;
 pub mod mvcc;
 pub mod persistence;
+pub mod record_form;
 pub mod remap;
 pub mod schema_add_column;
 pub mod schema_drop_column;
@@ -45,6 +46,7 @@ pub mod wal;
 // Re-export commonly used types
 pub use core::{EdgeStore, UpdateEdgePropertyByKeyParams};
 pub use iterator::{AdjacencyBatchAccessor, EdgeTableScanIterator, DEFAULT_ADJACENCY_BATCH};
+pub use record_form::MigrateStats;
 pub use staging::{EdgeStagingBatch, StagedDelete, StagedInsert};
 pub use stats::{DeletionStats, GroupSegmentStats, ScanPruneReport, TombstoneStats};
 

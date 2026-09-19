@@ -1,9 +1,10 @@
 //! Table construction and identity accessors.
 
-use super::super::super::{CsrShardSet, EdgeSchema};
+use super::super::super::{CsrShardSet, EdgeSchema, RecordForm, RecordFormPreference};
 use super::super::config::EdgeTableConfig;
 use super::super::mvcc::MVCCManager;
 use super::EdgeStore;
+use crate::edge::is_scalar_encodable;
 use crate::edge::property_schema::PropertySchema;
 use crate::edge::CsrWithProperties;
 use crate::schema::{LabelVersionHistory, SchemaObjectType};
@@ -26,15 +27,35 @@ impl EdgeStore {
             ));
         }
 
+        let record_form = match config.record_form {
+            RecordFormPreference::Columnar => RecordForm::Columnar,
+            RecordFormPreference::Auto => {
+                if schema.properties.is_empty() {
+                    RecordForm::Pure
+                } else if schema.properties.len() == 1
+                    && is_scalar_encodable(&schema.properties[0].data_type)
+                {
+                    RecordForm::Bundled
+                } else {
+                    RecordForm::Columnar
+                }
+            }
+        };
+        // The resolved form is authoritative in memory and on disk: load
+        // paths never re-infer it.
+        let mut schema = schema;
+        schema.record_form = record_form;
         let mut out_csr = CsrShardSet::new(
             schema.oe_strategy,
             config.node_group_bits,
             config.overflow_chunk_edges,
+            record_form,
         )?;
         let mut in_csr = CsrShardSet::new(
             schema.ie_strategy,
             config.node_group_bits,
             config.overflow_chunk_edges,
+            record_form,
         )?;
         // Pre-create groups covering the configured initial row space so
         // small tables start with their full address range addressable.
@@ -59,7 +80,12 @@ impl EdgeStore {
                     .with_default_value(p.default_value.clone())
             })
             .collect();
-        let properties = CsrWithProperties::new(prop_schemas);
+        // Inline forms keep a schema-only stub: the single scalar (or no
+        // property at all) lives in the CSR value column, never in columns.
+        let properties = match record_form {
+            RecordForm::Pure | RecordForm::Bundled => CsrWithProperties::inline_stub(prop_schemas),
+            RecordForm::Columnar => CsrWithProperties::new(prop_schemas),
+        };
 
         let label_id = schema.label_id;
         let label_name = schema.label_name.clone();

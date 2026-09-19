@@ -5,7 +5,7 @@ mod tests {
 
     use parking_lot::RwLock;
 
-    use crate::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
+    use crate::edge::{EdgeSchema, EdgeStore, EdgeStrategy, RecordForm};
     use crate::engine::data_store::EdgeTableKey;
     use crate::types::StoragePropertyDef;
     use crate::vertex::{IdKey, ShardedVertexTable, VertexSchema};
@@ -51,6 +51,7 @@ mod tests {
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
+            record_form: RecordForm::default(),
         };
         EdgeStore::new(schema).expect("Failed to create EdgeStore")
     }

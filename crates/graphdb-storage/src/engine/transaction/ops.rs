@@ -554,6 +554,7 @@ pub fn create_edge_type_undo(
         oe_strategy: crate::edge::EdgeStrategy::Multiple,
         ie_strategy: crate::edge::EdgeStrategy::Multiple,
         schema_version: 1,
+        record_form: crate::edge::RecordForm::default(),
     };
     edge_tables.insert(
         EdgeTableKey::new(src_label, dst_label, label),

@@ -354,6 +354,8 @@ impl SingleMutableCsr {
         }
     }
 
+    /// Test and offline use; production scans use `fill_physical_into` or
+    /// the visitor paths instead of this allocating accessor.
     pub fn physical_edges_of(&self, src: u32) -> Vec<Nbr> {
         let mut out = Vec::new();
         self.fill_physical_into(src, &mut out);
@@ -529,6 +531,8 @@ impl SingleMutableCsr {
         removed
     }
 
+    /// Test and offline use; production reads use `iter_edges_of` directly
+    /// instead of collecting through this allocating accessor.
     pub fn edges_of(&self, src: u32, ts: Timestamp) -> Vec<Nbr> {
         self.iter_edges_of(src, ts).into_iter().collect()
     }

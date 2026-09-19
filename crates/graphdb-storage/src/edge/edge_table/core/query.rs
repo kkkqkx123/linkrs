@@ -19,6 +19,13 @@ impl EdgeStore {
         query_ts: Timestamp,
         predicates: &[ScanPredicate],
     ) -> bool {
+        if self.is_bundled() {
+            // Single inline value evaluated with the shared predicate
+            // matcher; a NULL slot yields no properties so nothing matches,
+            // mirroring the columnar NULL semantics.
+            let props = self.bundled_scan_properties(edge_id, query_ts, None);
+            return predicates.iter().all(|p| p.matches(&props));
+        }
         self.properties
             .matches_predicates_for_edge(edge_id, query_ts, predicates)
     }
@@ -38,6 +45,26 @@ impl EdgeStore {
         query_ts: Timestamp,
         candidates: Option<&[EdgeId]>,
     ) -> Vec<EdgeId> {
+        if self.is_bundled() {
+            // The stub columnar store holds no rows, so the walk runs over
+            // the out-direction topology with per-edge predicate checks.
+            // Visibility rides inside `matches_pushdown` via the bundled
+            // scan, which returns no properties for invisible edges.
+            if let Some(ids) = candidates {
+                return ids
+                    .iter()
+                    .copied()
+                    .filter(|edge_id| self.matches_pushdown(*edge_id, query_ts, predicates))
+                    .collect();
+            }
+            let mut out = Vec::new();
+            for (_, nbr) in self.out_csr.iter_all() {
+                if self.matches_pushdown(nbr.edge_id, query_ts, predicates) {
+                    out.push(nbr.edge_id);
+                }
+            }
+            return out;
+        }
         if let Some(ids) = candidates {
             return self
                 .properties

@@ -7,7 +7,10 @@
 //! - `groups_manifest.bin`: address width plus existing out/in group id lists.
 //! - `out_g{gid}.bin` / `in_g{gid}.bin`: header + one `CsrVariant` dump per
 //!   existing group, written only for dirty groups; topology columns use the
-//!   integer column path with per-column encoding. Missing groups read as
+//!   integer column path with per-column encoding, or the raw direct dump at
+//!   native widths when `EdgeTableConfig::csr_dump_raw` selects speed over
+//!   size. The dump version marker records which mode wrote the group, so
+//!   loads accept both and reject anything else. Missing groups read as
 //!   empty and never produce files.
 //! - `ts_g{gid}.bin`: authoritative timestamps for the owning group's edges,
 //!   falling with the same dirt as the group.
@@ -233,6 +236,32 @@ pub fn serialize_csr_with_scratch(
     Ok(())
 }
 
+/// Serialize one sharded CSR in direct-dump mode reusing caller-owned
+/// column buffers.
+///
+/// Same framing as `serialize_csr_with_scratch`; the multi-edge form lands
+/// at native column widths for speed-sensitive checkpoints. Selected by
+/// `EdgeTableConfig::csr_dump_raw`. Loads dispatch by version marker, so
+/// mixed-mode group files in one table load without conversion.
+pub fn serialize_csr_with_scratch_raw(
+    csr: &CsrVariant,
+    section_id: u32,
+    buf: &mut Vec<u8>,
+    scratch: &mut crate::edge::mutable_csr::persistence::CsrDumpScratch,
+) -> StorageResult<()> {
+    write_header_to(buf, section_id)
+        .map_err(|e| StorageError::io_error(format!("Failed to write CSR header: {}", e)))?;
+
+    let len_pos = buf.len();
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    let start = buf.len();
+    csr.dump_into_with_scratch_raw(buf, scratch);
+    let len = (buf.len() - start) as u64;
+    buf[len_pos..len_pos + 8].copy_from_slice(&len.to_le_bytes());
+
+    Ok(())
+}
+
 pub fn serialize_csr_properties(
     properties: &CsrWithProperties,
     buf: &mut Vec<u8>,
@@ -439,6 +468,7 @@ mod tests {
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
+            record_form: RecordForm::default(),
         };
         EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
     }

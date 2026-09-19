@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use graphdb_core::types::{EdgeId, Timestamp};
+use graphdb_core::types::{EdgeId, Timestamp, INVALID_EDGE_ID};
 use graphdb_core::{DataType, StorageError, StorageResult, Value};
 
 use crate::edge::property_schema::PropertySchema;
@@ -64,25 +64,44 @@ impl RowVisibility {
 /// statistics. A reload restores plain values first, then re-applies the
 /// recorded encodings and statistics, so encoded scans survive checkpoints.
 /// Attribute time travel is therefore valid within a checkpoint epoch.
+/// Row slot holding no edge mapping inside the dense edge map.
+const UNMAPPED_ROW: u32 = u32::MAX;
+
 #[derive(Debug, Clone)]
 pub struct CsrWithProperties {
     property_schema: Vec<PropertySchema>,
     property_columns: Vec<Column>,
+    /// Column position by name, rebuilt on every schema mutation so hot
+    /// paths never scan the schema linearly.
+    column_index: HashMap<String, usize>,
+    /// Column position by stable identifier, rebuilt with the name index.
+    /// Undo parameters keyed by id resolve through this instead of scanning.
+    prop_id_index: HashMap<i32, usize>,
     visibility: Vec<RowVisibility>,
-    edge_to_row: HashMap<EdgeId, u32>,
+    /// Dense edge-to-row map indexed by the table-allocated edge id.
+    /// Edge ids are monotonic per table, so direct indexing replaces the
+    /// former hash lookup; unmapped ids hold `UNMAPPED_ROW`.
+    edge_to_row: Vec<u32>,
+    /// Live mapping count, maintained alongside the dense map.
+    edge_map_len: usize,
     /// Reverse index for O(1) row-to-edge lookup. Authoritative with
     /// `edge_to_row`; rebuilt on load, never persisted separately.
     row_to_edge: Vec<Option<EdgeId>>,
     free_list: Vec<u32>,
-    /// O(1) membership for free slots; rebuilt from `free_list` on load.
-    free_set: HashSet<u32>,
     row_count: usize,
-    /// Columns mutated since the last stats refresh or checkpoint.
+    /// Column positions mutated since the last stats refresh or checkpoint.
     /// Drives per-column stats refresh so clean columns never pay recompute.
-    dirty_columns: HashSet<String>,
+    /// Positions shift on schema mutation; the schema-mutating methods remap
+    /// this set together with the schema.
+    dirty_columns: HashSet<usize>,
     /// Stable column identifier allocator. Never reused or reassigned so
     /// stored undo parameters keyed by id stay valid across column drops.
     next_prop_id: i32,
+    /// Inline-form marker: the owning table stores its single scalar in the
+    /// CSR value column, so this store keeps only the schema and the
+    /// name/id indexes. Every row operation fails instead of forking a
+    /// second property truth.
+    inline: bool,
 }
 
 impl CsrWithProperties {
@@ -104,17 +123,115 @@ impl CsrWithProperties {
             .unwrap_or(-1)
             .saturating_add(1)
             .max(property_schema.len() as i32);
-        Self {
+        let mut store = Self {
             property_schema,
             property_columns,
+            column_index: HashMap::new(),
+            prop_id_index: HashMap::new(),
             visibility: Vec::new(),
-            edge_to_row: HashMap::new(),
+            edge_to_row: Vec::new(),
+            edge_map_len: 0,
             row_to_edge: Vec::new(),
             free_list: Vec::new(),
-            free_set: HashSet::new(),
             row_count: 0,
             dirty_columns: HashSet::new(),
             next_prop_id,
+            inline: false,
+        };
+        store.rebuild_schema_indexes();
+        store
+    }
+
+    /// Schema-only stub for the inline record forms.
+    ///
+    /// Keeps the schema with its name/id indexes for validation and WAL
+    /// naming, but holds no rows: every row read or write fails loudly so a
+    /// missed dispatch can never fork a second property truth beside the
+    /// CSR value column.
+    pub fn inline_stub(property_schema: Vec<PropertySchema>) -> Self {
+        let mut store = Self::new(property_schema);
+        store.inline = true;
+        store
+    }
+
+    /// Whether this store is a schema-only inline stub.
+    pub fn is_inline_stub(&self) -> bool {
+        self.inline
+    }
+
+    fn reject_inline(&self) -> StorageResult<()> {
+        if self.inline {
+            return Err(StorageError::invalid_operation(
+                "columnar property access on an inline-form table".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Rebuild the column position indexes after a schema mutation.
+    fn rebuild_schema_indexes(&mut self) {
+        self.column_index.clear();
+        self.prop_id_index.clear();
+        for (idx, schema) in self.property_schema.iter().enumerate() {
+            self.column_index.insert(schema.name.clone(), idx);
+            self.prop_id_index.insert(schema.prop_id, idx);
+        }
+    }
+
+    /// Column name for one stable identifier, if the column exists.
+    pub fn column_name_by_prop_id(&self, prop_id: i32) -> Option<&str> {
+        self.prop_id_index
+            .get(&prop_id)
+            .and_then(|&idx| self.property_schema.get(idx))
+            .map(|schema| schema.name.as_str())
+    }
+
+    /// Row mapped to `edge_id`, or `None` for unmapped ids.
+    ///
+    /// Edge ids are table-allocated dense values, so this is one bounds
+    /// check plus one indexed read with no hashing.
+    fn mapped_row(&self, edge_id: EdgeId) -> Option<usize> {
+        let pos = *self.edge_to_row.get(edge_id.0 as usize)?;
+        (pos != UNMAPPED_ROW).then_some(pos as usize)
+    }
+
+    /// Record the `edge_id` to `row_idx` mapping, growing the dense map.
+    ///
+    /// Rejects the unassignable gap sentinel explicitly: gap slots never
+    /// own property rows.
+    fn map_insert(&mut self, edge_id: EdgeId, row_idx: usize) -> StorageResult<()> {
+        if edge_id == INVALID_EDGE_ID {
+            return Err(StorageError::invalid_operation(
+                "unassignable edge id owns no property row",
+            ));
+        }
+        let slot = edge_id.0 as usize;
+        if slot >= self.edge_to_row.len() {
+            self.edge_to_row.resize(slot + 1, UNMAPPED_ROW);
+        }
+        if self.edge_to_row[slot] == UNMAPPED_ROW {
+            self.edge_map_len += 1;
+        }
+        self.edge_to_row[slot] = row_idx as u32;
+        Ok(())
+    }
+
+    /// Drop the mapping for `edge_id`, returning its former row.
+    fn map_remove(&mut self, edge_id: EdgeId) -> Option<usize> {
+        let slot = *self.edge_to_row.get(edge_id.0 as usize)?;
+        if slot == UNMAPPED_ROW {
+            return None;
+        }
+        self.edge_to_row[edge_id.0 as usize] = UNMAPPED_ROW;
+        self.edge_map_len = self.edge_map_len.saturating_sub(1);
+        self.truncate_unmapped_tail();
+        Some(slot as usize)
+    }
+
+    /// Release trailing unmapped slots so churned id ranges never pin memory.
+    fn truncate_unmapped_tail(&mut self) {
+        while self.edge_to_row.last() == Some(&UNMAPPED_ROW) {
+            self.edge_to_row.pop();
         }
     }
 
@@ -124,8 +241,11 @@ impl CsrWithProperties {
         }
     }
 
-    fn mark_column_dirty(&mut self, name: &str) {
-        self.dirty_columns.insert(name.to_string());
+    /// Mark one column position dirty without any name lookup or allocation.
+    /// Write paths resolve the position once through the schema indexes and
+    /// mark through this.
+    fn mark_column_dirty_at(&mut self, idx: usize) {
+        self.dirty_columns.insert(idx);
     }
 
     /// Clear per-column dirt after a successful checkpoint.
@@ -153,9 +273,40 @@ impl CsrWithProperties {
         values: &[(String, Value)],
         create_ts: Timestamp,
     ) -> StorageResult<usize> {
+        // Resolve names through the schema index once per call; the hot
+        // write path passes pre-resolved positions straight to
+        // `allocate_row_at` instead. Unknown names keep the historical
+        // behavior of falling back to the column default.
+        let mut positioned: Vec<(usize, Value)> = Vec::with_capacity(values.len());
+        for (name, value) in values {
+            if let Some(&idx) = self.column_index.get(name.as_str()) {
+                positioned.push((idx, value.clone()));
+            }
+        }
+        self.allocate_row_at(&positioned, create_ts)
+    }
+
+    /// Allocate a new row from pre-resolved `(column position, value)` pairs.
+    ///
+    /// Positions come from the schema index held by the caller, so this
+    /// performs no name lookup or string comparison per edge. Columns with
+    /// no provided value take their default. An out-of-range position is a
+    /// caller bug and fails loudly instead of writing the wrong column.
+    fn allocate_row_at(
+        &mut self,
+        positioned: &[(usize, Value)],
+        create_ts: Timestamp,
+    ) -> StorageResult<usize> {
+        for (idx, _) in positioned {
+            if *idx >= self.property_schema.len() {
+                return Err(StorageError::column_not_found(format!(
+                    "property column position out of range: {}",
+                    idx
+                )));
+            }
+        }
         let row_idx = if let Some(free_off) = self.free_list.pop() {
             let idx = free_off as usize;
-            self.free_set.remove(&free_off);
             if idx >= self.visibility.len() {
                 self.visibility.resize(idx + 1, RowVisibility::new(0));
             }
@@ -170,35 +321,32 @@ impl CsrWithProperties {
         };
         self.ensure_row_aux_len(self.visibility.len());
         self.row_to_edge[row_idx] = None;
-        let names: Vec<String> = self
-            .property_schema
-            .iter()
-            .map(|s| s.name.clone())
-            .collect();
-        for (i, schema) in self.property_schema.iter().enumerate() {
+        // Extend column data buffer for the new row without generating
+        // a spurious [0, create_ts) version chain entry. We do this by
+        // writing directly to the column's internal buffer and setting
+        // the correct visibility timestamp.
+        let mut provided: Vec<Option<&Value>> = vec![None; self.property_schema.len()];
+        for (idx, value) in positioned {
+            // First occurrence wins, matching the historical name-matched
+            // behavior where each column took its first matching value.
+            if provided[*idx].is_none() {
+                provided[*idx] = Some(value);
+            }
+        }
+        for i in 0..self.property_schema.len() {
             let col = &mut self.property_columns[i];
-            // Extend column data buffer for the new row without generating
-            // a spurious [0, create_ts) version chain entry. We do this by
-            // writing directly to the column's internal buffer and setting
-            // the correct visibility timestamp.
-            let value_opt = values
-                .iter()
-                .find(|(k, _)| k == &schema.name)
-                .map(|(_, v)| v);
-            match value_opt {
+            match provided[i] {
                 Some(v) => {
                     // Value provided: versioned write with the given value
                     col.set_versioned(row_idx, Some(v), create_ts)?;
                 }
                 None => {
                     // No value provided: use default value if available, otherwise None
-                    let default_val = schema.default_value.as_ref();
-                    col.set_with_timestamp(row_idx, default_val, create_ts)?;
+                    let default_val = self.property_schema[i].default_value.clone();
+                    col.set_with_timestamp(row_idx, default_val.as_ref(), create_ts)?;
                 }
             }
-        }
-        for name in names {
-            self.mark_column_dirty(&name);
+            self.mark_column_dirty_at(i);
         }
         Ok(row_idx)
     }
@@ -212,13 +360,6 @@ impl CsrWithProperties {
     /// Slots that were never used are never admitted to the free list.
     pub fn release_row(&mut self, row_idx: usize) {
         if row_idx >= self.visibility.len() {
-            if let Some(slot) = self.row_to_edge.get_mut(row_idx) {
-                if let Some(edge_id) = slot.take() {
-                    self.edge_to_row.remove(&edge_id);
-                }
-            } else {
-                self.edge_to_row.retain(|_, pos| *pos as usize != row_idx);
-            }
             return;
         }
         let virgin =
@@ -226,7 +367,7 @@ impl CsrWithProperties {
         if virgin {
             if let Some(slot) = self.row_to_edge.get_mut(row_idx) {
                 if let Some(edge_id) = slot.take() {
-                    self.edge_to_row.remove(&edge_id);
+                    self.map_remove(edge_id);
                 }
             }
             return;
@@ -236,15 +377,13 @@ impl CsrWithProperties {
         self.row_count = self.row_count.saturating_sub(1);
         if let Some(slot) = self.row_to_edge.get_mut(row_idx) {
             if let Some(edge_id) = slot.take() {
-                self.edge_to_row.remove(&edge_id);
+                self.map_remove(edge_id);
             }
-        } else {
-            self.edge_to_row.retain(|_, pos| *pos as usize != row_idx);
         }
-        let slot = row_idx as u32;
-        if self.free_set.insert(slot) {
-            self.free_list.push(slot);
-        }
+        // Released rows are virgin by construction, so a second release
+        // takes the virgin path above: slots never enter the free list twice
+        // and no membership set is needed.
+        self.free_list.push(row_idx as u32);
     }
 
     /// Read the property row for `edge_id` at `query_ts`, decoding only the
@@ -261,7 +400,7 @@ impl CsrWithProperties {
         query_ts: Timestamp,
         projection: Option<&[String]>,
     ) -> Option<Vec<(String, Option<Value>)>> {
-        let pos = *self.edge_to_row.get(&edge_id)? as usize;
+        let pos = self.mapped_row(edge_id)?;
         let vis = self.visibility.get(pos)?;
         if !vis.is_visible_at(query_ts) {
             return None;
@@ -317,7 +456,10 @@ impl CsrWithProperties {
         query_ts: Timestamp,
         projection: Option<&[String]>,
     ) -> Option<Vec<(String, Option<Value>)>> {
-        let pos = *self.edge_to_row.get(&edge_id)? as usize;
+        if self.inline {
+            return None;
+        }
+        let pos = self.mapped_row(edge_id)?;
         if pos >= self.visibility.len() {
             return None;
         }
@@ -353,7 +495,10 @@ impl CsrWithProperties {
 
     /// Read non-nullable properties for an edge by its EdgeId (no MVCC filtering).
     pub fn read_properties_by_edge_id(&self, edge_id: EdgeId) -> Option<Vec<(String, Value)>> {
-        let pos = *self.edge_to_row.get(&edge_id)? as usize;
+        if self.inline {
+            return None;
+        }
+        let pos = self.mapped_row(edge_id)?;
         let result: Vec<(String, Value)> = self
             .property_schema
             .iter()
@@ -372,7 +517,7 @@ impl CsrWithProperties {
 
     /// Column index for one property name.
     fn column_index(&self, name: &str) -> Option<usize> {
-        self.property_schema.iter().position(|s| s.name == name)
+        self.column_index.get(name).copied()
     }
 
     /// Snapshot value of one column cell for pushdown filtering.
@@ -399,10 +544,9 @@ impl CsrWithProperties {
         if predicates.is_empty() {
             return true;
         }
-        let Some(&row) = self.edge_to_row.get(&edge_id) else {
+        let Some(row) = self.mapped_row(edge_id) else {
             return false;
         };
-        let row = row as usize;
         for predicate in predicates {
             let Some(column) = self.column_index(predicate.column()) else {
                 return false;
@@ -432,7 +576,14 @@ impl CsrWithProperties {
     ) -> Vec<EdgeId> {
         if predicates.is_empty() {
             return candidates.map_or_else(
-                || self.edge_to_row.keys().copied().collect(),
+                || {
+                    self.edge_to_row
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, row)| **row != UNMAPPED_ROW)
+                        .map(|(slot, _)| EdgeId(slot as u64))
+                        .collect()
+                },
                 <[EdgeId]>::to_vec,
             );
         }
@@ -451,10 +602,9 @@ impl CsrWithProperties {
                 .iter()
                 .copied()
                 .filter(|edge_id| {
-                    let Some(&row) = self.edge_to_row.get(edge_id) else {
+                    let Some(row) = self.mapped_row(*edge_id) else {
                         return false;
                     };
-                    let row = row as usize;
                     resolved.iter().all(|(column, predicate)| {
                         self.pushdown_cell(row, *column, query_ts)
                             .is_some_and(|value| predicate.matches_value(&value))
@@ -464,7 +614,11 @@ impl CsrWithProperties {
             None => self
                 .edge_to_row
                 .iter()
-                .filter_map(|(edge_id, row)| {
+                .enumerate()
+                .filter_map(|(slot, row)| {
+                    if *row == UNMAPPED_ROW {
+                        return None;
+                    }
                     let row = *row as usize;
                     resolved
                         .iter()
@@ -472,15 +626,18 @@ impl CsrWithProperties {
                             self.pushdown_cell(row, *column, query_ts)
                                 .is_some_and(|value| predicate.matches_value(&value))
                         })
-                        .then_some(*edge_id)
+                        .then_some(EdgeId(slot as u64))
                 })
                 .collect(),
         }
     }
 
     pub fn mark_deleted(&mut self, edge_id: EdgeId, ts: Timestamp) -> bool {
-        if let Some(&pos) = self.edge_to_row.get(&edge_id) {
-            if let Some(vis) = self.visibility.get_mut(pos as usize) {
+        if self.inline {
+            return false;
+        }
+        if let Some(pos) = self.mapped_row(edge_id) {
+            if let Some(vis) = self.visibility.get_mut(pos) {
                 if vis.delete_ts.is_some() {
                     return false;
                 }
@@ -498,8 +655,29 @@ impl CsrWithProperties {
         values: &[(String, Value)],
         create_ts: Timestamp,
     ) -> StorageResult<()> {
+        self.reject_inline()?;
         let row_idx = self.allocate_row(values, create_ts)?;
-        self.edge_to_row.insert(edge_id, row_idx as u32);
+        self.map_insert(edge_id, row_idx)?;
+        self.ensure_row_aux_len(row_idx + 1);
+        self.row_to_edge[row_idx] = Some(edge_id);
+        Ok(())
+    }
+
+    /// Insert properties for an edge from pre-resolved column positions.
+    ///
+    /// Hot write-path entry: the caller resolved every column once through
+    /// the schema index, so this performs no name lookup, string clone or
+    /// string comparison per edge. Positions must be store column positions;
+    /// out-of-range entries fail loudly through `allocate_row_at`.
+    pub fn insert_for_edge_at(
+        &mut self,
+        edge_id: EdgeId,
+        positioned: &[(usize, Value)],
+        create_ts: Timestamp,
+    ) -> StorageResult<()> {
+        self.reject_inline()?;
+        let row_idx = self.allocate_row_at(positioned, create_ts)?;
+        self.map_insert(edge_id, row_idx)?;
         self.ensure_row_aux_len(row_idx + 1);
         self.row_to_edge[row_idx] = Some(edge_id);
         Ok(())
@@ -507,19 +685,23 @@ impl CsrWithProperties {
 
     /// Associate an existing row index with an edge id.
     pub fn associate_edge(&mut self, edge_id: EdgeId, row_idx: usize) {
-        self.edge_to_row.insert(edge_id, row_idx as u32);
+        self.map_insert(edge_id, row_idx)
+            .expect("associated edge ids are table-allocated dense values");
         self.ensure_row_aux_len(row_idx + 1);
         self.row_to_edge[row_idx] = Some(edge_id);
     }
 
     /// Get the row index for an edge.
     pub fn get_row_for_edge(&self, edge_id: EdgeId) -> Option<usize> {
-        self.edge_to_row.get(&edge_id).map(|&pos| pos as usize)
+        self.mapped_row(edge_id)
     }
 
     /// Remove edge-to-row mapping and return the row index.
     pub fn remove_edge_mapping(&mut self, edge_id: EdgeId) -> Option<usize> {
-        let pos = self.edge_to_row.remove(&edge_id).map(|pos| pos as usize)?;
+        if self.inline {
+            return None;
+        }
+        let pos = self.map_remove(edge_id)?;
         if let Some(slot) = self.row_to_edge.get_mut(pos) {
             if *slot == Some(edge_id) {
                 *slot = None;
@@ -530,7 +712,7 @@ impl CsrWithProperties {
 
     /// Whether the store holds a row mapping for `edge_id`.
     pub fn contains_edge(&self, edge_id: EdgeId) -> bool {
-        self.edge_to_row.contains_key(&edge_id)
+        self.mapped_row(edge_id).is_some()
     }
 
     /// Edge-aware property update: lookup row via `edge_id`.
@@ -541,11 +723,11 @@ impl CsrWithProperties {
         value: Option<Value>,
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let pos = *self
-            .edge_to_row
-            .get(&edge_id)
+        self.reject_inline()?;
+        let pos = self
+            .mapped_row(edge_id)
             .ok_or_else(|| StorageError::invalid_offset(0))?;
-        self.set_property_at_row(pos as usize, name, value, ts)
+        self.set_property_at_row(pos, name, value, ts)
     }
 
     /// Edge-aware bulk property update: lookup row via `edge_id` and update all properties.
@@ -555,11 +737,10 @@ impl CsrWithProperties {
         properties: &[(String, Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let pos = *self
-            .edge_to_row
-            .get(&edge_id)
+        let pos = self
+            .mapped_row(edge_id)
             .ok_or_else(|| StorageError::invalid_offset(0))?;
-        self.update_at_row(pos as usize, properties, ts)
+        self.update_at_row(pos, properties, ts)
     }
 
     pub fn set_property_by_id_for_edge(
@@ -569,33 +750,49 @@ impl CsrWithProperties {
         value: Option<Value>,
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let pos = *self
-            .edge_to_row
-            .get(&edge_id)
+        self.reject_inline()?;
+        let pos = self
+            .mapped_row(edge_id)
             .ok_or_else(|| StorageError::invalid_offset(0))?;
         let idx = self
-            .property_schema
-            .iter()
-            .position(|s| s.prop_id as u16 == prop_id.0)
+            .prop_id_index
+            .get(&(prop_id.0 as i32))
+            .copied()
             .ok_or_else(|| StorageError::column_not_found(format!("prop_id={}", prop_id.0)))?;
-        let name = self.property_schema[idx].name.clone();
-        self.set_property_at_row(pos as usize, &name, value, ts)
+        if pos >= self.visibility.len() || self.visibility[pos].create_ts == 0 {
+            return Err(StorageError::invalid_offset(pos as u32));
+        }
+        let col = &mut self.property_columns[idx];
+        col.set_versioned(pos, value.as_ref(), ts)?;
+        self.mark_column_dirty_at(idx);
+        Ok(())
     }
 
     pub fn revert_deletion_for_edge(&mut self, edge_id: EdgeId) -> bool {
-        if let Some(&pos) = self.edge_to_row.get(&edge_id) {
-            return self.revert_deletion_at_row(pos as usize);
+        if self.inline {
+            return false;
+        }
+        if let Some(pos) = self.mapped_row(edge_id) {
+            return self.revert_deletion_at_row(pos);
         }
         false
     }
 
     /// Iterate over all edge->row mappings (for compaction).
-    pub fn edge_mappings(&self) -> impl Iterator<Item = (&EdgeId, &u32)> {
-        self.edge_to_row.iter()
+    pub fn edge_mappings(&self) -> impl Iterator<Item = (EdgeId, u32)> + '_ {
+        self.edge_to_row
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| **row != UNMAPPED_ROW)
+            .map(|(slot, row)| (EdgeId(slot as u64), *row))
     }
 
     pub fn edge_ids(&self) -> impl Iterator<Item = EdgeId> + '_ {
-        self.edge_to_row.keys().copied()
+        self.edge_to_row
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| **row != UNMAPPED_ROW)
+            .map(|(slot, _)| EdgeId(slot as u64))
     }
 
     pub fn mark_deleted_at_row(&mut self, row_idx: usize, ts: Timestamp) -> StorageResult<()> {
@@ -629,14 +826,13 @@ impl CsrWithProperties {
     }
 
     pub fn has_property(&self, name: &str) -> bool {
-        self.property_schema.iter().any(|s| s.name == name)
+        self.column_index.contains_key(name)
     }
 
     pub fn get_property_id(&self, name: &str) -> Option<crate::types::PropertyId> {
-        self.property_schema
-            .iter()
-            .find(|s| s.name == name)
-            .map(|s| crate::types::PropertyId::new(s.prop_id as u16))
+        self.column_index
+            .get(name)
+            .map(|&idx| crate::types::PropertyId::new(self.property_schema[idx].prop_id as u16))
     }
 
     pub fn add_property(
@@ -659,40 +855,57 @@ impl CsrWithProperties {
             col.resize(rows);
         }
         self.property_columns.push(col);
-        self.mark_column_dirty(&name);
+        let idx = self.property_schema.len() - 1;
+        self.column_index.insert(name, idx);
+        self.mark_column_dirty_at(idx);
         Ok(crate::types::PropertyId::new(prop_id as u16))
     }
 
     pub fn remove_property(&mut self, name: &str) -> StorageResult<()> {
         let idx = self
-            .property_schema
-            .iter()
-            .position(|p| p.name == name)
+            .column_index
+            .get(name)
+            .copied()
             .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
         self.property_schema.remove(idx);
         self.property_columns.remove(idx);
-        self.dirty_columns.remove(name);
+        self.rebuild_schema_indexes();
+        // Positions above the removed column shift down by one; the dirt set
+        // moves with them instead of keeping stale positions.
+        let mut shifted = HashSet::new();
+        for pos in self.dirty_columns.drain() {
+            if pos == idx {
+                continue;
+            }
+            shifted.insert(if pos > idx { pos - 1 } else { pos });
+        }
+        self.dirty_columns = shifted;
         Ok(())
     }
 
     /// Clone one physical column for the staged drop snapshot.
     pub fn column_cloned(&self, name: &str) -> Option<crate::vertex::column::Column> {
-        self.property_columns
-            .iter()
-            .find(|col| col.name == name)
-            .cloned()
+        self.column_index
+            .get(name)
+            .and_then(|&idx| self.property_columns.get(idx).cloned())
     }
 
     /// Whether one column holds unrefreshed writes.
     pub fn has_column_dirt(&self, name: &str) -> bool {
-        self.dirty_columns.contains(name)
+        self.column_index
+            .get(name)
+            .is_some_and(|idx| self.dirty_columns.contains(idx))
     }
 
     /// Names of columns mutated since the last checkpoint. Drives
     /// dirty-column incremental persistence: clean columns reuse the last
     /// flushed encoding instead of paying re-export and re-encode.
     pub fn dirty_column_names(&self) -> Vec<String> {
-        self.dirty_columns.iter().cloned().collect()
+        self.dirty_columns
+            .iter()
+            .filter_map(|idx| self.property_schema.get(*idx))
+            .map(|schema| schema.name.clone())
+            .collect()
     }
 
     /// Put back a column removed by a failed drop publish at its exact
@@ -708,10 +921,16 @@ impl CsrWithProperties {
         self.property_schema.insert(at, schema);
         let at = at.min(self.property_columns.len());
         self.property_columns.insert(at, column);
+        self.rebuild_schema_indexes();
+        // Positions at or above the restored column shift up by one before
+        // the restored dirt mark lands, keeping every position exact.
+        let mut shifted = HashSet::new();
+        for pos in self.dirty_columns.drain() {
+            shifted.insert(if pos >= at { pos + 1 } else { pos });
+        }
+        self.dirty_columns = shifted;
         if had_column_dirt {
-            if let Some(restored) = self.property_schema.get(at) {
-                self.dirty_columns.insert(restored.name.clone());
-            }
+            self.dirty_columns.insert(at);
         }
     }
 
@@ -720,17 +939,16 @@ impl CsrWithProperties {
             return Err(StorageError::column_already_exists(new_name.to_string()));
         }
         let idx = self
-            .property_schema
-            .iter()
-            .position(|p| p.name == old_name)
+            .column_index
+            .get(old_name)
+            .copied()
             .ok_or_else(|| StorageError::column_not_found(old_name.to_string()))?;
         self.property_schema[idx].name = new_name.to_string();
         if let Some(col) = self.property_columns.get_mut(idx) {
             col.name = new_name.to_string();
         }
-        if self.dirty_columns.remove(old_name) {
-            self.dirty_columns.insert(new_name.to_string());
-        }
+        // Dirt is tracked by position, so a rename moves no marks.
+        self.rebuild_schema_indexes();
         Ok(())
     }
 
@@ -745,13 +963,13 @@ impl CsrWithProperties {
             return Err(StorageError::invalid_offset(row_idx as u32));
         }
         let col_idx = self
-            .property_schema
-            .iter()
-            .position(|s| s.name == name)
+            .column_index
+            .get(name)
+            .copied()
             .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
         let col = &mut self.property_columns[col_idx];
         col.set_versioned(row_idx, value.as_ref(), ts)?;
-        self.mark_column_dirty(name);
+        self.mark_column_dirty_at(col_idx);
         Ok(())
     }
 
@@ -767,13 +985,13 @@ impl CsrWithProperties {
         }
         for (name, value) in properties {
             let col_idx = self
-                .property_schema
-                .iter()
-                .position(|s| s.name == *name)
+                .column_index
+                .get(name.as_str())
+                .copied()
                 .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
             let col = &mut self.property_columns[col_idx];
             col.set_versioned(row_idx, Some(value), ts)?;
-            self.mark_column_dirty(name);
+            self.mark_column_dirty_at(col_idx);
         }
         Ok(())
     }
@@ -856,11 +1074,11 @@ impl CsrWithProperties {
     pub fn used_memory_size(&self) -> usize {
         let mut total = std::mem::size_of::<Self>();
         total += self.visibility.capacity() * std::mem::size_of::<RowVisibility>();
-        total +=
-            self.edge_to_row.len() * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<u32>());
+        total += self.edge_to_row.capacity() * std::mem::size_of::<u32>();
         total += self.free_list.capacity() * std::mem::size_of::<u32>();
         total += self.row_to_edge.capacity() * std::mem::size_of::<Option<EdgeId>>();
-        total += self.free_set.len() * std::mem::size_of::<u32>();
+        total += self.column_index.len()
+            * (std::mem::size_of::<String>() + std::mem::size_of::<usize>());
         for col in &self.property_columns {
             total += col.memory_size();
         }
@@ -886,9 +1104,12 @@ impl CsrWithProperties {
             }
         }
         buf.extend_from_slice(&(self.row_count as u32).to_le_bytes());
-        buf.extend_from_slice(&(self.edge_to_row.len() as u32).to_le_bytes());
-        for (eid, pos) in &self.edge_to_row {
-            buf.extend_from_slice(&eid.0.to_le_bytes());
+        buf.extend_from_slice(&(self.edge_map_len as u32).to_le_bytes());
+        for (slot, pos) in self.edge_to_row.iter().enumerate() {
+            if *pos == UNMAPPED_ROW {
+                continue;
+            }
+            buf.extend_from_slice(&(slot as u64).to_le_bytes());
             buf.extend_from_slice(&pos.to_le_bytes());
         }
         buf.extend_from_slice(&(self.free_list.len() as u32).to_le_bytes());
@@ -1014,13 +1235,30 @@ impl CsrWithProperties {
         let map_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
         self.edge_to_row.clear();
+        self.edge_map_len = 0;
+        // Wire format is unchanged (entry count plus id/row pairs); the dense
+        // map is rebuilt from the pairs. Rows must land inside the restored
+        // visibility window, otherwise the payload is rejected.
+        let vis_len = self.visibility.len();
         for _ in 0..map_len {
             need(data, offset, 12, "edge map entry")?;
             let eid = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
             offset += 8;
             let pos = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
             offset += 4;
-            self.edge_to_row.insert(EdgeId(eid), pos);
+            if eid == INVALID_EDGE_ID.0 || (pos as usize) >= vis_len {
+                return Err(StorageError::deserialize_error(
+                    "edge map entry outside the restored row window",
+                ));
+            }
+            let slot = eid as usize;
+            if slot >= self.edge_to_row.len() {
+                self.edge_to_row.resize(slot + 1, UNMAPPED_ROW);
+            }
+            if self.edge_to_row[slot] == UNMAPPED_ROW {
+                self.edge_map_len += 1;
+            }
+            self.edge_to_row[slot] = pos;
         }
         need(data, offset, 4, "free list length")?;
         let free_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
@@ -1076,7 +1314,7 @@ impl CsrWithProperties {
                 let rows =
                     u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
                 offset += 4;
-                if let Some(col_idx) = self.property_schema.iter().position(|s| s.name == name) {
+                if let Some(&col_idx) = self.column_index.get(&name) {
                     self.property_schema[col_idx].prop_id = prop_id;
                     let col = &mut self.property_columns[col_idx];
                     col.col_id = prop_id;
@@ -1198,16 +1436,16 @@ impl CsrWithProperties {
     fn rebuild_aux_indexes(&mut self) {
         self.row_to_edge.clear();
         self.row_to_edge.resize(self.visibility.len(), None);
-        for (edge_id, pos) in &self.edge_to_row {
+        for (slot, pos) in self.edge_to_row.iter().enumerate() {
+            if *pos == UNMAPPED_ROW {
+                continue;
+            }
             let idx = *pos as usize;
             if idx < self.row_to_edge.len() {
-                self.row_to_edge[idx] = Some(*edge_id);
+                self.row_to_edge[idx] = Some(EdgeId(slot as u64));
             }
         }
-        self.free_set.clear();
-        for &slot in &self.free_list {
-            self.free_set.insert(slot);
-        }
+        self.rebuild_schema_indexes();
         let max_id = self
             .property_schema
             .iter()
@@ -1253,19 +1491,17 @@ impl CsrWithProperties {
         if to_reclaim.is_empty() {
             return 0;
         }
-        let reclaim_set: HashSet<u32> = to_reclaim.iter().map(|&i| i as u32).collect();
         for &idx in &to_reclaim {
             self.visibility[idx].create_ts = 0;
             self.visibility[idx].delete_ts = None;
-            if let Some(slot) = self.row_to_edge.get_mut(idx) {
-                slot.take();
+            if let Some(taken) = self.row_to_edge.get_mut(idx).and_then(|slot| slot.take()) {
+                self.map_remove(taken);
             }
-            if self.free_set.insert(idx as u32) {
-                self.free_list.push(idx as u32);
-            }
+            // Reclaimed rows are virgin after the stamp clear, so the free
+            // list admits each of them exactly once with no membership set.
+            self.free_list.push(idx as u32);
             self.row_count = self.row_count.saturating_sub(1);
         }
-        self.edge_to_row.retain(|_, pos| !reclaim_set.contains(pos));
         to_reclaim.len()
     }
 
@@ -1273,7 +1509,10 @@ impl CsrWithProperties {
         &self,
         column: &str,
     ) -> Option<crate::stats_reader::ColumnStatsSnapshot> {
-        let col = self.property_columns.iter().find(|c| c.name == column)?;
+        let col = self
+            .column_index
+            .get(column)
+            .and_then(|&idx| self.property_columns.get(idx))?;
         let mut min: Option<Value> = None;
         let mut max: Option<Value> = None;
         for zone in col.zone_maps() {
@@ -1315,9 +1554,9 @@ impl CsrWithProperties {
 
     /// Encoding applied to one property column, if the column exists.
     pub fn column_encoding_type(&self, column: &str) -> Option<crate::encoding::EncodingType> {
-        self.property_columns
-            .iter()
-            .find(|c| c.name == column)
+        self.column_index
+            .get(column)
+            .and_then(|&idx| self.property_columns.get(idx))
             .map(|c| c.encoding_type())
     }
 
@@ -1332,17 +1571,18 @@ impl CsrWithProperties {
         encoding_type: crate::encoding::EncodingType,
         fsst_max_symbols: usize,
     ) -> StorageResult<()> {
-        let col = self
-            .property_columns
-            .iter_mut()
-            .find(|c| c.name == column)
+        let idx = self
+            .column_index
+            .get(column)
+            .copied()
             .ok_or_else(|| StorageError::column_not_found(column.to_string()))?;
+        let col = &mut self.property_columns[idx];
         if col.is_empty() {
             return Ok(());
         }
         if col.has_chunks() {
             col.apply_encoding_to_chunks(encoding_type, fsst_max_symbols)?;
-            if let Some(schema) = self.property_schema.iter_mut().find(|s| s.name == column) {
+            if let Some(schema) = self.property_schema.get_mut(idx) {
                 schema.encoding_type = col.encoding_type();
             }
             return Ok(());
@@ -1368,7 +1608,7 @@ impl CsrWithProperties {
             }
             crate::encoding::EncodingType::None => {}
         }
-        if let Some(schema) = self.property_schema.iter_mut().find(|s| s.name == column) {
+        if let Some(schema) = self.property_schema.get_mut(idx) {
             schema.encoding_type = col.encoding_type();
         }
         Ok(())
@@ -1420,12 +1660,14 @@ impl CsrWithProperties {
             }
             return;
         }
-        for col in &mut self.property_columns {
-            if !self.dirty_columns.contains(&col.name) {
-                continue;
-            }
-            if let Ok(stats) = col.compute_stats() {
-                col.set_stats(stats);
+        // Dirt marks stay until the checkpoint clears them: stats refresh
+        // must not consume the marks that drive dirty-column persistence.
+        let dirty: Vec<usize> = self.dirty_columns.iter().copied().collect();
+        for idx in dirty {
+            if let Some(col) = self.property_columns.get_mut(idx) {
+                if let Ok(stats) = col.compute_stats() {
+                    col.set_stats(stats);
+                }
             }
         }
     }
@@ -1433,9 +1675,11 @@ impl CsrWithProperties {
     /// Refresh statistics for one column only. Used by column-level
     /// checkpoint follow-up when only a subset changed.
     pub fn refresh_column_stats_for(&mut self, column: &str) {
-        if let Some(col) = self.property_columns.iter_mut().find(|c| c.name == column) {
-            if let Ok(stats) = col.compute_stats() {
-                col.set_stats(stats);
+        if let Some(&idx) = self.column_index.get(column) {
+            if let Some(col) = self.property_columns.get_mut(idx) {
+                if let Ok(stats) = col.compute_stats() {
+                    col.set_stats(stats);
+                }
             }
         }
     }
@@ -1446,15 +1690,16 @@ impl CsrWithProperties {
     /// explicit error; a single row failure aborts with the error.
     pub fn backfill_column(&mut self, column: &str, default: &Value) -> StorageResult<()> {
         let rows = self.visibility.len();
-        let col = self
-            .property_columns
-            .iter_mut()
-            .find(|c| c.name == column)
+        let idx = self
+            .column_index
+            .get(column)
+            .copied()
             .ok_or_else(|| StorageError::column_not_found(column.to_string()))?;
+        let col = &mut self.property_columns[idx];
         for row in 0..rows {
             col.set(row, Some(default))?;
         }
-        self.mark_column_dirty(column);
+        self.mark_column_dirty_at(idx);
         Ok(())
     }
 
@@ -1486,10 +1731,9 @@ impl CsrWithProperties {
 
     /// Stable identifier for one column in this shard, if present.
     pub fn prop_id_of(&self, name: &str) -> Option<i32> {
-        self.property_schema
-            .iter()
-            .find(|s| s.name == name)
-            .map(|s| s.prop_id)
+        self.column_index
+            .get(name)
+            .map(|&idx| self.property_schema[idx].prop_id)
     }
 
     /// Export one edge row for per-group property sharding.
@@ -1502,7 +1746,7 @@ impl CsrWithProperties {
         &self,
         edge_id: EdgeId,
     ) -> Option<(Timestamp, Option<Timestamp>, Vec<(String, Option<Value>)>)> {
-        let pos = *self.edge_to_row.get(&edge_id)? as usize;
+        let pos = self.mapped_row(edge_id)?;
         let vis = *self.visibility.get(pos)?;
         let values = self
             .property_schema
@@ -1529,21 +1773,21 @@ impl CsrWithProperties {
         delete_ts: Option<Timestamp>,
         values: &[(String, Option<Value>)],
     ) -> StorageResult<()> {
-        if self.edge_to_row.contains_key(&edge_id) {
+        if self.mapped_row(edge_id).is_some() {
             return Ok(());
         }
-        let mut present: Vec<(String, Value)> = Vec::new();
+        let mut present: Vec<(usize, Value)> = Vec::new();
         let mut nulls: Vec<String> = Vec::new();
         for (name, opt) in values {
-            if !self.has_property(name) {
+            let Some(&idx) = self.column_index.get(name.as_str()) else {
                 continue;
-            }
+            };
             match opt {
-                Some(value) => present.push((name.clone(), value.clone())),
+                Some(value) => present.push((idx, value.clone())),
                 None => nulls.push(name.clone()),
             }
         }
-        self.insert_for_edge(edge_id, &present, create_ts)?;
+        self.insert_for_edge_at(edge_id, &present, create_ts)?;
         for name in nulls {
             let _ = self.set_property_for_edge(edge_id, &name, None, create_ts);
         }
@@ -1585,6 +1829,30 @@ mod tests {
             .iter()
             .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.5))));
         assert_eq!(csr.row_count(), 2);
+    }
+
+    #[test]
+    fn positioned_insert_matches_named_insert() {
+        let mut csr = CsrWithProperties::new(schema());
+        let eid = EdgeId(11);
+        // Column positions follow schema order: weight=0, label=1.
+        csr.insert_for_edge_at(eid, &[(0, Value::Double(4.5))], 10)
+            .unwrap();
+        let got = csr.get_by_edge_id(eid, 10).unwrap();
+        assert!(got
+            .iter()
+            .any(|(k, v)| k == "weight" && v == &Some(Value::Double(4.5))));
+
+        // Out-of-range positions fail instead of writing the wrong column.
+        assert!(csr
+            .insert_for_edge_at(EdgeId(12), &[(9, Value::Double(1.0))], 10)
+            .is_err());
+
+        // Unknown names on the named path resolve to no column, so the
+        // non-nullable column keeps its missing default and fails loudly.
+        assert!(csr
+            .insert_for_edge(EdgeId(13), &[("nope".to_string(), Value::Double(1.0))], 10)
+            .is_err());
     }
 
     #[test]

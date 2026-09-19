@@ -2,11 +2,14 @@ use super::super::{ColdStamps, EdgeId, HotNbr, INVALID_EDGE_ID};
 use super::live_set::LiveKeySet;
 use super::overflow::OverflowStorage;
 use super::serialization::{
-    decode_overflow_chunk, decode_topology_i64_column, decode_topology_u32_column,
+    decode_overflow_chunk, decode_raw_i64_column, decode_raw_overflow_chunk, decode_raw_u32_column,
+    decode_raw_u64_column, decode_topology_i64_column, decode_topology_u32_column,
     decode_topology_u64_column, encode_overflow_chunk, encode_topology_i64_column,
-    encode_topology_u32_column, encode_topology_u64_column, TopologyColumnEncoding,
-    MUTABLE_CSR_FORMAT_VERSION,
+    encode_topology_u32_column, encode_topology_u64_column, write_raw_i64_column,
+    write_raw_overflow_chunk, write_raw_u32_column, write_raw_u64_column, TopologyColumnEncoding,
+    MUTABLE_CSR_FORMAT_RAW_VERSION, MUTABLE_CSR_FORMAT_VERSION,
 };
+use super::write::EdgePosition;
 use super::MutableCsr;
 use crate::persistence::{read_u32_le, read_u64_le};
 use graphdb_core::{StorageError, StorageResult};
@@ -156,6 +159,52 @@ impl MutableCsr {
         }
     }
 
+    /// Direct dump reusing caller-owned column buffers.
+    ///
+    /// Same logical content as [`Self::dump_into_with_scratch`] but every
+    /// topology column lands at its native width with no encoding choice, so
+    /// speed-sensitive checkpoints skip the per-column encode passes. The
+    /// scratch still serves the dump so column gathering pays no per-group
+    /// allocation. Marked with the raw format version; the loader dispatches
+    /// by marker and rejects any other marker instead of converting.
+    pub fn dump_into_with_scratch_raw(&self, out: &mut Vec<u8>, scratch: &mut CsrDumpScratch) {
+        out.extend_from_slice(&MUTABLE_CSR_FORMAT_RAW_VERSION.to_le_bytes());
+        out.extend_from_slice(&(self.adj_offsets.len() as u64).to_le_bytes());
+        out.extend_from_slice(&self.edge_count.to_le_bytes());
+        out.extend_from_slice(&(self.hot_list.len() as u64).to_le_bytes());
+        out.extend_from_slice(&(self.overflow_chunk_edges as u64).to_le_bytes());
+
+        write_raw_u32_column(&self.adj_offsets, out);
+        write_raw_u32_column(&self.degrees, out);
+        write_raw_u32_column(&self.primary_capacities, out);
+
+        scratch.fill_from_split(&self.hot_list, &self.cold_list);
+        write_raw_u32_column(scratch.endpoints(), out);
+        write_raw_i64_column(scratch.ranks(), out);
+        write_raw_u64_column(scratch.edge_ids(), out);
+        write_raw_u64_column(scratch.creates(), out);
+        write_raw_u64_column(scratch.deletes(), out);
+
+        for vid in 0..self.adj_offsets.len() {
+            let chunks = self.overflow_chunks.get(&(vid as u32));
+            out.extend_from_slice(&(chunks.map_or(0, Vec::len) as u32).to_le_bytes());
+            if let Some(chunks) = chunks {
+                for chunk in chunks {
+                    write_raw_overflow_chunk(chunk, out);
+                }
+            }
+        }
+    }
+
+    /// Owned direct dump, byte-identical to `dump_into_with_scratch_raw`
+    /// with a fresh scratch.
+    pub fn dump_raw(&self) -> Vec<u8> {
+        let mut result = Vec::new();
+        let mut scratch = CsrDumpScratch::new();
+        self.dump_into_with_scratch_raw(&mut result, &mut scratch);
+        result
+    }
+
     /// Encoding report for the persisted topology columns.
     ///
     /// Measures the winning encoding per column without changing in-memory
@@ -203,7 +252,9 @@ impl MutableCsr {
         ]
     }
 
-    /// Load from bytes, version 4 only.
+    /// Load from bytes, version 4 (encoded columns) or version 5 (raw
+    /// direct dump) by marker. Any other marker is rejected, never
+    /// converted; both versions share the same strict validation below.
     pub fn load(&mut self, data: &[u8]) -> StorageResult<()> {
         if data.len() < 36 {
             return Err(StorageError::deserialize_error(
@@ -214,11 +265,15 @@ impl MutableCsr {
         let mut offset = 0usize;
 
         let format_version = read_u32_le(data, &mut offset)?;
-        if format_version != MUTABLE_CSR_FORMAT_VERSION {
-            return Err(StorageError::deserialize_error(format!(
-                "Unsupported mutable CSR format version: {format_version}"
-            )));
-        }
+        let raw = match format_version {
+            MUTABLE_CSR_FORMAT_VERSION => false,
+            MUTABLE_CSR_FORMAT_RAW_VERSION => true,
+            _ => {
+                return Err(StorageError::deserialize_error(format!(
+                    "Unsupported mutable CSR format version: {format_version}"
+                )));
+            }
+        };
         let vertex_capacity = read_u64_le(data, &mut offset)? as usize;
         let edge_count = read_u64_le(data, &mut offset)?;
         let primary_len = read_u64_le(data, &mut offset)? as usize;
@@ -229,9 +284,19 @@ impl MutableCsr {
             ));
         }
 
-        let adj_offsets = decode_topology_u32_column(data, &mut offset)?;
-        let degrees = decode_topology_u32_column(data, &mut offset)?;
-        let primary_capacities = decode_topology_u32_column(data, &mut offset)?;
+        let (adj_offsets, degrees, primary_capacities) = if raw {
+            (
+                decode_raw_u32_column(data, &mut offset)?,
+                decode_raw_u32_column(data, &mut offset)?,
+                decode_raw_u32_column(data, &mut offset)?,
+            )
+        } else {
+            (
+                decode_topology_u32_column(data, &mut offset)?,
+                decode_topology_u32_column(data, &mut offset)?,
+                decode_topology_u32_column(data, &mut offset)?,
+            )
+        };
         if adj_offsets.len() != vertex_capacity
             || degrees.len() != vertex_capacity
             || primary_capacities.len() != vertex_capacity
@@ -240,11 +305,23 @@ impl MutableCsr {
                 "Mutable CSR header column length mismatch",
             ));
         }
-        let endpoints = decode_topology_u32_column(data, &mut offset)?;
-        let ranks = decode_topology_i64_column(data, &mut offset)?;
-        let edge_ids = decode_topology_u64_column(data, &mut offset)?;
-        let create_stamps = decode_topology_u64_column(data, &mut offset)?;
-        let delete_stamps = decode_topology_u64_column(data, &mut offset)?;
+        let (endpoints, ranks, edge_ids, create_stamps, delete_stamps) = if raw {
+            (
+                decode_raw_u32_column(data, &mut offset)?,
+                decode_raw_i64_column(data, &mut offset)?,
+                decode_raw_u64_column(data, &mut offset)?,
+                decode_raw_u64_column(data, &mut offset)?,
+                decode_raw_u64_column(data, &mut offset)?,
+            )
+        } else {
+            (
+                decode_topology_u32_column(data, &mut offset)?,
+                decode_topology_i64_column(data, &mut offset)?,
+                decode_topology_u64_column(data, &mut offset)?,
+                decode_topology_u64_column(data, &mut offset)?,
+                decode_topology_u64_column(data, &mut offset)?,
+            )
+        };
         if endpoints.len() != primary_len
             || ranks.len() != primary_len
             || edge_ids.len() != primary_len
@@ -290,7 +367,7 @@ impl MutableCsr {
 
         let mut overflow_chunks = OverflowStorage::new();
         let mut overflow_capacity = 0usize;
-        let mut live_keys: Vec<Vec<(u32, i64)>> = vec![Vec::new(); vertex_capacity];
+        let mut live_keys: Vec<Vec<((u32, i64), EdgePosition)>> = vec![Vec::new(); vertex_capacity];
         let mut recomputed: u64 = 0;
         for (hot, cold) in hot_list.iter().zip(cold_list.iter()) {
             if hot.edge_id != INVALID_EDGE_ID && cold.is_live() {
@@ -304,7 +381,10 @@ impl MutableCsr {
             for i in 0..degree {
                 match (hot_list.get(row_offset + i), cold_list.get(row_offset + i)) {
                     (Some(hot), Some(cold)) if hot.edge_id != INVALID_EDGE_ID && cold.is_live() => {
-                        keys.push((hot.endpoint, hot.rank));
+                        keys.push((
+                            (hot.endpoint, hot.rank),
+                            EdgePosition::Primary { slot: i as u32 },
+                        ));
                     }
                     _ => {}
                 }
@@ -313,17 +393,29 @@ impl MutableCsr {
         for vid in 0..vertex_capacity {
             let chunk_count = read_u32_le(data, &mut offset)? as usize;
             let mut chunks = Vec::with_capacity(chunk_count);
-            for _ in 0..chunk_count {
-                let chunk = decode_overflow_chunk(data, &mut offset)?;
+            for chunk_idx in 0..chunk_count {
+                let chunk = if raw {
+                    decode_raw_overflow_chunk(data, &mut offset)?
+                } else {
+                    decode_overflow_chunk(data, &mut offset)?
+                };
                 if chunk.len() > overflow_chunk_edges {
                     return Err(StorageError::deserialize_error(
                         "Mutable CSR overflow chunk exceeds configured chunk size",
                     ));
                 }
-                for (hot, cold) in chunk.hot_slice().iter().zip(chunk.cold_slice()) {
+                for (slot_idx, (hot, cold)) in
+                    chunk.hot_slice().iter().zip(chunk.cold_slice()).enumerate()
+                {
                     if hot.edge_id != INVALID_EDGE_ID && cold.is_live() {
                         recomputed += 1;
-                        live_keys[vid].push((hot.endpoint, hot.rank));
+                        live_keys[vid].push((
+                            (hot.endpoint, hot.rank),
+                            EdgePosition::Overflow {
+                                chunk: chunk_idx as u32,
+                                slot: slot_idx as u32,
+                            },
+                        ));
                     }
                 }
                 overflow_capacity = overflow_capacity.saturating_add(chunk.capacity().max(1));
@@ -356,7 +448,7 @@ impl MutableCsr {
             // Narrow rows stay set-free; only wide rows pay for the index.
             if keys.len() > super::live_set::LIVE_SET_WIDTH_BOUND {
                 self.live_sets
-                    .insert(vid as u32, LiveKeySet::from_keys(keys));
+                    .insert(vid as u32, LiveKeySet::from_positions(keys));
             }
         }
         if offset != data.len() {

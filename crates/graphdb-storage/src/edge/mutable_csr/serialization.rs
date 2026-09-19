@@ -6,6 +6,11 @@ use super::super::{EdgeId, Nbr};
 use super::overflow::OverflowChunk;
 
 pub(crate) const MUTABLE_CSR_FORMAT_VERSION: u32 = 4;
+/// Direct-dump format version: topology columns stored at native widths
+/// with no encoding choice. Selected by configuration for speed-sensitive
+/// checkpoints; the loader accepts both versions by marker and rejects any
+/// other marker instead of converting.
+pub(crate) const MUTABLE_CSR_FORMAT_RAW_VERSION: u32 = 5;
 
 /// Integer-only column encoding for topology persistence.
 ///
@@ -566,6 +571,77 @@ pub fn decode_topology_i64_column(data: &[u8], offset: &mut usize) -> StorageRes
     Ok(wide.into_iter().map(|v| v as i64).collect())
 }
 
+/// Raw column framing: value count as u32 followed by native-width
+/// little-endian values with no encoding choice. The direct-dump mode
+/// writes and reads every topology column in this framing so checkpoints
+/// skip the per-column encode passes entirely.
+pub fn write_raw_u32_column(values: &[u32], out: &mut Vec<u8>) {
+    out.extend_from_slice(&(values.len() as u32).to_le_bytes());
+    for &value in values {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+/// Decode one raw u32 column, failing closed on truncation.
+pub fn decode_raw_u32_column(data: &[u8], offset: &mut usize) -> StorageResult<Vec<u32>> {
+    let count = read_u32_le(data, offset)? as usize;
+    let need = count.saturating_mul(4);
+    if data.len().saturating_sub(*offset) < need {
+        return Err(StorageError::deserialize_error(
+            "raw u32 topology column too short",
+        ));
+    }
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        let mut buf = [0u8; 4];
+        buf.copy_from_slice(&data[*offset..*offset + 4]);
+        *offset += 4;
+        out.push(u32::from_le_bytes(buf));
+    }
+    Ok(out)
+}
+
+/// Write one i64 column at native width, bits preserved exactly.
+pub fn write_raw_i64_column(values: &[i64], out: &mut Vec<u8>) {
+    out.extend_from_slice(&(values.len() as u32).to_le_bytes());
+    for &value in values {
+        out.extend_from_slice(&(value as u64).to_le_bytes());
+    }
+}
+
+/// Decode one raw i64 column, failing closed on truncation.
+pub fn decode_raw_i64_column(data: &[u8], offset: &mut usize) -> StorageResult<Vec<i64>> {
+    let wide = decode_raw_u64_column(data, offset)?;
+    Ok(wide.into_iter().map(|v| v as i64).collect())
+}
+
+/// Write one u64 column at native width.
+pub fn write_raw_u64_column(values: &[u64], out: &mut Vec<u8>) {
+    out.extend_from_slice(&(values.len() as u32).to_le_bytes());
+    for &value in values {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+/// Decode one raw u64 column, failing closed on truncation.
+pub fn decode_raw_u64_column(data: &[u8], offset: &mut usize) -> StorageResult<Vec<u64>> {
+    let count = read_u32_le(data, offset)? as usize;
+    let need = count.saturating_mul(8);
+    if data.len().saturating_sub(*offset) < need {
+        return Err(StorageError::deserialize_error(
+            "raw u64 topology column too short",
+        ));
+    }
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(&data[*offset..*offset + 8]);
+        *offset += 8;
+        out.push(u64::from_le_bytes(buf));
+    }
+    Ok(out)
+}
+
 /// Encode one overflow chunk through the narrow integer column path.
 ///
 /// Each of the five neighbor fields goes through its native-width column
@@ -639,6 +715,73 @@ pub fn decode_overflow_chunk(data: &[u8], offset: &mut usize) -> StorageResult<O
     Ok(out)
 }
 
+/// Write one overflow chunk with every neighbor field at native width.
+///
+/// Same field order as the encoded form (endpoints, ranks, edge ids,
+/// create stamps, delete stamps), each column in raw framing. Written
+/// straight from the chunk slices with no gather buffers.
+pub fn write_raw_overflow_chunk(chunk: &OverflowChunk, out: &mut Vec<u8>) {
+    let hot = chunk.hot_slice();
+    let cold = chunk.cold_slice();
+    out.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(hot.len() as u32).to_le_bytes());
+    for h in hot {
+        out.extend_from_slice(&h.endpoint.to_le_bytes());
+    }
+    out.extend_from_slice(&(hot.len() as u32).to_le_bytes());
+    for h in hot {
+        out.extend_from_slice(&(h.rank as u64).to_le_bytes());
+    }
+    out.extend_from_slice(&(hot.len() as u32).to_le_bytes());
+    for h in hot {
+        out.extend_from_slice(&h.edge_id.0.to_le_bytes());
+    }
+    out.extend_from_slice(&(cold.len() as u32).to_le_bytes());
+    for c in cold {
+        out.extend_from_slice(&c.create_ts.to_le_bytes());
+    }
+    out.extend_from_slice(&(cold.len() as u32).to_le_bytes());
+    for c in cold {
+        out.extend_from_slice(&c.delete_ts.to_le_bytes());
+    }
+}
+
+/// Decode one overflow chunk written by `write_raw_overflow_chunk`.
+/// Fails closed when column lengths disagree with the chunk length.
+pub fn decode_raw_overflow_chunk(data: &[u8], offset: &mut usize) -> StorageResult<OverflowChunk> {
+    let chunk_len = read_u32_le(data, offset)? as usize;
+    if chunk_len == 0 {
+        return Ok(OverflowChunk::default());
+    }
+    let endpoints = decode_raw_u32_column(data, offset)?;
+    let ranks = decode_raw_i64_column(data, offset)?;
+    let edge_ids = decode_raw_u64_column(data, offset)?;
+    let creates = decode_raw_u64_column(data, offset)?;
+    let deletes = decode_raw_u64_column(data, offset)?;
+    if endpoints.len() != chunk_len
+        || ranks.len() != chunk_len
+        || edge_ids.len() != chunk_len
+        || creates.len() != chunk_len
+        || deletes.len() != chunk_len
+    {
+        return Err(StorageError::deserialize_error(
+            "raw overflow chunk column length mismatch",
+        ));
+    }
+    let mut out = OverflowChunk::with_capacity(chunk_len);
+    for index in 0..chunk_len {
+        let mut nbr = Nbr::with_timestamps(
+            endpoints[index],
+            ranks[index],
+            EdgeId(edge_ids[index]),
+            deletes[index],
+        );
+        nbr.create_ts = creates[index];
+        out.push(nbr);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -695,6 +838,52 @@ mod tests {
             ranks
         );
         assert_eq!(offset, payload.len());
+    }
+
+    #[test]
+    fn raw_columns_roundtrip_at_native_width() {
+        let u32_values = vec![0u32, 1, u32::MAX, 4096];
+        let mut payload = Vec::new();
+        write_raw_u32_column(&u32_values, &mut payload);
+        let mut offset = 0usize;
+        assert_eq!(
+            decode_raw_u32_column(&payload, &mut offset).unwrap(),
+            u32_values
+        );
+        assert_eq!(offset, payload.len());
+
+        let i64_values = vec![0i64, -1, 1, i64::MIN, i64::MAX];
+        let mut payload = Vec::new();
+        write_raw_i64_column(&i64_values, &mut payload);
+        let mut offset = 0usize;
+        assert_eq!(
+            decode_raw_i64_column(&payload, &mut offset).unwrap(),
+            i64_values
+        );
+        assert_eq!(offset, payload.len());
+
+        let u64_values = vec![0u64, 1, u64::MAX];
+        let mut payload = Vec::new();
+        write_raw_u64_column(&u64_values, &mut payload);
+        let mut offset = 0usize;
+        assert_eq!(
+            decode_raw_u64_column(&payload, &mut offset).unwrap(),
+            u64_values
+        );
+        assert_eq!(offset, payload.len());
+
+        let empty: Vec<u32> = Vec::new();
+        let mut payload = Vec::new();
+        write_raw_u32_column(&empty, &mut payload);
+        let mut offset = 0usize;
+        assert!(decode_raw_u32_column(&payload, &mut offset)
+            .unwrap()
+            .is_empty());
+
+        let mut short = Vec::new();
+        write_raw_u64_column(&[1u64, 2], &mut short);
+        short.pop();
+        assert!(decode_raw_u64_column(&short, &mut 0usize).is_err());
     }
 
     #[test]

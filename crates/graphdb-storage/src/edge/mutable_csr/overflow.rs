@@ -189,6 +189,28 @@ impl OverflowStorage {
         self.table.get(*vid)
     }
 
+    /// Single-block fast path for consolidated rows.
+    ///
+    /// Merge passes (write-path repack, rebalance, vertex compaction) leave
+    /// merged rows as one contiguous chunk, so most overflow reads touch one
+    /// block. Returns it directly when the row holds exactly one chunk;
+    /// multi-block rows fall back to the chain walk.
+    #[inline]
+    pub fn single_chunk(&self, vid: &u32) -> Option<&OverflowChunk> {
+        let chunks = self.get(vid)?;
+        if chunks.len() == 1 {
+            chunks.first()
+        } else {
+            None
+        }
+    }
+
+    /// Chunk count of one row, zero when the row holds no overflow.
+    #[inline]
+    pub fn chunk_count(&self, vid: &u32) -> usize {
+        self.get(vid).map_or(0, Vec::len)
+    }
+
     #[inline]
     pub fn get_mut(&mut self, vid: &u32) -> Option<&mut Vec<OverflowChunk>> {
         if !self.has_row(*vid) {

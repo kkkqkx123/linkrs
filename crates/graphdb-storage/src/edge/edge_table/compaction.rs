@@ -420,8 +420,8 @@ impl EdgeStore {
             // Authoritative visibility, not the tombstone table alone: a
             // tombstone reclaimed by an earlier GC round must not resurrect
             // its edge as live here.
-            if self.mvcc.is_edge_visible(*edge_id, bound) {
-                valid_edge_ids.insert(*edge_id);
+            if self.mvcc.is_edge_visible(edge_id, bound) {
+                valid_edge_ids.insert(edge_id);
             }
         }
 

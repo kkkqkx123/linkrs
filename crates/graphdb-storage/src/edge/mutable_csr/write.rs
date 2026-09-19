@@ -36,7 +36,29 @@ impl MutableCsr {
             self.add_capacity(new_cap);
         }
         if nbr.delete_ts == Timestamp::MAX {
-            self.track_live_insert(src_vid, nbr.endpoint, nbr.rank);
+            // Tail slot just pushed: the row-relative position feeds the
+            // wide-row location index directly, so no rescan is needed to
+            // keep it exact. Rows still narrow stay set-free through the
+            // width gate inside the tracker.
+            let position = self
+                .overflow_chunks
+                .get(&src_vid)
+                .map(|chunks| {
+                    let chunk = chunks.len().saturating_sub(1);
+                    let slot = chunks
+                        .last()
+                        .map(|tail| tail.len().saturating_sub(1))
+                        .unwrap_or(0);
+                    EdgePosition::Overflow {
+                        chunk: chunk as u32,
+                        slot: slot as u32,
+                    }
+                })
+                .unwrap_or(EdgePosition::Overflow {
+                    chunk: chunk_count.saturating_sub(1) as u32,
+                    slot: 0,
+                });
+            self.track_live_insert(src_vid, nbr.endpoint, nbr.rank, position);
         }
         // Per-vertex overflow bound: past the limit the row is consolidated
         // into one contiguous chunk whether or not it holds dead entries,
@@ -108,7 +130,14 @@ impl MutableCsr {
             let base = self.adj_offsets[src_idx] as usize;
             self.set_slot(base + degree, nbr_with_ts);
             self.degrees[src_idx] += 1;
-            self.track_live_insert(src_vid, decoded_endpoint, decoded_rank);
+            self.track_live_insert(
+                src_vid,
+                decoded_endpoint,
+                decoded_rank,
+                EdgePosition::Primary {
+                    slot: degree as u32,
+                },
+            );
             self.edge_count += 1;
             return Ok(());
         }
@@ -130,7 +159,12 @@ impl MutableCsr {
                     .is_some_and(|cold| is_reclaimable_cold(&cold, cutoff));
                 if reclaimable {
                     self.set_slot(base + i, nbr_with_ts);
-                    self.track_live_insert(src_vid, decoded_endpoint, decoded_rank);
+                    self.track_live_insert(
+                        src_vid,
+                        decoded_endpoint,
+                        decoded_rank,
+                        EdgePosition::Primary { slot: i as u32 },
+                    );
                     self.edge_count += 1;
                     return Ok(());
                 }
@@ -406,7 +440,14 @@ impl MutableCsr {
         if can_revert_delete(&probe, ts) {
             self.cold_list[idx].delete_ts = Timestamp::MAX;
             self.edge_count += 1;
-            self.track_live_insert(src_vid, probe.endpoint, probe.rank);
+            self.track_live_insert(
+                src_vid,
+                probe.endpoint,
+                probe.rank,
+                EdgePosition::Primary {
+                    slot: offset as u32,
+                },
+            );
             return true;
         }
         false
@@ -451,7 +492,12 @@ impl MutableCsr {
                 .copy_within(start + i + 1..start + degree, start + i);
             self.degrees[src_idx] -= 1;
             if was_live {
-                self.track_live_remove(src_vid, probe.endpoint, probe.rank);
+                // Gap-closing memmove shifts every later primary slot left
+                // by one, so stored row positions go stale: rebuild the
+                // indexed row when one exists instead of dropping one key.
+                if self.live_sets.get(&src_vid).is_some() {
+                    self.rebuild_live_set_for_vertex(src_vid);
+                }
                 self.edge_count -= 1;
             }
             return true;
@@ -495,7 +541,12 @@ impl MutableCsr {
                 }
             }
             if was_live {
-                self.track_live_remove(src_vid, probe.endpoint, probe.rank);
+                // In-chunk removal shifts later slots of the same chunk, so
+                // stored overflow positions go stale: rebuild the indexed
+                // row when one exists instead of dropping one key.
+                if self.live_sets.get(&src_vid).is_some() {
+                    self.rebuild_live_set_for_vertex(src_vid);
+                }
                 self.edge_count -= 1;
             }
             return true;
@@ -535,7 +586,12 @@ impl MutableCsr {
             let (start, _) = self.primary_window(src_idx);
             self.cold_list[start + i].delete_ts = Timestamp::MAX;
             self.edge_count += 1;
-            self.track_live_insert(src_vid, probe.endpoint, probe.rank);
+            self.track_live_insert(
+                src_vid,
+                probe.endpoint,
+                probe.rank,
+                EdgePosition::Primary { slot: i as u32 },
+            );
             return true;
         }
 
@@ -549,7 +605,15 @@ impl MutableCsr {
                 if can_revert_delete(&probe, ts) {
                     chunks[chunk_idx].cold_at_mut(edge_idx).unwrap().delete_ts = Timestamp::MAX;
                     self.edge_count += 1;
-                    self.track_live_insert(src_vid, probe.endpoint, probe.rank);
+                    self.track_live_insert(
+                        src_vid,
+                        probe.endpoint,
+                        probe.rank,
+                        EdgePosition::Overflow {
+                            chunk: chunk_idx as u32,
+                            slot: edge_idx as u32,
+                        },
+                    );
                     return true;
                 }
             }
@@ -657,11 +721,19 @@ impl MutableCsr {
         check_duplicates: bool,
     ) -> StorageResult<usize> {
         if check_duplicates {
+            // Scratch buffers live for the whole batch: each row clears and
+            // refills them instead of allocating per row, so duplicate
+            // checking over many rows keeps peak allocation to one key
+            // buffer plus one probe set.
+            let mut keys: Vec<(u32, i64)> = Vec::new();
+            let mut seen: HashSet<(u32, i64)> = HashSet::new();
             for (src_vid, batch) in groups {
-                let mut keys: Vec<(u32, i64)> = batch
-                    .iter()
-                    .map(|(endpoint, rank, _, _)| (*endpoint, *rank))
-                    .collect();
+                keys.clear();
+                keys.extend(
+                    batch
+                        .iter()
+                        .map(|(endpoint, rank, _, _)| (*endpoint, *rank)),
+                );
                 keys.sort_unstable();
                 for window in keys.windows(2) {
                     if window[0] == window[1] {
@@ -671,13 +743,14 @@ impl MutableCsr {
                         )));
                     }
                 }
-                // One row scan into a transient set: per-edge
+                // One row scan into the reused set: per-edge
                 // `live_key_present` would rescan the row for every batch
                 // edge on set-free rows, degrading bulk loads to
                 // O(batch x degree). The transient set also absorbs batch
                 // keys as they are checked, so intra-row conflicts against
                 // both stored and staged edges surface in one pass.
-                let mut seen: HashSet<(u32, i64)> = HashSet::with_capacity(batch.len());
+                seen.clear();
+                seen.reserve(batch.len());
                 self.visit_physical(*src_vid, |nbr| {
                     if nbr.delete_ts == Timestamp::MAX {
                         seen.insert((nbr.endpoint, nbr.rank));
@@ -824,26 +897,43 @@ impl MutableCsr {
                 }
                 self.cold_list[idx].delete_ts = Timestamp::MAX;
                 self.edge_count += 1;
-                self.track_live_insert(src_vid, probe.endpoint, probe.rank);
+                self.track_live_insert(
+                    src_vid,
+                    probe.endpoint,
+                    probe.rank,
+                    EdgePosition::Primary { slot },
+                );
                 true
             }
             EdgePosition::Overflow { chunk, slot } => {
+                let (chunk_idx, slot_idx) = (chunk, slot);
                 let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) else {
                     return false;
                 };
-                let Some(chunk) = chunks.get_mut(chunk as usize) else {
+                let Some(chunk) = chunks.get_mut(chunk_idx as usize) else {
                     return false;
                 };
-                let probe = match (chunk.hot_at(slot as usize), chunk.cold_at(slot as usize)) {
+                let probe = match (
+                    chunk.hot_at(slot_idx as usize),
+                    chunk.cold_at(slot_idx as usize),
+                ) {
                     (Some(hot), Some(cold)) => Nbr::from_parts(hot, cold),
                     _ => return false,
                 };
                 if probe.edge_id != expected || !can_revert_delete(&probe, ts) {
                     return false;
                 }
-                chunk.cold_at_mut(slot as usize).unwrap().delete_ts = Timestamp::MAX;
+                chunk.cold_at_mut(slot_idx as usize).unwrap().delete_ts = Timestamp::MAX;
                 self.edge_count += 1;
-                self.track_live_insert(src_vid, probe.endpoint, probe.rank);
+                self.track_live_insert(
+                    src_vid,
+                    probe.endpoint,
+                    probe.rank,
+                    EdgePosition::Overflow {
+                        chunk: chunk_idx,
+                        slot: slot_idx,
+                    },
+                );
                 true
             }
         }

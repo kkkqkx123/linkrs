@@ -2,7 +2,9 @@ use super::super::core::EdgeStore;
 use super::super::persistence;
 use super::*;
 use crate::edge::edge_table::config::EdgeTableConfig;
-use crate::edge::{frozen_serving::serving_path_for, CsrVariant, EdgeSchema, EdgeStrategy};
+use crate::edge::{
+    frozen_serving::serving_path_for, CsrVariant, EdgeSchema, EdgeStrategy, RecordForm,
+};
 use crate::types::StoragePropertyDef;
 use graphdb_core::Value;
 use std::io::Write as _;
@@ -22,6 +24,7 @@ fn make_table() -> EdgeStore {
         oe_strategy: EdgeStrategy::Multiple,
         ie_strategy: EdgeStrategy::Multiple,
         schema_version: 1,
+        record_form: RecordForm::default(),
     };
     EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
 }
@@ -402,6 +405,7 @@ fn published_column_survives_reload_with_stats() {
         oe_strategy: EdgeStrategy::Multiple,
         ie_strategy: EdgeStrategy::Multiple,
         schema_version: 1,
+        record_form: RecordForm::default(),
     };
     let mut loaded =
         EdgeStore::with_config(schema, EdgeTableConfig::default()).expect("table builds");
@@ -505,6 +509,7 @@ fn stable_column_ids_survive_drop_and_reload() {
         oe_strategy: EdgeStrategy::Multiple,
         ie_strategy: EdgeStrategy::Multiple,
         schema_version: 1,
+        record_form: RecordForm::default(),
     };
     let mut loaded =
         EdgeStore::with_config(schema, EdgeTableConfig::default()).expect("table builds");
@@ -1386,6 +1391,7 @@ fn reshard_roundtrip_preserves_snapshot() {
             oe_strategy: crate::edge::EdgeStrategy::Multiple,
             ie_strategy: crate::edge::EdgeStrategy::Multiple,
             schema_version: 1,
+            record_form: RecordForm::default(),
         },
         EdgeTableConfig {
             node_group_bits: 9,
@@ -1414,6 +1420,7 @@ fn make_bounded_table(bound: usize) -> EdgeStore {
         oe_strategy: EdgeStrategy::Multiple,
         ie_strategy: EdgeStrategy::Multiple,
         schema_version: 1,
+        record_form: RecordForm::default(),
     };
     let config = EdgeTableConfig {
         max_append_ops_per_group: bound,
