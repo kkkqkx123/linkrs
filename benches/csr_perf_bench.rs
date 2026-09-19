@@ -165,6 +165,60 @@ fn bench_deletes(csr: &mut MutableCsr) {
     black_box((deleted, reverted));
 }
 
+fn bench_point_lookup_narrow(csr: &MutableCsr) {
+    let start = Instant::now();
+    let mut hits = 0usize;
+    for src in 0..VERTICES {
+        let dst = VertexId::edge_endpoint_key((src ^ (0 * 7919)) % VERTICES, 0);
+        if csr.get_edge(src, dst, 1).is_some() {
+            hits += 1;
+        }
+    }
+    let secs = start.elapsed().as_secs_f64();
+    println!(
+        "point lookup narrow : {:>10.0} ops/s ({} hits, {:.3}s)",
+        VERTICES as f64 / secs,
+        hits,
+        secs
+    );
+    black_box(hits);
+}
+
+fn bench_point_lookup_wide(csr: &MutableCsr) {
+    let hub = 0u32;
+    let keys: Vec<VertexId> = (0..512u32)
+        .map(|k| VertexId::edge_endpoint_key((hub + k * 31) % VERTICES, 0))
+        .collect();
+    let start = Instant::now();
+    let mut hits = 0usize;
+    for dst in &keys {
+        if csr.get_edge(hub, *dst, 1).is_some() {
+            hits += 1;
+        }
+    }
+    let secs = start.elapsed().as_secs_f64();
+    println!(
+        "point lookup wide  : {:>10.0} ops/s ({} hits, {:.3}s)",
+        keys.len() as f64 / secs,
+        hits,
+        secs
+    );
+    black_box(hits);
+}
+
+fn bench_full_iter(csr: &MutableCsr) {
+    let start = Instant::now();
+    let count = csr.iter(1).count();
+    let secs = start.elapsed().as_secs_f64();
+    println!(
+        "full iter           : {:>10.0} edges/s ({} edges, {:.3}s)",
+        count as f64 / secs,
+        count,
+        secs
+    );
+    black_box(count);
+}
+
 fn main() {
     println!("machine: {}", machine_name());
     bench_insert_uniform();
@@ -173,11 +227,15 @@ fn main() {
     let mut csr = MutableCsr::with_capacity(VERTICES as usize, 65536);
     build_uniform(&mut csr, 4);
     bench_scan(&csr, "no-overflow");
+    bench_point_lookup_narrow(&csr);
+    bench_full_iter(&csr);
     bench_memory(&csr);
 
     let mut wide = MutableCsr::with_capacity(VERTICES as usize, 65536);
     build_power_law(&mut wide);
     bench_scan(&wide, "with-overflow");
+    bench_point_lookup_wide(&wide);
+    bench_full_iter(&wide);
 
     for src in 0..64u32 {
         let _ = wide.delete_edge_by_dst(

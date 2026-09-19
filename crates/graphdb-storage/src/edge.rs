@@ -34,6 +34,7 @@ pub mod csr_variant;
 pub mod csr_with_properties;
 pub mod edge_table;
 pub mod fragmentation_stats;
+pub mod frozen_serving;
 pub mod immutable_csr;
 pub mod mutable_csr;
 pub mod node_group;
@@ -42,7 +43,7 @@ pub mod single_mutable_csr;
 
 use crate::types::StoragePropertyDef;
 pub use csr_trait::{CsrBase, MutableCsrTrait};
-pub use csr_variant::CsrVariant;
+pub use csr_variant::{CsrRowIter, CsrVariant};
 pub use csr_with_properties::CsrWithProperties;
 pub use edge_table::core::UpdateEdgePropertyByKeyParams;
 pub use edge_table::EdgeStore;
@@ -61,8 +62,9 @@ pub use node_group::{
 };
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
+pub use frozen_serving::{MappedFrozen, MappedFrozenIterator, MappedFrozenRowIter};
 pub use graphdb_core::types::INVALID_EDGE_ID;
-pub use immutable_csr::{ImmutableCsr, ImmutableCsrIterator};
+pub use immutable_csr::{FrozenRowIter, ImmutableCsr, ImmutableCsrIterator};
 
 #[derive(Debug, Clone)]
 pub struct EdgeRecord {
@@ -223,11 +225,65 @@ impl EdgeSchema {
     }
 }
 
+/// Hot topology half of a CSR slot: everything a traversal needs.
+///
+/// Packed `(endpoint, rank, edge_id)` without timestamp replicas. Scans that
+/// resolve visibility through the version authority (by `edge_id`) walk this
+/// half only, so the cold timestamp lines stay out of the cache. Assembled
+/// back into [`Nbr`] at API boundaries through [`Nbr::from_parts`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HotNbr {
+    pub endpoint: u32,
+    pub rank: i64,
+    pub edge_id: EdgeId,
+}
+
+/// Cold timestamp half of a CSR slot: physical MVCC replicas.
+///
+/// `create_ts` mirrors the creation stamp kept for compaction and debugging,
+/// `delete_ts` the deletion stamp (`Timestamp::MAX` means alive). Query
+/// paths must never decide visibility from these fields; the version
+/// authority owns that decision. Touched only by writes, deletes, rollback,
+/// compaction and persistence assembly, never by topology scans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColdStamps {
+    pub create_ts: Timestamp,
+    pub delete_ts: Timestamp,
+}
+
+impl HotNbr {
+    /// Gap-fill sentinel matching [`Nbr::dead_gap`]: unassignable edge id.
+    pub fn dead_gap() -> Self {
+        Self {
+            endpoint: 0,
+            rank: 0,
+            edge_id: INVALID_EDGE_ID,
+        }
+    }
+}
+
+impl ColdStamps {
+    /// Gap-fill sentinel matching [`Nbr::dead_gap`]: empty stamp window.
+    pub fn dead_gap() -> Self {
+        Self {
+            create_ts: 0,
+            delete_ts: 0,
+        }
+    }
+
+    /// Whether the slot holds no deletion stamp.
+    #[inline]
+    pub fn is_live(&self) -> bool {
+        self.delete_ts == Timestamp::MAX
+    }
+}
+
 /// Compact CSR edge entry.
 ///
-/// Stores the neighbor as a packed `(endpoint: u32, rank: i64)` pair plus the
-/// edge id and the creation/deletion stamps. The exact in-memory size follows
-/// the measured struct size.
+/// Logical assembly of a [`HotNbr`] topology half and a [`ColdStamps`]
+/// timestamp half. Storage layers persist the halves separately and
+/// reassemble this record at API boundaries; the exact in-memory size
+/// follows the measured struct size.
 ///
 /// The `endpoint` is the internal vertex ID of the neighbor. The `rank` is the
 /// edge multiplicity index (typically 0 for simple edges).
@@ -317,6 +373,37 @@ impl Nbr {
         self.create_ts <= ts && ts < self.delete_ts
     }
 
+    /// Split the record into its hot topology half.
+    #[inline]
+    pub fn hot(&self) -> HotNbr {
+        HotNbr {
+            endpoint: self.endpoint,
+            rank: self.rank,
+            edge_id: self.edge_id,
+        }
+    }
+
+    /// Split the record into its cold timestamp half.
+    #[inline]
+    pub fn cold(&self) -> ColdStamps {
+        ColdStamps {
+            create_ts: self.create_ts,
+            delete_ts: self.delete_ts,
+        }
+    }
+
+    /// Reassemble a record from its halves.
+    #[inline]
+    pub fn from_parts(hot: HotNbr, cold: ColdStamps) -> Self {
+        Self {
+            endpoint: hot.endpoint,
+            rank: hot.rank,
+            edge_id: hot.edge_id,
+            create_ts: cold.create_ts,
+            delete_ts: cold.delete_ts,
+        }
+    }
+
     /// Reconstruct the full `VertexId` from the packed `(endpoint, rank)` pair.
     ///
     /// The result is a 16-byte VertexId encoding `(endpoint as i64, rank)` in
@@ -337,6 +424,23 @@ impl Nbr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hot_half_stays_within_single_cache_line_budget() {
+        assert!(std::mem::size_of::<HotNbr>() <= 24);
+        assert!(std::mem::size_of::<ColdStamps>() <= 16);
+    }
+
+    #[test]
+    fn slot_halves_roundtrip_through_nbr() {
+        let nbr = Nbr::with_create_ts(7, 2, EdgeId(9), 100);
+        let assembled = Nbr::from_parts(nbr.hot(), nbr.cold());
+        assert_eq!(assembled, nbr);
+        assert_eq!(
+            Nbr::from_parts(HotNbr::dead_gap(), ColdStamps::dead_gap()),
+            Nbr::dead_gap()
+        );
+    }
 
     #[test]
     fn test_edge_schema_validation_both_none() {

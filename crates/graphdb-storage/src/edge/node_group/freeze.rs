@@ -2,11 +2,13 @@
 //!
 //! Freezing packs one group's mutable variant into the frozen packed form:
 //! one contiguous neighbor segment plus a degree table, with no capacities,
-//! overflow chains, live index or locks. The packed bytes preserve every
-//! neighbor of the source group, so timestamp-filtered reads observe the
-//! same entries before and after. Unfreezing rebuilds a fresh mutable
-//! variant by replaying the packed rows through the regular insert and
-//! delete entries, restoring identical physical content.
+//! overflow chains, live index or locks. The packed rows preserve the logical
+//! content of the source group (tombstones verbatim, gap sentinels dropped)
+//! in sorted `(endpoint, rank, create_ts, edge_id)` row order, so
+//! timestamp-filtered reads observe the same logical entries before and
+//! after. Unfreezing rebuilds a fresh mutable variant by replaying the packed
+//! rows through the regular insert and delete entries, restoring the same
+//! logical content in fresh physical order.
 //!
 //! Both operations are explicit. Freeze optionally reclaims first at a caller
 //! cutoff through the shared group compaction, reporting removals for the
@@ -23,9 +25,9 @@ use super::CsrShardSet;
 impl CsrShardSet {
     /// Whether one existing group is frozen.
     pub fn is_frozen(&self, gid: usize) -> bool {
-        self.shards
-            .get(&gid)
-            .is_some_and(|shard| matches!(shard.variant, CsrVariant::Frozen(_)))
+        self.shards.get(&gid).is_some_and(|shard| {
+            matches!(shard.variant, CsrVariant::Frozen(_) | CsrVariant::Mapped(_))
+        })
     }
 
     /// Whether the group owning `vid` exists and is frozen.
@@ -61,7 +63,7 @@ impl CsrShardSet {
         };
         match shard.variant {
             CsrVariant::Multiple(_) | CsrVariant::Single(_) => {}
-            CsrVariant::Frozen(_) => {
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => {
                 return Err(StorageError::invalid_operation(format!(
                     "group {} is already frozen",
                     gid
@@ -80,7 +82,7 @@ impl CsrShardSet {
         let frozen = match &shard.variant {
             CsrVariant::Multiple(csr) => ImmutableCsr::pack_from_mutable(csr),
             CsrVariant::Single(csr) => ImmutableCsr::pack_single_from(csr),
-            CsrVariant::Frozen(_) | CsrVariant::None { .. } => {
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) | CsrVariant::None { .. } => {
                 return Err(StorageError::invalid_operation(format!(
                     "group {} changed under freeze",
                     gid
@@ -102,13 +104,22 @@ impl CsrShardSet {
     ///
     /// Replays every packed row through the regular insert entry and restores
     /// deletion stamps through the regular delete entry, so the rebuilt rows
-    /// carry identical neighbor bytes. Gap sentinels are not replayed: they
-    /// are reserved-slot fillers, never edges. The rebuilt shape follows the
-    /// set strategy. Only frozen groups unfreeze; anything else is rejected.
+    /// carry the same logical content in fresh physical order. Gap sentinels
+    /// are not replayed: they are reserved-slot fillers, never edges. The
+    /// rebuilt shape follows the set strategy. Only frozen groups unfreeze;
+    /// anything else is rejected.
     pub fn unfreeze_group(&mut self, gid: usize) -> StorageResult<u64> {
         let frozen = match self.shards.get(&gid) {
             Some(shard) => match &shard.variant {
                 CsrVariant::Frozen(csr) => csr.clone(),
+                // Mapped groups replay from identical authoritative bytes:
+                // the dump is byte-equal to the heap frozen dump by
+                // construction, so the rebuilt content matches.
+                CsrVariant::Mapped(csr) => {
+                    let mut heap = ImmutableCsr::new();
+                    heap.load(&csr.dump())?;
+                    Box::new(heap)
+                }
                 _ => {
                     return Err(StorageError::invalid_operation(format!(
                         "group {} is not frozen",

@@ -8,6 +8,7 @@
 //! pending-aware overload) so the projections cannot drift apart.
 
 use super::stats::TombstoneStats;
+use super::Nbr;
 use graphdb_core::types::{EdgeId, Timestamp};
 use std::collections::HashMap;
 
@@ -88,6 +89,24 @@ impl AuthorityMap {
             .enumerate()
             .filter(|(_, slot)| slot.is_some())
             .map(|(idx, _)| EdgeId(idx as u64))
+    }
+
+    /// Batch visibility probe over `edge_ids` at `ts`, appending one flag
+    /// per id to `out`.
+    ///
+    /// Single loop over the dense slot array with direct subscript. Missing
+    /// slots read as absent (fail closed: invisible), matching `get`-based
+    /// single checks.
+    pub fn fill_visibility_mask(&self, edge_ids: &[EdgeId], ts: Timestamp, out: &mut Vec<bool>) {
+        out.clear();
+        out.reserve(edge_ids.len());
+        for id in edge_ids {
+            out.push(
+                self.slots.get(id.0 as usize).is_some_and(|slot| {
+                    slot.as_ref().is_some_and(|ts_info| ts_info.is_alive_at(ts))
+                }),
+            );
+        }
     }
 
     /// Drop records deleted before `watermark` whose rows are gone.
@@ -344,6 +363,80 @@ impl MVCCManager {
         false
     }
 
+    /// Batch form of [`Self::is_edge_visible`]: `out[i]` reports whether
+    /// `edge_ids[i]` is visible at `ts` through the same single authority.
+    /// One loop over the dense slot array with direct subscript, so a staged
+    /// row pays one authority pass instead of one method call per edge.
+    pub fn are_visible(&self, edge_ids: &[EdgeId], ts: Timestamp, out: &mut Vec<bool>) {
+        self.edge_timestamps.fill_visibility_mask(edge_ids, ts, out);
+    }
+
+    /// Batch form of [`Self::is_edge_visible_with_gate`] with the same
+    /// authority-plus-gate semantics. Per-stamp gate probes stay per edge;
+    /// the batching amortizes the call and reservation overhead.
+    pub fn are_visible_with_gate(
+        &self,
+        edge_ids: &[EdgeId],
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+        out: &mut Vec<bool>,
+    ) {
+        out.clear();
+        out.reserve(edge_ids.len());
+        for id in edge_ids {
+            out.push(self.is_edge_visible_with_gate(*id, ts, gate));
+        }
+    }
+
+    /// In-place filter of a staged neighbor row to its visible entries.
+    ///
+    /// Single authority pass backing the batch fill paths: physical
+    /// collection stages the row once, this pass compacts it without a
+    /// second id vector. Survivor order is preserved.
+    pub fn retain_visible(&self, nbrs: &mut Vec<Nbr>, ts: Timestamp) {
+        let slots = &self.edge_timestamps.slots;
+        let mut write = 0usize;
+        for read in 0..nbrs.len() {
+            let idx = nbrs[read].edge_id.0 as usize;
+            let visible = slots.get(idx).is_some_and(|slot| {
+                slot.as_ref().is_some_and(|stamps| {
+                    crate::mvcc_visibility::Visibility::is_edge_visible(
+                        ts,
+                        stamps.create_ts,
+                        stamps.delete_ts,
+                    )
+                })
+            });
+            if visible {
+                if write != read {
+                    nbrs.swap(write, read);
+                }
+                write += 1;
+            }
+        }
+        nbrs.truncate(write);
+    }
+
+    /// Pending-aware form of [`Self::retain_visible`] with the same
+    /// authority-plus-gate semantics.
+    pub fn retain_visible_with_gate(
+        &self,
+        nbrs: &mut Vec<Nbr>,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) {
+        let mut write = 0usize;
+        for read in 0..nbrs.len() {
+            if self.is_edge_visible_with_gate(nbrs[read].edge_id, ts, gate) {
+                if write != read {
+                    nbrs.swap(write, read);
+                }
+                write += 1;
+            }
+        }
+        nbrs.truncate(write);
+    }
+
     /// Get the creation timestamp of an edge, if known.
     pub fn creation_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
         self.edge_timestamps.get(&edge_id).map(|ts| ts.create_ts)
@@ -579,6 +672,94 @@ mod tests {
 
         table.mvcc.unregister_active_snapshot(1);
         assert_eq!(table.mvcc.active_snapshot_count(), 1);
+    }
+
+    #[test]
+    fn test_batch_visibility_matches_single_checks() {
+        let mut table = create_edge_table_with_props();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        table.insert_edge(0, 2, 0, &[], 100).unwrap();
+        table.insert_edge(0, 3, 0, &[], 300).unwrap();
+        table.delete_edge(0, 2, 0, 150).unwrap();
+
+        // Live, deleted, not-yet-created and never-existing ids.
+        let ids = [EdgeId(0), EdgeId(1), EdgeId(2), EdgeId(999)];
+        for ts in [99, 100, 150, 200, 300] {
+            let mut mask = Vec::new();
+            table.mvcc.are_visible(&ids, ts, &mut mask);
+            assert_eq!(mask.len(), ids.len());
+            for (id, visible) in ids.iter().zip(mask.iter()) {
+                assert_eq!(
+                    *visible,
+                    table.mvcc.is_edge_visible(*id, ts),
+                    "batch/single disagree for {:?} at {}",
+                    id,
+                    ts
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_batch_visibility_with_gate_matches_single_checks() {
+        use crate::mvcc_visibility::PendingGate;
+        use graphdb_transaction::VersionManager;
+
+        let mut table = create_edge_table_with_props();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        table.insert_edge(0, 2, 0, &[], 100).unwrap();
+        table.delete_edge(0, 2, 0, 150).unwrap();
+
+        let vm = VersionManager::new();
+        let gate = PendingGate::new(&vm, None);
+        let ids = [EdgeId(0), EdgeId(1), EdgeId(999)];
+        for ts in [100, 150, 200] {
+            let mut mask = Vec::new();
+            table.mvcc.are_visible_with_gate(&ids, ts, &gate, &mut mask);
+            assert_eq!(mask.len(), ids.len());
+            for (id, visible) in ids.iter().zip(mask.iter()) {
+                assert_eq!(
+                    *visible,
+                    table.mvcc.is_edge_visible_with_gate(*id, ts, &gate),
+                    "gated batch/single disagree for {:?} at {}",
+                    id,
+                    ts
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_retain_visible_preserves_order_and_matches_single_checks() {
+        use crate::edge::Nbr;
+
+        let mut table = create_edge_table_with_props();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        table.insert_edge(0, 2, 0, &[], 100).unwrap();
+        table.insert_edge(0, 3, 0, &[], 100).unwrap();
+        table.delete_edge(0, 2, 0, 150).unwrap();
+
+        // Staged out of order with a never-existing id mixed in.
+        let mut staged = vec![
+            Nbr::new(3, 0, EdgeId(2)),
+            Nbr::new(9, 0, EdgeId(999)),
+            Nbr::new(1, 0, EdgeId(0)),
+            Nbr::new(2, 0, EdgeId(1)),
+        ];
+        table.mvcc.retain_visible(&mut staged, 200);
+        let kept: Vec<EdgeId> = staged.iter().map(|nbr| nbr.edge_id).collect();
+        assert_eq!(kept, vec![EdgeId(2), EdgeId(0)]);
+
+        // Same survivor set as filtering through the single checks.
+        let mut staged = vec![
+            Nbr::new(3, 0, EdgeId(2)),
+            Nbr::new(9, 0, EdgeId(999)),
+            Nbr::new(1, 0, EdgeId(0)),
+            Nbr::new(2, 0, EdgeId(1)),
+        ];
+        staged.retain(|nbr| table.mvcc.is_edge_visible(nbr.edge_id, 200));
+        let expected: Vec<EdgeId> = staged.iter().map(|nbr| nbr.edge_id).collect();
+        assert_eq!(kept, expected);
     }
 
     #[test]

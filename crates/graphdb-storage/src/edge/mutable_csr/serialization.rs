@@ -3,6 +3,7 @@ use graphdb_core::{StorageError, StorageResult};
 use crate::persistence::read_u32_le;
 
 use super::super::{EdgeId, Nbr};
+use super::overflow::OverflowChunk;
 
 pub(crate) const MUTABLE_CSR_FORMAT_VERSION: u32 = 4;
 
@@ -570,16 +571,26 @@ pub fn decode_topology_i64_column(data: &[u8], offset: &mut usize) -> StorageRes
 /// Each of the five neighbor fields goes through its native-width column
 /// encoder, so overflow storage benefits from the same bit-packing and
 /// run-length encodings as the primary area instead of staying plain.
-pub fn encode_overflow_chunk(chunk: &[Nbr], out: &mut Vec<u8>) {
+/// The chunk halves are gathered into the existing column buffers, so the
+/// on-disk bytes match the pre-split layout exactly.
+pub fn encode_overflow_chunk(chunk: &OverflowChunk, out: &mut Vec<u8>) {
     out.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
     if chunk.is_empty() {
         return;
     }
-    let endpoints: Vec<u32> = chunk.iter().map(|nbr| nbr.endpoint).collect();
-    let ranks: Vec<i64> = chunk.iter().map(|nbr| nbr.rank).collect();
-    let edge_ids: Vec<u64> = chunk.iter().map(|nbr| nbr.edge_id.0).collect();
-    let creates: Vec<u64> = chunk.iter().map(|nbr| nbr.create_ts).collect();
-    let deletes: Vec<u64> = chunk.iter().map(|nbr| nbr.delete_ts).collect();
+    let endpoints: Vec<u32> = chunk.hot_slice().iter().map(|hot| hot.endpoint).collect();
+    let ranks: Vec<i64> = chunk.hot_slice().iter().map(|hot| hot.rank).collect();
+    let edge_ids: Vec<u64> = chunk.hot_slice().iter().map(|hot| hot.edge_id.0).collect();
+    let creates: Vec<u64> = chunk
+        .cold_slice()
+        .iter()
+        .map(|cold| cold.create_ts)
+        .collect();
+    let deletes: Vec<u64> = chunk
+        .cold_slice()
+        .iter()
+        .map(|cold| cold.delete_ts)
+        .collect();
     let (_, payload) = encode_topology_u32_column(&endpoints);
     out.extend_from_slice(&payload);
     let (_, payload) = encode_topology_i64_column(&ranks);
@@ -594,10 +605,10 @@ pub fn encode_overflow_chunk(chunk: &[Nbr], out: &mut Vec<u8>) {
 
 /// Decode one overflow chunk written by `encode_overflow_chunk`.
 /// Fails closed when column lengths disagree or bytes trail.
-pub fn decode_overflow_chunk(data: &[u8], offset: &mut usize) -> StorageResult<Vec<Nbr>> {
+pub fn decode_overflow_chunk(data: &[u8], offset: &mut usize) -> StorageResult<OverflowChunk> {
     let chunk_len = read_u32_le(data, offset)? as usize;
     if chunk_len == 0 {
-        return Ok(Vec::new());
+        return Ok(OverflowChunk::default());
     }
     let endpoints = decode_topology_u32_column(data, offset)?;
     let ranks = decode_topology_i64_column(data, offset)?;
@@ -614,7 +625,7 @@ pub fn decode_overflow_chunk(data: &[u8], offset: &mut usize) -> StorageResult<V
             "overflow chunk column length mismatch",
         ));
     }
-    let mut out = Vec::with_capacity(chunk_len);
+    let mut out = OverflowChunk::with_capacity(chunk_len);
     for index in 0..chunk_len {
         let mut nbr = Nbr::with_timestamps(
             endpoints[index],

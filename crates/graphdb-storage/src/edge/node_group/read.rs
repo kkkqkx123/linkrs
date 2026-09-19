@@ -5,7 +5,7 @@
 
 use graphdb_core::types::EdgeId;
 
-use super::super::{MutableCsrTrait, Nbr};
+use super::super::{HotNbr, MutableCsrTrait, Nbr};
 use super::CsrShardSet;
 
 impl CsrShardSet {
@@ -38,6 +38,23 @@ impl CsrShardSet {
         };
         if let Some(shard) = self.shards.get(&gid) {
             shard.variant.visit_physical(local, f);
+        }
+    }
+
+    /// Visit every physically stored hot half of one vertex without
+    /// allocating and without touching the stamp lines.
+    ///
+    /// Hot-only counterpart of [`Self::visit_physical`] for traversals that
+    /// resolve visibility through the version authority by `edge_id`.
+    pub fn visit_hot<F>(&self, src_vid: u32, f: F)
+    where
+        F: FnMut(HotNbr) -> bool,
+    {
+        let Some((gid, local)) = self.route(src_vid) else {
+            return;
+        };
+        if let Some(shard) = self.shards.get(&gid) {
+            shard.variant.visit_hot(local, f);
         }
     }
 

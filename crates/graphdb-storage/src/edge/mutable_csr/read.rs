@@ -1,9 +1,38 @@
 use super::super::csr_shared::decode_endpoint_pair;
-use super::super::{EdgeId, Nbr, Timestamp, VertexId};
+use super::super::{ColdStamps, EdgeId, HotNbr, Nbr, Timestamp, VertexId};
 use super::write::EdgePosition;
 use super::MutableCsr;
 
 impl MutableCsr {
+    /// Clamped primary window of one row as `(start, end)` list indices.
+    ///
+    /// Single bounds check per row: every row scan below goes through this
+    /// instead of probing each slot with `get`, so per-slot branches and
+    /// `Option` unwraps disappear from the hot paths.
+    pub(super) fn primary_window(&self, src_idx: usize) -> (usize, usize) {
+        if src_idx >= self.vertex_capacity() {
+            return (0, 0);
+        }
+        let start = self.adj_offsets[src_idx] as usize;
+        let end = start
+            .saturating_add(self.degrees[src_idx] as usize)
+            .min(self.hot_list.len())
+            .min(self.cold_list.len());
+        (start.min(end), end)
+    }
+
+    /// Primary hot slice of one row; empty when the row is missing or empty.
+    pub(super) fn primary_hot(&self, src_idx: usize) -> &[HotNbr] {
+        let (start, end) = self.primary_window(src_idx);
+        &self.hot_list[start..end]
+    }
+
+    /// Primary hot plus cold slices of one row, locked to the same window.
+    pub(super) fn primary_pair(&self, src_idx: usize) -> (&[HotNbr], &[ColdStamps]) {
+        let (start, end) = self.primary_window(src_idx);
+        (&self.hot_list[start..end], &self.cold_list[start..end])
+    }
+
     /// Read-only view of one primary slot without mutating state.
     ///
     /// Used to verify that a caller-supplied offset still addresses the
@@ -20,7 +49,7 @@ impl MutableCsr {
             return None;
         }
         let idx = self.adj_offsets[src_idx] as usize + offset as usize;
-        self.nbr_list.get(idx).copied()
+        self.slot_at(idx)
     }
 
     /// Locate the first live edge by endpoint without consulting snapshots.
@@ -35,28 +64,25 @@ impl MutableCsr {
         if src_idx >= self.vertex_capacity() {
             return None;
         }
-        let degree = self.degrees[src_idx] as usize;
-        let offset = self.adj_offsets[src_idx] as usize;
-        for i in 0..degree {
-            if let Some(nbr) = self.nbr_list.get(offset + i) {
-                if nbr.endpoint == decoded_endpoint
-                    && nbr.rank == decoded_rank
-                    && nbr.edge_id != INVALID_EDGE_ID
-                    && nbr.delete_ts == Timestamp::MAX
-                {
-                    return Some(*nbr);
-                }
+        let (hot, cold) = self.primary_pair(src_idx);
+        for (h, c) in hot.iter().zip(cold.iter()) {
+            if h.endpoint == decoded_endpoint
+                && h.rank == decoded_rank
+                && h.edge_id != INVALID_EDGE_ID
+                && c.is_live()
+            {
+                return Some(Nbr::from_parts(*h, *c));
             }
         }
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for chunk in chunks {
-                for nbr in chunk {
-                    if nbr.endpoint == decoded_endpoint
-                        && nbr.rank == decoded_rank
-                        && nbr.edge_id != INVALID_EDGE_ID
-                        && nbr.delete_ts == Timestamp::MAX
+                for (hot, cold) in chunk.hot_slice().iter().zip(chunk.cold_slice()) {
+                    if hot.endpoint == decoded_endpoint
+                        && hot.rank == decoded_rank
+                        && hot.edge_id != INVALID_EDGE_ID
+                        && cold.is_live()
                     {
-                        return Some(*nbr);
+                        return Some(Nbr::from_parts(*hot, *cold));
                     }
                 }
             }
@@ -84,17 +110,51 @@ impl MutableCsr {
         if src_idx >= self.vertex_capacity() {
             return;
         }
-        let degree = self.degrees[src_idx] as usize;
-        let offset = self.adj_offsets[src_idx] as usize;
-        out.reserve(degree);
-        for i in 0..degree {
-            if let Some(nbr) = self.nbr_list.get(offset + i) {
-                out.push(*nbr);
+        let (hot, cold) = self.primary_pair(src_idx);
+        out.reserve(hot.len());
+        out.extend(
+            hot.iter()
+                .zip(cold.iter())
+                .map(|(h, c)| Nbr::from_parts(*h, *c)),
+        );
+        if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
+            for chunk in chunks {
+                out.reserve(chunk.len());
+                for i in 0..chunk.len() {
+                    if let Some(nbr) = chunk.slot_at(i) {
+                        out.push(nbr);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Visit every physically stored hot half of one vertex without
+    /// allocating and without touching the stamp lines.
+    ///
+    /// Hot-only counterpart of [`Self::visit_physical`] for traversals that
+    /// resolve visibility through the version authority by `edge_id`. Stamps
+    /// stay out of cache on this walk.
+    pub fn visit_hot<F>(&self, src_vid: u32, mut f: F)
+    where
+        F: FnMut(HotNbr) -> bool,
+    {
+        let src_idx = src_vid as usize;
+        if src_idx >= self.vertex_capacity() {
+            return;
+        }
+        for h in self.primary_hot(src_idx) {
+            if !f(*h) {
+                return;
             }
         }
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for chunk in chunks {
-                out.extend_from_slice(chunk);
+                for h in chunk.hot_slice() {
+                    if !f(*h) {
+                        return;
+                    }
+                }
             }
         }
     }
@@ -111,20 +171,19 @@ impl MutableCsr {
         if src_idx >= self.vertex_capacity() {
             return;
         }
-        let degree = self.degrees[src_idx] as usize;
-        let offset = self.adj_offsets[src_idx] as usize;
-        for i in 0..degree {
-            if let Some(nbr) = self.nbr_list.get(offset + i) {
-                if !f(*nbr) {
-                    return;
-                }
+        let (hot, cold) = self.primary_pair(src_idx);
+        for (h, c) in hot.iter().zip(cold.iter()) {
+            if !f(Nbr::from_parts(*h, *c)) {
+                return;
             }
         }
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for chunk in chunks {
-                for nbr in chunk {
-                    if !f(*nbr) {
-                        return;
+                for i in 0..chunk.len() {
+                    if let Some(nbr) = chunk.slot_at(i) {
+                        if !f(nbr) {
+                            return;
+                        }
                     }
                 }
             }
@@ -146,26 +205,28 @@ impl MutableCsr {
         if src_idx >= self.vertex_capacity() {
             return;
         }
-        let degree = self.degrees[src_idx] as usize;
-        let offset = self.adj_offsets[src_idx] as usize;
-        for i in 0..degree {
-            if let Some(nbr) = self.nbr_list.get(offset + i) {
-                if !f(EdgePosition::Primary { slot: i as u32 }, *nbr) {
-                    return;
-                }
+        let (hot, cold) = self.primary_pair(src_idx);
+        for (i, (h, c)) in hot.iter().zip(cold.iter()).enumerate() {
+            if !f(
+                EdgePosition::Primary { slot: i as u32 },
+                Nbr::from_parts(*h, *c),
+            ) {
+                return;
             }
         }
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for (chunk_idx, chunk) in chunks.iter().enumerate() {
-                for (slot_idx, nbr) in chunk.iter().enumerate() {
-                    if !f(
-                        EdgePosition::Overflow {
-                            chunk: chunk_idx as u32,
-                            slot: slot_idx as u32,
-                        },
-                        *nbr,
-                    ) {
-                        return;
+                for slot_idx in 0..chunk.len() {
+                    if let Some(nbr) = chunk.slot_at(slot_idx) {
+                        if !f(
+                            EdgePosition::Overflow {
+                                chunk: chunk_idx as u32,
+                                slot: slot_idx as u32,
+                            },
+                            nbr,
+                        ) {
+                            return;
+                        }
                     }
                 }
             }
@@ -199,18 +260,9 @@ impl MutableCsr {
         if src_idx >= self.vertex_capacity() {
             return false;
         }
-        let degree = self.degrees[src_idx] as usize;
-        let offset = self.adj_offsets[src_idx] as usize;
-        for i in 0..degree {
-            if self
-                .nbr_list
-                .get(offset + i)
-                .is_some_and(|nbr| nbr.edge_id == edge_id)
-            {
-                return true;
-            }
-        }
-        false
+        self.primary_hot(src_idx)
+            .iter()
+            .any(|hot| hot.edge_id == edge_id)
     }
 
     /// Whether one vertex holds any physically stored entry.
@@ -234,27 +286,26 @@ impl MutableCsr {
             return Vec::new();
         }
 
-        let degree = self.degrees[src_idx] as usize;
-        let offset = self.adj_offsets[src_idx] as usize;
+        let (hot, cold) = self.primary_pair(src_idx);
         let overflow_len = self
             .overflow_chunks
             .get(&src_vid)
-            .map(|chunks| chunks.iter().map(Vec::len).sum::<usize>())
+            .map(|chunks| chunks.iter().map(|chunk| chunk.len()).sum::<usize>())
             .unwrap_or(0);
-        let mut result = Vec::with_capacity(degree + overflow_len);
+        let mut result = Vec::with_capacity(hot.len() + overflow_len);
 
-        for i in 0..degree {
-            let nbr = &self.nbr_list[offset + i];
-            if nbr.is_alive_at(ts) {
-                result.push(*nbr);
-            }
-        }
+        result.extend(hot.iter().zip(cold.iter()).filter_map(|(h, c)| {
+            let nbr = Nbr::from_parts(*h, *c);
+            nbr.is_alive_at(ts).then_some(nbr)
+        }));
 
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for chunk in chunks {
-                for nbr in chunk {
-                    if nbr.is_alive_at(ts) {
-                        result.push(*nbr);
+                for i in 0..chunk.len() {
+                    if let Some(nbr) = chunk.slot_at(i) {
+                        if nbr.is_alive_at(ts) {
+                            result.push(nbr);
+                        }
                     }
                 }
             }
@@ -271,25 +322,29 @@ impl MutableCsr {
             return None;
         }
 
-        // Scan primary
-        let degree = self.degrees[src_idx] as usize;
-        let offset = self.adj_offsets[src_idx] as usize;
-        for i in 0..degree {
-            let nbr = &self.nbr_list[offset + i];
-            if nbr.endpoint == decoded_endpoint && nbr.rank == decoded_rank && nbr.is_alive_at(ts) {
-                return Some(*nbr);
+        // Scan primary: compare the packed key halves directly and only
+        // assemble the record on a key match.
+        let (hot, cold) = self.primary_pair(src_idx);
+        for (h, c) in hot.iter().zip(cold.iter()) {
+            if h.endpoint == decoded_endpoint && h.rank == decoded_rank {
+                let nbr = Nbr::from_parts(*h, *c);
+                if nbr.is_alive_at(ts) {
+                    return Some(nbr);
+                }
             }
         }
 
         // Scan overflow
         if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
             for chunk in chunks {
-                for nbr in chunk {
-                    if nbr.endpoint == decoded_endpoint
-                        && nbr.rank == decoded_rank
-                        && nbr.is_alive_at(ts)
-                    {
-                        return Some(*nbr);
+                for i in 0..chunk.len() {
+                    if let Some(nbr) = chunk.slot_at(i) {
+                        if nbr.endpoint == decoded_endpoint
+                            && nbr.rank == decoded_rank
+                            && nbr.is_alive_at(ts)
+                        {
+                            return Some(nbr);
+                        }
                     }
                 }
             }

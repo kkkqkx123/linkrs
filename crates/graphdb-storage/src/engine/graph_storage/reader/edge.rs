@@ -460,10 +460,13 @@ fn append_hot_neighbors(
     };
     match direction {
         EdgeDirection::Out => {
-            if let Some((src_internal, nbrs)) =
-                ctx.out_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
-            {
-                for nbr in nbrs {
+            ctx.visit_out_nbrs(
+                edge_label_id,
+                src_label_id,
+                dst_label_id,
+                *src_id,
+                ts,
+                |src_internal, nbr| {
                     let rank = nbr.rank;
                     let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(dst_internal) = dst_internal_vid.as_int64() {
@@ -479,14 +482,17 @@ fn append_hot_neighbors(
                             neighbors.push(ext);
                         }
                     }
-                }
-            }
+                },
+            );
         }
         EdgeDirection::In => {
-            if let Some((dst_internal, nbrs)) =
-                ctx.in_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
-            {
-                for nbr in nbrs {
+            ctx.visit_in_nbrs(
+                edge_label_id,
+                src_label_id,
+                dst_label_id,
+                *src_id,
+                ts,
+                |dst_internal, nbr| {
                     let rank = nbr.rank;
                     let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(src_internal) = src_internal_vid.as_int64() {
@@ -502,14 +508,17 @@ fn append_hot_neighbors(
                             neighbors.push(ext);
                         }
                     }
-                }
-            }
+                },
+            );
         }
         EdgeDirection::Both => {
-            if let Some((src_internal, nbrs)) =
-                ctx.out_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
-            {
-                for nbr in nbrs {
+            ctx.visit_out_nbrs(
+                edge_label_id,
+                src_label_id,
+                dst_label_id,
+                *src_id,
+                ts,
+                |src_internal, nbr| {
                     let rank = nbr.rank;
                     let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(dst_internal) = dst_internal_vid.as_int64() {
@@ -525,12 +534,15 @@ fn append_hot_neighbors(
                             neighbors.push(ext);
                         }
                     }
-                }
-            }
-            if let Some((dst_internal, nbrs)) =
-                ctx.in_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
-            {
-                for nbr in nbrs {
+                },
+            );
+            ctx.visit_in_nbrs(
+                edge_label_id,
+                src_label_id,
+                dst_label_id,
+                *src_id,
+                ts,
+                |dst_internal, nbr| {
                     let rank = nbr.rank;
                     let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(src_internal) = src_internal_vid.as_int64() {
@@ -546,8 +558,8 @@ fn append_hot_neighbors(
                             neighbors.push(ext);
                         }
                     }
-                }
-            }
+                },
+            );
         }
     }
 }
@@ -567,54 +579,66 @@ fn count_hot_neighbors(
 ) {
     match direction {
         EdgeDirection::Out => {
-            if let Some((src_internal, nbrs)) =
-                ctx.out_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
-            {
-                for nbr in nbrs {
+            ctx.visit_out_nbrs(
+                edge_label_id,
+                src_label_id,
+                dst_label_id,
+                *src_id,
+                ts,
+                |src_internal, nbr| {
                     let rank = nbr.rank;
                     let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(dst_internal) = dst_internal_vid.as_int64() {
                         seen.insert((src_internal, dst_internal as u32, rank));
                     }
-                }
-            }
+                },
+            );
         }
         EdgeDirection::In => {
-            if let Some((dst_internal, nbrs)) =
-                ctx.in_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
-            {
-                for nbr in nbrs {
+            ctx.visit_in_nbrs(
+                edge_label_id,
+                src_label_id,
+                dst_label_id,
+                *src_id,
+                ts,
+                |dst_internal, nbr| {
                     let rank = nbr.rank;
                     let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(src_internal) = src_internal_vid.as_int64() {
                         seen.insert((src_internal as u32, dst_internal, rank));
                     }
-                }
-            }
+                },
+            );
         }
         EdgeDirection::Both => {
-            if let Some((src_internal, nbrs)) =
-                ctx.out_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
-            {
-                for nbr in nbrs {
+            ctx.visit_out_nbrs(
+                edge_label_id,
+                src_label_id,
+                dst_label_id,
+                *src_id,
+                ts,
+                |src_internal, nbr| {
                     let rank = nbr.rank;
                     let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(dst_internal) = dst_internal_vid.as_int64() {
                         seen.insert((src_internal, dst_internal as u32, rank));
                     }
-                }
-            }
-            if let Some((dst_internal, nbrs)) =
-                ctx.in_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
-            {
-                for nbr in nbrs {
+                },
+            );
+            ctx.visit_in_nbrs(
+                edge_label_id,
+                src_label_id,
+                dst_label_id,
+                *src_id,
+                ts,
+                |dst_internal, nbr| {
                     let rank = nbr.rank;
                     let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
                     if let Some(src_internal) = src_internal_vid.as_int64() {
                         seen.insert((src_internal as u32, dst_internal, rank));
                     }
-                }
-            }
+                },
+            );
         }
     }
 }

@@ -286,6 +286,16 @@ impl EdgeStore {
                             ));
                         }
                     }
+                    super::super::super::CsrVariant::Mapped(csr) => {
+                        for (name, encoding, plain, encoded) in csr.topology_encoding_report() {
+                            report.push((
+                                format!("out_g{}:{}", gid, name),
+                                encoding,
+                                plain,
+                                encoded,
+                            ));
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -304,6 +314,16 @@ impl EdgeStore {
                         }
                     }
                     super::super::super::CsrVariant::Frozen(csr) => {
+                        for (name, encoding, plain, encoded) in csr.topology_encoding_report() {
+                            report.push((
+                                format!("in_g{}:{}", gid, name),
+                                encoding,
+                                plain,
+                                encoded,
+                            ));
+                        }
+                    }
+                    super::super::super::CsrVariant::Mapped(csr) => {
                         for (name, encoding, plain, encoded) in csr.topology_encoding_report() {
                             report.push((
                                 format!("in_g{}:{}", gid, name),

@@ -1,4 +1,4 @@
-use super::super::{EdgeId, Nbr, Timestamp, INVALID_EDGE_ID};
+use super::super::{ColdStamps, EdgeId, HotNbr, INVALID_EDGE_ID};
 use super::live_set::LiveKeySet;
 use super::overflow::OverflowStorage;
 use super::serialization::{
@@ -50,23 +50,26 @@ impl CsrDumpScratch {
         &self.deletes
     }
 
-    pub(crate) fn fill_from(&mut self, nbr_list: &[Nbr]) {
+    pub(crate) fn fill_from_split(&mut self, hot: &[HotNbr], cold: &[ColdStamps]) {
+        debug_assert_eq!(hot.len(), cold.len());
         self.endpoints.clear();
         self.ranks.clear();
         self.edge_ids.clear();
         self.creates.clear();
         self.deletes.clear();
-        self.endpoints.reserve(nbr_list.len());
-        self.ranks.reserve(nbr_list.len());
-        self.edge_ids.reserve(nbr_list.len());
-        self.creates.reserve(nbr_list.len());
-        self.deletes.reserve(nbr_list.len());
-        for nbr in nbr_list {
-            self.endpoints.push(nbr.endpoint);
-            self.ranks.push(nbr.rank);
-            self.edge_ids.push(nbr.edge_id.0);
-            self.creates.push(nbr.create_ts);
-            self.deletes.push(nbr.delete_ts);
+        self.endpoints.reserve(hot.len());
+        self.ranks.reserve(hot.len());
+        self.edge_ids.reserve(hot.len());
+        self.creates.reserve(hot.len());
+        self.deletes.reserve(hot.len());
+        for slot in hot {
+            self.endpoints.push(slot.endpoint);
+            self.ranks.push(slot.rank);
+            self.edge_ids.push(slot.edge_id.0);
+        }
+        for stamp in cold {
+            self.creates.push(stamp.create_ts);
+            self.deletes.push(stamp.delete_ts);
         }
     }
 }
@@ -120,7 +123,7 @@ impl MutableCsr {
         out.extend_from_slice(&MUTABLE_CSR_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&(self.adj_offsets.len() as u64).to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
-        out.extend_from_slice(&(self.nbr_list.len() as u64).to_le_bytes());
+        out.extend_from_slice(&(self.hot_list.len() as u64).to_le_bytes());
         out.extend_from_slice(&(self.overflow_chunk_edges as u64).to_le_bytes());
 
         let (_, offsets_payload) = encode_topology_u32_column(&self.adj_offsets);
@@ -130,7 +133,7 @@ impl MutableCsr {
         let (_, caps_payload) = encode_topology_u32_column(&self.primary_capacities);
         out.extend_from_slice(&caps_payload);
 
-        scratch.fill_from(&self.nbr_list);
+        scratch.fill_from_split(&self.hot_list, &self.cold_list);
         let (_, endpoints_payload) = encode_topology_u32_column(&scratch.endpoints);
         out.extend_from_slice(&endpoints_payload);
         let (_, ranks_payload) = encode_topology_i64_column(&scratch.ranks);
@@ -159,8 +162,8 @@ impl MutableCsr {
     /// state. Neighbor and edge-id columns are reported first, offset and
     /// length columns follow; all use the integer column path only.
     pub fn topology_encoding_report(&self) -> Vec<(String, TopologyColumnEncoding, usize, usize)> {
-        let endpoints: Vec<u32> = self.nbr_list.iter().map(|nbr| nbr.endpoint).collect();
-        let edge_ids: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.edge_id.0).collect();
+        let endpoints: Vec<u32> = self.hot_list.iter().map(|hot| hot.endpoint).collect();
+        let edge_ids: Vec<u64> = self.hot_list.iter().map(|hot| hot.edge_id.0).collect();
         let (endpoint_choice, _) = encode_topology_u32_column(&endpoints);
         let (edge_id_choice, _) = encode_topology_u64_column(&edge_ids);
         let (offsets_choice, _) = encode_topology_u32_column(&self.adj_offsets);
@@ -252,16 +255,18 @@ impl MutableCsr {
                 "Mutable CSR neighbor column length mismatch",
             ));
         }
-        let mut nbr_list = Vec::with_capacity(primary_len);
+        let mut hot_list = Vec::with_capacity(primary_len);
+        let mut cold_list = Vec::with_capacity(primary_len);
         for index in 0..primary_len {
-            let mut nbr = Nbr::with_timestamps(
-                endpoints[index],
-                ranks[index],
-                EdgeId(edge_ids[index]),
-                delete_stamps[index],
-            );
-            nbr.create_ts = create_stamps[index];
-            nbr_list.push(nbr);
+            hot_list.push(HotNbr {
+                endpoint: endpoints[index],
+                rank: ranks[index],
+                edge_id: EdgeId(edge_ids[index]),
+            });
+            cold_list.push(ColdStamps {
+                create_ts: create_stamps[index],
+                delete_ts: delete_stamps[index],
+            });
         }
 
         // Addressing consistency: every row window must land inside the
@@ -287,9 +292,8 @@ impl MutableCsr {
         let mut overflow_capacity = 0usize;
         let mut live_keys: Vec<Vec<(u32, i64)>> = vec![Vec::new(); vertex_capacity];
         let mut recomputed: u64 = 0;
-        for index in 0..primary_len {
-            let nbr = &nbr_list[index];
-            if nbr.edge_id != INVALID_EDGE_ID && nbr.delete_ts == Timestamp::MAX {
+        for (hot, cold) in hot_list.iter().zip(cold_list.iter()) {
+            if hot.edge_id != INVALID_EDGE_ID && cold.is_live() {
                 recomputed += 1;
             }
         }
@@ -298,10 +302,11 @@ impl MutableCsr {
             let degree = degrees[vid] as usize;
             let keys = &mut live_keys[vid];
             for i in 0..degree {
-                if let Some(nbr) = nbr_list.get(row_offset + i) {
-                    if nbr.edge_id != INVALID_EDGE_ID && nbr.delete_ts == Timestamp::MAX {
-                        keys.push((nbr.endpoint, nbr.rank));
+                match (hot_list.get(row_offset + i), cold_list.get(row_offset + i)) {
+                    (Some(hot), Some(cold)) if hot.edge_id != INVALID_EDGE_ID && cold.is_live() => {
+                        keys.push((hot.endpoint, hot.rank));
                     }
+                    _ => {}
                 }
             }
         }
@@ -315,10 +320,10 @@ impl MutableCsr {
                         "Mutable CSR overflow chunk exceeds configured chunk size",
                     ));
                 }
-                for nbr in &chunk {
-                    if nbr.edge_id != INVALID_EDGE_ID && nbr.delete_ts == Timestamp::MAX {
+                for (hot, cold) in chunk.hot_slice().iter().zip(chunk.cold_slice()) {
+                    if hot.edge_id != INVALID_EDGE_ID && cold.is_live() {
                         recomputed += 1;
-                        live_keys[vid].push((nbr.endpoint, nbr.rank));
+                        live_keys[vid].push((hot.endpoint, hot.rank));
                     }
                 }
                 overflow_capacity = overflow_capacity.saturating_add(chunk.capacity().max(1));
@@ -336,18 +341,20 @@ impl MutableCsr {
             )));
         }
 
-        self.total_edge_capacity = nbr_list.len().saturating_add(overflow_capacity);
+        self.total_edge_capacity = hot_list.len().saturating_add(overflow_capacity);
         self.adj_offsets = adj_offsets;
         self.degrees = degrees;
         self.primary_capacities = primary_capacities;
         self.overflow_chunks = overflow_chunks;
         self.overflow_chunk_edges = overflow_chunk_edges;
-        self.nbr_list = nbr_list;
+        self.hot_list = hot_list;
+        self.cold_list = cold_list;
         self.edge_count = edge_count;
         self.live_sets.clear();
         self.live_sets.ensure_capacity(vertex_capacity);
         for (vid, keys) in live_keys.into_iter().enumerate() {
-            if !keys.is_empty() {
+            // Narrow rows stay set-free; only wide rows pay for the index.
+            if keys.len() > super::live_set::LIVE_SET_WIDTH_BOUND {
                 self.live_sets
                     .insert(vid as u32, LiveKeySet::from_keys(keys));
             }

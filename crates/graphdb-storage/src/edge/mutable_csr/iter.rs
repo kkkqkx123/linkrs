@@ -1,7 +1,11 @@
+use std::iter::Zip;
+use std::slice::Iter as SliceIter;
+
 use graphdb_core::types::VertexId;
 
+use super::overflow::OverflowChunk;
 use super::MutableCsr;
-use crate::edge::Nbr;
+use crate::edge::{ColdStamps, HotNbr, Nbr};
 use graphdb_core::types::Timestamp;
 
 impl MutableCsr {
@@ -25,38 +29,23 @@ impl MutableCsr {
 }
 
 /// Iterator over edges of a single vertex in MutableCsr.
+///
+/// The primary row is held as a fused slice-pair iterator, so the walk pays
+/// one bounds check per row instead of one per slot.
 pub struct VertexEdgesIter<'a> {
-    csr: &'a MutableCsr,
+    primary: Zip<SliceIter<'a, HotNbr>, SliceIter<'a, ColdStamps>>,
     ts: Timestamp,
-    primary_idx: usize,
-    primary_end: usize,
-    overflow_chunks: Option<&'a Vec<Vec<Nbr>>>,
+    overflow_chunks: Option<&'a Vec<OverflowChunk>>,
     overflow_chunk_idx: usize,
     overflow_edge_idx: usize,
 }
 
 impl<'a> VertexEdgesIter<'a> {
     pub fn new(csr: &'a MutableCsr, src_vid: u32, ts: Timestamp) -> Self {
-        let src_idx = src_vid as usize;
-        if src_idx >= csr.vertex_capacity() {
-            return Self {
-                csr,
-                ts,
-                primary_idx: 0,
-                primary_end: 0,
-                overflow_chunks: None,
-                overflow_chunk_idx: 0,
-                overflow_edge_idx: 0,
-            };
-        }
-
-        let degree = csr.degrees[src_idx] as usize;
-        let offset = csr.adj_offsets[src_idx] as usize;
+        let (hot, cold) = csr.primary_pair(src_vid as usize);
         Self {
-            csr,
+            primary: hot.iter().zip(cold.iter()),
             ts,
-            primary_idx: offset,
-            primary_end: offset + degree,
             overflow_chunks: csr.overflow_chunks.get(&src_vid),
             overflow_chunk_idx: 0,
             overflow_edge_idx: 0,
@@ -65,12 +54,11 @@ impl<'a> VertexEdgesIter<'a> {
 }
 
 impl<'a> Iterator for VertexEdgesIter<'a> {
-    type Item = &'a Nbr;
+    type Item = Nbr;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.primary_idx < self.primary_end {
-            let nbr = &self.csr.nbr_list[self.primary_idx];
-            self.primary_idx += 1;
+        for (hot, cold) in self.primary.by_ref() {
+            let nbr = Nbr::from_parts(*hot, *cold);
             if nbr.is_alive_at(self.ts) {
                 return Some(nbr);
             }
@@ -80,7 +68,7 @@ impl<'a> Iterator for VertexEdgesIter<'a> {
             while self.overflow_chunk_idx < chunks.len() {
                 let chunk = &chunks[self.overflow_chunk_idx];
                 while self.overflow_edge_idx < chunk.len() {
-                    let nbr = &chunk[self.overflow_edge_idx];
+                    let nbr = chunk.slot_at(self.overflow_edge_idx).unwrap();
                     self.overflow_edge_idx += 1;
                     if nbr.is_alive_at(self.ts) {
                         return Some(nbr);
@@ -102,7 +90,7 @@ pub struct MutableCsrIterator<'a> {
     current_vertex: usize,
     current_edge: usize,
     in_overflow: bool,
-    overflow_chunks: Option<&'a Vec<Vec<Nbr>>>,
+    overflow_chunks: Option<&'a Vec<OverflowChunk>>,
     overflow_chunk_idx: usize,
     overflow_edge_idx: usize,
 }
@@ -142,19 +130,19 @@ impl<'a> Iterator for MutableCsrIterator<'a> {
     type Item = (VertexId, Nbr);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.current_vertex < self.csr.vertex_capacity() {
-            let degree = self.csr.degrees[self.current_vertex] as usize;
-            let offset = self.csr.adj_offsets[self.current_vertex] as usize;
-
+        // Copy the shared reference out so slice borrows below live for 'a
+        // and do not conflict with the cursor mutations on `self`.
+        let csr: &'a MutableCsr = self.csr;
+        while self.current_vertex < csr.vertex_capacity() {
             if !self.in_overflow {
                 if self.current_edge == 0 {
-                    self.overflow_chunks =
-                        self.csr.overflow_chunks.get(&(self.current_vertex as u32));
+                    self.overflow_chunks = csr.overflow_chunks.get(&(self.current_vertex as u32));
                     self.overflow_chunk_idx = 0;
                     self.overflow_edge_idx = 0;
                 }
-                while self.current_edge < degree {
-                    let nbr = self.csr.nbr_list[offset + self.current_edge];
+                let (hot, cold) = csr.primary_pair(self.current_vertex);
+                while self.current_edge < hot.len() {
+                    let nbr = Nbr::from_parts(hot[self.current_edge], cold[self.current_edge]);
                     self.current_edge += 1;
                     if self.include_deleted || nbr.is_alive_at(self.ts) {
                         return Some((VertexId::from_int64(self.current_vertex as i64), nbr));
@@ -167,7 +155,7 @@ impl<'a> Iterator for MutableCsrIterator<'a> {
                 while self.overflow_chunk_idx < chunks.len() {
                     let chunk = &chunks[self.overflow_chunk_idx];
                     while self.overflow_edge_idx < chunk.len() {
-                        let nbr = chunk[self.overflow_edge_idx];
+                        let nbr = chunk.slot_at(self.overflow_edge_idx).unwrap();
                         self.overflow_edge_idx += 1;
                         if self.include_deleted || nbr.is_alive_at(self.ts) {
                             return Some((VertexId::from_int64(self.current_vertex as i64), nbr));

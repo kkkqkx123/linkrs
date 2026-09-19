@@ -1,5 +1,6 @@
-use super::super::csr_shared::is_reclaimable_slot;
+use super::super::csr_shared::is_reclaimable_cold;
 use super::super::{EdgeId, Nbr, Timestamp};
+use super::overflow::OverflowChunk;
 use super::MutableCsr;
 
 /// Target density for packed rows: live entries per unit of reserved row
@@ -49,18 +50,8 @@ impl MutableCsr {
         if idx >= self.vertex_capacity() {
             return 0;
         }
-        let degree = self.degrees[idx] as usize;
-        let offset = self.adj_offsets[idx] as usize;
-        let mut live = 0usize;
-        for i in 0..degree {
-            if self
-                .nbr_list
-                .get(offset + i)
-                .is_some_and(|nbr| nbr.delete_ts == Timestamp::MAX)
-            {
-                live += 1;
-            }
-        }
+        let (_, cold) = self.primary_pair(idx);
+        let live = cold.iter().filter(|c| c.is_live()).count();
         (self.primary_capacities[idx] as usize).saturating_sub(live)
     }
 
@@ -74,18 +65,8 @@ impl MutableCsr {
         if cap == 0 {
             return 1.0;
         }
-        let degree = self.degrees[idx] as usize;
-        let offset = self.adj_offsets[idx] as usize;
-        let mut live = 0usize;
-        for i in 0..degree {
-            if self
-                .nbr_list
-                .get(offset + i)
-                .is_some_and(|nbr| nbr.delete_ts == Timestamp::MAX)
-            {
-                live += 1;
-            }
-        }
+        let (_, cold) = self.primary_pair(idx);
+        let live = cold.iter().filter(|c| c.is_live()).count();
         live as f32 / cap as f32
     }
 
@@ -109,21 +90,23 @@ impl MutableCsr {
         let mut live: Vec<Nbr> = Vec::new();
         let mut pinned: Vec<Nbr> = Vec::new();
         for i in 0..degree {
-            if let Some(nbr) = self.nbr_list.get(offset + i) {
+            if let Some(nbr) = self.slot_at(offset + i) {
                 if nbr.delete_ts == Timestamp::MAX {
-                    live.push(*nbr);
+                    live.push(nbr);
                 } else {
-                    pinned.push(*nbr);
+                    pinned.push(nbr);
                 }
             }
         }
         if let Some(chunks) = self.overflow_chunks.get(&vid) {
             for chunk in chunks {
-                for nbr in chunk {
-                    if nbr.delete_ts == Timestamp::MAX {
-                        live.push(*nbr);
-                    } else {
-                        pinned.push(*nbr);
+                for i in 0..chunk.len() {
+                    if let Some(nbr) = chunk.slot_at(i) {
+                        if nbr.delete_ts == Timestamp::MAX {
+                            live.push(nbr);
+                        } else {
+                            pinned.push(nbr);
+                        }
                     }
                 }
             }
@@ -131,8 +114,8 @@ impl MutableCsr {
         let slots = cap.min(live.len() + pinned.len());
         let mut placed = 0usize;
         for nbr in live.iter().chain(pinned.iter()).take(slots) {
-            if offset + placed < self.nbr_list.len() {
-                self.nbr_list[offset + placed] = *nbr;
+            if offset + placed < self.hot_list.len() {
+                self.set_slot(offset + placed, *nbr);
             }
             placed += 1;
         }
@@ -141,10 +124,9 @@ impl MutableCsr {
         let overflow_live: Vec<Nbr> = live.into_iter().skip(placed_live).collect();
         let placed_pinned = pinned.len().min(slots.saturating_sub(placed_live));
         let overflow_pinned: Vec<Nbr> = pinned.into_iter().skip(placed_pinned).collect();
-        let old_overflow_cap: usize = self
-            .overflow_chunks
-            .get(&vid)
-            .map_or(0, |chunks| chunks.iter().map(Vec::capacity).sum());
+        let old_overflow_cap: usize = self.overflow_chunks.get(&vid).map_or(0, |chunks| {
+            chunks.iter().map(|chunk| chunk.capacity()).sum()
+        });
         if overflow_live.is_empty() && overflow_pinned.is_empty() {
             self.overflow_chunks.remove(&vid);
             self.sub_capacity(old_overflow_cap);
@@ -153,18 +135,14 @@ impl MutableCsr {
                 Vec::with_capacity(overflow_live.len() + overflow_pinned.len());
             rest.extend_from_slice(&overflow_live);
             rest.extend_from_slice(&overflow_pinned);
-            let chunk_edges = self.effective_chunk_edges(placed_live);
-            let mut repacked: Vec<Vec<Nbr>> = Vec::new();
-            for piece in rest.chunks(chunk_edges.max(1)) {
-                let mut v = Vec::with_capacity(chunk_edges.max(1));
-                v.extend_from_slice(piece);
-                repacked.push(v);
-            }
-            let new_overflow_cap: usize = repacked.iter().map(Vec::capacity).sum();
+            // Same single-block consolidation as the repack path: leftover
+            // overflow reads as one block after the primary row.
+            let single = OverflowChunk::consolidated(&rest);
+            let new_overflow_cap = single.capacity();
             self.sub_capacity(old_overflow_cap);
             self.add_capacity(new_overflow_cap);
             if let Some(slot) = self.overflow_chunks.get_mut(&vid) {
-                *slot = repacked;
+                *slot = vec![single];
             }
         }
         self.rebuild_live_set_for_vertex(vid);
@@ -177,49 +155,38 @@ impl MutableCsr {
         cutoff: Timestamp,
         on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
     ) {
-        let Some(chunks) = self.overflow_chunks.get(&vid).cloned() else {
+        let Some(chunks) = self.overflow_chunks.remove(&vid) else {
             return;
         };
         let old_cap: usize = chunks.iter().map(|c| c.capacity()).sum();
+        self.sub_capacity(old_cap);
         let removals_enabled = cutoff != Timestamp::MAX;
         let mut kept: Vec<Nbr> = Vec::new();
         for chunk in &chunks {
-            for nbr in chunk {
-                if removals_enabled && is_reclaimable_slot(nbr, cutoff) {
+            for i in 0..chunk.len() {
+                let nbr = chunk.slot_at(i).unwrap();
+                if removals_enabled && is_reclaimable_cold(&nbr.cold(), cutoff) {
                     on_edge_removed(nbr.edge_id, nbr.delete_ts);
                 } else {
-                    kept.push(*nbr);
+                    kept.push(nbr);
                 }
             }
         }
         if kept.is_empty() {
-            // Remove empty overflow entry entirely to reclaim metadata.
-            self.overflow_chunks.remove(&vid);
-            self.sub_capacity(old_cap);
+            // Entry already removed above; only the live set needs a rebuild.
             self.rebuild_live_set_for_vertex(vid);
             return;
         }
-        // Repack kept entries (live plus pinned tombstones) into fresh
-        // graded chunks. Grading stays by live width so tiers match the
-        // steady-state layout.
-        let live_kept = kept
-            .iter()
-            .filter(|nbr| nbr.delete_ts == Timestamp::MAX)
-            .count();
-        let chunk_edges = self.effective_chunk_edges(live_kept.max(1));
-        let mut new_chunks: Vec<Vec<Nbr>> = Vec::new();
-        for chunk in kept.chunks(chunk_edges) {
-            let mut v = Vec::with_capacity(chunk_edges);
-            v.extend_from_slice(chunk);
-            new_chunks.push(v);
-        }
-        // Update capacity accounting: old capacity vs new.
-        let new_cap: usize = new_chunks.iter().map(|c| c.capacity()).sum();
-        self.sub_capacity(old_cap);
+        // Consolidate kept entries (live plus pinned tombstones) into one
+        // contiguous chunk so the row reads as primary plus a single block.
+        // Write-path appends keep growing small graded tail chunks; the next
+        // bound breach repacks again, keeping the consolidation cost
+        // amortized over the appends since the last repack.
+        let single = OverflowChunk::consolidated(&kept);
+        // Update capacity accounting: old capacity already released above.
+        let new_cap = single.capacity();
         self.add_capacity(new_cap);
-        if let Some(slot) = self.overflow_chunks.get_mut(&vid) {
-            *slot = new_chunks;
-        }
+        self.overflow_chunks.insert(vid, vec![single]);
         self.rebuild_live_set_for_vertex(vid);
     }
 }

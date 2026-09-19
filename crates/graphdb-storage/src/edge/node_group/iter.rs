@@ -6,8 +6,7 @@
 use graphdb_core::types::{Timestamp, VertexId};
 use std::collections::BTreeMap;
 
-use super::super::csr_variant::CsrIterator;
-use super::super::mutable_csr::VertexEdgesIter;
+use super::super::csr_variant::{CsrIterator, CsrRowIter};
 use super::super::Nbr;
 use super::{group_base, CsrShardSet, Shard};
 
@@ -80,9 +79,9 @@ impl<'a> Iterator for ShardCsrIterator<'a> {
 }
 
 impl CsrShardSet {
-    /// Iterate edges of a vertex without allocating (Multiple only).
+    /// Iterate edges of a vertex without allocating, for every strategy.
     /// Test-only row-stamp filtered iterator; production scans go through the version authority.
-    pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> Option<VertexEdgesIter<'_>> {
+    pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> Option<CsrRowIter<'_>> {
         let (gid, local) = self.route(src_vid)?;
         self.shards.get(&gid)?.variant.iter_edges_of(local, ts)
     }

@@ -15,13 +15,16 @@
 //! - `CsrVariant::Multiple`: Mutable CSR with dynamic capacity growth
 //! - `CsrVariant::Single`: Mutable single-edge CSR
 //! - `CsrVariant::Frozen`: Packed immutable CSR, writes rejected until unfrozen
+//! - `CsrVariant::Mapped`: Memory-mapped frozen CSR, same read-only semantics
 //! - `CsrVariant::None`: Placeholder for relationships with no edges
 
 use graphdb_core::{StorageError, StorageResult};
 
+use super::mutable_csr::VertexEdgesIter;
 use super::{
-    CsrBase, EdgeId, EdgePosition, EdgeStrategy, FragmentationStats, ImmutableCsr,
-    ImmutableCsrIterator, MutableCsr, MutableCsrIterator, MutableCsrTrait, Nbr, SingleMutableCsr,
+    CsrBase, EdgeId, EdgePosition, EdgeStrategy, FragmentationStats, FrozenRowIter, HotNbr,
+    ImmutableCsr, ImmutableCsrIterator, MappedFrozen, MappedFrozenIterator, MappedFrozenRowIter,
+    MutableCsr, MutableCsrIterator, MutableCsrTrait, Nbr, SingleMutableCsr,
     SingleMutableCsrIterator, Timestamp, VertexId,
 };
 
@@ -51,6 +54,7 @@ macro_rules! dispatch {
             CsrVariant::Multiple(csr) => csr.$method($($arg),+),
             CsrVariant::Single(csr) => csr.$method($($arg),+),
             CsrVariant::Frozen(csr) => csr.$method($($arg),+),
+            CsrVariant::Mapped(csr) => csr.$method($($arg),+),
             CsrVariant::None { .. } => $default,
         }
     };
@@ -61,6 +65,7 @@ macro_rules! dispatch {
             CsrVariant::Multiple(csr) => csr.$method(),
             CsrVariant::Single(csr) => csr.$method(),
             CsrVariant::Frozen(csr) => csr.$method(),
+            CsrVariant::Mapped(csr) => csr.$method(),
             CsrVariant::None { .. } => $default,
         }
     };
@@ -87,6 +92,12 @@ pub enum CsrVariant {
     /// Boxed like `Multiple` so small variants never pay the packed segment
     /// size in every enum value.
     Frozen(Box<ImmutableCsr>),
+    /// Memory-mapped frozen CSR: same read-only content as `Frozen`, served
+    /// straight from the serving file instead of the heap
+    ///
+    /// Clones share one mapping through the reference count. Checkpoints
+    /// treat it as frozen bytes: dumps are authoritative and identical.
+    Mapped(Box<MappedFrozen>),
     /// No-edge placeholder: vertices exist but have no outgoing edges
     None { vertex_capacity: usize },
 }
@@ -115,10 +126,18 @@ impl CsrVariant {
 
     /// Clear all edges
     pub fn clear(&mut self) {
+        // Clearing drops the serving view: the mapping is outside the heap
+        // and cannot be emptied, so the group falls back to the placeholder.
+        if let CsrVariant::Mapped(csr) = self {
+            let vertex_capacity = csr.vertex_capacity();
+            *self = CsrVariant::None { vertex_capacity };
+            return;
+        }
         match self {
             CsrVariant::Multiple(csr) => csr.clear(),
             CsrVariant::Single(csr) => csr.clear(),
             CsrVariant::Frozen(csr) => csr.clear(),
+            CsrVariant::Mapped(_) => unreachable!("mapped view replaced above"),
             CsrVariant::None { .. } => {}
         }
     }
@@ -191,6 +210,7 @@ impl CsrBase for CsrVariant {
             CsrVariant::Multiple(csr) => csr.vertex_capacity(),
             CsrVariant::Single(csr) => csr.vertex_capacity(),
             CsrVariant::Frozen(csr) => csr.vertex_capacity(),
+            CsrVariant::Mapped(csr) => csr.vertex_capacity(),
         }
     }
 
@@ -220,6 +240,11 @@ impl CsrBase for CsrVariant {
                 result.extend(csr.dump());
                 result
             }
+            CsrVariant::Mapped(csr) => {
+                let mut result = vec![3u8];
+                result.extend(csr.dump());
+                result
+            }
         }
     }
 
@@ -238,6 +263,10 @@ impl CsrBase for CsrVariant {
                 csr.dump_into(out);
             }
             CsrVariant::Frozen(csr) => {
+                out.push(3u8);
+                csr.dump_into(out);
+            }
+            CsrVariant::Mapped(csr) => {
                 out.push(3u8);
                 csr.dump_into(out);
             }
@@ -316,6 +345,10 @@ impl CsrVariant {
                 out.push(3u8);
                 csr.dump_into(out);
             }
+            CsrVariant::Mapped(csr) => {
+                out.push(3u8);
+                csr.dump_into(out);
+            }
         }
     }
 }
@@ -332,6 +365,7 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Multiple(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::Single(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::Frozen(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
+            CsrVariant::Mapped(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::None { .. } => Err(StorageError::invalid_operation(
                 "no edges stored for this edge type".to_string(),
             )),
@@ -362,7 +396,7 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Single(csr) => {
                 csr.delete_edge_by_dst_reporting(src_vid, dst, ts, on_deleted)
             }
-            CsrVariant::Frozen(_) => 0,
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => 0,
             CsrVariant::None { .. } => 0,
         }
     }
@@ -391,6 +425,7 @@ impl MutableCsrTrait for CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.locate_edge(src_vid, edge_id),
             CsrVariant::Frozen(csr) => csr.locate_edge(src_vid, edge_id),
+            CsrVariant::Mapped(csr) => csr.locate_edge(src_vid, edge_id),
             _ => None,
         }
     }
@@ -435,6 +470,7 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Multiple(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
             CsrVariant::Single(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
             CsrVariant::Frozen(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
+            CsrVariant::Mapped(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
             CsrVariant::None { .. } => Ok(false),
         }
     }
@@ -460,6 +496,7 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Multiple(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::Single(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::Frozen(csr) => csr.fill_physical_into(src_vid, out),
+            CsrVariant::Mapped(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::None { .. } => out.clear(),
         }
     }
@@ -469,6 +506,7 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Multiple(csr) => csr.has_physical_entries(vid),
             CsrVariant::Single(csr) => csr.has_physical_entries(vid),
             CsrVariant::Frozen(csr) => csr.has_physical_entries(vid),
+            CsrVariant::Mapped(csr) => csr.has_physical_entries(vid),
             CsrVariant::None { .. } => false,
         }
     }
@@ -478,6 +516,7 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Multiple(csr) => csr.primary_contains(src_vid, edge_id),
             CsrVariant::Single(csr) => csr.primary_contains(src_vid, edge_id),
             CsrVariant::Frozen(csr) => csr.primary_contains(src_vid, edge_id),
+            CsrVariant::Mapped(csr) => csr.primary_contains(src_vid, edge_id),
             CsrVariant::None { .. } => false,
         }
     }
@@ -511,7 +550,7 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Single(csr) => {
                 csr.compact_vertex_with_reporting(vid, cutoff, on_edge_removed)
             }
-            CsrVariant::Frozen(_) => 0,
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => 0,
             CsrVariant::None { .. } => 0,
         }
     }
@@ -520,7 +559,7 @@ impl MutableCsrTrait for CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.reclaimable_count(vid, cutoff),
             CsrVariant::Single(csr) => csr.reclaimable_count(vid, cutoff),
-            CsrVariant::Frozen(_) => 0,
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => 0,
             CsrVariant::None { .. } => 0,
         }
     }
@@ -529,7 +568,7 @@ impl MutableCsrTrait for CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.vertex_needs_compact(vid, cutoff),
             CsrVariant::Single(csr) => csr.reclaimable_count(vid, cutoff) > 0,
-            CsrVariant::Frozen(_) => false,
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => false,
             CsrVariant::None { .. } => false,
         }
     }
@@ -539,6 +578,7 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Multiple(csr) => csr.vertex_census(vid),
             CsrVariant::Single(csr) => csr.vertex_census(vid),
             CsrVariant::Frozen(csr) => csr.vertex_census(vid),
+            CsrVariant::Mapped(csr) => csr.vertex_census(vid),
             CsrVariant::None { .. } => (0, 0, 0),
         }
     }
@@ -547,7 +587,7 @@ impl MutableCsrTrait for CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.vertex_reclaim_probe(vid, cutoff),
             CsrVariant::Single(csr) => csr.vertex_reclaim_probe(vid, cutoff),
-            CsrVariant::Frozen(_) => (0, 0),
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => (0, 0),
             CsrVariant::None { .. } => (0, 0),
         }
     }
@@ -555,21 +595,30 @@ impl MutableCsrTrait for CsrVariant {
     fn row_gap(&self, vid: u32) -> usize {
         match self {
             CsrVariant::Multiple(csr) => csr.row_gap(vid),
-            CsrVariant::Single(_) | CsrVariant::Frozen(_) | CsrVariant::None { .. } => 0,
+            CsrVariant::Single(_)
+            | CsrVariant::Frozen(_)
+            | CsrVariant::Mapped(_)
+            | CsrVariant::None { .. } => 0,
         }
     }
 
     fn row_density(&self, vid: u32) -> f32 {
         match self {
             CsrVariant::Multiple(csr) => csr.row_density(vid),
-            CsrVariant::Single(_) | CsrVariant::Frozen(_) | CsrVariant::None { .. } => 1.0,
+            CsrVariant::Single(_)
+            | CsrVariant::Frozen(_)
+            | CsrVariant::Mapped(_)
+            | CsrVariant::None { .. } => 1.0,
         }
     }
 
     fn rebalance_row(&mut self, vid: u32) -> bool {
         match self {
             CsrVariant::Multiple(csr) => csr.rebalance_row(vid),
-            CsrVariant::Single(_) | CsrVariant::Frozen(_) | CsrVariant::None { .. } => true,
+            CsrVariant::Single(_)
+            | CsrVariant::Frozen(_)
+            | CsrVariant::Mapped(_)
+            | CsrVariant::None { .. } => true,
         }
     }
 
@@ -579,21 +628,26 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Multiple(csr) => csr.used_memory_size(),
             CsrVariant::Single(csr) => csr.used_memory_size(),
             CsrVariant::Frozen(csr) => csr.used_memory_size(),
+            CsrVariant::Mapped(csr) => csr.used_memory_size(),
         }
     }
 }
 
 impl CsrVariant {
-    /// Iterate edges of a vertex without allocating (only for Multiple strategy).
-    /// Test-only row-stamp filtered iterator; production scans go through the version authority.
-    pub fn iter_edges_of(
-        &self,
-        src_vid: u32,
-        ts: Timestamp,
-    ) -> Option<super::mutable_csr::VertexEdgesIter<'_>> {
+    /// Iterate edges of a vertex without allocating, for every strategy.
+    ///
+    /// Test-only row-stamp filtered iterator; production scans go through
+    /// the version authority. Missing groups and the `None` strategy yield
+    /// no iterator.
+    pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> Option<CsrRowIter<'_>> {
         match self {
-            CsrVariant::Multiple(csr) => Some(csr.iter_edges_of(src_vid, ts)),
-            _ => None,
+            CsrVariant::Multiple(csr) => Some(CsrRowIter::Multiple(csr.iter_edges_of(src_vid, ts))),
+            CsrVariant::Single(csr) => Some(CsrRowIter::Single(
+                csr.iter_edges_of(src_vid, ts).into_iter(),
+            )),
+            CsrVariant::Frozen(csr) => Some(CsrRowIter::Frozen(csr.iter_edges_of(src_vid, ts))),
+            CsrVariant::Mapped(csr) => Some(CsrRowIter::Mapped(csr.iter_edges_of(src_vid, ts))),
+            CsrVariant::None { .. } => None,
         }
     }
 
@@ -603,6 +657,7 @@ impl CsrVariant {
             CsrVariant::Multiple(csr) => CsrIterator::Multiple(csr.iter(ts)),
             CsrVariant::Single(csr) => CsrIterator::Single(csr.iter(ts)),
             CsrVariant::Frozen(csr) => CsrIterator::Frozen(csr.iter(ts)),
+            CsrVariant::Mapped(csr) => CsrIterator::Mapped(csr.iter(ts)),
             CsrVariant::None { .. } => CsrIterator::None,
         }
     }
@@ -616,6 +671,7 @@ impl CsrVariant {
             CsrVariant::Multiple(csr) => CsrIterator::Multiple(csr.iter_all()),
             CsrVariant::Single(csr) => CsrIterator::Single(csr.iter_all()),
             CsrVariant::Frozen(csr) => CsrIterator::Frozen(csr.iter_all()),
+            CsrVariant::Mapped(csr) => CsrIterator::Mapped(csr.iter_all()),
             CsrVariant::None { .. } => CsrIterator::None,
         }
     }
@@ -635,7 +691,7 @@ impl CsrVariant {
                 csr.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed)
             }
             CsrVariant::Single(csr) => csr.compact_with_ts_reporting(cutoff, on_edge_removed),
-            CsrVariant::Frozen(_) => 0,
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => 0,
             CsrVariant::None { .. } => 0,
         }
     }
@@ -649,6 +705,25 @@ impl CsrVariant {
             CsrVariant::Multiple(csr) => csr.visit_physical(src_vid, f),
             CsrVariant::Single(csr) => csr.visit_physical(src_vid, f),
             CsrVariant::Frozen(csr) => csr.visit_physical(src_vid, f),
+            CsrVariant::Mapped(csr) => csr.visit_physical(src_vid, f),
+            CsrVariant::None { .. } => {}
+        }
+    }
+
+    /// Visit every physically stored hot half of one vertex without
+    /// allocating and without touching the stamp lines.
+    ///
+    /// Hot-only counterpart of [`Self::visit_physical`] for traversals that
+    /// resolve visibility through the version authority by `edge_id`.
+    pub fn visit_hot<F>(&self, src_vid: u32, f: F)
+    where
+        F: FnMut(HotNbr) -> bool,
+    {
+        match self {
+            CsrVariant::Multiple(csr) => csr.visit_hot(src_vid, f),
+            CsrVariant::Single(csr) => csr.visit_hot(src_vid, f),
+            CsrVariant::Frozen(csr) => csr.visit_hot(src_vid, f),
+            CsrVariant::Mapped(csr) => csr.visit_hot(src_vid, f),
             CsrVariant::None { .. } => {}
         }
     }
@@ -662,6 +737,7 @@ impl CsrVariant {
             CsrVariant::Multiple(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::Single(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::Frozen(csr) => csr.fill_physical_into(src_vid, out),
+            CsrVariant::Mapped(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::None { .. } => out.clear(),
         }
     }
@@ -675,6 +751,8 @@ pub enum CsrIterator<'a> {
     Single(SingleMutableCsrIterator<'a>),
     /// Iterator over frozen packed CSR
     Frozen(ImmutableCsrIterator<'a>),
+    /// Iterator over memory-mapped frozen CSR (owns its mapping handle)
+    Mapped(MappedFrozenIterator),
     /// Empty iterator
     None,
 }
@@ -687,7 +765,39 @@ impl<'a> Iterator for CsrIterator<'a> {
             CsrIterator::Multiple(iter) => iter.next(),
             CsrIterator::Single(iter) => iter.next(),
             CsrIterator::Frozen(iter) => iter.next(),
+            CsrIterator::Mapped(iter) => iter.next(),
             CsrIterator::None => None,
+        }
+    }
+}
+
+/// Borrowed per-vertex edge iterator covering every CSR strategy.
+///
+/// Allocation-free counterpart of `edges_of` at the variant level: each arm
+/// wraps the strategy's own iterator, so callers above the variant (shard
+/// sets, table scans) iterate one row without materializing a vector,
+/// regardless of the underlying layout. Records are assembled by value
+/// because the split halves live in separate slices.
+pub enum CsrRowIter<'a> {
+    /// Multi-edge row: primary block plus overflow chain walk.
+    Multiple(VertexEdgesIter<'a>),
+    /// Single-edge row: at most one assembled slot.
+    Single(std::option::IntoIter<Nbr>),
+    /// Frozen row: filtered packed-slice walk.
+    Frozen(FrozenRowIter<'a>),
+    /// Mapped frozen row: on-demand decode walk owning its mapping handle.
+    Mapped(MappedFrozenRowIter),
+}
+
+impl<'a> Iterator for CsrRowIter<'a> {
+    type Item = Nbr;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            CsrRowIter::Multiple(iter) => iter.next(),
+            CsrRowIter::Single(iter) => iter.next(),
+            CsrRowIter::Frozen(iter) => iter.next(),
+            CsrRowIter::Mapped(iter) => iter.next(),
         }
     }
 }

@@ -170,9 +170,9 @@ fn test_overflow_dump_and_load() {
     assert_eq!(csr2.vertex_capacity(), csr1.vertex_capacity());
     assert_eq!(csr2.edge_count(), csr1.edge_count());
     assert_eq!(
-        csr2.overflow_chunks
-            .get(&0)
-            .map_or(0, |chunks| { chunks.iter().map(Vec::len).sum::<usize>() }),
+        csr2.overflow_chunks.get(&0).map_or(0, |chunks| {
+            chunks.iter().map(|chunk| chunk.len()).sum::<usize>()
+        }),
         2
     );
 }
@@ -295,7 +295,7 @@ fn test_overflow_iterator() {
 }
 
 #[test]
-fn test_supernode_overflow_uses_fixed_chunks_without_recopying() {
+fn test_supernode_overflow_consolidates_repack_into_single_block() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(1, 4, 32);
     for i in 0..4_096u64 {
         csr.insert_edge(0, VertexId::from_int64(i as i64 + 1), EdgeId(i + 1), 1)
@@ -303,8 +303,21 @@ fn test_supernode_overflow_uses_fixed_chunks_without_recopying() {
     }
 
     let chunks = csr.overflow_chunks.get(&0).expect("vertex 0 has overflow");
-    assert!(chunks.iter().all(|chunk| chunk.capacity() == 32));
-    assert!(chunks.iter().all(|chunk| chunk.len() <= 32));
+    // Repacks consolidate the chain: at most one consolidated block plus
+    // the small graded tail chunks grown since the last repack.
+    assert!(
+        chunks.len() <= OVERFLOW_REPACK_CHUNKS_PER_VERTEX + 1,
+        "overflow chain must stay bounded, got {}",
+        chunks.len()
+    );
+    let consolidated = chunks.iter().filter(|chunk| chunk.capacity() > 32).count();
+    assert!(
+        consolidated <= 1,
+        "at most one consolidated block per row, got {}",
+        consolidated
+    );
+    assert!(chunks.iter().all(|chunk| chunk.len() <= chunk.capacity()));
+    assert_eq!(csr.physical_edges_of(0).len(), 4_096);
     assert_eq!(csr.edges_of(0, 1).len(), 4_096);
 }
 
@@ -697,7 +710,7 @@ fn test_steady_state_gap_fill_before_overflow() {
     assert!(csr.get_overflow_chunks(0).is_some());
     let overflow_before: usize = csr
         .get_overflow_chunks(0)
-        .map(|chunks| chunks.iter().map(Vec::len).sum())
+        .map(|chunks| chunks.iter().map(|chunk| chunk.len()).sum())
         .unwrap_or(0);
     assert_eq!(overflow_before, 1);
 
@@ -716,7 +729,7 @@ fn test_steady_state_gap_fill_before_overflow() {
         .unwrap();
     let overflow_after: usize = csr
         .get_overflow_chunks(0)
-        .map(|chunks| chunks.iter().map(Vec::len).sum())
+        .map(|chunks| chunks.iter().map(|chunk| chunk.len()).sum())
         .unwrap_or(0);
     assert_eq!(overflow_after, overflow_before);
     assert_eq!(csr.edges_of(0u32, 3).len(), 5);
@@ -894,7 +907,7 @@ fn test_overflow_repack_preserves_unexpired_tombstones() {
     assert!(csr.delete_edge(0u32, EdgeId(7), 10).unwrap());
     let overflow_before: usize = csr
         .get_overflow_chunks(0)
-        .map(|chunks| chunks.iter().map(Vec::len).sum())
+        .map(|chunks| chunks.iter().map(|chunk| chunk.len()).sum())
         .unwrap_or(0);
     assert!(overflow_before > 0);
 
@@ -903,7 +916,7 @@ fn test_overflow_repack_preserves_unexpired_tombstones() {
     assert!(reported.is_empty());
     let kept: usize = csr
         .get_overflow_chunks(0)
-        .map(|chunks| chunks.iter().map(Vec::len).sum())
+        .map(|chunks| chunks.iter().map(|chunk| chunk.len()).sum())
         .unwrap_or(0);
     assert_eq!(kept, overflow_before);
 
@@ -912,9 +925,34 @@ fn test_overflow_repack_preserves_unexpired_tombstones() {
     assert_eq!(reported.len(), 2);
     let kept: usize = csr
         .get_overflow_chunks(0)
-        .map(|chunks| chunks.iter().map(Vec::len).sum())
+        .map(|chunks| chunks.iter().map(|chunk| chunk.len()).sum())
         .unwrap_or(0);
     assert_eq!(kept, overflow_before - 2);
+}
+
+#[test]
+fn test_overflow_repack_consolidates_to_single_chunk() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+    for i in 0..24u64 {
+        csr.insert_edge(0u32, VertexId::from_int64(100 + i as i64), EdgeId(i), 1)
+            .unwrap();
+    }
+    let before = csr.physical_edges_of(0);
+    assert_eq!(before.len(), 24);
+
+    let mut noop = |_: EdgeId, _: Timestamp| {};
+    csr.compact_overflow_for_vertex(0, Timestamp::MAX, &mut noop);
+    let chunks = csr
+        .get_overflow_chunks(0)
+        .expect("overflow remains after preserve-all repack");
+    assert_eq!(
+        chunks.len(),
+        1,
+        "repack must consolidate the row to one contiguous chunk"
+    );
+    // No entry lost or reordered by the consolidation.
+    assert_eq!(csr.physical_edges_of(0), before);
+    assert_eq!(csr.edges_of(0u32, 1).len(), 24);
 }
 
 #[test]
@@ -952,7 +990,7 @@ fn insert_without_reuse_cutoff_spills_to_overflow() {
     assert_eq!(csr.edge_count(), 3);
     let spilled: usize = csr
         .get_overflow_chunks(0)
-        .map(|chunks| chunks.iter().map(Vec::len).sum())
+        .map(|chunks| chunks.iter().map(|chunk| chunk.len()).sum())
         .unwrap_or(0);
     assert_eq!(spilled, 1);
 }
@@ -970,7 +1008,7 @@ fn insert_keeps_pinned_tombstone_when_cutoff_below_delete_ts() {
         .unwrap();
     let spilled: usize = csr
         .get_overflow_chunks(0)
-        .map(|chunks| chunks.iter().map(Vec::len).sum())
+        .map(|chunks| chunks.iter().map(|chunk| chunk.len()).sum())
         .unwrap_or(0);
     assert_eq!(spilled, 1);
     let tombstone = csr
@@ -982,10 +1020,10 @@ fn insert_keeps_pinned_tombstone_when_cutoff_below_delete_ts() {
 }
 
 #[test]
-fn live_set_upgrades_past_sorted_bound() {
-    use super::live_set::{LiveKeySet, LIVE_SET_SORTED_BOUND};
+fn live_set_installed_only_past_bound() {
+    use super::live_set::LIVE_SET_WIDTH_BOUND;
     let mut csr = MutableCsr::with_overflow_chunk_edges(4, 64, 64);
-    for i in 0..=(LIVE_SET_SORTED_BOUND as i64) {
+    for i in 0..=(LIVE_SET_WIDTH_BOUND as i64) {
         csr.insert_edge(
             0u32,
             VertexId::from_int64(1000 + i),
@@ -994,14 +1032,20 @@ fn live_set_upgrades_past_sorted_bound() {
         )
         .unwrap();
     }
-    assert_eq!(csr.live_key_count(0), LIVE_SET_SORTED_BOUND + 1);
-    assert!(matches!(csr.live_sets.get(&0), Some(LiveKeySet::Hashed(_))));
+    assert_eq!(csr.live_key_count(0), LIVE_SET_WIDTH_BOUND + 1);
+    assert!(csr.live_sets.get(&0).is_some());
     assert!(csr
         .insert_edge(0u32, VertexId::from_int64(1000), EdgeId(999), 1)
         .is_err());
+    // Narrow rows stay set-free yet answer duplicate checks through scans.
     csr.insert_edge(1u32, VertexId::from_int64(1), EdgeId(1), 1)
         .unwrap();
-    assert!(matches!(csr.live_sets.get(&1), Some(LiveKeySet::Sorted(_))));
+    assert!(csr.live_sets.get(&1).is_none());
+    assert_eq!(csr.live_key_count(1), 1);
+    assert!(csr.get_edge(1, VertexId::from_int64(1), 1).is_some());
+    assert!(csr
+        .insert_edge(1u32, VertexId::from_int64(1), EdgeId(2), 1)
+        .is_err());
 }
 
 #[test]
@@ -1085,9 +1129,9 @@ fn positional_delete_and_revert_roundtrip() {
     assert!(csr
         .delete_edge_at_position(0u32, position, nbr.edge_id, 2)
         .unwrap());
-    assert!(!csr.live_key_present(0, nbr.endpoint, nbr.rank));
+    assert!(!csr.row_live_scan(0, nbr.endpoint, nbr.rank).0);
     assert!(csr.revert_delete_at_position(0u32, position, nbr.edge_id, 2));
-    assert!(csr.live_key_present(0, nbr.endpoint, nbr.rank));
+    assert!(csr.row_live_scan(0, nbr.endpoint, nbr.rank).0);
     assert!(!csr
         .delete_edge_at_position(0u32, position, EdgeId(999), 3)
         .unwrap());

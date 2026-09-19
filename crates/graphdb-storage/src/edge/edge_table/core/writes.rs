@@ -671,7 +671,7 @@ impl EdgeStore {
         // generation never masks the visible generation.
         let mut candidates: Vec<EdgeId> = Vec::new();
         self.out_csr.visit_physical(src, |nbr| {
-            if nbr.to_vertex_id() == dst_key {
+            if nbr.endpoint == dst && nbr.rank == rank {
                 candidates.push(nbr.edge_id);
             }
             true
@@ -937,10 +937,9 @@ impl EdgeStore {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
         }
-        let dst_key = Self::edge_endpoint_key(dst, rank);
         let mut candidates: Vec<EdgeId> = Vec::new();
         self.out_csr.visit_physical(src, |nbr| {
-            if nbr.to_vertex_id() == dst_key {
+            if nbr.endpoint == dst && nbr.rank == rank {
                 candidates.push(nbr.edge_id);
             }
             true

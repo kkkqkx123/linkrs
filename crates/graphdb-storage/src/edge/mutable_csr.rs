@@ -1,7 +1,8 @@
 //! Mutable CSR Implementation
 //!
 //! Two-level CSR with fixed-size overflow chunks for stable append cost.
-//! Primary blocks are stored contiguously in `nbr_list` (flat CSR layout).
+//! Primary blocks are stored contiguously in `hot_list`/`cold_list`
+//! (flat CSR layout with split topology and timestamp halves).
 //! Each overflow allocation adds one chunk and never copies an existing chunk. This keeps
 //! high-degree vertex growth linear and avoids the repeated doubling/copying behavior that
 //! previously produced unreachable blocks in the primary neighbor array.
@@ -9,8 +10,9 @@
 //! # Zero-Degree Rows
 //!
 //! Primary blocks are allocated lazily on the first edge of a vertex. A vertex without
-//! edges holds no slots in `nbr_list`, and overflow chunks are addressed by dense
-//! row subscript. This keeps the per-row fixed cost to 12 bytes
+//! edges holds no slots in the primary halves, and overflow chunks plus live-key
+//! sets are addressed by segmented sparse row index (only touched segments
+//! allocate). This keeps the per-row fixed cost to 12 bytes
 //! (offset + degree + capacity) with no per-row hashing.
 //!
 //! Layout by responsibility (`mutable_csr/` subdirectory)://! - `core` holds lifecycle and capacity management.
@@ -27,7 +29,7 @@
 
 use std::fmt;
 
-use super::{Nbr, Timestamp};
+use super::{ColdStamps, HotNbr, Nbr, Timestamp};
 
 use live_set::LiveSetStorage;
 
@@ -48,25 +50,27 @@ pub(crate) mod write;
 mod tests;
 
 pub use iter::{MutableCsrIterator, VertexEdgesIter};
-pub use overflow::OverflowStorage;
+pub use overflow::{OverflowChunk, OverflowStorage};
 pub use write::EdgePosition;
 
 pub(crate) use row::PACKED_CSR_DENSITY;
 
 pub struct MutableCsr {
-    nbr_list: Vec<Nbr>,
+    hot_list: Vec<HotNbr>,
+    cold_list: Vec<ColdStamps>,
     adj_offsets: Vec<u32>,
     degrees: Vec<u32>,
     primary_capacities: Vec<u32>,
 
     overflow_chunks: OverflowStorage,
     overflow_chunk_edges: usize,
-    /// Single live-endpoint set per vertex covering primary and overflow:
+    /// Single live-endpoint set per wide vertex covering primary and overflow:
     /// (endpoint, rank) of edges whose `delete_ts == MAX`. One set replaces
     /// the former primary/overflow pair, so duplicate checks never consult
-    /// two heaps and never fall back to linear scans. Narrow rows hold a
-    /// sorted inline array, wide rows a hash set; see `live_set`. Rows are
-    /// addressed by dense subscript; empty rows hold no set.
+    /// two heaps and never fall back to linear scans on indexed rows.
+    /// Only rows wider than the live-set bound carry a set; narrow rows
+    /// answer through direct row scans with no per-vertex memory. Rows are
+    /// addressed by dense subscript; empty and narrow rows hold no set.
     live_sets: LiveSetStorage,
     /// Watermark-derived cutoff for hot-path tombstone reuse, refreshed by
     /// the table maintenance pass. The sentinel disables reuse. Memory-only:
@@ -77,10 +81,43 @@ pub struct MutableCsr {
     total_edge_capacity: usize,
 }
 
+impl MutableCsr {
+    /// Assembled slot copy at a primary-list index.
+    ///
+    /// Hot and cold halves grow in lockstep, so one index addresses both.
+    /// Callers that only need one half must read it directly instead of
+    /// paying for the assembly here.
+    #[inline]
+    pub(crate) fn slot_at(&self, idx: usize) -> Option<Nbr> {
+        Some(Nbr::from_parts(
+            *self.hot_list.get(idx)?,
+            *self.cold_list.get(idx)?,
+        ))
+    }
+
+    /// Write an assembled record into a primary-list index.
+    ///
+    /// Sole paired writer for the primary halves: hot and cold stay in
+    /// lockstep by construction instead of by caller discipline.
+    #[inline]
+    pub(crate) fn set_slot(&mut self, idx: usize, nbr: Nbr) {
+        self.hot_list[idx] = nbr.hot();
+        self.cold_list[idx] = nbr.cold();
+        debug_assert_eq!(self.hot_list.len(), self.cold_list.len());
+    }
+
+    /// Cold half at a primary-list index without touching topology lines.
+    #[inline]
+    pub(crate) fn cold_at(&self, idx: usize) -> Option<ColdStamps> {
+        self.cold_list.get(idx).copied()
+    }
+}
+
 impl Clone for MutableCsr {
     fn clone(&self) -> Self {
         Self {
-            nbr_list: self.nbr_list.clone(),
+            hot_list: self.hot_list.clone(),
+            cold_list: self.cold_list.clone(),
             adj_offsets: self.adj_offsets.clone(),
             degrees: self.degrees.clone(),
             primary_capacities: self.primary_capacities.clone(),

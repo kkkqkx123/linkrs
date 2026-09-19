@@ -113,13 +113,12 @@ impl<'a> AdjacencyBatchAccessor<'a> {
 
     /// Point lookup through the shared merged row-location logic.
     pub fn lookup(&self, src: u32, dst: u32, rank: i64) -> Option<Nbr> {
-        let key = EdgeStore::edge_endpoint_key(dst, rank);
         let csr = self.csr();
         let ts = self.ts;
         let table = self.table;
         let mut found = None;
         csr.visit_physical(src, |nbr| {
-            if nbr.to_vertex_id() == key && table.is_visible(nbr.edge_id, ts) {
+            if nbr.endpoint == dst && nbr.rank == rank && table.is_visible(nbr.edge_id, ts) {
                 found = Some(nbr);
                 false
             } else {

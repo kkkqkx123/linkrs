@@ -1,4 +1,4 @@
-use super::super::Nbr;
+use super::super::{ColdStamps, HotNbr};
 use super::MutableCsr;
 use crate::edge::FragmentationStats;
 
@@ -10,19 +10,21 @@ impl MutableCsr {
     /// Tombstone authority memory is accounted by the table layer through
     /// the shared tombstone estimate so both stay on one caliber.
     pub fn used_memory_size(&self) -> usize {
-        let arrays = self.nbr_list.capacity() * std::mem::size_of::<Nbr>()
+        let slot_bytes = std::mem::size_of::<HotNbr>() + std::mem::size_of::<ColdStamps>();
+        let arrays = self.hot_list.capacity() * std::mem::size_of::<HotNbr>()
+            + self.cold_list.capacity() * std::mem::size_of::<ColdStamps>()
             + self.adj_offsets.capacity() * std::mem::size_of::<u32>()
             + self.degrees.capacity() * std::mem::size_of::<u32>()
             + self.primary_capacities.capacity() * std::mem::size_of::<u32>();
         let overflow_reserved: usize = self
             .overflow_chunks
             .iter()
-            .map(|(_, chunks)| chunks.iter().map(Vec::capacity).sum::<usize>())
+            .map(|(_, chunks)| chunks.iter().map(|chunk| chunk.capacity()).sum::<usize>())
             .sum();
         let live_heap: usize = self.live_sets.heap_bytes_total();
         let live_sets = self.live_sets.index_bytes() + live_heap;
         arrays
-            + overflow_reserved * std::mem::size_of::<Nbr>()
+            + overflow_reserved * slot_bytes
             + self.overflow_chunks.index_bytes()
             + live_sets
             + std::mem::size_of::<Self>()
@@ -46,7 +48,8 @@ impl MutableCsr {
     /// Estimate wasted memory due to fragmentation (in bytes)
     pub(crate) fn wasted_bytes_estimate(&self) -> usize {
         let active_edges = self.edge_count as usize;
-        self.total_edge_capacity.saturating_sub(active_edges) * std::mem::size_of::<Nbr>()
+        let slot_bytes = std::mem::size_of::<HotNbr>() + std::mem::size_of::<ColdStamps>();
+        self.total_edge_capacity.saturating_sub(active_edges) * slot_bytes
     }
 
     /// Get detailed fragmentation statistics.

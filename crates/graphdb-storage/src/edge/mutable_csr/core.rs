@@ -1,7 +1,7 @@
 use super::super::csr_shared::{grown_vertex_capacity, DEFAULT_VERTEX_CAPACITY};
-use super::super::{Nbr, Timestamp};
+use super::super::{ColdStamps, HotNbr, Timestamp};
 use super::live_set::LiveSetStorage;
-use super::overflow::OverflowStorage;
+use super::overflow::{OverflowChunk, OverflowStorage};
 use super::MutableCsr;
 
 pub(crate) const DEFAULT_EDGE_CAPACITY: usize = 4096;
@@ -30,7 +30,8 @@ impl MutableCsr {
         let edge_cap = edge_capacity.max(1);
 
         Self {
-            nbr_list: Vec::with_capacity(edge_cap),
+            hot_list: Vec::with_capacity(edge_cap),
+            cold_list: Vec::with_capacity(edge_cap),
             adj_offsets: vec![0; vertex_cap],
             degrees: vec![0; vertex_cap],
             primary_capacities: vec![0; vertex_cap],
@@ -65,7 +66,7 @@ impl MutableCsr {
             return;
         }
 
-        let tail = self.nbr_list.len() as u32;
+        let tail = self.hot_list.len() as u32;
         self.adj_offsets.resize(new_vertex_capacity, tail);
         self.degrees.resize(new_vertex_capacity, 0);
         self.primary_capacities.resize(new_vertex_capacity, 0);
@@ -81,16 +82,18 @@ impl MutableCsr {
     }
 
     /// Get overflow chunks for a vertex.
-    pub fn get_overflow_chunks(&self, vid: u32) -> Option<&Vec<Vec<Nbr>>> {
+    pub fn get_overflow_chunks(&self, vid: u32) -> Option<&Vec<OverflowChunk>> {
         self.overflow_chunks.get(&vid)
     }
 
     /// Allocate the primary block of `DEFAULT_VERTEX_DEGREE` slots for a vertex
-    /// on its first edge. Zero-degree vertices hold no slots in `nbr_list`.
+    /// on its first edge. Zero-degree vertices hold no slots in either half.
     pub(crate) fn allocate_primary_block(&mut self, src_idx: usize) {
-        let block_offset = self.nbr_list.len();
-        self.nbr_list
-            .resize(block_offset + DEFAULT_VERTEX_DEGREE, Nbr::dead_gap());
+        let block_offset = self.hot_list.len();
+        self.hot_list
+            .resize(block_offset + DEFAULT_VERTEX_DEGREE, HotNbr::dead_gap());
+        self.cold_list
+            .resize(block_offset + DEFAULT_VERTEX_DEGREE, ColdStamps::dead_gap());
         self.adj_offsets[src_idx] = block_offset as u32;
         self.primary_capacities[src_idx] = DEFAULT_VERTEX_DEGREE as u32;
         self.add_capacity(DEFAULT_VERTEX_DEGREE);

@@ -1,6 +1,7 @@
 //! Read-only paths: visibility, adjacency, point lookups and scans.
 
-use super::super::super::{CsrBase, CsrShardSet, EdgeRecord, Nbr};
+use super::super::super::csr_shared::decode_endpoint_pair;
+use super::super::super::{CsrBase, CsrShardSet, EdgeRecord, HotNbr, Nbr};
 use super::EdgeStore;
 use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 use graphdb_core::Value;
@@ -35,30 +36,63 @@ impl EdgeStore {
         out: &mut Vec<Nbr>,
     ) {
         out.clear();
+        // Stage the physical row once, then compact it with a single
+        // authority pass instead of one visibility call per edge.
         csr.visit_physical(src, |nbr| {
-            if self.is_visible(nbr.edge_id, ts) {
-                out.push(nbr);
-            }
+            out.push(nbr);
             true
         });
+        self.mvcc.retain_visible(out, ts);
     }
 
-    /// Pending-aware variant of the shared batch fill.
-    pub(crate) fn fill_visible_into_with_gate(
+    /// Visit every visible neighbor of one row without any allocation.
+    ///
+    /// Hot-only traversal primitive: no intermediate vector is built and the
+    /// stamp lines are never touched, so per-vertex fan-out over thousands
+    /// of vertices pays only topology bandwidth. The visitor runs inline on
+    /// the physical walk.
+    pub(crate) fn visit_visible_with_gate<F>(
         &self,
         csr: &CsrShardSet,
         src: u32,
         ts: Timestamp,
         gate: &crate::mvcc_visibility::PendingGate<'_>,
-        out: &mut Vec<Nbr>,
-    ) {
-        out.clear();
-        csr.visit_physical(src, |nbr| {
-            if self.is_visible_with_gate(nbr.edge_id, ts, gate) {
-                out.push(nbr);
+        mut f: F,
+    ) where
+        F: FnMut(HotNbr),
+    {
+        csr.visit_hot(src, |hot| {
+            if self.is_visible_with_gate(hot.edge_id, ts, gate) {
+                f(hot);
             }
             true
         });
+    }
+
+    /// Out-direction visit without allocation, for traversal fan-out.
+    pub(crate) fn visit_out_with_gate<F>(
+        &self,
+        src: u32,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+        f: F,
+    ) where
+        F: FnMut(HotNbr),
+    {
+        self.visit_visible_with_gate(&self.out_csr, src, ts, gate, f);
+    }
+
+    /// In-direction visit without allocation, for traversal fan-out.
+    pub(crate) fn visit_in_with_gate<F>(
+        &self,
+        dst: u32,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+        f: F,
+    ) where
+        F: FnMut(HotNbr),
+    {
+        self.visit_visible_with_gate(&self.in_csr, dst, ts, gate, f);
     }
 
     /// Single row-location entry for point lookups: physical topology lookup
@@ -75,9 +109,12 @@ impl EdgeStore {
         dst: VertexId,
         ts: Timestamp,
     ) -> Option<Nbr> {
+        // Compare the packed key halves directly: building a `VertexId`
+        // per slot just to compare it is pure overhead on this scan.
+        let (endpoint, rank) = decode_endpoint_pair(dst);
         let mut found = None;
         csr.visit_physical(src, |nbr| {
-            if nbr.to_vertex_id() == dst && self.is_visible(nbr.edge_id, ts) {
+            if nbr.endpoint == endpoint && nbr.rank == rank && self.is_visible(nbr.edge_id, ts) {
                 found = Some(nbr);
                 false
             } else {
@@ -97,9 +134,13 @@ impl EdgeStore {
         ts: Timestamp,
         gate: &crate::mvcc_visibility::PendingGate<'_>,
     ) -> Option<Nbr> {
+        let (endpoint, rank) = decode_endpoint_pair(dst);
         let mut found = None;
         csr.visit_physical(src, |nbr| {
-            if nbr.to_vertex_id() == dst && self.is_visible_with_gate(nbr.edge_id, ts, gate) {
+            if nbr.endpoint == endpoint
+                && nbr.rank == rank
+                && self.is_visible_with_gate(nbr.edge_id, ts, gate)
+            {
                 found = Some(nbr);
                 false
             } else {
@@ -115,19 +156,6 @@ impl EdgeStore {
     pub(crate) fn merged_edges_of(&self, csr: &CsrShardSet, src: u32, ts: Timestamp) -> Vec<Nbr> {
         let mut out = Vec::new();
         self.fill_visible_into(csr, src, ts, &mut out);
-        out
-    }
-
-    /// Allocating pending-aware convenience over the shared batch fill.
-    fn merged_edges_of_with_gate(
-        &self,
-        csr: &CsrShardSet,
-        src: u32,
-        ts: Timestamp,
-        gate: &crate::mvcc_visibility::PendingGate<'_>,
-    ) -> Vec<Nbr> {
-        let mut out = Vec::new();
-        self.fill_visible_into_with_gate(csr, src, ts, gate, &mut out);
         out
     }
 
@@ -163,24 +191,6 @@ impl EdgeStore {
             }
         });
         out
-    }
-
-    pub fn merged_out_nbrs_with_gate(
-        &self,
-        src: u32,
-        ts: Timestamp,
-        gate: &crate::mvcc_visibility::PendingGate<'_>,
-    ) -> Vec<Nbr> {
-        self.merged_edges_of_with_gate(&self.out_csr, src, ts, gate)
-    }
-
-    pub fn merged_in_nbrs_with_gate(
-        &self,
-        dst: u32,
-        ts: Timestamp,
-        gate: &crate::mvcc_visibility::PendingGate<'_>,
-    ) -> Vec<Nbr> {
-        self.merged_edges_of_with_gate(&self.in_csr, dst, ts, gate)
     }
 
     pub fn merged_out_nbrs_with_gate_limit(
@@ -246,20 +256,23 @@ impl EdgeStore {
         if !self.is_open {
             return Vec::new();
         }
-        self.merged_out_nbrs_with_gate(src, ts, gate)
-            .into_iter()
-            .map(|nbr| {
-                let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
-                let rank = nbr.rank;
-                let properties = self.properties_for_edge_projected(nbr.edge_id, ts, projection);
-                EdgeRecord {
-                    src_vid: VertexId::from_int64(src as i64),
-                    dst_vid,
-                    rank,
-                    properties,
-                }
-            })
-            .collect()
+        // Hot-only stream with the pending gate: no cold-line touch, no
+        // intermediate neighbor vector.
+        let mut out = Vec::new();
+        self.out_csr.visit_hot(src, |hot| {
+            if self.is_visible_with_gate(hot.edge_id, ts, gate) {
+                out.push(self.edge_record_from_hot_projected(
+                    VertexId::from_int64(src as i64),
+                    VertexId::from_int64(hot.endpoint as i64),
+                    hot.rank,
+                    hot.edge_id,
+                    ts,
+                    projection,
+                ));
+            }
+            true
+        });
+        out
     }
 
     pub fn in_edges_with_gate(
@@ -281,20 +294,22 @@ impl EdgeStore {
         if !self.is_open {
             return Vec::new();
         }
-        self.merged_in_nbrs_with_gate(dst, ts, gate)
-            .into_iter()
-            .map(|nbr| {
-                let src_vid = VertexId::from_int64(nbr.endpoint as i64);
-                let rank = nbr.rank;
-                let properties = self.properties_for_edge_projected(nbr.edge_id, ts, projection);
-                EdgeRecord {
-                    src_vid,
-                    dst_vid: VertexId::from_int64(dst as i64),
-                    rank,
-                    properties,
-                }
-            })
-            .collect()
+        // Hot-only stream mirroring the out direction with the pending gate.
+        let mut out = Vec::new();
+        self.in_csr.visit_hot(dst, |hot| {
+            if self.is_visible_with_gate(hot.edge_id, ts, gate) {
+                out.push(self.edge_record_from_hot_projected(
+                    VertexId::from_int64(hot.endpoint as i64),
+                    VertexId::from_int64(dst as i64),
+                    hot.rank,
+                    hot.edge_id,
+                    ts,
+                    projection,
+                ));
+            }
+            true
+        });
+        out
     }
 
     pub fn out_edges_with_gate_projected_limit(
@@ -372,6 +387,29 @@ impl EdgeStore {
         let properties = self.properties_for_edge_projected(nbr.edge_id, query_ts, projection);
         EdgeRecord {
             src_vid: VertexId::from_int64(src as i64),
+            dst_vid,
+            rank,
+            properties,
+        }
+    }
+
+    /// Assemble a record from a hot half without touching stamp lines.
+    ///
+    /// Hot-only counterpart of [`Self::edge_record_from_nbr_projected`]
+    /// for record paths that stream topology and resolve visibility by
+    /// edge id through the authority.
+    pub(crate) fn edge_record_from_hot_projected(
+        &self,
+        src_vid: VertexId,
+        dst_vid: VertexId,
+        rank: i64,
+        edge_id: EdgeId,
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> EdgeRecord {
+        let properties = self.properties_for_edge_projected(edge_id, query_ts, projection);
+        EdgeRecord {
+            src_vid,
             dst_vid,
             rank,
             properties,
@@ -504,15 +542,33 @@ impl EdgeStore {
             return Vec::new();
         }
 
-        let nbrs = self.merged_out_nbrs(src, ts);
-
-        nbrs.into_iter()
-            .map(|nbr| self.edge_record_from_nbr_projected(src, nbr, ts, projection))
-            .collect()
+        // Hot-only stream: visibility resolves by edge id through the
+        // authority, so the cold stamp lines stay out of cache and no
+        // intermediate neighbor vector is built.
+        let mut out = Vec::new();
+        self.out_csr.visit_hot(src, |hot| {
+            if self.is_visible(hot.edge_id, ts) {
+                out.push(self.edge_record_from_hot_projected(
+                    VertexId::from_int64(src as i64),
+                    VertexId::from_int64(hot.endpoint as i64),
+                    hot.rank,
+                    hot.edge_id,
+                    ts,
+                    projection,
+                ));
+            }
+            true
+        });
+        out
     }
 
     /// Raw out-edge neighbors of `src` (MVCC-filtered, snapshot-consistent)
     /// with no property decoding.
+    ///
+    /// Owned single-row convenience over [`Self::fill_visible_into`].
+    /// Record-building paths stream hot-only without this intermediate, and
+    /// high-frequency traversals use `visit_out_with_gate` or the batch
+    /// accessor instead.
     pub fn merged_out_nbrs(&self, src: u32, ts: Timestamp) -> Vec<Nbr> {
         self.merged_edges_of(&self.out_csr, src, ts)
     }
@@ -531,28 +587,32 @@ impl EdgeStore {
             return Vec::new();
         }
 
-        let nbrs = self.merged_in_nbrs(dst, ts);
-
-        nbrs.into_iter()
-            .map(|nbr| {
-                let src_vid = VertexId::from_int64(nbr.endpoint as i64);
-                let rank = nbr.rank;
-                let properties = self.properties_for_edge_projected(nbr.edge_id, ts, projection);
-
-                EdgeRecord {
-                    src_vid,
-                    dst_vid: VertexId::from_int64(dst as i64),
-                    rank,
-                    properties,
-                }
-            })
-            .collect()
+        // Hot-only stream mirroring the out direction: no cold-line touch,
+        // no intermediate neighbor vector.
+        let mut out = Vec::new();
+        self.in_csr.visit_hot(dst, |hot| {
+            if self.is_visible(hot.edge_id, ts) {
+                out.push(self.edge_record_from_hot_projected(
+                    VertexId::from_int64(hot.endpoint as i64),
+                    VertexId::from_int64(dst as i64),
+                    hot.rank,
+                    hot.edge_id,
+                    ts,
+                    projection,
+                ));
+            }
+            true
+        });
+        out
     }
 
     /// Raw in-edge neighbors of `dst` (MVCC-filtered, snapshot-consistent)
     /// with no property decoding.
     ///
-    /// Allocating convenience; high-frequency paths use the batch accessor.
+    /// Owned single-row convenience over [`Self::fill_visible_into`].
+    /// Record-building paths stream hot-only without this intermediate, and
+    /// high-frequency traversals use `visit_in_with_gate` or the batch
+    /// accessor instead.
     pub fn merged_in_nbrs(&self, dst: u32, ts: Timestamp) -> Vec<Nbr> {
         self.merged_edges_of(&self.in_csr, dst, ts)
     }

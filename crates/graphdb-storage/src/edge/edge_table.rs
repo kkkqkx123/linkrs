@@ -49,4 +49,4 @@ pub use staging::{EdgeStagingBatch, StagedDelete, StagedInsert};
 pub use stats::{DeletionStats, GroupSegmentStats, ScanPruneReport, TombstoneStats};
 
 // Re-export from parent
-pub use super::{CsrBase, CsrVariant, Nbr};
+pub use super::{ColdStamps, CsrBase, CsrVariant, HotNbr, Nbr};

@@ -3,7 +3,7 @@
 //! Freezing packs one direction's group into the frozen form through the
 //! shard-set freeze, promoting reclaimed deletions into the visibility
 //! authority exactly like the group compaction path. Unfreezing rebuilds the
-//! mutable variant with identical neighbor bytes and no authority traffic.
+//! mutable variant with the same logical content and no authority traffic.
 
 use super::core::EdgeStore;
 use graphdb_core::types::{EdgeId, Timestamp};

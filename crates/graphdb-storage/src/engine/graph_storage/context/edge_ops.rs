@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use crate::edge::{EdgeRecord, Nbr};
+use crate::edge::{EdgeRecord, HotNbr};
 use crate::engine::data_store::EdgeTableKey;
 use crate::engine::{EdgeOperationParams, InsertEdgeParams, InsertEdgesBatchParams};
 use crate::mvcc_visibility::PendingGate;
@@ -569,17 +569,25 @@ impl GraphStorageContext {
         Ok(erased)
     }
 
-    /// Raw out-edge neighbors of `src` (no `EdgeRecord` materialization, no
-    /// property decode).  The neighbor endpoint is encoded in `Nbr.neighbor`.
-    /// Returns the resolved internal src id together with the neighbors.
-    pub fn out_nbrs(
+    /// Visit raw out-edge neighbors of `src` without building a vector.
+    ///
+    /// Zero-copy fan-out entry point: resolves the internal id once, then
+    /// streams every visible neighbor of every matching table into the
+    /// visitor as `(src_internal, nbr)` pairs. Returns the resolved internal
+    /// src id. Use this in per-vertex traversal loops to avoid per-vertex
+    /// allocation.
+    pub fn visit_out_nbrs<F>(
         &self,
         edge_label: LabelId,
         src_label: LabelId,
         _dst_label: LabelId,
         src_id: VertexId,
         ts: Timestamp,
-    ) -> Option<(u32, Vec<Nbr>)> {
+        mut f: F,
+    ) -> Option<u32>
+    where
+        F: FnMut(u32, HotNbr),
+    {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return None;
         }
@@ -599,32 +607,35 @@ impl GraphStorageContext {
                     Some((src_internal, actual_src))
                 })?;
 
-        let nbrs = self.persistent.data_store.with_edge_tables(|edge_tables| {
-            let mut nbrs = Vec::new();
+        self.persistent.data_store.with_edge_tables(|edge_tables| {
             let gate = self.pending_gate();
             for table in edge_tables
                 .values()
                 .map(|arc| arc.read())
                 .filter(|t| t.label() == edge_label && t.src_label() == actual_src)
             {
-                nbrs.extend(table.merged_out_nbrs_with_gate(src_internal, ts, &gate));
+                table.visit_out_with_gate(src_internal, ts, &gate, |nbr| f(src_internal, nbr));
             }
-            nbrs
         });
-        Some((src_internal, nbrs))
+        Some(src_internal)
     }
 
-    /// Raw in-edge neighbors of `dst` (no `EdgeRecord` materialization, no
-    /// property decode).  The neighbor endpoint is encoded in `Nbr.neighbor`.
-    /// Returns the resolved internal dst id together with the neighbors.
-    pub fn in_nbrs(
+    /// Visit raw in-edge neighbors of `dst` without building a vector.
+    ///
+    /// In-direction counterpart of `visit_out_nbrs`, streaming
+    /// `(dst_internal, nbr)` pairs. Returns the resolved internal dst id.
+    pub fn visit_in_nbrs<F>(
         &self,
         edge_label: LabelId,
         _src_label: LabelId,
         dst_label: LabelId,
         dst_id: VertexId,
         ts: Timestamp,
-    ) -> Option<(u32, Vec<Nbr>)> {
+        mut f: F,
+    ) -> Option<u32>
+    where
+        F: FnMut(u32, HotNbr),
+    {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return None;
         }
@@ -644,19 +655,17 @@ impl GraphStorageContext {
                     Some((dst_internal, actual_dst))
                 })?;
 
-        let nbrs = self.persistent.data_store.with_edge_tables(|edge_tables| {
-            let mut nbrs = Vec::new();
+        self.persistent.data_store.with_edge_tables(|edge_tables| {
             let gate = self.pending_gate();
             for table in edge_tables
                 .values()
                 .map(|arc| arc.read())
                 .filter(|t| t.label() == edge_label && t.dst_label() == actual_dst)
             {
-                nbrs.extend(table.merged_in_nbrs_with_gate(dst_internal, ts, &gate));
+                table.visit_in_with_gate(dst_internal, ts, &gate, |nbr| f(dst_internal, nbr));
             }
-            nbrs
         });
-        Some((dst_internal, nbrs))
+        Some(dst_internal)
     }
 
     pub fn out_edges_projected(

@@ -26,13 +26,15 @@ use graphdb_core::{StorageError, StorageResult};
 
 use super::csr_shared::{
     can_revert_delete, decide_slot_delete, decode_endpoint_pair, grown_vertex_capacity,
-    is_reclaimable_slot, DeleteSlotOutcome, DEFAULT_VERTEX_CAPACITY,
+    is_reclaimable_cold, DeleteSlotOutcome, DEFAULT_VERTEX_CAPACITY,
 };
 use super::mutable_csr::serialization::{
     decode_topology_i64_column, decode_topology_u32_column, decode_topology_u64_column,
     encode_topology_i64_column, encode_topology_u32_column, encode_topology_u64_column,
 };
-use super::{CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_EDGE_ID};
+use super::{
+    ColdStamps, CsrBase, EdgeId, HotNbr, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_EDGE_ID,
+};
 
 /// Persistence version for the single-edge topology columns. Version 3
 /// carries the integer column path for neighbor and edge-id columns plus a
@@ -45,14 +47,16 @@ fn empty_slot() -> Nbr {
 }
 
 pub struct SingleMutableCsr {
-    nbr_list: Vec<Nbr>,
+    hot_slots: Vec<HotNbr>,
+    cold_slots: Vec<ColdStamps>,
     edge_count: u64,
 }
 
 impl Clone for SingleMutableCsr {
     fn clone(&self) -> Self {
         Self {
-            nbr_list: self.nbr_list.clone(),
+            hot_slots: self.hot_slots.clone(),
+            cold_slots: self.cold_slots.clone(),
             edge_count: self.edge_count,
         }
     }
@@ -74,16 +78,16 @@ impl SingleMutableCsr {
 
     pub fn with_capacity(vertex_capacity: usize) -> Self {
         let vertex_cap = vertex_capacity.max(1);
-        let nbr_list = vec![empty_slot(); vertex_cap];
 
         Self {
-            nbr_list,
+            hot_slots: vec![HotNbr::dead_gap(); vertex_cap],
+            cold_slots: vec![ColdStamps::dead_gap(); vertex_cap],
             edge_count: 0,
         }
     }
 
     pub fn vertex_capacity(&self) -> usize {
-        self.nbr_list.len()
+        self.hot_slots.len()
     }
 
     pub fn edge_count(&self) -> u64 {
@@ -96,13 +100,42 @@ impl SingleMutableCsr {
         }
 
         let additional = new_vertex_capacity - self.vertex_capacity();
-        self.nbr_list
-            .extend(std::iter::repeat_n(empty_slot(), additional));
+        self.hot_slots
+            .extend(std::iter::repeat_n(HotNbr::dead_gap(), additional));
+        self.cold_slots
+            .extend(std::iter::repeat_n(ColdStamps::dead_gap(), additional));
     }
 
     pub fn ensure_vertex_capacity(&mut self, min_capacity: usize) {
         if min_capacity > self.vertex_capacity() {
             self.resize(grown_vertex_capacity(min_capacity));
+        }
+    }
+
+    /// Assembled slot copy at one index.
+    fn slot_at(&self, idx: usize) -> Option<Nbr> {
+        Some(Nbr::from_parts(
+            *self.hot_slots.get(idx)?,
+            *self.cold_slots.get(idx)?,
+        ))
+    }
+
+    /// Paired writer for one slot: hot and cold stay in lockstep.
+    fn set_slot(&mut self, idx: usize, nbr: Nbr) {
+        self.hot_slots[idx] = nbr.hot();
+        self.cold_slots[idx] = nbr.cold();
+        debug_assert_eq!(self.hot_slots.len(), self.cold_slots.len());
+    }
+
+    /// Visit the single hot half of one vertex without allocating.
+    pub fn visit_hot<F>(&self, src: u32, mut f: F)
+    where
+        F: FnMut(HotNbr) -> bool,
+    {
+        if let Some(hot) = self.hot_slots.get(src as usize) {
+            if hot.edge_id != INVALID_EDGE_ID {
+                let _ = f(*hot);
+            }
         }
     }
 
@@ -119,26 +152,31 @@ impl SingleMutableCsr {
             self.ensure_vertex_capacity(src_idx + 1);
         }
 
-        let nbr = &mut self.nbr_list[src_idx];
+        let hot = &self.hot_slots[src_idx];
+        let cold = &self.cold_slots[src_idx];
 
         // Physical uniqueness only: a live slot rejects the second insert
         // regardless of timestamp, while a tombstoned or empty slot accepts
         // any timestamp. Snapshot visibility is decided by the version
         // authority above this layer.
-        if nbr.delete_ts == Timestamp::MAX && nbr.edge_id != INVALID_EDGE_ID {
+        if cold.is_live() && hot.edge_id != INVALID_EDGE_ID {
             return Err(StorageError::conflict(format!(
                 "[SingleMutableCsr] insert conflict on src={}: slot holds live edge {:?}",
-                src, nbr.edge_id
+                src, hot.edge_id
             )));
         }
 
-        let was_empty = nbr.edge_id == INVALID_EDGE_ID || nbr.delete_ts != Timestamp::MAX;
+        let was_empty = hot.edge_id == INVALID_EDGE_ID || !cold.is_live();
         let (decoded_endpoint, rank) = decode_endpoint_pair(dst);
-        nbr.endpoint = decoded_endpoint;
-        nbr.rank = rank;
-        nbr.edge_id = edge_id;
-        nbr.create_ts = ts;
-        nbr.delete_ts = Timestamp::MAX;
+        self.hot_slots[src_idx] = HotNbr {
+            endpoint: decoded_endpoint,
+            rank,
+            edge_id,
+        };
+        self.cold_slots[src_idx] = ColdStamps {
+            create_ts: ts,
+            delete_ts: Timestamp::MAX,
+        };
 
         if was_empty {
             self.edge_count += 1;
@@ -154,24 +192,27 @@ impl SingleMutableCsr {
             return Ok(false);
         }
 
-        let nbr = &mut self.nbr_list[src_idx];
+        let probe = match self.slot_at(src_idx) {
+            Some(probe) => probe,
+            None => return Ok(false),
+        };
 
-        if nbr.edge_id == INVALID_EDGE_ID {
+        if probe.edge_id == INVALID_EDGE_ID {
             return Ok(false);
         }
 
-        if nbr.edge_id != edge_id {
+        if probe.edge_id != edge_id {
             return Ok(false);
         }
 
         if matches!(
-            decide_slot_delete(nbr, nbr.edge_id, ts)?,
+            decide_slot_delete(&probe, probe.edge_id, ts)?,
             DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated
         ) {
             return Ok(false);
         }
 
-        nbr.delete_ts = ts;
+        self.cold_slots[src_idx].delete_ts = ts;
         self.edge_count -= 1;
         Ok(true)
     }
@@ -195,25 +236,26 @@ impl SingleMutableCsr {
         }
 
         let (dst_ep, dst_rank) = decode_endpoint_pair(dst);
-        let nbr = &mut self.nbr_list[src_idx];
+        let probe = match self.slot_at(src_idx) {
+            Some(probe) => probe,
+            None => return 0,
+        };
 
-        if nbr.edge_id == INVALID_EDGE_ID
-            || nbr.endpoint != dst_ep
-            || nbr.rank != dst_rank
-            || nbr.delete_ts < Timestamp::MAX
+        if probe.edge_id == INVALID_EDGE_ID
+            || probe.endpoint != dst_ep
+            || probe.rank != dst_rank
+            || probe.delete_ts < Timestamp::MAX
         {
             return 0;
         }
 
-        let create_ts = nbr.create_ts;
-        if create_ts > ts {
+        if probe.create_ts > ts {
             return 0;
         }
 
-        let edge_id = nbr.edge_id;
-        nbr.delete_ts = ts;
+        self.cold_slots[src_idx].delete_ts = ts;
         self.edge_count -= 1;
-        on_deleted(edge_id);
+        on_deleted(probe.edge_id);
         1
     }
 
@@ -233,14 +275,17 @@ impl SingleMutableCsr {
         }
 
         let (dst_ep, dst_rank) = decode_endpoint_pair(dst);
-        let nbr = &self.nbr_list[src_idx];
+        let probe = match self.slot_at(src_idx) {
+            Some(probe) => probe,
+            None => return None,
+        };
 
-        if !nbr.is_alive_at(ts) {
+        if !probe.is_alive_at(ts) {
             return None;
         }
 
-        if nbr.endpoint == dst_ep && nbr.rank == dst_rank {
-            Some(*nbr)
+        if probe.endpoint == dst_ep && probe.rank == dst_rank {
+            Some(probe)
         } else {
             None
         }
@@ -257,11 +302,14 @@ impl SingleMutableCsr {
             return false;
         }
 
-        let nbr = &mut self.nbr_list[src_idx];
+        let probe = match self.slot_at(src_idx) {
+            Some(probe) => probe,
+            None => return false,
+        };
 
         // Only revert deletions that happened at or before rollback time.
-        if can_revert_delete(nbr, ts) {
-            nbr.delete_ts = Timestamp::MAX;
+        if can_revert_delete(&probe, ts) {
+            self.cold_slots[src_idx].delete_ts = Timestamp::MAX;
             self.edge_count += 1;
             return true;
         }
@@ -282,7 +330,7 @@ impl SingleMutableCsr {
         if src_idx >= self.vertex_capacity() {
             return Ok(false);
         }
-        let edge_id = self.nbr_list[src_idx].edge_id;
+        let edge_id = self.hot_slots[src_idx].edge_id;
         self.delete_edge(src, edge_id, ts)
     }
 
@@ -290,17 +338,17 @@ impl SingleMutableCsr {
         if offset != 0 {
             return None;
         }
-        self.nbr_list.get(src as usize).copied()
+        self.slot_at(src as usize)
     }
 
     pub fn get_edge_physical(&self, src: u32, dst: VertexId) -> Option<Nbr> {
-        let slot = self.nbr_list.get(src as usize)?;
-        if slot.edge_id == INVALID_EDGE_ID || slot.delete_ts != Timestamp::MAX {
+        let probe = self.slot_at(src as usize)?;
+        if probe.edge_id == INVALID_EDGE_ID || probe.delete_ts != Timestamp::MAX {
             return None;
         }
         let (dst_ep, dst_rank) = decode_endpoint_pair(dst);
-        if slot.endpoint == dst_ep && slot.rank == dst_rank {
-            Some(*slot)
+        if probe.endpoint == dst_ep && probe.rank == dst_rank {
+            Some(probe)
         } else {
             None
         }
@@ -318,9 +366,9 @@ impl SingleMutableCsr {
     /// allocation. Lets batch scans share one buffer across vertices.
     pub fn fill_physical_into(&self, src: u32, out: &mut Vec<Nbr>) {
         out.clear();
-        if let Some(nbr) = self.nbr_list.get(src as usize) {
-            if nbr.edge_id != INVALID_EDGE_ID {
-                out.push(*nbr);
+        if let Some(probe) = self.slot_at(src as usize) {
+            if probe.edge_id != INVALID_EDGE_ID {
+                out.push(probe);
             }
         }
     }
@@ -329,23 +377,23 @@ impl SingleMutableCsr {
     where
         F: FnMut(Nbr) -> bool,
     {
-        if let Some(nbr) = self.nbr_list.get(src as usize) {
-            if nbr.edge_id != INVALID_EDGE_ID {
-                let _ = f(*nbr);
+        if let Some(probe) = self.slot_at(src as usize) {
+            if probe.edge_id != INVALID_EDGE_ID {
+                let _ = f(probe);
             }
         }
     }
 
     pub fn has_physical_entries(&self, vid: u32) -> bool {
-        self.nbr_list
+        self.hot_slots
             .get(vid as usize)
-            .is_some_and(|nbr| nbr.edge_id != INVALID_EDGE_ID)
+            .is_some_and(|hot| hot.edge_id != INVALID_EDGE_ID)
     }
 
     pub fn primary_contains(&self, src: u32, edge_id: EdgeId) -> bool {
-        self.nbr_list
+        self.hot_slots
             .get(src as usize)
-            .is_some_and(|slot| slot.edge_id == edge_id)
+            .is_some_and(|hot| hot.edge_id == edge_id)
     }
 
     pub fn remove_edge(&mut self, src: u32, edge_id: EdgeId) -> bool {
@@ -353,15 +401,15 @@ impl SingleMutableCsr {
         if src_idx >= self.vertex_capacity() {
             return false;
         }
-        let slot = &mut self.nbr_list[src_idx];
+        let slot = self.hot_slots[src_idx];
         if slot.edge_id == INVALID_EDGE_ID {
             return false;
         }
         if slot.edge_id != edge_id {
             return false;
         }
-        let was_live = slot.delete_ts == Timestamp::MAX;
-        *slot = empty_slot();
+        let was_live = self.cold_slots[src_idx].is_live();
+        self.set_slot(src_idx, empty_slot());
         if was_live {
             self.edge_count -= 1;
         }
@@ -373,15 +421,18 @@ impl SingleMutableCsr {
         if src_idx >= self.vertex_capacity() {
             return false;
         }
-        let slot = &mut self.nbr_list[src_idx];
-        if slot.edge_id == INVALID_EDGE_ID {
+        let probe = match self.slot_at(src_idx) {
+            Some(probe) => probe,
+            None => return false,
+        };
+        if probe.edge_id == INVALID_EDGE_ID {
             return false;
         }
-        if slot.edge_id != edge_id {
+        if probe.edge_id != edge_id {
             return false;
         }
-        if can_revert_delete(slot, ts) {
-            slot.delete_ts = Timestamp::MAX;
+        if can_revert_delete(&probe, ts) {
+            self.cold_slots[src_idx].delete_ts = Timestamp::MAX;
             self.edge_count += 1;
             return true;
         }
@@ -392,10 +443,13 @@ impl SingleMutableCsr {
         if cutoff == Timestamp::MAX {
             return 0;
         }
-        let Some(slot) = self.nbr_list.get(vid as usize) else {
+        let (Some(hot), Some(cold)) = (
+            self.hot_slots.get(vid as usize),
+            self.cold_slots.get(vid as usize),
+        ) else {
             return 0;
         };
-        if slot.edge_id != INVALID_EDGE_ID && is_reclaimable_slot(slot, cutoff) {
+        if hot.edge_id != INVALID_EDGE_ID && is_reclaimable_cold(cold, cutoff) {
             1
         } else {
             0
@@ -403,13 +457,16 @@ impl SingleMutableCsr {
     }
 
     pub fn vertex_census(&self, vid: u32) -> (usize, usize, usize) {
-        let Some(slot) = self.nbr_list.get(vid as usize) else {
+        let (Some(hot), Some(cold)) = (
+            self.hot_slots.get(vid as usize),
+            self.cold_slots.get(vid as usize),
+        ) else {
             return (0, 0, 0);
         };
-        if slot.edge_id == INVALID_EDGE_ID {
+        if hot.edge_id == INVALID_EDGE_ID {
             return (0, 0, 0);
         }
-        if slot.delete_ts == Timestamp::MAX {
+        if cold.is_live() {
             (1, 0, 1)
         } else {
             (0, 1, 1)
@@ -418,14 +475,17 @@ impl SingleMutableCsr {
 
     /// Single-slot reclaim probe: `(dead, reclaimable)` in one slot read.
     pub fn vertex_reclaim_probe(&self, vid: u32, cutoff: Timestamp) -> (usize, usize) {
-        let Some(slot) = self.nbr_list.get(vid as usize) else {
+        let (Some(hot), Some(cold)) = (
+            self.hot_slots.get(vid as usize),
+            self.cold_slots.get(vid as usize),
+        ) else {
             return (0, 0);
         };
-        if slot.edge_id == INVALID_EDGE_ID || slot.delete_ts == Timestamp::MAX {
+        if hot.edge_id == INVALID_EDGE_ID || cold.is_live() {
             return (0, 0);
         }
         let reclaimable =
-            usize::from(cutoff != Timestamp::MAX && is_reclaimable_slot(slot, cutoff));
+            usize::from(cutoff != Timestamp::MAX && is_reclaimable_cold(cold, cutoff));
         (1, reclaimable)
     }
 
@@ -440,11 +500,11 @@ impl SingleMutableCsr {
         }
         let src_idx = vid as usize;
         let (edge_id, delete_ts) = (
-            self.nbr_list[src_idx].edge_id,
-            self.nbr_list[src_idx].delete_ts,
+            self.hot_slots[src_idx].edge_id,
+            self.cold_slots[src_idx].delete_ts,
         );
         on_edge_removed(edge_id, delete_ts);
-        self.nbr_list[src_idx] = empty_slot();
+        self.set_slot(src_idx, empty_slot());
         1
     }
 
@@ -457,11 +517,12 @@ impl SingleMutableCsr {
             return 0;
         }
         let mut removed = 0usize;
-        for idx in 0..self.nbr_list.len() {
-            let slot = self.nbr_list[idx];
-            if slot.edge_id != INVALID_EDGE_ID && is_reclaimable_slot(&slot, cutoff) {
-                on_edge_removed(slot.edge_id, slot.delete_ts);
-                self.nbr_list[idx] = empty_slot();
+        for idx in 0..self.hot_slots.len() {
+            let hot = self.hot_slots[idx];
+            let cold = self.cold_slots[idx];
+            if hot.edge_id != INVALID_EDGE_ID && is_reclaimable_cold(&cold, cutoff) {
+                on_edge_removed(hot.edge_id, cold.delete_ts);
+                self.set_slot(idx, empty_slot());
                 removed += 1;
             }
         }
@@ -469,41 +530,32 @@ impl SingleMutableCsr {
     }
 
     pub fn edges_of(&self, src: u32, ts: Timestamp) -> Vec<Nbr> {
-        let src_idx = src as usize;
+        self.iter_edges_of(src, ts).into_iter().collect()
+    }
 
-        if src_idx >= self.vertex_capacity() {
-            return Vec::new();
-        }
-
-        let nbr = &self.nbr_list[src_idx];
-
-        if !nbr.is_alive_at(ts) {
-            return Vec::new();
-        }
-
-        vec![*nbr]
+    /// Read the single slot of one vertex when it is alive at `ts`.
+    ///
+    /// Allocation-free counterpart of `edges_of`: no vector is built for the
+    /// one-entry row. Returns `None` for out-of-range rows and for slots
+    /// that are empty or not alive at `ts`.
+    pub fn iter_edges_of(&self, src: u32, ts: Timestamp) -> Option<Nbr> {
+        let probe = self.slot_at(src as usize)?;
+        probe.is_alive_at(ts).then_some(probe)
     }
 
     fn get_edge_any_dst(&self, src: u32, ts: Timestamp) -> Option<Nbr> {
-        let src_idx = src as usize;
+        let probe = self.slot_at(src as usize)?;
 
-        if src_idx >= self.vertex_capacity() {
-            return None;
-        }
-
-        let nbr = &self.nbr_list[src_idx];
-
-        if nbr.is_alive_at(ts) {
-            Some(*nbr)
+        if probe.is_alive_at(ts) {
+            Some(probe)
         } else {
             None
         }
     }
 
     pub fn clear(&mut self) {
-        for nbr in &mut self.nbr_list {
-            *nbr = empty_slot();
-        }
+        self.hot_slots.fill(HotNbr::dead_gap());
+        self.cold_slots.fill(ColdStamps::dead_gap());
         self.edge_count = 0;
     }
 
@@ -523,30 +575,32 @@ impl SingleMutableCsr {
     pub fn dump_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&SINGLE_CSR_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
-        out.extend_from_slice(&(self.nbr_list.len() as u64).to_le_bytes());
+        out.extend_from_slice(&(self.hot_slots.len() as u64).to_le_bytes());
 
         {
-            let endpoints: Vec<u32> = self.nbr_list.iter().map(|nbr| nbr.endpoint).collect();
+            let endpoints: Vec<u32> = self.hot_slots.iter().map(|hot| hot.endpoint).collect();
             let (_, endpoints_payload) = encode_topology_u32_column(&endpoints);
             out.extend_from_slice(&endpoints_payload);
         }
         {
-            let ranks: Vec<i64> = self.nbr_list.iter().map(|nbr| nbr.rank).collect();
+            let ranks: Vec<i64> = self.hot_slots.iter().map(|hot| hot.rank).collect();
             let (_, ranks_payload) = encode_topology_i64_column(&ranks);
             out.extend_from_slice(&ranks_payload);
         }
         {
-            let edge_ids: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.edge_id.0).collect();
+            let edge_ids: Vec<u64> = self.hot_slots.iter().map(|hot| hot.edge_id.0).collect();
             let (_, edge_ids_payload) = encode_topology_u64_column(&edge_ids);
             out.extend_from_slice(&edge_ids_payload);
         }
         {
-            let create_stamps: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.create_ts).collect();
+            let create_stamps: Vec<u64> =
+                self.cold_slots.iter().map(|cold| cold.create_ts).collect();
             let (_, create_payload) = encode_topology_u64_column(&create_stamps);
             out.extend_from_slice(&create_payload);
         }
         {
-            let delete_stamps: Vec<u64> = self.nbr_list.iter().map(|nbr| nbr.delete_ts).collect();
+            let delete_stamps: Vec<u64> =
+                self.cold_slots.iter().map(|cold| cold.delete_ts).collect();
             let (_, delete_payload) = encode_topology_u64_column(&delete_stamps);
             out.extend_from_slice(&delete_payload);
         }
@@ -560,7 +614,9 @@ impl SingleMutableCsr {
     /// the table layer after the shared authority estimate is added, never at
     /// the shard level directly.
     pub fn used_memory_size(&self) -> usize {
-        self.nbr_list.capacity() * std::mem::size_of::<Nbr>() + std::mem::size_of::<Self>()
+        self.hot_slots.capacity() * std::mem::size_of::<HotNbr>()
+            + self.cold_slots.capacity() * std::mem::size_of::<ColdStamps>()
+            + std::mem::size_of::<Self>()
     }
 
     /// Load version 3 only; versionless payloads fail closed.
@@ -598,20 +654,23 @@ impl SingleMutableCsr {
                 "Single CSR column length mismatch",
             ));
         }
-        let mut nbr_list = Vec::with_capacity(slot_count);
+        let mut hot_slots = Vec::with_capacity(slot_count);
+        let mut cold_slots = Vec::with_capacity(slot_count);
         for index in 0..slot_count {
-            let mut nbr = Nbr::with_timestamps(
-                endpoints[index],
-                ranks[index],
-                EdgeId(edge_ids[index]),
-                delete_stamps[index],
-            );
-            nbr.create_ts = create_stamps[index];
-            nbr_list.push(nbr);
+            hot_slots.push(HotNbr {
+                endpoint: endpoints[index],
+                rank: ranks[index],
+                edge_id: EdgeId(edge_ids[index]),
+            });
+            cold_slots.push(ColdStamps {
+                create_ts: create_stamps[index],
+                delete_ts: delete_stamps[index],
+            });
         }
-        let recomputed = nbr_list
+        let recomputed = hot_slots
             .iter()
-            .filter(|nbr| nbr.edge_id != INVALID_EDGE_ID && nbr.delete_ts == Timestamp::MAX)
+            .zip(cold_slots.iter())
+            .filter(|(hot, cold)| hot.edge_id != INVALID_EDGE_ID && cold.is_live())
             .count() as u64;
         if recomputed != edge_count {
             return Err(StorageError::deserialize_error(format!(
@@ -625,7 +684,8 @@ impl SingleMutableCsr {
             ));
         }
 
-        self.nbr_list = nbr_list;
+        self.hot_slots = hot_slots;
+        self.cold_slots = cold_slots;
         self.edge_count = edge_count;
 
         Ok(())
@@ -685,9 +745,7 @@ impl<'a> Iterator for SingleMutableCsrIterator<'a> {
 
             let nbr = if self.include_deleted {
                 self.csr
-                    .nbr_list
-                    .get(vid)
-                    .copied()
+                    .slot_at(vid)
                     .filter(|n| n.edge_id != INVALID_EDGE_ID)
             } else {
                 self.csr.get_edge_any_dst(vid as u32, self.ts)
