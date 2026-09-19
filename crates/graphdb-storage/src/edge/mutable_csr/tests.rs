@@ -1019,8 +1019,13 @@ fn dense_slots_reused_after_remove_and_reinsert() {
     assert_eq!(csr.live_key_count(0), 0);
     assert_eq!(csr.edge_count(), 0);
     for i in 0..6i64 {
-        csr.insert_edge(0u32, VertexId::from_int64(100 + i), EdgeId(100 + i as u64), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::from_int64(100 + i),
+            EdgeId(100 + i as u64),
+            1,
+        )
+        .unwrap();
     }
     let seen: Vec<EdgeId> = csr
         .physical_edges_of(0u32)
@@ -1077,7 +1082,9 @@ fn positional_delete_and_revert_roundtrip() {
     }
     let (position, nbr) = csr.locate_edge(0u32, EdgeId(7)).expect("edge present");
     assert!(matches!(position, EdgePosition::Overflow { .. }));
-    assert!(csr.delete_edge_at_position(0u32, position, nbr.edge_id, 2).unwrap());
+    assert!(csr
+        .delete_edge_at_position(0u32, position, nbr.edge_id, 2)
+        .unwrap());
     assert!(!csr.live_key_present(0, nbr.endpoint, nbr.rank));
     assert!(csr.revert_delete_at_position(0u32, position, nbr.edge_id, 2));
     assert!(csr.live_key_present(0, nbr.endpoint, nbr.rank));

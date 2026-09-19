@@ -30,7 +30,27 @@ impl CsrDumpScratch {
         Self::default()
     }
 
-    fn fill_from(&mut self, nbr_list: &[Nbr]) {
+    pub(crate) fn endpoints(&self) -> &[u32] {
+        &self.endpoints
+    }
+
+    pub(crate) fn ranks(&self) -> &[i64] {
+        &self.ranks
+    }
+
+    pub(crate) fn edge_ids(&self) -> &[u64] {
+        &self.edge_ids
+    }
+
+    pub(crate) fn creates(&self) -> &[u64] {
+        &self.creates
+    }
+
+    pub(crate) fn deletes(&self) -> &[u64] {
+        &self.deletes
+    }
+
+    pub(crate) fn fill_from(&mut self, nbr_list: &[Nbr]) {
         self.endpoints.clear();
         self.ranks.clear();
         self.edge_ids.clear();

@@ -369,6 +369,109 @@ fn test_batch_insert_edges_rolls_back_on_failure() {
     );
 }
 
+fn batch_equivalence_edges() -> Vec<Edge> {
+    let mut edges = Vec::new();
+    for src in 1..=5i64 {
+        for k in 0..3i64 {
+            let mut props = std::collections::HashMap::new();
+            props.insert(
+                "since".to_string(),
+                graphdb_core::Value::from((src * 10 + k) as i32),
+            );
+            edges.push(Edge::new(
+                VertexId::from_int64(src),
+                VertexId::from_int64(src + k + 1),
+                "KNOWS".to_string(),
+                k,
+                props,
+            ));
+        }
+    }
+    edges
+}
+
+fn sorted_edge_keys(edges: Vec<graphdb_core::Edge>) -> Vec<(i64, i64, i64, String)> {
+    let mut keys: Vec<(i64, i64, i64, String)> = edges
+        .into_iter()
+        .map(|edge| {
+            (
+                edge.src.as_int64().unwrap_or(-1),
+                edge.dst.as_int64().unwrap_or(-1),
+                edge.ranking,
+                format!("{:?}", edge.props.get("since")),
+            )
+        })
+        .collect();
+    keys.sort();
+    keys
+}
+
+#[test]
+fn test_batch_insert_edges_matches_sequential() {
+    let edges = batch_equivalence_edges();
+
+    let mut reference = create_test_storage();
+    setup_space(&mut reference);
+    setup_person_tag(&mut reference);
+    setup_knows_edge(&mut reference);
+    for id in 1..=9i64 {
+        insert_test_vertex(&mut reference, id, &format!("person{id}"));
+    }
+    for edge in edges.clone() {
+        reference.insert_edge("test_space", edge).unwrap();
+    }
+
+    let mut batched = create_test_storage();
+    setup_space(&mut batched);
+    setup_person_tag(&mut batched);
+    setup_knows_edge(&mut batched);
+    for id in 1..=9i64 {
+        insert_test_vertex(&mut batched, id, &format!("person{id}"));
+    }
+    batched.batch_insert_edges("test_space", edges).unwrap();
+
+    let reference_keys =
+        sorted_edge_keys(reference.scan_edges_by_type("test_space", "KNOWS").unwrap());
+    let batched_keys = sorted_edge_keys(batched.scan_edges_by_type("test_space", "KNOWS").unwrap());
+    assert_eq!(batched_keys, reference_keys);
+    assert_eq!(batched_keys.len(), 15);
+}
+
+#[test]
+fn test_batch_insert_edges_rejects_intra_batch_duplicates() {
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    setup_knows_edge(&mut storage);
+    insert_test_vertex(&mut storage, 1, "Alice");
+    insert_test_vertex(&mut storage, 2, "Bob");
+
+    let edges = vec![
+        Edge::new(
+            VertexId::from_int64(1),
+            VertexId::from_int64(2),
+            "KNOWS".to_string(),
+            0,
+            std::collections::HashMap::new(),
+        ),
+        Edge::new(
+            VertexId::from_int64(1),
+            VertexId::from_int64(2),
+            "KNOWS".to_string(),
+            0,
+            std::collections::HashMap::new(),
+        ),
+    ];
+    assert!(storage.batch_insert_edges("test_space", edges).is_err());
+    assert_eq!(
+        storage
+            .scan_edges_by_type("test_space", "KNOWS")
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
 #[test]
 fn test_get_edge_projected() {
     let mut storage = create_test_storage();

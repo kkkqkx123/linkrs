@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::engine::params::{EdgeOperationParams, InsertEdgeParams};
+use crate::engine::{BatchEdgeInsert, InsertEdgesBatchParams};
 use crate::index::traits::VertexIndexOps;
 use crate::index::types::EdgeIdentity;
 use graphdb_core::metadata::IndexMetadataManager;
@@ -1320,18 +1321,15 @@ pub(crate) fn batch_insert_edges(
 
     let ts = ctx.get_write_timestamp()?;
     let mut rollback = Vec::new();
-
-    for edge in edges {
-        if let Err(e) =
-            insert_edge_at_timestamp(ctx, space, space_info.space_id, edge, ts, &mut rollback)
-        {
-            rollback_edges(ctx, space_info.space_id, &rollback, ts);
-            return Err(e);
-        }
+    if let Err(e) = batch_insert_grouped(ctx, space, space_info.space_id, &edges, ts, &mut rollback)
+    {
+        rollback_edges(ctx, space_info.space_id, &rollback, ts);
+        ctx.abort_write_timestamp(ts);
+        return Err(e);
     }
 
     for item in &rollback {
-        record_edge_insert(
+        if let Err(e) = record_edge_insert(
             ctx,
             EdgeIdentifier::new(
                 item.src_label_id,
@@ -1342,10 +1340,152 @@ pub(crate) fn batch_insert_edges(
                 item.rank,
             ),
             Some(item.redo_entry.clone()),
-        )?;
+        ) {
+            rollback_edges(ctx, space_info.space_id, &rollback, ts);
+            ctx.abort_write_timestamp(ts);
+            return Err(e);
+        }
     }
 
     ctx.commit_write_timestamp_ordered(ts)?;
+
+    Ok(())
+}
+
+/// Insert a batch grouped by edge type in first-seen order.
+///
+/// Each type resolves its schema once, appends one redo per edge in group
+/// order, commits the whole type through a single staging batch, then runs
+/// the per-edge index updates in the same order. A failure rolls back every
+/// previously applied edge through the shared rollback path, matching the
+/// visible-state effects of the sequential loop this replaces.
+fn batch_insert_grouped(
+    ctx: &GraphStorageContext,
+    space: &str,
+    space_id: u64,
+    edges: &[Edge],
+    ts: Timestamp,
+    rollback: &mut Vec<InsertedEdgeRecord>,
+) -> StorageResult<()> {
+    let mut order: Vec<String> = Vec::new();
+    let mut by_type: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (index, edge) in edges.iter().enumerate() {
+        by_type
+            .entry(edge.edge_type.clone())
+            .or_insert_with(|| {
+                order.push(edge.edge_type.clone());
+                Vec::new()
+            })
+            .push(index);
+    }
+    for edge_type_name in &order {
+        let positions = by_type
+            .get(edge_type_name)
+            .ok_or_else(|| StorageError::db_error("batch type group missing".to_string()))?;
+        insert_one_type_batch(ctx, space, space_id, edges, positions, ts, rollback)?;
+    }
+    Ok(())
+}
+
+fn insert_one_type_batch(
+    ctx: &GraphStorageContext,
+    space: &str,
+    space_id: u64,
+    edges: &[Edge],
+    positions: &[usize],
+    ts: Timestamp,
+    rollback: &mut Vec<InsertedEdgeRecord>,
+) -> StorageResult<()> {
+    let first = &edges[positions[0]];
+    let edge_type = resolve_edge_type(ctx, space, &first.edge_type)?;
+    let edge_label_id = edge_type.edge_type_id;
+    let src_label_id =
+        endpoint_label_id(ctx, space, &edge_type.src_tag_name)?.ok_or_else(|| {
+            StorageError::not_found(format!("Source tag {} not found", edge_type.src_tag_name))
+        })?;
+    let dst_label_id =
+        endpoint_label_id(ctx, space, &edge_type.dst_tag_name)?.ok_or_else(|| {
+            StorageError::not_found(format!(
+                "Destination tag {} not found",
+                edge_type.dst_tag_name
+            ))
+        })?;
+
+    let mut prepared: Vec<(Vec<(String, Value)>, usize)> = Vec::with_capacity(positions.len());
+    for &index in positions {
+        let edge = &edges[index];
+        let props: Vec<(String, Value)> = edge
+            .props
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let props = apply_edge_type_constraints(ctx, space, &edge.edge_type, props)?;
+        prepared.push((props, index));
+    }
+
+    let mut redo_entries = Vec::with_capacity(prepared.len());
+    for (props, index) in &prepared {
+        let edge = &edges[*index];
+        let redo = InsertEdgeRedo {
+            src_label: src_label_id,
+            src_vid: edge.src,
+            dst_label: dst_label_id,
+            dst_vid: edge.dst,
+            edge_label: edge_label_id,
+            rank: edge.ranking,
+            properties: props.clone(),
+        };
+        redo_entries.push(ctx.append_wal_redo(WalOpType::InsertEdge, ts, &redo)?);
+    }
+
+    let batch_params: Vec<BatchEdgeInsert> = prepared
+        .iter()
+        .map(|(props, index)| {
+            let edge = &edges[*index];
+            BatchEdgeInsert {
+                src_id: edge.src,
+                dst_id: edge.dst,
+                rank: edge.ranking,
+                properties: props,
+            }
+        })
+        .collect();
+    ctx.insert_edges_batch(InsertEdgesBatchParams {
+        edge_label: edge_label_id,
+        src_label: src_label_id,
+        dst_label: dst_label_id,
+        edges: &batch_params,
+        ts,
+    })?;
+
+    for (position, index) in prepared.iter().map(|(_, index)| index).enumerate() {
+        let edge = &edges[*index];
+        rollback.push(InsertedEdgeRecord {
+            edge_label_id,
+            src_label_id,
+            dst_label_id,
+            src: edge.src,
+            dst: edge.dst,
+            edge_type: edge.edge_type.clone(),
+            rank: edge.ranking,
+            redo_entry: redo_entries[position].clone(),
+        });
+    }
+
+    for (props, index) in &prepared {
+        let edge = &edges[*index];
+        let src_value = Value::from(edge.src);
+        let dst_value = Value::from(edge.dst);
+        let edge_identity = EdgeIdentity::new(
+            space_id,
+            &src_value,
+            &dst_value,
+            &edge.edge_type,
+            edge.ranking,
+        );
+        ctx.update_all_edge_indexes_mvcc(&edge_identity, props, ts)?;
+    }
 
     Ok(())
 }

@@ -291,6 +291,15 @@ impl CsrShardSet {
         let shard = self.shards.get_mut(&gid).ok_or_else(|| {
             StorageError::deserialize_error(format!("group {} out of range on append replay", gid))
         })?;
+        // Frozen groups carry no deltas by construction: freeze clears the
+        // in-memory log and the base rewrite drops the sidecar. A sidecar for
+        // a frozen base is damage, rejected here instead of replayed.
+        if matches!(shard.variant, super::super::CsrVariant::Frozen(_)) {
+            return Err(StorageError::deserialize_error(format!(
+                "append sidecar for frozen group {}",
+                gid
+            )));
+        }
         for insert in inserts {
             shard
                 .variant

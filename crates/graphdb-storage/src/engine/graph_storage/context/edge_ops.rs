@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use crate::edge::{EdgeRecord, Nbr};
 use crate::engine::data_store::EdgeTableKey;
-use crate::engine::{EdgeOperationParams, InsertEdgeParams};
+use crate::engine::{EdgeOperationParams, InsertEdgeParams, InsertEdgesBatchParams};
 use crate::mvcc_visibility::PendingGate;
 use crate::vertex::ShardedVertexTable;
 use graphdb_core::types::{LabelId, Timestamp, VertexId};
-use graphdb_core::{StorageError, StorageResult};
+use graphdb_core::{StorageError, StorageResult, Value};
 
 use super::helpers;
 use super::GraphStorageContext;
@@ -96,6 +96,130 @@ impl GraphStorageContext {
                 Ok(edge_table.needs_background_maintenance())
             },
         )?;
+        if maintenance_requested {
+            self.schedule_background_maintenance();
+        }
+        self.mark_edge_modified(params.edge_label);
+        Ok(())
+    }
+
+    /// Insert many edges of one edge type with one staging commit per owner
+    /// partition.
+    ///
+    /// Every endpoint resolves once under a single vertex-table read, then
+    /// edges group by owner partition so each edge lands exactly where
+    /// repeated single inserts put it. One partition lock and one staging
+    /// commit serve each group instead of one per edge.
+    pub fn insert_edges_batch(&self, params: InsertEdgesBatchParams) -> StorageResult<()> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return Err(StorageError::storage_not_open());
+        }
+        if params.edges.is_empty() {
+            return Ok(());
+        }
+        let resolved: Vec<(u32, u32, LabelId, LabelId)> =
+            self.persistent.data_store.with_vertex_tables(
+                |vertex_tables| -> StorageResult<Vec<(u32, u32, LabelId, LabelId)>> {
+                    let mut resolved = Vec::with_capacity(params.edges.len());
+                    for edge in params.edges {
+                        let src_internal = helpers::resolve_internal_id(
+                            self,
+                            vertex_tables,
+                            params.src_label,
+                            edge.src_id,
+                            params.ts,
+                        )
+                        .ok_or(StorageError::vertex_not_found())?;
+                        let dst_internal = helpers::resolve_internal_id(
+                            self,
+                            vertex_tables,
+                            params.dst_label,
+                            edge.dst_id,
+                            params.ts,
+                        )
+                        .ok_or(StorageError::vertex_not_found())?;
+                        let actual_src_label = if params.src_label == 0 {
+                            helpers::resolve_internal_id_label(
+                                vertex_tables,
+                                &edge.src_id,
+                                params.ts,
+                            )
+                            .ok_or(StorageError::vertex_not_found())?
+                        } else {
+                            params.src_label
+                        };
+                        let actual_dst_label = if params.dst_label == 0 {
+                            helpers::resolve_internal_id_label(
+                                vertex_tables,
+                                &edge.dst_id,
+                                params.ts,
+                            )
+                            .ok_or(StorageError::vertex_not_found())?
+                        } else {
+                            params.dst_label
+                        };
+                        resolved.push((
+                            src_internal,
+                            dst_internal,
+                            actual_src_label,
+                            actual_dst_label,
+                        ));
+                    }
+                    Ok(resolved)
+                },
+            )?;
+
+        let mut by_partition: HashMap<(LabelId, LabelId), Vec<usize>> = HashMap::new();
+        for (index, (_, _, actual_src, actual_dst)) in resolved.iter().enumerate() {
+            by_partition
+                .entry((*actual_src, *actual_dst))
+                .or_default()
+                .push(index);
+        }
+        let mut partitions: Vec<((LabelId, LabelId), Vec<usize>)> =
+            by_partition.into_iter().collect();
+        partitions.sort_unstable_by_key(|(key, _)| *key);
+
+        let stats_manager = self.persistent.stats_manager.clone();
+        let mut maintenance_requested = false;
+        for ((actual_src, actual_dst), indices) in partitions {
+            let key = EdgeTableKey::new(actual_src, actual_dst, params.edge_label);
+            let template_key = EdgeTableKey::new(0, 0, params.edge_label);
+            let entries: Vec<(u32, u32, i64, &[(String, Value)], Timestamp)> = indices
+                .iter()
+                .map(|&index| {
+                    let (src_internal, dst_internal, _, _) = resolved[index];
+                    let edge = &params.edges[index];
+                    (
+                        src_internal,
+                        dst_internal,
+                        edge.rank,
+                        edge.properties,
+                        params.ts,
+                    )
+                })
+                .collect();
+            let stats_manager = stats_manager.clone();
+            let requested = self.persistent.data_store.with_edge_partition_mut(
+                key,
+                template_key,
+                |template| {
+                    let mut s = template.schema().clone();
+                    s.src_label = actual_src;
+                    s.dst_label = actual_dst;
+                    let mut table = crate::edge::EdgeStore::new(s)?;
+                    if let Some(stats) = stats_manager {
+                        table.set_stats_manager(stats);
+                    }
+                    Ok(table)
+                },
+                |edge_table| {
+                    edge_table.insert_edges_batch(&entries)?;
+                    Ok(edge_table.needs_background_maintenance())
+                },
+            )?;
+            maintenance_requested |= requested;
+        }
         if maintenance_requested {
             self.schedule_background_maintenance();
         }

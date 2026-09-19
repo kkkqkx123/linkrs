@@ -40,6 +40,8 @@
 //! - `manifest` holds the per-table existing-group layout record.
 //! - `append_log` holds the per-group write-through delta and its codec.
 //! - `core` holds construction, group materialization, routing and bulk insert.
+//! - `freeze` holds explicit group freeze and unfreeze between mutable and
+//!   packed forms.
 //! - `read` holds routed physical read helpers.
 //! - `iter` holds the cross-group scan iterator.
 //! - `compaction` holds region observation, merge-scope selection and
@@ -57,6 +59,7 @@ pub(crate) mod append_log;
 pub(crate) mod compaction;
 pub(crate) mod core;
 pub(crate) mod dirt;
+pub(crate) mod freeze;
 pub(crate) mod iter;
 pub(crate) mod manifest;
 pub(crate) mod read;

@@ -6,7 +6,9 @@
 //!
 //! - `MutableCsr`: Mutable CSR supporting dynamic edge operations
 //! - `SingleMutableCsr`: Optimized mutable CSR for single-edge scenarios
-//! - `CsrVariant`: Enum wrapper for runtime CSR selection (mutable variants only)
+//! - `ImmutableCsr`: Frozen packed CSR for read-mostly groups (explicit
+//!   freeze/unfreeze only, writes rejected while frozen)
+//! - `CsrVariant`: Enum wrapper for runtime CSR selection
 //! - `CsrWithProperties`: Ladybug-style columnar property storage
 //! - `CsrShardSet`: Node-group sharded topology container routing by endpoint interval
 //! - `EdgeStore`: Node-group sharded edge table combining out/in shards and property storage
@@ -32,6 +34,7 @@ pub mod csr_variant;
 pub mod csr_with_properties;
 pub mod edge_table;
 pub mod fragmentation_stats;
+pub mod immutable_csr;
 pub mod mutable_csr;
 pub mod node_group;
 pub mod property_schema;
@@ -59,6 +62,7 @@ pub use node_group::{
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
 pub use graphdb_core::types::INVALID_EDGE_ID;
+pub use immutable_csr::{ImmutableCsr, ImmutableCsrIterator};
 
 #[derive(Debug, Clone)]
 pub struct EdgeRecord {

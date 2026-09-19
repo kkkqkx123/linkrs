@@ -826,6 +826,7 @@ impl EdgeStore {
         };
         let mut written = 0u64;
         let mut rebalanced = false;
+        let mut dump_scratch = crate::edge::mutable_csr::persistence::CsrDumpScratch::new();
         for gid in existing {
             let base_path = if outgoing {
                 out_group_path(dir, gid)
@@ -854,7 +855,12 @@ impl EdgeStore {
                     StorageError::deserialize_error(format!("group {} missing on flush", gid))
                 })?;
                 let mut payload = Vec::new();
-                persistence::serialize_csr(variant, section_id, &mut payload)?;
+                persistence::serialize_csr_with_scratch(
+                    variant,
+                    section_id,
+                    &mut payload,
+                    &mut dump_scratch,
+                )?;
                 persistence::write_pages_to_file(
                     &base_path,
                     &payload,
@@ -899,7 +905,12 @@ impl EdgeStore {
                         StorageError::deserialize_error(format!("group {} missing on flush", gid))
                     })?;
                     let mut payload = Vec::new();
-                    persistence::serialize_csr(variant, section_id, &mut payload)?;
+                    persistence::serialize_csr_with_scratch(
+                        variant,
+                        section_id,
+                        &mut payload,
+                        &mut dump_scratch,
+                    )?;
                     persistence::write_pages_to_file(
                         &base_path,
                         &payload,

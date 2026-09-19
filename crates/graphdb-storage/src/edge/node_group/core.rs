@@ -93,7 +93,7 @@ impl CsrShardSet {
         (max - min + 1) * self.group_size()
     }
 
-    fn fresh_variant(&self) -> StorageResult<CsrVariant> {
+    pub(crate) fn fresh_variant(&self) -> StorageResult<CsrVariant> {
         let mut variant = CsrVariant::from_strategy_with_overflow(
             self.strategy,
             self.group_size(),
@@ -259,6 +259,37 @@ impl CsrShardSet {
             }
         }
         Ok(inserted)
+    }
+
+    /// Pre-size touched rows once for an incoming batch.
+    ///
+    /// Groups missing rows are materialized first; each `Multiple` group
+    /// sizes its rows at the packed density target so the following
+    /// per-edge inserts land in reserved gaps. Other strategies skip
+    /// reservation. Only sizing happens here; inserts still flow through
+    /// the regular path so dirt and append logs stay exact.
+    pub fn reserve_for_batch(&mut self, counts: &[(u32, usize)]) -> StorageResult<()> {
+        if self.strategy == EdgeStrategy::None {
+            return Ok(());
+        }
+        let mut by_group: BTreeMap<usize, Vec<(u32, usize)>> = BTreeMap::new();
+        for (vid, incoming) in counts {
+            let gid = group_id_for(*vid, self.group_bits);
+            by_group
+                .entry(gid)
+                .or_default()
+                .push((local_vid(*vid, self.group_bits), *incoming));
+        }
+        for (gid, group_counts) in by_group {
+            self.ensure_group_id(gid)?;
+            let Some(shard) = self.shards.get_mut(&gid) else {
+                continue;
+            };
+            if let CsrVariant::Multiple(csr) = &mut shard.variant {
+                csr.reserve_for_batch(&group_counts);
+            }
+        }
+        Ok(())
     }
 
     /// Borrow one persisted group for checkpoint writes.

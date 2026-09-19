@@ -9,9 +9,9 @@
 //! # Zero-Degree Rows
 //!
 //! Primary blocks are allocated lazily on the first edge of a vertex. A vertex without
-//! edges holds no slots in `nbr_list`, and overflow chunks are stored sparsely in a
-//! HashMap keyed by vertex id. This keeps the per-row fixed cost to 12 bytes
-//! (offset + degree + capacity) and eliminates HashMap fragmentation.
+//! edges holds no slots in `nbr_list`, and overflow chunks are addressed by dense
+//! row subscript. This keeps the per-row fixed cost to 12 bytes
+//! (offset + degree + capacity) with no per-row hashing.
 //!
 //! Layout by responsibility (`mutable_csr/` subdirectory)://! - `core` holds lifecycle and capacity management.
 //! - `live_set` maintains the live endpoint index.

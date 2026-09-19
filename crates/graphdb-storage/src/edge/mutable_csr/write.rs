@@ -571,7 +571,6 @@ impl MutableCsr {
             let have = self.primary_capacities[src_idx] as usize;
             if want > have {
                 let base = self.adj_offsets[src_idx] as usize;
-                let degree = self.degrees[src_idx] as usize;
                 let extra = want - have;
                 let insert_at = base + have;
                 self.nbr_list.splice(
@@ -585,7 +584,6 @@ impl MutableCsr {
                 }
                 self.primary_capacities[src_idx] = want as u32;
                 self.add_capacity(extra);
-                let _ = degree;
             }
         }
     }
@@ -605,14 +603,20 @@ impl MutableCsr {
     ) -> StorageResult<usize> {
         if check_duplicates {
             for (src_vid, batch) in groups {
-                let mut seen = std::collections::HashSet::with_capacity(batch.len());
-                for (endpoint, rank, _, _) in batch {
-                    if !seen.insert((*endpoint, *rank)) {
+                let mut keys: Vec<(u32, i64)> = batch
+                    .iter()
+                    .map(|(endpoint, rank, _, _)| (*endpoint, *rank))
+                    .collect();
+                keys.sort_unstable();
+                for window in keys.windows(2) {
+                    if window[0] == window[1] {
                         return Err(StorageError::edge_already_exists(format!(
                             "duplicate key in bulk batch for vertex {}",
                             src_vid
                         )));
                     }
+                }
+                for (endpoint, rank, _, _) in batch {
                     if self.live_key_present(*src_vid, *endpoint, *rank) {
                         return Err(StorageError::edge_already_exists(format!(
                             "{} -> ({}, {})",

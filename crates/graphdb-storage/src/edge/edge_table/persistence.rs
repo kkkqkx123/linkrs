@@ -210,6 +210,29 @@ pub fn serialize_csr(csr: &CsrVariant, section_id: u32, buf: &mut Vec<u8>) -> St
     Ok(())
 }
 
+/// Serialize one sharded CSR reusing caller-owned column buffers.
+///
+/// Same bytes as `serialize_csr`; group-set flushes share one scratch so a
+/// checkpoint over many groups pays one allocation per column.
+pub fn serialize_csr_with_scratch(
+    csr: &CsrVariant,
+    section_id: u32,
+    buf: &mut Vec<u8>,
+    scratch: &mut crate::edge::mutable_csr::persistence::CsrDumpScratch,
+) -> StorageResult<()> {
+    write_header_to(buf, section_id)
+        .map_err(|e| StorageError::io_error(format!("Failed to write CSR header: {}", e)))?;
+
+    let len_pos = buf.len();
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    let start = buf.len();
+    csr.dump_into_with_scratch(buf, scratch);
+    let len = (buf.len() - start) as u64;
+    buf[len_pos..len_pos + 8].copy_from_slice(&len.to_le_bytes());
+
+    Ok(())
+}
+
 pub fn serialize_csr_properties(
     properties: &CsrWithProperties,
     buf: &mut Vec<u8>,

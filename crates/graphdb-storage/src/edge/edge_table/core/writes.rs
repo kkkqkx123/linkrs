@@ -2,7 +2,7 @@
 
 use super::super::super::MutableCsrTrait;
 use super::super::config::UpdateEdgePropertyByKeyParams;
-use super::super::staging::EdgeStagingBatch;
+use super::super::staging::{EdgeStagingBatch, StagedInsert};
 use super::EdgeStore;
 use crate::types::PropertyId;
 use graphdb_core::types::{EdgeId, Timestamp};
@@ -32,6 +32,34 @@ impl EdgeStore {
         // per-step compensation branches here.
         let mut batch = EdgeStagingBatch::new();
         batch.stage_insert(src, dst, rank, property_values, ts);
+        self.commit_staging_batch(batch).map(|_| ())
+    }
+
+    /// Commit many inserts of one edge type in a single staging batch.
+    ///
+    /// One prevalidation, one topology reservation pass and one live-index
+    /// rebuild for the whole batch instead of one per edge. Entries apply in
+    /// slice order with the same per-entry effects as repeated `insert_edge`
+    /// calls, including out/in symmetry and rollback of the applied prefix on
+    /// failure.
+    pub fn insert_edges_batch(
+        &mut self,
+        entries: &[(u32, u32, i64, &[(String, Value)], Timestamp)],
+    ) -> StorageResult<()> {
+        if !self.is_open {
+            return Err(StorageError::storage_not_open());
+        }
+
+        if self.schema.oe_strategy == super::super::super::EdgeStrategy::None {
+            return Err(StorageError::invalid_operation(
+                "Cannot insert edge: out-edge strategy is None".to_string(),
+            ));
+        }
+
+        let mut batch = EdgeStagingBatch::new();
+        for (src, dst, rank, property_values, ts) in entries {
+            batch.stage_insert(*src, *dst, *rank, property_values, *ts);
+        }
         self.commit_staging_batch(batch).map(|_| ())
     }
 
@@ -98,6 +126,7 @@ impl EdgeStore {
         if order.is_empty() {
             return Ok(0);
         }
+        self.reserve_topology_for_inserts(&inserts);
 
         // Recycled working buffers: cleared, not reallocated, and handed
         // back on every exit path below so the next commit reuses them.
@@ -170,6 +199,45 @@ impl EdgeStore {
         }
         self.commit_scratch = scratch;
         Ok(applied)
+    }
+
+    /// Pre-size touched topology rows once for the staged inserts.
+    ///
+    /// Counts inserts per bound endpoint per direction and sizes each row a
+    /// single time, so the apply loop below lands in reserved gaps instead
+    /// of growing overflow chunk by chunk. Sizing only; inserts still flow
+    /// through the regular apply path so authority, properties, dirt and
+    /// append logs stay exact. Failures leave at most empty groups behind.
+    fn reserve_topology_for_inserts(&mut self, inserts: &[StagedInsert]) {
+        if inserts.is_empty() {
+            return;
+        }
+        let mut by_src: Vec<u32> = inserts.iter().map(|ins| ins.src).collect();
+        by_src.sort_unstable();
+        let mut out_counts: Vec<(u32, usize)> = Vec::new();
+        for src in by_src {
+            if let Some(last) = out_counts.last_mut() {
+                if last.0 == src {
+                    last.1 += 1;
+                    continue;
+                }
+            }
+            out_counts.push((src, 1));
+        }
+        let mut by_dst: Vec<u32> = inserts.iter().map(|ins| ins.dst).collect();
+        by_dst.sort_unstable();
+        let mut in_counts: Vec<(u32, usize)> = Vec::new();
+        for dst in by_dst {
+            if let Some(last) = in_counts.last_mut() {
+                if last.0 == dst {
+                    last.1 += 1;
+                    continue;
+                }
+            }
+            in_counts.push((dst, 1));
+        }
+        let _ = self.out_csr.reserve_for_batch(&out_counts);
+        let _ = self.in_csr.reserve_for_batch(&in_counts);
     }
 
     fn convert_property_values(
@@ -511,6 +579,14 @@ impl EdgeStore {
         rank: i64,
         ts: Timestamp,
     ) -> StorageResult<Option<EdgeId>> {
+        // Frozen groups reject deletes explicitly instead of reporting a
+        // miss: the edge exists, only the layout refuses the write.
+        if self.out_csr.is_group_frozen_for(src) || self.in_csr.is_group_frozen_for(dst) {
+            return Err(StorageError::invalid_operation(format!(
+                "frozen group rejects deletes: ({}, {}, {})",
+                src, dst, rank
+            )));
+        }
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let src_key = Self::edge_endpoint_key(src, rank);
 
@@ -547,7 +623,10 @@ impl EdgeStore {
                     out_deleted
                 );
             }
-            let in_deleted = self.in_csr.delete_edge_by_dst(dst, src_key, ts);
+            let mut noop_in = |_edge_id: EdgeId, _position: Option<crate::edge::EdgePosition>| {};
+            let in_deleted =
+                self.in_csr
+                    .delete_edge_by_dst_reporting_positioned(dst, src_key, ts, &mut noop_in);
             if in_deleted == 0 {
                 // Roll back the out-direction deletion to keep both sides
                 // consistent. Count reconciliation: expected exactly one
@@ -704,6 +783,10 @@ impl EdgeStore {
     }
 
     /// Revert one batch-applied delete during batch rollback.
+    ///
+    /// Positional fast path first with edge-id fallback: the locate shares
+    /// one scan, the positional write then addresses the slot directly and
+    /// refuses stale positions instead of touching the wrong edge.
     fn revert_applied_delete(
         &mut self,
         src: u32,
@@ -711,8 +794,22 @@ impl EdgeStore {
         edge_id: EdgeId,
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let out_ok = self.out_csr.revert_delete_by_edge_id(src, edge_id, ts);
-        let in_ok = self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts);
+        let out_ok = match self.out_csr.locate_edge(src, edge_id) {
+            Some((position, _)) => {
+                self.out_csr
+                    .revert_delete_at_position(src, position, edge_id, ts)
+                    || self.out_csr.revert_delete_by_edge_id(src, edge_id, ts)
+            }
+            None => self.out_csr.revert_delete_by_edge_id(src, edge_id, ts),
+        };
+        let in_ok = match self.in_csr.locate_edge(dst, edge_id) {
+            Some((position, _)) => {
+                self.in_csr
+                    .revert_delete_at_position(dst, position, edge_id, ts)
+                    || self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts)
+            }
+            None => self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts),
+        };
         self.revive_authority_after_revert(edge_id, out_ok, in_ok)?;
         Ok(())
     }

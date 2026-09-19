@@ -35,3 +35,23 @@ pub struct InsertEdgeParams<'a> {
     pub properties: &'a [(String, Value)],
     pub ts: Timestamp,
 }
+
+/// One edge inside a batch insert: endpoints plus payload.
+pub struct BatchEdgeInsert<'a> {
+    pub src_id: VertexId,
+    pub dst_id: VertexId,
+    pub rank: i64,
+    pub properties: &'a [(String, Value)],
+}
+
+/// Parameters for a batch insert into one edge type.
+///
+/// All edges share the edge label, endpoint labels and timestamp. Endpoint
+/// labels follow the single-insert convention: zero means resolve per edge.
+pub struct InsertEdgesBatchParams<'a> {
+    pub edge_label: LabelId,
+    pub src_label: LabelId,
+    pub dst_label: LabelId,
+    pub edges: &'a [BatchEdgeInsert<'a>],
+    pub ts: Timestamp,
+}

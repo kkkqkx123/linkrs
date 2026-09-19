@@ -265,19 +265,55 @@ impl EdgeStore {
         let mut report = Vec::new();
         for gid in self.out_csr.existing_group_ids() {
             if let Some(variant) = self.out_csr.group_variant(gid) {
-                if let super::super::super::CsrVariant::Multiple(csr) = variant {
-                    for (name, encoding, plain, encoded) in csr.topology_encoding_report() {
-                        report.push((format!("out_g{}:{}", gid, name), encoding, plain, encoded));
+                match variant {
+                    super::super::super::CsrVariant::Multiple(csr) => {
+                        for (name, encoding, plain, encoded) in csr.topology_encoding_report() {
+                            report.push((
+                                format!("out_g{}:{}", gid, name),
+                                encoding,
+                                plain,
+                                encoded,
+                            ));
+                        }
                     }
+                    super::super::super::CsrVariant::Frozen(csr) => {
+                        for (name, encoding, plain, encoded) in csr.topology_encoding_report() {
+                            report.push((
+                                format!("out_g{}:{}", gid, name),
+                                encoding,
+                                plain,
+                                encoded,
+                            ));
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
         for gid in self.in_csr.existing_group_ids() {
             if let Some(variant) = self.in_csr.group_variant(gid) {
-                if let super::super::super::CsrVariant::Multiple(csr) = variant {
-                    for (name, encoding, plain, encoded) in csr.topology_encoding_report() {
-                        report.push((format!("in_g{}:{}", gid, name), encoding, plain, encoded));
+                match variant {
+                    super::super::super::CsrVariant::Multiple(csr) => {
+                        for (name, encoding, plain, encoded) in csr.topology_encoding_report() {
+                            report.push((
+                                format!("in_g{}:{}", gid, name),
+                                encoding,
+                                plain,
+                                encoded,
+                            ));
+                        }
                     }
+                    super::super::super::CsrVariant::Frozen(csr) => {
+                        for (name, encoding, plain, encoded) in csr.topology_encoding_report() {
+                            report.push((
+                                format!("in_g{}:{}", gid, name),
+                                encoding,
+                                plain,
+                                encoded,
+                            ));
+                        }
+                    }
+                    _ => {}
                 }
             }
         }

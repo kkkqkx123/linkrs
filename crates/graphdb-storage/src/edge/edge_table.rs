@@ -16,6 +16,7 @@
 //! - `schema_drop_column`: staged drop-column state machine (prepare/publish/abort)
 //! - `schema_rename_column`: staged rename-column state machine (prepare/publish/abort)
 //! - `stats`: tombstone and deletion statistics
+//! - `freeze`: explicit per-direction group freeze and unfreeze
 //!
 //! Write batching contract: the engine layer currently commits one edge per
 //! staging batch (`insert_edge`/`delete_edge` each wrap a single staged
@@ -29,6 +30,7 @@ pub mod checkpoint;
 pub mod compaction;
 pub mod config;
 pub mod core;
+pub mod freeze;
 pub mod iterator;
 pub mod mvcc;
 pub mod persistence;
