@@ -28,7 +28,9 @@ use std::collections::HashMap;
 use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
 
-use super::csr_shared::{grown_vertex_capacity, SegmentedTable, DEFAULT_VERTEX_CAPACITY};
+use super::csr_shared::{
+    grown_vertex_capacity, OverflowTable, SegmentedTable, DEFAULT_VERTEX_CAPACITY,
+};
 use super::csr_trait::{CsrBase, MutableCsrTrait};
 use super::{EdgePosition, Nbr};
 
@@ -36,7 +38,9 @@ use crate::persistence::{read_u32_le, read_u64_le};
 
 const INVALID_EDGE_ID: EdgeId = EdgeId(u64::MAX);
 
-const PURE_CSR_FORMAT_VERSION: u32 = 1;
+/// Version 2 covers the payload with a trailing CRC32 trailer verified on
+/// load; version 1 payloads without the trailer are rejected by marker.
+const PURE_CSR_FORMAT_VERSION: u32 = 2;
 
 pub(crate) const DEFAULT_VERTEX_DEGREE: usize = 4;
 
@@ -103,190 +107,32 @@ impl PureOverflowChunk {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub(crate) struct PureOverflowStorage {
-    pub(crate) table: SegmentedTable<Vec<PureOverflowChunk>>,
-    pub(crate) live_entries: usize,
-    pub(crate) present: Vec<u64>,
+impl super::csr_shared::OverflowChunkSpec for PureOverflowChunk {
+    type Slot = (u32, EdgeId);
+
+    fn with_capacity(cap: usize) -> Self {
+        PureOverflowChunk::with_capacity(cap)
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.len()
+    }
+
+    #[inline]
+    fn capacity(&self) -> usize {
+        self.capacity()
+    }
+
+    #[inline]
+    fn push_slot(&mut self, slot: (u32, EdgeId)) {
+        self.push(slot.0, slot.1);
+    }
 }
 
-impl PureOverflowStorage {
-    pub(crate) fn new() -> Self {
-        Self {
-            table: SegmentedTable::new(),
-            live_entries: 0,
-            present: Vec::new(),
-        }
-    }
-
-    #[inline]
-    pub(crate) fn has_row(&self, vid: u32) -> bool {
-        let word = vid as usize / 64;
-        let bit = vid as usize % 64;
-        self.present
-            .get(word)
-            .is_some_and(|w| w & (1u64 << bit) != 0)
-    }
-
-    #[inline]
-    pub(crate) fn set_present(&mut self, vid: u32, value: bool) {
-        let word = vid as usize / 64;
-        let bit = vid as usize % 64;
-        if self.present.len() <= word {
-            self.present.resize(word + 1, 0);
-        }
-        if value {
-            self.present[word] |= 1u64 << bit;
-        } else {
-            self.present[word] &= !(1u64 << bit);
-        }
-    }
-
-    pub(crate) fn ensure_capacity(&mut self, vertex_capacity: usize) {
-        self.table.ensure_capacity(vertex_capacity);
-        let words = vertex_capacity.div_ceil(64);
-        if self.present.len() < words {
-            self.present.resize(words, 0);
-        }
-    }
-
-    #[inline]
-    pub(crate) fn get(&self, vid: u32) -> Option<&Vec<PureOverflowChunk>> {
-        if !self.has_row(vid) {
-            return None;
-        }
-        self.table.get(vid)
-    }
-
-    #[inline]
-    pub(crate) fn single_chunk(&self, vid: u32) -> Option<&PureOverflowChunk> {
-        let chunks = self.get(vid)?;
-        if chunks.len() == 1 {
-            chunks.first()
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    pub(crate) fn get_mut(&mut self, vid: u32) -> Option<&mut Vec<PureOverflowChunk>> {
-        if !self.has_row(vid) {
-            return None;
-        }
-        self.table.get_mut(vid)
-    }
-
-    #[inline]
-    pub(crate) fn get_or_create(&mut self, vid: u32) -> &mut Vec<PureOverflowChunk> {
-        let slot = self.table.slot_mut(vid);
-        if slot.is_none() {
-            *slot = Some(Vec::new());
-            self.live_entries += 1;
-        }
-        let word = vid as usize / 64;
-        if self.present.len() <= word {
-            self.present.resize(word + 1, 0);
-        }
-        self.present[word] |= 1u64 << (vid as usize % 64);
-        slot.as_mut().expect("slot just created")
-    }
-
-    #[inline]
-    pub(crate) fn push_to_row(
-        &mut self,
-        vid: u32,
-        endpoint: u32,
-        edge_id: EdgeId,
-        chunk_edges: usize,
-    ) -> (usize, Option<usize>) {
-        let slot = self.table.slot_mut(vid);
-        if slot.is_none() {
-            *slot = Some(Vec::new());
-            self.live_entries += 1;
-        }
-        let chunks = slot.as_mut().expect("slot just created");
-        let mut added = None;
-        if chunks
-            .last()
-            .is_none_or(|chunk| chunk.len() >= chunk.capacity().max(1))
-        {
-            chunks.push(PureOverflowChunk::with_capacity(chunk_edges));
-            added = chunks.last().map(|chunk| chunk.capacity());
-        }
-        chunks
-            .last_mut()
-            .expect("tail chunk just ensured")
-            .push(endpoint, edge_id);
-        let pushed_len = chunks.len();
-        let word = vid as usize / 64;
-        if self.present.len() <= word {
-            self.present.resize(word + 1, 0);
-        }
-        self.present[word] |= 1u64 << (vid as usize % 64);
-        (pushed_len, added)
-    }
-
-    #[inline]
-    pub(crate) fn insert(&mut self, vid: u32, chunks: Vec<PureOverflowChunk>) {
-        let slot = self.table.slot_mut(vid);
-        if slot.is_none() && !chunks.is_empty() {
-            self.live_entries += 1;
-        } else if slot.is_some() && chunks.is_empty() {
-            self.live_entries = self.live_entries.saturating_sub(1);
-        }
-        if chunks.is_empty() {
-            *slot = None;
-            self.set_present(vid, false);
-        } else {
-            *slot = Some(chunks);
-            self.set_present(vid, true);
-        }
-    }
-
-    #[inline]
-    pub(crate) fn contains_key(&self, vid: u32) -> bool {
-        self.has_row(vid) && self.get(vid).is_some_and(|chunks| !chunks.is_empty())
-    }
-
-    #[inline]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.live_entries == 0
-    }
-
-    #[inline]
-    pub(crate) fn clear(&mut self) {
-        self.table.clear();
-        self.live_entries = 0;
-        self.present.clear();
-    }
-
-    #[inline]
-    pub(crate) fn remove(&mut self, vid: u32) -> Option<Vec<PureOverflowChunk>> {
-        if !self.has_row(vid) {
-            return None;
-        }
-        let taken = self.table.take(vid);
-        if taken.is_some() {
-            self.live_entries = self.live_entries.saturating_sub(1);
-            self.set_present(vid, false);
-        }
-        taken
-    }
-
-    pub(crate) fn total_entry_count(&self) -> usize {
-        self.table
-            .iter()
-            .flat_map(|(_, chunks)| chunks.iter())
-            .map(PureOverflowChunk::len)
-            .sum()
-    }
-
-    pub(crate) fn index_bytes(&self) -> usize {
-        self.table.table_bytes()
-            + self.live_entries
-                * (std::mem::size_of::<u32>() + std::mem::size_of::<Vec<PureOverflowChunk>>())
-    }
-}
+/// Pure-CSR overflow storage: the shared overflow table over
+/// endpoint/edge-id chunk halves.
+pub(crate) type PureOverflowStorage = OverflowTable<PureOverflowChunk>;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PureLiveKeySet {
@@ -651,7 +497,7 @@ impl PureTopologyCsr {
         };
         let (chunk_count, added) =
             self.overflow_chunks
-                .push_to_row(src_vid, endpoint, edge_id, effective_chunk_edges);
+                .push_to_row(src_vid, (endpoint, edge_id), effective_chunk_edges);
         if let Some(new_cap) = added {
             self.add_capacity(new_cap);
         }
@@ -995,6 +841,7 @@ impl CsrBase for PureTopologyCsr {
     }
 
     fn dump_into(&self, out: &mut Vec<u8>) {
+        let start = out.len();
         out.extend_from_slice(&PURE_CSR_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&(self.adj_offsets.len() as u64).to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
@@ -1015,14 +862,28 @@ impl CsrBase for PureTopologyCsr {
                 }
             }
         }
+        let crc = crc32fast::hash(&out[start..]);
+        out.extend_from_slice(&crc.to_le_bytes());
     }
 
     fn load(&mut self, data: &[u8]) -> StorageResult<()> {
-        if data.len() < 24 {
+        if data.len() < 28 {
             return Err(StorageError::deserialize_error(
                 "PureTopologyCsr data too short for header",
             ));
         }
+        let (body, trailer) = data.split_at(data.len() - 4);
+        let mut stored_bytes = [0u8; 4];
+        stored_bytes.copy_from_slice(trailer);
+        let stored = u32::from_le_bytes(stored_bytes);
+        let computed = crc32fast::hash(body);
+        if stored != computed {
+            return Err(StorageError::deserialize_error(format!(
+                "Pure CSR dump CRC mismatch: stored={:#x} computed={:#x}",
+                stored, computed
+            )));
+        }
+        let data = body;
 
         let mut offset = 0usize;
 
@@ -1603,7 +1464,7 @@ impl MutableCsrTrait for PureTopologyCsr {
             .any(|&eid| EdgeId(eid) == edge_id)
     }
 
-    fn remove_edge(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
+    fn rollback_insert(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
             return false;

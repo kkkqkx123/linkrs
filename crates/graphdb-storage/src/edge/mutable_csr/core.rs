@@ -83,7 +83,7 @@ impl MutableCsr {
 
     /// Get overflow chunks for a vertex.
     pub fn get_overflow_chunks(&self, vid: u32) -> Option<&Vec<OverflowChunk>> {
-        self.overflow_chunks.get(&vid)
+        self.overflow_chunks.get(vid)
     }
 
     /// Allocate the primary block of `DEFAULT_VERTEX_DEGREE` slots for a vertex

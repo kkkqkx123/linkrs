@@ -52,7 +52,7 @@ impl MutableCsr {
             }
             EdgePosition::Overflow { chunk, slot } => self
                 .overflow_chunks
-                .get(&src_vid)?
+                .get(src_vid)?
                 .get(chunk as usize)?
                 .slot_at(slot as usize),
         }
@@ -121,7 +121,7 @@ impl MutableCsr {
             }
         }
         // Consolidated single-block rows skip the chain loop.
-        if let Some(single) = self.overflow_chunks.single_chunk(&src_vid) {
+        if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
             for (hot, cold) in single.hot_slice().iter().zip(single.cold_slice()) {
                 if hot.endpoint == decoded_endpoint
                     && hot.rank == decoded_rank
@@ -133,7 +133,7 @@ impl MutableCsr {
             }
             return None;
         }
-        if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
+        if let Some(chunks) = self.overflow_chunks.get(src_vid) {
             for chunk in chunks {
                 for (hot, cold) in chunk.hot_slice().iter().zip(chunk.cold_slice()) {
                     if hot.endpoint == decoded_endpoint
@@ -178,7 +178,7 @@ impl MutableCsr {
                 .zip(cold.iter())
                 .map(|(h, c)| Nbr::from_parts(*h, *c)),
         );
-        if let Some(single) = self.overflow_chunks.single_chunk(&src_vid) {
+        if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
             out.reserve(single.len());
             for i in 0..single.len() {
                 if let Some(nbr) = single.slot_at(i) {
@@ -187,7 +187,7 @@ impl MutableCsr {
             }
             return;
         }
-        if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
+        if let Some(chunks) = self.overflow_chunks.get(src_vid) {
             for chunk in chunks {
                 out.reserve(chunk.len());
                 for i in 0..chunk.len() {
@@ -219,7 +219,7 @@ impl MutableCsr {
                 return;
             }
         }
-        if let Some(single) = self.overflow_chunks.single_chunk(&src_vid) {
+        if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
             for h in single.hot_slice() {
                 if !f(*h) {
                     return;
@@ -227,7 +227,7 @@ impl MutableCsr {
             }
             return;
         }
-        if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
+        if let Some(chunks) = self.overflow_chunks.get(src_vid) {
             for chunk in chunks {
                 for h in chunk.hot_slice() {
                     if !f(*h) {
@@ -257,7 +257,7 @@ impl MutableCsr {
                 return;
             }
         }
-        if let Some(single) = self.overflow_chunks.single_chunk(&src_vid) {
+        if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
             for i in 0..single.len() {
                 if let Some(nbr) = single.slot_at(i) {
                     if !f(nbr) {
@@ -267,7 +267,7 @@ impl MutableCsr {
             }
             return;
         }
-        if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
+        if let Some(chunks) = self.overflow_chunks.get(src_vid) {
             for chunk in chunks {
                 for i in 0..chunk.len() {
                     if let Some(nbr) = chunk.slot_at(i) {
@@ -304,7 +304,7 @@ impl MutableCsr {
                 return;
             }
         }
-        if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
+        if let Some(chunks) = self.overflow_chunks.get(src_vid) {
             for (chunk_idx, chunk) in chunks.iter().enumerate() {
                 for slot_idx in 0..chunk.len() {
                     if let Some(nbr) = chunk.slot_at(slot_idx) {
@@ -365,7 +365,7 @@ impl MutableCsr {
             return true;
         }
         self.overflow_chunks
-            .get(&vid)
+            .get(vid)
             .is_some_and(|chunks| chunks.iter().any(|c| !c.is_empty()))
     }
 
@@ -382,7 +382,7 @@ impl MutableCsr {
         let (hot, cold) = self.primary_pair(src_idx);
         let overflow_len = self
             .overflow_chunks
-            .get(&src_vid)
+            .get(src_vid)
             .map(|chunks| chunks.iter().map(|chunk| chunk.len()).sum::<usize>())
             .unwrap_or(0);
         let mut result = Vec::with_capacity(hot.len() + overflow_len);
@@ -392,7 +392,7 @@ impl MutableCsr {
             nbr.is_alive_at(ts).then_some(nbr)
         }));
 
-        if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
+        if let Some(chunks) = self.overflow_chunks.get(src_vid) {
             for chunk in chunks {
                 for i in 0..chunk.len() {
                     if let Some(nbr) = chunk.slot_at(i) {
@@ -451,7 +451,7 @@ impl MutableCsr {
         }
 
         // Scan overflow: consolidated single-block rows skip the chain loop.
-        if let Some(single) = self.overflow_chunks.single_chunk(&src_vid) {
+        if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
             for i in 0..single.len() {
                 if let Some(nbr) = single.slot_at(i) {
                     if nbr.endpoint == decoded_endpoint
@@ -464,7 +464,7 @@ impl MutableCsr {
             }
             return None;
         }
-        if let Some(chunks) = self.overflow_chunks.get(&src_vid) {
+        if let Some(chunks) = self.overflow_chunks.get(src_vid) {
             for chunk in chunks {
                 for i in 0..chunk.len() {
                     if let Some(nbr) = chunk.slot_at(i) {

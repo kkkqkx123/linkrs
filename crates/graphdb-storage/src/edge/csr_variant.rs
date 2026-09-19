@@ -84,6 +84,13 @@ macro_rules! dispatch {
 ///
 /// The enum dispatch via `CsrVariant` keeps one implementation per trait
 /// method; callers use the trait interface so behavior stays in one place.
+///
+/// Cross-layer traversal contract: row positions (`EdgePosition` chunk/slot
+/// pairs, primary-block offsets, overflow indices) are variant-local and
+/// never cross a layer boundary. Every handoff between layers (read to
+/// write, scan to point lookup, live table to migration) re-resolves the
+/// target through the edge-id key first; a position obtained from one
+/// variant is never interpreted by another.
 #[derive(Debug, Clone)]
 pub enum CsrVariant {
     /// Multi-edge mutable CSR: each vertex can have multiple outgoing edges
@@ -639,8 +646,8 @@ impl MutableCsrTrait for CsrVariant {
         }
     }
 
-    fn remove_edge(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
-        dispatch!(self, remove_edge(src_vid, edge_id) -> false)
+    fn rollback_insert(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
+        dispatch!(self, rollback_insert(src_vid, edge_id) -> false)
     }
 
     fn revert_delete_by_edge_id(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
@@ -790,43 +797,6 @@ impl CsrVariant {
             CsrVariant::Frozen(csr) => Some(CsrRowIter::Frozen(csr.iter_edges_of(src_vid, ts))),
             CsrVariant::Mapped(csr) => Some(CsrRowIter::Mapped(csr.iter_edges_of(src_vid, ts))),
             CsrVariant::None { .. } => None,
-        }
-    }
-
-    /// Create an iterator over edges
-    pub fn iter(&self, ts: Timestamp) -> CsrIterator<'_> {
-        match self {
-            CsrVariant::Multiple(csr) => CsrIterator::Multiple(csr.iter(ts)),
-            CsrVariant::Single(csr) => CsrIterator::Single(csr.iter(ts)),
-            CsrVariant::Pure(csr) => {
-                let cap = csr.vertex_capacity();
-                CsrIterator::Pure(
-                    (0..cap as u32)
-                        .flat_map(move |vid| {
-                            csr.edges_of(vid, ts)
-                                .into_iter()
-                                .map(move |nbr| (VertexId::from_int64(vid as i64), nbr))
-                        })
-                        .collect::<Vec<_>>()
-                        .into_iter(),
-                )
-            }
-            CsrVariant::Bundled(csr) => {
-                let cap = csr.vertex_capacity();
-                CsrIterator::Bundled(
-                    (0..cap as u32)
-                        .flat_map(move |vid| {
-                            csr.edges_of(vid, ts)
-                                .into_iter()
-                                .map(move |nbr| (VertexId::from_int64(vid as i64), nbr))
-                        })
-                        .collect::<Vec<_>>()
-                        .into_iter(),
-                )
-            }
-            CsrVariant::Frozen(csr) => CsrIterator::Frozen(csr.iter(ts)),
-            CsrVariant::Mapped(csr) => CsrIterator::Mapped(csr.iter(ts)),
-            CsrVariant::None { .. } => CsrIterator::None,
         }
     }
 
@@ -1213,7 +1183,7 @@ mod tests {
     fn test_none_csr_iter() {
         let csr =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::None, 10, 100, 4096).unwrap();
-        let mut iter = csr.iter(1);
+        let mut iter = csr.iter_all();
 
         // Iterator should produce no items
         assert!(iter.next().is_none());

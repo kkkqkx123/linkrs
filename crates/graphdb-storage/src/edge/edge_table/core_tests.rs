@@ -1366,7 +1366,7 @@ fn test_revert_delete_keeps_authority_on_partial_failure() {
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table.insert_edge(0, 1, 0, &[], 100).unwrap();
     assert!(table.delete_edge(0, 1, 0, 150).unwrap());
-    assert!(table.in_csr.remove_edge(1, EdgeId(0)));
+    assert!(table.in_csr.rollback_insert(1, EdgeId(0)));
     assert!(table.revert_delete_edge(0, 1, 0, 150).is_err());
     assert!(table.mvcc.is_edge_deleted(EdgeId(0)));
     assert!(!table.has_edge(0, 1, 0, 200));

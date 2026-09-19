@@ -323,14 +323,14 @@ impl MutableCsrTrait for CsrShardSet {
         reverted
     }
 
-    fn remove_edge(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
+    fn rollback_insert(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
         let Some((gid, local)) = self.route(src_vid) else {
             return false;
         };
         let removed = self
             .shards
             .get_mut(&gid)
-            .map(|shard| shard.variant.remove_edge(local, edge_id))
+            .map(|shard| shard.variant.rollback_insert(local, edge_id))
             .unwrap_or(false);
         if removed {
             self.mark_region_delete(gid, local);

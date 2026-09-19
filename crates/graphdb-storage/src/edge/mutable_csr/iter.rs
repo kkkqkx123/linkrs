@@ -46,7 +46,7 @@ impl<'a> VertexEdgesIter<'a> {
         Self {
             primary: hot.iter().zip(cold.iter()),
             ts,
-            overflow_chunks: csr.overflow_chunks.get(&src_vid),
+            overflow_chunks: csr.overflow_chunks.get(src_vid),
             overflow_chunk_idx: 0,
             overflow_edge_idx: 0,
         }
@@ -136,7 +136,7 @@ impl<'a> Iterator for MutableCsrIterator<'a> {
         while self.current_vertex < csr.vertex_capacity() {
             if !self.in_overflow {
                 if self.current_edge == 0 {
-                    self.overflow_chunks = csr.overflow_chunks.get(&(self.current_vertex as u32));
+                    self.overflow_chunks = csr.overflow_chunks.get(self.current_vertex as u32);
                     self.overflow_chunk_idx = 0;
                     self.overflow_edge_idx = 0;
                 }

@@ -11,7 +11,7 @@
 //! and each topology overflow chunk has a parallel `BundledOverflowValues`
 //! chunk of identical length.  Every topology mutation goes through the
 //! shared `PureTopologyCsr` entry (`insert_edge_returning_position`,
-//! positioned deletes) or mirrors its slot moves exactly (`remove_edge`,
+//! positioned deletes) or mirrors its slot moves exactly (`rollback_insert`,
 //! `compact_vertex_with_reporting`), so the two columns never drift.
 //!
 //! A deleted slot keeps its stale raw word but clears its validity bit;
@@ -31,7 +31,7 @@ use super::pure_csr::{PureOverflowChunk, PureTopologyCsr, DEFAULT_OVERFLOW_CHUNK
 use super::{EdgePosition, Nbr};
 use crate::persistence::{read_u32_le, read_u64_le};
 
-const BUNDLED_CSR_FORMAT_VERSION: u32 = 1;
+const BUNDLED_CSR_FORMAT_VERSION: u32 = 2;
 const INVALID_EDGE_ID: EdgeId = EdgeId(u64::MAX);
 
 /// Encode a scalar `Value` into a 64-bit storage word.
@@ -498,8 +498,8 @@ impl BundledCsr {
         }
     }
 
-    /// Physically remove one edge, shifting the value column with the topology.
-    fn remove_edge_shifted(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
+    /// Erase one just-inserted edge for insert rollback, shifting the value column with the topology.
+    fn rollback_insert_shifted(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
         if edge_id == INVALID_EDGE_ID {
             return false;
         }
@@ -742,11 +742,23 @@ impl CsrBase for BundledCsr {
     }
 
     fn load(&mut self, data: &[u8]) -> StorageResult<()> {
-        if data.len() < 12 {
+        if data.len() < 16 {
             return Err(StorageError::deserialize_error(
                 "bundled csr: data too short".to_string(),
             ));
         }
+        let (body, trailer) = data.split_at(data.len() - 4);
+        let mut stored_bytes = [0u8; 4];
+        stored_bytes.copy_from_slice(trailer);
+        let stored = u32::from_le_bytes(stored_bytes);
+        let computed = crc32fast::hash(body);
+        if stored != computed {
+            return Err(StorageError::deserialize_error(format!(
+                "bundled csr: dump CRC mismatch: stored={:#x} computed={:#x}",
+                stored, computed
+            )));
+        }
+        let data = body;
         let mut offset = 0usize;
         let version = read_u32_le(data, &mut offset)?;
         if version != BUNDLED_CSR_FORMAT_VERSION {
@@ -829,6 +841,7 @@ impl CsrBase for BundledCsr {
     }
 
     fn dump_into(&self, out: &mut Vec<u8>) {
+        let start = out.len();
         out.extend_from_slice(&BUNDLED_CSR_FORMAT_VERSION.to_le_bytes());
         let topo = self.topology.dump();
         out.extend_from_slice(&(topo.len() as u64).to_le_bytes());
@@ -848,6 +861,8 @@ impl CsrBase for BundledCsr {
                 None => out.extend_from_slice(&0u32.to_le_bytes()),
             }
         }
+        let crc = crc32fast::hash(&out[start..]);
+        out.extend_from_slice(&crc.to_le_bytes());
     }
 }
 
@@ -1029,8 +1044,8 @@ impl MutableCsrTrait for BundledCsr {
         self.topology.primary_contains(src_vid, edge_id)
     }
 
-    fn remove_edge(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
-        self.remove_edge_shifted(src_vid, edge_id)
+    fn rollback_insert(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
+        self.rollback_insert_shifted(src_vid, edge_id)
     }
 
     fn revert_delete_by_edge_id(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
@@ -1162,7 +1177,7 @@ mod tests {
         }
         assert!(csr.set_value_by_edge_id(0, EdgeId(3), Some(0xFFFF)));
         assert_eq!(csr.value_by_edge_id(0, EdgeId(3)), Some((0xFFFF, true)));
-        assert!(csr.remove_edge(0, EdgeId(0)));
+        assert!(csr.rollback_insert(0, EdgeId(0)));
         assert_eq!(csr.edge_count(), 9);
         for i in 1..10u32 {
             let expect = if i == 3 { 0xFFFF } else { i as u64 * 10 };

@@ -39,7 +39,7 @@ use super::{
 /// Persistence version for the single-edge topology columns. Version 3
 /// carries the integer column path for neighbor and edge-id columns plus a
 /// version header; versionless payloads are rejected, never converted.
-pub(crate) const SINGLE_CSR_FORMAT_VERSION: u32 = 3;
+pub(crate) const SINGLE_CSR_FORMAT_VERSION: u32 = 4;
 
 /// Unassigned single slot: no edge id, never alive at any timestamp.
 fn empty_slot() -> Nbr {
@@ -398,7 +398,7 @@ impl SingleMutableCsr {
             .is_some_and(|hot| hot.edge_id == edge_id)
     }
 
-    pub fn remove_edge(&mut self, src: u32, edge_id: EdgeId) -> bool {
+    pub fn rollback_insert(&mut self, src: u32, edge_id: EdgeId) -> bool {
         let src_idx = src as usize;
         if src_idx >= self.vertex_capacity() {
             return false;
@@ -575,8 +575,10 @@ impl SingleMutableCsr {
         result
     }
 
-    /// Borrow-based dump into `out`, byte-identical to `dump`.
+    /// Borrow-based dump into `out`, byte-identical to `dump`. The payload
+    /// carries a trailing CRC32 trailer verified on load.
     pub fn dump_into(&self, out: &mut Vec<u8>) {
+        let start = out.len();
         out.extend_from_slice(&SINGLE_CSR_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
         out.extend_from_slice(&(self.hot_slots.len() as u64).to_le_bytes());
@@ -608,6 +610,8 @@ impl SingleMutableCsr {
             let (_, delete_payload) = encode_topology_u64_column(&delete_stamps);
             out.extend_from_slice(&delete_payload);
         }
+        let crc = crc32fast::hash(&out[start..]);
+        out.extend_from_slice(&crc.to_le_bytes());
     }
 
     /// Reserved slot memory plus struct overhead.
@@ -623,13 +627,26 @@ impl SingleMutableCsr {
             + std::mem::size_of::<Self>()
     }
 
-    /// Load version 3 only; versionless payloads fail closed.
+    /// Load version 4 only; versionless payloads fail closed. The trailing
+    /// CRC32 is verified before any parsing.
     pub fn load(&mut self, data: &[u8]) -> StorageResult<()> {
-        if data.len() < 16 {
+        if data.len() < 20 {
             return Err(StorageError::deserialize_error(
                 "Single CSR data too short for header",
             ));
         }
+        let (body, trailer) = data.split_at(data.len() - 4);
+        let mut stored_bytes = [0u8; 4];
+        stored_bytes.copy_from_slice(trailer);
+        let stored = u32::from_le_bytes(stored_bytes);
+        let computed = crc32fast::hash(body);
+        if stored != computed {
+            return Err(StorageError::deserialize_error(format!(
+                "Single CSR dump CRC mismatch: stored={:#x} computed={:#x}",
+                stored, computed
+            )));
+        }
+        let data = body;
 
         let mut offset = 0usize;
 
@@ -850,8 +867,8 @@ impl MutableCsrTrait for SingleMutableCsr {
         SingleMutableCsr::primary_contains(self, src_vid, edge_id)
     }
 
-    fn remove_edge(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
-        SingleMutableCsr::remove_edge(self, src_vid, edge_id)
+    fn rollback_insert(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
+        SingleMutableCsr::rollback_insert(self, src_vid, edge_id)
     }
 
     fn revert_delete_by_edge_id(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
@@ -1008,6 +1025,15 @@ mod tests {
         tampered[4..12].copy_from_slice(&(stored + 1).to_le_bytes());
         let mut csr2 = SingleMutableCsr::new();
         let err = csr2.load(&tampered).expect_err("tampered count must fail");
+        assert!(err.to_string().contains("CRC mismatch"));
+
+        // Re-seal the trailer so the CRC passes: the structural edge-count
+        // validation underneath must still catch the tamper.
+        let body_len = tampered.len() - 4;
+        let resealed = crc32fast::hash(&tampered[..body_len]);
+        tampered[body_len..].copy_from_slice(&resealed.to_le_bytes());
+        let mut csr3 = SingleMutableCsr::new();
+        let err = csr3.load(&tampered).expect_err("resealed count must fail");
         assert!(err.to_string().contains("edge count mismatch"));
     }
 
@@ -1107,7 +1133,7 @@ mod tests {
         let mut csr = SingleMutableCsr::with_capacity(4);
         csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
             .unwrap();
-        assert!(csr.remove_edge(0, EdgeId(100)));
+        assert!(csr.rollback_insert(0, EdgeId(100)));
         assert_eq!(csr.edge_count(), 0);
         assert!(!csr.has_physical_entries(0));
         csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(101), 110)

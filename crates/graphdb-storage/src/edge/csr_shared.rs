@@ -92,10 +92,10 @@ pub(crate) const SEGMENT_MASK: usize = SEGMENT_SIZE - 1;
 /// only the pointer, so millions of empty vertices no longer pay a slot each.
 /// Segments are never freed once allocated; `clear` only empties their slots.
 ///
-/// The live-entry/row counters stay in the owning wrapper (`OverflowStorage`,
+/// The live-entry/row counters stay in the owning wrapper (`OverflowTable`,
 /// `LiveSetStorage`); this table only owns addressing and storage.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct SegmentedTable<T> {
+pub struct SegmentedTable<T> {
     segments: Vec<Option<Box<[Option<T>; SEGMENT_SIZE]>>>,
 }
 
@@ -208,5 +208,268 @@ impl<T> SegmentedTable<T> {
     pub(crate) fn table_bytes(&self) -> usize {
         self.segments.capacity() * std::mem::size_of::<Option<Box<[Option<T>; SEGMENT_SIZE]>>>()
             + self.allocated_segments() * SEGMENT_SIZE * std::mem::size_of::<Option<T>>()
+    }
+}
+
+/// Chunk contract for the shared per-vertex overflow table.
+///
+/// The mutable CSR (`OverflowChunk`: hot-topology plus cold-stamp halves)
+/// and the pure CSR (`PureOverflowChunk`: endpoint plus edge-id halves) share
+/// the table routing, presence bitmap and live-row ledger below; only the
+/// slot encoding differs. Method names mirror the inherent chunk methods so
+/// the two chunk types stay in sync with this contract.
+pub trait OverflowChunkSpec {
+    /// One assembled record as split across the owning chunk halves.
+    type Slot;
+    fn with_capacity(cap: usize) -> Self;
+    fn len(&self) -> usize;
+    fn capacity(&self) -> usize;
+    fn push_slot(&mut self, slot: Self::Slot);
+}
+
+/// Per-vertex overflow storage with segmented sparse row indexing, shared by
+/// the mutable and pure CSR variants.
+///
+/// Row addresses inside one CSR are dense vertex ids, so non-empty rows are
+/// addressed by direct subscript (segment by shift, offset by mask) instead
+/// of hashing. Segments with no touched row stay unallocated and cost only
+/// the pointer, so millions of empty vertices no longer pay a slot each;
+/// sparsity across groups is still handled by the group map above this layer.
+///
+/// A one-bit-per-vertex presence map fronts every lookup: rows without
+/// overflow answer from a single bit test instead of paying the segment
+/// routing on every read, write and full-scan step.
+#[derive(Debug, Clone, Default)]
+pub struct OverflowTable<C: OverflowChunkSpec> {
+    table: SegmentedTable<Vec<C>>,
+    live_entries: usize,
+    present: Vec<u64>,
+}
+
+impl<C: OverflowChunkSpec> OverflowTable<C> {
+    pub fn new() -> Self {
+        Self {
+            table: SegmentedTable::new(),
+            live_entries: 0,
+            present: Vec::new(),
+        }
+    }
+
+    /// Bit-test fast path shared by the lookup entries.
+    #[inline]
+    fn has_row(&self, vid: u32) -> bool {
+        let word = vid as usize / 64;
+        let bit = vid as usize % 64;
+        self.present
+            .get(word)
+            .is_some_and(|w| w & (1u64 << bit) != 0)
+    }
+
+    #[inline]
+    fn set_present(&mut self, vid: u32, value: bool) {
+        let word = vid as usize / 64;
+        let bit = vid as usize % 64;
+        if self.present.len() <= word {
+            self.present.resize(word + 1, 0);
+        }
+        if value {
+            self.present[word] |= 1u64 << bit;
+        } else {
+            self.present[word] &= !(1u64 << bit);
+        }
+    }
+
+    /// Reserve segment pointers so `vertex_capacity` is addressable. Segment
+    /// contents are never allocated here: untouched rows stay pointer-only.
+    pub fn ensure_capacity(&mut self, vertex_capacity: usize) {
+        self.table.ensure_capacity(vertex_capacity);
+        let words = vertex_capacity.div_ceil(64);
+        if self.present.len() < words {
+            self.present.resize(words, 0);
+        }
+    }
+
+    #[inline]
+    pub fn get(&self, vid: u32) -> Option<&Vec<C>> {
+        if !self.has_row(vid) {
+            return None;
+        }
+        self.table.get(vid)
+    }
+
+    /// Single-block fast path for consolidated rows.
+    ///
+    /// Merge passes (write-path repack, rebalance, vertex compaction) leave
+    /// merged rows as one contiguous chunk, so most overflow reads touch one
+    /// block. Returns it directly when the row holds exactly one chunk;
+    /// multi-block rows fall back to the chain walk.
+    #[inline]
+    pub fn single_chunk(&self, vid: u32) -> Option<&C> {
+        let chunks = self.get(vid)?;
+        if chunks.len() == 1 {
+            chunks.first()
+        } else {
+            None
+        }
+    }
+
+    /// Chunk count of one row, zero when the row holds no overflow.
+    #[inline]
+    pub fn chunk_count(&self, vid: u32) -> usize {
+        self.get(vid).map_or(0, Vec::len)
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self, vid: u32) -> Option<&mut Vec<C>> {
+        if !self.has_row(vid) {
+            return None;
+        }
+        self.table.get_mut(vid)
+    }
+
+    /// Get mutable reference to the chunk list for `vid`, inserting an empty
+    /// entry if absent.
+    #[inline]
+    pub fn get_or_create(&mut self, vid: u32) -> &mut Vec<C> {
+        let slot = self.table.slot_mut(vid);
+        if slot.is_none() {
+            *slot = Some(Vec::new());
+            self.live_entries += 1;
+        }
+        // Inline bit set on the disjoint `present` field: the table borrow
+        // in `slot` is still live at the return below.
+        let word = vid as usize / 64;
+        if self.present.len() <= word {
+            self.present.resize(word + 1, 0);
+        }
+        self.present[word] |= 1u64 << (vid as usize % 64);
+        slot.as_mut().expect("slot just created")
+    }
+
+    /// Append one record to the row, allocating a fresh chunk when the tail
+    /// chunk is full. Single table routing per call; returns the live chunk
+    /// count plus the reserved capacity when a new chunk was allocated so the
+    /// caller can ledger it without a second lookup.
+    #[inline]
+    pub fn push_to_row(
+        &mut self,
+        vid: u32,
+        slot: C::Slot,
+        chunk_edges: usize,
+    ) -> (usize, Option<usize>) {
+        let row = self.table.slot_mut(vid);
+        if row.is_none() {
+            *row = Some(Vec::new());
+            self.live_entries += 1;
+        }
+        let chunks = row.as_mut().expect("slot just created");
+        let mut added = None;
+        if chunks
+            .last()
+            .is_none_or(|chunk| chunk.len() >= chunk.capacity().max(1))
+        {
+            chunks.push(C::with_capacity(chunk_edges));
+            added = chunks.last().map(|chunk| chunk.capacity());
+        }
+        chunks
+            .last_mut()
+            .expect("tail chunk just ensured")
+            .push_slot(slot);
+        let pushed_len = chunks.len();
+        // Inline bit set on the disjoint `present` field; see `get_or_create`.
+        let word = vid as usize / 64;
+        if self.present.len() <= word {
+            self.present.resize(word + 1, 0);
+        }
+        self.present[word] |= 1u64 << (vid as usize % 64);
+        (pushed_len, added)
+    }
+
+    #[inline]
+    pub fn insert(&mut self, vid: u32, chunks: Vec<C>) {
+        let slot = self.table.slot_mut(vid);
+        if slot.is_none() && !chunks.is_empty() {
+            self.live_entries += 1;
+        } else if slot.is_some() && chunks.is_empty() {
+            self.live_entries = self.live_entries.saturating_sub(1);
+        }
+        if chunks.is_empty() {
+            *slot = None;
+            self.set_present(vid, false);
+        } else {
+            *slot = Some(chunks);
+            self.set_present(vid, true);
+        }
+    }
+
+    #[inline]
+    pub fn contains_key(&self, vid: u32) -> bool {
+        self.has_row(vid) && self.get(vid).is_some_and(|chunks| !chunks.is_empty())
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.live_entries
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.live_entries == 0
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.table.clear();
+        self.live_entries = 0;
+        self.present.clear();
+    }
+
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = (u32, &Vec<C>)> {
+        self.table.iter()
+    }
+
+    #[inline]
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (u32, &mut Vec<C>)> {
+        self.table.iter_mut()
+    }
+
+    /// Remove entry for `vid` and return its chunks if present.
+    #[inline]
+    pub fn remove(&mut self, vid: u32) -> Option<Vec<C>> {
+        if !self.has_row(vid) {
+            return None;
+        }
+        let taken = self.table.take(vid);
+        if taken.is_some() {
+            self.live_entries = self.live_entries.saturating_sub(1);
+            self.set_present(vid, false);
+        }
+        taken
+    }
+
+    /// Total number of slot entries across all overflow chunks.
+    pub fn total_entry_count(&self) -> usize {
+        self.table
+            .iter()
+            .flat_map(|(_, chunks)| chunks.iter())
+            .map(|chunk| chunk.len())
+            .sum()
+    }
+
+    /// Estimate of wasted capacity inside overflow chunks (capacity - len).
+    pub fn wasted_capacity(&self) -> usize {
+        self.table
+            .iter()
+            .flat_map(|(_, chunks)| chunks.iter())
+            .map(|c| c.capacity().saturating_sub(c.len()))
+            .sum()
+    }
+
+    /// Segment pointer table plus allocated segment slabs, plus per-row
+    /// chunk lists. Untouched segments contribute only their pointer.
+    pub fn index_bytes(&self) -> usize {
+        self.table.table_bytes()
+            + self.live_entries * (std::mem::size_of::<u32>() + std::mem::size_of::<Vec<C>>())
     }
 }

@@ -78,17 +78,17 @@ impl CsrDumpScratch {
 }
 
 impl MutableCsr {
-    /// Dump to bytes, version 4.
+    /// Dump to bytes, version 6.
     ///
     /// Header columns (offsets, degrees, capacities) and primary neighbor
     /// columns (endpoints, ranks, edge ids, stamps) persist through the
     /// integer column path with per-column bit-packing or run-length
     /// encoding and a narrow plain fallback. Overflow chunks use the same
-    /// column path per chunk instead of plain neighbor records. Version 3
-    /// and older payloads are rejected on load, never converted.
+    /// column path per chunk instead of plain neighbor records. Older
+    /// payloads are rejected on load, never converted.
     ///
     /// Format:
-    /// - format_version (u32 = 4)
+    /// - format_version (u32 = 6)
     /// - vertex_capacity (u64)
     /// - edge_count (u64)
     /// - primary_len (u64)
@@ -102,6 +102,7 @@ impl MutableCsr {
     /// - encoded create stamps column
     /// - encoded delete stamps column
     /// - per-vertex overflow chunks (column-encoded per chunk)
+    /// - payload CRC32 (u32, little-endian, over all preceding bytes)
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
         self.dump_into(&mut result);
@@ -123,6 +124,7 @@ impl MutableCsr {
     /// checkpoint over many groups pays one allocation per column instead
     /// of one per group. The scratch holds no state between calls.
     pub fn dump_into_with_scratch(&self, out: &mut Vec<u8>, scratch: &mut CsrDumpScratch) {
+        let start = out.len();
         out.extend_from_slice(&MUTABLE_CSR_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&(self.adj_offsets.len() as u64).to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
@@ -149,7 +151,7 @@ impl MutableCsr {
         out.extend_from_slice(&delete_payload);
 
         for vid in 0..self.adj_offsets.len() {
-            let chunks = self.overflow_chunks.get(&(vid as u32));
+            let chunks = self.overflow_chunks.get(vid as u32);
             out.extend_from_slice(&(chunks.map_or(0, Vec::len) as u32).to_le_bytes());
             if let Some(chunks) = chunks {
                 for chunk in chunks {
@@ -157,6 +159,8 @@ impl MutableCsr {
                 }
             }
         }
+        let crc = crc32fast::hash(&out[start..]);
+        out.extend_from_slice(&crc.to_le_bytes());
     }
 
     /// Direct dump reusing caller-owned column buffers.
@@ -168,6 +172,7 @@ impl MutableCsr {
     /// allocation. Marked with the raw format version; the loader dispatches
     /// by marker and rejects any other marker instead of converting.
     pub fn dump_into_with_scratch_raw(&self, out: &mut Vec<u8>, scratch: &mut CsrDumpScratch) {
+        let start = out.len();
         out.extend_from_slice(&MUTABLE_CSR_FORMAT_RAW_VERSION.to_le_bytes());
         out.extend_from_slice(&(self.adj_offsets.len() as u64).to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
@@ -186,7 +191,7 @@ impl MutableCsr {
         write_raw_u64_column(scratch.deletes(), out);
 
         for vid in 0..self.adj_offsets.len() {
-            let chunks = self.overflow_chunks.get(&(vid as u32));
+            let chunks = self.overflow_chunks.get(vid as u32);
             out.extend_from_slice(&(chunks.map_or(0, Vec::len) as u32).to_le_bytes());
             if let Some(chunks) = chunks {
                 for chunk in chunks {
@@ -194,6 +199,8 @@ impl MutableCsr {
                 }
             }
         }
+        let crc = crc32fast::hash(&out[start..]);
+        out.extend_from_slice(&crc.to_le_bytes());
     }
 
     /// Owned direct dump, byte-identical to `dump_into_with_scratch_raw`
@@ -252,15 +259,29 @@ impl MutableCsr {
         ]
     }
 
-    /// Load from bytes, version 4 (encoded columns) or version 5 (raw
+    /// Load from bytes, version 6 (encoded columns) or version 7 (raw
     /// direct dump) by marker. Any other marker is rejected, never
     /// converted; both versions share the same strict validation below.
+    /// The trailing CRC32 is verified before any parsing so a truncated or
+    /// bit-rotted checkpoint fails fast instead of decoding garbage.
     pub fn load(&mut self, data: &[u8]) -> StorageResult<()> {
-        if data.len() < 36 {
+        if data.len() < 40 {
             return Err(StorageError::deserialize_error(
                 "CSR data too short for header",
             ));
         }
+        let (body, trailer) = data.split_at(data.len() - 4);
+        let mut stored_bytes = [0u8; 4];
+        stored_bytes.copy_from_slice(trailer);
+        let stored = u32::from_le_bytes(stored_bytes);
+        let computed = crc32fast::hash(body);
+        if stored != computed {
+            return Err(StorageError::deserialize_error(format!(
+                "CSR dump CRC mismatch: stored={:#x} computed={:#x}",
+                stored, computed
+            )));
+        }
+        let data = body;
 
         let mut offset = 0usize;
 

@@ -5,12 +5,15 @@ use crate::persistence::read_u32_le;
 use super::super::{EdgeId, Nbr};
 use super::overflow::OverflowChunk;
 
-pub(crate) const MUTABLE_CSR_FORMAT_VERSION: u32 = 4;
+pub(crate) const MUTABLE_CSR_FORMAT_VERSION: u32 = 6;
 /// Direct-dump format version: topology columns stored at native widths
 /// with no encoding choice. Selected by configuration for speed-sensitive
 /// checkpoints; the loader accepts both versions by marker and rejects any
 /// other marker instead of converting.
-pub(crate) const MUTABLE_CSR_FORMAT_RAW_VERSION: u32 = 5;
+///
+/// Both markers cover payloads with a trailing CRC32 trailer verified on
+/// load; versions 4/5 without the trailer are rejected by marker.
+pub(crate) const MUTABLE_CSR_FORMAT_RAW_VERSION: u32 = 7;
 
 /// Integer-only column encoding for topology persistence.
 ///

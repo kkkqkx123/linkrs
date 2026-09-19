@@ -217,11 +217,14 @@ pub trait MutableCsrTrait: CsrBase {
         false
     }
 
-    /// Physically remove an edge by edge id (no tombstone trace).
+    /// Erase one just-inserted edge for insert rollback (no tombstone trace).
     ///
-    /// Reclaims the slot and updates the edge count. Only implemented by
-    /// `MutableCsr`; other strategies default to no-op.
-    fn remove_edge(&mut self, _src_vid: u32, _edge_id: EdgeId) -> bool {
+    /// Insert-rollback only: erases the slot as if the edge never existed.
+    /// Never use for MVCC deletes, which must go through `delete_edge` so
+    /// the tombstone stays visible to the reclaim machinery. Reclaims the
+    /// slot and updates the edge count. Only implemented by writable
+    /// strategies; other strategies default to no-op.
+    fn rollback_insert(&mut self, _src_vid: u32, _edge_id: EdgeId) -> bool {
         false
     }
 

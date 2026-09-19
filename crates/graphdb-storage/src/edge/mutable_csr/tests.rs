@@ -96,6 +96,15 @@ fn test_load_rejects_tampered_edge_count() {
     tampered[12..20].copy_from_slice(&(stored + 1).to_le_bytes());
     let mut csr2 = MutableCsr::new();
     let err = csr2.load(&tampered).expect_err("tampered count must fail");
+    assert!(err.to_string().contains("CRC mismatch"));
+
+    // Re-seal the trailer so the CRC passes: the structural edge-count
+    // validation underneath must still catch the tamper.
+    let body_len = tampered.len() - 4;
+    let resealed = crc32fast::hash(&tampered[..body_len]);
+    tampered[body_len..].copy_from_slice(&resealed.to_le_bytes());
+    let mut csr3 = MutableCsr::new();
+    let err = csr3.load(&tampered).expect_err("resealed count must fail");
     assert!(err.to_string().contains("edge count mismatch"));
 }
 
@@ -170,7 +179,7 @@ fn test_overflow_dump_and_load() {
     assert_eq!(csr2.vertex_capacity(), csr1.vertex_capacity());
     assert_eq!(csr2.edge_count(), csr1.edge_count());
     assert_eq!(
-        csr2.overflow_chunks.get(&0).map_or(0, |chunks| {
+        csr2.overflow_chunks.get(0).map_or(0, |chunks| {
             chunks.iter().map(|chunk| chunk.len()).sum::<usize>()
         }),
         2
@@ -194,7 +203,7 @@ fn test_compact_with_ts_merges_overflow() {
     let removed = csr.compact_with_ts_reporting(6, 0.25, &mut |_, _| {});
     assert_eq!(removed, 3);
 
-    assert!(csr.overflow_chunks.get(&0).is_none_or(Vec::is_empty));
+    assert!(csr.overflow_chunks.get(0).is_none_or(Vec::is_empty));
 
     let edges = csr.edges_of(0u32, 3);
     assert_eq!(edges.len(), 3);
@@ -302,7 +311,7 @@ fn test_supernode_overflow_consolidates_repack_into_single_block() {
             .unwrap();
     }
 
-    let chunks = csr.overflow_chunks.get(&0).expect("vertex 0 has overflow");
+    let chunks = csr.overflow_chunks.get(0).expect("vertex 0 has overflow");
     // Repacks consolidate the chain: at most one consolidated block plus
     // the small graded tail chunks grown since the last repack.
     assert!(
@@ -621,9 +630,9 @@ fn test_remove_after_delete_does_not_double_count() {
         .unwrap();
     assert!(csr.delete_edge(0u32, EdgeId(100), 2).unwrap());
     assert_eq!(csr.edge_count(), 1);
-    assert!(csr.remove_edge(0u32, EdgeId(100)));
+    assert!(csr.rollback_insert(0u32, EdgeId(100)));
     assert_eq!(csr.edge_count(), 1);
-    assert!(csr.remove_edge(0u32, EdgeId(101)));
+    assert!(csr.rollback_insert(0u32, EdgeId(101)));
     assert_eq!(csr.edge_count(), 0);
 }
 
@@ -637,7 +646,7 @@ fn test_remove_after_delete_overflow_does_not_double_count() {
     assert_eq!(csr.edge_count(), 6);
     assert!(csr.delete_edge(0u32, EdgeId(5), 2).unwrap());
     assert_eq!(csr.edge_count(), 5);
-    assert!(csr.remove_edge(0u32, EdgeId(5)));
+    assert!(csr.rollback_insert(0u32, EdgeId(5)));
     assert_eq!(csr.edge_count(), 5);
 }
 
@@ -1057,7 +1066,7 @@ fn dense_slots_reused_after_remove_and_reinsert() {
     }
     assert!(csr.get_overflow_chunks(0).is_some());
     for i in 0..10u64 {
-        assert!(csr.remove_edge(0u32, EdgeId(i)));
+        assert!(csr.rollback_insert(0u32, EdgeId(i)));
     }
     assert!(csr.get_overflow_chunks(0).is_none_or(Vec::is_empty));
     assert_eq!(csr.live_key_count(0), 0);
@@ -1174,7 +1183,7 @@ fn wide_row_point_lookup_uses_location_index() {
         EdgeId(7)
     );
 
-    assert!(csr.remove_edge(0u32, EdgeId(8)));
+    assert!(csr.rollback_insert(0u32, EdgeId(8)));
     for endpoint in [1i64, 2, 3, 9, 20] {
         let found = csr
             .get_edge_physical(0u32, VertexId::from_int64(endpoint))
@@ -1203,7 +1212,7 @@ fn consolidated_row_reads_single_block() {
             .unwrap();
     }
     csr.rebalance_row(0u32);
-    if let Some(chunks) = csr.overflow_chunks.get(&0) {
+    if let Some(chunks) = csr.overflow_chunks.get(0) {
         assert_eq!(chunks.len(), 1, "merged rows keep a single block");
     }
     let mut via_visit = Vec::new();
@@ -1291,4 +1300,99 @@ fn raw_dump_rejects_bad_marker_and_truncation() {
     let raw = csr.dump_raw();
     assert!(MutableCsr::new().load(&raw[..raw.len() - 1]).is_err());
     assert!(MutableCsr::new().load(&[]).is_err());
+}
+
+#[test]
+fn test_offset_delete_shares_conflict_semantics() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 10)
+        .unwrap();
+    assert!(csr.delete_edge_by_offset(0u32, 0, 20).unwrap());
+    assert!(!csr.delete_edge_by_offset(0u32, 0, 20).unwrap());
+    assert!(csr.delete_edge_by_offset(0u32, 0, 30).is_err());
+    assert_eq!(csr.edge_count(), 0);
+}
+
+/// Cross-check the three delete-model ledgers after every mutation stage:
+/// `edge_count`, the per-row live index (`live_key_count`) and the
+/// fragmentation census must all agree with a full physical scan.
+fn assert_delete_model_invariants(csr: &MutableCsr, vertex_range: std::ops::Range<u32>) {
+    let mut total_live = 0usize;
+    let mut buf = Vec::new();
+    for vid in vertex_range {
+        csr.fill_physical_into(vid, &mut buf);
+        let live = buf
+            .iter()
+            .filter(|nbr| nbr.delete_ts == Timestamp::MAX)
+            .count();
+        let dead = buf.len() - live;
+        total_live += live;
+        assert_eq!(
+            csr.live_key_count(vid),
+            live,
+            "live index drift on vertex {vid}"
+        );
+        let (census_live, census_dead, _) = csr.vertex_census(vid);
+        assert_eq!(
+            (census_live, census_dead),
+            (live, dead),
+            "census drift on vertex {vid}"
+        );
+    }
+    assert_eq!(csr.edge_count(), total_live as u64, "edge count drift");
+}
+
+#[test]
+fn test_delete_model_invariants_under_mixed_workload() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(16, 128, 4);
+    for i in 0..3u64 {
+        csr.insert_edge(
+            0u32,
+            VertexId::from_int64(10 + i as i64),
+            EdgeId(100 + i),
+            1,
+        )
+        .unwrap();
+    }
+    for i in 0..20u64 {
+        csr.insert_edge(
+            1u32,
+            VertexId::from_int64(100 + i as i64),
+            EdgeId(200 + i),
+            1,
+        )
+        .unwrap();
+    }
+    for i in 0..6u64 {
+        csr.insert_edge(
+            2u32,
+            VertexId::from_int64(200 + i as i64),
+            EdgeId(300 + i),
+            1,
+        )
+        .unwrap();
+    }
+    assert_delete_model_invariants(&csr, 0..3);
+
+    // Tombstone deletes across primary and overflow rows.
+    assert!(csr.delete_edge(1u32, EdgeId(205), 5).unwrap());
+    assert_eq!(
+        csr.delete_edge_by_dst(2u32, VertexId::from_int64(202), 5),
+        1
+    );
+    assert!(csr.delete_edge_by_offset(0u32, 0, 5).unwrap());
+    assert_delete_model_invariants(&csr, 0..3);
+
+    // Insert rollback erases without tombstone residue.
+    assert!(csr.rollback_insert(1u32, EdgeId(210)));
+    assert_delete_model_invariants(&csr, 0..3);
+
+    // Maintenance passes must preserve the ledgers.
+    let mut removed = Vec::new();
+    csr.compact_vertex_with_reporting(1u32, 10, &mut |id, ts| {
+        removed.push((id, ts));
+    });
+    assert_eq!(removed, vec![(EdgeId(205), 5)]);
+    csr.rebalance_row(1u32);
+    assert_delete_model_invariants(&csr, 0..3);
 }

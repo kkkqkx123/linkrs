@@ -42,7 +42,7 @@ impl MutableCsr {
             // width gate inside the tracker.
             let position = self
                 .overflow_chunks
-                .get(&src_vid)
+                .get(src_vid)
                 .map(|chunks| {
                     let chunk = chunks.len().saturating_sub(1);
                     let slot = chunks
@@ -182,7 +182,7 @@ impl MutableCsr {
     /// deletes pay no heap allocation. Callers needing every match use the
     /// in-place stamping passes instead.
     fn scan_overflow_for_edge_id(&self, src_vid: u32, edge_id: EdgeId) -> Option<(usize, usize)> {
-        let chunks = self.overflow_chunks.get(&src_vid)?;
+        let chunks = self.overflow_chunks.get(src_vid)?;
         for (chunk_idx, chunk) in chunks.iter().enumerate() {
             for (edge_idx, hot) in chunk.hot_slice().iter().enumerate() {
                 if hot.edge_id == edge_id {
@@ -240,10 +240,10 @@ impl MutableCsr {
         if let Some((chunk_idx, edge_idx)) = self.scan_overflow_for_edge_id(src_vid, edge_id) {
             // Capture the assembled slot before mutable borrow ends for live set update.
             let probe = {
-                let chunks = self.overflow_chunks.get(&src_vid).unwrap();
+                let chunks = self.overflow_chunks.get(src_vid).unwrap();
                 chunks[chunk_idx].slot_at(edge_idx).unwrap()
             };
-            if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
+            if let Some(chunks) = self.overflow_chunks.get_mut(src_vid) {
                 match decide_slot_delete(&probe, edge_id, ts)? {
                     DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated => {
                         return Ok(false);
@@ -324,7 +324,7 @@ impl MutableCsr {
         }
 
         // Stamp overflow matches in the same pass.
-        if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
+        if let Some(chunks) = self.overflow_chunks.get_mut(src_vid) {
             for (chunk_idx, chunk) in chunks.iter_mut().enumerate() {
                 for slot_idx in 0..chunk.len() {
                     let hot = chunk.hot_at(slot_idx).unwrap();
@@ -385,27 +385,21 @@ impl MutableCsr {
             return Ok(false);
         }
         let probe = Nbr::from_parts(self.hot_list[idx], self.cold_list[idx]);
-        // Tombstone timestamp check mirrors the other delete entries: a
-        // repeat at the same timestamp stays idempotent while a different
-        // timestamp surfaces as a write-write conflict instead of folding
-        // into not-found.
-        if probe.delete_ts != Timestamp::MAX {
-            match decide_slot_delete(&probe, probe.edge_id, ts)? {
-                DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated => {
-                    return Ok(false);
-                }
-                DeleteSlotOutcome::Stamped => {
-                    return Ok(false);
-                }
+        // Shared delete state machine: a tombstone at another timestamp
+        // surfaces as a write-write conflict, an identical re-delete or a
+        // not-yet-created edge reports `false`, and only a live deletable
+        // slot falls through to the stamp below.
+        match decide_slot_delete(&probe, probe.edge_id, ts)? {
+            DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated => {
+                return Ok(false);
             }
+            DeleteSlotOutcome::Stamped => {}
         }
-        if probe.delete_ts == Timestamp::MAX {
-            if probe.create_ts <= ts {
-                self.cold_list[idx].delete_ts = ts;
-                self.edge_count -= 1;
-                self.track_live_remove(src_vid, probe.endpoint, probe.rank);
-                return Ok(true);
-            }
+        if probe.create_ts <= ts {
+            self.cold_list[idx].delete_ts = ts;
+            self.edge_count -= 1;
+            self.track_live_remove(src_vid, probe.endpoint, probe.rank);
+            return Ok(true);
         }
         Ok(false)
     }
@@ -453,18 +447,19 @@ impl MutableCsr {
         false
     }
 
-    /// Physically remove an edge by edge id from primary or overflow.
+    /// Erase one just-inserted edge for insert rollback.
     ///
     /// Rollback-only path: erases the slot and updates degree/edge count,
     /// leaving no tombstone trace, so a failed double-write can pretend the
     /// edge never existed. This is deliberately distinct from MVCC deletes
     /// (`delete_edge` family), which stamp `delete_ts` and stay visible to
     /// the reclaim machinery (`reclaimable_count`, `vertex_reclaim_probe`,
-    /// `fragmentation_ratio`). Physical removals free their slots inline
+    /// `fragmentation_ratio`). Physical erasures free their slots inline
     /// and therefore never appear in tombstone statistics; mixing the two
-    /// models on one row is expected (tombstones for MVCC, erasure for
-    /// rollback) and both keep the capacity ledger and the live index exact.
-    pub fn remove_edge(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
+    /// models on one row is expected (erasure for insert rollback,
+    /// tombstones for MVCC) and both keep the capacity ledger and the live
+    /// index exact.
+    pub fn rollback_insert(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
             return false;
@@ -507,14 +502,14 @@ impl MutableCsr {
         if let Some((chunk_idx, edge_idx)) = self.scan_overflow_for_edge_id(src_vid, edge_id) {
             // Capture live status before removal for set maintenance.
             let probe = {
-                let chunks = self.overflow_chunks.get(&src_vid).unwrap();
+                let chunks = self.overflow_chunks.get(src_vid).unwrap();
                 chunks[chunk_idx].slot_at(edge_idx).unwrap()
             };
             let was_live = probe.delete_ts == Timestamp::MAX;
             // Detach the entry, capturing the ledger delta before the shard
             // borrow ends so the release routes through the ledger primitive.
             // `Some((freed, emptied))` when an empty chunk detached.
-            let detached = if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
+            let detached = if let Some(chunks) = self.overflow_chunks.get_mut(src_vid) {
                 chunks[chunk_idx].remove(edge_idx);
                 // Clean up empty chunk vectors to keep per-vertex chunk count bounded.
                 if chunks[chunk_idx].is_empty() {
@@ -535,7 +530,7 @@ impl MutableCsr {
                     if was_live {
                         self.edge_count -= 1;
                     }
-                    self.overflow_chunks.remove(&src_vid);
+                    self.overflow_chunks.remove(src_vid);
                     self.rebuild_live_set_for_vertex(src_vid);
                     return true;
                 }
@@ -598,10 +593,10 @@ impl MutableCsr {
         // Scan overflow
         if let Some((chunk_idx, edge_idx)) = self.scan_overflow_for_edge_id(src_vid, edge_id) {
             let probe = {
-                let chunks = self.overflow_chunks.get(&src_vid).unwrap();
+                let chunks = self.overflow_chunks.get(src_vid).unwrap();
                 chunks[chunk_idx].slot_at(edge_idx).unwrap()
             };
-            if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
+            if let Some(chunks) = self.overflow_chunks.get_mut(src_vid) {
                 if can_revert_delete(&probe, ts) {
                     chunks[chunk_idx].cold_at_mut(edge_idx).unwrap().delete_ts = Timestamp::MAX;
                     self.edge_count += 1;
@@ -641,18 +636,29 @@ impl MutableCsr {
             return;
         }
         // Aggregate duplicate entries per row so one row is sized once.
+        // Ordered bulk writes arrive src-ordered, so the aggregation
+        // re-sort is skipped when the input already arrives ordered.
         let mut aggregated: Vec<(u32, usize)> = Vec::with_capacity(counts.len());
         {
-            let mut sorted = counts.to_vec();
-            sorted.sort_unstable_by_key(|(src, _)| *src);
-            for (src, incoming) in sorted {
+            let mut push = |src: u32, incoming: usize| {
                 if let Some(last) = aggregated.last_mut() {
                     if last.0 == src {
                         last.1 = last.1.saturating_add(incoming);
-                        continue;
+                        return;
                     }
                 }
                 aggregated.push((src, incoming));
+            };
+            if counts.windows(2).all(|w| w[0].0 <= w[1].0) {
+                for &(src, incoming) in counts {
+                    push(src, incoming);
+                }
+            } else {
+                let mut sorted = counts.to_vec();
+                sorted.sort_unstable_by_key(|(src, _)| *src);
+                for (src, incoming) in sorted {
+                    push(src, incoming);
+                }
             }
         }
         // Make every touched row addressable with a primary block first.
@@ -734,7 +740,11 @@ impl MutableCsr {
                         .iter()
                         .map(|(endpoint, rank, _, _)| (*endpoint, *rank)),
                 );
-                keys.sort_unstable();
+                // Ordered batches arrive key-ordered; skip the re-sort when
+                // the keys already arrive ordered.
+                if !keys.windows(2).all(|w| w[0] <= w[1]) {
+                    keys.sort_unstable();
+                }
                 for window in keys.windows(2) {
                     if window[0] == window[1] {
                         return Err(StorageError::edge_already_exists(format!(
@@ -841,7 +851,7 @@ impl MutableCsr {
                 Ok(true)
             }
             EdgePosition::Overflow { chunk, slot } => {
-                let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) else {
+                let Some(chunks) = self.overflow_chunks.get_mut(src_vid) else {
                     return Ok(false);
                 };
                 let Some(chunk) = chunks.get_mut(chunk as usize) else {
@@ -907,7 +917,7 @@ impl MutableCsr {
             }
             EdgePosition::Overflow { chunk, slot } => {
                 let (chunk_idx, slot_idx) = (chunk, slot);
-                let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) else {
+                let Some(chunks) = self.overflow_chunks.get_mut(src_vid) else {
                     return false;
                 };
                 let Some(chunk) = chunks.get_mut(chunk_idx as usize) else {

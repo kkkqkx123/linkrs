@@ -190,7 +190,7 @@ impl MutableCsr {
                 }
             }
         }
-        if let Some(chunks) = self.overflow_chunks.get(&vid) {
+        if let Some(chunks) = self.overflow_chunks.get(vid) {
             for chunk in chunks {
                 for (hot, cold) in chunk.hot_slice().iter().zip(chunk.cold_slice()) {
                     if cold.is_live() {
@@ -220,7 +220,7 @@ impl MutableCsr {
                 live += 1;
             }
         }
-        if let Some(chunks) = self.overflow_chunks.get(&vid) {
+        if let Some(chunks) = self.overflow_chunks.get(vid) {
             for chunk in chunks {
                 for cold in chunk.cold_slice() {
                     if cold.is_live() {
@@ -251,7 +251,7 @@ impl MutableCsr {
         let mut width = 0usize;
         if (vid as usize) < self.vertex_capacity() {
             width = self.degrees[vid as usize] as usize;
-            if let Some(chunks) = self.overflow_chunks.get(&vid) {
+            if let Some(chunks) = self.overflow_chunks.get(vid) {
                 width += chunks.iter().map(|chunk| chunk.len()).sum::<usize>();
             }
         }
@@ -284,7 +284,7 @@ impl MutableCsr {
                 ));
             }
         }
-        if let Some(chunks) = self.overflow_chunks.get(&vid) {
+        if let Some(chunks) = self.overflow_chunks.get(vid) {
             for (chunk_idx, chunk) in chunks.iter().enumerate() {
                 for (slot_idx, (hot, cold)) in
                     chunk.hot_slice().iter().zip(chunk.cold_slice()).enumerate()

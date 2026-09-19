@@ -130,8 +130,8 @@ impl MutableCsrTrait for MutableCsr {
         MutableCsr::primary_contains(self, src_vid, edge_id)
     }
 
-    fn remove_edge(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
-        MutableCsr::remove_edge(self, src_vid, edge_id)
+    fn rollback_insert(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
+        MutableCsr::rollback_insert(self, src_vid, edge_id)
     }
 
     fn revert_delete_by_edge_id(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {

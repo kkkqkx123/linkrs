@@ -911,6 +911,12 @@ impl MappedFrozen {
     }
 
     /// Iterate timestamp-visible entries of one row without allocating.
+    ///
+    /// Detached-snapshot contract: the serving file embeds the full
+    /// create/delete stamp history, so point-in-time reads inside the
+    /// snapshot are decided from the embedded stamps alone, without the
+    /// table version authority. Live tables must never use this path for
+    /// visibility; they decide through `EdgeStore::is_visible`.
     pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> MappedFrozenRowIter {
         let (start, end) = self.row_window(src_vid).unwrap_or((0, 0));
         MappedFrozenRowIter {
@@ -922,7 +928,7 @@ impl MappedFrozen {
     }
 
     /// Authoritative checkpoint bytes rebuilt from the mapping: same version
-    /// 1 layout as the heap frozen dump, so a mapped group flushes
+    /// 2 layout as the heap frozen dump, so a mapped group flushes
     /// indistinguishably from a heap frozen group.
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
@@ -942,6 +948,7 @@ impl MappedFrozen {
         out: &mut Vec<u8>,
         scratch: &mut super::mutable_csr::persistence::CsrDumpScratch,
     ) {
+        let start = out.len();
         out.extend_from_slice(&IMMUTABLE_CSR_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&(self.rows as u64).to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
@@ -976,6 +983,8 @@ impl MappedFrozen {
         out.extend_from_slice(&create_payload);
         let (_, delete_payload) = encode_topology_u64_column(scratch.deletes());
         out.extend_from_slice(&delete_payload);
+        let crc = crc32fast::hash(&out[start..]);
+        out.extend_from_slice(&crc.to_le_bytes());
     }
 }
 
@@ -1096,7 +1105,7 @@ impl super::MutableCsrTrait for MappedFrozen {
         MappedFrozen::primary_contains(self, src_vid, edge_id)
     }
 
-    fn remove_edge(&mut self, _src_vid: u32, _edge_id: EdgeId) -> bool {
+    fn rollback_insert(&mut self, _src_vid: u32, _edge_id: EdgeId) -> bool {
         false
     }
 
@@ -1320,7 +1329,7 @@ mod tests {
         assert!(mapped.insert_edge(0, key, EdgeId(100), 9).is_err());
         assert!(mapped.delete_edge(0, EdgeId(1), 9).is_err());
         assert_eq!(mapped.delete_edge_by_dst(0, key, 9), 0);
-        assert!(!mapped.remove_edge(0, EdgeId(1)));
+        assert!(!mapped.rollback_insert(0, EdgeId(1)));
         assert!(!mapped.revert_delete_by_edge_id(0, EdgeId(1), 9));
         assert_eq!(mapped.reclaimable_count(0, 9), 0);
         assert!(!mapped.vertex_needs_compact(0, 9));

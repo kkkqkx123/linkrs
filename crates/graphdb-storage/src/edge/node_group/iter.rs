@@ -1,7 +1,10 @@
-//! Cross-group scan iterator and its constructors.
+//! Cross-group physical scan iterator and its constructors.
 //!
 //! Chains every existing group in group order, translating local rows back
-//! to global vertex ids. Missing groups are absent and never visited.
+//! to global vertex ids. Missing groups are absent and never visited. The
+//! scan is physical: it yields every stored entry including tombstones, and
+//! visibility is decided above this layer by the version authority, never
+//! from row stamps here.
 
 use graphdb_core::types::{Timestamp, VertexId};
 use std::collections::BTreeMap;
@@ -12,6 +15,9 @@ use super::{group_base, CsrShardSet, Shard};
 
 /// Iterator chaining every existing group in group order, translating local
 /// rows to global vertex ids. Missing groups are absent and never visited.
+///
+/// Physical scan: yields every stored entry including tombstones. Callers
+/// apply the version authority to decide visibility.
 pub struct ShardCsrIterator<'a> {
     shards: &'a BTreeMap<usize, Shard>,
     order: Vec<usize>,
@@ -19,17 +25,10 @@ pub struct ShardCsrIterator<'a> {
     group_pos: usize,
     base: u32,
     inner: CsrIterator<'a>,
-    include_deleted: bool,
-    ts: Timestamp,
 }
 
 impl<'a> ShardCsrIterator<'a> {
-    fn new(
-        shards: &'a BTreeMap<usize, Shard>,
-        group_bits: u32,
-        ts: Timestamp,
-        include_deleted: bool,
-    ) -> Self {
+    fn new(shards: &'a BTreeMap<usize, Shard>, group_bits: u32) -> Self {
         Self {
             shards,
             order: shards.keys().copied().collect(),
@@ -37,8 +36,6 @@ impl<'a> ShardCsrIterator<'a> {
             group_pos: 0,
             base: 0,
             inner: CsrIterator::None,
-            include_deleted,
-            ts,
         }
     }
 
@@ -52,12 +49,7 @@ impl<'a> ShardCsrIterator<'a> {
         let Some(shard) = self.shards.get(&gid) else {
             return self.advance_group();
         };
-        let variant = &shard.variant;
-        self.inner = if self.include_deleted {
-            variant.iter_all()
-        } else {
-            variant.iter(self.ts)
-        };
+        self.inner = shard.variant.iter_all();
         true
     }
 }
@@ -86,14 +78,10 @@ impl CsrShardSet {
         self.shards.get(&gid)?.variant.iter_edges_of(local, ts)
     }
 
-    /// Iterate all live edges across groups in group order.
-    pub fn iter(&self, ts: Timestamp) -> ShardCsrIterator<'_> {
-        ShardCsrIterator::new(&self.shards, self.group_bits, ts, false)
-    }
-
     /// Iterate every physically present entry across groups, including
-    /// tombstoned ones, in group order.
+    /// tombstoned ones, in group order. Visibility is decided above this
+    /// layer by the version authority.
     pub fn iter_all(&self) -> ShardCsrIterator<'_> {
-        ShardCsrIterator::new(&self.shards, self.group_bits, 0, true)
+        ShardCsrIterator::new(&self.shards, self.group_bits)
     }
 }

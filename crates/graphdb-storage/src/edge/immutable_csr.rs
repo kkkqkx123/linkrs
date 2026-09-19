@@ -44,7 +44,7 @@ use graphdb_core::{StorageError, StorageResult};
 ///
 /// Version 1 only. Older or newer versions are rejected on load, never
 /// converted.
-pub(crate) const IMMUTABLE_CSR_FORMAT_VERSION: u32 = 1;
+pub(crate) const IMMUTABLE_CSR_FORMAT_VERSION: u32 = 2;
 
 fn frozen_error() -> StorageError {
     StorageError::invalid_operation(
@@ -557,6 +557,7 @@ impl ImmutableCsr {
         out: &mut Vec<u8>,
         scratch: &mut super::mutable_csr::persistence::CsrDumpScratch,
     ) {
+        let start = out.len();
         out.extend_from_slice(&IMMUTABLE_CSR_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&(self.degrees.len() as u64).to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
@@ -574,18 +575,33 @@ impl ImmutableCsr {
         out.extend_from_slice(&create_payload);
         let (_, delete_payload) = encode_topology_u64_column(scratch.deletes());
         out.extend_from_slice(&delete_payload);
+        let crc = crc32fast::hash(&out[start..]);
+        out.extend_from_slice(&crc.to_le_bytes());
     }
 
-    /// Load from bytes, version 1 only.
+    /// Load from bytes, version 2 only.
     ///
-    /// Rejects short headers, version mismatches, column length mismatches,
-    /// out-of-range row windows, edge count mismatches and trailing bytes.
+    /// Rejects short headers, version mismatches, CRC mismatches, column
+    /// length mismatches, out-of-range row windows, edge count mismatches
+    /// and trailing bytes.
     pub fn load(&mut self, data: &[u8]) -> StorageResult<()> {
-        if data.len() < 32 {
+        if data.len() < 36 {
             return Err(StorageError::deserialize_error(
                 "frozen CSR data too short for header",
             ));
         }
+        let (body, trailer) = data.split_at(data.len() - 4);
+        let mut stored_bytes = [0u8; 4];
+        stored_bytes.copy_from_slice(trailer);
+        let stored = u32::from_le_bytes(stored_bytes);
+        let computed = crc32fast::hash(body);
+        if stored != computed {
+            return Err(StorageError::deserialize_error(format!(
+                "frozen CSR dump CRC mismatch: stored={:#x} computed={:#x}",
+                stored, computed
+            )));
+        }
+        let data = body;
         let mut offset = 0usize;
         let format_version = read_u32_le(data, &mut offset)?;
         if format_version != IMMUTABLE_CSR_FORMAT_VERSION {
@@ -779,7 +795,7 @@ impl MutableCsrTrait for ImmutableCsr {
         ImmutableCsr::primary_contains(self, src_vid, edge_id)
     }
 
-    fn remove_edge(&mut self, _src_vid: u32, _edge_id: EdgeId) -> bool {
+    fn rollback_insert(&mut self, _src_vid: u32, _edge_id: EdgeId) -> bool {
         false
     }
 
@@ -1029,7 +1045,7 @@ mod tests {
         assert!(frozen
             .delete_edge_at_position(0, EdgePosition::Primary { slot: 0 }, EdgeId(1), 9)
             .is_err());
-        assert!(!frozen.remove_edge(0, EdgeId(1)));
+        assert!(!frozen.rollback_insert(0, EdgeId(1)));
         assert!(!frozen.revert_delete_by_edge_id(0, EdgeId(2), 9));
         assert!(!frozen.revert_delete_by_offset(0, 0, 9));
         assert!(!frozen.revert_delete_at_position(

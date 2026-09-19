@@ -87,7 +87,7 @@ fn sharded_iter_translates_to_global_rows() {
     set.insert_edge(5000, endpoint(2, 0), EdgeId(1), 100)
         .unwrap();
     let rows: Vec<(i64, EdgeId)> = set
-        .iter(200)
+        .iter_all()
         .map(|(src, nbr)| (src.as_int64().unwrap_or(-1), nbr.edge_id))
         .collect();
     assert_eq!(rows.len(), 2);
@@ -253,7 +253,7 @@ fn truncate_drops_trailing_empty_groups() {
     set.insert_edge(9000, endpoint(1, 0), EdgeId(0), 100)
         .unwrap();
     assert_eq!(set.existing_group_ids(), vec![0, 2]);
-    assert!(set.remove_edge(9000, EdgeId(0)));
+    assert!(set.rollback_insert(9000, EdgeId(0)));
     set.truncate_trailing_empty_groups();
     assert_eq!(set.group_count(), 1);
 }

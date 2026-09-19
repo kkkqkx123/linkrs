@@ -81,7 +81,7 @@ impl MutableCsr {
         if idx >= self.vertex_capacity() || self.primary_capacities[idx] == 0 {
             return false;
         }
-        if self.overflow_chunks.get(&vid).is_none_or(Vec::is_empty) {
+        if self.overflow_chunks.get(vid).is_none_or(Vec::is_empty) {
             return false;
         }
         let degree = self.degrees[idx] as usize;
@@ -98,7 +98,7 @@ impl MutableCsr {
                 }
             }
         }
-        if let Some(chunks) = self.overflow_chunks.get(&vid) {
+        if let Some(chunks) = self.overflow_chunks.get(vid) {
             for chunk in chunks {
                 for i in 0..chunk.len() {
                     if let Some(nbr) = chunk.slot_at(i) {
@@ -124,11 +124,11 @@ impl MutableCsr {
         let overflow_live: Vec<Nbr> = live.into_iter().skip(placed_live).collect();
         let placed_pinned = pinned.len().min(slots.saturating_sub(placed_live));
         let overflow_pinned: Vec<Nbr> = pinned.into_iter().skip(placed_pinned).collect();
-        let old_overflow_cap: usize = self.overflow_chunks.get(&vid).map_or(0, |chunks| {
+        let old_overflow_cap: usize = self.overflow_chunks.get(vid).map_or(0, |chunks| {
             chunks.iter().map(|chunk| chunk.capacity()).sum()
         });
         if overflow_live.is_empty() && overflow_pinned.is_empty() {
-            self.overflow_chunks.remove(&vid);
+            self.overflow_chunks.remove(vid);
             self.sub_capacity(old_overflow_cap);
         } else {
             let mut rest: Vec<Nbr> =
@@ -141,12 +141,12 @@ impl MutableCsr {
             let new_overflow_cap = single.capacity();
             self.sub_capacity(old_overflow_cap);
             self.add_capacity(new_overflow_cap);
-            if let Some(slot) = self.overflow_chunks.get_mut(&vid) {
+            if let Some(slot) = self.overflow_chunks.get_mut(vid) {
                 *slot = vec![single];
             }
         }
         self.rebuild_live_set_for_vertex(vid);
-        self.overflow_chunks.get(&vid).is_none_or(Vec::is_empty)
+        self.overflow_chunks.get(vid).is_none_or(Vec::is_empty)
     }
 
     pub(crate) fn compact_overflow_for_vertex(
@@ -155,7 +155,7 @@ impl MutableCsr {
         cutoff: Timestamp,
         on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
     ) {
-        let Some(chunks) = self.overflow_chunks.remove(&vid) else {
+        let Some(chunks) = self.overflow_chunks.remove(vid) else {
             return;
         };
         let old_cap: usize = chunks.iter().map(|c| c.capacity()).sum();

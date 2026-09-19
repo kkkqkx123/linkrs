@@ -203,13 +203,23 @@ impl EdgeStore {
                 if nbr.edge_id == crate::edge::INVALID_EDGE_ID {
                     continue;
                 }
-                match self.mvcc.edge_timestamps.get(&nbr.edge_id) {
+                // Authority-total: live edges always hold an authority
+                // record (inserts register, reclaim only removes fully
+                // collected tombstones). A missing record means queries
+                // treat the edge as invisible, so migration fails closed
+                // the same way instead of resurrecting it from the row
+                // replica. Tombstoned edges are dropped for cleanup.
+                let create_ts = match self.mvcc.edge_timestamps.get(&nbr.edge_id) {
                     Some(info) if info.delete_ts != Timestamp::MAX => {
                         dropped.push(nbr.edge_id);
                         continue;
                     }
-                    _ => {}
-                }
+                    Some(info) => info.create_ts,
+                    None => {
+                        dropped.push(nbr.edge_id);
+                        continue;
+                    }
+                };
                 if target != RecordForm::Columnar && nbr.rank != 0 {
                     return Err(StorageError::invalid_operation(format!(
                         "nonzero rank {} cannot migrate to {:?}",
@@ -217,12 +227,6 @@ impl EdgeStore {
                     )));
                 }
                 let row = base + local_vid.as_int64().unwrap_or(0) as u32;
-                let create_ts = self
-                    .mvcc
-                    .edge_timestamps
-                    .get(&nbr.edge_id)
-                    .map(|info| info.create_ts)
-                    .unwrap_or(nbr.create_ts);
                 let props = self.extract_edge_props(shards, row, nbr.edge_id, current, target)?;
                 live.push(LiveEdge {
                     row,

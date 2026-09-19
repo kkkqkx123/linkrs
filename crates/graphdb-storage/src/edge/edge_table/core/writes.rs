@@ -536,7 +536,7 @@ impl EdgeStore {
             // Roll back the out-direction insertion physically so no
             // tombstone residue remains; fall back to logical deletion if
             // the entry cannot be located.
-            if !self.out_csr.remove_edge(src, edge_id) {
+            if !self.out_csr.rollback_insert(src, edge_id) {
                 let _ = self.out_csr.delete_edge(src, edge_id, ts);
             }
             if let Some(row) = self.properties.remove_edge_mapping(edge_id) {
@@ -670,7 +670,7 @@ impl EdgeStore {
             self.in_csr
                 .bundled_insert_with_value(dst, src_key, edge_id, ts, inline_value)
         {
-            if !self.out_csr.remove_edge(src, edge_id) {
+            if !self.out_csr.rollback_insert(src, edge_id) {
                 let _ = self.out_csr.delete_edge(src, edge_id, ts);
             }
             self.mvcc.remove_edge_timestamps(edge_id);
@@ -850,8 +850,8 @@ impl EdgeStore {
                 .read_properties_by_edge_id(edge_id)
                 .unwrap_or_default()
         };
-        self.out_csr.remove_edge(src, edge_id);
-        self.in_csr.remove_edge(dst, edge_id);
+        self.out_csr.rollback_insert(src, edge_id);
+        self.in_csr.rollback_insert(dst, edge_id);
         if let Some(row) = self.properties.remove_edge_mapping(edge_id) {
             self.properties.release_row(row);
         }
@@ -1023,8 +1023,8 @@ impl EdgeStore {
                 .read_properties_by_edge_id(edge_id)
                 .unwrap_or_default()
         };
-        self.out_csr.remove_edge(src, edge_id);
-        self.in_csr.remove_edge(dst, edge_id);
+        self.out_csr.rollback_insert(src, edge_id);
+        self.in_csr.rollback_insert(dst, edge_id);
         if let Some(row) = self.properties.remove_edge_mapping(edge_id) {
             self.properties.release_row(row);
         }

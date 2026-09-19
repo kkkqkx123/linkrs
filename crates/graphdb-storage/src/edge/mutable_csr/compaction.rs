@@ -40,7 +40,7 @@ impl MutableCsr {
                     kept += 1;
                 }
             }
-            if let Some(chunks) = self.overflow_chunks.get(&(vid as u32)) {
+            if let Some(chunks) = self.overflow_chunks.get(vid as u32) {
                 for chunk in chunks {
                     for (hot, cold) in chunk.hot_slice().iter().zip(chunk.cold_slice()) {
                         if removals_enabled && is_reclaimable_cold(cold, cutoff) {
@@ -71,7 +71,7 @@ impl MutableCsr {
                 new_hot_list.push(*h);
                 new_cold_list.push(*c);
             }
-            if let Some(chunks) = self.overflow_chunks.get(&(vid as u32)) {
+            if let Some(chunks) = self.overflow_chunks.get(vid as u32) {
                 for chunk in chunks {
                     for (hot, cold) in chunk.hot_slice().iter().zip(chunk.cold_slice()) {
                         if removals_enabled && is_reclaimable_cold(cold, cutoff) {
@@ -149,7 +149,7 @@ impl MutableCsr {
                 count += 1;
             }
         }
-        if let Some(chunks) = self.overflow_chunks.get(&vid) {
+        if let Some(chunks) = self.overflow_chunks.get(vid) {
             for chunk in chunks {
                 for cold in chunk.cold_slice() {
                     if is_reclaimable_cold(cold, cutoff) {
@@ -189,7 +189,7 @@ impl MutableCsr {
                 }
             }
         }
-        if let Some(chunks) = self.overflow_chunks.get(&vid) {
+        if let Some(chunks) = self.overflow_chunks.get(vid) {
             for chunk in chunks {
                 for cold in chunk.cold_slice() {
                     if !cold.is_live() {
@@ -225,7 +225,7 @@ impl MutableCsr {
             }
         }
         let mut capacity = self.primary_capacities[idx] as usize;
-        if let Some(chunks) = self.overflow_chunks.get(&vid) {
+        if let Some(chunks) = self.overflow_chunks.get(vid) {
             capacity += chunks.iter().map(|chunk| chunk.capacity()).sum::<usize>();
             for chunk in chunks {
                 for cold in chunk.cold_slice() {
@@ -290,11 +290,11 @@ impl MutableCsr {
         }
         self.degrees[idx] = keep as u32;
 
-        if self.overflow_chunks.get(&vid).is_some() {
+        if self.overflow_chunks.get(vid).is_some() {
             // Take ownership of the chunk list instead of cloning it: the
             // entry is reinserted below, so the filter runs on owned chunks
             // with no duplicate allocation.
-            let chunks = self.overflow_chunks.remove(&vid).unwrap_or_default();
+            let chunks = self.overflow_chunks.remove(vid).unwrap_or_default();
             let freed: usize = chunks.iter().map(|chunk| chunk.capacity()).sum();
             self.sub_capacity(freed);
             let mut kept: Vec<Nbr> = Vec::new();
