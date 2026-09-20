@@ -1,0 +1,73 @@
+use super::super::super::{EdgeId, VertexId};
+use super::super::row::PACKED_CSR_DENSITY;
+use super::super::MutableCsr;
+
+#[test]
+fn test_steady_state_gap_fill_before_overflow() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    for i in 1..=5i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
+            .unwrap();
+    }
+    // 4 primary slots plus one overflow entry.
+    assert!(csr.get_overflow_chunks(0).is_some());
+    let overflow_before: usize = csr
+        .get_overflow_chunks(0)
+        .map(|chunks| chunks.iter().map(|chunk| chunk.len()).sum())
+        .unwrap_or(0);
+    assert_eq!(overflow_before, 1);
+
+    // Reclaim two primary tombstones at an eligible cutoff so trailing
+    // gaps open without touching overflow.
+    assert!(csr.delete_edge(0u32, EdgeId(1), 2).unwrap());
+    assert!(csr.delete_edge(0u32, EdgeId(2), 2).unwrap());
+    let removed = csr.compact_vertex_with_reporting(0, 3, &mut |_, _| {});
+    assert_eq!(removed, 2);
+
+    // Everyday writes fill the freed primary gaps first even though
+    // overflow exists: overflow length stays put.
+    csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(10), 3)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(11), EdgeId(11), 3)
+        .unwrap();
+    let overflow_after: usize = csr
+        .get_overflow_chunks(0)
+        .map(|chunks| chunks.iter().map(|chunk| chunk.len()).sum())
+        .unwrap_or(0);
+    assert_eq!(overflow_after, overflow_before);
+    assert_eq!(csr.edges_of(0u32, 3).len(), 5);
+}
+
+#[test]
+fn test_rebalance_row_drains_overflow_into_gaps() {
+    let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
+    for i in 0..6u64 {
+        csr.insert_edge(0u32, VertexId::from_int64(100 + i as i64), EdgeId(i), 1)
+            .unwrap();
+    }
+    assert!(csr.get_overflow_chunks(0).is_some());
+    // Reclaim primary tombstones so gaps open, then rebalance pulls the
+    // overflow live entries back into the primary row.
+    assert!(csr.delete_edge(0u32, EdgeId(0), 2).unwrap());
+    assert!(csr.delete_edge(0u32, EdgeId(1), 2).unwrap());
+    let removed = csr.compact_vertex_with_reporting(0, 3, &mut |_, _| {});
+    assert_eq!(removed, 2);
+    assert!(csr.rebalance_row(0));
+    assert!(csr.get_overflow_chunks(0).is_none_or(Vec::is_empty));
+    assert_eq!(csr.edges_of(0u32, 3).len(), 4);
+}
+
+#[test]
+fn test_row_gap_and_density_observe_reserve() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(1), 1)
+        .unwrap();
+    // One live entry in a 4-slot block: three write gaps remain.
+    assert_eq!(csr.row_gap(0), 3);
+    assert!((csr.row_density(0) - 0.25).abs() < 1e-6);
+    // Rebuilds size rows at the packed density target with gaps.
+    let removed = csr.compact_with_ts_reporting(2, 1.0 - PACKED_CSR_DENSITY, &mut |_, _| {});
+    assert_eq!(removed, 0);
+    assert_eq!(csr.row_gap(0), 1);
+    assert!((csr.row_density(0) - 0.5).abs() < 1e-6);
+}
