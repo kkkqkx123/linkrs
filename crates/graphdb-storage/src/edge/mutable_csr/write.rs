@@ -3,6 +3,7 @@ use super::super::csr_shared::{
     DeleteSlotOutcome,
 };
 use super::super::{ColdStamps, EdgeId, HotNbr, Nbr, Timestamp, VertexId};
+use super::core::REUSE_HINT_UNKNOWN;
 use super::overflow::OVERFLOW_REPACK_CHUNKS_PER_VERTEX;
 use super::MutableCsr;
 use graphdb_core::{StorageError, StorageResult};
@@ -10,7 +11,10 @@ use std::collections::HashSet;
 
 /// Hot-path bound for the tombstone-reuse scan. Rows wider than this leave
 /// leftover reclaimable slots to the maintenance pass instead of scanning
-/// the whole row on every insert.
+/// the whole row on every insert. The per-vertex reuse hint usually avoids
+/// the scan entirely; the bound only caps the fallback walk when the hint
+/// is unknown or stale. Tune against `benches/csr_perf_bench.rs` before
+/// changing it.
 const TOMBSTONE_REUSE_SCAN_BOUND: usize = 64;
 
 /// Physical position of one stored edge inside its row.
@@ -34,6 +38,7 @@ impl MutableCsr {
         let (chunk_count, added) = self.overflow_chunks.push_to_row(src_vid, nbr, chunk_edges);
         if let Some(new_cap) = added {
             self.add_capacity(new_cap);
+            self.overflow_chunk_allocs += 1;
         }
         if nbr.delete_ts == Timestamp::MAX {
             // Tail slot just pushed: the row-relative position feeds the
@@ -70,6 +75,7 @@ impl MutableCsr {
         if chunk_count > OVERFLOW_REPACK_CHUNKS_PER_VERTEX {
             let mut noop = |_id: EdgeId, _ts: Timestamp| {};
             self.compact_overflow_for_vertex(src_vid, Timestamp::MAX, &mut noop);
+            self.repack_count += 1;
         }
     }
 
@@ -90,7 +96,7 @@ impl MutableCsr {
         }
 
         // Lazy primary block allocation on first edge
-        if self.primary_capacities[src_idx] == 0 {
+        if self.rows.primary_capacities[src_idx] == 0 {
             self.allocate_primary_block(src_idx);
         }
 
@@ -118,18 +124,18 @@ impl MutableCsr {
             live
         };
 
-        // Record create_ts in the Nbr before writing
         let nbr_with_ts = Nbr::with_create_ts(decoded_endpoint, decoded_rank, edge_id, ts);
 
         // Steady-state gap fill: primary trailing gaps are filled first
         // even when overflow exists, so everyday writes land in row gaps.
         // Row rebalances that pull overflow back into freed gaps run on the
         // maintenance path, never on this hot path, keeping inserts O(1).
-        let degree = self.degrees[src_idx] as usize;
-        if degree < self.primary_capacities[src_idx] as usize {
-            let base = self.adj_offsets[src_idx] as usize;
+        let degree = self.rows.degrees[src_idx] as usize;
+        if degree < self.rows.primary_capacities[src_idx] as usize {
+            let base = self.rows.adj_offsets[src_idx] as usize;
             self.set_slot(base + degree, nbr_with_ts);
-            self.degrees[src_idx] += 1;
+            self.rows.degrees[src_idx] += 1;
+            self.live_counts[src_idx] += 1;
             self.track_live_insert(
                 src_vid,
                 decoded_endpoint,
@@ -147,11 +153,39 @@ impl MutableCsr {
         // overflow. The eligibility predicate matches the maintenance
         // compaction exactly, so the hot path never drops a tombstone the
         // reclaim pass would keep. Overflow tombstones stay for the region
-        // compaction; the scan is bounded to a fixed prefix so high-degree
-        // rows never pay O(degree) per insert.
+        // compaction. The per-vertex hint gives O(1) reuse when a recent
+        // delete recorded its slot; the bounded prefix scan below is only
+        // the fallback when the hint is unknown or stale.
         if self.tombstone_reuse_cutoff != Timestamp::MAX {
-            let base = self.adj_offsets[src_idx] as usize;
+            let base = self.rows.adj_offsets[src_idx] as usize;
             let cutoff = self.tombstone_reuse_cutoff;
+            if let Some(&hint) = self.reuse_hint.get(src_idx) {
+                if hint != REUSE_HINT_UNKNOWN {
+                    let slot = hint as usize;
+                    if slot < degree {
+                        let reclaimable = self
+                            .cold_at(base + slot)
+                            .is_some_and(|cold| is_reclaimable_cold(&cold, cutoff));
+                        if reclaimable {
+                            self.set_slot(base + slot, nbr_with_ts);
+                            self.invalidate_reuse_hint(src_idx);
+                            self.live_counts[src_idx] += 1;
+                            self.tombstone_counts[src_idx] =
+                                self.tombstone_counts[src_idx].saturating_sub(1);
+                            self.track_live_insert(
+                                src_vid,
+                                decoded_endpoint,
+                                decoded_rank,
+                                EdgePosition::Primary { slot: slot as u32 },
+                            );
+                            self.edge_count += 1;
+                            self.tombstone_reuse_count += 1;
+                            return Ok(());
+                        }
+                    }
+                    self.invalidate_reuse_hint(src_idx);
+                }
+            }
             let bound = degree.min(TOMBSTONE_REUSE_SCAN_BOUND);
             for i in 0..bound {
                 let reclaimable = self
@@ -159,6 +193,10 @@ impl MutableCsr {
                     .is_some_and(|cold| is_reclaimable_cold(&cold, cutoff));
                 if reclaimable {
                     self.set_slot(base + i, nbr_with_ts);
+                    self.invalidate_reuse_hint(src_idx);
+                    self.live_counts[src_idx] += 1;
+                    self.tombstone_counts[src_idx] =
+                        self.tombstone_counts[src_idx].saturating_sub(1);
                     self.track_live_insert(
                         src_vid,
                         decoded_endpoint,
@@ -166,12 +204,14 @@ impl MutableCsr {
                         EdgePosition::Primary { slot: i as u32 },
                     );
                     self.edge_count += 1;
+                    self.tombstone_reuse_count += 1;
                     return Ok(());
                 }
             }
         }
 
         self.append_overflow(src_vid, nbr_with_ts, live.saturating_add(1));
+        self.live_counts[src_idx] += 1;
         self.edge_count += 1;
         Ok(())
     }
@@ -224,7 +264,7 @@ impl MutableCsr {
         };
         if let Some((i, probe)) = found {
             match decide_slot_delete(&probe, edge_id, ts)? {
-                DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated => {
+                DeleteSlotOutcome::AlreadyStamped => {
                     return Ok(false);
                 }
                 DeleteSlotOutcome::Stamped => {}
@@ -232,6 +272,9 @@ impl MutableCsr {
             let (start, _) = self.primary_window(src_idx);
             self.cold_list[start + i].delete_ts = ts;
             self.edge_count -= 1;
+            self.live_counts[src_idx] = self.live_counts[src_idx].saturating_sub(1);
+            self.tombstone_counts[src_idx] += 1;
+            self.note_primary_tombstone(src_idx, i);
             self.track_live_remove(src_vid, probe.endpoint, probe.rank);
             return Ok(true);
         }
@@ -245,13 +288,15 @@ impl MutableCsr {
             };
             if let Some(chunks) = self.overflow_chunks.get_mut(src_vid) {
                 match decide_slot_delete(&probe, edge_id, ts)? {
-                    DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated => {
+                    DeleteSlotOutcome::AlreadyStamped => {
                         return Ok(false);
                     }
                     DeleteSlotOutcome::Stamped => {}
                 }
                 chunks[chunk_idx].cold_at_mut(edge_idx).unwrap().delete_ts = ts;
                 self.edge_count -= 1;
+                self.live_counts[src_idx] = self.live_counts[src_idx].saturating_sub(1);
+                self.tombstone_counts[src_idx] += 1;
                 self.track_live_remove(src_vid, probe.endpoint, probe.rank);
                 return Ok(true);
             }
@@ -310,15 +355,17 @@ impl MutableCsr {
         let (start, end) = self.primary_window(src_idx);
         let hot = &self.hot_list[start..end];
         let cold = &mut self.cold_list[start..end];
+        let mut first_primary_tombstone: Option<usize> = None;
         for (i, (h, c)) in hot.iter().zip(cold.iter_mut()).enumerate() {
-            if h.endpoint == decoded_endpoint
-                && h.rank == decoded_rank
-                && c.is_live()
-                && c.create_ts <= ts
-            {
+            if h.endpoint == decoded_endpoint && h.rank == decoded_rank && c.is_live() {
                 c.delete_ts = ts;
                 self.edge_count -= 1;
+                self.live_counts[src_idx] = self.live_counts[src_idx].saturating_sub(1);
+                self.tombstone_counts[src_idx] += 1;
                 on_deleted(h.edge_id, EdgePosition::Primary { slot: i as u32 });
+                if first_primary_tombstone.is_none_or(|first| i < first) {
+                    first_primary_tombstone = Some(i);
+                }
                 deleted += 1;
             }
         }
@@ -332,10 +379,11 @@ impl MutableCsr {
                     if hot.endpoint == decoded_endpoint
                         && hot.rank == decoded_rank
                         && cold.is_live()
-                        && cold.create_ts <= ts
                     {
                         chunk.cold_at_mut(slot_idx).unwrap().delete_ts = ts;
                         self.edge_count -= 1;
+                        self.live_counts[src_idx] = self.live_counts[src_idx].saturating_sub(1);
+                        self.tombstone_counts[src_idx] += 1;
                         on_deleted(
                             hot.edge_id,
                             EdgePosition::Overflow {
@@ -349,6 +397,9 @@ impl MutableCsr {
             }
         }
         if deleted > 0 {
+            if let Some(slot) = first_primary_tombstone {
+                self.note_primary_tombstone(src_idx, slot);
+            }
             self.track_live_remove(src_vid, decoded_endpoint, decoded_rank);
         }
 
@@ -374,13 +425,13 @@ impl MutableCsr {
             return Ok(false);
         }
         let src_idx = src_vid as usize;
-        if src_idx >= self.vertex_capacity() || self.primary_capacities[src_idx] == 0 {
+        if src_idx >= self.vertex_capacity() || self.rows.primary_capacities[src_idx] == 0 {
             return Ok(false);
         }
-        if offset as usize >= self.degrees[src_idx] as usize {
+        if offset as usize >= self.rows.degrees[src_idx] as usize {
             return Ok(false);
         }
-        let idx = self.adj_offsets[src_idx] as usize + offset as usize;
+        let idx = self.rows.adj_offsets[src_idx] as usize + offset as usize;
         if idx >= self.hot_list.len() {
             return Ok(false);
         }
@@ -390,18 +441,18 @@ impl MutableCsr {
         // not-yet-created edge reports `false`, and only a live deletable
         // slot falls through to the stamp below.
         match decide_slot_delete(&probe, probe.edge_id, ts)? {
-            DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated => {
+            DeleteSlotOutcome::AlreadyStamped => {
                 return Ok(false);
             }
             DeleteSlotOutcome::Stamped => {}
         }
-        if probe.create_ts <= ts {
-            self.cold_list[idx].delete_ts = ts;
-            self.edge_count -= 1;
-            self.track_live_remove(src_vid, probe.endpoint, probe.rank);
-            return Ok(true);
-        }
-        Ok(false)
+        self.cold_list[idx].delete_ts = ts;
+        self.edge_count -= 1;
+        self.live_counts[src_idx] = self.live_counts[src_idx].saturating_sub(1);
+        self.tombstone_counts[src_idx] += 1;
+        self.note_primary_tombstone(src_idx, offset as usize);
+        self.track_live_remove(src_vid, probe.endpoint, probe.rank);
+        Ok(true)
     }
 
     /// Revert a deleted edge by offset position in the primary block.
@@ -414,14 +465,14 @@ impl MutableCsr {
             return false;
         }
         let src_idx = src_vid as usize;
-        if src_idx >= self.vertex_capacity() || self.primary_capacities[src_idx] == 0 {
+        if src_idx >= self.vertex_capacity() || self.rows.primary_capacities[src_idx] == 0 {
             return false;
         }
-        if offset as usize >= self.degrees[src_idx] as usize {
+        if offset as usize >= self.rows.degrees[src_idx] as usize {
             return false;
         }
 
-        let base_offset = self.adj_offsets[src_idx] as usize;
+        let base_offset = self.rows.adj_offsets[src_idx] as usize;
         let idx = base_offset + offset as usize;
 
         if idx >= self.hot_list.len() {
@@ -434,6 +485,10 @@ impl MutableCsr {
         if can_revert_delete(&probe, ts) {
             self.cold_list[idx].delete_ts = Timestamp::MAX;
             self.edge_count += 1;
+            self.live_counts[src_idx] += 1;
+            self.tombstone_counts[src_idx] =
+                self.tombstone_counts[src_idx].saturating_sub(1);
+            self.invalidate_reuse_hint(src_idx);
             self.track_live_insert(
                 src_vid,
                 probe.endpoint,
@@ -478,15 +533,17 @@ impl MutableCsr {
         };
         if let Some((i, probe)) = found {
             let (start, _) = self.primary_window(src_idx);
-            let degree = self.degrees[src_idx] as usize;
+            let degree = self.rows.degrees[src_idx] as usize;
             let was_live = probe.delete_ts == Timestamp::MAX;
             // Shift left to close the gap, then decrement the degree.
             self.hot_list
                 .copy_within(start + i + 1..start + degree, start + i);
             self.cold_list
                 .copy_within(start + i + 1..start + degree, start + i);
-            self.degrees[src_idx] -= 1;
+            self.rows.degrees[src_idx] -= 1;
+            self.invalidate_reuse_hint(src_idx);
             if was_live {
+                self.live_counts[src_idx] = self.live_counts[src_idx].saturating_sub(1);
                 // Gap-closing memmove shifts every later primary slot left
                 // by one, so stored row positions go stale: rebuild the
                 // indexed row when one exists instead of dropping one key.
@@ -494,6 +551,9 @@ impl MutableCsr {
                     self.rebuild_live_set_for_vertex(src_vid);
                 }
                 self.edge_count -= 1;
+            } else {
+                self.tombstone_counts[src_idx] =
+                    self.tombstone_counts[src_idx].saturating_sub(1);
             }
             return true;
         }
@@ -524,11 +584,13 @@ impl MutableCsr {
             if let Some((freed, emptied)) = detached {
                 self.sub_capacity(freed);
                 if emptied {
-                    // Drop the per-vertex entry so later lookups stay constant time.
-                    // The unified live set still covers primary rows, so
-                    // rebuild it instead of dropping the whole entry.
                     if was_live {
                         self.edge_count -= 1;
+                        self.live_counts[src_idx] =
+                            self.live_counts[src_idx].saturating_sub(1);
+                    } else {
+                        self.tombstone_counts[src_idx] =
+                            self.tombstone_counts[src_idx].saturating_sub(1);
                     }
                     self.overflow_chunks.remove(src_vid);
                     self.rebuild_live_set_for_vertex(src_vid);
@@ -543,6 +605,11 @@ impl MutableCsr {
                     self.rebuild_live_set_for_vertex(src_vid);
                 }
                 self.edge_count -= 1;
+                self.live_counts[src_idx] =
+                    self.live_counts[src_idx].saturating_sub(1);
+            } else {
+                self.tombstone_counts[src_idx] =
+                    self.tombstone_counts[src_idx].saturating_sub(1);
             }
             return true;
         }
@@ -581,6 +648,7 @@ impl MutableCsr {
             let (start, _) = self.primary_window(src_idx);
             self.cold_list[start + i].delete_ts = Timestamp::MAX;
             self.edge_count += 1;
+            self.invalidate_reuse_hint(src_idx);
             self.track_live_insert(
                 src_vid,
                 probe.endpoint,
@@ -667,12 +735,12 @@ impl MutableCsr {
             if src_idx >= self.vertex_capacity() {
                 self.ensure_vertex_capacity(src_idx + 1);
             }
-            if self.primary_capacities[src_idx] == 0 {
+            if self.rows.primary_capacities[src_idx] == 0 {
                 self.allocate_primary_block(src_idx);
             }
         }
         // Compute target capacities; track whether anything must grow.
-        let mut new_caps = self.primary_capacities.clone();
+        let mut new_caps = self.rows.primary_capacities.clone();
         let mut total_extra = 0usize;
         for (src_vid, incoming) in &aggregated {
             let src_idx = *src_vid as usize;
@@ -694,8 +762,8 @@ impl MutableCsr {
         let mut new_offsets = vec![0u32; rows];
         for vid in 0..rows {
             new_offsets[vid] = new_hot.len() as u32;
-            let base = self.adj_offsets[vid] as usize;
-            let cap = self.primary_capacities[vid] as usize;
+            let base = self.rows.adj_offsets[vid] as usize;
+            let cap = self.rows.primary_capacities[vid] as usize;
             let want = new_caps[vid] as usize;
             if cap > 0 {
                 new_hot.extend_from_slice(&self.hot_list[base..base + cap]);
@@ -708,13 +776,14 @@ impl MutableCsr {
         }
         self.hot_list = new_hot;
         self.cold_list = new_cold;
-        self.adj_offsets = new_offsets;
-        self.primary_capacities = new_caps;
+        self.rows.adj_offsets = new_offsets;
+        self.rows.primary_capacities = new_caps;
         self.add_capacity(total_extra);
+        self.reset_reuse_hints();
     }
 
     /// Bulk insert pre-grouped edges: `groups` holds one `(src, batch)` per
-    /// touched row with decoded `(endpoint, rank, edge_id, create_ts)` tuples.
+    /// touched row with decoded `(endpoint, rank, edge_id, ts)` tuples.
     ///
     /// Each row is reserved once at the packed density target, written in a
     /// single pass, and has its live set rebuilt once instead of per edge.
@@ -793,12 +862,12 @@ impl MutableCsr {
                 // Every batch edge is a live insert: keep the running width
                 // exact for the overflow sizing below.
                 live += 1;
-                let degree = self.degrees[src_idx] as usize;
-                let cap = self.primary_capacities[src_idx] as usize;
+                let degree = self.rows.degrees[src_idx] as usize;
+                let cap = self.rows.primary_capacities[src_idx] as usize;
                 if degree < cap {
-                    let base = self.adj_offsets[src_idx] as usize;
+                    let base = self.rows.adj_offsets[src_idx] as usize;
                     self.set_slot(base + degree, nbr);
-                    self.degrees[src_idx] += 1;
+                    self.rows.degrees[src_idx] += 1;
                 } else {
                     self.append_overflow(*src_vid, nbr, live);
                 }
@@ -828,10 +897,10 @@ impl MutableCsr {
                 if src_idx >= self.vertex_capacity() {
                     return Ok(false);
                 }
-                if slot as usize >= self.degrees[src_idx] as usize {
+                if slot as usize >= self.rows.degrees[src_idx] as usize {
                     return Ok(false);
                 }
-                let idx = self.adj_offsets[src_idx] as usize + slot as usize;
+                let idx = self.rows.adj_offsets[src_idx] as usize + slot as usize;
                 let probe = match (self.hot_list.get(idx), self.cold_list.get(idx)) {
                     (Some(hot), Some(cold)) => Nbr::from_parts(*hot, *cold),
                     _ => return Ok(false),
@@ -840,13 +909,14 @@ impl MutableCsr {
                     return Ok(false);
                 }
                 match decide_slot_delete(&probe, expected, ts)? {
-                    DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated => {
+                    DeleteSlotOutcome::AlreadyStamped => {
                         return Ok(false)
                     }
                     DeleteSlotOutcome::Stamped => {}
                 }
                 self.cold_list[idx].delete_ts = ts;
                 self.edge_count -= 1;
+                self.note_primary_tombstone(src_idx, slot as usize);
                 self.track_live_remove(src_vid, probe.endpoint, probe.rank);
                 Ok(true)
             }
@@ -865,7 +935,7 @@ impl MutableCsr {
                     return Ok(false);
                 }
                 match decide_slot_delete(&probe, expected, ts)? {
-                    DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated => {
+                    DeleteSlotOutcome::AlreadyStamped => {
                         return Ok(false)
                     }
                     DeleteSlotOutcome::Stamped => {}
@@ -894,10 +964,10 @@ impl MutableCsr {
                 if src_idx >= self.vertex_capacity() {
                     return false;
                 }
-                if slot as usize >= self.degrees[src_idx] as usize {
+                if slot as usize >= self.rows.degrees[src_idx] as usize {
                     return false;
                 }
-                let idx = self.adj_offsets[src_idx] as usize + slot as usize;
+                let idx = self.rows.adj_offsets[src_idx] as usize + slot as usize;
                 let probe = match (self.hot_list.get(idx), self.cold_list.get(idx)) {
                     (Some(hot), Some(cold)) => Nbr::from_parts(*hot, *cold),
                     _ => return false,
@@ -907,6 +977,7 @@ impl MutableCsr {
                 }
                 self.cold_list[idx].delete_ts = Timestamp::MAX;
                 self.edge_count += 1;
+                self.invalidate_reuse_hint(src_idx);
                 self.track_live_insert(
                     src_vid,
                     probe.endpoint,

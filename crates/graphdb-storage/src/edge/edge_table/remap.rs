@@ -144,7 +144,7 @@ fn remap_direction(
                     new_src,
                     new_nbr.to_vertex_id(),
                     new_nbr.edge_id,
-                    new_nbr.create_ts,
+                    0,
                     inline_value,
                 )?;
             } else {
@@ -152,7 +152,7 @@ fn remap_direction(
                     new_src,
                     new_nbr.to_vertex_id(),
                     new_nbr.edge_id,
-                    new_nbr.create_ts,
+                    0,
                 )?;
             }
             if new_nbr.delete_ts != Timestamp::MAX {

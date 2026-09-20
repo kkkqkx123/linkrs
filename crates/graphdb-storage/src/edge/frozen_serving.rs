@@ -8,21 +8,23 @@
 //! File layout, everything little-endian:
 //! - magic (u32), format version (u32)
 //! - rows (u64), entries (u64), live edge count (u64)
-//! - six `(offset u64, length u64)` column descriptors: degrees, endpoints,
-//!   ranks, edge ids, create stamps, delete stamps
+//! - five `(offset u64, length u64)` column descriptors: degrees, endpoints,
+//!   ranks, edge ids, delete stamps
 //! - degrees: `rows` u32 values
 //! - endpoints: `entries` u32 values
 //! - ranks: `entries` i64 values
-//! - edge ids, create stamps, delete stamps: `entries` u64 values each
+//! - edge ids, delete stamps: `entries` u64 values each
 //!
 //! Column widths are fixed, so any slot is addressable by index with one
 //! little-endian decode and no full-file decode. Row offsets are rebuilt in
 //! memory on open and never persisted, mirroring the heap frozen form.
 //!
-//! The serving file carries no checksum: on any structural mismatch (magic,
-//! version, out-of-range descriptors, length disagreements, trailing bytes)
-//! open fails and the caller falls back to the authoritative checkpoint,
-//! optionally regenerating the serving file. Stale files are never upgraded:
+//! The serving payload carries a trailing CRC32 covering every preceding
+//! byte, using the same checksum pattern as the heap checkpoint dumps. Open
+//! rejects structural mismatches (magic, version, out-of-range descriptors,
+//! length disagreements, trailing bytes) and CRC mismatches alike, and the
+//! caller falls back to the authoritative checkpoint, optionally
+//! regenerating the serving file. Stale files are never upgraded:
 //! a bad cache is discarded and rebuilt. Writers use a sibling temp file
 //! plus atomic rename, so readers only ever observe complete files.
 //!
@@ -30,7 +32,9 @@
 //! mapping), so readers holding a view keep the file alive across serving
 //! file replacement. Single-writer discipline applies: the checkpoint flush
 //! syncs base file and serving file together, and flushing a non-frozen
-//! group removes its serving file.
+//! group removes its serving file. On Linux the mapping carries a transparent
+//! huge page hint; a rejected hint falls back to base pages without failing
+//! the open.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -48,11 +52,14 @@ use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 
 /// Serving file magic: `b"GCSR"`.
 pub(crate) const SERVING_MAGIC: u32 = 0x52534347;
-/// Serving file format version. Only version 1 is read, never converted.
-pub(crate) const SERVING_FORMAT_VERSION: u32 = 1;
-/// Header bytes: magic + version + rows + entries + edge count + six
+/// Serving file format version. Only version 2 is read, never converted.
+/// Version 2 appends a trailing CRC32 over every preceding byte.
+pub(crate) const SERVING_FORMAT_VERSION: u32 = 2;
+/// Header bytes: magic + version + rows + entries + edge count + five
 /// `(offset, length)` descriptors.
-pub(crate) const SERVING_HEADER_LEN: usize = 8 + 24 + 6 * 16;
+pub(crate) const SERVING_HEADER_LEN: usize = 8 + 24 + 5 * 16;
+/// Trailing checksum bytes covering the header plus all columns.
+pub(crate) const SERVING_CRC_LEN: usize = 4;
 
 fn serving_error(message: String) -> StorageError {
     StorageError::deserialize_error(message)
@@ -85,7 +92,6 @@ struct ServingColumns {
     endpoints: ColumnRange,
     ranks: ColumnRange,
     edge_ids: ColumnRange,
-    creates: ColumnRange,
     deletes: ColumnRange,
 }
 
@@ -110,12 +116,21 @@ fn read_u64_le_at(bytes: &[u8], offset: usize) -> StorageResult<u64> {
 /// Parse and validate the serving header, returning row/entry counts, the
 /// stored live edge count and the column ranges.
 fn parse_header(bytes: &[u8]) -> StorageResult<(usize, usize, u64, ServingColumns)> {
-    if bytes.len() < SERVING_HEADER_LEN {
+    if bytes.len() < SERVING_HEADER_LEN + SERVING_CRC_LEN {
         return Err(serving_error(format!(
             "serving file too short for header: {} bytes",
             bytes.len()
         )));
     }
+    let (body, trailer) = bytes.split_at(bytes.len() - SERVING_CRC_LEN);
+    let stored = u32::from_le_bytes([trailer[0], trailer[1], trailer[2], trailer[3]]);
+    let computed = crc32fast::hash(body);
+    if stored != computed {
+        return Err(serving_error(format!(
+            "serving file CRC mismatch: stored={stored:#x} computed={computed:#x}"
+        )));
+    }
+    let bytes = body;
     let magic = read_u32_le_at(bytes, 0)?;
     if magic != SERVING_MAGIC {
         return Err(serving_error(format!(
@@ -132,7 +147,7 @@ fn parse_header(bytes: &[u8]) -> StorageResult<(usize, usize, u64, ServingColumn
     let entries = read_u64_le_at(bytes, 16)? as usize;
     let edge_count = read_u64_le_at(bytes, 24)?;
     let mut cursor = 32usize;
-    let mut ranges = [ColumnRange::default(); 6];
+    let mut ranges = [ColumnRange::default(); 5];
     for range in &mut ranges {
         let start = read_u64_le_at(bytes, cursor)? as usize;
         let len = read_u64_le_at(bytes, cursor + 8)? as usize;
@@ -142,7 +157,6 @@ fn parse_header(bytes: &[u8]) -> StorageResult<(usize, usize, u64, ServingColumn
     let expected = [
         rows.saturating_mul(4),
         entries.saturating_mul(4),
-        entries.saturating_mul(8),
         entries.saturating_mul(8),
         entries.saturating_mul(8),
         entries.saturating_mul(8),
@@ -174,8 +188,7 @@ fn parse_header(bytes: &[u8]) -> StorageResult<(usize, usize, u64, ServingColumn
         endpoints: ranges[1],
         ranks: ranges[2],
         edge_ids: ranges[3],
-        creates: ranges[4],
-        deletes: ranges[5],
+        deletes: ranges[4],
     };
     Ok((rows, entries, edge_count, columns))
 }
@@ -191,12 +204,11 @@ pub fn write_serving_file(frozen: &ImmutableCsr, path: &Path) -> StorageResult<(
     debug_assert_eq!(hot.len(), cold.len());
     let rows = degrees.len();
     let entries = hot.len();
-    let mut ranges = [ColumnRange::default(); 6];
+    let mut ranges = [ColumnRange::default(); 5];
     let mut cursor = SERVING_HEADER_LEN;
     let lens = [
         rows.saturating_mul(4),
         entries.saturating_mul(4),
-        entries.saturating_mul(8),
         entries.saturating_mul(8),
         entries.saturating_mul(8),
         entries.saturating_mul(8),
@@ -228,12 +240,11 @@ pub fn write_serving_file(frozen: &ImmutableCsr, path: &Path) -> StorageResult<(
         bytes.extend_from_slice(&hot_nbr.edge_id.0.to_le_bytes());
     }
     for cold_stamps in cold {
-        bytes.extend_from_slice(&cold_stamps.create_ts.to_le_bytes());
-    }
-    for cold_stamps in cold {
         bytes.extend_from_slice(&cold_stamps.delete_ts.to_le_bytes());
     }
     debug_assert_eq!(bytes.len(), cursor);
+    let crc = crc32fast::hash(&bytes);
+    bytes.extend_from_slice(&crc.to_le_bytes());
     let tmp = path.with_extension("serving.tmp");
     std::fs::write(&tmp, &bytes)
         .map_err(|e| StorageError::io_error(format!("serving file write failed: {e}")))?;
@@ -267,6 +278,11 @@ impl MappedFrozen {
             .map_err(|e| StorageError::io_error(format!("serving file open failed: {e}")))?;
         let map = unsafe { memmap2::Mmap::map(&file) }
             .map_err(|e| StorageError::io_error(format!("serving file map failed: {e}")))?;
+        // Ask for transparent huge pages on this read-only scan-heavy
+        // mapping. The hint is best-effort: rejection falls back to base
+        // pages without failing the open.
+        #[cfg(target_os = "linux")]
+        let _ = map.advise(memmap2::Advice::HugePage);
         Self::from_map(Arc::new(map))
     }
 
@@ -401,15 +417,10 @@ impl MappedFrozen {
         if start == end {
             return;
         }
-        let creates = self.row_column_bytes(self.columns.creates, 8, start, end);
         let deletes = self.row_column_bytes(self.columns.deletes, 8, start, end);
         out.reserve(end - start);
-        for (create, delete) in creates.chunks_exact(8).zip(deletes.chunks_exact(8)) {
+        for delete in deletes.chunks_exact(8) {
             out.push(ColdStamps {
-                create_ts: u64::from_le_bytes([
-                    create[0], create[1], create[2], create[3], create[4], create[5], create[6],
-                    create[7],
-                ]),
                 delete_ts: u64::from_le_bytes([
                     delete[0], delete[1], delete[2], delete[3], delete[4], delete[5], delete[6],
                     delete[7],
@@ -439,12 +450,6 @@ impl MappedFrozen {
     }
 
     #[inline]
-    fn create_at(&self, idx: usize) -> Timestamp {
-        read_u64_le_at(&self.map, self.columns.creates.start + idx * 8)
-            .expect("serving create column validated at open")
-    }
-
-    #[inline]
     fn delete_at(&self, idx: usize) -> Timestamp {
         read_u64_le_at(&self.map, self.columns.deletes.start + idx * 8)
             .expect("serving delete column validated at open")
@@ -470,7 +475,6 @@ impl MappedFrozen {
             return None;
         }
         Some(ColdStamps {
-            create_ts: self.create_at(idx),
             delete_ts: self.delete_at(idx),
         })
     }
@@ -556,19 +560,14 @@ impl MappedFrozen {
         let endpoints = self.row_column_bytes(self.columns.endpoints, 4, start, end);
         let ranks = self.row_column_bytes(self.columns.ranks, 8, start, end);
         let edge_ids = self.row_column_bytes(self.columns.edge_ids, 8, start, end);
-        let creates = self.row_column_bytes(self.columns.creates, 8, start, end);
         let deletes = self.row_column_bytes(self.columns.deletes, 8, start, end);
         out.reserve(end - start);
         let mut rank_chunks = ranks.chunks_exact(8);
         let mut id_chunks = edge_ids.chunks_exact(8);
-        let mut create_chunks = creates.chunks_exact(8);
         let mut delete_chunks = deletes.chunks_exact(8);
         for endpoint in endpoints.chunks_exact(4) {
             let rank = rank_chunks.next().expect("rank column matches row window");
             let edge_id = id_chunks.next().expect("edge-id column matches row window");
-            let create = create_chunks
-                .next()
-                .expect("create column matches row window");
             let delete = delete_chunks
                 .next()
                 .expect("delete column matches row window");
@@ -581,10 +580,6 @@ impl MappedFrozen {
                     edge_id[0], edge_id[1], edge_id[2], edge_id[3], edge_id[4], edge_id[5],
                     edge_id[6], edge_id[7],
                 ])),
-                create_ts: u64::from_le_bytes([
-                    create[0], create[1], create[2], create[3], create[4], create[5], create[6],
-                    create[7],
-                ]),
                 delete_ts: u64::from_le_bytes([
                     delete[0], delete[1], delete[2], delete[3], delete[4], delete[5], delete[6],
                     delete[7],
@@ -649,19 +644,14 @@ impl MappedFrozen {
         let endpoints = self.row_column_bytes(self.columns.endpoints, 4, start, end);
         let ranks = self.row_column_bytes(self.columns.ranks, 8, start, end);
         let edge_ids = self.row_column_bytes(self.columns.edge_ids, 8, start, end);
-        let creates = self.row_column_bytes(self.columns.creates, 8, start, end);
         let deletes = self.row_column_bytes(self.columns.deletes, 8, start, end);
         out.reserve(end - start);
         let mut rank_chunks = ranks.chunks_exact(8);
         let mut id_chunks = edge_ids.chunks_exact(8);
-        let mut create_chunks = creates.chunks_exact(8);
         let mut delete_chunks = deletes.chunks_exact(8);
         for endpoint in endpoints.chunks_exact(4) {
             let rank = rank_chunks.next().expect("rank column matches row window");
             let edge_id = id_chunks.next().expect("edge-id column matches row window");
-            let create = create_chunks
-                .next()
-                .expect("create column matches row window");
             let delete = delete_chunks
                 .next()
                 .expect("delete column matches row window");
@@ -674,10 +664,6 @@ impl MappedFrozen {
                     edge_id[0], edge_id[1], edge_id[2], edge_id[3], edge_id[4], edge_id[5],
                     edge_id[6], edge_id[7],
                 ])),
-                create_ts: u64::from_le_bytes([
-                    create[0], create[1], create[2], create[3], create[4], create[5], create[6],
-                    create[7],
-                ]),
                 delete_ts: u64::from_le_bytes([
                     delete[0], delete[1], delete[2], delete[3], delete[4], delete[5], delete[6],
                     delete[7],
@@ -702,18 +688,13 @@ impl MappedFrozen {
         let endpoints = self.row_column_bytes(self.columns.endpoints, 4, start, end);
         let ranks = self.row_column_bytes(self.columns.ranks, 8, start, end);
         let edge_ids = self.row_column_bytes(self.columns.edge_ids, 8, start, end);
-        let creates = self.row_column_bytes(self.columns.creates, 8, start, end);
         let deletes = self.row_column_bytes(self.columns.deletes, 8, start, end);
         let mut rank_chunks = ranks.chunks_exact(8);
         let mut id_chunks = edge_ids.chunks_exact(8);
-        let mut create_chunks = creates.chunks_exact(8);
         let mut delete_chunks = deletes.chunks_exact(8);
         for endpoint in endpoints.chunks_exact(4) {
             let rank = rank_chunks.next().expect("rank column matches row window");
             let edge_id = id_chunks.next().expect("edge-id column matches row window");
-            let create = create_chunks
-                .next()
-                .expect("create column matches row window");
             let delete = delete_chunks
                 .next()
                 .expect("delete column matches row window");
@@ -726,10 +707,6 @@ impl MappedFrozen {
                     edge_id[0], edge_id[1], edge_id[2], edge_id[3], edge_id[4], edge_id[5],
                     edge_id[6], edge_id[7],
                 ])),
-                create_ts: u64::from_le_bytes([
-                    create[0], create[1], create[2], create[3], create[4], create[5], create[6],
-                    create[7],
-                ]),
                 delete_ts: u64::from_le_bytes([
                     delete[0], delete[1], delete[2], delete[3], delete[4], delete[5], delete[6],
                     delete[7],
@@ -828,7 +805,6 @@ impl MappedFrozen {
         let mut dead = 0usize;
         for idx in start..end {
             let cold = ColdStamps {
-                create_ts: self.create_at(idx),
                 delete_ts: self.delete_at(idx),
             };
             if cold.is_live() {
@@ -968,7 +944,6 @@ impl MappedFrozen {
                 edge_id: self.edge_id_at(idx),
             });
             cold.push(ColdStamps {
-                create_ts: self.create_at(idx),
                 delete_ts: self.delete_at(idx),
             });
         }
@@ -979,8 +954,6 @@ impl MappedFrozen {
         out.extend_from_slice(&ranks_payload);
         let (_, edge_ids_payload) = encode_topology_u64_column(scratch.edge_ids());
         out.extend_from_slice(&edge_ids_payload);
-        let (_, create_payload) = encode_topology_u64_column(scratch.creates());
-        out.extend_from_slice(&create_payload);
         let (_, delete_payload) = encode_topology_u64_column(scratch.deletes());
         out.extend_from_slice(&delete_payload);
         let crc = crc32fast::hash(&out[start..]);
@@ -1320,6 +1293,18 @@ mod tests {
     }
 
     #[test]
+    fn hugepage_hint_keeps_serving_openable() {
+        let frozen = sample_frozen();
+        let path = serving_path("hugepage");
+        write_serving_file(&frozen, &path).unwrap();
+        // The open path carries a best-effort huge-page hint. It must never
+        // fail the open: rejection falls back to base pages.
+        let mapped = MappedFrozen::open(&path).unwrap();
+        assert_eq!(mapped.physical_edges_of(0), frozen.physical_edges_of(0));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn mapped_writes_are_rejected() {
         let frozen = sample_frozen();
         let path = serving_path("rejected");
@@ -1364,6 +1349,23 @@ mod tests {
             assert!(MappedFrozen::open(&path).is_err());
         }
         // A bad cache rebuilds cleanly from the authority.
+        let mapped = MappedFrozen::open_or_rebuild(&path, &frozen).unwrap();
+        assert_eq!(mapped.physical_edges_of(0), frozen.physical_edges_of(0));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn payload_bit_flip_fails_checksum() {
+        let frozen = sample_frozen();
+        let path = serving_path("payload_crc");
+        write_serving_file(&frozen, &path).unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        assert!(bytes.len() > SERVING_HEADER_LEN + SERVING_CRC_LEN);
+        let mid = SERVING_HEADER_LEN + 1;
+        bytes[mid] ^= 0x01;
+        std::fs::write(&path, &bytes).unwrap();
+        let err = MappedFrozen::open(&path).expect_err("payload corruption must fail");
+        assert!(err.to_string().contains("CRC"));
         let mapped = MappedFrozen::open_or_rebuild(&path, &frozen).unwrap();
         assert_eq!(mapped.physical_edges_of(0), frozen.physical_edges_of(0));
         let _ = std::fs::remove_file(&path);

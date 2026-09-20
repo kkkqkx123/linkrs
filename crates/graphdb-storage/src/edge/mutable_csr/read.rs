@@ -13,9 +13,9 @@ impl MutableCsr {
         if src_idx >= self.vertex_capacity() {
             return (0, 0);
         }
-        let start = self.adj_offsets[src_idx] as usize;
+        let start = self.rows.adj_offsets[src_idx] as usize;
         let end = start
-            .saturating_add(self.degrees[src_idx] as usize)
+            .saturating_add(self.rows.degrees[src_idx] as usize)
             .min(self.hot_list.len())
             .min(self.cold_list.len());
         (start.min(end), end)
@@ -33,6 +33,36 @@ impl MutableCsr {
         (&self.hot_list[start..end], &self.cold_list[start..end])
     }
 
+    /// Whether the live entries of one row arrive in key order.
+    ///
+    /// Mutable rows are insertion-ordered, so this usually reports false on
+    /// multi-edge rows and true on empty or single-entry rows. Frozen rows
+    /// are packed sorted and always report true. Query planning consults
+    /// this before choosing a bisection over a linear walk.
+    pub fn is_row_sorted(&self, src_vid: u32) -> bool {
+        let src_idx = src_vid as usize;
+        if src_idx >= self.vertex_capacity() {
+            return true;
+        }
+        let mut last: Option<(u32, i64)> = None;
+        let mut ordered = true;
+        self.visit_physical(src_vid, |nbr| {
+            if nbr.delete_ts != Timestamp::MAX {
+                return true;
+            }
+            let key = (nbr.endpoint, nbr.rank);
+            if let Some(prev) = last {
+                if key < prev {
+                    ordered = false;
+                    return false;
+                }
+            }
+            last = Some(key);
+            true
+        });
+        ordered
+    }
+
     /// Assembled slot copy at a wide-row index position.
     ///
     /// Row-relative addressing shared by the endpoint location fast paths:
@@ -47,7 +77,7 @@ impl MutableCsr {
     ) -> Option<Nbr> {
         match position {
             EdgePosition::Primary { slot } => {
-                let base = *self.adj_offsets.get(src_idx)? as usize;
+                let base = *self.rows.adj_offsets.get(src_idx)? as usize;
                 self.slot_at(base + slot as usize)
             }
             EdgePosition::Overflow { chunk, slot } => self
@@ -67,13 +97,13 @@ impl MutableCsr {
             return None;
         }
         let src_idx = src_vid as usize;
-        if src_idx >= self.vertex_capacity() || self.primary_capacities[src_idx] == 0 {
+        if src_idx >= self.vertex_capacity() || self.rows.primary_capacities[src_idx] == 0 {
             return None;
         }
-        if offset as usize >= self.degrees[src_idx] as usize {
+        if offset as usize >= self.rows.degrees[src_idx] as usize {
             return None;
         }
-        let idx = self.adj_offsets[src_idx] as usize + offset as usize;
+        let idx = self.rows.adj_offsets[src_idx] as usize + offset as usize;
         self.slot_at(idx)
     }
 
@@ -93,13 +123,22 @@ impl MutableCsr {
         if src_idx >= self.vertex_capacity() {
             return None;
         }
+        // Narrow rows never carry a live-set index; skip the HashMap
+        // probe and go straight to the row scan.
+        if src_idx < self.live_counts.len()
+            && self.live_counts[src_idx] as usize <= super::live_set::LIVE_SET_WIDTH_BOUND
+        {
+            return self.get_edge_physical_via_scan(
+                src_idx,
+                src_vid,
+                decoded_endpoint,
+                decoded_rank,
+            );
+        }
         if let Some(set) = self.live_sets.get(&src_vid) {
             let Some(position) = set.position(&(decoded_endpoint, decoded_rank)) else {
                 return None;
             };
-            // Position mismatch means the row moved without a rebuild, which
-            // must not happen; fall back to the scan instead of answering
-            // from the wrong slot.
             if let Some(nbr) = self.slot_at_position(src_vid, src_idx, position) {
                 if nbr.endpoint == decoded_endpoint
                     && nbr.rank == decoded_rank
@@ -110,21 +149,32 @@ impl MutableCsr {
                 }
             }
         }
+        self.get_edge_physical_via_scan(src_idx, src_vid, decoded_endpoint, decoded_rank)
+    }
+
+    /// Primary-then-overflow physical scan without index dispatch.
+    fn get_edge_physical_via_scan(
+        &self,
+        src_idx: usize,
+        src_vid: u32,
+        endpoint: u32,
+        rank: i64,
+    ) -> Option<Nbr> {
+        use super::super::INVALID_EDGE_ID;
         let (hot, cold) = self.primary_pair(src_idx);
         for (h, c) in hot.iter().zip(cold.iter()) {
-            if h.endpoint == decoded_endpoint
-                && h.rank == decoded_rank
+            if h.endpoint == endpoint
+                && h.rank == rank
                 && h.edge_id != INVALID_EDGE_ID
                 && c.is_live()
             {
                 return Some(Nbr::from_parts(*h, *c));
             }
         }
-        // Consolidated single-block rows skip the chain loop.
         if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
             for (hot, cold) in single.hot_slice().iter().zip(single.cold_slice()) {
-                if hot.endpoint == decoded_endpoint
-                    && hot.rank == decoded_rank
+                if hot.endpoint == endpoint
+                    && hot.rank == rank
                     && hot.edge_id != INVALID_EDGE_ID
                     && cold.is_live()
                 {
@@ -136,8 +186,8 @@ impl MutableCsr {
         if let Some(chunks) = self.overflow_chunks.get(src_vid) {
             for chunk in chunks {
                 for (hot, cold) in chunk.hot_slice().iter().zip(chunk.cold_slice()) {
-                    if hot.endpoint == decoded_endpoint
-                        && hot.rank == decoded_rank
+                    if hot.endpoint == endpoint
+                        && hot.rank == rank
                         && hot.edge_id != INVALID_EDGE_ID
                         && cold.is_live()
                     {
@@ -361,7 +411,7 @@ impl MutableCsr {
         if idx >= self.vertex_capacity() {
             return false;
         }
-        if self.degrees[idx] > 0 {
+        if self.rows.degrees[idx] > 0 {
             return true;
         }
         self.overflow_chunks
@@ -421,6 +471,15 @@ impl MutableCsr {
             return None;
         }
 
+        // Narrow rows never carry a live-set index, so the HashMap lookup
+        // is guaranteed to miss.  Skip it and go straight to the row scan
+        // to save one hash probe on the hot path.
+        if src_idx < self.live_counts.len()
+            && self.live_counts[src_idx] as usize <= super::live_set::LIVE_SET_WIDTH_BOUND
+        {
+            return self.get_edge_via_scan(src_idx, decoded_endpoint, decoded_rank, ts);
+        }
+
         if let Some(set) = self.live_sets.get(&src_vid) {
             match set.position(&(decoded_endpoint, decoded_rank)) {
                 Some(position) => {
@@ -428,7 +487,6 @@ impl MutableCsr {
                         if nbr.endpoint == decoded_endpoint
                             && nbr.rank == decoded_rank
                             && nbr.delete_ts == Timestamp::MAX
-                            && nbr.create_ts <= ts
                         {
                             return Some(nbr);
                         }
@@ -438,11 +496,23 @@ impl MutableCsr {
                 None => {}
             }
         }
-        // Scan primary: compare the packed key halves directly and only
-        // assemble the record on a key match.
+        self.get_edge_via_scan(src_idx, decoded_endpoint, decoded_rank, ts)
+    }
+
+    /// Primary-then-overflow scan for one key without index dispatch.
+    ///
+    /// Extracted so the narrow-row fast path in [`Self::get_edge`] can
+    /// skip the live-set probe and jump directly here.
+    fn get_edge_via_scan(
+        &self,
+        src_idx: usize,
+        endpoint: u32,
+        rank: i64,
+        ts: Timestamp,
+    ) -> Option<Nbr> {
         let (hot, cold) = self.primary_pair(src_idx);
         for (h, c) in hot.iter().zip(cold.iter()) {
-            if h.endpoint == decoded_endpoint && h.rank == decoded_rank {
+            if h.endpoint == endpoint && h.rank == rank {
                 let nbr = Nbr::from_parts(*h, *c);
                 if nbr.is_alive_at(ts) {
                     return Some(nbr);
@@ -450,12 +520,12 @@ impl MutableCsr {
             }
         }
 
-        // Scan overflow: consolidated single-block rows skip the chain loop.
+        let src_vid = src_idx as u32;
         if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
             for i in 0..single.len() {
                 if let Some(nbr) = single.slot_at(i) {
-                    if nbr.endpoint == decoded_endpoint
-                        && nbr.rank == decoded_rank
+                    if nbr.endpoint == endpoint
+                        && nbr.rank == rank
                         && nbr.is_alive_at(ts)
                     {
                         return Some(nbr);
@@ -468,8 +538,8 @@ impl MutableCsr {
             for chunk in chunks {
                 for i in 0..chunk.len() {
                     if let Some(nbr) = chunk.slot_at(i) {
-                        if nbr.endpoint == decoded_endpoint
-                            && nbr.rank == decoded_rank
+                        if nbr.endpoint == endpoint
+                            && nbr.rank == rank
                             && nbr.is_alive_at(ts)
                         {
                             return Some(nbr);

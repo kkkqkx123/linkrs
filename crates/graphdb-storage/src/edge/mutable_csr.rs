@@ -29,6 +29,7 @@
 
 use std::fmt;
 
+use super::csr_shared::VertexBookkeeping;
 use super::{ColdStamps, HotNbr, Nbr, Timestamp};
 
 use live_set::LiveSetStorage;
@@ -55,12 +56,16 @@ pub use write::EdgePosition;
 
 pub(crate) use row::PACKED_CSR_DENSITY;
 
+/// Mutable multi-edge CSR with lazy primary blocks and overflow chains.
+///
+/// Single-writer discipline: this type carries no internal locks. Concurrent
+/// readers are safe while no mutation is in flight; concurrent writers must
+/// be serialized by the caller (table or transaction layer). Vertex-level
+/// locking is a caller decision, not a property of this struct.
 pub struct MutableCsr {
     hot_list: Vec<HotNbr>,
     cold_list: Vec<ColdStamps>,
-    adj_offsets: Vec<u32>,
-    degrees: Vec<u32>,
-    primary_capacities: Vec<u32>,
+    rows: VertexBookkeeping,
 
     overflow_chunks: OverflowStorage,
     overflow_chunk_edges: usize,
@@ -76,9 +81,28 @@ pub struct MutableCsr {
     /// the table maintenance pass. The sentinel disables reuse. Memory-only:
     /// never persisted, rebuilt to the default on construction.
     tombstone_reuse_cutoff: Timestamp,
+    /// First known reclaimable primary slot per vertex, or unknown sentinel.
+    /// Set on primary deletes, consumed on reuse, invalidated by any row move.
+    /// Memory-only hint: a stale value only costs one failed probe before the
+    /// bounded scan fallback.
+    reuse_hint: Vec<u32>,
+
+    /// Incremental live entry count per vertex (narrow rows only).
+    /// Indexed rows track membership via the live set instead.
+    live_counts: Vec<u32>,
+    /// Incremental tombstone count per vertex (narrow rows only).
+    tombstone_counts: Vec<u32>,
 
     edge_count: u64,
     total_edge_capacity: usize,
+
+    // -- baseline instrumentation probes (memory-only, not persisted) --
+    overflow_chunk_allocs: u64,
+    primary_block_allocs: u64,
+    repack_count: u64,
+    tombstone_reuse_count: u64,
+    live_set_rebuild_count: u64,
+    vertex_expansion_count: u64,
 }
 
 impl MutableCsr {
@@ -118,15 +142,22 @@ impl Clone for MutableCsr {
         Self {
             hot_list: self.hot_list.clone(),
             cold_list: self.cold_list.clone(),
-            adj_offsets: self.adj_offsets.clone(),
-            degrees: self.degrees.clone(),
-            primary_capacities: self.primary_capacities.clone(),
+            rows: self.rows.clone(),
             overflow_chunks: self.overflow_chunks.clone(),
             overflow_chunk_edges: self.overflow_chunk_edges,
             live_sets: self.live_sets.clone(),
             tombstone_reuse_cutoff: self.tombstone_reuse_cutoff,
+            reuse_hint: self.reuse_hint.clone(),
+            live_counts: self.live_counts.clone(),
+            tombstone_counts: self.tombstone_counts.clone(),
             edge_count: self.edge_count,
             total_edge_capacity: self.total_edge_capacity,
+            overflow_chunk_allocs: self.overflow_chunk_allocs,
+            primary_block_allocs: self.primary_block_allocs,
+            repack_count: self.repack_count,
+            tombstone_reuse_count: self.tombstone_reuse_count,
+            live_set_rebuild_count: self.live_set_rebuild_count,
+            vertex_expansion_count: self.vertex_expansion_count,
         }
     }
 }

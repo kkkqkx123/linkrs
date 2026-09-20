@@ -344,7 +344,6 @@ fn test_csr_timestamps_agree_with_mvcc() {
                 .edge_timestamps
                 .get(&nbr.edge_id)
                 .unwrap_or_else(|| panic!("mvcc record missing for {:?}", nbr.edge_id));
-            assert_eq!(nbr.create_ts, ts.create_ts);
             assert_eq!(nbr.delete_ts, ts.delete_ts);
             seen += 1;
         }

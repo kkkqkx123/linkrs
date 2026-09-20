@@ -6,7 +6,7 @@
 //! a frozen group pays only its entries plus two small per-row arrays.
 //!
 //! A frozen group keeps every neighbor byte of the mutable group it was
-//! packed from, including edge ids, both timestamps and tombstones, except
+//! packed from, including edge ids, delete timestamps and tombstones, except
 //! reserved-slot gap sentinels (`INVALID_EDGE_ID` fillers), which carry no
 //! edge and are dropped at pack time. Freezing changes the physical layout
 //! and the row order, so timestamp-filtered reads observe the same logical
@@ -14,20 +14,18 @@
 //! stays above this layer; row stamps are physical replicas as in the
 //! mutable form.
 //!
-//! Every packed row is sorted by `(endpoint, rank, create_ts, edge_id)`.
-//! Endpoint and rank keep one point-query key contiguous, create stamps fix
-//! the version order of same-key entries, and edge ids make the order total.
-//! Point queries bisect the key range and return the first timestamp-visible
-//! version inside it, which is the earliest-created visible version
-//! (edge-id order breaks create-stamp ties). Scans stay linear over the
-//! sorted rows.
+//! Every packed row is sorted by `(endpoint, rank, edge_id)`.
+//! Endpoint and rank keep one point-query key contiguous, and edge ids make
+//! the order total. Point queries bisect the key range and return the first
+//! timestamp-visible version inside it. Scans stay linear over the sorted
+//! rows.
 //!
 //! Row offsets are rebuilt in memory on open and on load, never persisted.
 //! Every mutating entry point rejects writes: a frozen group must be
 //! explicitly unfrozen back into a mutable variant before it accepts writes
 //! again. There is no implicit unfreeze on the write path.
 
-use super::csr_shared::decode_endpoint_pair;
+use super::csr_shared::{decode_endpoint_pair, is_reclaimable_cold};
 use super::mutable_csr::serialization::{
     decode_topology_i64_column, decode_topology_u32_column, decode_topology_u64_column,
     encode_topology_i64_column, encode_topology_u32_column, encode_topology_u64_column,
@@ -54,8 +52,8 @@ fn frozen_error() -> StorageError {
 
 /// Frozen row order: point-query key first, then version order, then a
 /// stable total-order tiebreak. Total, so packing sorts deterministically.
-fn frozen_row_key(nbr: &Nbr) -> (u32, i64, Timestamp, u64) {
-    (nbr.endpoint, nbr.rank, nbr.create_ts, nbr.edge_id.0)
+fn frozen_row_key(nbr: &Nbr) -> (u32, i64, u64) {
+    (nbr.endpoint, nbr.rank, nbr.edge_id.0)
 }
 
 /// Sort one packed row into frozen order and drop reserved-slot gap
@@ -78,7 +76,7 @@ fn frozen_key_range(hot: &[HotNbr], endpoint: u32, rank: i64) -> (usize, usize) 
 /// Packed immutable adjacency of one group.
 ///
 /// `hot_entries`/`cold_entries` hold every row back to back in row order,
-/// each row sorted by `(endpoint, rank, create_ts, edge_id)`;
+/// each row sorted by `(endpoint, rank, edge_id)`;
 /// `degrees[row]` is the row length and `offsets[row]` its start inside the
 /// halves. Empty rows contribute no slots. `offsets` is memory-only state
 /// rebuilt by packing and by loading.
@@ -142,7 +140,7 @@ impl ImmutableCsr {
     ///
     /// Content-preserving up to logical equivalence: tombstones travel
     /// verbatim, reserved-slot gap sentinels are dropped, and rows are sorted
-    /// by `(endpoint, rank, create_ts, edge_id)`. Timestamp-filtered reads
+    /// by `(endpoint, rank, edge_id)`. Timestamp-filtered reads
     /// observe the same logical entries as the source table.
     pub fn pack_from_mutable(csr: &MutableCsr) -> Self {
         let rows = csr.vertex_capacity();
@@ -271,8 +269,8 @@ impl ImmutableCsr {
     /// First timestamp-visible entry matching an endpoint key.
     ///
     /// Bisects the sorted row to the `(endpoint, rank)` key range, then
-    /// filters inside the range by timestamp. The row sort makes the answer
-    /// the earliest-created visible version (edge-id order breaks ties).
+    /// filters inside the range by timestamp. The row sort makes edge-id
+    /// order the total version order within each key.
     pub fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
         let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
         let (start, end) = self.row_window(src_vid)?;
@@ -437,9 +435,115 @@ impl ImmutableCsr {
         (live, dead, end - start)
     }
 
-    /// Frozen rows are never reclaimed; maintenance skips frozen groups.
-    pub fn reclaimable_count(&self, _vid: u32, _cutoff: Timestamp) -> usize {
-        0
+    /// Count entries of one row reclaimable at `cutoff`.
+    pub fn reclaimable_count(&self, vid: u32, cutoff: Timestamp) -> usize {
+        if cutoff == Timestamp::MAX {
+            return 0;
+        }
+        let Some((start, end)) = self.row_window(vid) else {
+            return 0;
+        };
+        self.cold_entries[start..end]
+            .iter()
+            .filter(|cold| is_reclaimable_cold(cold, cutoff))
+            .count()
+    }
+
+    /// Reclaim one row in place, leaving every other row untouched.
+    ///
+    /// Eligible tombstones of `vid` are dropped and reported; live entries
+    /// keep their sorted order. Other rows are copied verbatim with fresh
+    /// offsets, so the work stays proportional to the table only through the
+    /// single rebuild all frozen compacts pay.
+    pub fn compact_row(
+        &mut self,
+        vid: u32,
+        cutoff: Timestamp,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+    ) -> usize {
+        if cutoff == Timestamp::MAX {
+            return 0;
+        }
+        let idx = vid as usize;
+        if idx >= self.degrees.len() {
+            return 0;
+        }
+        if self.reclaimable_count(vid, cutoff) == 0 {
+            return 0;
+        }
+        let rows = self.degrees.len();
+        let mut removed = 0usize;
+        let mut kept_hot = Vec::with_capacity(self.hot_entries.len());
+        let mut kept_cold = Vec::with_capacity(self.cold_entries.len());
+        let mut new_degrees = Vec::with_capacity(rows);
+        for row in 0..rows {
+            let start = self.offsets[row] as usize;
+            let degree = self.degrees[row] as usize;
+            let end = start.saturating_add(degree).min(self.hot_entries.len());
+            let mut kept = 0usize;
+            for entry in start..end {
+                let cold = self.cold_entries[entry];
+                if row == idx && is_reclaimable_cold(&cold, cutoff) {
+                    on_edge_removed(self.hot_entries[entry].edge_id, cold.delete_ts);
+                    removed += 1;
+                } else {
+                    kept_hot.push(self.hot_entries[entry]);
+                    kept_cold.push(cold);
+                    kept += 1;
+                }
+            }
+            new_degrees.push(kept as u32);
+        }
+        self.hot_entries = kept_hot;
+        self.cold_entries = kept_cold;
+        self.degrees = new_degrees;
+        self.rebuild_offsets();
+        removed
+    }
+
+    /// Drop GC-eligible tombstones in place without unfreezing.
+    ///
+    /// Rows stay sorted because filtering preserves order; degrees, offsets
+    /// and the packed halves are rebuilt tight with no reserved gaps. Live
+    /// entries are untouched, so the live edge count does not change. Each
+    /// dropped entry is reported through `on_edge_removed` for tombstone
+    /// accounting above this layer.
+    pub fn compact_with_cutoff(
+        &mut self,
+        cutoff: Timestamp,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+    ) -> usize {
+        if cutoff == Timestamp::MAX {
+            return 0;
+        }
+        let rows = self.degrees.len();
+        let mut removed = 0usize;
+        let mut kept_hot = Vec::with_capacity(self.hot_entries.len());
+        let mut kept_cold = Vec::with_capacity(self.cold_entries.len());
+        let mut new_degrees = Vec::with_capacity(rows);
+        for vid in 0..rows {
+            let start = self.offsets[vid] as usize;
+            let degree = self.degrees[vid] as usize;
+            let end = start.saturating_add(degree).min(self.hot_entries.len());
+            let mut kept = 0usize;
+            for idx in start..end {
+                let cold = self.cold_entries[idx];
+                if is_reclaimable_cold(&cold, cutoff) {
+                    on_edge_removed(self.hot_entries[idx].edge_id, cold.delete_ts);
+                    removed += 1;
+                } else {
+                    kept_hot.push(self.hot_entries[idx]);
+                    kept_cold.push(cold);
+                    kept += 1;
+                }
+            }
+            new_degrees.push(kept as u32);
+        }
+        self.hot_entries = kept_hot;
+        self.cold_entries = kept_cold;
+        self.degrees = new_degrees;
+        self.rebuild_offsets();
+        removed
     }
 
     /// Approximate memory usage in bytes.
@@ -531,7 +635,6 @@ impl ImmutableCsr {
     /// - encoded endpoints column
     /// - encoded ranks column
     /// - encoded edge ids column
-    /// - encoded create stamps column
     /// - encoded delete stamps column
     ///
     /// Row offsets are memory-only and never persisted; load rebuilds them.
@@ -571,8 +674,6 @@ impl ImmutableCsr {
         out.extend_from_slice(&ranks_payload);
         let (_, edge_ids_payload) = encode_topology_u64_column(scratch.edge_ids());
         out.extend_from_slice(&edge_ids_payload);
-        let (_, create_payload) = encode_topology_u64_column(scratch.creates());
-        out.extend_from_slice(&create_payload);
         let (_, delete_payload) = encode_topology_u64_column(scratch.deletes());
         out.extend_from_slice(&delete_payload);
         let crc = crc32fast::hash(&out[start..]);
@@ -621,12 +722,10 @@ impl ImmutableCsr {
         let endpoints = decode_topology_u32_column(data, &mut offset)?;
         let ranks = decode_topology_i64_column(data, &mut offset)?;
         let edge_ids = decode_topology_u64_column(data, &mut offset)?;
-        let create_stamps = decode_topology_u64_column(data, &mut offset)?;
         let delete_stamps = decode_topology_u64_column(data, &mut offset)?;
         if endpoints.len() != entries_len
             || ranks.len() != entries_len
             || edge_ids.len() != entries_len
-            || create_stamps.len() != entries_len
             || delete_stamps.len() != entries_len
         {
             return Err(StorageError::deserialize_error(
@@ -643,7 +742,6 @@ impl ImmutableCsr {
                 edge_id: EdgeId(edge_ids[index]),
             };
             let cold = ColdStamps {
-                create_ts: create_stamps[index],
                 delete_ts: delete_stamps[index],
             };
             if hot.edge_id != INVALID_EDGE_ID && cold.is_live() {
@@ -818,19 +916,19 @@ impl MutableCsrTrait for ImmutableCsr {
 
     fn compact_vertex_with_reporting(
         &mut self,
-        _vid: u32,
-        _cutoff: Timestamp,
-        _on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+        vid: u32,
+        cutoff: Timestamp,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
     ) -> usize {
-        0
+        ImmutableCsr::compact_row(self, vid, cutoff, on_edge_removed)
     }
 
-    fn reclaimable_count(&self, _vid: u32, _cutoff: Timestamp) -> usize {
-        0
+    fn reclaimable_count(&self, vid: u32, cutoff: Timestamp) -> usize {
+        ImmutableCsr::reclaimable_count(self, vid, cutoff)
     }
 
-    fn vertex_needs_compact(&self, _vid: u32, _cutoff: Timestamp) -> bool {
-        false
+    fn vertex_needs_compact(&self, vid: u32, cutoff: Timestamp) -> bool {
+        ImmutableCsr::reclaimable_count(self, vid, cutoff) > 0
     }
 
     fn vertex_census(&self, vid: u32) -> (usize, usize, usize) {
@@ -1056,7 +1154,7 @@ mod tests {
         ));
         assert_eq!(
             frozen.compact_vertex_with_reporting(0, 9, &mut |_, _| {}),
-            0
+            1
         );
         assert_eq!(frozen.reclaimable_count(0, 9), 0);
         assert!(!frozen.vertex_needs_compact(0, 9));
@@ -1203,23 +1301,25 @@ mod tests {
     fn same_key_versions_select_earliest_created() {
         let mut mutable = MutableCsr::with_capacity(2, 16);
         let key = packed_endpoint(42, 0);
-        // Same key twice via delete plus reinsert with a backdated create
-        // stamp: insertion order and create order disagree on purpose.
+        // Same key twice via delete plus reinsert: EdgeId(1) at ts=5 then
+        // EdgeId(2) at ts=3. create_ts no longer lives in the row, so both
+        // mutable and frozen pick the first surviving slot at the given ts.
         mutable.insert_edge(0, key, EdgeId(1), 5).unwrap();
         mutable.delete_edge(0, EdgeId(1), 9).unwrap();
         mutable.insert_edge(0, key, EdgeId(2), 3).unwrap();
         let frozen = ImmutableCsr::pack_from_mutable(&mutable);
-        // Both versions visible at ts=6: mutable answers insertion-first,
-        // frozen answers earliest-created per the documented frozen rule.
+        // At ts=6 EdgeId(1) is alive (delete_ts=9 > 6), EdgeId(2) is also
+        // alive; frozen row order is (endpoint, rank, edge_id) so EdgeId(1)
+        // comes first.
         assert_eq!(
             mutable.get_edge(0, key, 6).map(|nbr| nbr.edge_id),
             Some(EdgeId(1))
         );
         assert_eq!(
             frozen.get_edge(0, key, 6).map(|nbr| nbr.edge_id),
-            Some(EdgeId(2))
+            Some(EdgeId(1))
         );
-        // After the first version's tombstone closes, both agree again.
+        // After the first version's tombstone closes, both agree.
         assert_eq!(
             frozen.get_edge(0, key, 9).map(|nbr| nbr.edge_id),
             mutable.get_edge(0, key, 9).map(|nbr| nbr.edge_id)
@@ -1228,5 +1328,44 @@ mod tests {
             frozen.get_edge(0, key, 9).map(|nbr| nbr.edge_id),
             Some(EdgeId(2))
         );
+    }
+
+    #[test]
+    fn frozen_compact_drops_eligible_tombstones_in_place() {
+        let mut mutable = MutableCsr::with_capacity(4, 16);
+        for (endpoint, edge) in [(1, 10), (2, 11), (3, 12)] {
+            mutable
+                .insert_edge(0, packed_endpoint(endpoint, 0), EdgeId(edge), 1)
+                .unwrap();
+        }
+        mutable.delete_edge(0, EdgeId(11), 5).unwrap();
+        let mut frozen = ImmutableCsr::pack_from_mutable(&mutable);
+        assert_eq!(frozen.reclaimable_count(0, 10), 1);
+        let mut removed = Vec::new();
+        let dropped = frozen.compact_with_cutoff(10, &mut |id, ts| removed.push((id, ts)));
+        assert_eq!(dropped, 1);
+        assert_eq!(removed, vec![(EdgeId(11), 5)]);
+        assert_eq!(frozen.reclaimable_count(0, 10), 0);
+        assert_eq!(frozen.edge_count(), 2);
+        let keys: Vec<u32> = frozen
+            .physical_edges_of(0)
+            .iter()
+            .map(|nbr| nbr.endpoint)
+            .collect();
+        assert_eq!(keys, vec![1, 3]);
+    }
+
+    #[test]
+    fn mutable_row_sorted_reflects_insertion_order() {
+        let mut mutable = MutableCsr::with_capacity(4, 16);
+        assert!(mutable.is_row_sorted(0));
+        mutable
+            .insert_edge(0, packed_endpoint(10, 0), EdgeId(1), 1)
+            .unwrap();
+        assert!(mutable.is_row_sorted(0));
+        mutable
+            .insert_edge(0, packed_endpoint(5, 0), EdgeId(2), 1)
+            .unwrap();
+        assert!(!mutable.is_row_sorted(0));
     }
 }

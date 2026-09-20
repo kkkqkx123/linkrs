@@ -1,4 +1,4 @@
-use super::super::csr_shared::{grown_vertex_capacity, DEFAULT_VERTEX_CAPACITY};
+use super::super::csr_shared::{grown_vertex_capacity, VertexBookkeeping, DEFAULT_VERTEX_CAPACITY};
 use super::super::{ColdStamps, HotNbr, Timestamp};
 use super::live_set::LiveSetStorage;
 use super::overflow::{OverflowChunk, OverflowStorage};
@@ -7,6 +7,8 @@ use super::MutableCsr;
 pub(crate) const DEFAULT_EDGE_CAPACITY: usize = 4096;
 pub(crate) const DEFAULT_VERTEX_DEGREE: usize = 4;
 pub(crate) const DEFAULT_OVERFLOW_CHUNK_EDGES: usize = 4096;
+/// Sentinel for an unknown reuse hint: no known reclaimable slot.
+pub(crate) const REUSE_HINT_UNKNOWN: u32 = u32::MAX;
 
 impl MutableCsr {
     pub fn new() -> Self {
@@ -32,15 +34,22 @@ impl MutableCsr {
         Self {
             hot_list: Vec::with_capacity(edge_cap),
             cold_list: Vec::with_capacity(edge_cap),
-            adj_offsets: vec![0; vertex_cap],
-            degrees: vec![0; vertex_cap],
-            primary_capacities: vec![0; vertex_cap],
+            rows: VertexBookkeeping::with_capacity(vertex_cap),
             overflow_chunks: OverflowStorage::new(),
             overflow_chunk_edges: overflow_chunk_edges.max(1),
             live_sets: LiveSetStorage::new(),
             tombstone_reuse_cutoff: Timestamp::MAX,
+            reuse_hint: vec![REUSE_HINT_UNKNOWN; vertex_cap],
+            live_counts: vec![0; vertex_cap],
+            tombstone_counts: vec![0; vertex_cap],
             edge_count: 0,
             total_edge_capacity: 0,
+            overflow_chunk_allocs: 0,
+            primary_block_allocs: 0,
+            repack_count: 0,
+            tombstone_reuse_count: 0,
+            live_set_rebuild_count: 0,
+            vertex_expansion_count: 0,
         }
     }
 
@@ -53,7 +62,7 @@ impl MutableCsr {
     }
 
     pub fn vertex_capacity(&self) -> usize {
-        self.adj_offsets.len()
+        self.rows.adj_offsets.len()
     }
 
     pub fn edge_count(&self) -> u64 {
@@ -67,9 +76,11 @@ impl MutableCsr {
         }
 
         let tail = self.hot_list.len() as u32;
-        self.adj_offsets.resize(new_vertex_capacity, tail);
-        self.degrees.resize(new_vertex_capacity, 0);
-        self.primary_capacities.resize(new_vertex_capacity, 0);
+        self.rows.resize(new_vertex_capacity, tail);
+        self.reuse_hint
+            .resize(new_vertex_capacity, REUSE_HINT_UNKNOWN);
+        self.live_counts.resize(new_vertex_capacity, 0);
+        self.tombstone_counts.resize(new_vertex_capacity, 0);
         self.overflow_chunks.ensure_capacity(new_vertex_capacity);
         self.live_sets.ensure_capacity(new_vertex_capacity);
     }
@@ -94,9 +105,10 @@ impl MutableCsr {
             .resize(block_offset + DEFAULT_VERTEX_DEGREE, HotNbr::dead_gap());
         self.cold_list
             .resize(block_offset + DEFAULT_VERTEX_DEGREE, ColdStamps::dead_gap());
-        self.adj_offsets[src_idx] = block_offset as u32;
-        self.primary_capacities[src_idx] = DEFAULT_VERTEX_DEGREE as u32;
+        self.rows
+            .assign_primary_block(src_idx, block_offset as u32, DEFAULT_VERTEX_DEGREE as u32);
         self.add_capacity(DEFAULT_VERTEX_DEGREE);
+        self.primary_block_allocs += 1;
     }
 
     /// Single entry point for capacity growth. Every branch that reserves
@@ -115,15 +127,42 @@ impl MutableCsr {
 
     /// Clear all edges
     pub fn clear(&mut self) {
-        self.degrees.fill(0);
+        self.rows.degrees.fill(0);
         self.overflow_chunks.clear();
         self.live_sets.clear();
+        self.reuse_hint.fill(REUSE_HINT_UNKNOWN);
+        self.live_counts.fill(0);
+        self.tombstone_counts.fill(0);
         self.total_edge_capacity = self
+            .rows
             .primary_capacities
             .iter()
             .map(|cap| *cap as usize)
             .sum();
         self.edge_count = 0;
+        self.reset_baseline_counters();
+    }
+
+    /// Record a freshly tombstoned primary slot as the reuse candidate.
+    pub(crate) fn note_primary_tombstone(&mut self, src_idx: usize, slot: usize) {
+        if let Some(hint) = self.reuse_hint.get_mut(src_idx) {
+            let slot = slot as u32;
+            if slot < *hint {
+                *hint = slot;
+            }
+        }
+    }
+
+    /// Drop the reuse hint after any row move or slot reuse.
+    pub(crate) fn invalidate_reuse_hint(&mut self, src_idx: usize) {
+        if let Some(hint) = self.reuse_hint.get_mut(src_idx) {
+            *hint = REUSE_HINT_UNKNOWN;
+        }
+    }
+
+    /// Reset every reuse hint after a whole-table rebuild.
+    pub(crate) fn reset_reuse_hints(&mut self) {
+        self.reuse_hint.fill(REUSE_HINT_UNKNOWN);
     }
 }
 

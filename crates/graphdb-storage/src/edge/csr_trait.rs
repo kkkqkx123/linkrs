@@ -9,6 +9,11 @@ use super::mutable_csr::EdgePosition;
 use super::{EdgeId, Nbr, Timestamp, VertexId};
 
 pub trait CsrBase: std::fmt::Debug + Send + Sync {
+    /// Concurrency contract: row stores carry no internal locks. Concurrent
+    /// reads are safe while no writer holds exclusive access, but any
+    /// concurrent mutation requires caller-side mutual exclusion. The
+    /// `Send + Sync` bounds express single-writer transfer across threads,
+    /// not lock-free concurrent writes.
     fn vertex_capacity(&self) -> usize;
 
     fn edge_count(&self) -> u64;

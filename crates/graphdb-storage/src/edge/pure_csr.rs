@@ -20,8 +20,12 @@
 //!   (rank is always 0) with a width bound of [`LIVE_SET_WIDTH_BOUND`];
 //!   narrow rows scan instead of allocating a set.
 //!
-//! Reads assemble [`Nbr`] on the fly with `rank = 0`, `create_ts = 0`,
+//! Reads assemble [`Nbr`] on the fly with `rank = 0`,
 //! `delete_ts = Timestamp::MAX`.  No MVCC state is stored or checked.
+//!
+//! Single-writer discipline: this type carries no internal locks. Concurrent
+//! reads are safe while no mutation is in flight; concurrent writers must be
+//! serialized by the caller.
 
 use std::collections::HashMap;
 
@@ -29,7 +33,7 @@ use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
 
 use super::csr_shared::{
-    grown_vertex_capacity, OverflowTable, SegmentedTable, DEFAULT_VERTEX_CAPACITY,
+    grown_vertex_capacity, OverflowTable, SegmentedTable, VertexBookkeeping, DEFAULT_VERTEX_CAPACITY,
 };
 use super::csr_trait::{CsrBase, MutableCsrTrait};
 use super::{EdgePosition, Nbr};
@@ -259,9 +263,7 @@ impl PureLiveSetStorage {
 }
 
 pub struct PureTopologyCsr {
-    pub(crate) adj_offsets: Vec<u32>,
-    pub(crate) degrees: Vec<u32>,
-    pub(crate) primary_capacities: Vec<u32>,
+    pub(crate) rows: VertexBookkeeping,
     pub(crate) endpoints: Vec<u32>,
     pub(crate) edge_ids: Vec<u64>,
     pub(crate) overflow_chunks: PureOverflowStorage,
@@ -271,12 +273,55 @@ pub struct PureTopologyCsr {
     pub(crate) total_edge_capacity: usize,
 }
 
+/// Borrowed walk over one pure-topology row.
+///
+/// Holds slices of the primary window plus the overflow chain reference, so
+/// iteration needs no allocation. Sentinel holes are skipped inline.
+#[derive(Debug, Clone, Copy)]
+pub struct PureRowIter<'a> {
+    csr: &'a PureTopologyCsr,
+    primary_endpoints: &'a [u32],
+    primary_ids: &'a [u64],
+    primary_idx: usize,
+    overflow: Option<&'a Vec<PureOverflowChunk>>,
+    chunk_idx: usize,
+    slot_idx: usize,
+}
+
+impl<'a> Iterator for PureRowIter<'a> {
+    type Item = Nbr;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.primary_idx < self.primary_endpoints.len() {
+            let endpoint = self.primary_endpoints[self.primary_idx];
+            let edge_id = EdgeId(self.primary_ids[self.primary_idx]);
+            self.primary_idx += 1;
+            if edge_id != INVALID_EDGE_ID {
+                return Some(self.csr.make_nbr(endpoint, edge_id));
+            }
+        }
+        let chunks = self.overflow?;
+        while self.chunk_idx < chunks.len() {
+            let chunk = &chunks[self.chunk_idx];
+            while self.slot_idx < chunk.len() {
+                let endpoint = chunk.endpoints[self.slot_idx];
+                let edge_id = EdgeId(chunk.edge_ids[self.slot_idx]);
+                self.slot_idx += 1;
+                if edge_id != INVALID_EDGE_ID {
+                    return Some(self.csr.make_nbr(endpoint, edge_id));
+                }
+            }
+            self.chunk_idx += 1;
+            self.slot_idx = 0;
+        }
+        None
+    }
+}
+
 impl Clone for PureTopologyCsr {
     fn clone(&self) -> Self {
         Self {
-            adj_offsets: self.adj_offsets.clone(),
-            degrees: self.degrees.clone(),
-            primary_capacities: self.primary_capacities.clone(),
+            rows: self.rows.clone(),
             endpoints: self.endpoints.clone(),
             edge_ids: self.edge_ids.clone(),
             overflow_chunks: self.overflow_chunks.clone(),
@@ -326,9 +371,7 @@ impl PureTopologyCsr {
         let edge_cap = edge_capacity.max(1);
 
         Self {
-            adj_offsets: vec![0; vertex_cap],
-            degrees: vec![0; vertex_cap],
-            primary_capacities: vec![0; vertex_cap],
+            rows: VertexBookkeeping::with_capacity(vertex_cap),
             endpoints: Vec::with_capacity(edge_cap),
             edge_ids: Vec::with_capacity(edge_cap),
             overflow_chunks: PureOverflowStorage::new(),
@@ -340,7 +383,7 @@ impl PureTopologyCsr {
     }
 
     pub fn vertex_capacity(&self) -> usize {
-        self.adj_offsets.len()
+        self.rows.len()
     }
 
     pub fn edge_count(&self) -> u64 {
@@ -352,9 +395,7 @@ impl PureTopologyCsr {
             return;
         }
         let tail = self.endpoints.len() as u32;
-        self.adj_offsets.resize(new_vertex_capacity, tail);
-        self.degrees.resize(new_vertex_capacity, 0);
-        self.primary_capacities.resize(new_vertex_capacity, 0);
+        self.rows.resize(new_vertex_capacity, tail);
         self.overflow_chunks.ensure_capacity(new_vertex_capacity);
         self.live_sets.ensure_capacity(new_vertex_capacity);
     }
@@ -371,8 +412,8 @@ impl PureTopologyCsr {
             .resize(block_offset + DEFAULT_VERTEX_DEGREE, 0);
         self.edge_ids
             .resize(block_offset + DEFAULT_VERTEX_DEGREE, INVALID_EDGE_ID.0);
-        self.adj_offsets[src_idx] = block_offset as u32;
-        self.primary_capacities[src_idx] = DEFAULT_VERTEX_DEGREE as u32;
+        self.rows
+            .assign_primary_block(src_idx, block_offset as u32, DEFAULT_VERTEX_DEGREE as u32);
         self.add_capacity(DEFAULT_VERTEX_DEGREE);
     }
 
@@ -388,12 +429,8 @@ impl PureTopologyCsr {
         if src_idx >= self.vertex_capacity() {
             return (0, 0);
         }
-        let start = self.adj_offsets[src_idx] as usize;
-        let end = start
-            .saturating_add(self.degrees[src_idx] as usize)
-            .min(self.endpoints.len())
-            .min(self.edge_ids.len());
-        (start.min(end), end)
+        let col_len = self.endpoints.len().min(self.edge_ids.len());
+        self.rows.primary_window(src_idx, col_len)
     }
 
     pub(crate) fn make_nbr(&self, endpoint: u32, edge_id: EdgeId) -> Nbr {
@@ -401,7 +438,6 @@ impl PureTopologyCsr {
             endpoint,
             rank: 0,
             edge_id,
-            create_ts: 0,
             delete_ts: Timestamp::MAX,
         }
     }
@@ -453,7 +489,7 @@ impl PureTopologyCsr {
             self.ensure_vertex_capacity(src_idx + 1);
         }
 
-        if self.primary_capacities[src_idx] == 0 {
+        if self.rows.primary_capacities[src_idx] == 0 {
             self.allocate_primary_block(src_idx);
         }
 
@@ -476,12 +512,12 @@ impl PureTopologyCsr {
             live
         };
 
-        let degree = self.degrees[src_idx] as usize;
-        if degree < self.primary_capacities[src_idx] as usize {
-            let base = self.adj_offsets[src_idx] as usize;
+        let degree = self.rows.degrees[src_idx] as usize;
+        if degree < self.rows.primary_capacities[src_idx] as usize {
+            let base = self.rows.adj_offsets[src_idx] as usize;
             self.endpoints[base + degree] = endpoint;
             self.edge_ids[base + degree] = edge_id.0;
-            self.degrees[src_idx] += 1;
+            self.rows.degrees[src_idx] += 1;
             let position = EdgePosition::Primary {
                 slot: degree as u32,
             };
@@ -525,12 +561,13 @@ impl PureTopologyCsr {
     }
 
     pub fn clear(&mut self) {
-        self.degrees.fill(0);
+        self.rows.degrees.fill(0);
         self.endpoints.clear();
         self.edge_ids.clear();
         self.overflow_chunks.clear();
         self.live_sets.clear();
         self.total_edge_capacity = self
+            .rows
             .primary_capacities
             .iter()
             .map(|cap| *cap as usize)
@@ -649,6 +686,54 @@ impl PureTopologyCsr {
         }
     }
 
+    /// Borrowed row walk over live entries without allocating.
+    ///
+    /// Skips sentinel holes inline, so callers iterate one row with no
+    /// intermediate vector regardless of primary versus overflow layout.
+    pub fn iter_row(&self, src_vid: u32) -> PureRowIter<'_> {
+        let src_idx = src_vid as usize;
+        let (start, end) = if src_idx < self.vertex_capacity() {
+            self.primary_window(src_idx)
+        } else {
+            (0, 0)
+        };
+        let (primary_endpoints, primary_ids) = if start <= end
+            && end <= self.endpoints.len()
+            && end <= self.edge_ids.len()
+        {
+            (&self.endpoints[start..end], &self.edge_ids[start..end])
+        } else {
+            (&[][..], &[][..])
+        };
+        PureRowIter {
+            csr: self,
+            primary_endpoints,
+            primary_ids,
+            primary_idx: 0,
+            overflow: self.overflow_chunks.get(src_vid),
+            chunk_idx: 0,
+            slot_idx: 0,
+        }
+    }
+
+    /// Whether the live endpoints of one row arrive in ascending order.
+    ///
+    /// Pure rows are insertion-ordered, so this usually reports false on
+    /// multi-edge rows. Frozen packing sorts rows, after which the same
+    /// check would report true.
+    pub fn is_row_sorted(&self, src_vid: u32) -> bool {
+        let mut last: Option<u32> = None;
+        for nbr in self.iter_row(src_vid) {
+            if let Some(prev) = last {
+                if nbr.endpoint < prev {
+                    return false;
+                }
+            }
+            last = Some(nbr.endpoint);
+        }
+        true
+    }
+
     pub(crate) fn rebuild_live_set_for_vertex(&mut self, vid: u32) {
         let idx = vid as usize;
         if idx >= self.vertex_capacity() {
@@ -755,9 +840,15 @@ impl PureTopologyCsr {
             self.live_sets.insert_key(vid, endpoint, position);
             return;
         }
+        // Narrow rows stay set-free until the physical row width passes the
+        // bound. The width check touches only lengths, not entries: counting
+        // live entries instead would cost a full row walk per insert, so the
+        // physical gate is kept deliberately. Rebuilds drop the set again
+        // when the live width is still narrow, so tombstone-heavy rows may
+        // rescan on later inserts until maintenance compacts them.
         let mut width = 0usize;
         if (vid as usize) < self.vertex_capacity() {
-            width = self.degrees[vid as usize] as usize;
+            width = self.rows.degrees[vid as usize] as usize;
             if let Some(chunks) = self.overflow_chunks.get(vid) {
                 width += chunks.iter().map(|chunk| chunk.len()).sum::<usize>();
             }
@@ -843,15 +934,15 @@ impl CsrBase for PureTopologyCsr {
     fn dump_into(&self, out: &mut Vec<u8>) {
         let start = out.len();
         out.extend_from_slice(&PURE_CSR_FORMAT_VERSION.to_le_bytes());
-        out.extend_from_slice(&(self.adj_offsets.len() as u64).to_le_bytes());
+        out.extend_from_slice(&(self.rows.adj_offsets.len() as u64).to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
         out.extend_from_slice(&(self.endpoints.len() as u64).to_le_bytes());
 
-        Self::dump_columns(out, &self.degrees);
+        Self::dump_columns(out, &self.rows.degrees);
         Self::dump_columns(out, &self.endpoints);
         Self::dump_columns_u64(out, &self.edge_ids);
 
-        for vid in 0..self.adj_offsets.len() {
+        for vid in 0..self.rows.adj_offsets.len() {
             let chunks = self.overflow_chunks.get(vid as u32);
             out.extend_from_slice(&(chunks.map_or(0, Vec::len) as u32).to_le_bytes());
             if let Some(chunks) = chunks {
@@ -957,15 +1048,15 @@ impl CsrBase for PureTopologyCsr {
             )));
         }
 
-        self.adj_offsets.resize(vertex_capacity, 0);
-        self.degrees.resize(vertex_capacity, 0);
-        self.primary_capacities.resize(vertex_capacity, 0);
+        self.rows.adj_offsets.resize(vertex_capacity, 0);
+        self.rows.degrees.resize(vertex_capacity, 0);
+        self.rows.primary_capacities.resize(vertex_capacity, 0);
 
         let mut running_offset = 0u32;
         for vid in 0..vertex_capacity {
-            self.adj_offsets[vid] = running_offset;
-            self.degrees[vid] = degrees[vid];
-            self.primary_capacities[vid] = degrees[vid];
+            self.rows.adj_offsets[vid] = running_offset;
+            self.rows.degrees[vid] = degrees[vid];
+            self.rows.primary_capacities[vid] = degrees[vid];
             running_offset += degrees[vid];
         }
 
@@ -1195,10 +1286,10 @@ impl MutableCsrTrait for PureTopologyCsr {
                 if src_idx >= self.vertex_capacity() {
                     return Ok(false);
                 }
-                if slot as usize >= self.degrees[src_idx] as usize {
+                if slot as usize >= self.rows.degrees[src_idx] as usize {
                     return Ok(false);
                 }
-                let idx = self.adj_offsets[src_idx] as usize + slot as usize;
+                let idx = self.rows.adj_offsets[src_idx] as usize + slot as usize;
                 if idx >= self.edge_ids.len() || EdgeId(self.edge_ids[idx]) != expected {
                     return Ok(false);
                 }
@@ -1249,10 +1340,10 @@ impl MutableCsrTrait for PureTopologyCsr {
                 if src_idx >= self.vertex_capacity() {
                     return false;
                 }
-                if slot as usize >= self.degrees[src_idx] as usize {
+                if slot as usize >= self.rows.degrees[src_idx] as usize {
                     return false;
                 }
-                let idx = self.adj_offsets[src_idx] as usize + slot as usize;
+                let idx = self.rows.adj_offsets[src_idx] as usize + slot as usize;
                 if idx >= self.edge_ids.len() {
                     return false;
                 }
@@ -1300,10 +1391,10 @@ impl MutableCsrTrait for PureTopologyCsr {
         if src_idx >= self.vertex_capacity() {
             return Ok(false);
         }
-        if offset as usize >= self.degrees[src_idx] as usize {
+        if offset as usize >= self.rows.degrees[src_idx] as usize {
             return Ok(false);
         }
-        let idx = self.adj_offsets[src_idx] as usize + offset as usize;
+        let idx = self.rows.adj_offsets[src_idx] as usize + offset as usize;
         if idx >= self.edge_ids.len() {
             return Ok(false);
         }
@@ -1318,6 +1409,9 @@ impl MutableCsrTrait for PureTopologyCsr {
     }
 
     fn revert_delete_by_offset(&mut self, _src_vid: u32, _offset: i32, _ts: Timestamp) -> bool {
+        // Deletion overwrites the edge id with the unassignable sentinel, so
+        // an offset-only revert cannot recover the erased identity. Callers
+        // needing restore must keep the edge id and use the positioned path.
         false
     }
 
@@ -1326,18 +1420,23 @@ impl MutableCsrTrait for PureTopologyCsr {
             return None;
         }
         let src_idx = src_vid as usize;
-        if src_idx >= self.vertex_capacity() || self.primary_capacities[src_idx] == 0 {
+        if src_idx >= self.vertex_capacity() || self.rows.primary_capacities[src_idx] == 0 {
             return None;
         }
-        if offset as usize >= self.degrees[src_idx] as usize {
+        if offset as usize >= self.rows.degrees[src_idx] as usize {
             return None;
         }
-        let idx = self.adj_offsets[src_idx] as usize + offset as usize;
+        let idx = self.rows.adj_offsets[src_idx] as usize + offset as usize;
         let endpoint = *self.endpoints.get(idx)?;
         let edge_id = EdgeId(*self.edge_ids.get(idx)?);
         Some(self.make_nbr(endpoint, edge_id))
     }
 
+    /// Locate the first live edge by endpoint without consulting snapshots.
+    ///
+    /// Wide rows answer from the endpoint location index: a present key
+    /// addresses its slot directly, an absent key returns without scanning.
+    /// Narrow rows without an index fall through to the linear walk.
     fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
         let (decoded_endpoint, _decoded_rank) = dst.decode_edge_endpoint();
         let target_endpoint = decoded_endpoint.as_int64().unwrap_or(0) as u32;
@@ -1348,29 +1447,33 @@ impl MutableCsrTrait for PureTopologyCsr {
         }
 
         if let Some(set) = self.live_sets.get(src_vid) {
-            if let Some(position) = set.position(&target_endpoint) {
-                let nbr = match position {
-                    EdgePosition::Primary { slot } => {
-                        let base = self.adj_offsets[src_idx] as usize;
-                        let idx = base + slot as usize;
-                        let endpoint = *self.endpoints.get(idx)?;
-                        let edge_id = EdgeId(*self.edge_ids.get(idx)?);
-                        self.make_nbr(endpoint, edge_id)
-                    }
-                    EdgePosition::Overflow { chunk, slot } => {
-                        let chunks = self.overflow_chunks.get(src_vid)?;
-                        let c = chunks.get(chunk as usize)?;
-                        let endpoint = c.endpoint_at(slot as usize)?;
-                        let edge_id = c.edge_id_at(slot as usize)?;
-                        self.make_nbr(endpoint, edge_id)
-                    }
-                };
-                if nbr.endpoint == target_endpoint
-                    && nbr.edge_id != INVALID_EDGE_ID
-                    && nbr.delete_ts == Timestamp::MAX
-                {
-                    return Some(nbr);
+            let Some(position) = set.position(&target_endpoint) else {
+                return None;
+            };
+            let nbr = match position {
+                EdgePosition::Primary { slot } => {
+                    let base = self.rows.adj_offsets[src_idx] as usize;
+                    let idx = base + slot as usize;
+                    let endpoint = *self.endpoints.get(idx)?;
+                    let edge_id = EdgeId(*self.edge_ids.get(idx)?);
+                    self.make_nbr(endpoint, edge_id)
                 }
+                EdgePosition::Overflow { chunk, slot } => {
+                    let chunks = self.overflow_chunks.get(src_vid)?;
+                    let c = chunks.get(chunk as usize)?;
+                    let endpoint = c.endpoint_at(slot as usize)?;
+                    let edge_id = c.edge_id_at(slot as usize)?;
+                    self.make_nbr(endpoint, edge_id)
+                }
+            };
+            // Position mismatch means the row moved without a rebuild, which
+            // must not happen; fall back to the scan instead of answering
+            // from the wrong slot.
+            if nbr.endpoint == target_endpoint
+                && nbr.edge_id != INVALID_EDGE_ID
+                && nbr.delete_ts == Timestamp::MAX
+            {
+                return Some(nbr);
             }
         }
 
@@ -1445,7 +1548,7 @@ impl MutableCsrTrait for PureTopologyCsr {
         if idx >= self.vertex_capacity() {
             return false;
         }
-        if self.degrees[idx] > 0 {
+        if self.rows.degrees[idx] > 0 {
             return true;
         }
         self.overflow_chunks
@@ -1484,13 +1587,13 @@ impl MutableCsrTrait for PureTopologyCsr {
                 })
         };
         if let Some((idx, _endpoint)) = found {
-            let degree = self.degrees[src_idx] as usize;
-            let base = self.adj_offsets[src_idx] as usize;
+            let degree = self.rows.degrees[src_idx] as usize;
+            let base = self.rows.adj_offsets[src_idx] as usize;
             self.endpoints
                 .copy_within(base + idx - base + 1..base + degree, base + idx - base);
             self.edge_ids
                 .copy_within(base + idx - base + 1..base + degree, base + idx - base);
-            self.degrees[src_idx] -= 1;
+            self.rows.degrees[src_idx] -= 1;
             self.sub_capacity(1);
             self.edge_count -= 1;
             self.rebuild_live_set_for_vertex(src_vid);
@@ -1529,48 +1632,21 @@ impl MutableCsrTrait for PureTopologyCsr {
         _edge_id: EdgeId,
         _ts: Timestamp,
     ) -> bool {
+        // Deleted slots hold the sentinel instead of the edge id, so an
+        // id-keyed scan cannot locate them. Restoration uses the positioned
+        // path with the expected id supplied by the caller.
         false
     }
 
+    /// Timestamp-filtered point lookup.
+    ///
+    /// Pure rows store no timestamps: [`Self::make_nbr`] stamps every live
+    /// entry identically, so the timestamp carries no information here and
+    /// this entry shares the physical indexed path exactly instead of
+    /// duplicating its scan. Wide rows therefore get the same absent-key
+    /// short-circuit as [`Self::get_edge_physical`].
     fn get_edge(&self, src_vid: u32, dst: VertexId, _ts: Timestamp) -> Option<Nbr> {
-        let (decoded_endpoint, _decoded_rank) = dst.decode_edge_endpoint();
-        let target_endpoint = decoded_endpoint.as_int64().unwrap_or(0) as u32;
-
-        let src_idx = src_vid as usize;
-        if src_idx >= self.vertex_capacity() {
-            return None;
-        }
-
-        let (start, end) = self.primary_window(src_idx);
-        for i in start..end {
-            if self.endpoints[i] == target_endpoint && self.edge_ids[i] != INVALID_EDGE_ID.0 {
-                return Some(self.make_nbr(self.endpoints[i], EdgeId(self.edge_ids[i])));
-            }
-        }
-
-        if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
-            for i in 0..single.len() {
-                if single.endpoints[i] == target_endpoint && single.edge_ids[i] != INVALID_EDGE_ID.0
-                {
-                    return Some(self.make_nbr(single.endpoints[i], EdgeId(single.edge_ids[i])));
-                }
-            }
-            return None;
-        }
-
-        if let Some(chunks) = self.overflow_chunks.get(src_vid) {
-            for chunk in chunks {
-                for i in 0..chunk.len() {
-                    if chunk.endpoints[i] == target_endpoint
-                        && chunk.edge_ids[i] != INVALID_EDGE_ID.0
-                    {
-                        return Some(self.make_nbr(chunk.endpoints[i], EdgeId(chunk.edge_ids[i])));
-                    }
-                }
-            }
-        }
-
-        None
+        self.get_edge_physical(src_vid, dst)
     }
 
     fn edges_of(&self, src_vid: u32, _ts: Timestamp) -> Vec<Nbr> {
@@ -1619,8 +1695,8 @@ impl MutableCsrTrait for PureTopologyCsr {
 
         let mut removed = 0usize;
 
-        let base = self.adj_offsets[idx] as usize;
-        let degree = self.degrees[idx] as usize;
+        let base = self.rows.adj_offsets[idx] as usize;
+        let degree = self.rows.degrees[idx] as usize;
         let mut keep = 0usize;
         for i in 0..degree {
             let idx_i = base + i;
@@ -1636,8 +1712,8 @@ impl MutableCsrTrait for PureTopologyCsr {
                 keep += 1;
             }
         }
-        self.degrees[idx] = keep as u32;
-        self.primary_capacities[idx] = keep as u32;
+        self.rows.degrees[idx] = keep as u32;
+        self.rows.primary_capacities[idx] = keep as u32;
 
         if self.overflow_chunks.get(vid).is_some() {
             let chunks = self.overflow_chunks.remove(vid).unwrap_or_default();
@@ -1711,7 +1787,7 @@ impl MutableCsrTrait for PureTopologyCsr {
         if idx >= self.vertex_capacity() {
             return 0;
         }
-        self.primary_capacities[idx].saturating_sub(self.degrees[idx]) as usize
+        self.rows.primary_capacities[idx].saturating_sub(self.rows.degrees[idx]) as usize
     }
 
     fn row_density(&self, vid: u32) -> f32 {
@@ -1719,21 +1795,98 @@ impl MutableCsrTrait for PureTopologyCsr {
         if idx >= self.vertex_capacity() {
             return 1.0;
         }
-        let cap = self.primary_capacities[idx] as f32;
+        let cap = self.rows.primary_capacities[idx] as f32;
         if cap == 0.0 {
             return 1.0;
         }
-        self.degrees[idx] as f32 / cap
+        self.rows.degrees[idx] as f32 / cap
     }
 
     fn used_memory_size(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.endpoints.len() * 4
             + self.edge_ids.len() * 8
-            + self.adj_offsets.len() * 4 * 3
+            + self.rows.adj_offsets.len() * 4 * 3
             + self.overflow_chunks.index_bytes()
             + self.overflow_chunks.total_entry_count() * (4 + 8)
             + self.live_sets.index_bytes()
             + self.live_sets.heap_bytes_total()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wide_row_absent_key_short_circuits() {
+        let mut csr = PureTopologyCsr::with_capacity(16, 64);
+        for dst in 0..12u32 {
+            csr.insert_edge(
+                0,
+                VertexId::edge_endpoint_key(dst, 0),
+                EdgeId(dst as u64),
+                1,
+            )
+            .expect("insert");
+        }
+        assert!(
+            csr.live_sets.get(0).is_some(),
+            "wide row must carry an index"
+        );
+        let absent = VertexId::edge_endpoint_key(900, 0);
+        assert!(csr.get_edge_physical(0, absent).is_none());
+        assert!(csr.get_edge(0, absent, Timestamp::MAX).is_none());
+        let present = VertexId::edge_endpoint_key(3, 0);
+        assert!(csr.get_edge_physical(0, present).is_some());
+        assert!(csr.get_edge(0, present, Timestamp::MAX).is_some());
+    }
+
+    #[test]
+    fn count_index_capacity_stay_consistent() {
+        let mut csr = PureTopologyCsr::with_overflow_chunk_edges(8, 32, 4);
+        for dst in 0..10u32 {
+            csr.insert_edge(0, VertexId::edge_endpoint_key(dst, 0), EdgeId(dst as u64), 0)
+                .expect("insert");
+        }
+        csr.delete_edge_by_offset(0, 0, 0).expect("delete");
+        let live: usize = {
+            let mut buf = Vec::new();
+            csr.fill_physical_into(0, &mut buf);
+            buf.into_iter()
+                .filter(|nbr| nbr.edge_id != INVALID_EDGE_ID)
+                .count()
+        };
+        assert_eq!(csr.edge_count(), live as u64);
+        assert!(csr.total_edge_capacity >= csr.endpoints.len());
+        assert!(csr.total_edge_capacity >= live);
+        let mut rebuilt = 0usize;
+        if let Some(chunks) = csr.overflow_chunks.get(0) {
+            rebuilt += chunks.iter().map(|chunk| chunk.len()).sum::<usize>();
+        }
+        let (start, end) = csr.primary_window(0);
+        rebuilt += end - start;
+        assert!(csr.total_edge_capacity >= rebuilt);
+        assert!(!csr.revert_delete_by_offset(0, 0, 0));
+        assert!(!csr.revert_delete_by_edge_id(0, EdgeId(999), 0));
+    }
+
+    #[test]
+    fn positioned_revert_restores_deleted_slot() {
+        let mut csr = PureTopologyCsr::with_capacity(8, 16);
+        csr.insert_edge(0, VertexId::edge_endpoint_key(1, 0), EdgeId(10), 0)
+            .expect("insert");
+        csr.insert_edge(0, VertexId::edge_endpoint_key(2, 0), EdgeId(11), 0)
+            .expect("insert");
+        let position = EdgePosition::Primary { slot: 0 };
+        assert!(csr
+            .delete_edge_at_position(0, position, EdgeId(10), 0)
+            .expect("positioned delete"));
+        assert_eq!(csr.edge_count(), 1);
+        assert!(csr.revert_delete_at_position(0, position, EdgeId(10), 0));
+        assert_eq!(csr.edge_count(), 2);
+        assert!(csr
+            .get_edge_physical(0, VertexId::edge_endpoint_key(1, 0))
+            .is_some());
     }
 }

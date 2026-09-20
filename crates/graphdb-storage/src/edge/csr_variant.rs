@@ -22,7 +22,7 @@ use graphdb_core::{StorageError, StorageResult};
 
 use super::bundled_csr::BundledCsr;
 use super::mutable_csr::VertexEdgesIter;
-use super::pure_csr::PureTopologyCsr;
+use super::pure_csr::{PureRowIter, PureTopologyCsr};
 use super::{
     CsrBase, EdgeId, EdgePosition, EdgeStrategy, FragmentationStats, FrozenRowIter, HotNbr,
     ImmutableCsr, ImmutableCsrIterator, MappedFrozen, MappedFrozenIterator, MappedFrozenRowIter,
@@ -692,7 +692,8 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Single(csr) => csr.reclaimable_count(vid, cutoff),
             CsrVariant::Pure(csr) => csr.reclaimable_count(vid, cutoff),
             CsrVariant::Bundled(csr) => csr.reclaimable_count(vid, cutoff),
-            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => 0,
+            CsrVariant::Frozen(csr) => csr.reclaimable_count(vid, cutoff),
+            CsrVariant::Mapped(_) => 0,
             CsrVariant::None { .. } => 0,
         }
     }
@@ -702,7 +703,8 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Multiple(csr) => csr.vertex_needs_compact(vid, cutoff),
             CsrVariant::Single(csr) => csr.reclaimable_count(vid, cutoff) > 0,
             CsrVariant::Pure(_) | CsrVariant::Bundled(_) => false,
-            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => false,
+            CsrVariant::Frozen(csr) => csr.reclaimable_count(vid, cutoff) > 0,
+            CsrVariant::Mapped(_) => false,
             CsrVariant::None { .. } => false,
         }
     }
@@ -785,15 +787,16 @@ impl CsrVariant {
     /// the version authority. Missing groups and the `None` strategy yield
     /// no iterator.
     pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> Option<CsrRowIter<'_>> {
+        // Pure rows store no timestamps, so the timestamp carries no
+        // information there; the borrowed walk yields live entries directly.
+        let _ = ts;
         match self {
             CsrVariant::Multiple(csr) => Some(CsrRowIter::Multiple(csr.iter_edges_of(src_vid, ts))),
             CsrVariant::Single(csr) => Some(CsrRowIter::Single(
                 csr.iter_edges_of(src_vid, ts).into_iter(),
             )),
-            CsrVariant::Pure(csr) => Some(CsrRowIter::Pure(csr.edges_of(src_vid, ts).into_iter())),
-            CsrVariant::Bundled(csr) => {
-                Some(CsrRowIter::Bundled(csr.edges_of(src_vid, ts).into_iter()))
-            }
+            CsrVariant::Pure(csr) => Some(CsrRowIter::Pure(csr.iter_row(src_vid))),
+            CsrVariant::Bundled(csr) => Some(CsrRowIter::Bundled(csr.iter_row(src_vid))),
             CsrVariant::Frozen(csr) => Some(CsrRowIter::Frozen(csr.iter_edges_of(src_vid, ts))),
             CsrVariant::Mapped(csr) => Some(CsrRowIter::Mapped(csr.iter_edges_of(src_vid, ts))),
             CsrVariant::None { .. } => None,
@@ -848,7 +851,9 @@ impl CsrVariant {
     /// Compact with per-edge removal reporting.
     ///
     /// Both retained strategies report reclaimed tombstones; the placeholder
-    /// keeps the no-op semantics.
+    /// keeps the no-op semantics. Frozen groups reclaim tombstones in place
+    /// with no reserve; mapped views need a serving-file rebuild and stay
+    /// no-op here.
     pub fn compact_with_ts_reporting(
         &mut self,
         cutoff: Timestamp,
@@ -861,7 +866,8 @@ impl CsrVariant {
             }
             CsrVariant::Single(csr) => csr.compact_with_ts_reporting(cutoff, on_edge_removed),
             CsrVariant::Pure(_) | CsrVariant::Bundled(_) => 0,
-            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => 0,
+            CsrVariant::Frozen(csr) => csr.compact_with_cutoff(cutoff, on_edge_removed),
+            CsrVariant::Mapped(_) => 0,
             CsrVariant::None { .. } => 0,
         }
     }
@@ -1068,10 +1074,10 @@ pub enum CsrRowIter<'a> {
     Multiple(VertexEdgesIter<'a>),
     /// Single-edge row: at most one assembled slot.
     Single(std::option::IntoIter<Nbr>),
-    /// Pure topology row: collected edge list.
-    Pure(std::vec::IntoIter<Nbr>),
-    /// Bundled row: collected edge list.
-    Bundled(std::vec::IntoIter<Nbr>),
+    /// Pure topology row: borrowed primary plus overflow walk.
+    Pure(PureRowIter<'a>),
+    /// Bundled row: borrowed topology walk, values resolved separately.
+    Bundled(PureRowIter<'a>),
     /// Frozen row: filtered packed-slice walk.
     Frozen(FrozenRowIter<'a>),
     /// Mapped frozen row: on-demand decode walk owning its mapping handle.
@@ -1231,5 +1237,38 @@ mod tests {
         assert!(csr2
             .insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
             .is_err());
+    }
+
+    #[test]
+    fn pure_row_iter_matches_allocating_read() {
+        let mut inner = PureTopologyCsr::with_capacity(8, 16);
+        for dst in [1u32, 2, 3] {
+            inner
+                .insert_edge(
+                    0,
+                    VertexId::edge_endpoint_key(dst, 0),
+                    EdgeId(dst as u64),
+                    0,
+                )
+                .unwrap();
+        }
+        let variant = CsrVariant::Pure(Box::new(inner));
+        let via_iter: Vec<Nbr> = variant.iter_edges_of(0, 1).unwrap().collect();
+        assert_eq!(via_iter, variant.edges_of(0, 1));
+        assert_eq!(via_iter.len(), 3);
+    }
+
+    #[test]
+    fn bundled_row_iter_matches_allocating_read() {
+        let mut inner = BundledCsr::with_capacity(8, 16);
+        for dst in [5u32, 6] {
+            inner
+                .insert_edge(0, VertexId::edge_endpoint_key(dst, 0), EdgeId(dst as u64), 0)
+                .unwrap();
+        }
+        let variant = CsrVariant::Bundled(Box::new(inner));
+        let via_iter: Vec<Nbr> = variant.iter_edges_of(0, 1).unwrap().collect();
+        assert_eq!(via_iter, variant.edges_of(0, 1));
+        assert_eq!(via_iter.len(), 2);
     }
 }

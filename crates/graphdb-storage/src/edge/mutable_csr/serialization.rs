@@ -5,15 +5,15 @@ use crate::persistence::read_u32_le;
 use super::super::{EdgeId, Nbr};
 use super::overflow::OverflowChunk;
 
-pub(crate) const MUTABLE_CSR_FORMAT_VERSION: u32 = 6;
+pub(crate) const MUTABLE_CSR_FORMAT_VERSION: u32 = 8;
 /// Direct-dump format version: topology columns stored at native widths
 /// with no encoding choice. Selected by configuration for speed-sensitive
 /// checkpoints; the loader accepts both versions by marker and rejects any
 /// other marker instead of converting.
 ///
 /// Both markers cover payloads with a trailing CRC32 trailer verified on
-/// load; versions 4/5 without the trailer are rejected by marker.
-pub(crate) const MUTABLE_CSR_FORMAT_RAW_VERSION: u32 = 7;
+/// load; older versions without the trailer are rejected by marker.
+pub(crate) const MUTABLE_CSR_FORMAT_RAW_VERSION: u32 = 9;
 
 /// Integer-only column encoding for topology persistence.
 ///
@@ -647,7 +647,7 @@ pub fn decode_raw_u64_column(data: &[u8], offset: &mut usize) -> StorageResult<V
 
 /// Encode one overflow chunk through the narrow integer column path.
 ///
-/// Each of the five neighbor fields goes through its native-width column
+/// Each of the four neighbor fields goes through its native-width column
 /// encoder, so overflow storage benefits from the same bit-packing and
 /// run-length encodings as the primary area instead of staying plain.
 /// The chunk halves are gathered into the existing column buffers, so the
@@ -660,11 +660,6 @@ pub fn encode_overflow_chunk(chunk: &OverflowChunk, out: &mut Vec<u8>) {
     let endpoints: Vec<u32> = chunk.hot_slice().iter().map(|hot| hot.endpoint).collect();
     let ranks: Vec<i64> = chunk.hot_slice().iter().map(|hot| hot.rank).collect();
     let edge_ids: Vec<u64> = chunk.hot_slice().iter().map(|hot| hot.edge_id.0).collect();
-    let creates: Vec<u64> = chunk
-        .cold_slice()
-        .iter()
-        .map(|cold| cold.create_ts)
-        .collect();
     let deletes: Vec<u64> = chunk
         .cold_slice()
         .iter()
@@ -675,8 +670,6 @@ pub fn encode_overflow_chunk(chunk: &OverflowChunk, out: &mut Vec<u8>) {
     let (_, payload) = encode_topology_i64_column(&ranks);
     out.extend_from_slice(&payload);
     let (_, payload) = encode_topology_u64_column(&edge_ids);
-    out.extend_from_slice(&payload);
-    let (_, payload) = encode_topology_u64_column(&creates);
     out.extend_from_slice(&payload);
     let (_, payload) = encode_topology_u64_column(&deletes);
     out.extend_from_slice(&payload);
@@ -692,12 +685,10 @@ pub fn decode_overflow_chunk(data: &[u8], offset: &mut usize) -> StorageResult<O
     let endpoints = decode_topology_u32_column(data, offset)?;
     let ranks = decode_topology_i64_column(data, offset)?;
     let edge_ids = decode_topology_u64_column(data, offset)?;
-    let creates = decode_topology_u64_column(data, offset)?;
     let deletes = decode_topology_u64_column(data, offset)?;
     if endpoints.len() != chunk_len
         || ranks.len() != chunk_len
         || edge_ids.len() != chunk_len
-        || creates.len() != chunk_len
         || deletes.len() != chunk_len
     {
         return Err(StorageError::deserialize_error(
@@ -706,13 +697,12 @@ pub fn decode_overflow_chunk(data: &[u8], offset: &mut usize) -> StorageResult<O
     }
     let mut out = OverflowChunk::with_capacity(chunk_len);
     for index in 0..chunk_len {
-        let mut nbr = Nbr::with_timestamps(
+        let nbr = Nbr::with_timestamps(
             endpoints[index],
             ranks[index],
             EdgeId(edge_ids[index]),
             deletes[index],
         );
-        nbr.create_ts = creates[index];
         out.push(nbr);
     }
     Ok(out)
@@ -721,8 +711,8 @@ pub fn decode_overflow_chunk(data: &[u8], offset: &mut usize) -> StorageResult<O
 /// Write one overflow chunk with every neighbor field at native width.
 ///
 /// Same field order as the encoded form (endpoints, ranks, edge ids,
-/// create stamps, delete stamps), each column in raw framing. Written
-/// straight from the chunk slices with no gather buffers.
+/// delete stamps), each column in raw framing. Written straight from
+/// the chunk slices with no gather buffers.
 pub fn write_raw_overflow_chunk(chunk: &OverflowChunk, out: &mut Vec<u8>) {
     let hot = chunk.hot_slice();
     let cold = chunk.cold_slice();
@@ -741,10 +731,6 @@ pub fn write_raw_overflow_chunk(chunk: &OverflowChunk, out: &mut Vec<u8>) {
     }
     out.extend_from_slice(&(cold.len() as u32).to_le_bytes());
     for c in cold {
-        out.extend_from_slice(&c.create_ts.to_le_bytes());
-    }
-    out.extend_from_slice(&(cold.len() as u32).to_le_bytes());
-    for c in cold {
         out.extend_from_slice(&c.delete_ts.to_le_bytes());
     }
 }
@@ -759,12 +745,10 @@ pub fn decode_raw_overflow_chunk(data: &[u8], offset: &mut usize) -> StorageResu
     let endpoints = decode_raw_u32_column(data, offset)?;
     let ranks = decode_raw_i64_column(data, offset)?;
     let edge_ids = decode_raw_u64_column(data, offset)?;
-    let creates = decode_raw_u64_column(data, offset)?;
     let deletes = decode_raw_u64_column(data, offset)?;
     if endpoints.len() != chunk_len
         || ranks.len() != chunk_len
         || edge_ids.len() != chunk_len
-        || creates.len() != chunk_len
         || deletes.len() != chunk_len
     {
         return Err(StorageError::deserialize_error(
@@ -773,13 +757,12 @@ pub fn decode_raw_overflow_chunk(data: &[u8], offset: &mut usize) -> StorageResu
     }
     let mut out = OverflowChunk::with_capacity(chunk_len);
     for index in 0..chunk_len {
-        let mut nbr = Nbr::with_timestamps(
+        let nbr = Nbr::with_timestamps(
             endpoints[index],
             ranks[index],
             EdgeId(edge_ids[index]),
             deletes[index],
         );
-        nbr.create_ts = creates[index];
         out.push(nbr);
     }
     Ok(out)

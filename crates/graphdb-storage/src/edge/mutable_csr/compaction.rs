@@ -96,14 +96,15 @@ impl MutableCsr {
 
         self.hot_list = new_hot_list;
         self.cold_list = new_cold_list;
-        self.adj_offsets = final_offsets;
-        self.degrees = new_degrees;
-        self.primary_capacities = new_capacities;
+        self.rows.adj_offsets = final_offsets;
+        self.rows.degrees = new_degrees;
+        self.rows.primary_capacities = new_capacities;
         self.total_edge_capacity = new_total_edge_capacity;
 
         self.overflow_chunks = OverflowStorage::new();
         self.live_sets.clear();
         self.rebuild_live_sets();
+        self.reset_reuse_hints();
 
         removed_count
     }
@@ -224,7 +225,7 @@ impl MutableCsr {
                 dead += 1;
             }
         }
-        let mut capacity = self.primary_capacities[idx] as usize;
+        let mut capacity = self.rows.primary_capacities[idx] as usize;
         if let Some(chunks) = self.overflow_chunks.get(vid) {
             capacity += chunks.iter().map(|chunk| chunk.capacity()).sum::<usize>();
             for chunk in chunks {
@@ -268,8 +269,8 @@ impl MutableCsr {
         }
         let mut removed = 0usize;
 
-        let degree = self.degrees[idx] as usize;
-        let offset = self.adj_offsets[idx] as usize;
+        let degree = self.rows.degrees[idx] as usize;
+        let offset = self.rows.adj_offsets[idx] as usize;
         let mut keep = 0usize;
         for i in 0..degree {
             let drop = self
@@ -288,7 +289,8 @@ impl MutableCsr {
                 keep += 1;
             }
         }
-        self.degrees[idx] = keep as u32;
+        self.rows.degrees[idx] = keep as u32;
+        self.invalidate_reuse_hint(idx);
 
         if self.overflow_chunks.get(vid).is_some() {
             // Take ownership of the chunk list instead of cloning it: the

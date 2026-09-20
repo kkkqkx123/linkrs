@@ -642,6 +642,11 @@ impl EdgeStore {
     /// Bundled counterpart of [`Self::apply_staged_insert`]: the single
     /// scalar rides the CSR value column in both directions and the
     /// columnar store is never touched.
+    ///
+    /// The value is stored twice on purpose: each direction must answer
+    /// value reads from its own row walk without a cross-direction hop, so
+    /// halving the storage would trade one cheap duplicate write for a hop
+    /// on every reverse traversal. The duplication is kept deliberately.
     fn apply_staged_insert_bundled(
         &mut self,
         src: u32,

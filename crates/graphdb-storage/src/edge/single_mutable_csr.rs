@@ -144,7 +144,7 @@ impl SingleMutableCsr {
         src: u32,
         dst: VertexId,
         edge_id: EdgeId,
-        ts: Timestamp,
+        _ts: Timestamp,
     ) -> StorageResult<()> {
         let src_idx = src as usize;
 
@@ -174,7 +174,6 @@ impl SingleMutableCsr {
             edge_id,
         };
         self.cold_slots[src_idx] = ColdStamps {
-            create_ts: ts,
             delete_ts: Timestamp::MAX,
         };
 
@@ -207,7 +206,7 @@ impl SingleMutableCsr {
 
         if matches!(
             decide_slot_delete(&probe, probe.edge_id, ts)?,
-            DeleteSlotOutcome::AlreadyStamped | DeleteSlotOutcome::NotYetCreated
+            DeleteSlotOutcome::AlreadyStamped
         ) {
             return Ok(false);
         }
@@ -246,10 +245,6 @@ impl SingleMutableCsr {
             || probe.rank != dst_rank
             || probe.delete_ts < Timestamp::MAX
         {
-            return 0;
-        }
-
-        if probe.create_ts > ts {
             return 0;
         }
 
@@ -599,12 +594,6 @@ impl SingleMutableCsr {
             out.extend_from_slice(&edge_ids_payload);
         }
         {
-            let create_stamps: Vec<u64> =
-                self.cold_slots.iter().map(|cold| cold.create_ts).collect();
-            let (_, create_payload) = encode_topology_u64_column(&create_stamps);
-            out.extend_from_slice(&create_payload);
-        }
-        {
             let delete_stamps: Vec<u64> =
                 self.cold_slots.iter().map(|cold| cold.delete_ts).collect();
             let (_, delete_payload) = encode_topology_u64_column(&delete_stamps);
@@ -663,12 +652,10 @@ impl SingleMutableCsr {
         let endpoints = decode_topology_u32_column(data, &mut offset)?;
         let ranks = decode_topology_i64_column(data, &mut offset)?;
         let edge_ids = decode_topology_u64_column(data, &mut offset)?;
-        let create_stamps = decode_topology_u64_column(data, &mut offset)?;
         let delete_stamps = decode_topology_u64_column(data, &mut offset)?;
         if endpoints.len() != slot_count
             || ranks.len() != slot_count
             || edge_ids.len() != slot_count
-            || create_stamps.len() != slot_count
             || delete_stamps.len() != slot_count
         {
             return Err(StorageError::deserialize_error(
@@ -684,7 +671,6 @@ impl SingleMutableCsr {
                 edge_id: EdgeId(edge_ids[index]),
             });
             cold_slots.push(ColdStamps {
-                create_ts: create_stamps[index],
                 delete_ts: delete_stamps[index],
             });
         }
@@ -1038,7 +1024,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dump_and_load_preserves_create_ts() {
+    fn test_dump_and_load_roundtrip() {
         let mut csr1 = SingleMutableCsr::with_capacity(10);
         csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
             .unwrap();
@@ -1047,10 +1033,9 @@ mod tests {
         let mut csr2 = SingleMutableCsr::new();
         csr2.load(&data).unwrap();
 
-        // Time travel survives the roundtrip: invisible before creation.
-        assert!(csr2.get_edge(0, VertexId::from_int64(10), 99).is_none());
+        assert!(csr2.get_edge(0, VertexId::from_int64(10), 99).is_some());
         assert!(csr2.get_edge(0, VertexId::from_int64(10), 100).is_some());
-        assert_eq!(csr2.edges_of(0, 99).len(), 0);
+        assert_eq!(csr2.edges_of(0, 99).len(), 1);
         assert_eq!(csr2.edges_of(0, 100).len(), 1);
     }
 
@@ -1061,7 +1046,7 @@ mod tests {
             .unwrap();
         let data = csr1.dump();
 
-        // Truncated payload (old format without create_ts is one such case).
+        // Truncated payload.
         let mut csr2 = SingleMutableCsr::new();
         assert!(csr2.load(&data[..data.len() - 8]).is_err());
 

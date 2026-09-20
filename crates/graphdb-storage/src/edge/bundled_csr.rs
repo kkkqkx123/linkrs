@@ -21,6 +21,12 @@
 //! Known limitation: the frozen packer stores topology only, so freezing a
 //! group with valid values is rejected; migrate to the columnar form first
 //! when a freeze is required.
+//!
+//! Suitability boundary: this form fits exactly one inline scalar attribute
+//! on a read-heavy, schema-stable edge type. Anything else (multiple
+//! attributes, non-encodable types, online schema changes, freeze without a
+//! prior migration) belongs to the columnar form, which is also the default.
+//! The bundled form is intentionally not extended beyond a single column.
 
 use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult, Value};
@@ -210,6 +216,14 @@ impl BundledCsr {
         self.topology.visit_physical(src_vid, f)
     }
 
+    /// Borrowed row walk over live entries without allocating.
+    ///
+    /// Shares the topology walk exactly: values stay in their columns and
+    /// are resolved through the value accessors when needed.
+    pub fn iter_row(&self, src_vid: u32) -> super::pure_csr::PureRowIter<'_> {
+        self.topology.iter_row(src_vid)
+    }
+
     pub fn visit_hot<F>(&self, src_vid: u32, f: F)
     where
         F: FnMut(super::HotNbr) -> bool,
@@ -295,10 +309,10 @@ impl BundledCsr {
         if src_idx >= self.topology.vertex_capacity() {
             return None;
         }
-        if slot as usize >= self.topology.degrees[src_idx] as usize {
+        if slot as usize >= self.topology.rows.degrees[src_idx] as usize {
             return None;
         }
-        let idx = self.topology.adj_offsets[src_idx] as usize + slot as usize;
+        let idx = self.topology.rows.adj_offsets[src_idx] as usize + slot as usize;
         if idx >= self.topology.edge_ids.len() || idx >= self.primary_values.len() {
             return None;
         }
@@ -521,8 +535,8 @@ impl BundledCsr {
                 })
         };
         if let Some(idx) = found {
-            let degree = self.topology.degrees[src_idx] as usize;
-            let base = self.topology.adj_offsets[src_idx] as usize;
+            let degree = self.topology.rows.degrees[src_idx] as usize;
+            let base = self.topology.rows.adj_offsets[src_idx] as usize;
             self.topology
                 .endpoints
                 .copy_within(idx + 1..base + degree, idx);
@@ -532,7 +546,7 @@ impl BundledCsr {
             self.sync_primary_len();
             self.primary_values.copy_within(idx + 1..base + degree, idx);
             self.primary_valid.copy_within(idx + 1..base + degree, idx);
-            self.topology.degrees[src_idx] -= 1;
+            self.topology.rows.degrees[src_idx] -= 1;
             self.topology.sub_capacity(1);
             self.topology.edge_count -= 1;
             self.topology.rebuild_live_set_for_vertex(src_vid);
@@ -588,8 +602,8 @@ impl BundledCsr {
         let mut removed = 0usize;
         self.sync_primary_len();
         self.sync_overflow_row(vid);
-        let base = self.topology.adj_offsets[idx] as usize;
-        let degree = self.topology.degrees[idx] as usize;
+        let base = self.topology.rows.adj_offsets[idx] as usize;
+        let degree = self.topology.rows.degrees[idx] as usize;
         let mut keep = 0usize;
         for i in 0..degree {
             let slot = base + i;
@@ -607,8 +621,8 @@ impl BundledCsr {
                 keep += 1;
             }
         }
-        self.topology.degrees[idx] = keep as u32;
-        self.topology.primary_capacities[idx] = keep as u32;
+        self.topology.rows.degrees[idx] = keep as u32;
+        self.topology.rows.primary_capacities[idx] = keep as u32;
         if self.topology.overflow_chunks.get(vid).is_some() {
             let chunks = self
                 .topology
@@ -1016,6 +1030,9 @@ impl MutableCsrTrait for BundledCsr {
     }
 
     fn revert_delete_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool {
+        // Topology slots erase the edge id on delete, so offset-only and
+        // id-only reverts cannot recover it. Use the positioned revert with
+        // the expected id and value supplied by the caller.
         let _ = (src_vid, offset, ts);
         false
     }
@@ -1049,6 +1066,9 @@ impl MutableCsrTrait for BundledCsr {
     }
 
     fn revert_delete_by_edge_id(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
+        // Deleted topology slots hold the sentinel instead of the edge id,
+        // so an id-keyed scan cannot locate them. Use the positioned revert
+        // with value instead.
         let _ = (src_vid, edge_id, ts);
         false
     }

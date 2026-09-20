@@ -77,7 +77,6 @@ pub(crate) fn encode_append_ops(
         out.extend_from_slice(&insert.nbr.endpoint.to_le_bytes());
         out.extend_from_slice(&insert.nbr.rank.to_le_bytes());
         out.extend_from_slice(&insert.nbr.edge_id.0.to_le_bytes());
-        out.extend_from_slice(&insert.nbr.create_ts.to_le_bytes());
         out.extend_from_slice(&insert.nbr.delete_ts.to_le_bytes());
     }
     out.extend_from_slice(&(deletes.len() as u64).to_le_bytes());
@@ -155,16 +154,11 @@ pub(crate) fn decode_append_ops(
                 .try_into()
                 .map_err(|_| StorageError::deserialize_error("append log edge id too short"))?,
         ));
-        let create_ts =
-            u64::from_le_bytes(take(data, &mut cursor, 8)?.try_into().map_err(|_| {
-                StorageError::deserialize_error("append log create stamp too short")
-            })?);
         let delete_ts =
             u64::from_le_bytes(take(data, &mut cursor, 8)?.try_into().map_err(|_| {
                 StorageError::deserialize_error("append log delete stamp too short")
             })?);
-        let mut nbr = Nbr::with_timestamps(endpoint, rank, edge_id, delete_ts);
-        nbr.create_ts = create_ts;
+        let nbr = Nbr::with_timestamps(endpoint, rank, edge_id, delete_ts);
         inserts.push(AppendInsert { local, nbr });
     }
     let delete_count = u64::from_le_bytes(
@@ -307,7 +301,7 @@ impl CsrShardSet {
                     insert.local,
                     VertexId::edge_endpoint_key(insert.nbr.endpoint, insert.nbr.rank),
                     insert.nbr.edge_id,
-                    insert.nbr.create_ts,
+                    Timestamp::MAX,
                 )
                 .map_err(|e| {
                     StorageError::deserialize_error(format!(

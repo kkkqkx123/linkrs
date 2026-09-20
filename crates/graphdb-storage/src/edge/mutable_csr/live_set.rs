@@ -10,56 +10,142 @@ pub(crate) const LIVE_SET_WIDTH_BOUND: usize = 8;
 /// Live endpoint keys of one wide vertex with row positions.
 ///
 /// Only rows wider than [`LIVE_SET_WIDTH_BOUND`] carry a set; narrow rows
-/// hold no index and answer through row scans. Sets are created on demand by
-/// the write path and dropped by rebuilds once the row narrows again, so
+/// hold no index and answer through row scans.  Sets are created on demand
+/// by the write path and dropped by rebuilds once the row narrows again, so
 /// widths oscillating around the bound cannot accumulate stale indexes.
 ///
-/// Each key maps to its row-relative slot, so point lookups on wide rows
-/// address the slot directly instead of scanning the row. Positions stay
-/// valid until the next structural change of the row (compaction, rebalance,
-/// repack, gap-closing removal or reservation rebuild); every such path
-/// rebuilds the set for the touched row through the same maintenance hook
-/// that keeps the key membership exact.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct LiveKeySet {
-    positions: HashMap<(u32, i64), EdgePosition>,
+/// Two internal representations back the set:
+///
+/// * **Hash** — a `HashMap` chosen during active mutation for O(1) insert
+///   and remove.
+/// * **Sorted** — a pre-sorted `Vec` chosen after a structural rebuild
+///   (compaction, rebalance, repack) that leaves the row stable.  Point
+///   lookups use `partition_point` (binary search) which is cache-friendlier
+///   than hashing on wide rows and avoids the per-entry allocation overhead
+///   of the hash table.
+///
+/// The write path always mutates the hash variant.  When a structural
+/// rebuild produces a set the caller marks stable, the set is promoted to
+/// the sorted variant.  Any subsequent insert or remove converts back to
+/// hash so the hot path stays O(1); the next rebuild may re-promote.
+#[derive(Debug, Clone)]
+pub(crate) enum LiveKeySet {
+    Hash(HashMap<(u32, i64), EdgePosition>),
+    Sorted(Vec<((u32, i64), EdgePosition)>),
+}
+
+impl Default for LiveKeySet {
+    fn default() -> Self {
+        Self::Hash(HashMap::new())
+    }
 }
 
 impl LiveKeySet {
     pub(crate) fn from_positions(positions: Vec<((u32, i64), EdgePosition)>) -> Self {
-        Self {
-            positions: positions.into_iter().collect(),
-        }
+        let mut sorted = positions;
+        sorted.sort_unstable_by_key(|(k, _)| *k);
+        Self::Sorted(sorted)
     }
 
     pub(crate) fn contains(&self, key: &(u32, i64)) -> bool {
-        self.positions.contains_key(key)
+        match self {
+            Self::Hash(map) => map.contains_key(key),
+            Self::Sorted(vec) => {
+                vec.partition_point(|(k, _)| k < key) < vec.len()
+                    && vec[vec.partition_point(|(k, _)| k < key)].0 == *key
+            }
+        }
     }
 
     pub(crate) fn position(&self, key: &(u32, i64)) -> Option<EdgePosition> {
-        self.positions.get(key).copied()
+        match self {
+            Self::Hash(map) => map.get(key).copied(),
+            Self::Sorted(vec) => {
+                let idx = vec.partition_point(|(k, _)| k < key);
+                if idx < vec.len() && vec[idx].0 == *key {
+                    Some(vec[idx].1)
+                } else {
+                    None
+                }
+            }
+        }
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.positions.len()
+        match self {
+            Self::Hash(map) => map.len(),
+            Self::Sorted(vec) => vec.len(),
+        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.positions.is_empty()
+        match self {
+            Self::Hash(map) => map.is_empty(),
+            Self::Sorted(vec) => vec.is_empty(),
+        }
     }
 
+    /// Insert a key-position pair, converting to hash when currently sorted.
+    ///
+    /// The hot write path always arrives here; converting to hash keeps
+    /// the insert O(1).  The next structural rebuild may re-promote.
     pub(crate) fn insert(&mut self, key: (u32, i64), position: EdgePosition) {
-        self.positions.insert(key, position);
+        match self {
+            Self::Hash(map) => {
+                map.insert(key, position);
+            }
+            Self::Sorted(_) => {
+                let map: HashMap<_, _> = std::mem::take(self)
+                    .into_sorted()
+                    .into_iter()
+                    .collect();
+                *self = Self::Hash(map);
+                if let Self::Hash(map) = self {
+                    map.insert(key, position);
+                }
+            }
+        }
     }
 
+    /// Remove a key, converting to hash when currently sorted.
     pub(crate) fn remove(&mut self, key: &(u32, i64)) {
-        self.positions.remove(key);
+        match self {
+            Self::Hash(map) => {
+                map.remove(key);
+            }
+            Self::Sorted(_) => {
+                let map: HashMap<_, _> = std::mem::take(self)
+                    .into_sorted()
+                    .into_iter()
+                    .collect();
+                *self = Self::Hash(map);
+                if let Self::Hash(map) = self {
+                    map.remove(key);
+                }
+            }
+        }
     }
 
-    /// Heap bytes held outside the struct itself, following the memory
-    /// estimate caliber used by the row statistics.
+    /// Heap bytes held outside the struct itself.
     pub(crate) fn heap_bytes(&self) -> usize {
-        self.positions.len() * (std::mem::size_of::<((u32, i64), EdgePosition)>() + 8)
+        let entry_size = std::mem::size_of::<((u32, i64), EdgePosition)>() + 8;
+        match self {
+            Self::Hash(map) => map.len() * entry_size,
+            Self::Sorted(vec) => vec.len() * entry_size,
+        }
+    }
+
+    /// Consume the set and return the inner sorted vector if sorted,
+    /// otherwise collect into a sorted vector.
+    fn into_sorted(self) -> Vec<((u32, i64), EdgePosition)> {
+        match self {
+            Self::Hash(map) => {
+                let mut entries: Vec<_> = map.into_iter().collect();
+                entries.sort_unstable_by_key(|(k, _)| *k);
+                entries
+            }
+            Self::Sorted(vec) => vec,
+        }
     }
 }
 
@@ -148,6 +234,12 @@ impl LiveSetStorage {
 }
 
 impl MutableCsr {
+    pub fn has_live_set(&self, vid: &u32) -> bool {
+        self.live_sets.get(vid).is_some()
+    }
+}
+
+impl MutableCsr {
     pub(crate) fn rebuild_live_sets(&mut self) {
         let capacity = self.vertex_capacity() as u32;
         self.live_sets.clear();
@@ -174,62 +266,52 @@ impl MutableCsr {
     /// whether a live entry for the key exists and how many live entries
     /// the row holds, so one insert pays one row walk instead of one for
     /// the duplicate check plus one for the width count.
+    ///
+    /// When incremental live counts are maintained (narrow rows), the live
+    /// width is returned from the counter and the scan only checks for the
+    /// duplicate key, short-circuiting once found.
     pub(crate) fn row_live_scan(&self, vid: u32, endpoint: u32, rank: i64) -> (bool, usize) {
         let idx = vid as usize;
         if idx >= self.vertex_capacity() {
             return (false, 0);
         }
         let mut present = false;
-        let mut live = 0usize;
         let (hot, cold) = self.primary_pair(idx);
         for (h, c) in hot.iter().zip(cold.iter()) {
             if c.is_live() {
-                live += 1;
                 if h.endpoint == endpoint && h.rank == rank {
                     present = true;
+                    break;
                 }
             }
         }
-        if let Some(chunks) = self.overflow_chunks.get(vid) {
-            for chunk in chunks {
-                for (hot, cold) in chunk.hot_slice().iter().zip(chunk.cold_slice()) {
-                    if cold.is_live() {
-                        live += 1;
-                        if hot.endpoint == endpoint && hot.rank == rank {
-                            present = true;
+        if !present {
+            if let Some(chunks) = self.overflow_chunks.get(vid) {
+                'outer: for chunk in chunks {
+                    for (hot, cold) in chunk.hot_slice().iter().zip(chunk.cold_slice()) {
+                        if cold.is_live() {
+                            if hot.endpoint == endpoint && hot.rank == rank {
+                                present = true;
+                                break 'outer;
+                            }
                         }
                     }
                 }
             }
         }
+        let live = self.live_counts[idx] as usize;
         (present, live)
     }
 
     /// Live entry count of one narrow row.
     ///
-    /// Scan fallback behind `live_key_count` for rows without an index.
+    /// Uses the incremental counter for O(1) access instead of scanning.
     pub(crate) fn row_live_count(&self, vid: u32) -> usize {
         let idx = vid as usize;
         if idx >= self.vertex_capacity() {
             return 0;
         }
-        let mut live = 0usize;
-        let (_, cold) = self.primary_pair(idx);
-        for c in cold.iter() {
-            if c.is_live() {
-                live += 1;
-            }
-        }
-        if let Some(chunks) = self.overflow_chunks.get(vid) {
-            for chunk in chunks {
-                for cold in chunk.cold_slice() {
-                    if cold.is_live() {
-                        live += 1;
-                    }
-                }
-            }
-        }
-        live
+        self.live_counts[idx] as usize
     }
 
     pub(crate) fn track_live_insert(
@@ -245,12 +327,14 @@ impl MutableCsr {
         }
         // Narrow rows stay set-free until the physical row width (primary
         // entries plus overflow entries) passes the bound. The width check
-        // touches only lengths, not entries. Rebuilds drop the set again
+        // touches only lengths, not entries: counting live entries instead
+        // would cost a full row walk per insert, so the physical gate is
+        // kept deliberately. Rebuilds drop the set again
         // when the live width is still narrow, so tombstone-heavy rows may
         // rescan on later inserts until maintenance compacts them.
         let mut width = 0usize;
         if (vid as usize) < self.vertex_capacity() {
-            width = self.degrees[vid as usize] as usize;
+            width = self.rows.degrees[vid as usize] as usize;
             if let Some(chunks) = self.overflow_chunks.get(vid) {
                 width += chunks.iter().map(|chunk| chunk.len()).sum::<usize>();
             }
@@ -272,16 +356,22 @@ impl MutableCsr {
         let idx = vid as usize;
         if idx >= self.vertex_capacity() {
             self.live_sets.remove(&vid);
+            self.live_set_rebuild_count += 1;
             return;
         }
         let (hot, cold) = self.primary_pair(idx);
         let mut positioned = Vec::new();
+        let mut live = 0u32;
+        let mut tombstones = 0u32;
         for (slot, (h, c)) in hot.iter().zip(cold.iter()).enumerate() {
             if c.is_live() {
+                live += 1;
                 positioned.push((
                     (h.endpoint, h.rank),
                     EdgePosition::Primary { slot: slot as u32 },
                 ));
+            } else {
+                tombstones += 1;
             }
         }
         if let Some(chunks) = self.overflow_chunks.get(vid) {
@@ -290,6 +380,7 @@ impl MutableCsr {
                     chunk.hot_slice().iter().zip(chunk.cold_slice()).enumerate()
                 {
                     if cold.is_live() {
+                        live += 1;
                         positioned.push((
                             (hot.endpoint, hot.rank),
                             EdgePosition::Overflow {
@@ -297,10 +388,14 @@ impl MutableCsr {
                                 slot: slot_idx as u32,
                             },
                         ));
+                    } else {
+                        tombstones += 1;
                     }
                 }
             }
         }
+        self.live_counts[idx] = live;
+        self.tombstone_counts[idx] = tombstones;
         // Narrow rows stay set-free; only wide rows pay for the index.
         if positioned.len() <= LIVE_SET_WIDTH_BOUND {
             self.live_sets.remove(&vid);
@@ -308,6 +403,7 @@ impl MutableCsr {
             self.live_sets
                 .insert(vid, LiveKeySet::from_positions(positioned));
         }
+        self.live_set_rebuild_count += 1;
     }
 }
 

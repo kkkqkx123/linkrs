@@ -17,14 +17,13 @@ use graphdb_core::{StorageError, StorageResult};
 /// Reusable neighbor-column buffers for checkpoint dumps.
 ///
 /// One scratch serves a whole checkpoint: each group clears and refills the
-/// buffers instead of allocating five temporary columns, so repeated dumps
+/// buffers instead of allocating four temporary columns, so repeated dumps
 /// keep peak allocation to one column set.
 #[derive(Debug, Default)]
 pub struct CsrDumpScratch {
     endpoints: Vec<u32>,
     ranks: Vec<i64>,
     edge_ids: Vec<u64>,
-    creates: Vec<u64>,
     deletes: Vec<u64>,
 }
 
@@ -45,10 +44,6 @@ impl CsrDumpScratch {
         &self.edge_ids
     }
 
-    pub(crate) fn creates(&self) -> &[u64] {
-        &self.creates
-    }
-
     pub(crate) fn deletes(&self) -> &[u64] {
         &self.deletes
     }
@@ -58,12 +53,10 @@ impl CsrDumpScratch {
         self.endpoints.clear();
         self.ranks.clear();
         self.edge_ids.clear();
-        self.creates.clear();
         self.deletes.clear();
         self.endpoints.reserve(hot.len());
         self.ranks.reserve(hot.len());
         self.edge_ids.reserve(hot.len());
-        self.creates.reserve(hot.len());
         self.deletes.reserve(hot.len());
         for slot in hot {
             self.endpoints.push(slot.endpoint);
@@ -71,7 +64,6 @@ impl CsrDumpScratch {
             self.edge_ids.push(slot.edge_id.0);
         }
         for stamp in cold {
-            self.creates.push(stamp.create_ts);
             self.deletes.push(stamp.delete_ts);
         }
     }
@@ -119,23 +111,23 @@ impl MutableCsr {
 
     /// Dump reusing caller-owned column buffers.
     ///
-    /// Same bytes as [`Self::dump_into`] but the five neighbor-column
+    /// Same bytes as [`Self::dump_into`] but the four neighbor-column
     /// buffers are cleared and refilled instead of reallocated, so a
     /// checkpoint over many groups pays one allocation per column instead
     /// of one per group. The scratch holds no state between calls.
     pub fn dump_into_with_scratch(&self, out: &mut Vec<u8>, scratch: &mut CsrDumpScratch) {
         let start = out.len();
         out.extend_from_slice(&MUTABLE_CSR_FORMAT_VERSION.to_le_bytes());
-        out.extend_from_slice(&(self.adj_offsets.len() as u64).to_le_bytes());
+        out.extend_from_slice(&(self.rows.adj_offsets.len() as u64).to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
         out.extend_from_slice(&(self.hot_list.len() as u64).to_le_bytes());
         out.extend_from_slice(&(self.overflow_chunk_edges as u64).to_le_bytes());
 
-        let (_, offsets_payload) = encode_topology_u32_column(&self.adj_offsets);
+        let (_, offsets_payload) = encode_topology_u32_column(&self.rows.adj_offsets);
         out.extend_from_slice(&offsets_payload);
-        let (_, degrees_payload) = encode_topology_u32_column(&self.degrees);
+        let (_, degrees_payload) = encode_topology_u32_column(&self.rows.degrees);
         out.extend_from_slice(&degrees_payload);
-        let (_, caps_payload) = encode_topology_u32_column(&self.primary_capacities);
+        let (_, caps_payload) = encode_topology_u32_column(&self.rows.primary_capacities);
         out.extend_from_slice(&caps_payload);
 
         scratch.fill_from_split(&self.hot_list, &self.cold_list);
@@ -145,12 +137,10 @@ impl MutableCsr {
         out.extend_from_slice(&ranks_payload);
         let (_, edge_ids_payload) = encode_topology_u64_column(&scratch.edge_ids);
         out.extend_from_slice(&edge_ids_payload);
-        let (_, create_payload) = encode_topology_u64_column(&scratch.creates);
-        out.extend_from_slice(&create_payload);
         let (_, delete_payload) = encode_topology_u64_column(&scratch.deletes);
         out.extend_from_slice(&delete_payload);
 
-        for vid in 0..self.adj_offsets.len() {
+        for vid in 0..self.rows.adj_offsets.len() {
             let chunks = self.overflow_chunks.get(vid as u32);
             out.extend_from_slice(&(chunks.map_or(0, Vec::len) as u32).to_le_bytes());
             if let Some(chunks) = chunks {
@@ -174,23 +164,22 @@ impl MutableCsr {
     pub fn dump_into_with_scratch_raw(&self, out: &mut Vec<u8>, scratch: &mut CsrDumpScratch) {
         let start = out.len();
         out.extend_from_slice(&MUTABLE_CSR_FORMAT_RAW_VERSION.to_le_bytes());
-        out.extend_from_slice(&(self.adj_offsets.len() as u64).to_le_bytes());
+        out.extend_from_slice(&(self.rows.adj_offsets.len() as u64).to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
         out.extend_from_slice(&(self.hot_list.len() as u64).to_le_bytes());
         out.extend_from_slice(&(self.overflow_chunk_edges as u64).to_le_bytes());
 
-        write_raw_u32_column(&self.adj_offsets, out);
-        write_raw_u32_column(&self.degrees, out);
-        write_raw_u32_column(&self.primary_capacities, out);
+        write_raw_u32_column(&self.rows.adj_offsets, out);
+        write_raw_u32_column(&self.rows.degrees, out);
+        write_raw_u32_column(&self.rows.primary_capacities, out);
 
         scratch.fill_from_split(&self.hot_list, &self.cold_list);
         write_raw_u32_column(scratch.endpoints(), out);
         write_raw_i64_column(scratch.ranks(), out);
         write_raw_u64_column(scratch.edge_ids(), out);
-        write_raw_u64_column(scratch.creates(), out);
         write_raw_u64_column(scratch.deletes(), out);
 
-        for vid in 0..self.adj_offsets.len() {
+        for vid in 0..self.rows.adj_offsets.len() {
             let chunks = self.overflow_chunks.get(vid as u32);
             out.extend_from_slice(&(chunks.map_or(0, Vec::len) as u32).to_le_bytes());
             if let Some(chunks) = chunks {
@@ -222,9 +211,9 @@ impl MutableCsr {
         let edge_ids: Vec<u64> = self.hot_list.iter().map(|hot| hot.edge_id.0).collect();
         let (endpoint_choice, _) = encode_topology_u32_column(&endpoints);
         let (edge_id_choice, _) = encode_topology_u64_column(&edge_ids);
-        let (offsets_choice, _) = encode_topology_u32_column(&self.adj_offsets);
-        let (degrees_choice, _) = encode_topology_u32_column(&self.degrees);
-        let (caps_choice, _) = encode_topology_u32_column(&self.primary_capacities);
+        let (offsets_choice, _) = encode_topology_u32_column(&self.rows.adj_offsets);
+        let (degrees_choice, _) = encode_topology_u32_column(&self.rows.degrees);
+        let (caps_choice, _) = encode_topology_u32_column(&self.rows.primary_capacities);
         vec![
             (
                 "neighbor".to_string(),
@@ -283,6 +272,8 @@ impl MutableCsr {
         }
         let data = body;
 
+        self.reset_baseline_counters();
+
         let mut offset = 0usize;
 
         let format_version = read_u32_le(data, &mut offset)?;
@@ -326,11 +317,10 @@ impl MutableCsr {
                 "Mutable CSR header column length mismatch",
             ));
         }
-        let (endpoints, ranks, edge_ids, create_stamps, delete_stamps) = if raw {
+        let (endpoints, ranks, edge_ids, delete_stamps) = if raw {
             (
                 decode_raw_u32_column(data, &mut offset)?,
                 decode_raw_i64_column(data, &mut offset)?,
-                decode_raw_u64_column(data, &mut offset)?,
                 decode_raw_u64_column(data, &mut offset)?,
                 decode_raw_u64_column(data, &mut offset)?,
             )
@@ -340,13 +330,11 @@ impl MutableCsr {
                 decode_topology_i64_column(data, &mut offset)?,
                 decode_topology_u64_column(data, &mut offset)?,
                 decode_topology_u64_column(data, &mut offset)?,
-                decode_topology_u64_column(data, &mut offset)?,
             )
         };
         if endpoints.len() != primary_len
             || ranks.len() != primary_len
             || edge_ids.len() != primary_len
-            || create_stamps.len() != primary_len
             || delete_stamps.len() != primary_len
         {
             return Err(StorageError::deserialize_error(
@@ -362,7 +350,6 @@ impl MutableCsr {
                 edge_id: EdgeId(edge_ids[index]),
             });
             cold_list.push(ColdStamps {
-                create_ts: create_stamps[index],
                 delete_ts: delete_stamps[index],
             });
         }
@@ -455,14 +442,17 @@ impl MutableCsr {
         }
 
         self.total_edge_capacity = hot_list.len().saturating_add(overflow_capacity);
-        self.adj_offsets = adj_offsets;
-        self.degrees = degrees;
-        self.primary_capacities = primary_capacities;
+        self.rows.adj_offsets = adj_offsets;
+        self.rows.degrees = degrees;
+        self.rows.primary_capacities = primary_capacities;
         self.overflow_chunks = overflow_chunks;
         self.overflow_chunk_edges = overflow_chunk_edges;
         self.hot_list = hot_list;
         self.cold_list = cold_list;
         self.edge_count = edge_count;
+        self.reuse_hint = vec![super::core::REUSE_HINT_UNKNOWN; vertex_capacity];
+        self.live_counts = vec![0; vertex_capacity];
+        self.tombstone_counts = vec![0; vertex_capacity];
         self.live_sets.clear();
         self.live_sets.ensure_capacity(vertex_capacity);
         for (vid, keys) in live_keys.into_iter().enumerate() {
@@ -471,6 +461,35 @@ impl MutableCsr {
                 self.live_sets
                     .insert(vid as u32, LiveKeySet::from_positions(keys));
             }
+        }
+        // Rebuild incremental live/tombstone counts from loaded data.
+        for vid in 0..vertex_capacity {
+            let degree = self.rows.degrees[vid] as usize;
+            let offset = self.rows.adj_offsets[vid] as usize;
+            let mut live = 0u32;
+            let mut tombstones = 0u32;
+            for i in 0..degree {
+                if let Some(cold) = self.cold_list.get(offset + i) {
+                    if cold.is_live() {
+                        live += 1;
+                    } else {
+                        tombstones += 1;
+                    }
+                }
+            }
+            if let Some(chunks) = self.overflow_chunks.get(vid as u32) {
+                for chunk in chunks {
+                    for cold in chunk.cold_slice() {
+                        if cold.is_live() {
+                            live += 1;
+                        } else {
+                            tombstones += 1;
+                        }
+                    }
+                }
+            }
+            self.live_counts[vid] = live;
+            self.tombstone_counts[vid] = tombstones;
         }
         if offset != data.len() {
             return Err(StorageError::deserialize_error(

@@ -33,13 +33,11 @@ pub(crate) enum DeleteSlotOutcome {
     Stamped,
     /// Idempotent re-delete at the same timestamp; report `false`.
     AlreadyStamped,
-    /// Edge not yet created at `ts`; report `false`.
-    NotYetCreated,
 }
 
 /// Shared delete state machine for one matched slot: a tombstone stamped at
 /// another timestamp is a write-write conflict, a tombstone at the same
-/// timestamp is idempotent, and an edge created after `ts` is not deletable.
+/// timestamp is idempotent, and an already-live edge is eligible for stamping.
 pub(crate) fn decide_slot_delete(
     nbr: &Nbr,
     edge_id: EdgeId,
@@ -53,9 +51,6 @@ pub(crate) fn decide_slot_delete(
             )));
         }
         return Ok(DeleteSlotOutcome::AlreadyStamped);
-    }
-    if nbr.create_ts > ts {
-        return Ok(DeleteSlotOutcome::NotYetCreated);
     }
     Ok(DeleteSlotOutcome::Stamped)
 }
@@ -75,6 +70,73 @@ pub(crate) fn can_revert_delete(nbr: &Nbr, ts: Timestamp) -> bool {
 pub(crate) fn is_reclaimable_cold(cold: &ColdStamps, cutoff: Timestamp) -> bool {
     cold.delete_ts != Timestamp::MAX
         && crate::mvcc_visibility::Visibility::is_gc_eligible(cold.delete_ts, cutoff)
+}
+
+/// Per-vertex row bookkeeping shared by `MutableCsr` and `PureTopologyCsr`.
+///
+/// Both CSR variants maintain identical arrays for vertex addressing:
+/// `adj_offsets` (start index into the primary column arrays),
+/// `degrees` (number of live physical slots), and
+/// `primary_capacities` (reserved slots including gaps).
+/// This struct captures that shared state so common operations can be
+/// expressed once rather than duplicated across the two types.
+#[derive(Debug, Clone)]
+pub(crate) struct VertexBookkeeping {
+    pub(crate) adj_offsets: Vec<u32>,
+    pub(crate) degrees: Vec<u32>,
+    pub(crate) primary_capacities: Vec<u32>,
+}
+
+impl VertexBookkeeping {
+    pub(crate) fn with_capacity(vertex_cap: usize) -> Self {
+        Self {
+            adj_offsets: vec![0; vertex_cap],
+            degrees: vec![0; vertex_cap],
+            primary_capacities: vec![0; vertex_cap],
+        }
+    }
+
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        self.adj_offsets.len()
+    }
+
+    /// Clamped primary window `(start, end)` for one row, bounded by the
+    /// column lengths so callers never overrun.
+    #[inline]
+    pub(crate) fn primary_window(
+        &self,
+        src_idx: usize,
+        col_len: usize,
+    ) -> (usize, usize) {
+        if src_idx >= self.len() {
+            return (0, 0);
+        }
+        let start = self.adj_offsets[src_idx] as usize;
+        let end = start
+            .saturating_add(self.degrees[src_idx] as usize)
+            .min(col_len);
+        (start.min(end), end)
+    }
+
+    /// Resize all three arrays to `new_vertex_capacity`, extending with
+    /// defaults (zero offset, zero degree, zero capacity).
+    pub(crate) fn resize(&mut self, new_vertex_capacity: usize, tail: u32) {
+        self.adj_offsets.resize(new_vertex_capacity, tail);
+        self.degrees.resize(new_vertex_capacity, 0);
+        self.primary_capacities.resize(new_vertex_capacity, 0);
+    }
+
+    /// Assign primary block location for `src_idx`.
+    pub(crate) fn assign_primary_block(
+        &mut self,
+        src_idx: usize,
+        block_offset: u32,
+        degree: u32,
+    ) {
+        self.adj_offsets[src_idx] = block_offset;
+        self.primary_capacities[src_idx] = degree;
+    }
 }
 
 /// Segment address bits: one segment covers `1 << SEGMENT_SHIFT` vertices.

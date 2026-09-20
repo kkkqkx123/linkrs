@@ -3,6 +3,41 @@ use super::MutableCsr;
 use crate::edge::FragmentationStats;
 
 impl MutableCsr {
+    pub fn overflow_chunk_allocs(&self) -> u64 {
+        self.overflow_chunk_allocs
+    }
+
+    pub fn primary_block_allocs(&self) -> u64 {
+        self.primary_block_allocs
+    }
+
+    pub fn repack_count(&self) -> u64 {
+        self.repack_count
+    }
+
+    pub fn tombstone_reuse_count(&self) -> u64 {
+        self.tombstone_reuse_count
+    }
+
+    pub fn live_set_rebuild_count(&self) -> u64 {
+        self.live_set_rebuild_count
+    }
+
+    pub fn vertex_expansion_count(&self) -> u64 {
+        self.vertex_expansion_count
+    }
+
+    pub fn reset_baseline_counters(&mut self) {
+        self.overflow_chunk_allocs = 0;
+        self.primary_block_allocs = 0;
+        self.repack_count = 0;
+        self.tombstone_reuse_count = 0;
+        self.live_set_rebuild_count = 0;
+        self.vertex_expansion_count = 0;
+    }
+}
+
+impl MutableCsr {
     /// Get used memory size, counting reserved topology plus indexes.
     ///
     /// Covers the primary neighbor list, the offset/degree/capacity arrays,
@@ -13,9 +48,9 @@ impl MutableCsr {
         let slot_bytes = std::mem::size_of::<HotNbr>() + std::mem::size_of::<ColdStamps>();
         let arrays = self.hot_list.capacity() * std::mem::size_of::<HotNbr>()
             + self.cold_list.capacity() * std::mem::size_of::<ColdStamps>()
-            + self.adj_offsets.capacity() * std::mem::size_of::<u32>()
-            + self.degrees.capacity() * std::mem::size_of::<u32>()
-            + self.primary_capacities.capacity() * std::mem::size_of::<u32>();
+            + self.rows.adj_offsets.capacity() * std::mem::size_of::<u32>()
+            + self.rows.degrees.capacity() * std::mem::size_of::<u32>()
+            + self.rows.primary_capacities.capacity() * std::mem::size_of::<u32>();
         let overflow_reserved: usize = self
             .overflow_chunks
             .iter()
@@ -63,7 +98,7 @@ impl MutableCsr {
 
         let mut physical_entries = 0usize;
         for vid in 0..self.vertex_capacity() {
-            physical_entries += self.degrees[vid] as usize;
+            physical_entries += self.rows.degrees[vid] as usize;
         }
         for (_, chunks) in self.overflow_chunks.iter() {
             for chunk in chunks {
@@ -80,5 +115,28 @@ impl MutableCsr {
             dead_entries,
             wasted_capacity,
         )
+    }
+
+    /// Fraction of overflow rows that hold exactly one chunk.
+    ///
+    /// Skewed rows that stay single-block after merge are the common
+    /// case; a ratio near 1.0 confirms the merge threshold and
+    /// vertex-level expansion are working.  Returns 0.0 when no vertex
+    /// carries overflow.
+    pub fn single_block_overflow_ratio(&self) -> f32 {
+        let mut total_overflow_rows = 0usize;
+        let mut single_block_rows = 0usize;
+        for (_, chunks) in self.overflow_chunks.iter() {
+            if !chunks.is_empty() {
+                total_overflow_rows += 1;
+                if chunks.len() == 1 {
+                    single_block_rows += 1;
+                }
+            }
+        }
+        if total_overflow_rows == 0 {
+            return 0.0;
+        }
+        single_block_rows as f32 / total_overflow_rows as f32
     }
 }

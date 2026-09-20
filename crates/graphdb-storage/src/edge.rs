@@ -68,7 +68,7 @@ pub use bundled_csr::{decode_scalar, encode_scalar, BundledCsr};
 pub use frozen_serving::{MappedFrozen, MappedFrozenIterator, MappedFrozenRowIter};
 pub use graphdb_core::types::INVALID_EDGE_ID;
 pub use immutable_csr::{FrozenRowIter, ImmutableCsr, ImmutableCsrIterator};
-pub use pure_csr::PureTopologyCsr;
+pub use pure_csr::{PureRowIter, PureTopologyCsr};
 
 /// Resolved record form for an edge table, persisted in `meta.bin`.
 ///
@@ -317,11 +317,12 @@ pub struct HotNbr {
 /// compaction and persistence assembly, never by topology scans.
 ///
 /// Both stamps stay in the row: point-in-time reads filter on them directly
-/// and the shared delete state machine orders on creation stamps, so moving
-/// them out would reroute every read through a per-edge authority lookup.
+/// Cold timestamp half of a CSR edge slot. Only `delete_ts` is needed
+/// inline: `create_ts` lives in the `EdgeTimestamps` authority and is
+/// consulted on-demand for MVCC visibility. This keeps the cold half at
+/// 8 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColdStamps {
-    pub create_ts: Timestamp,
     pub delete_ts: Timestamp,
 }
 
@@ -339,10 +340,7 @@ impl HotNbr {
 impl ColdStamps {
     /// Gap-fill sentinel matching [`Nbr::dead_gap`]: empty stamp window.
     pub fn dead_gap() -> Self {
-        Self {
-            create_ts: 0,
-            delete_ts: 0,
-        }
+        Self { delete_ts: 0 }
     }
 
     /// Whether the slot holds no deletion stamp.
@@ -362,13 +360,10 @@ impl ColdStamps {
 /// The `endpoint` is the internal vertex ID of the neighbor. The `rank` is the
 /// edge multiplicity index (typically 0 for simple edges).
 ///
-/// `create_ts` is the creation timestamp kept as a physical replica for
-/// compaction and debugging. `delete_ts` is the deletion timestamp
-/// (`Timestamp::MAX` means alive), also maintained as physical state.
-///
-/// Visibility authority lives in `MVCCManager` (`edge_timestamps`): query
-/// paths must decide visibility through `is_edge_visible`, never by reading
-/// these row fields directly.
+/// `delete_ts` is the deletion timestamp (`Timestamp::MAX` means alive),
+/// maintained as physical state for row-level reclaim decisions.
+/// `create_ts` lives in the `EdgeTimestamps` authority and is consulted
+/// on-demand for MVCC visibility; it is not stored inline.
 ///
 /// Topology and properties are decoupled: the CSR entry carries only the
 /// topology (endpoint, rank, edge_id, timestamps). Edge properties are
@@ -381,7 +376,6 @@ pub struct Nbr {
     pub endpoint: u32,
     pub rank: i64,
     pub edge_id: EdgeId,
-    pub create_ts: Timestamp,
     pub delete_ts: Timestamp,
 }
 
@@ -392,18 +386,24 @@ impl Nbr {
             endpoint,
             rank,
             edge_id,
-            create_ts: 0,
             delete_ts: Timestamp::MAX,
         }
     }
 
-    /// Create with explicit create timestamp.
-    pub fn with_create_ts(endpoint: u32, rank: i64, edge_id: EdgeId, create_ts: Timestamp) -> Self {
+    /// Create with explicit create timestamp (stored in the authority, not inline).
+    ///
+    /// The returned `Nbr` carries only the topology and `delete_ts`; the
+    /// caller must record `create_ts` in the `EdgeTimestamps` authority.
+    pub fn with_create_ts(
+        endpoint: u32,
+        rank: i64,
+        edge_id: EdgeId,
+        _create_ts: Timestamp,
+    ) -> Self {
         Self {
             endpoint,
             rank,
             edge_id,
-            create_ts,
             delete_ts: Timestamp::MAX,
         }
     }
@@ -419,14 +419,13 @@ impl Nbr {
             endpoint,
             rank,
             edge_id,
-            create_ts: 0,
             delete_ts,
         }
     }
 
     /// Gap-fill sentinel for rebuilt rows: never alive at any timestamp.
     ///
-    /// Uses the unassignable edge id with an empty `[create, delete)` window,
+    /// Uses the unassignable edge id with an empty delete window,
     /// so an overrun scan reports absence instead of a ghost live edge. This
     /// is the only sanctioned filler for reserved primary slots; every CSR
     /// shape shares it.
@@ -435,16 +434,15 @@ impl Nbr {
             endpoint: 0,
             rank: 0,
             edge_id: INVALID_EDGE_ID,
-            create_ts: 0,
             delete_ts: 0,
         }
     }
 
     /// Check if this edge is alive at the given timestamp.
-    /// An edge is alive when: create_ts <= ts AND ts < delete_ts.
+    /// An edge is alive when: ts < delete_ts.
     #[inline]
     pub fn is_alive_at(&self, ts: Timestamp) -> bool {
-        self.create_ts <= ts && ts < self.delete_ts
+        ts < self.delete_ts
     }
 
     /// Split the record into its hot topology half.
@@ -461,7 +459,6 @@ impl Nbr {
     #[inline]
     pub fn cold(&self) -> ColdStamps {
         ColdStamps {
-            create_ts: self.create_ts,
             delete_ts: self.delete_ts,
         }
     }
@@ -473,7 +470,6 @@ impl Nbr {
             endpoint: hot.endpoint,
             rank: hot.rank,
             edge_id: hot.edge_id,
-            create_ts: cold.create_ts,
             delete_ts: cold.delete_ts,
         }
     }
@@ -502,15 +498,15 @@ mod tests {
     #[test]
     fn hot_half_stays_within_single_cache_line_budget() {
         // Per-edge memory budget, pinned exactly: 24-byte hot half plus
-        // 16-byte cold half is 40 bytes per edge with no padding waste.
+        // 8-byte cold half is 32 bytes per edge with no padding waste.
         // Rank stays 64-bit because it is a caller-controlled multigraph
         // key shared with the query layer, WAL redo records and endpoint
         // key packing; narrowing it would reject legal inputs instead of
-        // storing them. Both stamps stay because point-in-time reads and
-        // the write-path delete state machine serve directly from the row.
+        // storing them. create_ts lives in the EdgeTimestamps authority,
+        // not inline; only delete_ts is kept for row-level reclaim.
         assert_eq!(std::mem::size_of::<HotNbr>(), 24);
-        assert_eq!(std::mem::size_of::<ColdStamps>(), 16);
-        assert_eq!(std::mem::size_of::<Nbr>(), 40);
+        assert_eq!(std::mem::size_of::<ColdStamps>(), 8);
+        assert_eq!(std::mem::size_of::<Nbr>(), 32);
     }
 
     #[test]

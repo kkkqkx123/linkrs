@@ -4,7 +4,7 @@
 //! one contiguous neighbor segment plus a degree table, with no capacities,
 //! overflow chains, live index or locks. The packed rows preserve the logical
 //! content of the source group (tombstones verbatim, gap sentinels dropped)
-//! in sorted `(endpoint, rank, create_ts, edge_id)` row order, so
+//! in sorted `(endpoint, rank, edge_id)` row order, so
 //! timestamp-filtered reads observe the same logical entries before and
 //! after. Unfreezing rebuilds a fresh mutable variant by replaying the packed
 //! rows through the regular insert and delete entries, restoring the same
@@ -61,11 +61,11 @@ impl CsrShardSet {
         };
         // The frozen packer stores topology only: freezing a bundled group
         // with valid inline values would drop them, so it is rejected up
-        // front. Migrate to the columnar form first when a freeze is
-        // required; all-NULL bundled groups pack like pure topologies.
+        // front. Run migrate_record_form to the columnar form first when a
+        // freeze is required; all-NULL bundled groups pack like pure topologies.
         if shard.variant.bundled_has_valid_values() {
             return Err(StorageError::invalid_operation(format!(
-                "group {} holds bundled inline values; migrate to columnar before freeze",
+                "group {} holds bundled inline values; run migrate_record_form to the columnar form before freeze",
                 gid
             )));
         }
@@ -186,7 +186,7 @@ impl CsrShardSet {
                     local as u32,
                     nbr.to_vertex_id(),
                     nbr.edge_id,
-                    nbr.create_ts,
+                    Timestamp::MAX,
                 )?;
                 if nbr.delete_ts != Timestamp::MAX {
                     let deleted = variant.delete_edge(local as u32, nbr.edge_id, nbr.delete_ts)?;
