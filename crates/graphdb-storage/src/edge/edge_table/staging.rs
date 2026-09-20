@@ -14,6 +14,19 @@
 //!   leaves no tombstone and no visible edge. The monotonic edge-id counter
 //!   only guarantees monotonicity without collision; callers must not rely on
 //!   exact values across cancel or crash reload.
+//!
+//! Crash-atomic boundary: one batch is the atomic unit. The commit appends
+//! the whole batch to the write-ahead log before applying anything, and the
+//! replay is idempotent, so a crash replays to either the whole batch visible
+//! or the whole batch invisible. A torn apply never leaves single-direction
+//! topology (out without in) or timestamps without topology: the load audit
+//! rejects such residue fail-closed. Large fanouts (for example deleting
+//! every edge of a high-degree vertex) commit as one batch with the same
+//! all-or-nothing guarantee; a mid-batch failure rolls the applied prefix
+//! back instead of leaving a half-deleted graph. Batches holding tens of
+//! thousands of entries are correct but hold the table lock for the whole
+//! apply, so callers with very large fanouts should chunk explicitly and
+//! treat each chunk as its own atomic unit.
 
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::Value;

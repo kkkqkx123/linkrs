@@ -66,7 +66,7 @@ impl EdgeStore {
         meta_cursor.read_exact(&mut header_buf)?;
         {
             let mut slice = &header_buf[..];
-            let (_version, sid) = crate::persistence::read_header(&mut slice)?;
+            let sid = crate::persistence::read_header(&mut slice)?;
             if sid != crate::persistence::section::EDGE_META {
                 return Err(StorageError::deserialize_error(format!(
                     "unexpected section id in edge meta: expected {:#06x}, got {:#06x}",
@@ -76,31 +76,10 @@ impl EdgeStore {
             }
         }
 
-        let mut version_bytes = [0u8; 4];
-        meta_cursor.read_exact(&mut version_bytes)?;
-        let version = u32::from_le_bytes(version_bytes);
-        if version == 1 {
-            return Err(StorageError::deserialize_error(
-                "legacy edge meta version 1 without a manifest commit tail is not supported"
-                    .to_string(),
-            ));
-        }
-        if version == 2 {
-            return Err(StorageError::deserialize_error(
-                "legacy edge meta version 2 with global timestamps is not supported".to_string(),
-            ));
-        }
-        if version != persistence::EDGE_META_VERSION {
-            return Err(StorageError::deserialize_error(format!(
-                "unsupported edge meta version: {}",
-                version
-            )));
-        }
-
         let meta = persistence::load_metadata(&mut meta_cursor)?;
         let embedded = TableShardManifest::decode(meta_cursor).map_err(|_| {
             StorageError::deserialize_error(
-                "edge meta missing manifest commit tail: torn write or legacy file".to_string(),
+                "edge meta missing manifest commit tail: torn write".to_string(),
             )
         })?;
         self.label = meta.label;

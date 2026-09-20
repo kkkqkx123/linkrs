@@ -10,8 +10,6 @@ use crate::cursor::PartitionSelector;
 use graphdb_core::types::{CommitLsn, IndexGeneration, SnapshotTimestamp};
 use graphdb_core::{StorageError, StorageResult};
 
-const MANIFEST_FORMAT_VERSION: u16 = 1;
-
 // ── Crash-safe generation rebuild state machine ──
 
 /// Persistent state of a native index generation rebuild.
@@ -201,7 +199,6 @@ impl IndexShard {
 /// The persisted routing table for one immutable index generation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexManifest {
-    pub format_version: u16,
     /// Logical namespace of this index. Index IDs are schema-local, so the
     /// pair `(space_id, index_id)` is the physical native-index identity.
     pub space_id: u64,
@@ -218,7 +215,6 @@ impl IndexManifest {
         shards: Vec<IndexShard>,
     ) -> StorageResult<Self> {
         let manifest = Self {
-            format_version: MANIFEST_FORMAT_VERSION,
             space_id,
             index_id,
             generation,
@@ -229,12 +225,6 @@ impl IndexManifest {
     }
 
     pub fn validate(&self) -> StorageResult<()> {
-        if self.format_version != MANIFEST_FORMAT_VERSION {
-            return Err(StorageError::db_error(format!(
-                "Unsupported index manifest version {}",
-                self.format_version
-            )));
-        }
         if self.shards.is_empty() {
             return Err(StorageError::db_error(
                 "Index manifest must contain at least one shard",
@@ -345,18 +335,14 @@ impl IndexManifest {
         let bytes = postcard::to_allocvec(&with_checksums).map_err(|error| {
             StorageError::db_error(format!("Serialize index manifest: {error}"))
         })?;
-        let mut versioned = Vec::new();
-        crate::persistence::write_versioned_payload(
-            &mut versioned,
-            graphdb_core::types::StorageVersion::CURRENT as u32,
-            &bytes,
-        );
-        crate::persistence::write_file_atomic(path, &versioned)
+        let mut wrapped = Vec::new();
+        crate::persistence::write_versioned_payload(&mut wrapped, &bytes);
+        crate::persistence::write_file_atomic(path, &wrapped)
     }
 
     pub fn load(path: &Path) -> StorageResult<Self> {
         let mut file = std::fs::File::open(path)?;
-        let (_version, payload) = crate::persistence::read_versioned_payload(
+        let payload = crate::persistence::read_versioned_payload(
             &mut file,
             path.file_name()
                 .and_then(|n| n.to_str())
@@ -739,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn persisted_manifest_roundtrips_and_rejects_unknown_version() {
+    fn persisted_manifest_roundtrips() {
         let directory = tempfile::tempdir().expect("temporary directory should be created");
         let path = directory.path().join("manifest.bin");
         let manifest = manifest(1, vec![shard(0, None, None)]);
@@ -749,8 +735,10 @@ mod tests {
             manifest
         );
 
-        let mut unsupported = manifest;
-        unsupported.format_version += 1;
+        let unsupported = IndexManifest {
+            shards: Vec::new(),
+            ..manifest
+        };
         assert!(unsupported.validate().is_err());
     }
 

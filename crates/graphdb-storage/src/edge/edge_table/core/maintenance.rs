@@ -131,15 +131,24 @@ impl EdgeStore {
     }
 
     /// Background variant: bound comes from one per-pass watermark capture
-    /// shared across all tables. Also reclaims authority tombstones whose
-    /// physical rows are gone in both directions, so the authority map stays
-    /// proportional to live edges rather than historical totals.
+    /// shared across all tables. Refreshes the hot-path reuse hint from the
+    /// same fresh capture before running, then reclaims authority tombstones
+    /// whose physical rows are gone in both directions, so the authority map
+    /// stays proportional to live edges rather than historical totals. A
+    /// disabled sentinel clears reuse instead of running on an expired bound.
     pub fn maybe_run_auto_maintenance_with_watermarks(
         &mut self,
         watermarks: &graphdb_transaction::MvccWatermarks,
         margin: Timestamp,
     ) -> usize {
         let bound = watermarks.safe_gc_timestamp_with_margin(margin);
+        if bound != Timestamp::MAX {
+            self.out_csr.refresh_tombstone_reuse_cutoff(bound);
+            self.in_csr.refresh_tombstone_reuse_cutoff(bound);
+        } else {
+            self.out_csr.clear_tombstone_reuse_cutoff();
+            self.in_csr.clear_tombstone_reuse_cutoff();
+        }
         let mut ran = self.run_auto_maintenance_pass(bound);
         if self.reclaim_authority_with_watermarks(watermarks, margin) > 0 {
             ran += 1;

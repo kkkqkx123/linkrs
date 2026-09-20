@@ -660,7 +660,7 @@ impl VertexTable {
         meta_cursor.read_exact(&mut header_buf)?;
         {
             let mut slice = &header_buf[..];
-            let (_version, sid) = read_header(&mut slice)?;
+            let sid = read_header(&mut slice)?;
             if sid != section::VERTEX_META {
                 return Err(StorageError::deserialize_error(format!(
                     "unexpected section id in vertex meta: expected {:#06x}, got {:#06x}",
@@ -724,7 +724,7 @@ impl VertexTable {
         cursor.read_exact(&mut header_buf)?;
         {
             let mut slice = &header_buf[..];
-            let (_version, sid) = read_header(&mut slice)?;
+            let sid = read_header(&mut slice)?;
             if sid != section::VERTEX_ID_INDEXER {
                 return Err(StorageError::deserialize_error(format!(
                     "unexpected section id in vertex id_indexer: expected {:#06x}, got {:#06x}",
@@ -758,7 +758,7 @@ impl VertexTable {
         cursor.read_exact(&mut header_buf)?;
         {
             let mut slice = &header_buf[..];
-            let (_version, sid) = read_header(&mut slice)?;
+            let sid = read_header(&mut slice)?;
             if sid != section::VERTEX_COLUMNS {
                 return Err(StorageError::deserialize_error(format!(
                     "unexpected section id in vertex columns: expected {:#06x}, got {:#06x}",
@@ -1118,7 +1118,7 @@ impl VertexTable {
         cursor.read_exact(&mut header_buf)?;
         {
             let mut slice = &header_buf[..];
-            let (_version, sid) = read_header(&mut slice)?;
+            let sid = read_header(&mut slice)?;
             if sid != section::VERTEX_TIMESTAMPS {
                 return Err(StorageError::deserialize_error(format!(
                     "unexpected section id in vertex timestamps: expected {:#06x}, got {:#06x}",

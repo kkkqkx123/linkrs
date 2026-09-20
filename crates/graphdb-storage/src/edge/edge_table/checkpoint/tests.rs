@@ -158,8 +158,7 @@ fn corrupt_serving_falls_back_to_authoritative() {
 }
 
 #[test]
-fn mutable_flush_removes_stale_serving() {
-    use graphdb_core::types::Timestamp;
+fn mutable_flush_removes_stale_serving() {    use graphdb_core::types::Timestamp;
     let mut table = make_table();
     table
         .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
@@ -188,6 +187,130 @@ fn mutable_flush_removes_stale_serving() {
         !serving.exists(),
         "mutable bases must not keep a frozen serving file"
     );
+}
+
+#[test]
+fn serving_state_machine_full_cycle() {
+    use graphdb_core::types::Timestamp;
+    let mut table = make_table();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .unwrap();
+    table
+        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+        .unwrap();
+    table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
+    let dir = tempfile::tempdir().expect("temporary edge table directory");
+    let flush = |table: &mut EdgeStore| {
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed")
+    };
+    let serving = serving_path_for(&dir.path().join(out_group_file(0)));
+
+    // Generate: frozen flush writes a valid sidecar; loads map it.
+    flush(&mut table);
+    assert!(serving.exists());
+    let mut loaded = make_table();
+    loaded.load(dir.path()).expect("load should succeed");
+    assert!(matches!(
+        loaded.out_csr.group_variant(0),
+        Some(CsrVariant::Mapped(_))
+    ));
+    assert_eq!(loaded.out_edges(0, 200).len(), 2);
+
+    // Expire: corrupt the sidecar; the next load falls back to the authority
+    // base and regenerates the cache on flush.
+    let mut bytes = std::fs::read(&serving).unwrap();
+    bytes[8] ^= 0xff;
+    std::fs::write(&serving, &bytes).unwrap();
+    let mut expired = make_table();
+    expired.load(dir.path()).expect("load should succeed");
+    assert!(matches!(
+        expired.out_csr.group_variant(0),
+        Some(CsrVariant::Frozen(_))
+    ));
+    assert_eq!(expired.out_edges(0, 200).len(), 2);
+    expired
+        .flush(
+            dir.path(),
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .expect("flush regenerates the cache");
+    assert!(serving.exists());
+    let mut remapped = make_table();
+    remapped.load(dir.path()).expect("load should succeed");
+    assert!(matches!(
+        remapped.out_csr.group_variant(0),
+        Some(CsrVariant::Mapped(_))
+    ));
+
+    // Delete: unfreezing plus flush drops the stale sidecar with the base.
+    table.unfreeze_group(true, 0).unwrap();
+    flush(&mut table);
+    assert!(!serving.exists());
+    assert!(table.audit_copy_drift().is_empty());
+}
+
+#[test]
+fn persistence_live_markers_are_current() {
+    // Guards the documented layout in `edge_table::persistence`: the two
+    // mutable dump markers are the only version-like negotiation left, and
+    // they select the two live write modes, not history.
+    assert_eq!(
+        crate::edge::mutable_csr::serialization::MUTABLE_CSR_FORMAT_VERSION,
+        8
+    );
+    assert_eq!(
+        crate::edge::mutable_csr::serialization::MUTABLE_CSR_FORMAT_RAW_VERSION,
+        9
+    );
+}
+
+#[test]
+fn memory_intent_serving_load_stays_correct() {
+    use crate::edge::edge_table::config::MemoryIntent;
+    use graphdb_core::types::Timestamp;
+    for intent in [MemoryIntent::HeapDefault, MemoryIntent::ReadServing, MemoryIntent::BulkLoad] {
+        let mut config = EdgeTableConfig::default();
+        config.memory_intent = intent;
+        let schema = EdgeSchema {
+            label_id: 0,
+            label_name: "knows".to_string(),
+            src_label: 0,
+            dst_label: 0,
+            properties: vec![StoragePropertyDef {
+                name: "weight".to_string(),
+                data_type: graphdb_core::types::DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            }],
+            oe_strategy: EdgeStrategy::Multiple,
+            ie_strategy: EdgeStrategy::Multiple,
+            schema_version: 1,
+            record_form: RecordForm::default(),
+        };
+        let mut table = EdgeStore::with_config(schema.clone(), config).unwrap();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+        let mut loaded =
+            EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+        loaded.load(dir.path()).expect("load should succeed");
+        assert_eq!(loaded.out_edges(0, 200).len(), 1, "{:?} serves reads", intent);
+        assert!(loaded.audit_copy_drift().is_empty());
+    }
 }
 
 #[test]
@@ -242,7 +365,7 @@ fn dirty_group_roundtrip_preserves_cross_group_edges() {
 }
 
 #[test]
-fn legacy_layout_without_manifest_is_rejected() {
+fn missing_manifest_is_rejected() {
     let mut table = make_table();
     table.insert_edge(0, 1, 0, &[], 100).unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
@@ -256,7 +379,7 @@ fn legacy_layout_without_manifest_is_rejected() {
     )
     .unwrap();
     persistence::write_pages_to_file(
-        &dir.path().join(LEGACY_OUT_CSR_FILE),
+        &dir.path().join("out_g0_foreign.bin"),
         &payload,
         crate::compression::DEFAULT_PAGE_SIZE,
         3,
@@ -267,8 +390,8 @@ fn legacy_layout_without_manifest_is_rejected() {
     let mut loaded = make_table();
     let err = loaded
         .load(dir.path())
-        .expect_err("legacy layout must be rejected");
-    assert!(err.to_string().contains("legacy single-file"));
+        .expect_err("missing manifest must be rejected");
+    assert!(err.to_string().contains("missing group manifest"));
 }
 
 #[test]
@@ -461,16 +584,15 @@ fn encoded_values_survive_reload_with_encoding() {
 }
 
 #[test]
-fn legacy_properties_version_is_rejected() {
+fn truncated_properties_payload_is_rejected() {
     let mut table = make_table();
     table
         .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
         .unwrap();
-    let mut payload = table.properties.dump();
+    let payload = table.properties.dump();
     assert!(!payload.is_empty());
-    payload[0] = 2;
     let mut reloaded = make_table();
-    assert!(reloaded.properties.load(&payload).is_err());
+    assert!(reloaded.properties.load(&payload[..payload.len() / 2]).is_err());
 }
 
 #[test]
@@ -740,7 +862,7 @@ fn torn_manifest_tail_recovers_new_snapshot() {
 }
 
 #[test]
-fn legacy_meta_without_tail_is_rejected() {
+fn meta_without_tail_is_rejected() {
     let mut table = make_table();
     table
         .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
@@ -753,14 +875,12 @@ fn legacy_meta_without_tail_is_rejected() {
         )
         .expect("flush should succeed");
 
-    // Strip the manifest commit tail and downgrade the version to mimic
-    // a version 1 file: the loader must reject it explicitly.
+    // Strip the manifest commit tail to mimic a torn metadata write:
+    // the loader must reject it explicitly.
     let meta_path = dir.path().join("meta.bin");
     let (mut payload, _) = persistence::read_pages_from_file(&meta_path).expect("meta readable");
     assert!(payload.len() > 20);
     payload.truncate(payload.len() - 16);
-    let header_len = crate::persistence::HEADER_SIZE;
-    payload[header_len..header_len + 4].copy_from_slice(&1u32.to_le_bytes());
     persistence::write_pages_to_file(
         &meta_path,
         &payload,
@@ -768,13 +888,13 @@ fn legacy_meta_without_tail_is_rejected() {
         3,
         1,
     )
-    .expect("legacy meta writable");
+    .expect("torn meta writable");
 
     let mut loaded = make_table();
     let err = loaded
         .load(dir.path())
-        .expect_err("legacy meta must be rejected");
-    assert!(err.to_string().contains("legacy"));
+        .expect_err("torn meta must be rejected");
+    assert!(err.to_string().contains("manifest commit tail"));
 }
 
 #[test]
@@ -1047,7 +1167,7 @@ fn torn_sidecar_is_rejected_not_replayed() {
 }
 
 #[test]
-fn pre_v4_manifest_is_rejected() {
+fn corrupt_manifest_is_rejected() {
     let mut table = make_table();
     table
         .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
@@ -1059,24 +1179,23 @@ fn pre_v4_manifest_is_rejected() {
             crate::compression::CompressionType::Zstd { level: 3 },
         )
         .expect("flush should succeed");
-    // Hand-craft a version 3 manifest: same body, old version.
-    let mut legacy = 3u32.to_le_bytes().to_vec();
+    // Truncate the manifest file: the loader must fail closed.
     let current = std::fs::read(dir.path().join(GROUPS_MANIFEST_FILE)).expect("manifest readable");
-    legacy.extend_from_slice(&current[4..]);
-    std::fs::write(dir.path().join(GROUPS_MANIFEST_FILE), &legacy)
-        .expect("legacy manifest writable");
+    std::fs::write(
+        dir.path().join(GROUPS_MANIFEST_FILE),
+        &current[..current.len() / 2],
+    )
+    .expect("torn manifest writable");
 
     let mut loaded = make_table();
-    let err = loaded
-        .load(dir.path())
-        .expect_err("pre-v4 manifest must be rejected");
-    assert!(err
-        .to_string()
-        .contains("unsupported group manifest version"));
+    assert!(
+        loaded.load(dir.path()).is_err(),
+        "corrupt manifest must be rejected"
+    );
 }
 
 #[test]
-fn legacy_global_properties_file_is_rejected() {
+fn foreign_properties_file_is_ignored() {
     let mut table = make_table();
     table.insert_edge(0, 1, 0, &[], 100).unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
@@ -1086,17 +1205,17 @@ fn legacy_global_properties_file_is_rejected() {
             crate::compression::CompressionType::Zstd { level: 3 },
         )
         .expect("flush should succeed");
-    std::fs::write(dir.path().join(LEGACY_PROPERTIES_FILE), b"legacy")
-        .expect("legacy props writable");
+    std::fs::write(dir.path().join("properties.bin"), b"third-party")
+        .expect("foreign file writable");
     let mut loaded = make_table();
-    let err = loaded
+    loaded
         .load(dir.path())
-        .expect_err("legacy properties must be rejected");
-    assert!(err.to_string().contains("legacy global properties"));
+        .expect("foreign files must not fail the load");
+    assert!(loaded.has_edge(0, 1, 0, 200));
 }
 
 #[test]
-fn legacy_meta_v2_is_rejected() {
+fn truncated_meta_is_rejected() {
     let mut table = make_table();
     table.insert_edge(0, 1, 0, &[], 100).unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
@@ -1108,8 +1227,7 @@ fn legacy_meta_v2_is_rejected() {
         .expect("flush should succeed");
     let meta_path = dir.path().join("meta.bin");
     let (mut payload, _) = persistence::read_pages_from_file(&meta_path).expect("meta readable");
-    let header_len = crate::persistence::HEADER_SIZE;
-    payload[header_len..header_len + 4].copy_from_slice(&2u32.to_le_bytes());
+    payload.truncate(payload.len() / 2);
     persistence::write_pages_to_file(
         &meta_path,
         &payload,
@@ -1117,12 +1235,12 @@ fn legacy_meta_v2_is_rejected() {
         3,
         1,
     )
-    .expect("legacy meta writable");
+    .expect("torn meta writable");
     let mut loaded = make_table();
-    let err = loaded
-        .load(dir.path())
-        .expect_err("legacy meta v2 must be rejected");
-    assert!(err.to_string().contains("version 2"));
+    assert!(
+        loaded.load(dir.path()).is_err(),
+        "truncated meta must be rejected"
+    );
 }
 
 #[test]
@@ -1487,4 +1605,147 @@ fn under_bound_stays_sidecar() {
     let mut loaded = make_bounded_table(16);
     loaded.load(dir.path()).expect("load should succeed");
     assert_eq!(loaded.edge_count(), 2);
+}
+
+#[test]
+fn missing_groups_leave_no_files() {
+    // Sparse file promise: only materialized groups produce base, append,
+    // timestamp, property and serving files. Hole groups must leave nothing
+    // behind, and the manifest roundtrip must list existing groups alone.
+    let mut table = make_table();
+    table.insert_edge(1_000_000, 1_000_001, 0, &[], 100).unwrap();
+    let dir = tempfile::tempdir().expect("temporary edge table directory");
+    table
+        .flush(
+            dir.path(),
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .expect("sparse flush should succeed");
+    for hole in [1usize, 100, 243] {
+        for name in [
+            out_group_file(hole),
+            in_group_file(hole),
+            out_append_file(hole),
+            in_append_file(hole),
+            ts_group_file(hole as u32),
+            props_group_file(hole as u32),
+        ] {
+            assert!(
+                !dir.path().join(&name).exists(),
+                "hole group {hole} must leave no file, found {name}"
+            );
+        }
+    }
+    // Mutable groups never carry a serving sidecar either.
+    assert!(
+        !serving_path_for(&dir.path().join(out_group_file(244))).exists()
+    );
+    let mut loaded = make_table();
+    loaded.load(dir.path()).expect("load should succeed");
+    assert_eq!(
+        loaded.out_csr.existing_group_ids(),
+        table.out_csr.existing_group_ids()
+    );
+    assert_eq!(loaded.edge_count(), 1);
+    assert!(loaded.audit_copy_drift().is_empty());
+}
+
+#[test]
+fn reshard_drill_syncs_routes_manifest_and_serving() {
+    use graphdb_core::types::Timestamp;
+    // Width-change drill: frozen serving exists before the switch, point
+    // lookups stay correct immediately after (fresh route cache rides with
+    // the rebuilt sets, no reload), the next flush drops the stale serving
+    // sidecar, and the rebuilt manifest reloads at the new width.
+    let mut table = make_table();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .unwrap();
+    table.insert_edge(5000, 6000, 0, &[], 100).unwrap();
+    table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
+    let dir = tempfile::tempdir().expect("temporary edge table directory");
+    table
+        .flush(
+            dir.path(),
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .expect("baseline flush should succeed");
+    assert!(serving_path_for(&dir.path().join(out_group_file(0))).exists());
+
+    let stats = table.reshard(9).expect("reshard should succeed");
+    assert_eq!(stats.old_bits, 12);
+    assert_eq!(stats.new_bits, 9);
+    assert_eq!(stats.edges, 2);
+    assert_eq!(table.out_csr.group_bits(), 9);
+    assert!(table.has_edge(0, 1, 0, 200));
+    assert!(table.has_edge(5000, 6000, 0, 200));
+    assert_eq!(table.live_authority_orphans(), 0);
+    assert!(table.audit_copy_drift().is_empty());
+
+    table
+        .flush(
+            dir.path(),
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .expect("post-reshard flush should succeed");
+    assert!(
+        !serving_path_for(&dir.path().join(out_group_file(0))).exists(),
+        "pre-reshard serving sidecar must not survive the width change"
+    );
+
+    let mut loaded = EdgeStore::with_config(
+        crate::edge::EdgeSchema {
+            label_id: 0,
+            label_name: "knows".to_string(),
+            src_label: 0,
+            dst_label: 0,
+            properties: vec![crate::types::StoragePropertyDef {
+                name: "weight".to_string(),
+                data_type: graphdb_core::types::DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            }],
+            oe_strategy: crate::edge::EdgeStrategy::Multiple,
+            ie_strategy: crate::edge::EdgeStrategy::Multiple,
+            schema_version: 1,
+            record_form: RecordForm::default(),
+        },
+        EdgeTableConfig {
+            node_group_bits: 9,
+            ..EdgeTableConfig::default()
+        },
+    )
+    .expect("table builds");
+    loaded.load(dir.path()).expect("load should succeed");
+    assert!(loaded.has_edge(0, 1, 0, 200));
+    assert!(loaded.has_edge(5000, 6000, 0, 200));
+    assert_eq!(loaded.edge_count(), 2);
+    assert!(loaded.audit_copy_drift().is_empty());
+}
+
+#[test]
+fn cross_group_flush_load_audits_clean_with_owner_counts() {
+    // Recovery across groups: edges in widely separated groups flush and
+    // reload with the owner map fully derived from topology, zero relocated
+    // orphans, and an empty drift audit.
+    let mut table = make_table();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    table.insert_edge(9000, 9001, 0, &[], 100).unwrap();
+    let dir = tempfile::tempdir().expect("temporary edge table directory");
+    table
+        .flush(
+            dir.path(),
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .expect("flush should succeed");
+    let mut loaded = make_table();
+    loaded.load(dir.path()).expect("load should succeed");
+    assert_eq!(loaded.edge_count(), 2);
+    assert!(loaded.has_edge(0, 1, 0, 200));
+    assert!(loaded.has_edge(9000, 9001, 0, 200));
+    assert_eq!(loaded.live_authority_orphans(), 0);
+    assert!(loaded.audit_copy_drift().is_empty());
+    let owner_stats = loaded.rebuild_owner_map_with_stats();
+    assert_eq!(owner_stats.mapped, 2);
+    assert_eq!(owner_stats.relocated_orphans, 0);
 }

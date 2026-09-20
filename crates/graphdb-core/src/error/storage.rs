@@ -51,7 +51,6 @@ pub enum StorageErrorKind {
     CompressError,
     DecompressError,
     DataCorruption,
-    UnsupportedVersion,
 }
 
 impl StorageErrorKind {
@@ -90,7 +89,6 @@ impl StorageErrorKind {
             StorageErrorKind::CompressError => "compress_error",
             StorageErrorKind::DecompressError => "decompress_error",
             StorageErrorKind::DataCorruption => "data_corruption",
-            StorageErrorKind::UnsupportedVersion => "unsupported_version",
         }
     }
 }
@@ -303,16 +301,6 @@ impl StorageError {
 
     pub fn data_corruption(message: impl Into<String>) -> Self {
         Self::new(StorageErrorKind::DataCorruption, message)
-    }
-
-    pub fn unsupported_version(found: u32, expected: u32) -> Self {
-        Self::new(
-            StorageErrorKind::UnsupportedVersion,
-            format!(
-                "unsupported format version: found {}, expected {}",
-                found, expected
-            ),
-        )
     }
 }
 

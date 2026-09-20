@@ -20,6 +20,11 @@ use crate::edge::property_schema::PropertySchema;
 use crate::vertex::column::Column;
 
 /// Row visibility for MVCC.
+///
+/// Physical projection of the version authority for collection only.
+/// Every visibility decision delegates to the single
+/// [`crate::mvcc_visibility::Visibility`] predicate so this copy can never
+/// drift into a second time comparison.
 #[derive(Debug, Clone, Copy)]
 struct RowVisibility {
     create_ts: Timestamp,
@@ -34,16 +39,9 @@ impl RowVisibility {
         }
     }
 
+    #[cfg(test)]
     fn is_visible_at(&self, query_ts: Timestamp) -> bool {
-        if query_ts < self.create_ts {
-            return false;
-        }
-        if let Some(del) = self.delete_ts {
-            if query_ts >= del {
-                return false;
-            }
-        }
-        true
+        crate::mvcc_visibility::Visibility::is_visible(query_ts, self.create_ts, self.delete_ts)
     }
 
     fn mark_deleted(&mut self, ts: Timestamp) {
@@ -394,6 +392,7 @@ impl CsrWithProperties {
     /// are skipped. Visibility is still enforced: an invisible edge yields
     /// `None`, a visible one yields `Some` (possibly empty).
     /// Test-only row-stamp filtered read; production uses physical read plus authority gate.
+    #[cfg(test)]
     pub fn get_projected_by_edge_id(
         &self,
         edge_id: EdgeId,
@@ -435,8 +434,8 @@ impl CsrWithProperties {
         }
     }
 
-    /// Insert properties for an edge and associate the row with `edge_id`.
     /// Test-only row-stamp filtered read; production uses physical read plus authority gate.
+    #[cfg(test)]
     pub fn get_by_edge_id(
         &self,
         edge_id: EdgeId,
@@ -1092,7 +1091,6 @@ impl CsrWithProperties {
         // load restores plain values holding the latest value with the row
         // creation stamp, then re-applies the recorded encodings.
         let mut buf = Vec::new();
-        buf.push(3u8); // version
         buf.extend_from_slice(&(self.visibility.len() as u32).to_le_bytes());
         for vis in &self.visibility {
             buf.extend_from_slice(&vis.create_ts.to_le_bytes());
@@ -1189,15 +1187,6 @@ impl CsrWithProperties {
             ));
         }
         let mut offset = 0usize;
-        need(data, offset, 1, "version")?;
-        let version = data[offset];
-        offset += 1;
-        if version != 3 {
-            return Err(StorageError::deserialize_error(format!(
-                "Unsupported CsrWithProperties version: {}, only version 3 is accepted",
-                version
-            )));
-        }
         need(data, offset, 4, "visibility length")?;
         let vis_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
@@ -1980,15 +1969,14 @@ mod tests {
     }
 
     #[test]
-    fn legacy_version_is_rejected() {
+    fn truncated_payload_is_rejected() {
         let mut csr = CsrWithProperties::new(schema());
         let eid = EdgeId(10);
         csr.insert_for_edge(eid, &[("weight".to_string(), Value::Double(1.0))], 100)
             .unwrap();
-        let mut bytes = csr.dump();
-        bytes[0] = 1;
+        let bytes = csr.dump();
         let mut loaded = CsrWithProperties::new(schema());
-        assert!(loaded.load(&bytes).is_err());
+        assert!(loaded.load(&bytes[..bytes.len() / 2]).is_err());
     }
 
     #[test]
@@ -2097,7 +2085,7 @@ mod tests {
         let mut bytes = csr.dump();
         // Patch the second column header identifier to collide with the
         // first: name length plus name precedes the identifier.
-        let mut cursor = 1usize;
+        let mut cursor = 0usize;
         let read_u32 = |cursor: &mut usize| {
             let value = u32::from_le_bytes(bytes[*cursor..*cursor + 4].try_into().unwrap());
             *cursor += 4;

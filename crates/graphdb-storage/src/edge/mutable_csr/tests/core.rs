@@ -54,5 +54,5 @@ fn test_zero_degree_rows_hold_no_slots() {
     csr.delete_edge(0u32, EdgeId(100), 2).unwrap();
     csr.compact_with_ts_reporting(3, 0.0, &mut |_, _| {});
     assert_eq!(csr.total_edge_capacity, 1);
-    assert_eq!(csr.primary_capacities[0], 0);
+    assert_eq!(csr.rows.primary_capacities[0], 0);
 }

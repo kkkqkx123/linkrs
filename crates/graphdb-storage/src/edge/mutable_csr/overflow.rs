@@ -118,6 +118,13 @@ impl OverflowChunk {
 /// only live entries is merged the same way so skewed rows cannot grow
 /// unbounded chains. Region and full compactions still handle watermark
 /// reclaim separately.
+///
+/// Source: 8 chunks bound the pointer-chase depth of the widest rows while
+/// keeping the amortized repack cost off the insert hot path (covered by
+/// `test_supernode_overflow_consolidates_repack_into_single_block`).
+/// Recommended range 4..=16; lower repacks too eagerly on skewed inserts,
+/// higher lets chains degrade point lookups. Retuning requires rerunning
+/// the supernode benchmark first.
 pub(crate) const OVERFLOW_REPACK_CHUNKS_PER_VERTEX: usize = 8;
 
 impl super::super::csr_shared::OverflowChunkSpec for OverflowChunk {

@@ -34,6 +34,12 @@
 //! with delete dirt rewrite the base and discard the log. Append row indexes
 //! are dropped after the flush that persists them.
 //!
+//! Concurrency: this container adds no locking of its own and follows the
+//! canonical contract in [`super::mutable_csr`]. All mutation takes `&mut
+//! self`; the route cache is the only shared mutable state and stays
+//! correct under relaxed atomics because removals invalidate before they
+//! unlink.
+//!
 //! Layout by responsibility (`node_group/` subdirectory):
 //! - `address` holds group/region address arithmetic and density calibration.
 //! - `dirt` holds the region/group dirt model and checkpoint classification.
@@ -79,7 +85,7 @@ pub use address::{
 pub use compaction::{RegionMergeScope, GROUP_MERGE_MIN_DENSITY, REGION_MERGE_MIN_DENSITY};
 pub use dirt::{EdgeCheckpointKind, GroupDirty, RegionDirty};
 pub use iter::ShardCsrIterator;
-pub use manifest::{TableShardManifest, GROUP_MANIFEST_VERSION};
+pub use manifest::TableShardManifest;
 pub use stats::NodeGroupStats;
 
 pub(crate) use append_log::{decode_append_ops, encode_append_ops, ShardAppendLog};

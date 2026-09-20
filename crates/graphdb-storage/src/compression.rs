@@ -18,7 +18,6 @@ pub const DEFAULT_PAGE_SIZE: usize = 64 * 1024 - 1;
 pub const MAX_PAGE_SIZE: usize = 64 * 1024 * 1024;
 pub const PAGE_MAGIC: [u8; 4] = *b"PGZC";
 pub const COLUMN_FILE_MAGIC: [u8; 8] = *b"GRPHDCOL";
-pub const COLUMN_FILE_VERSION: u16 = 1;
 
 const COMPRESSION_MARKER_NONE: u8 = 0x00;
 const COMPRESSION_MARKER_ZSTD: u8 = 0x01;
@@ -43,12 +42,6 @@ impl ColumnFileHeader {
             .write_all(&COLUMN_FILE_MAGIC)
             .map_err(|e| StorageError::io_error(format!("ColumnFileHeader write magic: {}", e)))?;
         written += 8;
-        writer
-            .write_all(&COLUMN_FILE_VERSION.to_le_bytes())
-            .map_err(|e| {
-                StorageError::io_error(format!("ColumnFileHeader write version: {}", e))
-            })?;
-        written += 2;
         if self.page_size == 0 || self.page_size > MAX_PAGE_SIZE {
             return Err(StorageError::invalid_input(format!(
                 "invalid column page size: {}",
@@ -91,17 +84,6 @@ impl ColumnFileHeader {
                 "Invalid column file magic: {:?}, expected {:?}",
                 magic, COLUMN_FILE_MAGIC
             )));
-        }
-        let mut version_bytes = [0u8; 2];
-        reader
-            .read_exact(&mut version_bytes)
-            .map_err(|e| StorageError::io_error(format!("ColumnFileHeader read version: {}", e)))?;
-        let version = u16::from_le_bytes(version_bytes);
-        if version != COLUMN_FILE_VERSION {
-            return Err(StorageError::unsupported_version(
-                version as u32,
-                COLUMN_FILE_VERSION as u32,
-            ));
         }
         let mut page_size_bytes = [0u8; 4];
         reader.read_exact(&mut page_size_bytes).map_err(|e| {
@@ -475,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn test_column_file_header_rejects_wrong_version() {
+    fn test_column_file_header_rejects_corrupt_magic() {
         let header = ColumnFileHeader {
             page_size: 4096,
             page_count: 10,
@@ -483,17 +465,10 @@ mod tests {
         };
         let mut buffer = Vec::new();
         header.serialize(&mut buffer).unwrap();
-        let version_offset = 8;
-        buffer[version_offset] = 0xFF;
-        buffer[version_offset + 1] = 0xFF;
+        buffer[0] = 0xFF;
         let mut cursor = std::io::Cursor::new(&buffer);
         let result = ColumnFileHeader::deserialize(&mut cursor);
         assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(
-            err.kind(),
-            graphdb_core::error::storage::StorageErrorKind::UnsupportedVersion
-        );
     }
 
     #[test]

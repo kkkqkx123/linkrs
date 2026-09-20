@@ -21,7 +21,7 @@
 //!
 //! If concurrent writes are needed, use MutableCsr (accepts multiple edges).
 
-use crate::persistence::{read_u32_le, read_u64_le};
+use crate::persistence::read_u64_le;
 use graphdb_core::{StorageError, StorageResult};
 
 use super::csr_shared::{
@@ -35,11 +35,6 @@ use super::mutable_csr::serialization::{
 use super::{
     ColdStamps, CsrBase, EdgeId, HotNbr, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_EDGE_ID,
 };
-
-/// Persistence version for the single-edge topology columns. Version 3
-/// carries the integer column path for neighbor and edge-id columns plus a
-/// version header; versionless payloads are rejected, never converted.
-pub(crate) const SINGLE_CSR_FORMAT_VERSION: u32 = 4;
 
 /// Unassigned single slot: no edge id, never alive at any timestamp.
 fn empty_slot() -> Nbr {
@@ -562,8 +557,7 @@ impl SingleMutableCsr {
     ///
     /// Offsets are trivial for the single-edge layout (slot index equals row),
     /// so only neighbor, rank, edge-id and stamp columns go through the
-    /// column path with a narrow plain fallback. Versionless payloads are
-    /// rejected on load.
+    /// column path with a narrow plain fallback.
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
         self.dump_into(&mut result);
@@ -574,7 +568,6 @@ impl SingleMutableCsr {
     /// carries a trailing CRC32 trailer verified on load.
     pub fn dump_into(&self, out: &mut Vec<u8>) {
         let start = out.len();
-        out.extend_from_slice(&SINGLE_CSR_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
         out.extend_from_slice(&(self.hot_slots.len() as u64).to_le_bytes());
 
@@ -616,10 +609,10 @@ impl SingleMutableCsr {
             + std::mem::size_of::<Self>()
     }
 
-    /// Load version 4 only; versionless payloads fail closed. The trailing
+    /// Load the single persisted layout. The trailing
     /// CRC32 is verified before any parsing.
     pub fn load(&mut self, data: &[u8]) -> StorageResult<()> {
-        if data.len() < 20 {
+        if data.len() < 16 {
             return Err(StorageError::deserialize_error(
                 "Single CSR data too short for header",
             ));
@@ -639,13 +632,6 @@ impl SingleMutableCsr {
 
         let mut offset = 0usize;
 
-        let version = read_u32_le(data, &mut offset)?;
-        if version != SINGLE_CSR_FORMAT_VERSION {
-            return Err(StorageError::deserialize_error(format!(
-                "Unsupported single CSR format version: {}",
-                version
-            )));
-        }
         let edge_count = read_u64_le(data, &mut offset)?;
         let slot_count = read_u64_le(data, &mut offset)? as usize;
 
@@ -1145,7 +1131,7 @@ mod tests {
     }
 
     #[test]
-    fn test_single_topology_encoding_rejects_versionless() {
+    fn test_single_topology_encoding_rejects_garbage() {
         let mut payload = Vec::new();
         payload.extend_from_slice(&5u64.to_le_bytes());
         payload.extend_from_slice(&[0u8; 24]);

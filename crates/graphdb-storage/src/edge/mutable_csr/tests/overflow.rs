@@ -188,3 +188,23 @@ fn test_overflow_repack_consolidates_to_single_chunk() {
     assert_eq!(csr.physical_edges_of(0), before);
     assert_eq!(csr.edges_of(0u32, 1).len(), 24);
 }
+
+#[test]
+fn test_graded_chunks_monotonic_capped_and_floored() {
+    // Pins the graded scheme shape: floor at the bottom, cap at the top,
+    // monotonic in between. Any replacement scheme must keep these three
+    // properties, proven by this test rather than by inspection.
+    let mut prev = graded_overflow_chunk_edges(0);
+    assert_eq!(prev, OVERFLOW_CHUNK_MIN);
+    for live in 1..(1 << 22) {
+        let cur = graded_overflow_chunk_edges(live);
+        assert!(cur >= prev, "live={live} cur={cur} prev={prev}");
+        assert!(cur >= OVERFLOW_CHUNK_MIN, "live={live} cur={cur}");
+        assert!(cur <= OVERFLOW_CHUNK_MAX, "live={live} cur={cur}");
+        prev = cur;
+        if live >= OVERFLOW_CHUNK_MAX && cur == OVERFLOW_CHUNK_MAX {
+            break;
+        }
+    }
+    assert_eq!(prev, OVERFLOW_CHUNK_MAX);
+}

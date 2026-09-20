@@ -42,11 +42,7 @@
 //! manifest commit are discardable uncommitted state reclaimed at startup by
 //! the shadow cleanup. Only groups holding uncheckpointed writes are written;
 //! clean groups are skipped, so flushed bytes stay proportional to dirty
-//! groups rather than the table size. Directories holding the old single-file
-//! layout (`out_csr.bin` without a manifest), version 1 `meta.bin` without a
-//! commit tail, version 2 `meta.bin` with global timestamps, the legacy
-//! global `properties.bin`, or a pre-version-5 manifest are rejected
-//! explicitly, never converted.
+//! groups rather than the table size.
 //!
 //! Organization (`checkpoint/`):
 //! - `layout`: file names, paths and group-file parsing
@@ -76,6 +72,5 @@ mod tests;
 
 pub use layout::{
     in_append_file, in_group_file, out_append_file, out_group_file, props_group_file,
-    ts_group_file, GROUPS_MANIFEST_FILE, LEGACY_IN_CSR_FILE, LEGACY_OUT_CSR_FILE,
-    LEGACY_PROPERTIES_FILE, SEGMENT_STATS_FILE,
+    ts_group_file, GROUPS_MANIFEST_FILE, SEGMENT_STATS_FILE,
 };

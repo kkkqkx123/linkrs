@@ -70,17 +70,16 @@ impl CsrDumpScratch {
 }
 
 impl MutableCsr {
-    /// Dump to bytes, version 6.
+    /// Dump to bytes, current encoded version.
     ///
     /// Header columns (offsets, degrees, capacities) and primary neighbor
     /// columns (endpoints, ranks, edge ids, stamps) persist through the
     /// integer column path with per-column bit-packing or run-length
     /// encoding and a narrow plain fallback. Overflow chunks use the same
-    /// column path per chunk instead of plain neighbor records. Older
-    /// payloads are rejected on load, never converted.
+    /// column path per chunk instead of plain neighbor records.
     ///
     /// Format:
-    /// - format_version (u32 = 6)
+    /// - format marker (u32 = encoded or raw mode, see serialization)
     /// - vertex_capacity (u64)
     /// - edge_count (u64)
     /// - primary_len (u64)
@@ -248,9 +247,9 @@ impl MutableCsr {
         ]
     }
 
-    /// Load from bytes, version 6 (encoded columns) or version 7 (raw
-    /// direct dump) by marker. Any other marker is rejected, never
-    /// converted; both versions share the same strict validation below.
+    /// Load from bytes, encoded or raw mode by marker. Any other
+    /// marker is corrupt; both modes share the same
+    /// strict validation below.
     /// The trailing CRC32 is verified before any parsing so a truncated or
     /// bit-rotted checkpoint fails fast instead of decoding garbage.
     pub fn load(&mut self, data: &[u8]) -> StorageResult<()> {

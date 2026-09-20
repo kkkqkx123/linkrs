@@ -91,6 +91,30 @@ macro_rules! dispatch {
 /// write, scan to point lookup, live table to migration) re-resolves the
 /// target through the edge-id key first; a position obtained from one
 /// variant is never interpreted by another.
+///
+/// # Row-view and ordering contract
+///
+/// All variants promise one shared row-view semantic: a row walk yields the
+/// physically stored entries of one vertex, each exactly once, as assembled
+/// `Nbr` records. Three access shapes serve it with unified naming: the
+/// borrowed [`Self::visit_physical`] walk (no allocation, preferred for
+/// inline forms and hot scans), the zero-alloc [`Self::fill_physical_into`]
+/// caller-buffer fill (preferred for batch scans), and the allocating
+/// `physical_edges_of` accessor (test and offline use only). No new
+/// traversal dialect may be added per variant; new needs go through these
+/// three.
+///
+/// Ordering is promised per form, never globally: mutable, single, pure and
+/// bundled rows are insertion-ordered and promise no order; frozen and
+/// mapped rows are packed sorted by `(endpoint, rank, edge_id)` and promise
+/// that order plus key-interval bisection. Freeze, compaction and serving
+/// rebuilds may change the order; the query layer must never depend on an
+/// unpromised order. [`MutableCsr::is_row_sorted`](super::MutableCsr::is_row_sorted)
+/// reports the advisory per-row state for plan selection.
+///
+/// Mapped rows hold their mapping by value (`Arc` inside the iterator), so a
+/// row walk stays valid across group replacement; the walk still yields the
+/// snapshot it was created from, never the replaced group.
 #[derive(Debug, Clone)]
 pub enum CsrVariant {
     /// Multi-edge mutable CSR: each vertex can have multiple outgoing edges
@@ -154,9 +178,41 @@ impl CsrVariant {
     /// Refresh the hot-path tombstone reuse cutoff. Only the multi-edge
     /// store reuses primary tombstones; single-slot rows overwrite in place
     /// already and hold no overflow, so other variants ignore the hint.
+    ///
+    /// Freshness follows the single contract on
+    /// [`MutableCsr::set_tombstone_reuse_cutoff`](super::MutableCsr::set_tombstone_reuse_cutoff):
+    /// only watermark-derived bounds refresh, the sentinel disables, and a
+    /// stale value only narrows reuse.
     pub fn set_tombstone_reuse_cutoff(&mut self, cutoff: Timestamp) {
         if let CsrVariant::Multiple(csr) = self {
             csr.set_tombstone_reuse_cutoff(cutoff);
+        }
+    }
+
+    /// Fresh watermark refresh allowing widening. Only call with a freshly
+    /// captured global watermark bound.
+    pub fn refresh_tombstone_reuse_cutoff(&mut self, fresh: Timestamp) {
+        if let CsrVariant::Multiple(csr) = self {
+            csr.refresh_tombstone_reuse_cutoff(fresh);
+        }
+    }
+
+    /// Drop the reuse hint back to the disabled sentinel on every group.
+    ///
+    /// Stale path of the same contract: no fresh watermark means no reuse.
+    pub fn clear_tombstone_reuse_cutoff(&mut self) {
+        if let CsrVariant::Multiple(csr) = self {
+            csr.clear_tombstone_reuse_cutoff();
+        }
+    }
+
+    /// Current reuse cutoff for observability and tests. Non-multi-edge
+    /// variants never reuse, so they report the disabled sentinel.
+    pub fn tombstone_reuse_cutoff(&self) -> Timestamp {
+        if let CsrVariant::Multiple(csr) = self {
+            csr.tombstone_reuse_cutoff()
+        } else {
+            Timestamp::MAX
         }
     }
 
@@ -554,7 +610,13 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Bundled(csr) => {
                 csr.delete_edge_at_position(src_vid, position, expected, ts)
             }
-            _ => self.delete_edge(src_vid, expected, ts),
+            _ => {
+                debug_assert!(
+                    false,
+                    "row position must not cross variants; re-resolve by edge id"
+                );
+                self.delete_edge(src_vid, expected, ts)
+            },
         }
     }
 
@@ -573,7 +635,13 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Bundled(csr) => {
                 csr.revert_delete_at_position(src_vid, position, expected, ts)
             }
-            _ => self.revert_delete_by_edge_id(src_vid, expected, ts),
+            _ => {
+                debug_assert!(
+                    false,
+                    "row position must not cross variants; re-resolve by edge id"
+                );
+                self.revert_delete_by_edge_id(src_vid, expected, ts)
+            },
         }
     }
 
@@ -911,7 +979,10 @@ impl CsrVariant {
     /// Fill a caller buffer with every physically stored entry of one vertex.
     ///
     /// Same content as the allocating trait accessor, without the per-vertex
-    /// allocation. Batch scans reuse one buffer across vertices.
+    /// allocation. Batch scans reuse one buffer across vertices. Behavior is
+    /// uniform across variants: the buffer is cleared first, then the row is
+    /// appended in the variant's promised order (insertion order for mutable
+    /// forms, sorted order for frozen forms; see the enum-level contract).
     pub fn fill_physical_into(&self, src_vid: u32, out: &mut Vec<Nbr>) {
         match self {
             CsrVariant::Multiple(csr) => csr.fill_physical_into(src_vid, out),

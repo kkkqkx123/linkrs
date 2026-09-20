@@ -111,7 +111,7 @@ fn test_topology_encoding_roundtrip_keeps_snapshot_reads() {
 }
 
 #[test]
-fn test_topology_encoding_rejects_old_version() {
+fn test_topology_encoding_rejects_garbage_marker() {
     let mut payload = Vec::new();
     payload.extend_from_slice(&2u32.to_le_bytes());
     payload.extend_from_slice(&[0u8; 32]);

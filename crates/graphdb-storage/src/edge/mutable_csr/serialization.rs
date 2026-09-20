@@ -6,13 +6,13 @@ use super::super::{EdgeId, Nbr};
 use super::overflow::OverflowChunk;
 
 pub(crate) const MUTABLE_CSR_FORMAT_VERSION: u32 = 8;
-/// Direct-dump format version: topology columns stored at native widths
+/// Direct-dump format marker: topology columns stored at native widths
 /// with no encoding choice. Selected by configuration for speed-sensitive
-/// checkpoints; the loader accepts both versions by marker and rejects any
-/// other marker instead of converting.
+/// checkpoints; the loader accepts both markers and rejects any
+/// other marker as corrupt.
 ///
 /// Both markers cover payloads with a trailing CRC32 trailer verified on
-/// load; older versions without the trailer are rejected by marker.
+/// load.
 pub(crate) const MUTABLE_CSR_FORMAT_RAW_VERSION: u32 = 9;
 
 /// Integer-only column encoding for topology persistence.
@@ -467,8 +467,6 @@ pub fn encode_topology_u32_column(values: &[u32]) -> (TopologyEncodingChoice, Ve
 }
 
 /// Decode one u32 topology column written by `encode_topology_u32_column`.
-/// Version 3 payloads widened through the u64 path and are rejected by the
-/// outer format version, never converted here.
 pub fn decode_topology_u32_column(data: &[u8], offset: &mut usize) -> StorageResult<Vec<u32>> {
     if data.len().saturating_sub(*offset) < 5 {
         return Err(StorageError::deserialize_error(

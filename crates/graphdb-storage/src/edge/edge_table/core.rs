@@ -14,6 +14,11 @@
 //! - `schema_ops`: schema evolution and column maintenance
 //! - `maintenance`: resource accounting, backpressure and upkeep
 //! - `recovery`: checkpoint wrappers, audit and WAL replay
+//!
+//! Concurrency: the table serializes writers and adds no locks around the
+//! CSR stack; the canonical discipline lives in `edge::mutable_csr` and is
+//! not restated here. The `version_history` mutex guards label history
+//! metadata only, never topology.
 
 use super::super::{CsrShardSet, EdgeSchema};
 use super::mvcc::MVCCManager;
@@ -92,6 +97,9 @@ pub struct EdgeStore {
     /// Watermark bound of the last executed reclaim pass. The write-path
     /// reclaim pass is skipped while the bound is unchanged and the tombstone
     /// heap stays below threshold, so insert-heavy commits pay no scan.
+    /// Source: the skip is purely an optimization over the watermark-driven
+    /// pass in `core/maintenance.rs`; correctness never depends on it because
+    /// any tombstone growth re-arms the pass via the baseline below.
     pub(crate) last_reclaim_bound: Timestamp,
     /// Tombstone count seen by the last executed reclaim pass. Growth past
     /// this baseline re-arms the pass even when the watermark stands still.
@@ -112,6 +120,10 @@ pub struct EdgeStore {
     /// as the staged add and drop: at most one schema change is pending at a
     /// time and a crash before publishing is equivalent to aborting.
     pub(crate) pending_rename_column: Option<super::schema_rename_column::PendingRenameColumn>,
+    /// A record-form switch completed since the last checkpoint. Pre-switch
+    /// WAL redo is fenced at switch time and must never replay onto the new
+    /// form, so the next checkpoint is mandatory, not advisory. Memory-only.
+    pub(crate) migration_pending_checkpoint: bool,
 }
 
 impl std::fmt::Debug for EdgeStore {

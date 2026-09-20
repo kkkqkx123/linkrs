@@ -46,10 +46,6 @@ impl StoragePaths {
         self.root.join("indexes")
     }
 
-    pub fn version_file(&self) -> PathBuf {
-        self.data_dir().join("version")
-    }
-
     pub fn migration_history_file(&self) -> PathBuf {
         self.root.join("migration_history.json")
     }
@@ -94,10 +90,6 @@ mod tests {
             PathBuf::from("/tmp/graphdb/index_meta/index_meta.json")
         );
         assert_eq!(paths.indexes_dir(), PathBuf::from("/tmp/graphdb/indexes"));
-        assert_eq!(
-            paths.version_file(),
-            PathBuf::from("/tmp/graphdb/data/version")
-        );
         assert_eq!(
             paths.vertex_dir(7),
             PathBuf::from("/tmp/graphdb/data/vertices/label_7")

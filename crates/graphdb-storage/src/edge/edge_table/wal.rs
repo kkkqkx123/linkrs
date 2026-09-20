@@ -5,15 +5,13 @@
 //! new snapshot is durable. Recovery loads the checkpoint base then replays
 //! the log in order; replay is idempotent so a repeated replay yields the
 //! same state. A torn tail fails the load instead of entering service with a
-//! partial prefix. Single format version, old versions are rejected.
+//! partial prefix.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult, Value};
-
-pub(crate) const EDGE_WAL_VERSION: u32 = 1;
 
 pub(crate) fn wal_path(dir: &Path) -> PathBuf {
     dir.join("edge_wal.bin")
@@ -58,9 +56,9 @@ pub(crate) enum EdgeWalOp {
     },
 }
 
-/// Append `ops` to the table log, creating it with a version header when
-/// missing. The file is fsynced before returning so a returned commit is
-/// durable; commit success and log durability share one atomic point.
+/// Append `ops` to the table log. The file is fsynced before returning so
+/// a returned commit is durable; commit success and log durability share one
+/// atomic point.
 pub(crate) fn append_ops(dir: &Path, ops: &[EdgeWalOp]) -> StorageResult<()> {
     if ops.is_empty() {
         return Ok(());
@@ -72,12 +70,6 @@ pub(crate) fn append_ops(dir: &Path, ops: &[EdgeWalOp]) -> StorageResult<()> {
         .append(true)
         .open(&path)
         .map_err(|e| StorageError::io_error(format!("Failed to open edge WAL: {}", e)))?;
-    if file.metadata().map(|meta| meta.len()).unwrap_or(0) == 0 {
-        file.write_all(&EDGE_WAL_VERSION.to_le_bytes())
-            .map_err(|e| {
-                StorageError::io_error(format!("Failed to write edge WAL header: {}", e))
-            })?;
-    }
     for op in ops {
         let bytes =
             postcard::to_allocvec(op).map_err(|e| StorageError::serialize_error(e.to_string()))?;
@@ -94,8 +86,8 @@ pub(crate) fn append_ops(dir: &Path, ops: &[EdgeWalOp]) -> StorageResult<()> {
     Ok(())
 }
 
-/// Read the log operations in order. A missing log reads as empty. A version
-/// mismatch or a torn trailing entry fails closed so recovery never enters
+/// Read the log operations in order. A missing log reads as empty. A torn
+/// trailing entry fails closed so recovery never enters
 /// service with a partial prefix.
 pub(crate) fn read_ops(dir: &Path) -> StorageResult<Vec<EdgeWalOp>> {
     let path = wal_path(dir);
@@ -104,17 +96,6 @@ pub(crate) fn read_ops(dir: &Path) -> StorageResult<Vec<EdgeWalOp>> {
     }
     let mut file = std::fs::File::open(&path)
         .map_err(|e| StorageError::io_error(format!("Failed to open edge WAL: {}", e)))?;
-    let mut version_bytes = [0u8; 4];
-    file.read_exact(&mut version_bytes).map_err(|_| {
-        StorageError::deserialize_error("edge WAL too short for version".to_string())
-    })?;
-    let version = u32::from_le_bytes(version_bytes);
-    if version != EDGE_WAL_VERSION {
-        return Err(StorageError::deserialize_error(format!(
-            "unsupported edge WAL version: {}",
-            version
-        )));
-    }
     let mut ops = Vec::new();
     loop {
         let mut len_bytes = [0u8; 8];

@@ -130,6 +130,7 @@ impl EdgeStore {
             last_reclaim_tombstones: 0,
             wal_dir: None,
             property_fallback_rewrites: 0,
+            migration_pending_checkpoint: false,
         })
     }
 

@@ -105,3 +105,77 @@ fn wide_row_point_lookup_uses_location_index() {
         EdgeId(9)
     );
 }
+
+#[test]
+fn threshold_oscillation_rebuilds_exactly_and_frees_index_memory() {
+    // Width jitter around the bound must not accumulate stale indexes: one
+    // rebuild drops the set once the row narrows, the rebuild counter moves
+    // by exactly one, and index heap memory returns to zero while the
+    // indexed lookups agreed with scans throughout.
+    let mut csr = MutableCsr::with_overflow_chunk_edges(4, 64, 64);
+    for i in 0..=(LIVE_SET_WIDTH_BOUND as i64) {
+        csr.insert_edge(
+            0u32,
+            VertexId::from_int64(1000 + i),
+            EdgeId(500 + i as u64),
+            1,
+        )
+        .unwrap();
+    }
+    assert!(csr.live_sets.get(&0).is_some());
+    assert!(csr.has_live_set(&0));
+    let heap_wide = csr.live_sets.heap_bytes_total();
+    assert!(heap_wide > 0);
+    let rebuilds_before = csr.live_set_rebuild_count();
+
+    // Indexed and scan paths agree before narrowing. Timestamp 1 is the
+    // insert time: the scan path checks `ts < delete_ts`, so MAX never hits
+    // there by construction.
+    for i in 0..=(LIVE_SET_WIDTH_BOUND as i64) {
+        let key = VertexId::from_int64(1000 + i);
+        assert_eq!(
+            csr.get_edge(0u32, key, 1)
+                .expect("indexed hit")
+                .edge_id,
+            csr.get_edge_physical(0u32, key)
+                .expect("physical hit")
+                .edge_id,
+        );
+    }
+
+    assert!(csr.delete_edge(0u32, EdgeId(500), 2).unwrap());
+    csr.rebuild_live_set_for_vertex(0);
+    assert_eq!(csr.live_set_rebuild_count(), rebuilds_before + 1);
+    assert!(csr.live_sets.get(&0).is_none());
+    assert!(!csr.has_live_set(&0));
+    assert_eq!(csr.live_sets.heap_bytes_total(), 0);
+    assert_eq!(csr.live_key_count(0), LIVE_SET_WIDTH_BOUND);
+    // The narrowed row still answers through scans at a post-delete time.
+    assert!(csr
+        .get_edge(0u32, VertexId::from_int64(1001), 3)
+        .is_some());
+    assert!(csr
+        .get_edge(0u32, VertexId::from_int64(1000), 3)
+        .is_none());
+}
+
+#[test]
+fn wide_row_index_memory_stays_proportional_to_width() {
+    // Index cost transparency: 200 live entries must cost no more than one
+    // entry slot per key plus table slabs, never a capacity-proportional
+    // reservation.
+    let mut csr = MutableCsr::with_overflow_chunk_edges(4, 512, 64);
+    for i in 0..200i64 {
+        csr.insert_edge(
+            0u32,
+            VertexId::from_int64(i + 1),
+            EdgeId(i as u64 + 1),
+            1,
+        )
+        .unwrap();
+    }
+    assert!(csr.live_sets.get(&0).is_some());
+    let entry = std::mem::size_of::<((u32, i64), super::super::write::EdgePosition)>() + 8;
+    assert!(csr.live_sets.heap_bytes_total() <= 200 * entry);
+    assert_eq!(csr.live_key_count(0), 200);
+}

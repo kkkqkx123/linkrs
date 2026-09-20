@@ -42,9 +42,9 @@ impl EdgeStore {
         Ok(file_bytes(&path))
     }
 
-    /// Load the segment-statistics snapshot, failing closed on section,
-    /// version or trailing mismatches. A missing snapshot means an older
-    /// layout and the load is rejected, never rebuilt silently.
+    /// Load the segment-statistics snapshot, failing closed on section
+    /// or trailing mismatches. A missing snapshot fails the load,
+    /// never rebuilt silently.
     pub(crate) fn load_segment_stats(&mut self, dir: &Path) -> StorageResult<()> {
         use super::super::stats::decode_segment_snapshot;
         use std::io::Read as _;
@@ -61,7 +61,7 @@ impl EdgeStore {
         cursor.read_exact(&mut header_buf)?;
         {
             let mut slice = &header_buf[..];
-            let (_version, sid) = crate::persistence::read_header(&mut slice)?;
+            let sid = crate::persistence::read_header(&mut slice)?;
             if sid != crate::persistence::section::EDGE_SEGMENT_STATS {
                 return Err(StorageError::deserialize_error(format!(
                     "unexpected section id in segment stats: expected {:#06x}, got {:#06x}",

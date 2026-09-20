@@ -82,6 +82,18 @@ impl EdgeStore {
     /// discards it with no residue. Cancelled inserts consume at most the
     /// monotonic edge-id counter, never visible state.
     ///
+    /// Crash-atomic boundary: the batch is the atomic unit. Logical redo is
+    /// appended to the write-ahead log before any topology, timestamp or
+    /// property mutation, and replay is idempotent (inserts skip on
+    /// `EdgeAlreadyExists`, deletes treat missing edges as done), so a crash
+    /// at any point replays to either the whole batch visible or the whole
+    /// batch invisible. A torn apply can never leave single-direction
+    /// topology or ownerless timestamps behind: the load-time copy audit
+    /// counts such residue and rejects the load fail-closed. The manifest
+    /// publish order (group shards before metadata, manifest file last with
+    /// its tail embedded in `meta.bin`) is unchanged; only this contract and
+    /// its tests are new.
+    ///
     /// Returns the number of net applied entries (inserts plus deletes,
     /// excluding batch-cancelled pairs).
     pub fn commit_staging_batch(&mut self, mut batch: EdgeStagingBatch) -> StorageResult<usize> {
@@ -97,19 +109,22 @@ impl EdgeStore {
         }
         self.prevalidate_staging_batch(&batch)?;
         let max_ts = batch.max_timestamp();
-        let mut inserts = batch.take_inserts();
+        let inserts = batch.take_inserts();
         let deletes = batch.take_deletes();
         let order = batch.take_order();
         if let Some(dir) = self.wal_dir.clone() {
             let mut ops = Vec::with_capacity(order.len());
             for ord in &order {
                 if ord.is_insert {
-                    let ins = &mut inserts[ord.slot];
+                    let ins = &inserts[ord.slot];
+                    // The redo owns a clone: taking the staged values here
+                    // would drain the insert before the apply loop below
+                    // reads them, silently storing defaults on WAL tables.
                     ops.push(super::super::wal::EdgeWalOp::Insert {
                         src: ins.src,
                         dst: ins.dst,
                         rank: ins.rank,
-                        properties: std::mem::take(&mut ins.properties),
+                        properties: ins.properties.clone(),
                         create_ts: ins.create_ts,
                     });
                 } else {
@@ -1062,14 +1077,29 @@ impl EdgeStore {
     ///
     /// Release builds skip the whole body (zero overhead): every arm is a
     /// `debug_assert`. A property row mapping must never outlive its
-    /// authority entry (orphan row). Called on insert success, delete
-    /// success and delete-rollback success.
+    /// authority entry (orphan row), and a present property row must carry
+    /// the same deleted state as the authority. Called on insert success,
+    /// delete success and delete-rollback success. The whole-table
+    /// counterpart [`EdgeStore::audit_copy_drift`](super::EdgeStore::audit_copy_drift)
+    /// adds the CSR cold-half stamp comparison for maintenance-time audits.
     pub(crate) fn debug_assert_copies_consistent(&self, edge_id: EdgeId) {
         debug_assert!(
             self.properties.get_row_for_edge(edge_id).is_none()
                 || self.mvcc.edge_timestamps.contains_key(&edge_id),
             "property row mapping without authority entry"
         );
+        if !self.properties.is_inline_stub() {
+            if let Some(info) = self.mvcc.edge_timestamps.get(&edge_id) {
+                if let Some(row) = self.properties.get_row_for_edge(edge_id) {
+                    let expected_deleted = info.delete_ts != Timestamp::MAX;
+                    debug_assert_eq!(
+                        self.properties.is_deleted_at_row(row),
+                        expected_deleted,
+                        "property deleted-state drift from authority"
+                    );
+                }
+            }
+        }
     }
 
     /// Revert a deletion by edge key without offsets.
@@ -1109,8 +1139,30 @@ impl EdgeStore {
         let Some(edge_id) = edge_id else {
             return Ok(false);
         };
-        let out_ok = self.out_csr.revert_delete_by_edge_id(src, edge_id, ts);
-        let in_ok = self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts);
+        // Bundled slots cannot revert by id: the id-keyed variant path
+        // cannot rewrite the value column, so revert positionally with an
+        // explicit NULL. Topology returns, the stale word is dropped, and
+        // the slot reads NULL afterwards.
+        let (out_ok, in_ok) = if self.is_bundled() {
+            let out_ok = match self.out_csr.locate_edge(src, edge_id) {
+                Some((position, _)) => self
+                    .out_csr
+                    .bundled_revert_with_value(src, position, edge_id, ts, None),
+                None => false,
+            };
+            let in_ok = match self.in_csr.locate_edge(dst, edge_id) {
+                Some((position, _)) => self
+                    .in_csr
+                    .bundled_revert_with_value(dst, position, edge_id, ts, None),
+                None => false,
+            };
+            (out_ok, in_ok)
+        } else {
+            (
+                self.out_csr.revert_delete_by_edge_id(src, edge_id, ts),
+                self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts),
+            )
+        };
         if !self.revive_authority_after_revert(edge_id, out_ok, in_ok)? {
             return Ok(false);
         }
@@ -1301,5 +1353,225 @@ impl EdgeStore {
         }
 
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EdgeStore;
+    use crate::edge::edge_table::config::EdgeTableConfig;
+    use crate::edge::edge_table::staging::EdgeStagingBatch;
+    use crate::edge::{EdgeSchema, EdgeStrategy, RecordForm};
+    use crate::types::StoragePropertyDef;
+    use graphdb_core::types::DataType;
+    use graphdb_core::Value;
+
+    fn batch_table() -> EdgeStore {
+        let schema = EdgeSchema {
+            label_id: 0,
+            label_name: "knows".to_string(),
+            src_label: 0,
+            dst_label: 0,
+            properties: vec![StoragePropertyDef {
+                name: "weight".to_string(),
+                data_type: DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            }],
+            oe_strategy: EdgeStrategy::Multiple,
+            ie_strategy: EdgeStrategy::Multiple,
+            schema_version: 1,
+            record_form: RecordForm::default(),
+        };
+        EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
+    }
+
+    #[test]
+    fn committed_batch_replays_whole_after_crash() {
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        let mut table = batch_table();
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("checkpoint truncates WAL");
+
+        let mut batch = EdgeStagingBatch::new();
+        for dst in 1..=8u32 {
+            batch.stage_insert(
+                0,
+                dst,
+                0,
+                &[("weight".to_string(), Value::Double(dst as f64))],
+                100,
+            );
+        }
+        assert_eq!(table.commit_staging_batch(batch).unwrap(), 8);
+
+        // Crash without a second checkpoint: reload replays the WAL.
+        let mut recovered = batch_table();
+        recovered.load(dir.path()).expect("load succeeds");
+        for dst in 1..=8u32 {
+            assert!(
+                recovered.has_edge(0, dst, 0, 200),
+                "replayed batch keeps edge 0 -> {}",
+                dst
+            );
+        }
+        // No single-direction residue and no ownerless timestamps.
+        assert!(recovered.audit_copy_drift().is_empty());
+        assert_eq!(recovered.out_edges(0, 200).len(), 8);
+    }
+
+    #[test]
+    fn failed_batch_leaves_no_visible_residue() {
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        let mut table = batch_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("checkpoint truncates WAL");
+
+        // The second insert duplicates a committed edge: prevalidation fails
+        // the whole batch before the WAL append, so nothing applies.
+        let mut batch = EdgeStagingBatch::new();
+        batch.stage_insert(0, 2, 0, &[], 100);
+        batch.stage_insert(0, 3, 0, &[], 100);
+        batch.stage_insert(0, 1, 0, &[], 100);
+        assert!(table.commit_staging_batch(batch).is_err());
+        assert!(!table.has_edge(0, 2, 0, 200));
+        assert!(!table.has_edge(0, 3, 0, 200));
+        assert!(table.audit_copy_drift().is_empty());
+
+        // Reload proves the failed batch never reached the WAL either.
+        let mut recovered = batch_table();
+        recovered.load(dir.path()).expect("load succeeds");
+        assert!(!recovered.has_edge(0, 2, 0, 200));
+        assert!(!recovered.has_edge(0, 3, 0, 200));
+        assert!(recovered.has_edge(0, 1, 0, 200));
+    }
+
+    #[test]
+    fn large_delete_fanout_fails_atomically() {
+        let mut table = batch_table();
+        for dst in 1..=200u32 {
+            table
+                .insert_edge(0, dst, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+                .unwrap();
+        }
+        // A committed edge outside the fanout: duplicating it fails the whole
+        // fanout batch. (An insert of a key deleted earlier in the same batch
+        // would rebuild instead of failing, so the conflict must target a key
+        // the batch does not delete.)
+        table
+            .insert_edge(5, 6, 0, &[("weight".to_string(), Value::Double(9.0))], 100)
+            .unwrap();
+
+        // No half-deleted graph: every fanout edge still visible in both
+        // directions after the failed commit.
+        let mut bad = EdgeStagingBatch::new();
+        for dst in 1..=200u32 {
+            bad.stage_delete(0, dst, 0, 150);
+        }
+        bad.stage_insert(5, 6, 0, &[], 150);
+        assert!(table.commit_staging_batch(bad).is_err());
+        assert_eq!(table.out_edges(0, 200).len(), 200);
+        for dst in 1..=200u32 {
+            assert!(table.has_edge(0, dst, 0, 200));
+            assert!(
+                table
+                    .in_edges(dst, 200)
+                    .iter()
+                    .any(|e| e.src_vid.as_int64() == Some(0)),
+                "in-direction of {} keeps the fanout edge",
+                dst
+            );
+        }
+        assert!(table.has_edge(5, 6, 0, 200));
+        assert!(table.audit_copy_drift().is_empty());
+
+        // The pure fanout batch deletes symmetrically: no out row without its
+        // in row and no timestamp without topology.
+        let mut good = EdgeStagingBatch::new();
+        for dst in 1..=200u32 {
+            good.stage_delete(0, dst, 0, 160);
+        }
+        assert_eq!(table.commit_staging_batch(good).unwrap(), 200);
+        assert!(table.out_edges(0, 200).is_empty());
+        for dst in 1..=200u32 {
+            assert!(
+                table
+                    .in_edges(dst, 200)
+                    .iter()
+                    .all(|e| e.src_vid.as_int64() != Some(0)),
+                "no in-direction residue of the fanout at {}",
+                dst
+            );
+        }
+        assert!(table.audit_copy_drift().is_empty());
+    }
+
+    #[test]
+    fn owner_rebuild_converges_reclaimed_tombstones_with_count() {
+        let mut table = batch_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        table
+            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+            .unwrap();
+        assert!(table.delete_edge(0, 1, 0, 150).unwrap());
+
+        // Reclaim the physical rows while the authority tombstone survives.
+        let watermarks = graphdb_transaction::MvccWatermarks::from_parts(
+            200,
+            200,
+            None,
+            graphdb_core::types::CommitLsn::ZERO,
+        );
+        table.compact_csr_only_with_watermarks(&watermarks, 0, 0.2);
+        let stats = table.rebuild_owner_map_with_stats();
+        assert_eq!(stats.mapped, 1, "one surviving topology edge maps to group 0");
+        assert_eq!(
+            stats.relocated_orphans, 1,
+            "the reclaimed tombstone converges with a count"
+        );
+        assert_eq!(stats.fallback_group, 0);
+        assert!(table.audit_copy_drift().is_empty());
+    }
+
+    #[test]
+    fn reclaim_boundary_stamp_uses_shared_gc_predicate() {
+        // `delete_ts == watermark` is eligible everywhere (shared predicate),
+        // so authority reclaim and CSR reclaim agree at the boundary instead
+        // of drifting by one round.
+        assert!(crate::mvcc_visibility::Visibility::is_gc_eligible(200, 200));
+        let mut table = batch_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+        let watermarks = graphdb_transaction::MvccWatermarks::from_parts(
+            200,
+            200,
+            None,
+            graphdb_core::types::CommitLsn::ZERO,
+        );
+        table.compact_csr_only_with_watermarks(&watermarks, 0, 0.2);
+        assert!(
+            table
+                .mvcc
+                .edge_timestamps
+                .get(&graphdb_core::types::EdgeId(0))
+                .is_some(),
+            "authority tombstones survive physical reclaim"
+        );
+        assert!(table.audit_copy_drift().is_empty());
     }
 }

@@ -2,6 +2,41 @@ use super::super::super::{EdgeId, VertexId};
 use super::super::{EdgePosition, MutableCsr};
 
 #[test]
+fn stale_position_is_refused_not_misapplied() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+        .unwrap();
+
+    // Capture the position of the second edge.
+    let mut stale = None;
+    csr.visit_physical_with_position(0u32, |position, nbr| {
+        if nbr.edge_id == EdgeId(101) {
+            stale = Some(position);
+            false
+        } else {
+            true
+        }
+    });
+    let stale = stale.expect("position captured");
+    assert_eq!(stale, EdgePosition::Primary { slot: 1 });
+
+    // Rolling back the first insert shifts the row left: the captured
+    // position now addresses a different edge.
+    assert!(csr.rollback_insert(0u32, EdgeId(100)));
+
+    // The positional delete must refuse the stale slot instead of touching
+    // the wrong edge: positions never cross a row move.
+    assert!(!csr
+        .delete_edge_at_position(0u32, stale, EdgeId(101), 2)
+        .unwrap());
+    // The edge itself is intact and still deletable by id.
+    assert!(csr.delete_edge(0u32, EdgeId(101), 2).unwrap());
+    assert_eq!(csr.edge_count(), 0);
+}
+
+#[test]
 fn test_delete_edge() {
     let mut csr = MutableCsr::with_capacity(10, 100);
 

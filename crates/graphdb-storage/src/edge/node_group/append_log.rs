@@ -12,11 +12,6 @@ use graphdb_core::{StorageError, StorageResult};
 use super::super::{MutableCsrTrait, Nbr};
 use super::{CsrShardSet, TableShardManifest};
 
-/// Wire version of one append-log sidecar payload. Version 2 carries only the
-/// address width so group-set growth never invalidates clean groups' sidecars;
-/// version 1 payloads are rejected, never converted.
-pub(crate) const APPEND_LOG_FORMAT_VERSION: u32 = 2;
-
 /// One committed append-log insert: the row plus the stored neighbor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AppendInsert {
@@ -69,7 +64,6 @@ pub(crate) fn encode_append_ops(
     deletes: &[AppendDelete],
 ) -> Vec<u8> {
     let mut out = Vec::new();
-    out.extend_from_slice(&APPEND_LOG_FORMAT_VERSION.to_le_bytes());
     out.extend_from_slice(&manifest.group_bits.to_le_bytes());
     out.extend_from_slice(&(inserts.len() as u64).to_le_bytes());
     for insert in inserts {
@@ -88,7 +82,7 @@ pub(crate) fn encode_append_ops(
     out
 }
 
-/// Decode one append-op sequence. Fails closed on version, address-width,
+/// Decode one append-op sequence. Fails closed on address-width,
 /// section-size or trailing-byte mismatches.
 pub(crate) fn decode_append_ops(
     data: &[u8],
@@ -105,17 +99,6 @@ pub(crate) fn decode_append_ops(
         *cursor += len;
         Ok(slice)
     };
-    let version = u32::from_le_bytes(
-        take(data, &mut cursor, 4)?
-            .try_into()
-            .map_err(|_| StorageError::deserialize_error("append log version too short"))?,
-    );
-    if version != APPEND_LOG_FORMAT_VERSION {
-        return Err(StorageError::deserialize_error(format!(
-            "unsupported append log version: {}",
-            version
-        )));
-    }
     let carried_bits = u32::from_le_bytes(
         take(data, &mut cursor, 4)?
             .try_into()

@@ -5,6 +5,14 @@ use super::write::EdgePosition;
 use super::MutableCsr;
 
 /// Live width at or below this bound keeps no index.
+///
+/// Source: the point-lookup routing benchmark in `benches/csr_perf_bench.rs`
+/// (routing hit versus fallback section) shows indexed binary search beating
+/// a linear row scan once rows grow past a handful of entries, while the
+/// per-row hash overhead dominates below it. Eight keeps narrow-row inserts
+/// allocation-free and bounds the worst unindexed scan to eight slots.
+/// Retuning this bound requires rerunning that benchmark first; changes
+/// without a benchmark run are not accepted.
 pub(crate) const LIVE_SET_WIDTH_BOUND: usize = 8;
 
 /// Live endpoint keys of one wide vertex with row positions.

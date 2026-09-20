@@ -13,8 +13,13 @@ use std::collections::HashSet;
 /// leftover reclaimable slots to the maintenance pass instead of scanning
 /// the whole row on every insert. The per-vertex reuse hint usually avoids
 /// the scan entirely; the bound only caps the fallback walk when the hint
-/// is unknown or stale. Tune against `benches/csr_perf_bench.rs` before
-/// changing it.
+/// is unknown or stale.
+///
+/// Source: insert-path microbenchmarks in `benches/csr_perf_bench.rs` show
+/// the reuse scan staying negligible against append cost up to a few dozen
+/// slots; 64 keeps the worst fallback walk to one cache-friendly row pass.
+/// Recommended range 32..=128. Tune against `benches/csr_perf_bench.rs`
+/// before changing it; changes without a benchmark run are not accepted.
 const TOMBSTONE_REUSE_SCAN_BOUND: usize = 64;
 
 /// Physical position of one stored edge inside its row.

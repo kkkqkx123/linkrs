@@ -32,12 +32,15 @@ impl CsrBase for CsrShardSet {
     /// Whole-direction dump is rejected by design: persistence moves through
     /// the per-group incremental protocol only, so a whole-direction payload
     /// would silently bypass group dirt, append sidecars and shard manifests.
-    /// The trait method stays as a fail-closed guard, never as a working path.
+    /// Any call here is a caller bug and fails loudly instead of returning
+    /// an empty payload that a reader could mistake for an empty table.
     fn dump(&self) -> Vec<u8> {
-        Vec::new()
+        panic!("whole-direction shard dump removed: use per-group incremental protocol");
     }
 
-    fn dump_into(&self, _out: &mut Vec<u8>) {}
+    fn dump_into(&self, _out: &mut Vec<u8>) {
+        panic!("whole-direction shard dump removed: use per-group incremental protocol");
+    }
 
     /// Whole-direction load is rejected by design, mirroring the dump guard
     /// above. Group payloads load through the per-group path instead.

@@ -42,6 +42,33 @@ pub(crate) fn parse_data_type(s: &str) -> graphdb_core::types::DataType {
     }
 }
 
+/// Accepted/dropped counts for one edge CSV import.
+///
+/// The import layer is lenient by design: syntactically invalid rows are
+/// dropped with an observable count instead of failing the whole file. This
+/// is strictly an import-side concern — the storage open/recovery path stays
+/// fail-closed and reports its own errors through distinct storage error
+/// kinds, never through these counts. The two must never be mixed: import
+/// logs speak of "dropped" rows, storage logs speak of "refused" loads.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ImportEdgeStats {
+    /// Rows accepted into writer batches.
+    pub accepted: usize,
+    /// Rows dropped for missing or unparsable endpoints.
+    pub dropped_invalid: usize,
+}
+
+/// Accepted/dropped counts for one vertex CSV import, mirroring the edge
+/// contract above: unparsable rows are dropped with a count, never coerced
+/// to id zero.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ImportVertexStats {
+    /// Rows accepted into writer batches.
+    pub accepted: usize,
+    /// Rows dropped for missing or unparsable ids.
+    pub dropped_invalid: usize,
+}
+
 /// Import a space from CSV files under `path/<space_name>/`.
 ///
 /// Expects a `schema.json` metadata file and `<tag>.csv` / `<edge_type>.csv` data files.
@@ -100,7 +127,14 @@ pub(crate) fn import_space_impl<S: StorageWriter + StorageSchemaOps + ?Sized>(
 
             let csv_path = base.join(format!("{tag_name}.csv"));
             if csv_path.exists() {
-                import_vertex_csv_from_path(space, tag_name, &csv_path, storage)?;
+                let stats = import_vertex_csv_from_path(space, tag_name, &csv_path, storage)?;
+                if stats.dropped_invalid > 0 {
+                    log::warn!(
+                        "Import of tag '{tag_name}' dropped {} invalid rows, accepted {}",
+                        stats.dropped_invalid,
+                        stats.accepted,
+                    );
+                }
             }
         }
     }
@@ -140,7 +174,14 @@ pub(crate) fn import_space_impl<S: StorageWriter + StorageSchemaOps + ?Sized>(
 
             let csv_path = base.join(format!("{et_name}.csv"));
             if csv_path.exists() {
-                import_edge_csv_from_path(space, et_name, &csv_path, storage)?;
+                let stats = import_edge_csv_from_path(space, et_name, &csv_path, storage)?;
+                if stats.dropped_invalid > 0 {
+                    log::warn!(
+                        "Import of edge type '{et_name}' dropped {} invalid rows, accepted {}",
+                        stats.dropped_invalid,
+                        stats.accepted,
+                    );
+                }
             }
         }
     }
@@ -149,12 +190,16 @@ pub(crate) fn import_space_impl<S: StorageWriter + StorageSchemaOps + ?Sized>(
 }
 
 /// Import vertex data from a CSV file into the given space and tag.
+///
+/// Lenient import semantic mirroring the edge path: rows with a missing or
+/// unparsable `vid`/`id` are dropped and counted instead of being coerced
+/// to id zero and forwarded to the writer.
 pub(crate) fn import_vertex_csv_from_path<W: StorageWriter + ?Sized>(
     space: &str,
     tag_name: &str,
     csv_path: &Path,
     writer: &mut W,
-) -> Result<(), StorageError> {
+) -> Result<ImportVertexStats, StorageError> {
     let file = std::fs::File::open(csv_path).map_err(|e| {
         StorageError::io_error(format!("Failed to open {}: {e}", csv_path.display()))
     })?;
@@ -164,7 +209,7 @@ pub(crate) fn import_vertex_csv_from_path<W: StorageWriter + ?Sized>(
     // Read header
     let header_line = match lines.next() {
         Some(Ok(line)) => line,
-        _ => return Ok(()),
+        _ => return Ok(ImportVertexStats::default()),
     };
     let headers: Vec<String> = header_line
         .split(',')
@@ -184,18 +229,27 @@ pub(crate) fn import_vertex_csv_from_path<W: StorageWriter + ?Sized>(
         .collect();
 
     let mut vertices = Vec::new();
-    for line in lines {
+    let mut stats = ImportVertexStats::default();
+    for (row, line) in lines.enumerate() {
         let line = line.map_err(|e| StorageError::io_error(format!("CSV read error: {e}")))?;
         let fields: Vec<&str> = line.split(',').collect();
 
         let vid = vid_idx
             .and_then(|i| fields.get(i))
-            .and_then(|s| s.trim().trim_matches('"').parse::<i64>().ok())
-            .unwrap_or(0);
+            .and_then(|s| s.trim().trim_matches('"').parse::<i64>().ok());
         let id = id_idx
             .and_then(|i| fields.get(i))
             .and_then(|s| s.trim().trim_matches('"').parse::<i64>().ok())
-            .unwrap_or(vid);
+            .or(vid);
+        let Some(id) = id else {
+            stats.dropped_invalid += 1;
+            log::debug!(
+                "Import of tag '{tag_name}' drops row {} with invalid ids: {line}",
+                row + 2,
+            );
+            continue;
+        };
+        stats.accepted += 1;
 
         let mut properties = std::collections::HashMap::new();
         for (col_idx, col_name) in &prop_cols {
@@ -228,16 +282,28 @@ pub(crate) fn import_vertex_csv_from_path<W: StorageWriter + ?Sized>(
         writer.batch_insert_vertices(space, vertices)?;
     }
 
-    Ok(())
+    log::info!(
+        "Import of tag '{tag_name}' finished: accepted={}, dropped_invalid={}",
+        stats.accepted,
+        stats.dropped_invalid,
+    );
+    Ok(stats)
 }
 
 /// Import edge data from a CSV file into the given space and edge type.
+///
+/// Lenient import semantic: rows with a missing or unparsable `src`/`dst`
+/// endpoint are dropped and counted in the returned stats instead of failing
+/// the file. Previously such rows silently became endpoint zero; they are now
+/// never forwarded to the writer. Semantic failures (unknown edge type,
+/// writer rejection) still fail the whole import: the writer batch path
+/// stays all-or-nothing and storage open/recovery stays fail-closed.
 pub(crate) fn import_edge_csv_from_path<W: StorageWriter + ?Sized>(
     space: &str,
     edge_type: &str,
     csv_path: &Path,
     writer: &mut W,
-) -> Result<(), StorageError> {
+) -> Result<ImportEdgeStats, StorageError> {
     let file = std::fs::File::open(csv_path).map_err(|e| {
         StorageError::io_error(format!("Failed to open {}: {e}", csv_path.display()))
     })?;
@@ -247,7 +313,7 @@ pub(crate) fn import_edge_csv_from_path<W: StorageWriter + ?Sized>(
     // Read header
     let header_line = match lines.next() {
         Some(Ok(line)) => line,
-        _ => return Ok(()),
+        _ => return Ok(ImportEdgeStats::default()),
     };
     let headers: Vec<String> = header_line
         .split(',')
@@ -266,18 +332,25 @@ pub(crate) fn import_edge_csv_from_path<W: StorageWriter + ?Sized>(
         .collect();
 
     let mut edges = Vec::new();
-    for line in lines {
+    let mut stats = ImportEdgeStats::default();
+    for (row, line) in lines.enumerate() {
         let line = line.map_err(|e| StorageError::io_error(format!("CSV read error: {e}")))?;
         let fields: Vec<&str> = line.split(',').collect();
 
         let src = src_idx
             .and_then(|i| fields.get(i))
-            .and_then(|s| s.trim().trim_matches('"').parse::<i64>().ok())
-            .unwrap_or(0);
+            .and_then(|s| s.trim().trim_matches('"').parse::<i64>().ok());
         let dst = dst_idx
             .and_then(|i| fields.get(i))
-            .and_then(|s| s.trim().trim_matches('"').parse::<i64>().ok())
-            .unwrap_or(0);
+            .and_then(|s| s.trim().trim_matches('"').parse::<i64>().ok());
+        let (Some(src), Some(dst)) = (src, dst) else {
+            stats.dropped_invalid += 1;
+            log::debug!(
+                "Import of edge type '{edge_type}' drops row {} with invalid endpoints: {line}",
+                row + 2,
+            );
+            continue;
+        };
         let ranking = rank_idx
             .and_then(|i| fields.get(i))
             .and_then(|s| s.trim().trim_matches('"').parse::<i64>().ok())
@@ -301,6 +374,7 @@ pub(crate) fn import_edge_csv_from_path<W: StorageWriter + ?Sized>(
             props,
         };
         edges.push(edge);
+        stats.accepted += 1;
 
         if edges.len() >= 1000 {
             writer.batch_insert_edges(space, edges.clone())?;
@@ -312,5 +386,53 @@ pub(crate) fn import_edge_csv_from_path<W: StorageWriter + ?Sized>(
         writer.batch_insert_edges(space, edges)?;
     }
 
-    Ok(())
+    log::info!(
+        "Import of edge type '{edge_type}' finished: accepted={}, dropped_invalid={}",
+        stats.accepted,
+        stats.dropped_invalid,
+    );
+    Ok(stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_mock::MockStorage;
+    use std::path::PathBuf;
+
+    fn write_csv(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, body).expect("test CSV must be writable");
+        path
+    }
+
+    #[test]
+    fn invalid_edge_rows_drop_with_counts() {
+        let dir = tempfile::tempdir().expect("temporary import directory");
+        let csv = write_csv(
+            dir.path(),
+            "knows.csv",
+            "src,dst,ranking\n1,2,0\n,3,0\n4,abc,0\n5,6,0\n",
+        );
+        let mut writer = MockStorage::new().expect("mock writer builds");
+        let stats = import_edge_csv_from_path("space", "knows", &csv, &mut writer)
+            .expect("import succeeds with drops");
+        assert_eq!(
+            stats,
+            ImportEdgeStats {
+                accepted: 2,
+                dropped_invalid: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn header_only_edge_file_imports_nothing() {
+        let dir = tempfile::tempdir().expect("temporary import directory");
+        let csv = write_csv(dir.path(), "knows.csv", "src,dst,ranking\n");
+        let mut writer = MockStorage::new().expect("mock writer builds");
+        let stats = import_edge_csv_from_path("space", "knows", &csv, &mut writer)
+            .expect("empty import succeeds");
+        assert_eq!(stats, ImportEdgeStats::default());
+    }
 }

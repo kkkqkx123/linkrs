@@ -55,6 +55,15 @@ impl EdgeStore {
         reserve_ratio: f32,
     ) -> usize {
         let cutoff = watermarks.safe_gc_timestamp_with_margin(margin);
+        // The explicit pass refreshes the reuse hint from its own fresh
+        // capture; a disabled sentinel propagates as disabled.
+        if cutoff != Timestamp::MAX {
+            self.out_csr.refresh_tombstone_reuse_cutoff(cutoff);
+            self.in_csr.refresh_tombstone_reuse_cutoff(cutoff);
+        } else {
+            self.out_csr.clear_tombstone_reuse_cutoff();
+            self.in_csr.clear_tombstone_reuse_cutoff();
+        }
         let mut removed_edges = std::collections::HashSet::new();
         for gid in self.out_csr.existing_group_ids() {
             self.out_csr.compact_group_with_reporting(
@@ -173,15 +182,18 @@ impl EdgeStore {
     /// reclaimable, so the commit skips the group scan entirely. A watermark
     /// advance or heap growth past the last pass re-arms it, and a full heap
     /// always scans. Insert-only workloads therefore pay no scan cost.
+    ///
+    /// This pass never refreshes the hot-path reuse hint: `bound` may come
+    /// from the table-local pin cache, which can sit above the global safe
+    /// point. Only watermark captures refresh the hint (see
+    /// [`Self::maybe_run_auto_maintenance_with_watermarks`],
+    /// [`Self::compact_csr_only_with_watermarks`] and
+    /// [`Self::maybe_compact_for_flush_with_watermarks`]); otherwise a stale
+    /// local bound would widen reuse past what reclaim has proven.
     pub(crate) fn run_vertex_reclaim_pass(&mut self, bound: Timestamp) -> bool {
         if bound == Timestamp::MAX {
             return false;
         }
-        // Refresh the hot-path reuse hint from the same watermark-derived
-        // bound, even when the pass below gates itself off: a skipped pass
-        // still advances provably reclaimable history for future inserts.
-        self.out_csr.set_tombstone_reuse_cutoff(bound);
-        self.in_csr.set_tombstone_reuse_cutoff(bound);
         let threshold = self.config.auto_maintenance.reclaim_tombstone_threshold;
         let tombstones = self.mvcc.total_tombstone_count();
         if tombstones == 0
@@ -216,11 +228,16 @@ impl EdgeStore {
         // rebuilt rows keep everyday-write gaps instead of packing full.
         const RESERVE_RATIO: f32 = 1.0 - crate::edge::mutable_csr::PACKED_CSR_DENSITY;
         let cutoff = watermarks.safe_gc_timestamp_with_margin(margin);
-        // The flush entry also refreshes the reuse hint: flush-time
-        // compactions may run without a preceding write-path reclaim pass.
+        // The flush entry also refreshes the reuse hint from its own fresh
+        // capture: flush-time compactions may run without a preceding
+        // write-path reclaim pass. A disabled sentinel clears reuse instead
+        // of running on an expired bound.
         if cutoff != Timestamp::MAX {
-            self.out_csr.set_tombstone_reuse_cutoff(cutoff);
-            self.in_csr.set_tombstone_reuse_cutoff(cutoff);
+            self.out_csr.refresh_tombstone_reuse_cutoff(cutoff);
+            self.in_csr.refresh_tombstone_reuse_cutoff(cutoff);
+        } else {
+            self.out_csr.clear_tombstone_reuse_cutoff();
+            self.in_csr.clear_tombstone_reuse_cutoff();
         }
         // Group-scope merges stay behind the caller fragmentation gate so a
         // small flush never triggers an unbounded rebuild; row and region

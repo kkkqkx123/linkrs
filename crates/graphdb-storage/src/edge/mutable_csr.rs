@@ -15,7 +15,8 @@
 //! allocate). This keeps the per-row fixed cost to 12 bytes
 //! (offset + degree + capacity) with no per-row hashing.
 //!
-//! Layout by responsibility (`mutable_csr/` subdirectory)://! - `core` holds lifecycle and capacity management.
+//! Layout by responsibility (`mutable_csr/` subdirectory):
+//! - `core` holds lifecycle and capacity management.
 //! - `live_set` maintains the live endpoint index.
 //! - `row` handles density tiering, gaps and rebalance.
 //! - `write` implements the mutation path.
@@ -26,6 +27,28 @@
 //! - `stats` reports memory and fragmentation.
 //! - `trait_impl` adapts the type to CSR traits.
 //! - `overflow` and `serialization` stay as storage primitives.
+//!
+//! # Concurrency contract (canonical)
+//!
+//! This section is the single authority for CSR write discipline; the
+//! sharded container (`node_group`) and the table (`edge_table::core`) only
+//! reference it and add no second set of rules.
+//!
+//! - Single writer: `MutableCsr` carries no internal locks. Every mutation
+//!   takes `&mut self`, so aliased writes are rejected by the borrow checker
+//!   at compile time, never detected at runtime.
+//! - Concurrent readers are safe while no mutation is in flight. The type is
+//!   `Send + Sync`, so shared references may cross threads; obtaining a
+//!   `&mut` while readers exist is again a compile-time error.
+//! - Caller serialization: the table or transaction layer serializes writers.
+//!   Vertex-level locking is a caller decision, not a property of this struct.
+//! - The only runtime-shared mutable state below this level is the sharded
+//!   route cache, built from atomics: a stale entry costs a re-lookup, never
+//!   a wrong answer. Debug builds cross-check cached routes against the group
+//!   map so cache-coherence violations fail fast instead of hiding.
+//! - No new lock module exists. If write concurrency is ever needed, per-row
+//!   locking must be evaluated against a contention benchmark first; a global
+//!   lock is not an acceptable default.
 
 use std::fmt;
 

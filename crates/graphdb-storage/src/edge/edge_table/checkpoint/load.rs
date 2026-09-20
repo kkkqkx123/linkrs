@@ -1,20 +1,14 @@
 //! Incremental load orchestration with torn-commit recovery.
 
 use super::super::core::EdgeStore;
-use super::layout::{
-    manifest_path, LEGACY_IN_CSR_FILE, LEGACY_OUT_CSR_FILE, LEGACY_PROPERTIES_FILE,
-};
+use super::layout::manifest_path;
 use crate::edge::node_group::TableShardManifest;
 use graphdb_core::{StorageError, StorageResult};
 use std::path::Path;
 
 impl EdgeStore {
-    /// Load an incremental checkpoint. Directories in the old single-file
-    /// layout, version 1 metadata without a commit tail, version 2 metadata
-    /// with global timestamps, the legacy global `properties.bin` and
-    /// pre-version-5 manifests are rejected explicitly, never converted.
-    /// Damage detection only: version, section and trailing-byte mismatches
-    /// fail the load. Crash consistency comes from
+    /// Load an incremental checkpoint. Damage detection only: section and
+    /// trailing-byte mismatches fail the load. Crash consistency comes from
     /// the commit protocol (group bases, sidecars and per-group shards before
     /// metadata, manifest published last with its tail embedded in
     /// `meta.bin`); a torn manifest file falls back to the embedded tail,
@@ -25,22 +19,10 @@ impl EdgeStore {
     pub(crate) fn load_incremental(&mut self, dir: &Path) -> StorageResult<()> {
         let manifest_file = manifest_path(dir);
         if !manifest_file.exists() {
-            if dir.join(LEGACY_OUT_CSR_FILE).exists() || dir.join(LEGACY_IN_CSR_FILE).exists() {
-                return Err(StorageError::deserialize_error(
-                    "legacy single-file edge layout without a group manifest is not supported"
-                        .to_string(),
-                ));
-            }
             return Err(StorageError::io_error(format!(
                 "missing group manifest: {}",
                 manifest_file.display()
             )));
-        }
-        if dir.join(LEGACY_PROPERTIES_FILE).exists() {
-            return Err(StorageError::deserialize_error(
-                "legacy global properties.bin without per-group shards is not supported"
-                    .to_string(),
-            ));
         }
         let manifest_bytes = std::fs::read(&manifest_file)
             .map_err(|e| StorageError::io_error(format!("Failed to read group manifest: {}", e)))?;
@@ -91,7 +73,22 @@ impl EdgeStore {
         self.load_timestamp_shards(dir, &manifest)?;
         self.load_property_shards(dir, &manifest)?;
         self.load_segment_stats(dir)?;
-        self.rebuild_owner_map();
+        let owner_stats = self.rebuild_owner_map_with_stats();
+        if owner_stats.relocated_orphans > 0 {
+            log::info!(
+                "EdgeTable[{}] rebuilt owner map: mapped={}, relocated_orphans={} to group {}",
+                self.label_name,
+                owner_stats.mapped,
+                owner_stats.relocated_orphans,
+                owner_stats.fallback_group,
+            );
+        } else {
+            log::debug!(
+                "EdgeTable[{}] rebuilt owner map: mapped={}",
+                self.label_name,
+                owner_stats.mapped,
+            );
+        }
 
         if self.next_edge_id.0 == 0 {
             let max_id = self
@@ -107,6 +104,19 @@ impl EdgeStore {
         // corrupt or regressed files and the load stays fail-closed.
         let (orphan_mappings, orphan_csr_rows, live_orphans) = self.copy_audit();
         if orphan_mappings + orphan_csr_rows + live_orphans > 0 {
+            // Storage-side refusal: corrupt or regressed checkpoint files fail
+            // the open. This is never an import discard — import drops count
+            // accepted/dropped rows per file, while this path refuses the
+            // whole load with a storage error.
+            log::warn!(
+                "EdgeTable[{}] refuses checkpoint load with copy mismatches: \
+                 orphan property mappings={}, orphan CSR rows={}, \
+                 live authority orphans={}",
+                self.label_name,
+                orphan_mappings,
+                orphan_csr_rows,
+                live_orphans,
+            );
             return Err(crate::StorageError::db_error(format!(
                 "edge table {} loaded with copy mismatches: \
                  orphan property mappings={}, orphan CSR rows={}, \
@@ -117,6 +127,8 @@ impl EdgeStore {
         self.properties_dirty = false;
         self.out_csr.clear_all_dirty();
         self.in_csr.clear_all_dirty();
+        // Reloaded state is a fresh checkpoint base: no switch is pending.
+        self.migration_pending_checkpoint = false;
         // Pending staged schema changes are memory-only: a reload after any
         // crash is equivalent to aborting them, because the property store is
         // rebuilt from the published schema below.
@@ -130,6 +142,18 @@ impl EdgeStore {
         }
         let (orphan_mappings, orphan_csr_rows, live_orphans) = self.copy_audit();
         if orphan_mappings + orphan_csr_rows + live_orphans > 0 {
+            // Storage-side refusal after WAL replay, same division as the
+            // load audit above: replay damage refuses the open, never counts
+            // as an import discard.
+            log::warn!(
+                "EdgeTable[{}] refuses WAL replay with copy mismatches: \
+                 orphan property mappings={}, orphan CSR rows={}, \
+                 live authority orphans={}",
+                self.label_name,
+                orphan_mappings,
+                orphan_csr_rows,
+                live_orphans,
+            );
             return Err(crate::StorageError::db_error(format!(
                 "edge table {} replayed WAL with copy mismatches: \
                  orphan property mappings={}, orphan CSR rows={}, \

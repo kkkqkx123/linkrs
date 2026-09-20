@@ -640,13 +640,9 @@ impl IndexDataManagerImpl {
         let path = self.build_state_path(index_root);
         let serialized = postcard::to_allocvec(state)
             .map_err(|e| StorageError::serialize_error(e.to_string()))?;
-        let mut versioned = Vec::new();
-        write_versioned_payload(
-            &mut versioned,
-            graphdb_core::types::StorageVersion::CURRENT as u32,
-            &serialized,
-        );
-        crate::persistence::write_file_atomic(&path, &versioned)
+        let mut wrapped = Vec::new();
+        write_versioned_payload(&mut wrapped, &serialized);
+        crate::persistence::write_file_atomic(&path, &wrapped)
     }
 
     pub(crate) fn load_build_state(
@@ -658,7 +654,7 @@ impl IndexDataManagerImpl {
             return Ok(None);
         }
         let mut file = std::fs::File::open(&path)?;
-        let (_version, payload) = read_versioned_payload(&mut file, "generation_build.bin")?;
+        let payload = read_versioned_payload(&mut file, "generation_build.bin")?;
         let state: GenerationBuildState = postcard::from_bytes(&payload)
             .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
         Ok(Some(state))

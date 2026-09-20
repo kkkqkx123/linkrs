@@ -120,7 +120,7 @@ fn container_dump_load_roundtrip() {
 }
 
 #[test]
-fn manifest_rejects_bad_version_and_trailing() {
+fn manifest_rejects_corrupt_and_trailing() {
     let manifest = TableShardManifest {
         group_bits: 12,
         out_groups: vec![0, 1],
@@ -135,16 +135,6 @@ fn manifest_rejects_bad_version_and_trailing() {
     trailing.push(0);
     assert!(TableShardManifest::decode(&trailing).is_err());
     assert!(TableShardManifest::decode(&payload[..8]).is_err());
-}
-
-#[test]
-fn manifest_v3_counts_are_rejected() {
-    let mut legacy = Vec::new();
-    legacy.extend_from_slice(&3u32.to_le_bytes());
-    legacy.extend_from_slice(&12u32.to_le_bytes());
-    legacy.extend_from_slice(&2u32.to_le_bytes());
-    legacy.extend_from_slice(&1u32.to_le_bytes());
-    assert!(TableShardManifest::decode(&legacy).is_err());
 }
 
 #[test]
@@ -498,4 +488,58 @@ fn append_log_cleared_after_merge() {
     set.clear_group_append_log(0);
     assert!(!set.group_has_append_log(0));
     assert_eq!(set.group_append_op_count(0), 0);
+}
+
+#[test]
+fn sparse_address_space_costs_only_existing_groups() {
+    // One edge far out in the address space: the span covers hundreds of
+    // groups, but only group 0 (pre-created) and the edge's group exist.
+    // This pins the sparse promise: holes cost no memory and read empty
+    // without materializing.
+    let mut set = multi_set();
+    set.insert_edge(1_000_000, endpoint(2, 0), EdgeId(0), 100)
+        .unwrap();
+    assert_eq!(
+        set.existing_group_ids(),
+        vec![0, group_id_for(1_000_000, DEFAULT_NODE_GROUP_BITS)]
+    );
+    assert_eq!(set.group_count(), 2);
+    assert!(
+        set.group_span() > set.group_count() * 100,
+        "span {} must dwarf the materialized count {}",
+        set.group_span(),
+        set.group_count()
+    );
+    // Holes read empty and never materialize, even between live groups.
+    assert!(set.edges_of(0, 200).is_empty());
+    assert!(set.edges_of(5000, 200).is_empty());
+    assert!(set.edges_of(999_999, 200).is_empty());
+    assert!(set.get_edge(5000, endpoint(2, 0), 200).is_none());
+    assert_eq!(set.group_count(), 2);
+    assert_eq!(set.edge_count(), 1);
+}
+
+#[test]
+fn concurrent_reads_share_while_no_mutation_in_flight() {
+    // Pins the canonical contract in `mutable_csr`: the sharded set crosses
+    // threads for shared reads, while exclusive mutation stays a caller's
+    // `&mut` token the compiler enforces.
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<CsrShardSet>();
+    let mut set = multi_set();
+    set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
+    set.insert_edge(5000, endpoint(6000, 1), EdgeId(1), 100)
+        .unwrap();
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            scope.spawn(|| {
+                assert_eq!(set.edges_of(0, 200).len(), 1);
+                assert_eq!(set.edges_of(5000, 200).len(), 1);
+                assert!(set.get_edge(0, endpoint(1, 0), 200).is_some());
+                assert!(set.edges_of(7, 200).is_empty());
+            });
+        }
+    });
+    // The set is untouched by the shared reads above.
+    assert_eq!(set.edge_count(), 2);
 }

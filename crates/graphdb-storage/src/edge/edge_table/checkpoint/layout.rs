@@ -8,11 +8,6 @@ use std::path::{Path, PathBuf};
 pub const GROUPS_MANIFEST_FILE: &str = "groups_manifest.bin";
 /// Segment-statistics snapshot inside an edge-table directory.
 pub const SEGMENT_STATS_FILE: &str = "segment_stats.bin";
-/// Legacy single-file topology payloads, rejected when no manifest exists.
-pub const LEGACY_OUT_CSR_FILE: &str = "out_csr.bin";
-pub const LEGACY_IN_CSR_FILE: &str = "in_csr.bin";
-/// Legacy global property file, rejected when present.
-pub const LEGACY_PROPERTIES_FILE: &str = "properties.bin";
 
 pub fn out_group_file(group: usize) -> String {
     format!("out_g{}.bin", group)

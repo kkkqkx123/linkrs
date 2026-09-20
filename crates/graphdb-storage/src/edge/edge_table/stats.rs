@@ -77,11 +77,6 @@ impl DeletionStats {
     }
 }
 
-/// Wire version of one group segment-statistics record. Version 1 carries
-/// row counts plus sort bounds and per-column statistics; older payloads are
-/// rejected, never converted.
-pub const SEGMENT_STATS_RECORD_VERSION: u32 = 1;
-
 /// Per-group segment statistics for scan pruning.
 ///
 /// One record per owner group: row and live counts, the property null-cell
@@ -256,7 +251,6 @@ impl GroupSegmentStats {
 
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        out.extend_from_slice(&SEGMENT_STATS_RECORD_VERSION.to_le_bytes());
         out.extend_from_slice(&self.group.to_le_bytes());
         out.extend_from_slice(&self.row_count.to_le_bytes());
         out.extend_from_slice(&self.live_count.to_le_bytes());
@@ -310,17 +304,6 @@ impl GroupSegmentStats {
             *cursor += len;
             Ok(slice)
         };
-        let version = u32::from_le_bytes(
-            take(data, cursor, 4)?
-                .try_into()
-                .map_err(|_| StorageError::deserialize_error("segment stats version too short"))?,
-        );
-        if version != SEGMENT_STATS_RECORD_VERSION {
-            return Err(StorageError::deserialize_error(format!(
-                "unsupported segment stats version: {}",
-                version
-            )));
-        }
         let group = u32::from_le_bytes(
             take(data, cursor, 4)?
                 .try_into()
@@ -406,7 +389,6 @@ pub fn encode_segment_snapshot(stats: &HashMap<u32, GroupSegmentStats>) -> Vec<u
     let mut groups: Vec<u32> = stats.keys().copied().collect();
     groups.sort_unstable();
     let mut out = Vec::new();
-    out.extend_from_slice(&1u32.to_le_bytes());
     out.extend_from_slice(&(groups.len() as u32).to_le_bytes());
     for group in groups {
         out.extend_from_slice(&stats[&group].encode());
@@ -414,7 +396,7 @@ pub fn encode_segment_snapshot(stats: &HashMap<u32, GroupSegmentStats>) -> Vec<u
     out
 }
 
-/// Decode a full segment-statistics snapshot, failing closed on version or
+/// Decode a full segment-statistics snapshot, failing closed on
 /// trailing mismatches.
 pub fn decode_segment_snapshot(data: &[u8]) -> StorageResult<HashMap<u32, GroupSegmentStats>> {
     let mut cursor = 0usize;
@@ -428,17 +410,6 @@ pub fn decode_segment_snapshot(data: &[u8]) -> StorageResult<HashMap<u32, GroupS
         *cursor += len;
         Ok(slice)
     };
-    let version = u32::from_le_bytes(
-        take(data, &mut cursor, 4)?
-            .try_into()
-            .map_err(|_| StorageError::deserialize_error("segment snapshot version too short"))?,
-    );
-    if version != 1 {
-        return Err(StorageError::deserialize_error(format!(
-            "unsupported segment snapshot version: {}",
-            version
-        )));
-    }
     let count = u32::from_le_bytes(
         take(data, &mut cursor, 4)?
             .try_into()

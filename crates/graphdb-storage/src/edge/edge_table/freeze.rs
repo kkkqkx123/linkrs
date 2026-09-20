@@ -154,4 +154,63 @@ mod tests {
         table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
         assert!(table.freeze_group(true, 0, Timestamp::MAX, 0.0).is_err());
     }
+
+    #[test]
+    fn row_ordering_contract_mutable_unordered_frozen_sorted() {
+        use crate::edge::{EdgeSchema, EdgeStrategy, RecordForm};
+        use crate::types::StoragePropertyDef;
+        use graphdb_core::types::DataType;
+
+        let schema = EdgeSchema {
+            label_id: 0,
+            label_name: "ordered".to_string(),
+            src_label: 0,
+            dst_label: 0,
+            properties: vec![StoragePropertyDef {
+                name: "weight".to_string(),
+                data_type: DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            }],
+            oe_strategy: EdgeStrategy::Multiple,
+            ie_strategy: EdgeStrategy::Multiple,
+            schema_version: 1,
+            record_form: RecordForm::default(),
+        };
+        let mut table =
+            EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+        for dst in [3u32, 1, 2] {
+            table
+                .insert_edge(0, dst, 0, &[], 100)
+                .expect("insert out of key order");
+        }
+        // Mutable rows promise no order: insertion order is observed but the
+        // query layer must not depend on it.
+        let mutable_order: Vec<i64> = table
+            .out_edges(0, 200)
+            .iter()
+            .map(|e| e.dst_vid.as_int64().unwrap_or(-1))
+            .collect();
+        assert_eq!(mutable_order, vec![3, 1, 2]);
+
+        // Frozen rows promise (endpoint, rank, edge_id) order.
+        table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
+        let frozen_order: Vec<i64> = table
+            .out_edges(0, 200)
+            .iter()
+            .map(|e| e.dst_vid.as_int64().unwrap_or(-1))
+            .collect();
+        assert_eq!(frozen_order, vec![1, 2, 3]);
+
+        // Unfrozen rows promise no order again: only the content set is
+        // pinned, never the sequence.
+        table.unfreeze_group(true, 0).unwrap();
+        let mut restored: Vec<i64> = table
+            .out_edges(0, 200)
+            .iter()
+            .map(|e| e.dst_vid.as_int64().unwrap_or(-1))
+            .collect();
+        restored.sort_unstable();
+        assert_eq!(restored, vec![1, 2, 3]);
+    }
 }

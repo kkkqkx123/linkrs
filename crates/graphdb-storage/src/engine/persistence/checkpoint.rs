@@ -814,7 +814,7 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
 
         let format_version = format_version.ok_or_else(|| {
             StorageError::deserialize_error(
-                "Missing format_version in checkpoint metadata: old format without version is not supported".to_string(),
+                "Missing format_version in checkpoint metadata".to_string(),
             )
         })?;
         if format_version != CHECKPOINT_FORMAT_VERSION

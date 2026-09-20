@@ -217,7 +217,7 @@ impl EdgeStore {
         }
         {
             let mut slice = &header_buf[..];
-            let Ok((_version, sid)) = crate::persistence::read_header(&mut slice) else {
+            let Ok(sid) = crate::persistence::read_header(&mut slice) else {
                 return Ok(None);
             };
             if sid != crate::persistence::section::EDGE_PROPS_SHARD {
@@ -334,7 +334,7 @@ impl EdgeStore {
             cursor.read_exact(&mut header_buf)?;
             {
                 let mut slice = &header_buf[..];
-                let (_version, sid) = crate::persistence::read_header(&mut slice)?;
+                let sid = crate::persistence::read_header(&mut slice)?;
                 if sid != crate::persistence::section::EDGE_PROPS_SHARD {
                     return Err(StorageError::deserialize_error(format!(
                         "unexpected section id in props shard: expected {:#06x}, got {:#06x}",

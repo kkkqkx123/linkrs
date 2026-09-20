@@ -13,7 +13,6 @@ use std::io::Write;
 use std::path::Path;
 
 const WAL_MAGIC: [u8; 4] = *b"INDW";
-const WAL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone)]
 pub(crate) enum WalEntry {
@@ -175,7 +174,6 @@ impl WalEntry {
 
 pub(crate) fn write_wal_header<W: Write>(writer: &mut W) -> std::io::Result<()> {
     writer.write_all(&WAL_MAGIC)?;
-    writer.write_all(&WAL_VERSION.to_le_bytes())?;
     Ok(())
 }
 
@@ -188,15 +186,6 @@ pub(crate) fn read_and_validate_wal_header<R: std::io::Read>(
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "WAL file magic mismatch",
-        ));
-    }
-    let mut version_bytes = [0u8; 4];
-    reader.read_exact(&mut version_bytes)?;
-    let version = u32::from_le_bytes(version_bytes);
-    if version != WAL_VERSION {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("Unsupported WAL version: {}", version),
         ));
     }
     Ok(())

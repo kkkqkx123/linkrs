@@ -15,7 +15,7 @@ pub mod id_indexer;
 pub mod vertex_table;
 pub mod vertex_timestamp;
 
-// Backward-compatible alias: external code uses `crate::vertex::column_store::*`.
+// Alias: external code uses `crate::vertex::column_store::*`.
 pub use column as column_store;
 
 use crate::types::StoragePropertyDef;

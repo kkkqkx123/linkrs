@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Pure Topology CSR
 //!
 //! Minimal CSR storing only `(endpoint: u32, edge_id: u64)` per edge (12
@@ -41,10 +40,6 @@ use super::{EdgePosition, Nbr};
 use crate::persistence::{read_u32_le, read_u64_le};
 
 const INVALID_EDGE_ID: EdgeId = EdgeId(u64::MAX);
-
-/// Version 2 covers the payload with a trailing CRC32 trailer verified on
-/// load; version 1 payloads without the trailer are rejected by marker.
-const PURE_CSR_FORMAT_VERSION: u32 = 2;
 
 pub(crate) const DEFAULT_VERTEX_DEGREE: usize = 4;
 
@@ -458,10 +453,6 @@ impl PureTopologyCsr {
         None
     }
 
-    pub(crate) fn overflow_total_entries(&self) -> usize {
-        self.overflow_chunks.total_entry_count()
-    }
-
     /// Insert one edge, reporting the physical slot it landed in.
     ///
     /// Shared by the trait entry below and by the bundled form, so both
@@ -587,6 +578,9 @@ impl PureTopologyCsr {
         for i in start..end {
             let endpoint = self.endpoints[i];
             let edge_id = EdgeId(self.edge_ids[i]);
+            if edge_id == INVALID_EDGE_ID {
+                continue;
+            }
             if !f(self.make_nbr(endpoint, edge_id)) {
                 return;
             }
@@ -596,6 +590,9 @@ impl PureTopologyCsr {
                 for i in 0..chunk.len() {
                     let endpoint = chunk.endpoints[i];
                     let edge_id = EdgeId(chunk.edge_ids[i]);
+                    if edge_id == INVALID_EDGE_ID {
+                        continue;
+                    }
                     if !f(self.make_nbr(endpoint, edge_id)) {
                         return;
                     }
@@ -773,13 +770,6 @@ impl PureTopologyCsr {
         }
     }
 
-    fn live_key_count(&self, vid: u32) -> usize {
-        if let Some(set) = self.live_sets.get(vid) {
-            return set.len();
-        }
-        self.row_live_count(vid)
-    }
-
     fn row_live_scan(&self, vid: u32, endpoint: u32) -> (bool, usize) {
         let idx = vid as usize;
         if idx >= self.vertex_capacity() {
@@ -809,30 +799,6 @@ impl PureTopologyCsr {
             }
         }
         (present, live)
-    }
-
-    fn row_live_count(&self, vid: u32) -> usize {
-        let idx = vid as usize;
-        if idx >= self.vertex_capacity() {
-            return 0;
-        }
-        let mut live = 0usize;
-        let (start, end) = self.primary_window(idx);
-        for i in start..end {
-            if self.edge_ids[i] != INVALID_EDGE_ID.0 {
-                live += 1;
-            }
-        }
-        if let Some(chunks) = self.overflow_chunks.get(vid) {
-            for chunk in chunks {
-                for &eid in &chunk.edge_ids {
-                    if eid != INVALID_EDGE_ID.0 {
-                        live += 1;
-                    }
-                }
-            }
-        }
-        live
     }
 
     pub(crate) fn track_live_insert(&mut self, vid: u32, endpoint: u32, position: EdgePosition) {
@@ -933,7 +899,6 @@ impl CsrBase for PureTopologyCsr {
 
     fn dump_into(&self, out: &mut Vec<u8>) {
         let start = out.len();
-        out.extend_from_slice(&PURE_CSR_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&(self.rows.adj_offsets.len() as u64).to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
         out.extend_from_slice(&(self.endpoints.len() as u64).to_le_bytes());
@@ -958,7 +923,7 @@ impl CsrBase for PureTopologyCsr {
     }
 
     fn load(&mut self, data: &[u8]) -> StorageResult<()> {
-        if data.len() < 28 {
+        if data.len() < 24 {
             return Err(StorageError::deserialize_error(
                 "PureTopologyCsr data too short for header",
             ));
@@ -978,13 +943,6 @@ impl CsrBase for PureTopologyCsr {
 
         let mut offset = 0usize;
 
-        let version = read_u32_le(data, &mut offset)?;
-        if version != PURE_CSR_FORMAT_VERSION {
-            return Err(StorageError::deserialize_error(format!(
-                "Unsupported pure CSR format version: {}",
-                version
-            )));
-        }
         let vertex_capacity = read_u64_le(data, &mut offset)? as usize;
         let edge_count = read_u64_le(data, &mut offset)?;
         let primary_len = read_u64_le(data, &mut offset)? as usize;
@@ -1524,12 +1482,20 @@ impl MutableCsrTrait for PureTopologyCsr {
         let (start, end) = self.primary_window(src_idx);
         out.reserve(end - start);
         for i in start..end {
-            out.push(self.make_nbr(self.endpoints[i], EdgeId(self.edge_ids[i])));
+            let edge_id = EdgeId(self.edge_ids[i]);
+            if edge_id == INVALID_EDGE_ID {
+                continue;
+            }
+            out.push(self.make_nbr(self.endpoints[i], edge_id));
         }
         if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
             out.reserve(single.len());
             for i in 0..single.len() {
-                out.push(self.make_nbr(single.endpoints[i], EdgeId(single.edge_ids[i])));
+                let edge_id = EdgeId(single.edge_ids[i]);
+                if edge_id == INVALID_EDGE_ID {
+                    continue;
+                }
+                out.push(self.make_nbr(single.endpoints[i], edge_id));
             }
             return;
         }
@@ -1537,7 +1503,11 @@ impl MutableCsrTrait for PureTopologyCsr {
             for chunk in chunks {
                 out.reserve(chunk.len());
                 for i in 0..chunk.len() {
-                    out.push(self.make_nbr(chunk.endpoints[i], EdgeId(chunk.edge_ids[i])));
+                    let edge_id = EdgeId(chunk.edge_ids[i]);
+                    if edge_id == INVALID_EDGE_ID {
+                        continue;
+                    }
+                    out.push(self.make_nbr(chunk.endpoints[i], edge_id));
                 }
             }
         }
@@ -1765,11 +1735,11 @@ impl MutableCsrTrait for PureTopologyCsr {
                 dead += 1;
             }
         }
-        let mut overflow_entries = 0usize;
+        let mut capacity = self.rows.primary_capacities[idx] as usize;
         if let Some(chunks) = self.overflow_chunks.get(vid) {
+            capacity += chunks.iter().map(|chunk| chunk.capacity()).sum::<usize>();
             for chunk in chunks {
                 for &eid in &chunk.edge_ids {
-                    overflow_entries += 1;
                     if eid != INVALID_EDGE_ID.0 {
                         alive += 1;
                     } else {
@@ -1778,8 +1748,7 @@ impl MutableCsrTrait for PureTopologyCsr {
                 }
             }
         }
-        let total = (end - start) + overflow_entries;
-        (total, alive, dead)
+        (alive, dead, capacity)
     }
 
     fn row_gap(&self, vid: u32) -> usize {

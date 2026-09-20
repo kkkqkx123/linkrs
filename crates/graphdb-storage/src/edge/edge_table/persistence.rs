@@ -1,6 +1,6 @@
 //! Persistence operations: serialization and deserialization to/from disk.
 //!
-//! Node-group sharded layout, version 5:
+//! Node-group sharded layout:
 //! - `meta.bin`: header section only (label ids, label name, schema, next
 //!   edge id), with the manifest commit tail appended so metadata and
 //!   manifest share one atomic unit.
@@ -9,9 +9,9 @@
 //!   existing group, written only for dirty groups; topology columns use the
 //!   integer column path with per-column encoding, or the raw direct dump at
 //!   native widths when `EdgeTableConfig::csr_dump_raw` selects speed over
-//!   size. The dump version marker records which mode wrote the group, so
-//!   loads accept both and reject anything else. Missing groups read as
-//!   empty and never produce files.
+//!   size. The dump marker records which of the two live modes wrote the
+//!   group, so loads accept both and reject anything else. Missing groups
+//!   read as empty and never produce files.
 //! - `ts_g{gid}.bin`: authoritative timestamps for the owning group's edges,
 //!   falling with the same dirt as the group.
 //! - `props_g{gid}.bin`: property rows for the owning group's edges,
@@ -19,11 +19,27 @@
 //! - `segment_stats.bin`: per-group segment statistics for scan pruning,
 //!   collected at each checkpoint.
 //!
-//! Old single-file layouts, version 1 metadata without a commit tail,
-//! version 2 metadata with global timestamps, pre-version-5 manifests and
-//! the legacy global `properties.bin` are rejected: loading requires the
-//! manifest, a torn manifest file falls back to the embedded tail, and
+//! A torn manifest file falls back to the embedded tail, and
 //! trailing bytes after any payload fail loudly instead of loading partially.
+//!
+//! # Persistence layout
+//!
+//! Every persisted file carries structural validation (magic, section,
+//! lengths, CRC); the table below is the single contract. Corrupt markers
+//! fail closed; new capability lands on the current layout only.
+//!
+//! | File | Layout |
+//! |------|---------|
+//! | `meta.bin` | header only |
+//! | `groups_manifest.bin` | address width plus existing group id lists |
+//! | `out_g/in_g` group dumps (encoded mode) | integer column path per column |
+//! | `out_g/in_g` group dumps (raw mode) | native widths; the two modes are live write modes selected per group by `csr_dump_raw` |
+//! | frozen group dumps | integer column path per column |
+//! | bundled group dumps | topology payload plus value columns |
+//! | `*.serving` sidecars | flat columns, trailing CRC32; a bad cache is discarded and rebuilt |
+//! | `*.append` sidecars | address width plus op sections |
+//! | property shards | visibility plus current values; duplicate names/ids and unknown encoding tags rejected |
+//! | `edge_wal.bin` | length-prefixed postcard ops; torn tails fail the load |
 
 use super::super::{CsrBase, CsrVariant};
 use super::mvcc::EdgeTimestamps;
@@ -37,10 +53,8 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-pub(crate) const EDGE_META_VERSION: u32 = 3;
-
 /// Deserialized edge table metadata returned by [`load_metadata`].
-/// Version 3 carries the header only; authoritative timestamps live in
+/// Carries the header only; authoritative timestamps live in
 /// per-group timestamp shards and are merged on load.
 pub(crate) struct EdgeMetadata {
     pub label: u32,
@@ -54,13 +68,12 @@ pub(crate) struct EdgeMetadata {
 
 /// Serialize edge table metadata to a buffer.
 ///
-/// Layout version 3: header section only (label ids, label name, openness,
+/// Layout: header section only (label ids, label name, openness,
 /// schema, next edge id). Timestamps are sharded per owner group in
 /// `ts_g{gid}.bin` files falling with the same dirt as their topology group;
 /// `meta.bin` never carries timestamps. The caller appends the manifest
 /// commit tail after the header so metadata and manifest share one atomic
-/// unit. Version 1 payloads (no tail) and version 2 payloads (global
-/// timestamps) are rejected on load, never converted.
+/// unit.
 #[allow(clippy::too_many_arguments)]
 pub fn flush_metadata(
     buf: &mut Vec<u8>,
@@ -72,7 +85,6 @@ pub fn flush_metadata(
     schema: &EdgeSchema,
     next_edge_id: EdgeId,
 ) -> StorageResult<()> {
-    buf.extend_from_slice(&EDGE_META_VERSION.to_le_bytes());
     write_metadata_header(
         buf, label, src_label, dst_label, label_name, is_open, schema,
     )?;
@@ -145,7 +157,7 @@ pub fn load_timestamp_shard(
     cursor.read_exact(&mut header_buf)?;
     {
         let mut slice = &header_buf[..];
-        let (_version, sid) = read_header(&mut slice)?;
+        let sid = read_header(&mut slice)?;
         if sid != expected_section {
             return Err(StorageError::deserialize_error(format!(
                 "unexpected section id in ts shard: expected {:#06x}, got {:#06x}",
@@ -337,7 +349,7 @@ pub fn load_csr(path: &Path, csr: &mut CsrVariant, expected_section: u32) -> Sto
     cursor.read_exact(&mut header_buf)?;
     {
         let mut slice = &header_buf[..];
-        let (_version, sid) = read_header(&mut slice)?;
+        let sid = read_header(&mut slice)?;
         if sid != expected_section {
             return Err(StorageError::deserialize_error(format!(
                 "unexpected section id in edge CSR: expected {:#06x}, got {:#06x}",
@@ -383,7 +395,7 @@ pub fn load_csr_properties(
     cursor.read_exact(&mut header_buf)?;
     {
         let mut slice = &header_buf[..];
-        let (_version, sid) = read_header(&mut slice)?;
+        let sid = read_header(&mut slice)?;
         if sid != section::EDGE_PROPERTIES {
             return Err(StorageError::deserialize_error(format!(
                 "unexpected section id in edge properties: expected {:#06x}, got {:#06x}",

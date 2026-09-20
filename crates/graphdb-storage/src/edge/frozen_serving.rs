@@ -6,7 +6,7 @@
 //! on demand instead of decoding the whole group into the heap at open.
 //!
 //! File layout, everything little-endian:
-//! - magic (u32), format version (u32)
+//! - magic (u32)
 //! - rows (u64), entries (u64), live edge count (u64)
 //! - five `(offset u64, length u64)` column descriptors: degrees, endpoints,
 //!   ranks, edge ids, delete stamps
@@ -21,11 +21,10 @@
 //!
 //! The serving payload carries a trailing CRC32 covering every preceding
 //! byte, using the same checksum pattern as the heap checkpoint dumps. Open
-//! rejects structural mismatches (magic, version, out-of-range descriptors,
+//! rejects structural mismatches (magic, out-of-range descriptors,
 //! length disagreements, trailing bytes) and CRC mismatches alike, and the
 //! caller falls back to the authoritative checkpoint, optionally
-//! regenerating the serving file. Stale files are never upgraded:
-//! a bad cache is discarded and rebuilt. Writers use a sibling temp file
+//! regenerating the serving file. A bad cache is discarded and rebuilt. Writers use a sibling temp file
 //! plus atomic rename, so readers only ever observe complete files.
 //!
 //! The mapped handle is reference-counted (`MappedFrozen` clones share one
@@ -35,6 +34,27 @@
 //! group removes its serving file. On Linux the mapping carries a transparent
 //! huge page hint; a rejected hint falls back to base pages without failing
 //! the open.
+//!
+//! # Serving cache state machine
+//!
+//! The serving file is a derived cache, never the truth. States and
+//! transitions, all covered by the checkpoint tests:
+//!
+//! - Absent: no sidecar beside the base. Frozen or mapped bases backfill one
+//!   on flush when missing; mutable bases stay absent.
+//! - Valid: sidecar parses (magic, descriptors, lengths, CRC) and
+//!   loads validate it against the base. Loads map it directly and skip the
+//!   authoritative decode.
+//! - Stale: the base was rewritten as mutable, or the group is gone. The
+//!   flush removes the sidecar; readers never see it.
+//! - Expired: the sidecar fails validation (corrupt bytes or
+//!   a pending append delta the read-only view cannot absorb). Loads fall
+//!   back to the authoritative base and regenerate the cache; the failure is
+//!   counted in debug logs, never silent, and never fails the load.
+//!
+//! Generation, deletion, expiry and fallback are all decided in the
+//! checkpoint serving helpers and the group load path; no other module
+//! creates or removes sidecars.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -43,7 +63,6 @@ use std::sync::Arc;
 use graphdb_core::{StorageError, StorageResult};
 
 use super::csr_shared::decode_endpoint_pair;
-use super::immutable_csr::IMMUTABLE_CSR_FORMAT_VERSION;
 use super::mutable_csr::serialization::{
     encode_topology_i64_column, encode_topology_u32_column, encode_topology_u64_column,
 };
@@ -52,12 +71,9 @@ use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 
 /// Serving file magic: `b"GCSR"`.
 pub(crate) const SERVING_MAGIC: u32 = 0x52534347;
-/// Serving file format version. Only version 2 is read, never converted.
-/// Version 2 appends a trailing CRC32 over every preceding byte.
-pub(crate) const SERVING_FORMAT_VERSION: u32 = 2;
-/// Header bytes: magic + version + rows + entries + edge count + five
+/// Header bytes: magic + rows + entries + edge count + five
 /// `(offset, length)` descriptors.
-pub(crate) const SERVING_HEADER_LEN: usize = 8 + 24 + 5 * 16;
+pub(crate) const SERVING_HEADER_LEN: usize = 4 + 24 + 5 * 16;
 /// Trailing checksum bytes covering the header plus all columns.
 pub(crate) const SERVING_CRC_LEN: usize = 4;
 
@@ -137,16 +153,10 @@ fn parse_header(bytes: &[u8]) -> StorageResult<(usize, usize, u64, ServingColumn
             "serving file magic mismatch: {magic:#010x}"
         )));
     }
-    let version = read_u32_le_at(bytes, 4)?;
-    if version != SERVING_FORMAT_VERSION {
-        return Err(serving_error(format!(
-            "unsupported serving file version: {version}"
-        )));
-    }
-    let rows = read_u64_le_at(bytes, 8)? as usize;
-    let entries = read_u64_le_at(bytes, 16)? as usize;
-    let edge_count = read_u64_le_at(bytes, 24)?;
-    let mut cursor = 32usize;
+    let rows = read_u64_le_at(bytes, 4)? as usize;
+    let entries = read_u64_le_at(bytes, 12)? as usize;
+    let edge_count = read_u64_le_at(bytes, 20)?;
+    let mut cursor = 28usize;
     let mut ranges = [ColumnRange::default(); 5];
     for range in &mut ranges {
         let start = read_u64_le_at(bytes, cursor)? as usize;
@@ -219,7 +229,6 @@ pub fn write_serving_file(frozen: &ImmutableCsr, path: &Path) -> StorageResult<(
     }
     let mut bytes = Vec::with_capacity(cursor);
     bytes.extend_from_slice(&SERVING_MAGIC.to_le_bytes());
-    bytes.extend_from_slice(&SERVING_FORMAT_VERSION.to_le_bytes());
     bytes.extend_from_slice(&(rows as u64).to_le_bytes());
     bytes.extend_from_slice(&(entries as u64).to_le_bytes());
     bytes.extend_from_slice(&frozen.edge_count().to_le_bytes());
@@ -274,15 +283,34 @@ impl MappedFrozen {
     /// Open and validate a serving file. Any structural problem is an error;
     /// callers fall back to the authoritative checkpoint.
     pub fn open(path: &Path) -> StorageResult<Self> {
+        Self::open_with_intent(path, crate::edge::edge_table::config::MemoryIntent::HeapDefault)
+    }
+
+    /// Open and validate a serving file under a declared memory intent.
+    ///
+    /// `ReadServing` explicitly requests transparent huge pages on Linux for
+    /// the read-only scan-heavy mapping; `BulkLoad` and `HeapDefault` skip
+    /// the hint so ingest and default heap paths stay on base pages. Every
+    /// hint is best-effort: rejection falls back to base pages without
+    /// failing the open.
+    pub fn open_with_intent(
+        path: &Path,
+        intent: crate::edge::edge_table::config::MemoryIntent,
+    ) -> StorageResult<Self> {
+        use crate::edge::edge_table::config::MemoryIntent;
         let file = File::open(path)
             .map_err(|e| StorageError::io_error(format!("serving file open failed: {e}")))?;
         let map = unsafe { memmap2::Mmap::map(&file) }
             .map_err(|e| StorageError::io_error(format!("serving file map failed: {e}")))?;
-        // Ask for transparent huge pages on this read-only scan-heavy
-        // mapping. The hint is best-effort: rejection falls back to base
-        // pages without failing the open.
+        // Transparent huge pages only on the declared read-serving path.
+        // The hint is best-effort: rejection falls back to base pages
+        // without failing the open.
         #[cfg(target_os = "linux")]
-        let _ = map.advise(memmap2::Advice::HugePage);
+        if intent == MemoryIntent::ReadServing {
+            let _ = map.advise(memmap2::Advice::HugePage);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = intent;
         Self::from_map(Arc::new(map))
     }
 
@@ -903,8 +931,8 @@ impl MappedFrozen {
         }
     }
 
-    /// Authoritative checkpoint bytes rebuilt from the mapping: same version
-    /// 2 layout as the heap frozen dump, so a mapped group flushes
+    /// Authoritative checkpoint bytes rebuilt from the mapping: same
+    /// layout as the heap frozen dump, so a mapped group flushes
     /// indistinguishably from a heap frozen group.
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
@@ -925,7 +953,6 @@ impl MappedFrozen {
         scratch: &mut super::mutable_csr::persistence::CsrDumpScratch,
     ) {
         let start = out.len();
-        out.extend_from_slice(&IMMUTABLE_CSR_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&(self.rows as u64).to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
         out.extend_from_slice(&(self.entries as u64).to_le_bytes());

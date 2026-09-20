@@ -50,6 +50,28 @@ pub struct EdgeTableConfig {
     /// `Auto` lets the system pick Pure/Bundled/Columnar based on schema;
     /// `Columnar` forces the standard multi/single/none strategy path.
     pub record_form: RecordFormPreference,
+    /// Declared memory intent for read-heavy paths. `HeapDefault` keeps the
+    /// historical behavior; `ReadServing` marks the read-only serving path
+    /// and `BulkLoad` the batch-ingest path so mapping hints follow intent.
+    pub memory_intent: MemoryIntent,
+}
+
+/// Declared memory intent for read-heavy paths.
+///
+/// Explicit configuration rather than a best-effort hint: the read-only
+/// serving open and the bulk-load path declare which behavior they want, so
+/// huge-page and prefetch choices stay reviewable instead of implicit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MemoryIntent {
+    /// Default heap behavior: no huge-page hint, mappings stay on base pages.
+    #[default]
+    HeapDefault,
+    /// Read-only serving scans: explicitly request transparent huge pages on
+    /// Linux (still best-effort, rejection falls back without failing).
+    ReadServing,
+    /// Batch ingest: skip the huge-page hint to avoid THP pressure during
+    /// sequential bulk writes; mappings stay on base pages.
+    BulkLoad,
 }
 
 /// Thresholds that trigger automatic maintenance on the write path.
@@ -86,6 +108,7 @@ impl Default for EdgeTableConfig {
             auto_maintenance: AutoMaintenanceConfig::default(),
             csr_dump_raw: false,
             record_form: RecordFormPreference::default(),
+            memory_intent: MemoryIntent::default(),
         }
     }
 }

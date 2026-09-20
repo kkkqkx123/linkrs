@@ -6,9 +6,21 @@ use super::MutableCsr;
 /// Target density for packed rows: live entries per unit of reserved row
 /// capacity. Rebuilds size rows to `ceil(live / PACKED_CSR_DENSITY)` so
 /// everyday writes land in row gaps before spilling to overflow.
+///
+/// Source: 0.8 reserves a 25% write gap per row, so steady-state inserts
+/// fill gaps instead of allocating overflow chunks (covered by
+/// `test_steady_state_gap_fill_before_overflow`), while keeping reserved
+/// memory bounded. Recommended range 0.7..=0.9; lower wastes memory, higher
+/// sheds the gap and pushes every insert into overflow. Retuning requires
+/// rerunning the compaction and insert benchmarks first.
 pub(crate) const PACKED_CSR_DENSITY: f32 = 0.8;
 /// Minimum primary slots kept for a live row after a row rebalance, so tiny
 /// rows still hold a small write gap without another allocation.
+///
+/// Source: 4 slots cover the common single-digit-degree vertex with room for
+/// one more edge; smaller values reallocate on the very next insert, larger
+/// values waste primary memory across millions of tiny rows. Fixed unless a
+/// small-row allocation benchmark proves otherwise.
 pub(crate) const MIN_ROW_CAPACITY: usize = 4;
 
 /// Proportional overflow sizing, single benchmarked scheme. Chunk sizes
@@ -16,6 +28,14 @@ pub(crate) const MIN_ROW_CAPACITY: usize = 4;
 /// row reserves 8 slots instead of 256. The effective size is
 /// `min(configured, graded(live))` so explicit test configurations keep
 /// their exact size.
+///
+/// Source: the floor of 8 matches `MIN_ROW_CAPACITY` granularity and the
+/// supernode bench in `benches/csr_perf_bench.rs` (graded tiers section);
+/// the cap of 4096 matches the default chunk configuration so a single
+/// chunk never exceeds one configured allocation unit. Geometric growth
+/// keeps skewed-row appends amortized while small rows stay small.
+/// Recommended floor range 4..=16, cap fixed at the configured chunk size.
+/// Retuning requires rerunning the supernode append benchmark first.
 pub(crate) const OVERFLOW_CHUNK_MIN: usize = 8;
 pub(crate) const OVERFLOW_CHUNK_MAX: usize = 4096;
 
@@ -148,71 +168,6 @@ impl MutableCsr {
         }
         self.rebuild_live_set_for_vertex(vid);
         self.overflow_chunks.get(vid).is_none_or(Vec::is_empty)
-    }
-
-    /// Expand a single vertex's primary block in place.
-    ///
-    /// The "middle gear" between gap-fill and overflow: when a narrow row's
-    /// primary block is full and no tombstone is reusable, this copies the
-    /// row to a fresh tail block with doubled capacity instead of spilling
-    /// to overflow.  The old primary block becomes dead gaps reclaimable by
-    /// the next compaction.
-    ///
-    /// Returns `true` when expansion succeeded and the caller may retry
-    /// the gap-fill write; `false` when the row is too wide or the table
-    /// is too large for a single-vertex expansion (fall through to
-    /// overflow).
-    #[allow(dead_code)]
-    pub(crate) fn expand_vertex_primary(&mut self, src_idx: usize) -> bool {
-        let current_cap = self.rows.primary_capacities[src_idx] as usize;
-        if current_cap == 0 {
-            return false;
-        }
-        let degree = self.rows.degrees[src_idx] as usize;
-        let new_cap = Self::sized_row_capacity(degree + 1);
-        if new_cap <= current_cap {
-            return false;
-        }
-        // Cap single-vertex expansion: beyond this threshold overflow
-        // chunks are more space-efficient.  The cap also prevents
-        // unbounded tail growth when the row keeps growing after
-        // expansion.
-        if new_cap > self.overflow_chunk_edges {
-            return false;
-        }
-
-        let old_offset = self.rows.adj_offsets[src_idx] as usize;
-        let new_offset = self.hot_list.len();
-
-        // Copy existing entries to temporary buffers to avoid borrow
-        // conflicts, then append to the tail of the primary lists.
-        let hot_src = self.hot_list[old_offset..old_offset + degree].to_vec();
-        let cold_src = self.cold_list[old_offset..old_offset + degree].to_vec();
-        self.hot_list.extend_from_slice(&hot_src);
-        self.cold_list.extend_from_slice(&cold_src);
-
-        // Fill remaining capacity with gap sentinels.
-        let extra = new_cap - degree;
-        self.hot_list
-            .resize(new_offset + new_cap, HotNbr::dead_gap());
-        self.cold_list
-            .resize(new_offset + new_cap, ColdStamps::dead_gap());
-
-        // Redirect the vertex to the new block.
-        self.rows.adj_offsets[src_idx] = new_offset as u32;
-        self.rows.primary_capacities[src_idx] = new_cap as u32;
-        // degrees stays the same (we copied `degree` entries).
-
-        // Capacity accounting: old block becomes dead gaps (still counted
-        // in total_edge_capacity via the delta), new slots are the extra.
-        self.add_capacity(extra);
-
-        // Invalidate stale hints and rebuild the live set for the new
-        // positions.
-        self.invalidate_reuse_hint(src_idx);
-        self.rebuild_live_set_for_vertex(src_idx as u32);
-
-        true
     }
 
     pub(crate) fn compact_overflow_for_vertex(

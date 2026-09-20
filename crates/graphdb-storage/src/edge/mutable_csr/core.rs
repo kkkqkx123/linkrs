@@ -4,6 +4,12 @@ use super::live_set::LiveSetStorage;
 use super::overflow::{OverflowChunk, OverflowStorage};
 use super::MutableCsr;
 
+/// Default reservations for a fresh CSR: 4096 edge slots, 4-slot initial
+/// primary blocks for new vertices, and 4096-edge overflow chunks matching
+/// `OVERFLOW_CHUNK_MAX` so one chunk never exceeds one allocation unit.
+/// These are construction-time capacities only, not tuning knobs: growth is
+/// driven by the graded overflow scheme and the packed density target.
+/// Changing the defaults requires a bulk-load memory benchmark first.
 pub(crate) const DEFAULT_EDGE_CAPACITY: usize = 4096;
 pub(crate) const DEFAULT_VERTEX_DEGREE: usize = 4;
 pub(crate) const DEFAULT_OVERFLOW_CHUNK_EDGES: usize = 4096;
@@ -53,12 +59,43 @@ impl MutableCsr {
         }
     }
 
-    /// Watermark-derived cutoff gating hot-path tombstone reuse. The table
-    /// maintenance pass refreshes it from its watermark capture; the
-    /// sentinel disables reuse. A stale value only narrows reuse, never
-    /// widens it, so a missed refresh degrades to the pre-reuse behavior.
+    /// Watermark-derived cutoff gating hot-path tombstone reuse. The cutoff
+    /// carries exactly one freshness contract, shared by every caller:
+    ///
+    /// - Only a global-watermark capture (`MvccWatermarks::capture` plus
+    ///   margin) may refresh it. The table-local pin cache is never a source:
+    ///   it can sit above the global safe point and would widen reuse past
+    ///   what reclaim has proven.
+    /// - The sentinel `Timestamp::MAX` disables reuse. A maintenance pass that
+    ///   cannot capture a fresh watermark must clear instead of reusing, so an
+    ///   unrefreshed table degrades to the pre-reuse behavior.
+    /// - This setter only narrows reuse: the stored cutoff moves to the
+    ///   minimum of the old and new values, so a stale larger value can never
+    ///   widen reuse. Fresh watermark advances use `refresh_from_watermark`.
     pub fn set_tombstone_reuse_cutoff(&mut self, cutoff: Timestamp) {
-        self.tombstone_reuse_cutoff = cutoff;
+        self.tombstone_reuse_cutoff = self.tombstone_reuse_cutoff.min(cutoff);
+    }
+
+    /// Fresh watermark refresh of the reuse cutoff, allowing widening.
+    ///
+    /// Only call with a freshly captured global watermark bound. Stale values
+    /// must go through `set_tombstone_reuse_cutoff` so they can only narrow.
+    pub fn refresh_tombstone_reuse_cutoff(&mut self, fresh: Timestamp) {
+        self.tombstone_reuse_cutoff = fresh;
+    }
+
+    /// Drop the reuse hint back to the disabled sentinel.
+    ///
+    /// Stale path of the freshness contract above: when no fresh watermark is
+    /// available, reuse stops entirely instead of running on an expired bound.
+    pub fn clear_tombstone_reuse_cutoff(&mut self) {
+        self.tombstone_reuse_cutoff = Timestamp::MAX;
+    }
+
+    /// Current reuse cutoff for observability and tests. `Timestamp::MAX`
+    /// means reuse is disabled.
+    pub fn tombstone_reuse_cutoff(&self) -> Timestamp {
+        self.tombstone_reuse_cutoff
     }
 
     pub fn vertex_capacity(&self) -> usize {

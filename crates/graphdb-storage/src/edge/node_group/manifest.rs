@@ -5,15 +5,9 @@ use graphdb_core::{StorageError, StorageResult};
 
 use super::validate_group_bits;
 
-/// Manifest version for the per-table group layout file. Version 5 records
-/// existing group ids rather than contiguous counts and admits per-group
-/// timestamp, property and segment-statistics shards; older manifests are
-/// rejected, never converted.
-pub const GROUP_MANIFEST_VERSION: u32 = 5;
-
 /// Per-table group layout shared by both directions.
 ///
-/// Version 4 records existing group ids rather than contiguous counts:
+/// Records existing group ids rather than contiguous counts:
 /// sparse endpoints materialize only groups holding rows, missing groups
 /// read as empty and never produce files.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,8 +25,7 @@ impl TableShardManifest {
         let mut in_groups = self.in_groups.clone();
         in_groups.sort_unstable();
         in_groups.dedup();
-        let mut out = Vec::with_capacity(16 + (out_groups.len() + in_groups.len()) * 4);
-        out.extend_from_slice(&GROUP_MANIFEST_VERSION.to_le_bytes());
+        let mut out = Vec::with_capacity(12 + (out_groups.len() + in_groups.len()) * 4);
         out.extend_from_slice(&self.group_bits.to_le_bytes());
         out.extend_from_slice(&(out_groups.len() as u32).to_le_bytes());
         for gid in &out_groups {
@@ -47,22 +40,15 @@ impl TableShardManifest {
 
     pub fn decode(data: &[u8]) -> StorageResult<Self> {
         let bad_slice = || StorageError::deserialize_error("group manifest slice too short");
-        if data.len() < 12 {
+        if data.len() < 8 {
             return Err(StorageError::deserialize_error(format!(
                 "group manifest too short: got {}",
                 data.len()
             )));
         }
-        let version = u32::from_le_bytes(data[0..4].try_into().map_err(|_| bad_slice())?);
-        if version != GROUP_MANIFEST_VERSION {
-            return Err(StorageError::deserialize_error(format!(
-                "unsupported group manifest version: {}",
-                version
-            )));
-        }
-        let group_bits = u32::from_le_bytes(data[4..8].try_into().map_err(|_| bad_slice())?);
+        let group_bits = u32::from_le_bytes(data[0..4].try_into().map_err(|_| bad_slice())?);
         validate_group_bits(group_bits)?;
-        let mut cursor = 8usize;
+        let mut cursor = 4usize;
         let take_u32 = |data: &[u8], cursor: &mut usize| -> StorageResult<u32> {
             if data.len() - *cursor < 4 {
                 return Err(StorageError::deserialize_error(

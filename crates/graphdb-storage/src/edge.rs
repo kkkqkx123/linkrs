@@ -59,7 +59,7 @@ pub use mutable_csr::{EdgePosition, MutableCsr, MutableCsrIterator};
 pub use node_group::{
     region_id_for_local, region_local_range, regions_per_group, CsrShardSet, EdgeCheckpointKind,
     GroupDirty, NodeGroupStats, RegionDirty, RegionMergeScope, ShardCsrIterator,
-    TableShardManifest, DEFAULT_NODE_GROUP_BITS, GROUP_MANIFEST_VERSION, GROUP_MERGE_MIN_DENSITY,
+    TableShardManifest, DEFAULT_NODE_GROUP_BITS, GROUP_MERGE_MIN_DENSITY,
     LEAF_REGION_ROWS, REGION_MERGE_MIN_DENSITY,
 };
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
@@ -176,7 +176,7 @@ pub struct EdgeSchema {
     pub schema_version: u64,
     /// Persisted record form: how edges are stored on disk.
     /// Determined once at table creation by the selector; never re-inferred
-    /// on load.  Default is `Columnar` for backward compatibility.
+    /// on load. Default is `Columnar`.
     #[serde(default)]
     pub record_form: RecordForm,
 }
@@ -438,8 +438,14 @@ impl Nbr {
         }
     }
 
-    /// Check if this edge is alive at the given timestamp.
-    /// An edge is alive when: ts < delete_ts.
+    /// Check if this edge is physically alive at the given timestamp.
+    ///
+    /// Physical reclaim probe only: compares the projected `delete_ts` replica
+    /// without the authority `create_ts`. Query visibility must go through the
+    /// version authority
+    /// ([`crate::mvcc_visibility::Visibility::is_edge_visible`]); using this
+    /// probe for queries would fork a second visibility decision that drifts
+    /// from the authority.
     #[inline]
     pub fn is_alive_at(&self, ts: Timestamp) -> bool {
         ts < self.delete_ts

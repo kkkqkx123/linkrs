@@ -71,3 +71,29 @@ fn test_row_gap_and_density_observe_reserve() {
     assert_eq!(csr.row_gap(0), 1);
     assert!((csr.row_density(0) - 0.5).abs() < 1e-6);
 }
+
+#[test]
+fn test_sized_row_capacity_pins_density_formula() {
+    // Pins `ceil(live / PACKED_CSR_DENSITY)`: changing the density target
+    // must update this test, which is the point — density retunes are
+    // explicit, never silent.
+    assert_eq!(MutableCsr::sized_row_capacity(0), 0);
+    // live=1: ceil(1/0.8)=2 beats the tiny-row floor, so capacity is 2.
+    assert_eq!(MutableCsr::sized_row_capacity(1), 2);
+    assert_eq!(
+        MutableCsr::sized_row_capacity(8),
+        (8.0f32 / PACKED_CSR_DENSITY).ceil() as usize
+    );
+    assert_eq!(
+        MutableCsr::sized_row_capacity(100),
+        (100.0f32 / PACKED_CSR_DENSITY).ceil() as usize
+    );
+    // Capacity always covers live entries and stays monotonic.
+    let mut prev = 0usize;
+    for live in 0..500usize {
+        let cap = MutableCsr::sized_row_capacity(live);
+        assert!(cap >= live, "live={live} cap={cap}");
+        assert!(cap >= prev, "live={live} cap={cap} prev={prev}");
+        prev = cap;
+    }
+}

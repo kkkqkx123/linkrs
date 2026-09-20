@@ -13,7 +13,6 @@
 //!
 //! ```text
 //! snapshots/
-//! ├── VERSION                    # Current snapshot format version
 //! ├── metadata.json              # Snapshot metadata index
 //! ├── snapshot_0000000001/       # Snapshot at timestamp 1
 //! │   ├── meta.json
@@ -38,14 +37,8 @@ use serde::{Deserialize, Serialize};
 
 use graphdb_core::{StorageError, StorageResult};
 
-/// Snapshot format version
-const SNAPSHOT_FORMAT_VERSION: u32 = 1;
-
 /// Snapshot metadata file name
 const SNAPSHOT_META_FILE: &str = "meta.json";
-
-/// Version file name
-const VERSION_FILE: &str = "VERSION";
 
 /// Metadata index file name
 const METADATA_INDEX_FILE: &str = "metadata.json";
@@ -122,8 +115,6 @@ impl Default for RetentionPolicy {
 /// Snapshot metadata index
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 struct SnapshotMetadataIndex {
-    /// Format version
-    version: u32,
     /// All snapshots indexed by ID
     snapshots: BTreeMap<u64, SnapshotInfo>,
     /// Current snapshot ID (latest successful)
@@ -191,27 +182,6 @@ impl SnapshotManager {
 
     /// Initialize snapshot manager
     fn init(&mut self) -> StorageResult<()> {
-        let version_path = self.snapshots_dir.join(VERSION_FILE);
-        if version_path.exists() {
-            let version = fs::read_to_string(&version_path)?
-                .trim()
-                .parse::<u32>()
-                .map_err(|error| {
-                    StorageError::deserialize_error(format!(
-                        "Invalid snapshot format version: {}",
-                        error
-                    ))
-                })?;
-            if version != SNAPSHOT_FORMAT_VERSION {
-                return Err(StorageError::deserialize_error(format!(
-                    "Unsupported snapshot format version {}",
-                    version
-                )));
-            }
-        } else {
-            self.write_version_file()?;
-        }
-
         self.cleanup_deleting_directories()?;
         self.load_metadata_index()?;
 
@@ -231,14 +201,6 @@ impl SnapshotManager {
         Ok(())
     }
 
-    /// Write version file
-    fn write_version_file(&self) -> StorageResult<()> {
-        let version_path = self.snapshots_dir.join(VERSION_FILE);
-        fs::write(&version_path, SNAPSHOT_FORMAT_VERSION.to_string())
-            .map_err(|e| StorageError::io_error(format!("Failed to write version file: {}", e)))?;
-        Ok(())
-    }
-
     /// Load metadata index from disk
     fn load_metadata_index(&self) -> StorageResult<()> {
         let index_path = self.snapshots_dir.join(METADATA_INDEX_FILE);
@@ -249,12 +211,6 @@ impl SnapshotManager {
             let index: SnapshotMetadataIndex = serde_json::from_str(&content).map_err(|e| {
                 StorageError::deserialize_error(format!("Invalid metadata index: {}", e))
             })?;
-            if index.version != SNAPSHOT_FORMAT_VERSION {
-                return Err(StorageError::deserialize_error(format!(
-                    "Unsupported snapshot metadata version {}",
-                    index.version
-                )));
-            }
             index
         } else {
             SnapshotMetadataIndex::default()
@@ -287,7 +243,6 @@ impl SnapshotManager {
         }
 
         let reconciled = SnapshotMetadataIndex {
-            version: SNAPSHOT_FORMAT_VERSION,
             current_id: (indexed.current_id != 0)
                 .then_some(indexed.current_id)
                 .filter(|id| snapshots.contains_key(id))
@@ -295,8 +250,7 @@ impl SnapshotManager {
                 .unwrap_or(0),
             snapshots,
         };
-        let changed = indexed.version != reconciled.version
-            || indexed.current_id != reconciled.current_id
+        let changed = indexed.current_id != reconciled.current_id
             || indexed.snapshots != reconciled.snapshots;
         *self.metadata_index.write() = reconciled;
         if changed || !index_path.exists() {
@@ -400,7 +354,6 @@ impl SnapshotManager {
             let mut index = self.metadata_index.write();
             index.snapshots.insert(params.snapshot_id, info.clone());
             index.current_id = params.snapshot_id;
-            index.version = SNAPSHOT_FORMAT_VERSION;
         }
         self.save_metadata_index()?;
 
@@ -898,7 +851,6 @@ mod tests {
             })
             .expect("snapshot");
         let stale = SnapshotMetadataIndex {
-            version: SNAPSHOT_FORMAT_VERSION,
             snapshots: BTreeMap::new(),
             current_id: 0,
         };

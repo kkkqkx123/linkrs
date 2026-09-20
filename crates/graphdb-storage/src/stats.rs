@@ -12,7 +12,6 @@ use graphdb_core::{StorageResult, Value};
 
 pub const HLL_P: u32 = 6;
 pub const HLL_M: usize = 64;
-const HLL_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HyperLogLog {
@@ -89,20 +88,11 @@ impl HyperLogLog {
     }
 
     pub fn serialize(&self, writer: &mut impl Write) -> StorageResult<usize> {
-        writer.write_all(&[HLL_VERSION])?;
         writer.write_all(&self.registers)?;
-        Ok(1 + HLL_M)
+        Ok(HLL_M)
     }
 
     pub fn deserialize(reader: &mut impl Read) -> StorageResult<Self> {
-        let mut ver = [0u8; 1];
-        reader.read_exact(&mut ver)?;
-        if ver[0] != HLL_VERSION {
-            return Err(graphdb_core::StorageError::deserialize_error(format!(
-                "unsupported HLL version {}",
-                ver[0]
-            )));
-        }
         let mut registers = [0u8; HLL_M];
         reader.read_exact(&mut registers)?;
         Ok(Self { registers })
@@ -175,7 +165,7 @@ mod tests {
         hll.add_value(&Value::string("hello"));
         let mut buf = Vec::new();
         hll.serialize(&mut buf).unwrap();
-        assert_eq!(buf.len(), 65);
+        assert_eq!(buf.len(), 64);
         let back = HyperLogLog::deserialize(&mut &buf[..]).unwrap();
         assert_eq!(back, hll);
     }

@@ -210,7 +210,7 @@ impl EdgeStore {
         cursor.read_exact(&mut header_buf)?;
         {
             let mut slice = &header_buf[..];
-            let (_version, sid) = crate::persistence::read_header(&mut slice)?;
+            let sid = crate::persistence::read_header(&mut slice)?;
             if sid != expected_section {
                 return Err(StorageError::deserialize_error(format!(
                     "unexpected section id in append sidecar: expected {:#06x}, got {:#06x}",
@@ -276,15 +276,36 @@ impl EdgeStore {
             // fail the load.
             let serving = serving_path_for(&path);
             if !append_path.exists() {
-                if let Ok(mapped) = MappedFrozen::open(&serving) {
-                    *variant = CsrVariant::Mapped(Box::new(mapped));
-                    shards.clear_group_dirty(gid);
-                    continue;
+                match MappedFrozen::open_with_intent(&serving, self.config.memory_intent) {
+                    Ok(mapped) => {
+                        *variant = CsrVariant::Mapped(Box::new(mapped));
+                        shards.clear_group_dirty(gid);
+                        continue;
+                    }
+                    Err(error) => {
+                        log::debug!(
+                            "serving cache miss for group {} ({}), falling back to authority: {}",
+                            gid,
+                            serving.display(),
+                            error,
+                        );
+                    }
                 }
+            } else {
+                log::debug!(
+                    "serving cache bypassed for group {} with pending append delta",
+                    gid,
+                );
             }
             super::super::persistence::load_csr(&path, variant, expected)?;
             if let CsrVariant::Frozen(csr) = &*variant {
-                let _ = write_serving_file(csr, &serving);
+                if let Err(error) = write_serving_file(csr, &serving) {
+                    log::debug!(
+                        "serving cache rebuild failed for group {}: {}",
+                        gid,
+                        error,
+                    );
+                }
             }
             // Sidecars replay the write-through delta on top of the base;
             // the memory row index stays empty because the base now carries

@@ -1,14 +1,33 @@
-//! Offline record-form migration (single direction, fail-closed).
+//! Record-form migration: offline checklist plus in-table online switch.
 //!
-//! `migrate_record_form` moves every authority-live edge into fresh shard
-//! sets of the target form while preserving edge ids, both directions and
-//! the secondary index keys. Authority-deleted edges are dropped together
-//! with their timestamp records, mirroring compaction. Nothing is swapped
-//! until the whole rebuild validates: any bad input (nonzero rank for an
-//! inline form, arity or type mismatch, corrupt payload data surfacing as
-//! topology errors) aborts with the table untouched. Checkpoint after a
-//! successful migration; WAL redo from before the migration must not replay
-//! on top of the new form.
+//! `migrate_record_form` (offline) and `switch_record_form_online` share one
+//! pure rebuild: every authority-live edge moves into fresh shard sets of the
+//! target form while preserving edge ids, both directions and the secondary
+//! index keys. Authority-deleted edges are dropped together with their
+//! timestamp records, mirroring compaction. Nothing is swapped until the
+//! whole rebuild validates: any bad input (nonzero rank for an inline form,
+//! arity or type mismatch, corrupt payload data surfacing as topology errors)
+//! aborts with the table untouched. Checkpoint after a successful switch;
+//! WAL redo from before the switch is fenced at switch time and must never
+//! replay on top of the new form.
+//!
+//! Inline value semantics, pinned here so the query layer never misreads:
+//! a delete drops the row from both directions (erase, not tombstone), so
+//! no id-keyed or endpoint read observes a deleted slot; the stale word
+//! dies with the row and only the authority tombstone remains. Keyed revert
+//! cannot revive an erased row and reports false instead of reviving a
+//! wrong generation. The positional rollback path (out-direction revert with
+//! the reporting-pass position after an in-direction miss) restores the
+//! erased topology slot with its retained word, so a rolled-back batch reads
+//! the original value. Validity bits persist across checkpoints, so a
+//! reload never defaults a blind slot to valid.
+//!
+//! Online contract: the switch holds `&mut self`, which already serializes
+//! every writer in this crate (single-writer discipline), so no concurrent
+//! read or write can interleave mid-switch. Reads before the call see the old
+//! form, reads after see the new form; there is no close/reopen window. A
+//! failed switch returns with the original shards, authority and properties
+//! untouched.
 
 use super::core::owner::EdgeOwnerMap;
 use super::core::EdgeStore;
@@ -29,6 +48,21 @@ pub struct MigrateStats {
     pub groups_rebuilt: usize,
 }
 
+/// Executable pre-switch checklist for one record-form migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MigrationPlan {
+    /// Form the table holds now.
+    pub current: RecordForm,
+    /// Requested form.
+    pub target: RecordForm,
+    /// Authority-live edges the rebuild will carry over.
+    pub live_edges: u64,
+    /// Authority-deleted edges the rebuild will drop with cleanup.
+    pub dropped_tombstones: u64,
+    /// Groups the rebuilt directions will hold.
+    pub groups_to_rebuild: usize,
+}
+
 struct LiveEdge {
     row: u32,
     endpoint: u32,
@@ -38,22 +72,103 @@ struct LiveEdge {
     props: Vec<(String, Value)>,
 }
 
+/// Fresh shards, properties and owner map built without touching live state.
+///
+/// The rebuild is pure until [`EdgeStore::publish_rebuilt_form`]: every
+/// fallible step runs here, so any failure aborts with the original table
+/// untouched and no rollback compensation is needed.
+struct RebuiltForm {
+    out_new: CsrShardSet,
+    in_new: CsrShardSet,
+    properties_new: CsrWithProperties,
+    owner_new: EdgeOwnerMap,
+    dropped: Vec<EdgeId>,
+    stats: MigrateStats,
+}
+
 impl EdgeStore {
     /// Migrate this table to another record form offline.
     ///
     /// Requires exclusive access and a checkpoint afterwards. Migrating to
     /// the current form is a no-op success.
     pub fn migrate_record_form(&mut self, target: RecordForm) -> StorageResult<MigrateStats> {
+        let rebuilt = self.rebuild_record_form(target)?;
+        self.publish_rebuilt_form(rebuilt, target)
+    }
+
+    /// Switch record forms in-table without closing the table.
+    ///
+    /// Same pure rebuild as [`Self::migrate_record_form`], run on the live
+    /// open table: `&mut self` already serializes every writer, so the switch
+    /// is atomic with respect to reads and writes without a close/reopen
+    /// window. Reads before the call observe the old form, reads after
+    /// observe the new form with identical logical content. A failed switch
+    /// leaves the original shards, authority and properties untouched. A
+    /// checkpoint afterwards is mandatory
+    /// ([`Self::is_migration_checkpoint_required`]); pre-switch WAL redo is
+    /// fenced at switch time and never replays onto the new form.
+    pub fn switch_record_form_online(
+        &mut self,
+        target: RecordForm,
+    ) -> StorageResult<MigrateStats> {
+        if !self.is_open {
+            return Err(StorageError::storage_not_open());
+        }
+        let rebuilt = self.rebuild_record_form(target)?;
+        self.publish_rebuilt_form(rebuilt, target)
+    }
+
+    /// Whether a record-form switch completed since the last checkpoint.
+    ///
+    /// Memory-only fence flag: while set, the table must be checkpointed
+    /// before any WAL replay or further switch is trusted. Cleared by flush
+    /// and load, which re-establish the checkpoint base.
+    pub fn is_migration_checkpoint_required(&self) -> bool {
+        self.migration_pending_checkpoint
+    }
+
+    /// Executable pre-switch checklist: prechecks, cost estimate and the
+    /// mandatory-checkpoint requirement, computed without touching live
+    /// state. A failing plan returns the same error the switch would, so
+    /// callers can quote cost and abort before paying the rebuild.
+    pub fn migration_plan(&self, target: RecordForm) -> StorageResult<MigrationPlan> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
         }
         let current = self.schema.record_form;
+        self.check_record_form_target(target)?;
         if current == target {
-            return Ok(MigrateStats {
-                edges_moved: 0,
-                groups_rebuilt: 0,
+            return Ok(MigrationPlan {
+                current,
+                target,
+                live_edges: 0,
+                dropped_tombstones: 0,
+                groups_to_rebuild: 0,
             });
         }
+        let (out_live, mut dropped) = self.extract_live_edges(true, current, target)?;
+        let (in_live, mut dropped_in) = self.extract_live_edges(false, current, target)?;
+        dropped.append(&mut dropped_in);
+        // Both directions carry the same logical edges; the out side quotes
+        // the move cost, and dropped tombstones dedupe by edge id so one
+        // deleted edge counts once, not once per direction.
+        let live_edges = out_live.len() as u64;
+        let _ = in_live;
+        dropped.sort_unstable();
+        dropped.dedup();
+        let groups_to_rebuild = self.out_csr.group_count() + self.in_csr.group_count();
+        Ok(MigrationPlan {
+            current,
+            target,
+            live_edges,
+            dropped_tombstones: dropped.len() as u64,
+            groups_to_rebuild,
+        })
+    }
+
+    /// Target prechecks shared by the plan and the rebuild: arity, scalar
+    /// encodability and rank rules fail before any state is read or written.
+    fn check_record_form_target(&self, target: RecordForm) -> StorageResult<()> {
         match target {
             RecordForm::Pure if !self.schema.properties.is_empty() => {
                 return Err(StorageError::invalid_operation(
@@ -75,6 +190,32 @@ impl EdgeStore {
             }
             RecordForm::Pure | RecordForm::Columnar => {}
         }
+        Ok(())
+    }
+
+    /// Pure rebuild shared by the offline and online entries: extract,
+    /// validate and build the replacement shards without mutating live
+    /// state. Every `?` below runs before the publish step, so any failure
+    /// aborts with the original table untouched.
+    fn rebuild_record_form(&mut self, target: RecordForm) -> StorageResult<RebuiltForm> {
+        if !self.is_open {
+            return Err(StorageError::storage_not_open());
+        }
+        let current = self.schema.record_form;
+        if current == target {
+            return Ok(RebuiltForm {
+                out_new: self.out_csr.clone(),
+                in_new: self.in_csr.clone(),
+                properties_new: self.properties.clone(),
+                owner_new: EdgeOwnerMap::new(),
+                dropped: Vec::new(),
+                stats: MigrateStats {
+                    edges_moved: 0,
+                    groups_rebuilt: 0,
+                },
+            });
+        }
+        self.check_record_form_target(target)?;
 
         // Extract and validate everything before touching live state.
         let (out_live, mut dropped) = self.extract_live_edges(true, current, target)?;
@@ -148,16 +289,57 @@ impl EdgeStore {
             }
         }
 
-        for edge_id in dropped {
-            self.mvcc.remove_edge_timestamps(edge_id);
-        }
-
         let groups_rebuilt = out_new.group_count() + in_new.group_count();
+        Ok(RebuiltForm {
+            out_new,
+            in_new,
+            properties_new,
+            owner_new,
+            dropped,
+            stats: MigrateStats {
+                edges_moved: moved,
+                groups_rebuilt,
+            },
+        })
+    }
+
+    /// Publish a validated rebuild: fence pre-switch WAL redo, then swap shards,
+    /// drop cleaned-up authority records and arm the mandatory checkpoint.
+    ///
+    /// The WAL fence runs before the swap and fails closed: a fence failure
+    /// returns with the original shards, authority and properties untouched.
+    /// A crash before the mandatory checkpoint recovers to the pre-switch
+    /// checkpoint (old form), never to a mixed form.
+    fn publish_rebuilt_form(
+        &mut self,
+        rebuilt: RebuiltForm,
+        target: RecordForm,
+    ) -> StorageResult<MigrateStats> {
+        let RebuiltForm {
+            mut out_new,
+            mut in_new,
+            properties_new,
+            owner_new,
+            dropped,
+            stats,
+        } = rebuilt;
+        if self.schema.record_form == target {
+            return Ok(stats);
+        }
+        // Fence first so a fence failure leaves live state untouched.
+        self.fence_wal_after_migration()?;
+        // Preserve the reuse-hint freshness contract across the swap: fresh
+        // groups seed from the live cutoffs instead of resetting to disabled.
+        out_new.set_tombstone_reuse_cutoff(self.out_csr.tombstone_reuse_cutoff());
+        in_new.set_tombstone_reuse_cutoff(self.in_csr.tombstone_reuse_cutoff());
         self.out_csr = out_new;
         self.in_csr = in_new;
         self.schema.record_form = target;
         self.properties = properties_new;
         self.edge_owner = owner_new;
+        for edge_id in dropped {
+            self.mvcc.remove_edge_timestamps(edge_id);
+        }
         self.segment_stats.clear();
         self.mark_properties_dirty();
         self.out_csr.mark_all_dirty();
@@ -166,14 +348,31 @@ impl EdgeStore {
         self.in_csr.clear_all_append_logs();
         self.out_csr.truncate_trailing_empty_groups();
         self.in_csr.truncate_trailing_empty_groups();
+        self.migration_pending_checkpoint = true;
         // The secondary index keys (src, dst, rank) never change across
         // forms, and migrated edges keep their ids, so no rebuild is needed.
         // New-table stats flow through the regular maintenance paths.
         self.debug_assert_migrated(target);
-        Ok(MigrateStats {
-            edges_moved: moved,
-            groups_rebuilt,
-        })
+        Ok(stats)
+    }
+
+    /// Fence pre-switch WAL redo so it can never replay onto the new form.
+    ///
+    /// The switched in-memory state already carries every live edge, while
+    /// old redo logged under the previous form could resurrect dropped
+    /// tombstones or misread inline encodings. Truncating is fail-safe: a
+    /// crash before the mandatory checkpoint recovers to the pre-switch
+    /// checkpoint (old form), never to a mixed form. Tables without a WAL
+    /// home have nothing to fence.
+    fn fence_wal_after_migration(&mut self) -> StorageResult<()> {
+        if let Some(dir) = self.wal_dir.clone() {
+            super::wal::truncate(&dir)?;
+            log::debug!(
+                "record-form switch fenced pre-switch WAL redo in {}",
+                dir.display()
+            );
+        }
+        Ok(())
     }
 
     /// Collect every authority-live physical edge of one direction.
@@ -626,5 +825,166 @@ mod tests {
             value: Value::Double(1.5),
         }];
         assert!(table.filter_edge_ids(&missing, 200, None).is_empty());
+    }
+
+    #[test]
+    fn migration_plan_quotes_cost_without_touching_state() {
+        let mut table = make_columnar_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .expect("insert");
+        table
+            .insert_edge(2, 3, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
+            .expect("insert");
+        table.delete_edge(0, 1, 0, 150).expect("delete");
+
+        let plan = table
+            .migration_plan(RecordForm::Bundled)
+            .expect("plan succeeds");
+        assert_eq!(plan.current, RecordForm::Columnar);
+        assert_eq!(plan.target, RecordForm::Bundled);
+        assert_eq!(plan.live_edges, 1);
+        assert_eq!(plan.dropped_tombstones, 1);
+        assert!(plan.groups_to_rebuild >= 1);
+        // Planning is read-only: reads still see the old form.
+        assert_eq!(table.schema.record_form, RecordForm::Columnar);
+        assert!(table.has_edge(2, 3, 0, 200));
+        assert!(!table.has_edge(0, 1, 0, 200));
+
+        // A failing plan reports the same error the switch would.
+        assert!(table.migration_plan(RecordForm::Pure).is_err());
+        assert_eq!(table.schema.record_form, RecordForm::Columnar);
+    }
+
+    #[test]
+    fn online_switch_roundtrip_keeps_reads_and_writes() {
+        let mut table = make_columnar_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .expect("insert");
+        assert!(!table.is_migration_checkpoint_required());
+
+        let forward = table
+            .switch_record_form_online(RecordForm::Bundled)
+            .expect("online switch");
+        assert_eq!(forward.edges_moved, 1);
+        assert_eq!(table.schema.record_form, RecordForm::Bundled);
+        assert!(table.is_migration_checkpoint_required());
+        // Reads see the new form with identical content; writes continue.
+        let edge = table.get_edge(0, 1, 0, 200).expect("edge present");
+        assert_eq!(
+            edge.properties,
+            vec![("weight".to_string(), Value::Double(1.5))]
+        );
+        table
+            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 200)
+            .expect("write after switch");
+        assert!(table.audit_copy_drift().is_empty());
+
+        let back = table
+            .switch_record_form_online(RecordForm::Columnar)
+            .expect("switch back");
+        assert_eq!(back.edges_moved, 2);
+        assert_eq!(table.schema.record_form, RecordForm::Columnar);
+        let restored = table.get_edge(0, 2, 0, 300).expect("edge present");
+        assert_eq!(
+            restored.properties,
+            vec![("weight".to_string(), Value::Double(2.5))]
+        );
+        assert!(table.audit_copy_drift().is_empty());
+    }
+
+    #[test]
+    fn failed_switch_rolls_back_to_original_form() {
+        let mut table = make_columnar_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .expect("insert");
+        // Inline forms reject nonzero ranks: the switch must fail with the
+        // original form, data and audit untouched.
+        table
+            .insert_edge(0, 2, 3, &[("weight".to_string(), Value::Double(2.5))], 100)
+            .expect("ranked insert");
+        assert!(table
+            .switch_record_form_online(RecordForm::Bundled)
+            .is_err());
+        assert_eq!(table.schema.record_form, RecordForm::Columnar);
+        assert!(!table.is_migration_checkpoint_required());
+        assert!(table.has_edge(0, 1, 0, 200));
+        assert!(table.has_edge(0, 2, 3, 200));
+        let edge = table.get_edge(0, 2, 3, 200).expect("ranked edge intact");
+        assert_eq!(
+            edge.properties,
+            vec![("weight".to_string(), Value::Double(2.5))]
+        );
+        assert!(table.audit_copy_drift().is_empty());
+    }
+
+    #[test]
+    fn switch_fences_old_wal_and_requires_checkpoint() {
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        let mut table = make_columnar_table();
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("checkpoint gives the WAL a home");
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .expect("post-checkpoint write appends WAL");
+        assert!(super::super::wal::wal_path(dir.path()).exists());
+
+        table
+            .switch_record_form_online(RecordForm::Bundled)
+            .expect("switch");
+        assert!(table.is_migration_checkpoint_required());
+        // Pre-switch redo is fenced: it can never replay onto the new form.
+        assert!(!super::super::wal::wal_path(dir.path()).exists());
+
+        // The mandatory checkpoint clears the fence and persists the form.
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("mandatory checkpoint");
+        assert!(!table.is_migration_checkpoint_required());
+        let mut loaded = make_columnar_table();
+        loaded.load(dir.path()).expect("load succeeds");
+        assert_eq!(loaded.schema.record_form, RecordForm::Bundled);
+        let edge = loaded.get_edge(0, 1, 0, 200).expect("edge present");
+        assert_eq!(
+            edge.properties,
+            vec![("weight".to_string(), Value::Double(1.5))]
+        );
+        assert!(loaded.audit_copy_drift().is_empty());
+    }
+
+    #[test]
+    fn bundled_delete_drops_row_and_keyed_revert_reports_false() {
+        let mut table = make_bundled_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .expect("insert");
+
+        // Erase-on-delete: the row is dropped from both directions, so no
+        // id-keyed or endpoint read observes a tombstone slot. The stale
+        // word dies with the row; only the authority tombstone remains.
+        assert!(table.delete_edge(0, 1, 0, 150).expect("delete"));
+        assert!(table.get_edge(0, 1, 0, 200).is_none());
+        assert!(table.out_csr.bundled_value_at(0, EdgeId(0)).is_none());
+        assert!(table.out_csr.bundled_value_by_endpoint(0, 1).is_none());
+        assert!(table.out_edges(0, 200).is_empty());
+        assert!(table.in_edges(1, 200).is_empty());
+
+        // Keyed revert cannot revive an erased row: without the edge id no
+        // slot is addressable, so undo reports false instead of reviving a
+        // wrong generation. Transaction abort of a bundled delete must not
+        // rely on keyed revert until deletes preserve ids as tombstones.
+        assert!(!table
+            .revert_delete_edge(0, 1, 0, 150)
+            .expect("revert reports"));
+        assert!(table.get_edge(0, 1, 0, 200).is_none());
     }
 }

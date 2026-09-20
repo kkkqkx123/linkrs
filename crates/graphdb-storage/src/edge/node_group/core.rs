@@ -130,14 +130,40 @@ impl CsrShardSet {
         Ok(variant)
     }
 
-    /// Refresh the hot-path tombstone reuse cutoff on every group. The
-    /// table maintenance pass calls this with its watermark-derived bound;
-    /// the sentinel disables reuse.
+    /// Refresh the hot-path tombstone reuse cutoff on every group.
+    ///
+    /// Only watermark-derived bounds refresh; the sentinel disables reuse.
+    /// See [`MutableCsr::set_tombstone_reuse_cutoff`](super::super::MutableCsr::set_tombstone_reuse_cutoff)
+    /// for the single freshness contract.
     pub fn set_tombstone_reuse_cutoff(&mut self, cutoff: Timestamp) {
-        self.tombstone_reuse_cutoff = cutoff;
+        self.tombstone_reuse_cutoff = self.tombstone_reuse_cutoff.min(cutoff);
         for shard in self.shards.values_mut() {
             shard.variant.set_tombstone_reuse_cutoff(cutoff);
         }
+    }
+
+    /// Fresh watermark refresh allowing widening on every group.
+    pub fn refresh_tombstone_reuse_cutoff(&mut self, fresh: Timestamp) {
+        self.tombstone_reuse_cutoff = fresh;
+        for shard in self.shards.values_mut() {
+            shard.variant.refresh_tombstone_reuse_cutoff(fresh);
+        }
+    }
+
+    /// Drop the reuse hint back to the disabled sentinel on every group.
+    ///
+    /// Stale path of the same contract: no fresh watermark means no reuse.
+    pub fn clear_tombstone_reuse_cutoff(&mut self) {
+        self.tombstone_reuse_cutoff = Timestamp::MAX;
+        for shard in self.shards.values_mut() {
+            shard.variant.clear_tombstone_reuse_cutoff();
+        }
+    }
+
+    /// Current reuse cutoff for observability and tests. `Timestamp::MAX`
+    /// means reuse is disabled.
+    pub fn tombstone_reuse_cutoff(&self) -> Timestamp {
+        self.tombstone_reuse_cutoff
     }
 
     pub(super) fn ensure_group_for(&mut self, vid: u32) -> StorageResult<usize> {
@@ -280,14 +306,19 @@ impl CsrShardSet {
         let Some((gid, local)) = self.route(src_vid) else {
             return false;
         };
-        self.shards
+        let reverted = self
+            .shards
             .get_mut(&gid)
             .map(|shard| {
                 shard
                     .variant
                     .bundled_revert_with_value(local, position, expected, ts, value)
             })
-            .unwrap_or(false)
+            .unwrap_or(false);
+        if reverted {
+            self.mark_region_delete(gid, local);
+        }
+        reverted
     }
 
     /// Visit every physically stored entry of one vertex with its inline
@@ -311,6 +342,15 @@ impl CsrShardSet {
         // triples are only stored for existing groups and removals
         // invalidate, so a hit is authoritative without rechecking the map.
         if let Some(hit) = self.route_cache.lookup(vid) {
+            // Debug-only coherence check: cached triples are only stored for
+            // existing groups and removals invalidate first, so a hit must
+            // always agree with the map. A failure here means a removal path
+            // forgot to invalidate, never a benign race.
+            debug_assert!(
+                self.shards.contains_key(&hit.0),
+                "stale route cache entry for vertex {vid}: group {} is gone",
+                hit.0,
+            );
             return Some(hit);
         }
         let gid = group_id_for(vid, self.group_bits);

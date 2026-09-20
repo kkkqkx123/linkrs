@@ -11,9 +11,19 @@ use super::{group_id_for, region_local_range, CsrShardSet};
 
 /// Region density at or above which a dirty region merges as a whole.
 /// Below it only rows holding reclaimable entries are visited.
+///
+/// Source: 0.4 keeps region-wide merges for regions where at least two in
+/// five slots are live, so mostly-dead regions compact row by row instead of
+/// rewriting clean rows. Recommended range 0.3..=0.5. Retuning requires a
+/// region-compaction benchmark proving the wider scope pays for itself.
 pub const REGION_MERGE_MIN_DENSITY: f32 = 0.4;
 /// Group density at or above which a multi-region dirty span merges at
 /// group scope. Below it merges stay region-scoped.
+///
+/// Source: 0.65 reserves group-wide merges for spans that are nearly all
+/// live, where per-region passes would revisit the same dense rows.
+/// Recommended range 0.5..=0.8. Retuning requires a group-compaction
+/// benchmark proving the wider scope pays for itself.
 pub const GROUP_MERGE_MIN_DENSITY: f32 = 0.65;
 
 /// Merge scope selected for a dirty region. The trigger is always the

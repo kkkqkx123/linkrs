@@ -152,16 +152,11 @@ pub(crate) fn save_data(ctx: &GraphStorageContext) -> StorageResult<()> {
 }
 
 pub(crate) fn save_data_to_dir(ctx: &GraphStorageContext, dir: &Path) -> StorageResult<()> {
-    use std::fs::{self, File};
-    use std::io::Write;
+    use std::fs::{self};
 
     let paths = StoragePaths::new(dir);
     let data_dir = paths.data_dir();
     fs::create_dir_all(&data_dir)?;
-
-    let version_file = paths.version_file();
-    let mut file = File::create(&version_file)?;
-    writeln!(file, "1")?;
 
     ctx.flush_tables_to_dir(&data_dir)?;
     ctx.user_storage().save_to_dir(&data_dir)?;

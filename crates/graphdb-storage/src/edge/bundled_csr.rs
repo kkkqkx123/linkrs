@@ -37,7 +37,6 @@ use super::pure_csr::{PureOverflowChunk, PureTopologyCsr, DEFAULT_OVERFLOW_CHUNK
 use super::{EdgePosition, Nbr};
 use crate::persistence::{read_u32_le, read_u64_le};
 
-const BUNDLED_CSR_FORMAT_VERSION: u32 = 2;
 const INVALID_EDGE_ID: EdgeId = EdgeId(u64::MAX);
 
 /// Encode a scalar `Value` into a 64-bit storage word.
@@ -756,7 +755,7 @@ impl CsrBase for BundledCsr {
     }
 
     fn load(&mut self, data: &[u8]) -> StorageResult<()> {
-        if data.len() < 16 {
+        if data.len() < 12 {
             return Err(StorageError::deserialize_error(
                 "bundled csr: data too short".to_string(),
             ));
@@ -774,13 +773,6 @@ impl CsrBase for BundledCsr {
         }
         let data = body;
         let mut offset = 0usize;
-        let version = read_u32_le(data, &mut offset)?;
-        if version != BUNDLED_CSR_FORMAT_VERSION {
-            return Err(StorageError::deserialize_error(format!(
-                "bundled csr: unsupported version {}",
-                version
-            )));
-        }
         let topo_len = read_u64_le(data, &mut offset)? as usize;
         if data.len().saturating_sub(offset) < topo_len {
             return Err(StorageError::deserialize_error(
@@ -856,7 +848,6 @@ impl CsrBase for BundledCsr {
 
     fn dump_into(&self, out: &mut Vec<u8>) {
         let start = out.len();
-        out.extend_from_slice(&BUNDLED_CSR_FORMAT_VERSION.to_le_bytes());
         let topo = self.topology.dump();
         out.extend_from_slice(&(topo.len() as u64).to_le_bytes());
         out.extend_from_slice(&topo);
@@ -1248,5 +1239,40 @@ mod tests {
         for (value, dt) in cases {
             assert_eq!(decode_scalar(encode_scalar(&value), &dt), value);
         }
+    }
+
+    #[test]
+    fn borrowed_walks_agree_without_materializing() {
+        let mut csr = BundledCsr::with_overflow_chunk_edges(2, 0, 1);
+        for i in 0..6u32 {
+            let value = if i % 2 == 0 { Some(i as u64) } else { None };
+            csr.insert_edge_with_value(0, dst(10 + i), EdgeId(i as u64), value)
+                .expect("insert");
+        }
+        // Borrowed visitor walk over primary plus overflow.
+        let mut visited = Vec::new();
+        csr.visit_physical(0, |nbr| {
+            visited.push((nbr.edge_id, nbr.endpoint));
+            true
+        });
+        // Borrowed row iterator over the same row.
+        let iterated: Vec<_> = csr
+            .iter_row(0)
+            .map(|nbr| (nbr.edge_id, nbr.endpoint))
+            .collect();
+        assert_eq!(visited, iterated);
+        // Value-carrying walk pairs each entry with its inline value.
+        let mut valued = Vec::new();
+        csr.visit_physical_with_values(0, |nbr, value| {
+            valued.push((nbr.edge_id, value));
+            true
+        });
+        let expect: Vec<_> = (0..6u32)
+            .map(|i| {
+                let value = if i % 2 == 0 { Some(i as u64) } else { None };
+                (EdgeId(i as u64), value)
+            })
+            .collect();
+        assert_eq!(valued, expect);
     }
 }

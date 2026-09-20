@@ -23,6 +23,9 @@ impl MutableCsr {
 
     /// Iterate edges of a vertex without collecting into a Vec.
     /// Test-only row-stamp filtered iterator; production scans go through the version authority.
+    /// Filters by the delete replica only: creation stamps live in the table
+    /// authority, not in the row, so this probe can never decide full MVCC
+    /// visibility on its own.
     pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> VertexEdgesIter<'_> {
         VertexEdgesIter::new(self, src_vid, ts)
     }

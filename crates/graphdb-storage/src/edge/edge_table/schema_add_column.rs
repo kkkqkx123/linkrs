@@ -58,7 +58,7 @@ impl EdgeStore {
             crate::edge::RecordForm::Pure | crate::edge::RecordForm::Bundled
         ) {
             return Err(StorageError::invalid_operation(
-                "schema change on an inline-form table requires an offline rebuild (migrate_record_form)".to_string(),
+                "schema change on an inline-form table requires a record-form rebuild (migrate_record_form or switch_record_form_online)".to_string(),
             ));
         }
         if self.pending_add_column.is_some()
@@ -92,8 +92,8 @@ impl EdgeStore {
 
     /// Build the physical column for the prepared change.
     ///
-    /// Uses the same physical entry point as the legacy single-step path so
-    /// only one column-construction implementation exists.
+    /// Uses the single column-construction implementation shared with the
+    /// single-step path.
     pub fn fill_pending_add_property(&mut self) -> StorageResult<()> {
         let pending = self.pending_add_column.as_ref().ok_or_else(|| {
             StorageError::invalid_operation("no pending add-column change to fill".to_string())

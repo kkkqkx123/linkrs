@@ -74,16 +74,18 @@ fn test_vertex_edges_iter_respects_timestamp() {
     // Delete the second edge at ts=2
     csr.delete_edge(0u32, EdgeId(101), 2).unwrap();
 
-    // At ts=1, only first edge should be visible
+    // Physical delete-replica probe only: creation stamps live in the table
+    // authority, not in the row, so every row whose delete replica still
+    // covers the query passes. Full MVCC visibility (creation plus deletion)
+    // is applied by the table layer through the version authority.
     let edges_ts1: Vec<_> = csr.iter_edges_of(0u32, 1).collect();
-    assert_eq!(edges_ts1.len(), 1);
-    assert_eq!(edges_ts1[0].edge_id, EdgeId(100));
+    assert_eq!(edges_ts1.len(), 3);
 
-    // At ts=2, first two edges are visible (but second is deleted)
+    // At ts=2 the deleted replica drops out; the survivors stay.
     let edges_ts2: Vec<_> = csr.iter_edges_of(0u32, 2).collect();
-    assert_eq!(edges_ts2.len(), 1);
+    assert_eq!(edges_ts2.len(), 2);
 
-    // At ts=3, all three are visible (but second is deleted)
+    // At ts=3 the same two survivors remain.
     let edges_ts3: Vec<_> = csr.iter_edges_of(0u32, 3).collect();
     assert_eq!(edges_ts3.len(), 2);
 }

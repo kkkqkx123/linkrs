@@ -94,20 +94,24 @@ impl EdgeStore {
         self.properties_dirty = false;
         self.out_csr.clear_all_column_dirty();
         self.in_csr.clear_all_column_dirty();
-        self.remove_orphan_group_files(dir);
+        // A checkpoint re-establishes the base: any pre-checkpoint switch is
+        // now durable and the mandatory-checkpoint fence lifts.
+        self.migration_pending_checkpoint = false;
+        let orphan_files = self.remove_orphan_group_files(dir);
         let encoding_saved: usize = self
             .topology_encoding_report()
             .iter()
             .map(|(_, _, plain, encoded)| plain.saturating_sub(*encoded))
             .sum();
         log::debug!(
-            "EdgeTable[{}] checkpoint kind={:?} dirty_groups={} bytes={} live_edges={} encoding_saved={}",
+            "EdgeTable[{}] checkpoint kind={:?} dirty_groups={} bytes={} live_edges={} encoding_saved={} orphan_files={}",
             self.label,
             kind,
             dirty_groups,
             flushed_bytes,
             self.out_csr.edge_count() + self.in_csr.edge_count(),
-            encoding_saved
+            encoding_saved,
+            orphan_files
         );
         if let Some(stats) = &self.stats_manager {
             stats.record_incremental_checkpoint(started.elapsed(), flushed_bytes);

@@ -716,22 +716,71 @@ pub(crate) fn delete_vertex(
     Ok(())
 }
 
+/// Delete a vertex together with every incident edge as one fanout unit.
+///
+/// All edge deletes share a single write timestamp and commit once, so a
+/// mid-fanout failure aborts the shared timestamp instead of leaving
+/// per-edge commits behind. Aborted stamps stay hidden through the pending
+/// gate, and explicit transactions keep per-edge restore entries through the
+/// mutation recorder. Very large fanouts should be chunked by the caller;
+/// each call is one atomic unit.
 pub(crate) fn delete_vertex_with_edges(
     ctx: &GraphStorageContext,
     space: &str,
     id: &VertexId,
 ) -> StorageResult<()> {
     let edges = reader::get_node_edges(ctx, space, id, EdgeDirection::Both)?;
-
-    for edge in edges {
-        delete_edge(
-            ctx,
-            space,
-            &edge.src,
-            &edge.dst,
-            &edge.edge_type,
-            edge.ranking,
-        )?;
+    if !edges.is_empty() {
+        let ts = ctx.get_write_timestamp()?;
+        let mut failed: Option<StorageError> = None;
+        for edge in &edges {
+            let previous = reader::get_edge(ctx, space, &edge.src, &edge.dst, &edge.edge_type, edge.ranking)?;
+            match delete_edge_at_timestamp(
+                ctx,
+                space,
+                &edge.src,
+                &edge.dst,
+                &edge.edge_type,
+                edge.ranking,
+                ts,
+            ) {
+                Ok(redo_entry) => {
+                    if let Some(previous) = previous {
+                        if let Ok(edge_info) = resolve_edge_type(ctx, space, &edge.edge_type) {
+                            let src_label = endpoint_label_id(ctx, space, &edge_info.src_tag_name)?;
+                            let dst_label = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)?;
+                            if let (Some(src_label), Some(dst_label)) = (src_label, dst_label) {
+                                record_edge_remove(
+                                    ctx,
+                                    EdgeIdentifier::new(
+                                        src_label,
+                                        edge.src,
+                                        dst_label,
+                                        edge.dst,
+                                        edge_info.edge_type_id,
+                                        edge.ranking,
+                                    ),
+                                    previous.props.into_iter().collect(),
+                                    redo_entry,
+                                )?;
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    failed = Some(error);
+                    break;
+                }
+            }
+        }
+        if let Some(error) = failed {
+            ctx.abort_write_timestamp(ts);
+            return Err(error);
+        }
+        if let Err(error) = ctx.commit_write_timestamp_ordered(ts) {
+            ctx.abort_write_timestamp(ts);
+            return Err(error);
+        }
     }
 
     delete_vertex(ctx, space, id)

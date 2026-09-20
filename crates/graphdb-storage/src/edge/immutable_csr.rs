@@ -35,14 +35,8 @@ use super::{
     ColdStamps, CsrBase, EdgeId, EdgePosition, HotNbr, MutableCsr, MutableCsrTrait, Nbr,
     SingleMutableCsr, Timestamp, VertexId, INVALID_EDGE_ID,
 };
-use crate::persistence::{read_u32_le, read_u64_le};
+use crate::persistence::read_u64_le;
 use graphdb_core::{StorageError, StorageResult};
-
-/// Persisted format version of the frozen neighbor payload.
-///
-/// Version 1 only. Older or newer versions are rejected on load, never
-/// converted.
-pub(crate) const IMMUTABLE_CSR_FORMAT_VERSION: u32 = 2;
 
 fn frozen_error() -> StorageError {
     StorageError::invalid_operation(
@@ -624,10 +618,9 @@ impl ImmutableCsr {
         ImmutableCsrIterator::new_all(self)
     }
 
-    /// Dump to bytes, version 1.
+    /// Dump to bytes.
     ///
     /// Format:
-    /// - format_version (u32 = 1)
     /// - rows (u64)
     /// - edge_count (u64)
     /// - entries_len (u64)
@@ -661,7 +654,6 @@ impl ImmutableCsr {
         scratch: &mut super::mutable_csr::persistence::CsrDumpScratch,
     ) {
         let start = out.len();
-        out.extend_from_slice(&IMMUTABLE_CSR_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&(self.degrees.len() as u64).to_le_bytes());
         out.extend_from_slice(&self.edge_count.to_le_bytes());
         out.extend_from_slice(&(self.hot_entries.len() as u64).to_le_bytes());
@@ -680,13 +672,13 @@ impl ImmutableCsr {
         out.extend_from_slice(&crc.to_le_bytes());
     }
 
-    /// Load from bytes, version 2 only.
+    /// Load from bytes.
     ///
-    /// Rejects short headers, version mismatches, CRC mismatches, column
+    /// Rejects short headers, CRC mismatches, column
     /// length mismatches, out-of-range row windows, edge count mismatches
     /// and trailing bytes.
     pub fn load(&mut self, data: &[u8]) -> StorageResult<()> {
-        if data.len() < 36 {
+        if data.len() < 32 {
             return Err(StorageError::deserialize_error(
                 "frozen CSR data too short for header",
             ));
@@ -704,12 +696,6 @@ impl ImmutableCsr {
         }
         let data = body;
         let mut offset = 0usize;
-        let format_version = read_u32_le(data, &mut offset)?;
-        if format_version != IMMUTABLE_CSR_FORMAT_VERSION {
-            return Err(StorageError::deserialize_error(format!(
-                "unsupported frozen CSR format version: {format_version}"
-            )));
-        }
         let rows = read_u64_le(data, &mut offset)? as usize;
         let edge_count = read_u64_le(data, &mut offset)?;
         let entries_len = read_u64_le(data, &mut offset)? as usize;

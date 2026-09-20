@@ -4,7 +4,6 @@ use crate::index::manifest::{GenerationBuildState, GenerationState, IndexManifes
 use crate::index::types::{EdgeIdentity, IndexIdentity};
 use crate::index::*;
 use crate::persistence::write_versioned_payload;
-use graphdb_core::types::StorageVersion;
 use graphdb_core::types::{
     CommitLsn, Index, IndexConfig, IndexField, IndexGeneration, IndexType, SnapshotTimestamp,
     MAX_TIMESTAMP,
@@ -14,10 +13,10 @@ use std::collections::BTreeMap;
 
 fn write_crashed_build_state(index_root: &std::path::Path, state: &GenerationBuildState) {
     let serialized = postcard::to_allocvec(state).expect("serialize");
-    let mut versioned = Vec::new();
-    write_versioned_payload(&mut versioned, StorageVersion::CURRENT as u32, &serialized);
+    let mut wrapped = Vec::new();
+    write_versioned_payload(&mut wrapped, &serialized);
     std::fs::create_dir_all(index_root).unwrap();
-    std::fs::write(index_root.join("generation_build.bin"), &versioned).unwrap();
+    std::fs::write(index_root.join("generation_build.bin"), &wrapped).unwrap();
 }
 
 fn create_tag_index(name: &str, schema_name: &str) -> Index {

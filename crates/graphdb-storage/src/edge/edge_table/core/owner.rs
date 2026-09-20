@@ -68,6 +68,18 @@ impl EdgeOwnerMap {
     }
 }
 
+/// Owner-map rebuild outcome for observability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OwnerRebuildStats {
+    /// Topology edges assigned to their current owner group.
+    pub mapped: usize,
+    /// Authority/property orphans without topology converged to the
+    /// fallback group.
+    pub relocated_orphans: usize,
+    /// The deterministic fallback group orphans converged to.
+    pub fallback_group: u32,
+}
+
 impl EdgeStore {
     /// Owner group for one edge write. Out groups own when out edges exist,
     /// otherwise in groups own. The owner decides which timestamp and
@@ -96,28 +108,60 @@ impl EdgeStore {
     }
 
     /// Rebuild the owner map from topology plus authority leftovers.
+    ///
     /// Topology edges take their current owner; timestamps or property rows
     /// without topology (reclaimed physical rows whose authority tombstone
     /// survives) fall back to the smallest materialized owner so they stay
-    /// in an existing shard.
+    /// in an existing shard. Every fallback is counted in the returned
+    /// stats and debug-logged: orphans converge to a deterministic group
+    /// with an observable count, never silently dropped.
     pub(crate) fn rebuild_owner_map(&mut self) {
+        let stats = self.rebuild_owner_map_with_stats();
+        if stats.relocated_orphans > 0 {
+            log::debug!(
+                "rebuild_owner_map: {} orphan timestamps/property rows converged to group {}",
+                stats.relocated_orphans,
+                stats.fallback_group,
+            );
+        }
+    }
+
+    /// Rebuild the owner map, reporting convergence counts.
+    ///
+    /// Same rebuild as [`Self::rebuild_owner_map`], but returns the counts
+    /// instead of only logging them so load and reshard paths can assert
+    /// and tests can observe orphan convergence directly.
+    pub(crate) fn rebuild_owner_map_with_stats(&mut self) -> OwnerRebuildStats {
         self.edge_owner.clear();
         let use_out = self.schema.oe_strategy != super::super::super::EdgeStrategy::None;
         let owner = if use_out { &self.out_csr } else { &self.in_csr };
         let existing = owner.existing_group_ids();
+        let mut mapped = 0usize;
+        let mut topology_ids = HashSet::new();
         for gid in &existing {
             if let Some(variant) = owner.group_variant(*gid) {
                 for (_, nbr) in variant.iter_all() {
                     self.edge_owner.insert(nbr.edge_id, *gid as u32);
+                    topology_ids.insert(nbr.edge_id);
+                    mapped += 1;
                 }
             }
         }
         let fallback = existing.first().copied().unwrap_or(0) as u32;
+        let mut relocated_orphans = 0usize;
         for edge_id in self.mvcc.edge_timestamps.keys() {
+            if !topology_ids.contains(&edge_id) {
+                relocated_orphans += 1;
+            }
             self.edge_owner.or_insert(edge_id, fallback);
         }
         for edge_id in self.properties.edge_ids() {
             self.edge_owner.or_insert(edge_id, fallback);
+        }
+        OwnerRebuildStats {
+            mapped,
+            relocated_orphans,
+            fallback_group: fallback,
         }
     }
 

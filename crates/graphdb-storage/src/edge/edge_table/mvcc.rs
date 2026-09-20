@@ -109,8 +109,11 @@ impl AuthorityMap {
         }
     }
 
-    /// Drop records deleted before `watermark` whose rows are gone.
+    /// Drop records deleted at or before `watermark` whose rows are gone.
     ///
+    /// Eligibility shares the single [`crate::mvcc_visibility::Visibility::is_gc_eligible`]
+    /// predicate with the CSR and property reclaim paths, so the three layers
+    /// cannot drift apart by one round at the boundary stamp.
     /// Returns the reclaimed count and truncates trailing holes so a
     /// delete-heavy table does not hold an ever-longer tail of empty slots.
     pub fn reclaim_where(
@@ -120,8 +123,13 @@ impl AuthorityMap {
     ) -> usize {
         let mut reclaimed = 0usize;
         for (idx, slot) in self.slots.iter_mut().enumerate() {
-            let eligible =
-                slot.is_some_and(|ts| ts.delete_ts != Timestamp::MAX && ts.delete_ts < watermark);
+            let eligible = slot.is_some_and(|ts| {
+                ts.delete_ts != Timestamp::MAX
+                    && crate::mvcc_visibility::Visibility::is_gc_eligible(
+                        ts.delete_ts,
+                        watermark,
+                    )
+            });
             if eligible && is_gone(EdgeId(idx as u64)) {
                 *slot = None;
                 reclaimed += 1;
@@ -192,9 +200,10 @@ impl MVCCManager {
     /// Derived from the authority record; edges without authority are never
     /// reported as tombstoned.
     pub fn is_tombstoned(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
-        self.edge_timestamps
-            .get(&edge_id)
-            .is_some_and(|info| info.delete_ts != Timestamp::MAX && info.delete_ts <= ts)
+        self.edge_timestamps.get(&edge_id).is_some_and(|info| {
+            info.delete_ts != Timestamp::MAX
+                && crate::mvcc_visibility::Visibility::is_gc_eligible(info.delete_ts, ts)
+        })
     }
 
     /// Register a new active snapshot at the given timestamp.
