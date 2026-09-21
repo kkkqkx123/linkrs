@@ -1,4 +1,4 @@
-use super::super::{ColdStamps, HotNbr, Nbr};
+use crate::edge::{ColdStamps, HotNbr, Nbr};
 use super::format::{read_u32_le_at, read_u64_le_at, ColumnRange};
 use super::MappedFrozen;
 use graphdb_core::types::{EdgeId, Timestamp};
@@ -8,10 +8,10 @@ impl MappedFrozen {
     pub(crate) fn degree_at(&self, row: usize) -> u32 {
         // Validated at open: degree column covers every row.
         read_u32_le_at(&self.map, self.columns.degrees.start + row * 4)
-            .expect("serving degree column validated at open")
+            .expect("snapshot degree column validated at open")
     }
 
-    /// Raw little-endian bytes of one serving column.
+    /// Raw little-endian bytes of one snapshot column.
     ///
     /// Column ranges are validated at open, so the slice always covers the
     /// column. Row scans take these slices once per row and decode the row
@@ -21,7 +21,7 @@ impl MappedFrozen {
     pub(crate) fn column_bytes(&self, range: ColumnRange) -> &[u8] {
         self.map
             .get(range.start..range.end())
-            .expect("serving column range validated at open")
+            .expect("snapshot column range validated at open")
     }
 
     /// Raw bytes of one entry column restricted to a validated row window.
@@ -35,7 +35,7 @@ impl MappedFrozen {
     ) -> &[u8] {
         self.column_bytes(range)
             .get(start * width..end * width)
-            .expect("serving row window validated against column ranges")
+            .expect("snapshot row window validated against column ranges")
     }
 
     /// Decode the hot halves of a validated row window as one chunked pass.
@@ -127,27 +127,27 @@ impl MappedFrozen {
     #[inline]
     pub(crate) fn endpoint_at(&self, idx: usize) -> u32 {
         read_u32_le_at(&self.map, self.columns.endpoints.start + idx * 4)
-            .expect("serving endpoint column validated at open")
+            .expect("snapshot endpoint column validated at open")
     }
 
     #[inline]
     pub(crate) fn rank_at(&self, idx: usize) -> i64 {
         read_u64_le_at(&self.map, self.columns.ranks.start + idx * 8)
-            .expect("serving rank column validated at open") as i64
+            .expect("snapshot rank column validated at open") as i64
     }
 
     #[inline]
     pub(crate) fn edge_id_at(&self, idx: usize) -> EdgeId {
         EdgeId(
             read_u64_le_at(&self.map, self.columns.edge_ids.start + idx * 8)
-                .expect("serving edge-id column validated at open"),
+                .expect("snapshot edge-id column validated at open"),
         )
     }
 
     #[inline]
     pub(crate) fn delete_at(&self, idx: usize) -> Timestamp {
         read_u64_le_at(&self.map, self.columns.deletes.start + idx * 8)
-            .expect("serving delete column validated at open")
+            .expect("snapshot delete column validated at open")
     }
 
     /// Hot half at a packed index, decoded on demand from the mapping.

@@ -27,9 +27,14 @@ impl CsrVariant {
         }
     }
 
-    /// Clear all edges
+    /// Clear all edges.
+    ///
+    /// Mapped views hold their payload off heap and cannot be emptied, so
+    /// clearing one swaps the whole variant to the empty placeholder at the
+    /// same vertex capacity. Group containers keep the group slot and must
+    /// treat the post-clear variant as a placeholder for every later branch.
     pub fn clear(&mut self) {
-        // Clearing drops the serving view: the mapping is outside the heap
+        // Clearing drops the snapshot view: the mapping is outside the heap
         // and cannot be emptied, so the group falls back to the placeholder.
         if let CsrVariant::Mapped(csr) = self {
             let vertex_capacity = csr.vertex_capacity();

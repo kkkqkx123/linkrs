@@ -304,7 +304,7 @@ fn test_vertex_cache_point_invalidation_is_precise() {
         );
     }
     // Point invalidation removes only the targeted key; the neighbour
-    // entry keeps serving newer snapshots.
+    // entry keeps snapshot newer snapshots.
     cache.remove_vertex(&VertexCacheKey::new(1, 1));
     assert!(cache.get_vertex(&VertexCacheKey::new(1, 1), 200).is_none());
     assert!(cache.get_vertex(&VertexCacheKey::new(1, 2), 200).is_some());

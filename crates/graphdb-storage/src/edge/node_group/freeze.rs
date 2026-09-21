@@ -93,34 +93,12 @@ impl CsrShardSet {
         let frozen = match &shard.variant {
             CsrVariant::Multiple(csr) => ImmutableCsr::pack_from_mutable(csr),
             CsrVariant::Single(csr) => ImmutableCsr::pack_single_from(csr),
-            CsrVariant::Pure(csr) => {
-                let rows = csr.vertex_capacity();
-                let mut temp = super::super::MutableCsr::with_capacity(rows, 0);
-                for local in 0..rows as u32 {
-                    let edges = csr.physical_edges_of(local);
-                    for nbr in edges {
-                        if nbr.edge_id == INVALID_EDGE_ID {
-                            continue;
-                        }
-                        temp.insert_edge(local, nbr.to_vertex_id(), nbr.edge_id, 0)?;
-                    }
-                }
-                ImmutableCsr::pack_from_mutable(&temp)
-            }
-            CsrVariant::Bundled(csr) => {
-                let rows = csr.vertex_capacity();
-                let mut temp = super::super::MutableCsr::with_capacity(rows, 0);
-                for local in 0..rows as u32 {
-                    let edges = csr.physical_edges_of(local);
-                    for nbr in edges {
-                        if nbr.edge_id == INVALID_EDGE_ID {
-                            continue;
-                        }
-                        temp.insert_edge(local, nbr.to_vertex_id(), nbr.edge_id, 0)?;
-                    }
-                }
-                ImmutableCsr::pack_from_mutable(&temp)
-            }
+            // Pure and bundled groups pack directly into the frozen layout:
+            // no temporary mutable rebuild, no fabricated timestamps. The
+            // valid-value guard above already ran before compaction, so this
+            // bundled pack only ever sees the all-NULL topology case.
+            CsrVariant::Pure(csr) => ImmutableCsr::pack_from_pure(csr),
+            CsrVariant::Bundled(csr) => ImmutableCsr::pack_from_bundled(csr),
             CsrVariant::Frozen(_) | CsrVariant::Mapped(_) | CsrVariant::None { .. } => {
                 return Err(StorageError::invalid_operation(format!(
                     "group {} changed under freeze",

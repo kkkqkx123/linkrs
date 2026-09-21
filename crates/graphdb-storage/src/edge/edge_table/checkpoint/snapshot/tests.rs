@@ -3,10 +3,10 @@ use crate::edge::{ImmutableCsr, MutableCsrTrait, Nbr};
 use graphdb_core::types::{EdgeId, VertexId};
 use std::path::PathBuf;
 
-use super::format::{SERVING_CRC_LEN, SERVING_HEADER_LEN};
+use super::format::{SNAPSHOT_CRC_LEN, SNAPSHOT_HEADER_LEN};
 
 fn sample_frozen() -> ImmutableCsr {
-    use super::super::MutableCsr;
+    use crate::edge::MutableCsr;
     let mut csr = MutableCsr::with_capacity(8, 64);
     let key = |endpoint: u32| VertexId::edge_endpoint_key(endpoint, 0);
     csr.insert_edge(0, key(30), EdgeId(1), 1).unwrap();
@@ -31,7 +31,7 @@ fn serving_path(name: &str) -> PathBuf {
 fn mapped_reads_match_heap_frozen() {
     let frozen = sample_frozen();
     let path = serving_path("match");
-    write_serving_file(&frozen, &path).unwrap();
+    write_snapshot_file(&frozen, &path).unwrap();
     let mapped = MappedFrozen::open(&path).unwrap();
     assert_eq!(mapped.vertex_capacity(), frozen.vertex_capacity());
     assert_eq!(mapped.edge_count(), frozen.edge_count());
@@ -63,7 +63,7 @@ fn mapped_reads_match_heap_frozen() {
 fn mapped_iterators_match_heap_counts() {
     let frozen = sample_frozen();
     let path = serving_path("iter");
-    write_serving_file(&frozen, &path).unwrap();
+    write_snapshot_file(&frozen, &path).unwrap();
     let mapped = MappedFrozen::open(&path).unwrap();
     assert_eq!(mapped.iter(6).count(), frozen.iter(6).count());
     assert_eq!(mapped.iter_all().count(), frozen.iter_all().count());
@@ -77,7 +77,7 @@ fn mapped_iterators_match_heap_counts() {
 fn hugepage_hint_keeps_serving_openable() {
     let frozen = sample_frozen();
     let path = serving_path("hugepage");
-    write_serving_file(&frozen, &path).unwrap();
+    write_snapshot_file(&frozen, &path).unwrap();
     // The open path carries a best-effort huge-page hint. It must never
     // fail the open: rejection falls back to base pages.
     let mapped = MappedFrozen::open(&path).unwrap();
@@ -89,7 +89,7 @@ fn hugepage_hint_keeps_serving_openable() {
 fn mapped_writes_are_rejected() {
     let frozen = sample_frozen();
     let path = serving_path("rejected");
-    write_serving_file(&frozen, &path).unwrap();
+    write_snapshot_file(&frozen, &path).unwrap();
     let mut mapped = MappedFrozen::open(&path).unwrap();
     let key = VertexId::edge_endpoint_key(99, 0);
     assert!(mapped.insert_edge(0, key, EdgeId(100), 9).is_err());
@@ -117,7 +117,7 @@ fn missing_file_falls_back_to_rebuild() {
 fn corrupt_serving_file_is_rejected() {
     let frozen = sample_frozen();
     let path = serving_path("corrupt");
-    write_serving_file(&frozen, &path).unwrap();
+    write_snapshot_file(&frozen, &path).unwrap();
     for mutate in [
         |bytes: &mut Vec<u8>| bytes[0] ^= 0xff,
         |bytes: &mut Vec<u8>| bytes[4] = 99,
@@ -139,10 +139,10 @@ fn corrupt_serving_file_is_rejected() {
 fn payload_bit_flip_fails_checksum() {
     let frozen = sample_frozen();
     let path = serving_path("payload_crc");
-    write_serving_file(&frozen, &path).unwrap();
+    write_snapshot_file(&frozen, &path).unwrap();
     let mut bytes = std::fs::read(&path).unwrap();
-    assert!(bytes.len() > SERVING_HEADER_LEN + SERVING_CRC_LEN);
-    let mid = SERVING_HEADER_LEN + 1;
+    assert!(bytes.len() > SNAPSHOT_HEADER_LEN + SNAPSHOT_CRC_LEN);
+    let mid = SNAPSHOT_HEADER_LEN + 1;
     bytes[mid] ^= 0x01;
     std::fs::write(&path, &bytes).unwrap();
     let err = MappedFrozen::open(&path).expect_err("payload corruption must fail");
@@ -154,10 +154,10 @@ fn payload_bit_flip_fails_checksum() {
 
 #[test]
 fn empty_table_serves() {
-    use super::super::MutableCsr;
+    use crate::edge::MutableCsr;
     let frozen = ImmutableCsr::pack_from_mutable(&MutableCsr::with_capacity(4, 16));
     let path = serving_path("empty");
-    write_serving_file(&frozen, &path).unwrap();
+    write_snapshot_file(&frozen, &path).unwrap();
     let mapped = MappedFrozen::open(&path).unwrap();
     assert_eq!(mapped.edge_count(), 0);
     assert!(mapped.edges_of(0, 1).is_empty());

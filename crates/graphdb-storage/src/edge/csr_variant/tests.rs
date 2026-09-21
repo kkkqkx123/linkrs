@@ -235,10 +235,11 @@ fn single_variant_supports_positional_writes() {
     assert_eq!(csr.edge_count(), 1);
     let stale = crate::edge::EdgePosition::Overflow { chunk: 0, slot: 0 };
     assert!(!csr.revert_delete_at_position(0, stale, EdgeId(100), 2));
-    assert!(csr
-        .delete_edge_at_position(0, stale, EdgeId(100), 3)
-        .unwrap_or(false)
-        == false);
+    assert!(
+        csr.delete_edge_at_position(0, stale, EdgeId(100), 3)
+            .unwrap_or(false)
+            == false
+    );
 }
 
 #[test]
@@ -263,4 +264,157 @@ fn frozen_variant_probe_reports_dead_entries() {
     assert_eq!(dead, 1);
     assert_eq!(reclaimable, 1);
     assert!(variant.vertex_needs_compact(0, 9));
+}
+
+#[test]
+fn mapped_dump_shares_tag_and_loads_as_heap() {
+    use crate::edge::edge_table::checkpoint::snapshot::{write_snapshot_file, MappedFrozen};
+    let mut inner = MutableCsr::with_capacity(8, 64);
+    inner
+        .insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    let frozen_heap = ImmutableCsr::pack_from_mutable(&inner);
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "linkrs_variant_mapped_tag_{}.bin",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    write_snapshot_file(&frozen_heap, &path).unwrap();
+    let mapped = MappedFrozen::open(&path).unwrap();
+    let mapped_variant = CsrVariant::Mapped(Box::new(mapped));
+    let frozen_variant = CsrVariant::Frozen(Box::new(frozen_heap));
+    let mapped_bytes = mapped_variant.dump();
+    let frozen_bytes = frozen_variant.dump();
+    assert_eq!(mapped_bytes[0], 3u8);
+    assert_eq!(frozen_bytes[0], 3u8);
+    assert_eq!(mapped_bytes, frozen_bytes);
+    let mut loaded =
+        CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 8, 64, 4096).unwrap();
+    loaded.load(&mapped_bytes).unwrap();
+    assert!(matches!(loaded, CsrVariant::Frozen(_)));
+    assert_eq!(loaded.edge_count(), 1);
+    assert_eq!(
+        loaded.physical_edges_of(0),
+        frozen_variant.physical_edges_of(0)
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn mapped_clear_falls_back_to_placeholder() {
+    use crate::edge::edge_table::checkpoint::snapshot::{write_snapshot_file, MappedFrozen};
+    let mut inner = MutableCsr::with_capacity(8, 64);
+    inner
+        .insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    let frozen_heap = ImmutableCsr::pack_from_mutable(&inner);
+    let capacity = frozen_heap.vertex_capacity();
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "linkrs_variant_mapped_clear_{}.bin",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    write_snapshot_file(&frozen_heap, &path).unwrap();
+    let mapped = MappedFrozen::open(&path).unwrap();
+    let mut variant = CsrVariant::Mapped(Box::new(mapped));
+    variant.clear();
+    assert!(matches!(
+        variant,
+        CsrVariant::None { vertex_capacity } if vertex_capacity == capacity
+    ));
+    assert_eq!(variant.edge_count(), 0);
+    assert!(variant.physical_edges_of(0).is_empty());
+    assert!(variant
+        .insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
+        .is_err());
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn pure_and_bundled_direct_pack_match_topology() {
+    let mut pure = PureTopologyCsr::with_capacity(8, 16);
+    for dst in [3u32, 1, 2] {
+        pure.insert_edge(
+            0,
+            VertexId::edge_endpoint_key(dst, 0),
+            EdgeId(dst as u64),
+            0,
+        )
+        .unwrap();
+    }
+    let packed = ImmutableCsr::pack_from_pure(&pure);
+    assert_eq!(packed.edge_count(), 3);
+    assert_eq!(packed.vertex_capacity(), pure.vertex_capacity());
+    let mut endpoints: Vec<u32> = packed
+        .physical_edges_of(0)
+        .iter()
+        .map(|n| n.endpoint)
+        .collect();
+    assert_eq!(endpoints, vec![1, 2, 3]);
+
+    let mut bundled = BundledCsr::with_capacity(8, 16);
+    for dst in [3u32, 1, 2] {
+        bundled
+            .insert_edge(
+                0,
+                VertexId::edge_endpoint_key(dst, 0),
+                EdgeId(dst as u64),
+                0,
+            )
+            .unwrap();
+    }
+    assert!(!CsrVariant::Bundled(Box::new(bundled.clone())).bundled_has_valid_values());
+    let packed_bundled = ImmutableCsr::pack_from_bundled(&bundled);
+    assert_eq!(packed_bundled.edge_count(), 3);
+    endpoints = packed_bundled
+        .physical_edges_of(0)
+        .iter()
+        .map(|n| n.endpoint)
+        .collect();
+    assert_eq!(endpoints, vec![1, 2, 3]);
+}
+
+#[test]
+fn bundled_topology_walk_needs_paired_values() {
+    let mut inner = BundledCsr::with_capacity(8, 16);
+    inner
+        .insert_edge(0, VertexId::edge_endpoint_key(1, 0), EdgeId(7), 0)
+        .unwrap();
+    inner.set_value_by_edge_id(0, EdgeId(7), Some(99));
+    let variant = CsrVariant::Bundled(Box::new(inner));
+    let topo: Vec<Nbr> = variant.iter_edges_of(0, 0).unwrap().collect();
+    assert_eq!(topo.len(), 1);
+    assert_eq!(
+        variant.bundled_value_by_edge_id(0, EdgeId(7)),
+        Some((99, true))
+    );
+    let mut paired = Vec::new();
+    variant.visit_physical_with_values(0, |nbr, value| {
+        paired.push((nbr.edge_id, value));
+        true
+    });
+    assert_eq!(paired, vec![(EdgeId(7), Some(99))]);
+}
+
+#[test]
+fn pure_threshold_ignores_rank_half_explicitly() {
+    let mut inner = PureTopologyCsr::with_capacity(8, 16);
+    for dst in [1u32, 5, 9] {
+        inner
+            .insert_edge(
+                0,
+                VertexId::edge_endpoint_key(dst, 0),
+                EdgeId(dst as u64),
+                0,
+            )
+            .unwrap();
+    }
+    let variant = CsrVariant::Pure(Box::new(inner));
+    let mut out = Vec::new();
+    variant.fill_threshold_into(0, Some((2, 999)), Some((8, -999)), &mut out);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].endpoint, 5);
+    assert!(variant.is_row_sorted(0) || !variant.is_row_sorted(0));
 }

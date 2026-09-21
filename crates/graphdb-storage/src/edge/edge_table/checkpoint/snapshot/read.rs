@@ -1,5 +1,5 @@
-use super::super::csr_shared::decode_endpoint_pair;
-use super::super::{ColdStamps, EdgePosition, HotNbr, Nbr, INVALID_EDGE_ID};
+use crate::edge::csr_shared::decode_endpoint_pair;
+use crate::edge::{ColdStamps, EdgePosition, HotNbr, Nbr, INVALID_EDGE_ID};
 use super::MappedFrozen;
 use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 

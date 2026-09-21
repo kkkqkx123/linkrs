@@ -1,7 +1,10 @@
 use graphdb_core::types::Timestamp;
 use graphdb_core::StorageError;
 
-use super::super::{ColdStamps, HotNbr, MutableCsr, Nbr, SingleMutableCsr, INVALID_EDGE_ID};
+use super::super::{
+    BundledCsr, ColdStamps, HotNbr, MutableCsr, Nbr, PureTopologyCsr, SingleMutableCsr,
+    INVALID_EDGE_ID,
+};
 use super::ImmutableCsr;
 
 pub(crate) fn frozen_error() -> StorageError {
@@ -59,17 +62,17 @@ impl ImmutableCsr {
         self.degrees.len()
     }
 
-    /// Packed hot halves for serving-file writers.
+    /// Packed hot halves for snapshot-file writers.
     pub(crate) fn packed_hot(&self) -> &[HotNbr] {
         &self.hot_entries
     }
 
-    /// Packed cold halves for serving-file writers.
+    /// Packed cold halves for snapshot-file writers.
     pub(crate) fn packed_cold(&self) -> &[ColdStamps] {
         &self.cold_entries
     }
 
-    /// Packed row degrees for serving-file writers.
+    /// Packed row degrees for snapshot-file writers.
     pub(crate) fn packed_degrees(&self) -> &[u32] {
         &self.degrees
     }
@@ -106,6 +109,46 @@ impl ImmutableCsr {
             csr.edge_count() as usize,
             |local, row| {
                 csr.fill_physical_into(local, row);
+            },
+        )
+    }
+
+    /// Pack a pure-topology group directly into the frozen layout.
+    ///
+    /// Same sorted content as routing through a temporary mutable table,
+    /// without the full copy and without fabricating timestamp replicas.
+    /// Pure rows carry no timestamps and no tombstones: every physically
+    /// stored entry is live, so the pack walks the topology only.
+    pub fn pack_from_pure(csr: &PureTopologyCsr) -> Self {
+        Self::pack_from_rows(
+            csr.vertex_capacity(),
+            csr.edge_count() as usize,
+            |local, row| {
+                row.clear();
+                csr.visit_physical(local, |nbr| {
+                    row.push(nbr);
+                    true
+                });
+            },
+        )
+    }
+
+    /// Pack a bundled group holding no valid inline values directly.
+    ///
+    /// Callers check valid values first and migrate to the columnar form
+    /// when values are present; this entry only packs the topology half.
+    /// Same sorted content as routing through a temporary mutable table,
+    /// without the full copy.
+    pub fn pack_from_bundled(csr: &BundledCsr) -> Self {
+        Self::pack_from_rows(
+            csr.vertex_capacity(),
+            csr.edge_count() as usize,
+            |local, row| {
+                row.clear();
+                csr.visit_physical(local, |nbr| {
+                    row.push(nbr);
+                    true
+                });
             },
         )
     }

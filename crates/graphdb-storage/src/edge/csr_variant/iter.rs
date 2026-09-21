@@ -45,6 +45,11 @@ impl<'a> Iterator for CsrIterator<'a> {
 /// sets, table scans) iterate one row without materializing a vector,
 /// regardless of the underlying layout. Records are assembled by value
 /// because the split halves live in separate slices.
+///
+/// Bundled rows yield topology only through this iterator: the inline value
+/// column stays unread. Callers needing values must use the paired value
+/// entry (`visit_physical_with_values` or the `bundled_value_*` accessors)
+/// instead of this walk alone, otherwise values are silently dropped.
 pub enum CsrRowIter<'a> {
     /// Multi-edge row: primary block plus overflow chain walk.
     Multiple(VertexEdgesIter<'a>),
@@ -52,7 +57,8 @@ pub enum CsrRowIter<'a> {
     Single(std::option::IntoIter<Nbr>),
     /// Pure topology row: borrowed primary plus overflow walk.
     Pure(PureRowIter<'a>),
-    /// Bundled row: borrowed topology walk, values resolved separately.
+    /// Bundled row: borrowed topology walk only. Values are not yielded;
+    /// resolve them through the paired value entry per edge.
     Bundled(PureRowIter<'a>),
     /// Frozen row: filtered packed-slice walk.
     Frozen(FrozenRowIter<'a>),

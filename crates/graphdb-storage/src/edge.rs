@@ -35,7 +35,6 @@ pub mod csr_variant;
 pub mod csr_with_properties;
 pub mod edge_table;
 pub mod fragmentation_stats;
-pub mod frozen_serving;
 pub mod immutable_csr;
 pub mod mutable_csr;
 pub mod node_group;
@@ -65,7 +64,7 @@ pub use node_group::{
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
 pub use bundled_csr::{decode_scalar, encode_scalar, BundledCsr};
-pub use frozen_serving::{MappedFrozen, MappedFrozenIterator, MappedFrozenRowIter};
+pub use edge_table::checkpoint::snapshot::{MappedFrozen, MappedFrozenIterator, MappedFrozenRowIter};
 pub use graphdb_core::types::INVALID_EDGE_ID;
 pub use immutable_csr::{FrozenRowIter, ImmutableCsr, ImmutableCsrIterator};
 pub use pure_csr::{PureAllIter, PureRowIter, PureTopologyCsr};
@@ -82,8 +81,11 @@ pub type RowEdgeBatch = (u32, Vec<EdgePut>);
 /// Resolved record form for an edge table, persisted in `meta.bin`.
 ///
 /// Determined once at table creation by the selector; never re-inferred on
-/// load.  A schema change that breaks the form's preconditions requires an
-/// offline rebuild to a different form.
+/// load. The choice locks the physical layout: later property additions,
+/// type changes or rank usage breaking the preconditions need an explicit
+/// migration (`EdgeStore::migration_plan`, `migrate_record_form` or
+/// `switch_record_form_online`) followed by a checkpoint, never an
+/// in-place reinterpretation.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default,
 )]
@@ -99,8 +101,11 @@ pub enum RecordForm {
 
 /// User-facing preference for record form selection at table creation time.
 ///
-/// `Auto` lets the system pick the optimal form based on the schema;
-/// `Columnar` forces the standard multi/single/none strategy path.
+/// `Auto` derives the form from the schema (no properties to pure, one
+/// encodable scalar to bundled, otherwise columnar) and reports the result
+/// through the table construction log; the resolved form then locks and
+/// persists. Later evolution breaking the preconditions must migrate
+/// explicitly. `Columnar` forces the standard multi/single/none strategy path.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default,
 )]

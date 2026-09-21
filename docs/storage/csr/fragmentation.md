@@ -266,6 +266,7 @@ if csr.fragmentation_ratio() >= GROUP_FRAGMENTATION_THRESHOLD {
   按密度目标恢复预留；
 - 额外有热路径墓碑复用（`tombstone_reuse_cutoff` 水位提示，
   内存态）：水位下墓碑槽可被新写直接复用，减少溢出分配。
+  该水位仅本形态生效，其余形态忽略；组容器仅在列式分支传播水位。
 
 ### SingleMutableCsr
 

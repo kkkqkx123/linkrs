@@ -6,7 +6,8 @@ impl CsrVariant {
     ///
     /// Test-only row-stamp filtered iterator; production scans go through
     /// the version authority. Missing groups and the `None` strategy yield
-    /// no iterator.
+    /// no iterator. Bundled rows yield topology only: pair each item with
+    /// the value accessors instead of reading values from this walk.
     pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> Option<CsrRowIter<'_>> {
         // Pure rows store no timestamps, so the timestamp carries no
         // information there; the borrowed walk yields live entries directly.
@@ -29,7 +30,9 @@ impl CsrVariant {
     /// Used when rebuilding the CSR (e.g. vertex ID remapping) so entries
     /// marked as deleted survive the rebuild. Pure and bundled holes carry
     /// the unassignable sentinel instead of an edge, so they are skipped:
-    /// no rebuild may resurrect a hole as a live edge.
+    /// no rebuild may resurrect a hole as a live edge. Bundled values are
+    /// not yielded here; migration paths resolve them through the paired
+    /// value entry.
     pub fn iter_all(&self) -> CsrIterator<'_> {
         match self {
             CsrVariant::Multiple(csr) => CsrIterator::Multiple(csr.iter_all()),
@@ -43,6 +46,9 @@ impl CsrVariant {
     }
 
     /// Visit every physically stored entry of one vertex without allocating.
+    ///
+    /// Bundled rows visit topology only; use `visit_physical_with_values`
+    /// when the inline value is needed.
     pub fn visit_physical<F>(&self, src_vid: u32, f: F)
     where
         F: FnMut(Nbr) -> bool,
@@ -85,6 +91,7 @@ impl CsrVariant {
     /// uniform across variants: the buffer is cleared first, then the row is
     /// appended in the variant's promised order (insertion order for mutable
     /// forms, sorted order for frozen forms; see the enum-level contract).
+    /// Bundled rows fill topology only; pair with the value accessors.
     pub fn fill_physical_into(&self, src_vid: u32, out: &mut Vec<Nbr>) {
         match self {
             CsrVariant::Multiple(csr) => csr.fill_physical_into(src_vid, out),
@@ -99,9 +106,11 @@ impl CsrVariant {
 
     /// Whether the live entries of one row arrive in key order.
     ///
-    /// Query routing consults this before choosing a bisection over a
-    /// linear walk. Frozen, mapped and single-slot rows are always ordered;
-    /// mutable rows report their insertion-order observation.
+    /// Only frozen, mapped and single-slot rows promise order and may use
+    /// bisection. All other forms report an observation that callers must
+    /// not cache across restarts: the flag is memory-only, rebuilt on load,
+    /// and query planning falls back to a linear walk unless the promise
+    /// holds for the row's current variant.
     pub fn is_row_sorted(&self, src_vid: u32) -> bool {
         match self {
             CsrVariant::Multiple(csr) => csr.is_row_sorted(src_vid),
@@ -116,7 +125,10 @@ impl CsrVariant {
 
     /// Visit live entries whose `(endpoint, rank)` key falls in the inclusive
     /// `[lower, upper]` range. Pure and bundled rows carry no rank, so the
-    /// rank halves of the bounds are ignored there.
+    /// rank halves of the bounds are explicitly ignored there: callers pass
+    /// endpoint intervals, and reusing one binary interval across forms
+    /// scans the wider endpoint range on these forms by contract rather than
+    /// by silent widening.
     pub fn visit_threshold<F>(
         &self,
         src_vid: u32,
@@ -142,6 +154,9 @@ impl CsrVariant {
     }
 
     /// Fill a caller buffer with the same range content as `visit_threshold`.
+    ///
+    /// Same explicit rank-half rule as `visit_threshold` on pure and bundled
+    /// rows.
     pub fn fill_threshold_into(
         &self,
         src_vid: u32,

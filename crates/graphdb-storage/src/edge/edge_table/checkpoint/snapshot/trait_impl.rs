@@ -1,4 +1,4 @@
-use super::super::{EdgePosition, Nbr};
+use crate::edge::{EdgePosition, Nbr};
 use super::MappedFrozen;
 
 use graphdb_core::types::{EdgeId, Timestamp, VertexId};

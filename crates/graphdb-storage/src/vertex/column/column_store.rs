@@ -614,7 +614,7 @@ impl ColumnStore {
             EncodingType::None => {}
         }
         // Encodings are built from placeholder base values; overflow rows
-        // keep serving from the side store, so mappings are preserved.
+        // keep snapshot from the side store, so mappings are preserved.
 
         Ok(())
     }

@@ -404,8 +404,7 @@ fn test_generation_build_state_save_load_remove_roundtrip() {
     assert!(loaded.barrier_lsn.is_none());
 
     // Remove
-    remove_generation_build_state(&ctx, space_id, index_name)
-        .expect("build state should remove");
+    remove_generation_build_state(&ctx, space_id, index_name).expect("build state should remove");
     let after_remove =
         load_generation_build_state(&ctx, space_id, index_name).expect("load should succeed");
     assert!(after_remove.is_none());

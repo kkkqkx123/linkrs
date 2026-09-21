@@ -124,7 +124,7 @@ pub use iter::{CsrIterator, CsrRowIter};
 /// bundled rows are insertion-ordered and promise no order; frozen and
 /// mapped rows are packed sorted by `(endpoint, rank, edge_id)` and promise
 /// that order plus key-interval bisection. Freeze, compaction, compression
-/// and serving rebuilds may change the order; the query layer must never depend on an
+/// and snapshot rebuilds may change the order; the query layer must never depend on an
 /// unpromised order. [`MutableCsr::is_row_sorted`](super::MutableCsr::is_row_sorted)
 /// reports the advisory per-row state for plan selection.
 ///

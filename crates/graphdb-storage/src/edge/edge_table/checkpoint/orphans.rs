@@ -17,7 +17,7 @@ impl EdgeStore {
     ///
     /// Timestamp and property shards follow the owner direction's groups, so
     /// orphan shard convergence is visible here as a count instead of silent
-    /// deletion. Serving sidecars track their base group and drop with it.
+    /// deletion. Snapshot sidecars track their base group and drop with it.
     pub(crate) fn remove_orphan_group_files(&self, dir: &Path) -> usize {
         let out_existing: HashSet<u32> = self
             .out_csr
@@ -75,10 +75,10 @@ impl EdgeStore {
                             remove(&path);
                         }
                     }
-                } else if name.ends_with(".serving") {
-                    // Serving sidecars track their base group: drop the cache
+                } else if name.ends_with(".snapshot") {
+                    // Snapshot sidecars track their base group: drop the cache
                     // when the group itself is gone.
-                    let base = name.strip_suffix(".serving").unwrap_or("");
+                    let base = name.strip_suffix(".snapshot").unwrap_or("");
                     if base.starts_with("out_g") {
                         if let Some(gid) = parse_group_file(base, "out_g") {
                             if !out_existing.contains(&gid) {

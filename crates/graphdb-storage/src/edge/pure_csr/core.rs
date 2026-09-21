@@ -123,7 +123,8 @@ impl PureTopologyCsr {
         if self.total_edge_capacity == 0 {
             return 0.0;
         }
-        self.total_edge_capacity.saturating_sub(self.edge_count as usize) as f32
+        self.total_edge_capacity
+            .saturating_sub(self.edge_count as usize) as f32
             / self.total_edge_capacity as f32
     }
 

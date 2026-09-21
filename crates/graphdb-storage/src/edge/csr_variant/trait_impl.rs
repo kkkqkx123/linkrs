@@ -113,9 +113,7 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Multiple(csr) => {
                 csr.delete_edge_at_position(src_vid, position, expected, ts)
             }
-            CsrVariant::Single(csr) => {
-                csr.delete_edge_at_position(src_vid, position, expected, ts)
-            }
+            CsrVariant::Single(csr) => csr.delete_edge_at_position(src_vid, position, expected, ts),
             CsrVariant::Pure(csr) => csr.delete_edge_at_position(src_vid, position, expected, ts),
             CsrVariant::Bundled(csr) => {
                 csr.delete_edge_at_position(src_vid, position, expected, ts)

@@ -24,8 +24,10 @@ match self.record_form {
 
 - `RecordFormPreference::Auto` 按模式自动推导形态
   （无属性 → `Pure`，单可编码标量 → `Bundled`，其余 → `Columnar`），
-  选定后持久化在 `meta.bin`，加载时不再重推；
-  破坏形态前置条件的模式变更须离线重建。
+  选定后持久化在 `meta.bin`，加载时不再重推；建表日志报告推导结果，
+  锁定后破坏形态前置条件的模式变更须走迁移（`migration_plan` /
+  `migrate_record_form` / `switch_record_form_online`）并随后检查点，
+  不做原地重解释。
 - `RecordFormPreference::Columnar` 强制走策略路径。
 
 ### CsrVariant::from_strategy_with_overflow：列式形态工厂
@@ -174,7 +176,11 @@ Tag  变体
 ```
 
 `dump()` 首字节打标签；`load()` 按首字节分发重建。
-`dump_into()` 与 `dump()` 字节一致，供检查点零拷贝追加。
+标签 3 由 `Frozen` 与 `Mapped` 共享是刻意的不对称：
+转储保留权威堆字节，加载一律重建堆内 `Frozen`，映射身份不持久。
+需要映射视图的调用方走检查点边车路径重开映射，
+不得假设视图类型可往返。`dump_into()` 与 `dump()` 字节一致，
+供检查点零拷贝追加；带暂存转储同样共享该标签行为。
 各形态载荷尾带 CRC32，加载先验签再解析；边 ID 计数等
 结构字段做重算校验，篡改与截断均拒绝。
 
@@ -189,11 +195,16 @@ pub enum CsrIterator<'a> {
 }
 ```
 
-行内顺序按形态承诺，不做全局承诺：可变 / Single /
-Pure / Bundled 行为插入序、无序承诺；Frozen / Mapped 行按
-`(endpoint, rank, edge_id)` 紧凑有序并承诺该顺序与键区间二分。
+行内顺序按形态承诺，不做全局承诺：可变 /
+Pure / Bundled 行为插入序、无序承诺；Frozen / Mapped / Single 行按
+键有序并承诺该顺序与键区间二分（`Single` 行至多一槽，天然有序）。
 冻结、回收、压缩与服务重建可改变顺序，查询层不得依赖未承诺顺序。
-`MutableCsr::is_row_sorted` 给出行级有序建议，供计划选择。
+`is_row_sorted` 只在承诺有序的形态上选择二分，其余走线性扫描；
+内存态有序标志不持久，加载后重建，计划缓存不得跨重启复用该标志。
+`Bundled` 行迭代器复用纯拓扑类型，只产出拓扑：遍历与读值必须配对
+（`visit_physical_with_values` 或 `bundled_value_*`），单独走拓扑会静默丢值。
+范围查询在 `Pure` / `Bundled` 上显式忽略排序键半键：调用方按端点区间
+构造查询，跨形态复用同一二元组区间时由调用方收紧。
 
 ## 集成：EdgeSchema → EdgeStore → CsrVariant
 
@@ -239,24 +250,18 @@ Query("traverse edges")
 
 **各变体行为**：
 
-| 变体 | 行为 |
-|---|---|
-| `Multiple` | 整表回收：合并溢出、丢截止线下墓碑并逐边上报 |
-| `Single` | 丢截止线下单槽墓碑并上报（无整表 reserve 参数） |
-| `Pure` / `Bundled` | 行级回收（Bundled 双列同步移动） |
-| `Frozen` / `Mapped` | 无操作（只读） |
+| 变体 | 行级回收 | 整表回收 |
+|---|---|---|
+| `Multiple` | 合并溢出、丢截止线下墓碑并逐边上报 | 同行级并消除溢出链 |
+| `Single` | 丢截止线下单槽墓碑并上报（无整表 reserve 参数） | 同行级语义 |
+| `Pure` / `Bundled` | 行级回收（Bundled 双列同步移动） | 无操作，离线重建同样不走整表 |
+| `Frozen` | 无操作（只读） | 堆内回收并上报 |
+| `Mapped` | 无操作（需重建服务文件） | 无操作 |
 | `None` | 无操作（零边） |
 
-仅 `Multiple` 的碎片诊断有意义：
-
-```rust
-pub fn fragmentation_ratio(&self) -> f32 {
-    match self {
-        CsrVariant::Multiple(csr) => csr.fragmentation_ratio(),
-        _ => 0.0,
-    }
-}
-```
+碎片口径覆盖持有预留行容量的形态（`Multiple` / `Pure` / `Bundled`），
+其余形态报告零或空。墓碑复用水位仅 `Multiple` 生效，
+`fresh_variant` 仅在列式分支传播水位，`Pure` / `Bundled` 分支不传播。
 
 ## 设计原则
 
@@ -280,6 +285,8 @@ pub fn fragmentation_ratio(&self) -> f32 {
 
 ### 4. 可扩展
 
-新增变体只需：实现 trait 的新结构体 +
-`dispatch!` 七分支加一臂 + 持久化标签 +
-迭代器枚举加一臂。宏使样板最小化。
+新增变体检查清单（存于本文档而非代码注释，上线前逐项核对，
+不实际新增变体时只做走查）：枚举定义、`dispatch!` 全部分支、
+持久化标签与加载分支、行/全表迭代器枚举、读遍历三形态、
+维护与回收分支、内联值分支、组容器构造出口、检查点边车分支、
+本文档与变体文档同步。宏使样板最小化，但不能代替逐项核对。

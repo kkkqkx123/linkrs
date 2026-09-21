@@ -2,14 +2,13 @@ use super::common::make_table;
 use crate::edge::edge_table::checkpoint::out_group_file;
 use crate::edge::edge_table::config::EdgeTableConfig;
 use crate::edge::edge_table::core::EdgeStore;
-use crate::edge::{
-    frozen_serving::serving_path_for, CsrVariant, EdgeSchema, EdgeStrategy, RecordForm,
-};
+use crate::edge::edge_table::checkpoint::snapshot::snapshot_path_for;
+use crate::edge::{CsrVariant, EdgeSchema, EdgeStrategy, RecordForm};
 use crate::types::StoragePropertyDef;
 use graphdb_core::Value;
 
 #[test]
-fn frozen_flush_writes_serving_and_load_serves_mapped() {
+fn frozen_flush_writes_snapshot_and_load_serves_mapped() {
     use graphdb_core::types::Timestamp;
     let mut table = make_table();
     table
@@ -31,10 +30,10 @@ fn frozen_flush_writes_serving_and_load_serves_mapped() {
             crate::compression::CompressionType::Zstd { level: 3 },
         )
         .expect("flush should succeed");
-    let serving = serving_path_for(&dir.path().join(out_group_file(0)));
+    let snapshot = snapshot_path_for(&dir.path().join(out_group_file(0)));
     assert!(
-        serving.exists(),
-        "flush writes the serving sidecar for frozen groups"
+        snapshot.exists(),
+        "flush writes the snapshot sidecar for frozen groups"
     );
 
     let mut loaded = make_table();
@@ -61,7 +60,7 @@ fn frozen_flush_writes_serving_and_load_serves_mapped() {
 }
 
 #[test]
-fn missing_serving_falls_back_to_authoritative() {
+fn missing_snapshot_falls_back_to_authoritative() {
     use graphdb_core::types::Timestamp;
     let mut table = make_table();
     table
@@ -80,8 +79,8 @@ fn missing_serving_falls_back_to_authoritative() {
             crate::compression::CompressionType::Zstd { level: 3 },
         )
         .expect("flush should succeed");
-    let serving = serving_path_for(&dir.path().join(out_group_file(0)));
-    std::fs::remove_file(&serving).unwrap();
+    let snapshot = snapshot_path_for(&dir.path().join(out_group_file(0)));
+    std::fs::remove_file(&snapshot).unwrap();
 
     let mut loaded = make_table();
     loaded.load(dir.path()).expect("load should succeed");
@@ -98,7 +97,7 @@ fn missing_serving_falls_back_to_authoritative() {
 }
 
 #[test]
-fn corrupt_serving_falls_back_to_authoritative() {
+fn corrupt_snapshot_falls_back_to_authoritative() {
     use graphdb_core::types::Timestamp;
     let mut table = make_table();
     table
@@ -117,10 +116,10 @@ fn corrupt_serving_falls_back_to_authoritative() {
             crate::compression::CompressionType::Zstd { level: 3 },
         )
         .expect("flush should succeed");
-    let serving = serving_path_for(&dir.path().join(out_group_file(0)));
-    let mut bytes = std::fs::read(&serving).unwrap();
+    let snapshot = snapshot_path_for(&dir.path().join(out_group_file(0)));
+    let mut bytes = std::fs::read(&snapshot).unwrap();
     bytes[0] ^= 0xff;
-    std::fs::write(&serving, &bytes).unwrap();
+    std::fs::write(&snapshot, &bytes).unwrap();
 
     let mut loaded = make_table();
     loaded.load(dir.path()).expect("load should succeed");
@@ -137,7 +136,7 @@ fn corrupt_serving_falls_back_to_authoritative() {
 }
 
 #[test]
-fn mutable_flush_removes_stale_serving() {
+fn mutable_flush_removes_stale_snapshot() {
     use graphdb_core::types::Timestamp;
     let mut table = make_table();
     table
@@ -151,11 +150,11 @@ fn mutable_flush_removes_stale_serving() {
             crate::compression::CompressionType::Zstd { level: 3 },
         )
         .expect("flush should succeed");
-    let serving = serving_path_for(&dir.path().join(out_group_file(0)));
-    assert!(serving.exists());
+    let snapshot = snapshot_path_for(&dir.path().join(out_group_file(0)));
+    assert!(snapshot.exists());
 
     // Unfreezing makes the group mutable again; the next flush rewrites
-    // the base and must drop the stale serving file with it.
+    // the base and must drop the stale snapshot file with it.
     table.unfreeze_group(true, 0).unwrap();
     table
         .flush(
@@ -164,13 +163,13 @@ fn mutable_flush_removes_stale_serving() {
         )
         .expect("flush should succeed");
     assert!(
-        !serving.exists(),
-        "mutable bases must not keep a frozen serving file"
+        !snapshot.exists(),
+        "mutable bases must not keep a frozen snapshot file"
     );
 }
 
 #[test]
-fn serving_state_machine_full_cycle() {
+fn snapshot_state_machine_full_cycle() {
     use graphdb_core::types::Timestamp;
     let mut table = make_table();
     table
@@ -189,11 +188,11 @@ fn serving_state_machine_full_cycle() {
             )
             .expect("flush should succeed")
     };
-    let serving = serving_path_for(&dir.path().join(out_group_file(0)));
+    let snapshot = snapshot_path_for(&dir.path().join(out_group_file(0)));
 
     // Generate: frozen flush writes a valid sidecar; loads map it.
     flush(&mut table);
-    assert!(serving.exists());
+    assert!(snapshot.exists());
     let mut loaded = make_table();
     loaded.load(dir.path()).expect("load should succeed");
     assert!(matches!(
@@ -204,9 +203,9 @@ fn serving_state_machine_full_cycle() {
 
     // Expire: corrupt the sidecar; the next load falls back to the authority
     // base and regenerates the cache on flush.
-    let mut bytes = std::fs::read(&serving).unwrap();
+    let mut bytes = std::fs::read(&snapshot).unwrap();
     bytes[8] ^= 0xff;
-    std::fs::write(&serving, &bytes).unwrap();
+    std::fs::write(&snapshot, &bytes).unwrap();
     let mut expired = make_table();
     expired.load(dir.path()).expect("load should succeed");
     assert!(matches!(
@@ -220,7 +219,7 @@ fn serving_state_machine_full_cycle() {
             crate::compression::CompressionType::Zstd { level: 3 },
         )
         .expect("flush regenerates the cache");
-    assert!(serving.exists());
+    assert!(snapshot.exists());
     let mut remapped = make_table();
     remapped.load(dir.path()).expect("load should succeed");
     assert!(matches!(
@@ -231,17 +230,17 @@ fn serving_state_machine_full_cycle() {
     // Delete: unfreezing plus flush drops the stale sidecar with the base.
     table.unfreeze_group(true, 0).unwrap();
     flush(&mut table);
-    assert!(!serving.exists());
+    assert!(!snapshot.exists());
     assert!(table.audit_copy_drift().is_empty());
 }
 
 #[test]
-fn memory_intent_serving_load_stays_correct() {
+fn memory_intent_snapshot_load_stays_correct() {
     use crate::edge::edge_table::config::MemoryIntent;
     use graphdb_core::types::Timestamp;
     for intent in [
         MemoryIntent::HeapDefault,
-        MemoryIntent::ReadServing,
+        MemoryIntent::ReadSnapshot,
         MemoryIntent::BulkLoad,
     ] {
         let mut config = EdgeTableConfig::default();
@@ -287,11 +286,11 @@ fn memory_intent_serving_load_stays_correct() {
 }
 
 #[test]
-fn reshard_drill_syncs_routes_manifest_and_serving() {
+fn reshard_drill_syncs_routes_manifest_and_snapshot() {
     use graphdb_core::types::Timestamp;
-    // Width-change drill: frozen serving exists before the switch, point
+    // Width-change drill: frozen snapshot exists before the switch, point
     // lookups stay correct immediately after (fresh route cache rides with
-    // the rebuilt sets, no reload), the next flush drops the stale serving
+    // the rebuilt sets, no reload), the next flush drops the stale snapshot
     // sidecar, and the rebuilt manifest reloads at the new width.
     let mut table = make_table();
     table
@@ -306,7 +305,7 @@ fn reshard_drill_syncs_routes_manifest_and_serving() {
             crate::compression::CompressionType::Zstd { level: 3 },
         )
         .expect("baseline flush should succeed");
-    assert!(serving_path_for(&dir.path().join(out_group_file(0))).exists());
+    assert!(snapshot_path_for(&dir.path().join(out_group_file(0))).exists());
 
     let stats = table.reshard(9).expect("reshard should succeed");
     assert_eq!(stats.old_bits, 12);
@@ -325,8 +324,8 @@ fn reshard_drill_syncs_routes_manifest_and_serving() {
         )
         .expect("post-reshard flush should succeed");
     assert!(
-        !serving_path_for(&dir.path().join(out_group_file(0))).exists(),
-        "pre-reshard serving sidecar must not survive the width change"
+        !snapshot_path_for(&dir.path().join(out_group_file(0))).exists(),
+        "pre-reshard snapshot sidecar must not survive the width change"
     );
 
     let mut loaded = EdgeStore::with_config(

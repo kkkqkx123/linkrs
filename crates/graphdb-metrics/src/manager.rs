@@ -206,8 +206,8 @@ pub enum MetricType {
     // Import discard observability
     ImportDroppedRows,
     ImportAcceptedRows,
-    // Serving cache fallback observability
-    ServingFallbackCount,
+    // Snapshot cache fallback observability
+    SnapshotFallbackCount,
 }
 
 /// Reason a checkpoint was triggered.

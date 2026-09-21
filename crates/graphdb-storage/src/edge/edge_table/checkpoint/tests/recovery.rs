@@ -6,7 +6,8 @@ use crate::edge::edge_table::checkpoint::{
 use crate::edge::edge_table::config::EdgeTableConfig;
 use crate::edge::edge_table::core::EdgeStore;
 use crate::edge::edge_table::persistence;
-use crate::edge::{frozen_serving::serving_path_for, RecordForm};
+use crate::edge::edge_table::checkpoint::snapshot::snapshot_path_for;
+use crate::edge::RecordForm;
 use graphdb_core::Value;
 use std::io::Write as _;
 
@@ -512,7 +513,7 @@ fn reshard_roundtrip_preserves_snapshot() {
 #[test]
 fn missing_groups_leave_no_files() {
     // Sparse file promise: only materialized groups produce base, append,
-    // timestamp, property and serving files. Hole groups must leave nothing
+    // timestamp, property and snapshot files. Hole groups must leave nothing
     // behind, and the manifest roundtrip must list existing groups alone.
     let mut table = make_table();
     table
@@ -540,8 +541,8 @@ fn missing_groups_leave_no_files() {
             );
         }
     }
-    // Mutable groups never carry a serving sidecar either.
-    assert!(!serving_path_for(&dir.path().join(out_group_file(244))).exists());
+    // Mutable groups never carry a snapshot sidecar either.
+    assert!(!snapshot_path_for(&dir.path().join(out_group_file(244))).exists());
     let mut loaded = make_table();
     loaded.load(dir.path()).expect("load should succeed");
     assert_eq!(

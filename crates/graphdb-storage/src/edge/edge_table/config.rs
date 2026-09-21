@@ -44,7 +44,7 @@ pub struct EdgeTableConfig {
     /// `Columnar` forces the standard multi/single/none strategy path.
     pub record_form: RecordFormPreference,
     /// Declared memory intent for read-heavy paths. `HeapDefault` keeps the
-    /// historical behavior; `ReadServing` marks the read-only serving path
+    /// historical behavior; `ReadSnapshot` marks the read-only snapshot path
     /// and `BulkLoad` the batch-ingest path so mapping hints follow intent.
     pub memory_intent: MemoryIntent,
 }
@@ -52,16 +52,16 @@ pub struct EdgeTableConfig {
 /// Declared memory intent for read-heavy paths.
 ///
 /// Explicit configuration rather than a best-effort hint: the read-only
-/// serving open and the bulk-load path declare which behavior they want, so
+/// snapshot open and the bulk-load path declare which behavior they want, so
 /// huge-page and prefetch choices stay reviewable instead of implicit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MemoryIntent {
     /// Default heap behavior: no huge-page hint, mappings stay on base pages.
     #[default]
     HeapDefault,
-    /// Read-only serving scans: explicitly request transparent huge pages on
+    /// Read-only snapshot scans: explicitly request transparent huge pages on
     /// Linux (still best-effort, rejection falls back without failing).
-    ReadServing,
+    ReadSnapshot,
     /// Batch ingest: skip the huge-page hint to avoid THP pressure during
     /// sequential bulk writes; mappings stay on base pages.
     BulkLoad,

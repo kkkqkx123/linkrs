@@ -467,9 +467,11 @@ impl EdgeStore {
 
     /// Decode the inline value of one edge from its shard row.
     ///
-    /// Returns an empty vector for invisible edges, NULL slots, pure
-    /// topologies and projections excluding the single property, mirroring
-    /// the columnar contract that NULL reads as absent.
+    /// Paired value half of the bundled read: topology walks yield edge ids,
+    /// this entry resolves the inline value for one of them. Returns an
+    /// empty vector for invisible edges, NULL slots, pure topologies and
+    /// projections excluding the single property, mirroring the columnar
+    /// contract that NULL reads as absent.
     pub(crate) fn bundled_properties_at(
         &self,
         outgoing: bool,

@@ -29,6 +29,9 @@ impl CsrVariant {
     }
 
     /// Read one edge's inline value within its source row.
+    ///
+    /// Paired value half of a bundled topology walk: resolve the edge id
+    /// from the topology walk first, then read its value here.
     pub fn bundled_value_by_edge_id(&self, src_vid: u32, edge_id: EdgeId) -> Option<(u64, bool)> {
         match self {
             CsrVariant::Bundled(csr) => csr.value_by_edge_id(src_vid, edge_id),
@@ -89,6 +92,11 @@ impl CsrVariant {
 
     /// Visit every physically stored entry of one vertex with its inline
     /// value (`None` for NULL slots). Non-bundled forms visit with `None`.
+    ///
+    /// Paired topology-plus-value walk for bundled rows: this is the only
+    /// bundled traversal yielding values. Topology-only walks
+    /// (`visit_physical`, `fill_physical_into`, row iterators) never yield
+    /// values and must not be paired ad hoc elsewhere.
     pub fn visit_physical_with_values<F>(&self, src_vid: u32, mut f: F)
     where
         F: FnMut(Nbr, Option<u64>) -> bool,

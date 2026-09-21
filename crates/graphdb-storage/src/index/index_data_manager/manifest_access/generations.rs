@@ -1,16 +1,11 @@
 use crate::index::helpers::flush_split_generation;
 use crate::index::key_codec::key_types::SecondaryIndexKey;
-use crate::index::manifest::{
-    IndexManifest, IndexShard, ManifestCatalog,
-    ManifestHandle,
-};
+use crate::index::manifest::{IndexManifest, IndexShard, ManifestCatalog, ManifestHandle};
 use crate::index::shard_runtime::{
     generation_from_maps_with_pool_capacity, GenerationRuntime, IndexMaps,
 };
 use crate::index::types::{IndexIdentity, IndexRecord};
-use graphdb_core::types::{
-    CommitLsn, IndexGeneration, Timestamp,
-};
+use graphdb_core::types::{CommitLsn, IndexGeneration, Timestamp};
 use graphdb_core::{StorageError, StorageResult};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::Ordering;

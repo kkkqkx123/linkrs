@@ -37,6 +37,9 @@
 
 `EdgeStrategy` 只有 `Multiple` / `Single` / `None` 三种取值
 （定义在 `graphdb-core` 的 `types/edge.rs`）。
+自动推导在建表时锁定并持久化，加载不再重推；
+破坏前置条件的模式变更走迁移（`migration_plan` /
+`migrate_record_form` / `switch_record_form_online`）并随后检查点。
 `EdgeSchema::validate` 要求出入两个方向均为启用的非 `None` 策略，
 单向表在构造时即被拒绝。`csr_variant.rs` 中的 `dispatch!` 宏
 把 trait 调用路由到具体形态，无 `dyn` 开销。详见

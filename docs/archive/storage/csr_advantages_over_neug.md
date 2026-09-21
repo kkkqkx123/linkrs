@@ -13,9 +13,9 @@
 
 ## 二、列编码压缩的持久化
 
-位置：`edge/mutable_csr/serialization.rs` 的拓扑列编码，`edge/mutable_csr/persistence.rs` 的转储加载，`edge/frozen_serving.rs` 的 serving 列存放。
+位置：`edge/mutable_csr/serialization.rs` 的拓扑列编码，`edge/mutable_csr/persistence.rs` 的转储加载，`edge/edge_table/checkpoint/snapshot.rs` 的快照列存放。
 
-拓扑列按位打包与游程编码二选一，劣于直接存放时回退直接存放，转储均带尾部校验和。serving 文件按固定宽度分列存放，支持按下标寻址而不必全文件解码。
+拓扑列按位打包与游程编码二选一，劣于直接存放时回退直接存放，转储均带尾部校验和。快照侧车文件按固定宽度分列存放，支持按下标寻址而不必全文件解码。
 
 不变量：可变 CSR 只有一个写入标记（8），加载只接受该标记。分片文件外层另有页级 CRC32 与行数交叉校验，完整性契约集中在 `edge/edge_table/persistence.rs` 的对照表。
 

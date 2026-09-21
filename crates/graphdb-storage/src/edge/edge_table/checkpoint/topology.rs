@@ -2,12 +2,12 @@
 
 use super::super::core::EdgeStore;
 use super::layout::{in_append_path, in_group_path, out_append_path, out_group_path};
-use super::serving::{backfill_serving_file, sync_serving_file};
+use super::snapshot_cache::{backfill_snapshot_file, sync_snapshot_file};
 use crate::edge::node_group::{decode_append_ops, encode_append_ops, TableShardManifest};
-use crate::edge::{
-    frozen_serving::{serving_path_for, write_serving_file, MappedFrozen},
-    CsrBase, CsrVariant,
+use crate::edge::edge_table::checkpoint::snapshot::{
+    snapshot_path_for, write_snapshot_file, MappedFrozen,
 };
+use crate::edge::{CsrBase, CsrVariant};
 use graphdb_core::{StorageError, StorageResult};
 use std::path::Path;
 
@@ -72,7 +72,7 @@ impl EdgeStore {
                 && !shards.group_has_append_log(gid)
                 && base_path.exists()
             {
-                backfill_serving_file(
+                backfill_snapshot_file(
                     &base_path,
                     shards.group_variant(gid).ok_or_else(|| {
                         StorageError::deserialize_error(format!("group {} missing on flush", gid))
@@ -103,7 +103,7 @@ impl EdgeStore {
                 if append_path.exists() {
                     let _ = std::fs::remove_file(&append_path);
                 }
-                sync_serving_file(&base_path, variant)?;
+                sync_snapshot_file(&base_path, variant)?;
                 let shards = if outgoing {
                     &mut self.out_csr
                 } else {
@@ -154,7 +154,7 @@ impl EdgeStore {
                     if append_path.exists() {
                         let _ = std::fs::remove_file(&append_path);
                     }
-                    sync_serving_file(&base_path, variant)?;
+                    sync_snapshot_file(&base_path, variant)?;
                     let shards = if outgoing {
                         &mut self.out_csr
                     } else {
@@ -261,15 +261,18 @@ impl EdgeStore {
             let variant = shards.group_variant_mut(gid).ok_or_else(|| {
                 StorageError::deserialize_error(format!("group {} missing on load", gid))
             })?;
-            // Prefer the serving file: a validated mapping skips the whole
-            // authoritative decode. Pending append deltas rule it out, since
-            // a read-only view cannot absorb the write-through delta; any
-            // structural problem also falls through to the authority below.
-            // A regenerated serving file is a cache: rebuilding it must never
-            // fail the load.
-            let serving = serving_path_for(&path);
+            // Snapshot cache branch: the base file holds the authoritative
+            // heap bytes (mapped groups dump under the shared frozen tag),
+            // while the snapshot file is a derived view. A validated mapping
+            // skips the authoritative decode and yields the mapped form;
+            // anything else falls through to the heap frozen form below, so
+            // the mapped identity never roundtrips through the base payload.
+            // Pending append deltas rule the view out, since a read-only
+            // view cannot absorb the write-through delta. A regenerated
+            // snapshot file is a cache: rebuilding it must never fail the load.
+            let snapshot = snapshot_path_for(&path);
             if !append_path.exists() {
-                match MappedFrozen::open_with_intent(&serving, self.config.memory_intent) {
+                match MappedFrozen::open_with_intent(&snapshot, self.config.memory_intent) {
                     Ok(mapped) => {
                         *variant = CsrVariant::Mapped(Box::new(mapped));
                         shards.clear_group_dirty(gid);
@@ -277,31 +280,31 @@ impl EdgeStore {
                     }
                     Err(error) => {
                         log::debug!(
-                            "serving cache miss for group {} ({}), falling back to authority: {}",
+                            "snapshot cache miss for group {} ({}), falling back to authority: {}",
                             gid,
-                            serving.display(),
+                            snapshot.display(),
                             error,
                         );
                         if let Some(stats) = &self.stats_manager {
-                            stats.add_value(graphdb_metrics::MetricType::ServingFallbackCount);
+                            stats.add_value(graphdb_metrics::MetricType::SnapshotFallbackCount);
                         }
                     }
                 }
             } else {
                 log::debug!(
-                    "serving cache bypassed for group {} with pending append delta",
+                    "snapshot cache bypassed for group {} with pending append delta",
                     gid,
                 );
                 if let Some(stats) = &self.stats_manager {
-                    stats.add_value(graphdb_metrics::MetricType::ServingFallbackCount);
+                    stats.add_value(graphdb_metrics::MetricType::SnapshotFallbackCount);
                 }
             }
             super::super::persistence::load_csr(&path, variant, expected)?;
             if let CsrVariant::Frozen(csr) = &*variant {
-                if let Err(error) = write_serving_file(csr, &serving) {
-                    log::warn!("serving cache rebuild failed for group {}: {}", gid, error,);
+                if let Err(error) = write_snapshot_file(csr, &snapshot) {
+                    log::warn!("snapshot cache rebuild failed for group {}: {}", gid, error,);
                     if let Some(stats) = &self.stats_manager {
-                        stats.add_value(graphdb_metrics::MetricType::ServingFallbackCount);
+                        stats.add_value(graphdb_metrics::MetricType::SnapshotFallbackCount);
                     }
                 }
             }

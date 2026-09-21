@@ -6,7 +6,7 @@ impl CsrVariant {
     ///
     /// Both retained strategies report reclaimed tombstones; the placeholder
     /// keeps the no-op semantics. Frozen groups reclaim tombstones in place
-    /// with no reserve; mapped views need a serving-file rebuild and stay
+    /// with no reserve; mapped views need a snapshot-file rebuild and stay
     /// no-op here.
     pub fn compact_with_ts_reporting(
         &mut self,

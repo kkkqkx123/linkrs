@@ -195,22 +195,24 @@ impl EdgeStore {
 
     /// Target prechecks shared by the plan and the rebuild: arity, scalar
     /// encodability and rank rules fail before any state is read or written.
+    /// Each rejection names the migration entry so callers quote cost with
+    /// `migration_plan` instead of treating the error as generic.
     fn check_record_form_target(&self, target: RecordForm) -> StorageResult<()> {
         match target {
             RecordForm::Pure if !self.schema.properties.is_empty() => {
                 return Err(StorageError::invalid_operation(
-                    "pure record form requires zero properties".to_string(),
+                    "pure record form requires zero properties; drop properties or keep the columnar form, see migration_plan/migrate_record_form".to_string(),
                 ));
             }
             RecordForm::Bundled => {
                 if self.schema.properties.len() != 1 {
                     return Err(StorageError::invalid_operation(
-                        "bundled record form requires exactly one property".to_string(),
+                        "bundled record form requires exactly one property; adjust the schema or keep the columnar form, see migration_plan/migrate_record_form".to_string(),
                     ));
                 }
                 if !is_scalar_encodable(&self.schema.properties[0].data_type) {
                     return Err(StorageError::invalid_operation(format!(
-                        "property type {:?} cannot inline into the bundled form",
+                        "property type {:?} cannot inline into the bundled form; keep the columnar form, see migration_plan/migrate_record_form",
                         self.schema.properties[0].data_type
                     )));
                 }
@@ -448,7 +450,7 @@ impl EdgeStore {
                 };
                 if target != RecordForm::Columnar && nbr.rank != 0 {
                     return Err(StorageError::invalid_operation(format!(
-                        "nonzero rank {} cannot migrate to {:?}",
+                        "nonzero rank {} cannot migrate to {:?}; keep the columnar form",
                         nbr.rank, target
                     )));
                 }
@@ -498,12 +500,12 @@ impl EdgeStore {
         };
         match target {
             RecordForm::Pure if !props.is_empty() => Err(StorageError::invalid_operation(format!(
-                "edge {:?} carries properties into the pure form",
+                "edge {:?} carries properties into the pure form; keep the columnar form",
                 edge_id
             ))),
             RecordForm::Bundled if props.len() > 1 => {
                 Err(StorageError::invalid_operation(format!(
-                    "edge {:?} carries multiple properties into the bundled form",
+                    "edge {:?} carries multiple properties into the bundled form; keep the columnar form",
                     edge_id
                 )))
             }

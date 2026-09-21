@@ -1,17 +1,9 @@
-use crate::index::helpers::{
-    flush_split_generation, merge_split_wal_changes,
-};
+use crate::index::helpers::{flush_split_generation, merge_split_wal_changes};
 use crate::index::key_codec::{KeyBuilder, KeyParser};
-use crate::index::manifest::{
-    GenerationBuildState, GenerationState, IndexManifest, IndexShard,
-};
-use crate::index::shard_runtime::{
-    generation_from_maps_with_pool_capacity, IndexMaps,
-};
+use crate::index::manifest::{GenerationBuildState, GenerationState, IndexManifest, IndexShard};
+use crate::index::shard_runtime::{generation_from_maps_with_pool_capacity, IndexMaps};
 use crate::index::types::IndexIdentity;
-use graphdb_core::types::{
-    CommitLsn, IndexGeneration, IndexType, SnapshotTimestamp, Timestamp,
-};
+use graphdb_core::types::{CommitLsn, IndexGeneration, IndexType, SnapshotTimestamp, Timestamp};
 use graphdb_core::wal::{EntityRef, OutboxIntent};
 use graphdb_core::{StorageError, StorageResult};
 use std::collections::{BTreeMap, HashMap};

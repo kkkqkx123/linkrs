@@ -53,12 +53,12 @@ impl MutableCsr {
     /// Whether the live entries of one row arrive in key order.
     ///
     /// Mutable rows are insertion-ordered, so this usually reports false on
-    /// multi-edge rows and true on empty or single-entry rows. Frozen rows
-    /// are packed sorted and always report true. Query planning consults
-    /// this before choosing a bisection over a linear walk. Rows with an
-    /// unsorted overflow suffix report false even when the primary prefix
-    /// is sorted; threshold scans still bisect the prefix via
-    /// `is_primary_sorted`.
+    /// multi-edge rows and true on empty or single-entry rows. Only frozen,
+    /// mapped and single-slot rows promise order and may use bisection;
+    /// this observation must not be cached across restarts (the underlying
+    /// flag is memory-only and rebuilt on load). Rows with an unsorted
+    /// overflow suffix report false even when the primary prefix is sorted;
+    /// threshold scans still bisect the prefix via `is_primary_sorted`.
     pub fn is_row_sorted(&self, src_vid: u32) -> bool {
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
@@ -148,11 +148,7 @@ impl MutableCsr {
         if src_idx < self.live_counts.len()
             && self.live_counts[src_idx] as usize <= super::live_set::LIVE_SET_WIDTH_BOUND
         {
-            return self.get_edge_physical_via_scan(
-                src_idx,
-                decoded_endpoint,
-                decoded_rank,
-            );
+            return self.get_edge_physical_via_scan(src_idx, decoded_endpoint, decoded_rank);
         }
         if let Some(set) = self.live_sets.get(&src_vid) {
             let position = set.position(&(decoded_endpoint, decoded_rank))?;
@@ -170,12 +166,7 @@ impl MutableCsr {
     }
 
     /// Primary-then-overflow physical scan without index dispatch.
-    fn get_edge_physical_via_scan(
-        &self,
-        src_idx: usize,
-        endpoint: u32,
-        rank: i64,
-    ) -> Option<Nbr> {
+    fn get_edge_physical_via_scan(&self, src_idx: usize, endpoint: u32, rank: i64) -> Option<Nbr> {
         self.scan_row_for_key(src_idx, endpoint, rank, |hot, cold| {
             hot.edge_id != INVALID_EDGE_ID && cold.is_live()
         })

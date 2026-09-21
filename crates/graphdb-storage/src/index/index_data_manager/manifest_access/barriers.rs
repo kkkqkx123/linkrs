@@ -1,7 +1,4 @@
-use crate::index::shard_runtime::{
-    IndexBarrierRegistry,
-    IndexRuntime,
-};
+use crate::index::shard_runtime::{IndexBarrierRegistry, IndexRuntime};
 use crate::index::types::IndexIdentity;
 use graphdb_core::types::CommitLsn;
 use parking_lot::RwLock;

@@ -1,8 +1,8 @@
-use super::super::mutable_csr::serialization::{
+use crate::edge::mutable_csr::serialization::{
     encode_topology_i64_column, encode_topology_u32_column, encode_topology_u64_column,
 };
-use super::super::{ColdStamps, HotNbr};
-use super::format::serving_error;
+use crate::edge::{ColdStamps, HotNbr};
+use super::format::snapshot_error;
 use super::MappedFrozen;
 use graphdb_core::StorageResult;
 
@@ -136,10 +136,10 @@ impl crate::edge::CsrBase for MappedFrozen {
     }
 
     fn load(&mut self, _data: &[u8]) -> StorageResult<()> {
-        // Mapped views load from serving files, never from byte payloads:
+        // Mapped views load from snapshot files, never from byte payloads:
         // callers open a fresh view and replace the variant instead.
-        Err(serving_error(
-            "mapped frozen view loads from a serving file, not from bytes".to_string(),
+        Err(snapshot_error(
+            "mapped frozen view loads from a snapshot file, not from bytes".to_string(),
         ))
     }
 }

@@ -12,4 +12,3 @@ mod encoding_select;
 mod flush;
 mod flush_incremental;
 mod load;
-

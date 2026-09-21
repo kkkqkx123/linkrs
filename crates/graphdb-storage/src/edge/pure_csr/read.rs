@@ -194,10 +194,13 @@ impl PureTopologyCsr {
     /// Visit live entries whose endpoint falls in the inclusive
     /// `[lower, upper]` range (`None` means unbounded).
     ///
-    /// Sorted primary prefixes bisect to the endpoint window, then filter
-    /// holes inline, and the overflow suffix always scans linearly. The
-    /// prefix probe is the cached per-row order flag, so hybrid rows still
-    /// bisect without paying a full sortedness walk on every query.
+    /// Endpoint-only range by construction: pure rows carry no rank, so
+    /// callers pass endpoint intervals. Sorted primary prefixes bisect to
+    /// the endpoint window, then filter holes inline, and the overflow
+    /// suffix always scans linearly. The prefix probe is the cached
+    /// per-row order flag, so hybrid rows still bisect without paying a
+    /// full sortedness walk on every query. The flag is memory-only and
+    /// rebuilt on load; never cache it across restarts.
     pub fn visit_threshold<F>(&self, src_vid: u32, lower: Option<u32>, upper: Option<u32>, mut f: F)
     where
         F: FnMut(Nbr) -> bool,

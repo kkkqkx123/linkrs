@@ -2,4 +2,4 @@ mod common;
 mod incremental;
 mod properties;
 mod recovery;
-mod serving;
+mod snapshot_cache;

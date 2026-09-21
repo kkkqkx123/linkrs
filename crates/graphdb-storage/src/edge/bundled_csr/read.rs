@@ -13,13 +13,16 @@ impl BundledCsr {
 
     /// Borrowed row walk over live entries without allocating.
     ///
-    /// Shares the topology walk exactly: values stay in their columns and
-    /// are resolved through the value accessors when needed.
+    /// Topology half of the paired bundled traversal: values stay in their
+    /// columns and must be resolved through `visit_physical_with_values` or
+    /// the value-by-key accessors. Walking this alone silently drops values.
     pub fn iter_row(&self, src_vid: u32) -> super::super::pure_csr::PureRowIter<'_> {
         self.topology.iter_row(src_vid)
     }
 
     /// Borrowed walk over every live entry of the table without allocating.
+    ///
+    /// Topology only; pair with the value entry when values are needed.
     pub fn iter_all(&self) -> super::super::pure_csr::PureAllIter<'_> {
         self.topology.iter_all()
     }
@@ -37,6 +40,9 @@ impl BundledCsr {
     }
 
     /// Visit live entries whose endpoint falls in the inclusive range.
+    ///
+    /// Endpoint-only range by construction: bundled rows carry no rank, so
+    /// callers pass endpoint intervals and must not expect rank filtering.
     pub fn visit_threshold<F>(&self, src_vid: u32, lower: Option<u32>, upper: Option<u32>, f: F)
     where
         F: FnMut(Nbr) -> bool,

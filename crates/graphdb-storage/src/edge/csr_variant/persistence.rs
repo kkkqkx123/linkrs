@@ -22,6 +22,11 @@ impl CsrBase for CsrVariant {
     }
 
     fn dump(&self) -> Vec<u8> {
+        // Tag 3 is shared by design: frozen heap and mapped view dump the
+        // same authoritative heap bytes. The mapping identity is a derived
+        // snapshot cache and never persists; loading tag 3 always rebuilds
+        // the heap frozen form. Checkpoint snapshot files own the mapped
+        // fast path, never this payload.
         match self {
             CsrVariant::None { vertex_capacity } => {
                 let mut result = vec![0u8];
@@ -62,6 +67,8 @@ impl CsrBase for CsrVariant {
     }
 
     fn dump_into(&self, out: &mut Vec<u8>) {
+        // Same shared-tag contract as `dump`: byte-equal for frozen and
+        // mapped inputs, always loading back as the heap frozen form.
         match self {
             CsrVariant::None { vertex_capacity } => {
                 out.push(0u8);
@@ -95,6 +102,9 @@ impl CsrBase for CsrVariant {
     }
 
     fn load(&mut self, data: &[u8]) -> StorageResult<()> {
+        // Tag 3 loads as the heap frozen form even when the bytes were
+        // dumped from a mapped view. View-type roundtrip is not promised:
+        // callers needing a mapping reopen the snapshot file instead.
         if data.is_empty() {
             return Err(graphdb_core::StorageError::deserialize_error(
                 "Cannot load CSR variant: empty data",
@@ -154,8 +164,10 @@ impl CsrBase for CsrVariant {
 impl CsrVariant {
     /// Borrow-based dump reusing caller-owned column buffers.
     ///
-    /// Same bytes as `dump_into` through the base trait; a checkpoint over
-    /// many groups pays one allocation per column instead of one per group.
+    /// Same bytes as `dump_into` through the base trait, including the
+    /// shared frozen tag: a checkpoint over many groups pays one allocation
+    /// per column instead of one per group, and mapped groups still dump as
+    /// heap frozen bytes that load back as the heap form.
     pub fn dump_into_with_scratch(
         &self,
         out: &mut Vec<u8>,

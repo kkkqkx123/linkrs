@@ -1,15 +1,7 @@
-use crate::index::manifest::{
-    IndexManifest, IndexShard, ManifestCatalog,
-    ManifestHandle,
-};
-use crate::index::shard_runtime::{
-    GenerationRuntime, IndexMaps,
-    IndexRuntime,
-};
+use crate::index::manifest::{IndexManifest, IndexShard, ManifestCatalog, ManifestHandle};
+use crate::index::shard_runtime::{GenerationRuntime, IndexMaps, IndexRuntime};
 use crate::index::types::IndexIdentity;
-use graphdb_core::types::{
-    Index, IndexGeneration,
-};
+use graphdb_core::types::{Index, IndexGeneration};
 use graphdb_core::{StorageError, StorageResult};
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;

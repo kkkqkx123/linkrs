@@ -289,6 +289,10 @@ impl CsrShardSet {
     }
 
     /// Whether the live entries of one row arrive in key order.
+    ///
+    /// Only frozen, mapped and single-slot rows promise order and may use
+    /// bisection; other variants report an observation that is memory-only,
+    /// rebuilt on load and never cached across restarts.
     pub fn is_row_sorted(&self, src_vid: u32) -> bool {
         let Some((gid, local)) = self.route(src_vid) else {
             return true;
@@ -309,6 +313,9 @@ impl CsrShardSet {
     }
 
     /// Visit live entries of one row whose key falls in the inclusive range.
+    ///
+    /// Pure and bundled rows ignore the rank halves by contract: callers
+    /// pass endpoint intervals there.
     pub fn visit_threshold<F>(
         &self,
         src_vid: u32,

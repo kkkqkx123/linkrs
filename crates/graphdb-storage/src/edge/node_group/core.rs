@@ -104,6 +104,9 @@ impl CsrShardSet {
     }
 
     pub(crate) fn fresh_variant(&self) -> StorageResult<CsrVariant> {
+        // Only the columnar multi-edge store reuses primary tombstones, so
+        // only that branch seeds the reuse cutoff. Pure and bundled groups
+        // hold no reuse state and intentionally ignore the hint.
         let variant = match self.record_form {
             RecordForm::Pure => CsrVariant::Pure(Box::new(
                 super::super::pure_csr::PureTopologyCsr::with_overflow_chunk_edges(
@@ -644,6 +647,12 @@ impl CsrShardSet {
 
     /// Clear all edges, keeping the group space. Marks surviving groups
     /// dirty so the next checkpoint persists the cleared state.
+    ///
+    /// Mapped groups cannot empty their off-heap mapping, so clearing one
+    /// replaces it with the empty placeholder at the same vertex capacity.
+    /// The discriminant change is intentional: later freeze, reclaim and
+    /// property branches must observe the placeholder, never the old view.
+    /// Missing-group reads stay empty and no group is dropped here.
     pub fn clear(&mut self) {
         for shard in self.shards.values_mut() {
             shard.variant.clear();

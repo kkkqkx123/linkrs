@@ -1,16 +1,10 @@
-use crate::index::helpers::{
-    edge_entity_ref, vertex_entity_ref,
-};
+use crate::index::helpers::{edge_entity_ref, vertex_entity_ref};
 use crate::index::key_codec::key_types::SecondaryIndexKey;
 use crate::index::key_codec::{KeyBuilder, KeyParser};
-use crate::index::manifest::{
-    IndexManifest, ManifestCatalog,
-};
+use crate::index::manifest::{IndexManifest, ManifestCatalog};
 use crate::index::shard_runtime::IndexMaps;
 use crate::index::types::{EdgeIdentity, IndexIdentity, IndexRecord};
-use graphdb_core::types::{
-    IndexType, Timestamp,
-};
+use graphdb_core::types::{IndexType, Timestamp};
 use graphdb_core::value::ordered_codec::OrderedCodec;
 use graphdb_core::{StorageError, StorageResult, Value};
 use std::collections::{HashMap, HashSet};

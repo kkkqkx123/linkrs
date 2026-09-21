@@ -35,7 +35,7 @@
 //! | single group dumps | edge-count header plus columns plus trailing CRC32 | no format version, trailing bytes rejected |
 //! | pure group dumps | endpoints plus edge ids plus trailing CRC32 | no format version |
 //! | bundled group dumps | topology payload plus value columns plus valid bits plus CRC32 | no format version, trailing bytes rejected |
-//! | `*.serving` sidecars | flat columns, trailing CRC32; magic only, no format version; a bad cache is discarded and rebuilt from authority | cache only, never authority |
+//! | `*.snapshot` sidecars | flat columns, trailing CRC32; magic only, no format version; a bad cache is discarded and rebuilt from authority | cache only, never authority |
 //! | `*.append` sidecars | address width plus op sections | no version, decode fails closed |
 //! | property shards | page-framed visibility plus current values (page layer carries per-page CRC32); duplicate names/ids and unknown encoding tags rejected | no version, encoding tags validated |
 //! | `edge_wal.bin` | length-prefixed postcard ops; torn tails fail the load, repairable offline by truncating at the last valid entry | no version |

@@ -23,9 +23,7 @@ pub(crate) use edge_index::{
 };
 #[cfg(test)]
 pub(crate) use generation::{clear_generation_faults, inject_generation_fault};
-pub(crate) use generation::{
-    current_wal_lsn, stable_hash,
-};
+pub(crate) use generation::{current_wal_lsn, stable_hash};
 pub(crate) use tag_index::{
     create_tag_index, drop_tag_index, get_tag_index, list_tag_indexes, lookup_index,
     rebuild_tag_index,

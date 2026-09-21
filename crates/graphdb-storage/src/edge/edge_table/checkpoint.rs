@@ -47,7 +47,7 @@
 //!
 //! Organization (`checkpoint/`):
 //! - `layout`: file names, paths and group-file parsing
-//! - `serving`: frozen serving-file sidecar cache
+//! - `snapshot_cache`: frozen snapshot_cache-file sidecar cache
 //! - `topology`: group base payloads plus append-log sidecars
 //! - `timestamps`: per-group timestamp shards
 //! - `properties`: property dirty tracking plus per-group property shards
@@ -64,7 +64,8 @@ pub mod load;
 pub mod orphans;
 pub mod properties;
 pub mod segment_stats;
-pub mod serving;
+pub mod snapshot;
+pub mod snapshot_cache;
 pub mod timestamps;
 pub mod topology;
 

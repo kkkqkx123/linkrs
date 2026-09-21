@@ -1,4 +1,4 @@
-use super::super::Nbr;
+use crate::edge::Nbr;
 use super::MappedFrozen;
 use graphdb_core::types::{Timestamp, VertexId};
 
@@ -16,7 +16,7 @@ impl MappedFrozen {
 
     /// Iterate timestamp-visible entries of one row without allocating.
     ///
-    /// Detached-snapshot contract: the serving file embeds the full
+    /// Detached-snapshot contract: the snapshot file embeds the full
     /// create/delete stamp history, so point-in-time reads inside the
     /// snapshot are decided from the embedded stamps alone, without the
     /// table version authority. Live tables must never use this path for

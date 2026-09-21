@@ -376,6 +376,9 @@ impl MutableCsr {
         self.reuse_hint = vec![super::core::REUSE_HINT_UNKNOWN; vertex_capacity];
         self.live_counts = vec![0; vertex_capacity];
         self.tombstone_counts = vec![0; vertex_capacity];
+        // Row order is memory-only and never persists: every load starts
+        // unsorted so later sorts re-observe the order. Plan caches must not
+        // reuse this flag across restarts.
         self.primary_sorted = vec![false; vertex_capacity];
         self.live_sets.clear();
         self.live_sets.ensure_capacity(vertex_capacity);

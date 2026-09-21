@@ -27,6 +27,10 @@ impl EdgeStore {
             ));
         }
 
+        // Auto derivation locks at creation: no properties selects pure,
+        // one encodable scalar selects bundled, anything else selects
+        // columnar. The resolved form persists and never re-derives on load;
+        // later precondition breaks must migrate explicitly.
         let record_form = match config.record_form {
             RecordFormPreference::Columnar => RecordForm::Columnar,
             RecordFormPreference::Auto => {
@@ -42,7 +46,14 @@ impl EdgeStore {
             }
         };
         // The resolved form is authoritative in memory and on disk: load
-        // paths never re-infer it.
+        // paths never re-infer it. Report the derivation so the locked
+        // choice and its later evolution cost stay visible to operators.
+        log::info!(
+            "edge table '{}' uses record form {:?} (preference {:?})",
+            schema.label_name,
+            record_form,
+            config.record_form,
+        );
         let mut schema = schema;
         schema.record_form = record_form;
         let mut out_csr = CsrShardSet::new(
