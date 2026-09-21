@@ -491,8 +491,7 @@ impl MutableCsr {
             self.cold_list[idx].delete_ts = Timestamp::MAX;
             self.edge_count += 1;
             self.live_counts[src_idx] += 1;
-            self.tombstone_counts[src_idx] =
-                self.tombstone_counts[src_idx].saturating_sub(1);
+            self.tombstone_counts[src_idx] = self.tombstone_counts[src_idx].saturating_sub(1);
             self.invalidate_reuse_hint(src_idx);
             self.track_live_insert(
                 src_vid,
@@ -557,8 +556,7 @@ impl MutableCsr {
                 }
                 self.edge_count -= 1;
             } else {
-                self.tombstone_counts[src_idx] =
-                    self.tombstone_counts[src_idx].saturating_sub(1);
+                self.tombstone_counts[src_idx] = self.tombstone_counts[src_idx].saturating_sub(1);
             }
             return true;
         }
@@ -591,8 +589,7 @@ impl MutableCsr {
                 if emptied {
                     if was_live {
                         self.edge_count -= 1;
-                        self.live_counts[src_idx] =
-                            self.live_counts[src_idx].saturating_sub(1);
+                        self.live_counts[src_idx] = self.live_counts[src_idx].saturating_sub(1);
                     } else {
                         self.tombstone_counts[src_idx] =
                             self.tombstone_counts[src_idx].saturating_sub(1);
@@ -610,11 +607,9 @@ impl MutableCsr {
                     self.rebuild_live_set_for_vertex(src_vid);
                 }
                 self.edge_count -= 1;
-                self.live_counts[src_idx] =
-                    self.live_counts[src_idx].saturating_sub(1);
+                self.live_counts[src_idx] = self.live_counts[src_idx].saturating_sub(1);
             } else {
-                self.tombstone_counts[src_idx] =
-                    self.tombstone_counts[src_idx].saturating_sub(1);
+                self.tombstone_counts[src_idx] = self.tombstone_counts[src_idx].saturating_sub(1);
             }
             return true;
         }
@@ -698,12 +693,14 @@ impl MutableCsr {
     /// listed are untouched. Live sets are left alone; per-edge inserts keep
     /// maintaining them incrementally.
     ///
-    /// Single-pass rebuild: all target capacities are computed first, then
-    /// the primary list is rebuilt once front to back with fresh offsets.
-    /// The previous per-row splice shifted the whole tail and re-fixed every
-    /// offset per touched row (O(R x V)); this pass moves each reserved byte
-    /// exactly once (O(total)). Untouched rows keep byte-identical content:
-    /// reserved blocks are copied verbatim, only the trailing gap grows.
+    /// Two growth paths share the sizing above. Small batches touching few
+    /// rows append fresh blocks at the tail, moving only touched rows and
+    /// leaving every other offset stable; the superseded blocks stay in the
+    /// vectors as orphaned filler until the next compaction reclaims them.
+    /// Large batches touching a substantial share of rows use the single
+    /// front-to-back rebuild, which moves each reserved byte exactly once
+    /// and reclaims all orphaned filler. Row positions are row-relative, so
+    /// neither path disturbs the live-key index.
     pub fn reserve_for_batch(&mut self, counts: &[(u32, usize)]) {
         if counts.is_empty() {
             return;
@@ -761,6 +758,47 @@ impl MutableCsr {
             return;
         }
         let rows = self.vertex_capacity();
+        // Narrow batches avoid the full-table copy: each touched row moves
+        // once to a tail block while untouched rows keep their offsets and
+        // reuse hints. Positions are row-relative, so the live-key index
+        // needs no rebuild on either path.
+        if aggregated.len().saturating_mul(8) < rows.max(1) {
+            for (src_vid, incoming) in &aggregated {
+                let src_idx = *src_vid as usize;
+                let live = self.live_key_count(*src_vid);
+                let want = Self::sized_row_capacity(live.saturating_add(*incoming));
+                let have = self.rows.primary_capacities[src_idx] as usize;
+                if want <= have {
+                    continue;
+                }
+                let degree = self.rows.degrees[src_idx] as usize;
+                let old_base = self.rows.adj_offsets[src_idx] as usize;
+                if old_base.saturating_add(have) == self.hot_list.len() {
+                    let grow = want - have;
+                    self.hot_list
+                        .resize(self.hot_list.len() + grow, HotNbr::dead_gap());
+                    self.cold_list
+                        .resize(self.cold_list.len() + grow, ColdStamps::dead_gap());
+                    self.rows.primary_capacities[src_idx] = want as u32;
+                    self.add_capacity(grow);
+                } else {
+                    let new_base = self.hot_list.len();
+                    self.hot_list.resize(new_base + want, HotNbr::dead_gap());
+                    self.cold_list
+                        .resize(new_base + want, ColdStamps::dead_gap());
+                    if degree > 0 {
+                        self.hot_list
+                            .copy_within(old_base..old_base + degree, new_base);
+                        self.cold_list
+                            .copy_within(old_base..old_base + degree, new_base);
+                    }
+                    self.rows.adj_offsets[src_idx] = new_base as u32;
+                    self.rows.primary_capacities[src_idx] = want as u32;
+                    self.add_capacity(want);
+                }
+            }
+            return;
+        }
         let total: usize = new_caps.iter().map(|&c| c as usize).sum();
         let mut new_hot = Vec::with_capacity(total);
         let mut new_cold = Vec::with_capacity(total);
@@ -914,9 +952,7 @@ impl MutableCsr {
                     return Ok(false);
                 }
                 match decide_slot_delete(&probe, expected, ts)? {
-                    DeleteSlotOutcome::AlreadyStamped => {
-                        return Ok(false)
-                    }
+                    DeleteSlotOutcome::AlreadyStamped => return Ok(false),
                     DeleteSlotOutcome::Stamped => {}
                 }
                 self.cold_list[idx].delete_ts = ts;
@@ -940,9 +976,7 @@ impl MutableCsr {
                     return Ok(false);
                 }
                 match decide_slot_delete(&probe, expected, ts)? {
-                    DeleteSlotOutcome::AlreadyStamped => {
-                        return Ok(false)
-                    }
+                    DeleteSlotOutcome::AlreadyStamped => return Ok(false),
                     DeleteSlotOutcome::Stamped => {}
                 }
                 chunk.cold_at_mut(slot as usize).unwrap().delete_ts = ts;

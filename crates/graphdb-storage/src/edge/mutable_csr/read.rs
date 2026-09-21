@@ -33,12 +33,32 @@ impl MutableCsr {
         (&self.hot_list[start..end], &self.cold_list[start..end])
     }
 
+    /// Whether the primary block of one row arrives in key order.
+    ///
+    /// Sorted-prefix probe behind threshold scans: after a maintenance sort
+    /// the primary block is ordered while overflow chunks stay in insertion
+    /// order as the unsorted suffix, so this reports true even when the
+    /// whole row is hybrid.
+    pub fn is_primary_sorted(&self, src_vid: u32) -> bool {
+        let src_idx = src_vid as usize;
+        if src_idx >= self.vertex_capacity() {
+            return true;
+        }
+        let (hot, _) = self.primary_pair(src_idx);
+        hot.windows(2).all(|w| {
+            (w[0].endpoint, w[0].rank, w[0].edge_id.0) <= (w[1].endpoint, w[1].rank, w[1].edge_id.0)
+        })
+    }
+
     /// Whether the live entries of one row arrive in key order.
     ///
     /// Mutable rows are insertion-ordered, so this usually reports false on
     /// multi-edge rows and true on empty or single-entry rows. Frozen rows
     /// are packed sorted and always report true. Query planning consults
-    /// this before choosing a bisection over a linear walk.
+    /// this before choosing a bisection over a linear walk. Rows with an
+    /// unsorted overflow suffix report false even when the primary prefix
+    /// is sorted; threshold scans still bisect the prefix via
+    /// `is_primary_sorted`.
     pub fn is_row_sorted(&self, src_vid: u32) -> bool {
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
@@ -524,10 +544,7 @@ impl MutableCsr {
         if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
             for i in 0..single.len() {
                 if let Some(nbr) = single.slot_at(i) {
-                    if nbr.endpoint == endpoint
-                        && nbr.rank == rank
-                        && nbr.is_alive_at(ts)
-                    {
+                    if nbr.endpoint == endpoint && nbr.rank == rank && nbr.is_alive_at(ts) {
                         return Some(nbr);
                     }
                 }
@@ -538,10 +555,7 @@ impl MutableCsr {
             for chunk in chunks {
                 for i in 0..chunk.len() {
                     if let Some(nbr) = chunk.slot_at(i) {
-                        if nbr.endpoint == endpoint
-                            && nbr.rank == rank
-                            && nbr.is_alive_at(ts)
-                        {
+                        if nbr.endpoint == endpoint && nbr.rank == rank && nbr.is_alive_at(ts) {
                             return Some(nbr);
                         }
                     }
@@ -550,5 +564,114 @@ impl MutableCsr {
         }
 
         None
+    }
+
+    /// Visit live entries whose `(endpoint, rank)` key falls in the inclusive
+    /// `[lower, upper]` range (`None` means unbounded).
+    ///
+    /// Sorted primary prefixes bisect to the key window and filter for
+    /// liveness inside it, then the overflow suffix always scans linearly.
+    /// Unsorted primaries scan linearly with the same key predicate. The
+    /// prefix probe is `is_primary_sorted`, so hybrid rows (sorted primary
+    /// plus unsorted overflow) still bisect the prefix. Only live entries
+    /// (`delete_ts == MAX`) are visited; snapshot visibility stays above.
+    pub fn visit_threshold<F>(
+        &self,
+        src_vid: u32,
+        lower: Option<(u32, i64)>,
+        upper: Option<(u32, i64)>,
+        mut f: F,
+    ) where
+        F: FnMut(Nbr) -> bool,
+    {
+        let src_idx = src_vid as usize;
+        if src_idx >= self.vertex_capacity() {
+            return;
+        }
+        let in_range = |endpoint: u32, rank: i64| -> bool {
+            if let Some((lo_ep, lo_rank)) = lower {
+                if (endpoint, rank) < (lo_ep, lo_rank) {
+                    return false;
+                }
+            }
+            if let Some((hi_ep, hi_rank)) = upper {
+                if (endpoint, rank) > (hi_ep, hi_rank) {
+                    return false;
+                }
+            }
+            true
+        };
+        let (hot, cold) = self.primary_pair(src_idx);
+        if self.is_primary_sorted(src_vid) && hot.len() > 1 {
+            let lo = match lower {
+                Some((lo_ep, lo_rank)) => {
+                    hot.partition_point(|h| (h.endpoint, h.rank) < (lo_ep, lo_rank))
+                }
+                None => 0,
+            };
+            let hi = match upper {
+                Some((hi_ep, hi_rank)) => {
+                    hot.partition_point(|h| (h.endpoint, h.rank) <= (hi_ep, hi_rank))
+                }
+                None => hot.len(),
+            };
+            for (h, c) in hot[lo..hi].iter().zip(&cold[lo..hi]) {
+                if c.is_live() {
+                    let nbr = Nbr::from_parts(*h, *c);
+                    if !f(nbr) {
+                        return;
+                    }
+                }
+            }
+        } else {
+            for (h, c) in hot.iter().zip(cold.iter()) {
+                if c.is_live() && in_range(h.endpoint, h.rank) {
+                    let nbr = Nbr::from_parts(*h, *c);
+                    if !f(nbr) {
+                        return;
+                    }
+                }
+            }
+        }
+        if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
+            for i in 0..single.len() {
+                if let Some(nbr) = single.slot_at(i) {
+                    if nbr.delete_ts == Timestamp::MAX && in_range(nbr.endpoint, nbr.rank) {
+                        if !f(nbr) {
+                            return;
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        if let Some(chunks) = self.overflow_chunks.get(src_vid) {
+            for chunk in chunks {
+                for i in 0..chunk.len() {
+                    if let Some(nbr) = chunk.slot_at(i) {
+                        if nbr.delete_ts == Timestamp::MAX && in_range(nbr.endpoint, nbr.rank) {
+                            if !f(nbr) {
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fill a caller buffer with the same range content as `visit_threshold`.
+    pub fn fill_threshold_into(
+        &self,
+        src_vid: u32,
+        lower: Option<(u32, i64)>,
+        upper: Option<(u32, i64)>,
+        out: &mut Vec<Nbr>,
+    ) {
+        out.clear();
+        self.visit_threshold(src_vid, lower, upper, |nbr| {
+            out.push(nbr);
+            true
+        });
     }
 }

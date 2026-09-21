@@ -223,11 +223,108 @@ impl BundledCsr {
         self.topology.iter_row(src_vid)
     }
 
+    /// Borrowed walk over every live entry of the table without allocating.
+    pub fn iter_all(&self) -> super::pure_csr::PureAllIter<'_> {
+        self.topology.iter_all()
+    }
+
     pub fn visit_hot<F>(&self, src_vid: u32, f: F)
     where
         F: FnMut(super::HotNbr) -> bool,
     {
         self.topology.visit_hot(src_vid, f)
+    }
+
+    /// Whether the live endpoints of one row arrive in ascending order.
+    pub fn is_row_sorted(&self, src_vid: u32) -> bool {
+        self.topology.is_row_sorted(src_vid)
+    }
+
+    /// Sort one primary row into `(endpoint, edge_id)` order with values.
+    ///
+    /// Same maintenance-only invalidation as the pure form; the value
+    /// columns permute with the topology slots so no column drifts.
+    /// Overflow chunks stay in insertion order as the unsorted suffix.
+    pub fn sort_row(&mut self, vid: u32) -> bool {
+        let idx = vid as usize;
+        if idx >= self.topology.vertex_capacity() {
+            return false;
+        }
+        self.sync_primary_len();
+        let (start, end) = self.topology.primary_window(idx);
+        if end.saturating_sub(start) <= 1 {
+            return false;
+        }
+        let mut live: Vec<(u32, u64, u64, bool)> = Vec::new();
+        for i in start..end {
+            let eid = self.topology.edge_ids[i];
+            if eid != INVALID_EDGE_ID.0 {
+                live.push((
+                    self.topology.endpoints[i],
+                    eid,
+                    self.primary_values[i],
+                    self.primary_valid[i],
+                ));
+            }
+        }
+        if live.len() <= 1 {
+            return false;
+        }
+        let mut sorted = live.clone();
+        sorted.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+        if sorted
+            .iter()
+            .map(|(e, id, _, _)| (*e, *id))
+            .eq(live.iter().map(|(e, id, _, _)| (*e, *id)))
+        {
+            return false;
+        }
+        for (offset, (endpoint, eid, value, valid)) in sorted.iter().enumerate() {
+            self.topology.endpoints[start + offset] = *endpoint;
+            self.topology.edge_ids[start + offset] = *eid;
+            self.primary_values[start + offset] = *value;
+            self.primary_valid[start + offset] = *valid;
+        }
+        for i in start + sorted.len()..end {
+            self.topology.endpoints[i] = u32::MAX;
+            self.topology.edge_ids[i] = INVALID_EDGE_ID.0;
+            self.primary_values[i] = 0;
+            self.primary_valid[i] = false;
+        }
+        self.topology.rebuild_live_set_for_vertex(vid);
+        true
+    }
+
+    /// Sort every primary row that is out of order. Returns reordered rows.
+    pub fn sort_all_rows(&mut self) -> usize {
+        let rows = self.topology.vertex_capacity();
+        let mut reordered = 0usize;
+        for vid in 0..rows {
+            if self.sort_row(vid as u32) {
+                reordered += 1;
+            }
+        }
+        reordered
+    }
+
+    /// Visit live entries whose endpoint falls in the inclusive range.
+    pub fn visit_threshold<F>(&self, src_vid: u32, lower: Option<u32>, upper: Option<u32>, f: F)
+    where
+        F: FnMut(Nbr) -> bool,
+    {
+        self.topology.visit_threshold(src_vid, lower, upper, f)
+    }
+
+    /// Fill a caller buffer with the same range content as `visit_threshold`.
+    pub fn fill_threshold_into(
+        &self,
+        src_vid: u32,
+        lower: Option<u32>,
+        upper: Option<u32>,
+        out: &mut Vec<Nbr>,
+    ) {
+        self.topology
+            .fill_threshold_into(src_vid, lower, upper, out)
     }
 
     /// Visit every physically stored entry of one vertex together with its

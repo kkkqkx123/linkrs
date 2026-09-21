@@ -11,6 +11,21 @@ use crate::edge::{
 use graphdb_core::{StorageError, StorageResult};
 use std::path::Path;
 
+/// Select the topology dump mode for one group flush.
+///
+/// Static mode returns the configured flag verbatim. Adaptive mode selects
+/// by checkpoint kind without a size threshold: bound-triggered rewrites
+/// carry frequent small deltas and prefer the raw direct dump for CPU
+/// savings, while delete-dirt and first-write rewrites carry infrequent
+/// large payloads and keep the compressed encoding for file-size savings.
+/// Size-based fine tuning waits for the six checkpoint benches.
+fn select_dump_raw(csr_dump_raw: bool, csr_dump_adaptive: bool, bound_triggered: bool) -> bool {
+    if !csr_dump_adaptive {
+        return csr_dump_raw;
+    }
+    bound_triggered
+}
+
 impl EdgeStore {
     /// Write one direction group by group, each in its own mode.
     ///
@@ -75,7 +90,11 @@ impl EdgeStore {
                     StorageError::deserialize_error(format!("group {} missing on flush", gid))
                 })?;
                 let mut payload = Vec::new();
-                if self.config.csr_dump_raw {
+                if select_dump_raw(
+                    self.config.csr_dump_raw,
+                    self.config.csr_dump_adaptive,
+                    false,
+                ) {
                     super::super::persistence::serialize_csr_with_scratch_raw(
                         variant,
                         section_id,
@@ -135,7 +154,11 @@ impl EdgeStore {
                         StorageError::deserialize_error(format!("group {} missing on flush", gid))
                     })?;
                     let mut payload = Vec::new();
-                    if self.config.csr_dump_raw {
+                    if select_dump_raw(
+                        self.config.csr_dump_raw,
+                        self.config.csr_dump_adaptive,
+                        true,
+                    ) {
                         super::super::persistence::serialize_csr_with_scratch_raw(
                             variant,
                             section_id,

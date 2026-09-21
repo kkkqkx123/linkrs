@@ -376,6 +376,55 @@ impl SingleMutableCsr {
         }
     }
 
+    /// Single-slot rows hold at most one entry and are trivially ordered.
+    pub fn is_row_sorted(&self, _src: u32) -> bool {
+        true
+    }
+
+    /// Threshold visit over at most one live entry.
+    pub fn visit_threshold<F>(
+        &self,
+        src: u32,
+        lower: Option<(u32, i64)>,
+        upper: Option<(u32, i64)>,
+        mut f: F,
+    ) where
+        F: FnMut(Nbr) -> bool,
+    {
+        let Some(probe) = self.slot_at(src as usize) else {
+            return;
+        };
+        if probe.edge_id == INVALID_EDGE_ID || probe.delete_ts != Timestamp::MAX {
+            return;
+        }
+        if let Some((lo_ep, lo_rank)) = lower {
+            if (probe.endpoint, probe.rank) < (lo_ep, lo_rank) {
+                return;
+            }
+        }
+        if let Some((hi_ep, hi_rank)) = upper {
+            if (probe.endpoint, probe.rank) > (hi_ep, hi_rank) {
+                return;
+            }
+        }
+        let _ = f(probe);
+    }
+
+    /// Fill a caller buffer with the same range content as `visit_threshold`.
+    pub fn fill_threshold_into(
+        &self,
+        src: u32,
+        lower: Option<(u32, i64)>,
+        upper: Option<(u32, i64)>,
+        out: &mut Vec<Nbr>,
+    ) {
+        out.clear();
+        self.visit_threshold(src, lower, upper, |nbr| {
+            out.push(nbr);
+            true
+        });
+    }
+
     pub fn has_physical_entries(&self, vid: u32) -> bool {
         self.hot_slots
             .get(vid as usize)

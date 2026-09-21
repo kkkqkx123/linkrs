@@ -32,7 +32,8 @@ use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
 
 use super::csr_shared::{
-    grown_vertex_capacity, OverflowTable, SegmentedTable, VertexBookkeeping, DEFAULT_VERTEX_CAPACITY,
+    grown_vertex_capacity, OverflowTable, SegmentedTable, VertexBookkeeping,
+    DEFAULT_VERTEX_CAPACITY,
 };
 use super::csr_trait::{CsrBase, MutableCsrTrait};
 use super::{EdgePosition, Nbr};
@@ -310,6 +311,38 @@ impl<'a> Iterator for PureRowIter<'a> {
             self.slot_idx = 0;
         }
         None
+    }
+}
+
+/// Borrowed walk over every live entry of the table without allocating.
+///
+/// Advances one borrowed row walk at a time, so full-table rebuilds and
+/// scans iterate with no intermediate vector regardless of primary versus
+/// overflow layout. Sentinel holes are skipped inline by the row walk.
+#[derive(Debug, Clone, Copy)]
+pub struct PureAllIter<'a> {
+    csr: &'a PureTopologyCsr,
+    cap: u32,
+    vid: u32,
+    row: PureRowIter<'a>,
+}
+
+impl<'a> Iterator for PureAllIter<'a> {
+    type Item = (VertexId, Nbr);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.vid >= self.cap {
+                return None;
+            }
+            if let Some(nbr) = self.row.next() {
+                return Some((VertexId::from_int64(self.vid as i64), nbr));
+            }
+            self.vid += 1;
+            if self.vid < self.cap {
+                self.row = self.csr.iter_row(self.vid);
+            }
+        }
     }
 }
 
@@ -694,14 +727,12 @@ impl PureTopologyCsr {
         } else {
             (0, 0)
         };
-        let (primary_endpoints, primary_ids) = if start <= end
-            && end <= self.endpoints.len()
-            && end <= self.edge_ids.len()
-        {
-            (&self.endpoints[start..end], &self.edge_ids[start..end])
-        } else {
-            (&[][..], &[][..])
-        };
+        let (primary_endpoints, primary_ids) =
+            if start <= end && end <= self.endpoints.len() && end <= self.edge_ids.len() {
+                (&self.endpoints[start..end], &self.edge_ids[start..end])
+            } else {
+                (&[][..], &[][..])
+            };
         PureRowIter {
             csr: self,
             primary_endpoints,
@@ -713,22 +744,200 @@ impl PureTopologyCsr {
         }
     }
 
+    /// Whether the primary window of one row arrives in key order.
+    ///
+    /// Sorted-prefix probe behind threshold scans: after a maintenance sort
+    /// live entries lead sorted with sentinel holes sunk to the back, so the
+    /// window bisects even while overflow stays unsorted.
+    pub fn is_primary_sorted(&self, src_vid: u32) -> bool {
+        let src_idx = src_vid as usize;
+        if src_idx >= self.vertex_capacity() {
+            return true;
+        }
+        let (start, end) = self.primary_window(src_idx);
+        if end.saturating_sub(start) <= 1 {
+            return true;
+        }
+        for i in start..end.saturating_sub(1) {
+            if (self.endpoints[i], self.edge_ids[i]) > (self.endpoints[i + 1], self.edge_ids[i + 1])
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Whether the live endpoints of one row arrive in ascending order.
     ///
     /// Pure rows are insertion-ordered, so this usually reports false on
     /// multi-edge rows. Frozen packing sorts rows, after which the same
-    /// check would report true.
+    /// check would report true. Query planning consults this before
+    /// choosing a bisection over a linear walk.
     pub fn is_row_sorted(&self, src_vid: u32) -> bool {
-        let mut last: Option<u32> = None;
+        let mut last: Option<(u32, u64)> = None;
         for nbr in self.iter_row(src_vid) {
+            let key = (nbr.endpoint, nbr.edge_id.0);
             if let Some(prev) = last {
-                if nbr.endpoint < prev {
+                if key < prev {
                     return false;
                 }
             }
-            last = Some(nbr.endpoint);
+            last = Some(key);
         }
         true
+    }
+
+    /// Sort one primary row into `(endpoint, edge_id)` order.
+    ///
+    /// Maintenance-only entry: sorting moves slots, so every previously
+    /// issued `EdgePosition` for this row becomes stale and the caller must
+    /// relocate through the edge-id key first. Live entries sort to the
+    /// front; sentinel holes sink to the back with a maximal endpoint so
+    /// the whole window stays ordered. The live index is rebuilt. Overflow
+    /// chunks stay in insertion order as the unsorted suffix. No watermark
+    /// or sorted flag is persisted.
+    pub fn sort_row(&mut self, vid: u32) -> bool {
+        let idx = vid as usize;
+        if idx >= self.vertex_capacity() {
+            return false;
+        }
+        let (start, end) = self.primary_window(idx);
+        if end.saturating_sub(start) <= 1 {
+            return false;
+        }
+        let mut live: Vec<(u32, u64)> = Vec::new();
+        for i in start..end {
+            let eid = self.edge_ids[i];
+            if eid != INVALID_EDGE_ID.0 {
+                live.push((self.endpoints[i], eid));
+            }
+        }
+        if live.len() <= 1 {
+            return false;
+        }
+        let mut sorted = live.clone();
+        sorted.sort_unstable();
+        if sorted == live {
+            return false;
+        }
+        for (offset, (endpoint, eid)) in sorted.iter().enumerate() {
+            self.endpoints[start + offset] = *endpoint;
+            self.edge_ids[start + offset] = *eid;
+        }
+        for i in start + sorted.len()..end {
+            self.endpoints[i] = u32::MAX;
+            self.edge_ids[i] = INVALID_EDGE_ID.0;
+        }
+        self.rebuild_live_set_for_vertex(vid);
+        true
+    }
+
+    /// Sort every primary row that is out of order. Returns reordered rows.
+    pub fn sort_all_rows(&mut self) -> usize {
+        let rows = self.vertex_capacity();
+        let mut reordered = 0usize;
+        for vid in 0..rows {
+            if self.sort_row(vid as u32) {
+                reordered += 1;
+            }
+        }
+        reordered
+    }
+
+    /// Visit live entries whose endpoint falls in the inclusive
+    /// `[lower, upper]` range (`None` means unbounded).
+    ///
+    /// Sorted primary prefixes bisect to the endpoint window, then filter
+    /// holes inline, and the overflow suffix always scans linearly. The
+    /// prefix probe is `is_primary_sorted`, so hybrid rows still bisect.
+    pub fn visit_threshold<F>(&self, src_vid: u32, lower: Option<u32>, upper: Option<u32>, mut f: F)
+    where
+        F: FnMut(Nbr) -> bool,
+    {
+        let src_idx = src_vid as usize;
+        if src_idx >= self.vertex_capacity() {
+            return;
+        }
+        let in_range = |endpoint: u32| -> bool {
+            if let Some(lo) = lower {
+                if endpoint < lo {
+                    return false;
+                }
+            }
+            if let Some(hi) = upper {
+                if endpoint > hi {
+                    return false;
+                }
+            }
+            true
+        };
+        let (start, end) = self.primary_window(src_idx);
+        let endpoints = &self.endpoints[start..end];
+        let edge_ids = &self.edge_ids[start..end];
+        if self.is_primary_sorted(src_vid) && endpoints.len() > 1 {
+            let lo = match lower {
+                Some(lo) => endpoints.partition_point(|e| *e < lo),
+                None => 0,
+            };
+            let hi = match upper {
+                Some(hi) => endpoints.partition_point(|e| *e <= hi),
+                None => endpoints.len(),
+            };
+            for (endpoint, eid) in endpoints[lo..hi].iter().zip(&edge_ids[lo..hi]) {
+                if *eid != INVALID_EDGE_ID.0 {
+                    if !f(self.make_nbr(*endpoint, EdgeId(*eid))) {
+                        return;
+                    }
+                }
+            }
+        } else {
+            for (endpoint, eid) in endpoints.iter().zip(edge_ids.iter()) {
+                if *eid != INVALID_EDGE_ID.0 && in_range(*endpoint) {
+                    if !f(self.make_nbr(*endpoint, EdgeId(*eid))) {
+                        return;
+                    }
+                }
+            }
+        }
+        if let Some(chunks) = self.overflow_chunks.get(src_vid) {
+            for chunk in chunks {
+                for i in 0..chunk.len() {
+                    let eid = chunk.edge_ids[i];
+                    if eid != INVALID_EDGE_ID.0 && in_range(chunk.endpoints[i]) {
+                        if !f(self.make_nbr(chunk.endpoints[i], EdgeId(eid))) {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fill a caller buffer with the same range content as `visit_threshold`.
+    pub fn fill_threshold_into(
+        &self,
+        src_vid: u32,
+        lower: Option<u32>,
+        upper: Option<u32>,
+        out: &mut Vec<Nbr>,
+    ) {
+        out.clear();
+        self.visit_threshold(src_vid, lower, upper, |nbr| {
+            out.push(nbr);
+            true
+        });
+    }
+
+    /// Borrowed walk over every live entry of the table without allocating.
+    pub fn iter_all(&self) -> PureAllIter<'_> {
+        let cap = self.vertex_capacity() as u32;
+        let row = self.iter_row(0);
+        PureAllIter {
+            csr: self,
+            cap,
+            vid: 0,
+            row,
+        }
     }
 
     pub(crate) fn rebuild_live_set_for_vertex(&mut self, vid: u32) {
@@ -1815,8 +2024,13 @@ mod tests {
     fn count_index_capacity_stay_consistent() {
         let mut csr = PureTopologyCsr::with_overflow_chunk_edges(8, 32, 4);
         for dst in 0..10u32 {
-            csr.insert_edge(0, VertexId::edge_endpoint_key(dst, 0), EdgeId(dst as u64), 0)
-                .expect("insert");
+            csr.insert_edge(
+                0,
+                VertexId::edge_endpoint_key(dst, 0),
+                EdgeId(dst as u64),
+                0,
+            )
+            .expect("insert");
         }
         csr.delete_edge_by_offset(0, 0, 0).expect("delete");
         let live: usize = {
@@ -1857,5 +2071,21 @@ mod tests {
         assert!(csr
             .get_edge_physical(0, VertexId::edge_endpoint_key(1, 0))
             .is_some());
+    }
+
+    #[test]
+    fn sort_row_orders_live_prefix_and_threshold_bisects() {
+        let mut csr = PureTopologyCsr::with_capacity(4, 16);
+        for (endpoint, edge) in [(30, 1), (10, 2), (20, 3)] {
+            csr.insert_edge(0, VertexId::edge_endpoint_key(endpoint, 0), EdgeId(edge), 0)
+                .expect("insert");
+        }
+        assert!(!csr.is_row_sorted(0));
+        assert!(csr.sort_row(0));
+        assert!(csr.is_row_sorted(0));
+        let mut ranged = Vec::new();
+        csr.fill_threshold_into(0, Some(15), Some(25), &mut ranged);
+        assert_eq!(ranged.len(), 1);
+        assert_eq!(ranged[0].endpoint, 20);
     }
 }

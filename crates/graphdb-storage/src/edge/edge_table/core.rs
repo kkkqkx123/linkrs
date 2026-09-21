@@ -32,7 +32,9 @@ use graphdb_core::types::{EdgeId, LabelId, Timestamp};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-pub use super::config::{AutoMaintenanceConfig, EdgeTableConfig, UpdateEdgePropertyByKeyParams};
+pub use super::config::{
+    AutoMaintenanceConfig, EdgeTableConfig, UpdateEdgePropertyByKeyParams,
+};
 pub use super::iterator::EdgeTableScanIterator;
 
 /// Node-group sharded edge store: one sharded CSR per direction with MVCC

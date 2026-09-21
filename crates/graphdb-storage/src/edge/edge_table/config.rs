@@ -46,6 +46,15 @@ pub struct EdgeTableConfig {
     /// between checkpoints: the dump version marker records the mode per
     /// group file and loads dispatch by marker.
     pub csr_dump_raw: bool,
+    /// Adaptive checkpoint encoding: when true, the flush path selects the
+    /// dump mode by checkpoint kind instead of the static flag above.
+    /// Bound-triggered base rewrites (frequent small deltas hitting the
+    /// append bound) use the raw direct dump for CPU savings, while
+    /// delete-dirt rewrites (infrequent large compactions) keep the
+    /// compressed encoding for file-size savings. Size-based fine tuning
+    /// waits for the six checkpoint benches; until measured this stays
+    /// disabled and the static flag decides.
+    pub csr_dump_adaptive: bool,
     /// User-facing preference for record form selection at table creation.
     /// `Auto` lets the system pick Pure/Bundled/Columnar based on schema;
     /// `Columnar` forces the standard multi/single/none strategy path.
@@ -107,6 +116,7 @@ impl Default for EdgeTableConfig {
             group_merge_min_density: crate::edge::node_group::GROUP_MERGE_MIN_DENSITY,
             auto_maintenance: AutoMaintenanceConfig::default(),
             csr_dump_raw: false,
+            csr_dump_adaptive: false,
             record_form: RecordFormPreference::default(),
             memory_intent: MemoryIntent::default(),
         }

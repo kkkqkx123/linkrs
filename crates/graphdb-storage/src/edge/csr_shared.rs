@@ -104,11 +104,7 @@ impl VertexBookkeeping {
     /// Clamped primary window `(start, end)` for one row, bounded by the
     /// column lengths so callers never overrun.
     #[inline]
-    pub(crate) fn primary_window(
-        &self,
-        src_idx: usize,
-        col_len: usize,
-    ) -> (usize, usize) {
+    pub(crate) fn primary_window(&self, src_idx: usize, col_len: usize) -> (usize, usize) {
         if src_idx >= self.len() {
             return (0, 0);
         }
@@ -128,12 +124,7 @@ impl VertexBookkeeping {
     }
 
     /// Assign primary block location for `src_idx`.
-    pub(crate) fn assign_primary_block(
-        &mut self,
-        src_idx: usize,
-        block_offset: u32,
-        degree: u32,
-    ) {
+    pub(crate) fn assign_primary_block(&mut self, src_idx: usize, block_offset: u32, degree: u32) {
         self.adj_offsets[src_idx] = block_offset;
         self.primary_capacities[src_idx] = degree;
     }

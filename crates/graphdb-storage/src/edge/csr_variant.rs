@@ -22,7 +22,7 @@ use graphdb_core::{StorageError, StorageResult};
 
 use super::bundled_csr::BundledCsr;
 use super::mutable_csr::VertexEdgesIter;
-use super::pure_csr::{PureRowIter, PureTopologyCsr};
+use super::pure_csr::{PureAllIter, PureRowIter, PureTopologyCsr};
 use super::{
     CsrBase, EdgeId, EdgePosition, EdgeStrategy, FragmentationStats, FrozenRowIter, HotNbr,
     ImmutableCsr, ImmutableCsrIterator, MappedFrozen, MappedFrozenIterator, MappedFrozenRowIter,
@@ -878,38 +878,11 @@ impl CsrVariant {
     /// the unassignable sentinel instead of an edge, so they are skipped:
     /// no rebuild may resurrect a hole as a live edge.
     pub fn iter_all(&self) -> CsrIterator<'_> {
-        use graphdb_core::types::INVALID_EDGE_ID;
         match self {
             CsrVariant::Multiple(csr) => CsrIterator::Multiple(csr.iter_all()),
             CsrVariant::Single(csr) => CsrIterator::Single(csr.iter_all()),
-            CsrVariant::Pure(csr) => {
-                let cap = csr.vertex_capacity();
-                CsrIterator::Pure(
-                    (0..cap as u32)
-                        .flat_map(|vid| {
-                            csr.physical_edges_of(vid)
-                                .into_iter()
-                                .filter(|nbr| nbr.edge_id != INVALID_EDGE_ID)
-                                .map(move |nbr| (VertexId::from_int64(vid as i64), nbr))
-                        })
-                        .collect::<Vec<_>>()
-                        .into_iter(),
-                )
-            }
-            CsrVariant::Bundled(csr) => {
-                let cap = csr.vertex_capacity();
-                CsrIterator::Bundled(
-                    (0..cap as u32)
-                        .flat_map(|vid| {
-                            csr.physical_edges_of(vid)
-                                .into_iter()
-                                .filter(|nbr| nbr.edge_id != INVALID_EDGE_ID)
-                                .map(move |nbr| (VertexId::from_int64(vid as i64), nbr))
-                        })
-                        .collect::<Vec<_>>()
-                        .into_iter(),
-                )
-            }
+            CsrVariant::Pure(csr) => CsrIterator::Pure(csr.iter_all()),
+            CsrVariant::Bundled(csr) => CsrIterator::Bundled(csr.iter_all()),
             CsrVariant::Frozen(csr) => CsrIterator::Frozen(csr.iter_all()),
             CsrVariant::Mapped(csr) => CsrIterator::Mapped(csr.iter_all()),
             CsrVariant::None { .. } => CsrIterator::None,
@@ -993,6 +966,82 @@ impl CsrVariant {
             CsrVariant::Mapped(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::None { .. } => out.clear(),
         }
+    }
+
+    /// Whether the live entries of one row arrive in key order.
+    ///
+    /// Query routing consults this before choosing a bisection over a
+    /// linear walk. Frozen, mapped and single-slot rows are always ordered;
+    /// mutable rows report their insertion-order observation.
+    pub fn is_row_sorted(&self, src_vid: u32) -> bool {
+        match self {
+            CsrVariant::Multiple(csr) => csr.is_row_sorted(src_vid),
+            CsrVariant::Single(csr) => csr.is_row_sorted(src_vid),
+            CsrVariant::Pure(csr) => csr.is_row_sorted(src_vid),
+            CsrVariant::Bundled(csr) => csr.is_row_sorted(src_vid),
+            CsrVariant::Frozen(csr) => csr.is_row_sorted(src_vid),
+            CsrVariant::Mapped(csr) => csr.is_row_sorted(src_vid),
+            CsrVariant::None { .. } => true,
+        }
+    }
+
+    /// Sort one primary row into key order on the maintenance path.
+    ///
+    /// Same invalidation as the underlying stores: positions go stale and
+    /// the caller relocates through the edge-id key. Frozen, mapped,
+    /// single-slot and empty forms are already ordered and report false.
+    pub fn sort_row(&mut self, src_vid: u32) -> bool {
+        match self {
+            CsrVariant::Multiple(csr) => csr.sort_row(src_vid),
+            CsrVariant::Pure(csr) => csr.sort_row(src_vid),
+            CsrVariant::Bundled(csr) => csr.sort_row(src_vid),
+            CsrVariant::Single(_)
+            | CsrVariant::Frozen(_)
+            | CsrVariant::Mapped(_)
+            | CsrVariant::None { .. } => false,
+        }
+    }
+
+    /// Visit live entries whose `(endpoint, rank)` key falls in the inclusive
+    /// `[lower, upper]` range. Pure and bundled rows carry no rank, so the
+    /// rank halves of the bounds are ignored there.
+    pub fn visit_threshold<F>(
+        &self,
+        src_vid: u32,
+        lower: Option<(u32, i64)>,
+        upper: Option<(u32, i64)>,
+        f: F,
+    ) where
+        F: FnMut(Nbr) -> bool,
+    {
+        match self {
+            CsrVariant::Multiple(csr) => csr.visit_threshold(src_vid, lower, upper, f),
+            CsrVariant::Single(csr) => csr.visit_threshold(src_vid, lower, upper, f),
+            CsrVariant::Pure(csr) => {
+                csr.visit_threshold(src_vid, lower.map(|(ep, _)| ep), upper.map(|(ep, _)| ep), f)
+            }
+            CsrVariant::Bundled(csr) => {
+                csr.visit_threshold(src_vid, lower.map(|(ep, _)| ep), upper.map(|(ep, _)| ep), f)
+            }
+            CsrVariant::Frozen(csr) => csr.visit_threshold(src_vid, lower, upper, f),
+            CsrVariant::Mapped(csr) => csr.visit_threshold(src_vid, lower, upper, f),
+            CsrVariant::None { .. } => {}
+        }
+    }
+
+    /// Fill a caller buffer with the same range content as `visit_threshold`.
+    pub fn fill_threshold_into(
+        &self,
+        src_vid: u32,
+        lower: Option<(u32, i64)>,
+        upper: Option<(u32, i64)>,
+        out: &mut Vec<Nbr>,
+    ) {
+        out.clear();
+        self.visit_threshold(src_vid, lower, upper, |nbr| {
+            out.push(nbr);
+            true
+        });
     }
 
     /// Whether this group stores its single scalar inline.
@@ -1106,9 +1155,9 @@ pub enum CsrIterator<'a> {
     /// Iterator over single-edge CSR
     Single(SingleMutableCsrIterator<'a>),
     /// Iterator over pure topology CSR
-    Pure(std::vec::IntoIter<(VertexId, Nbr)>),
+    Pure(PureAllIter<'a>),
     /// Iterator over bundled CSR
-    Bundled(std::vec::IntoIter<(VertexId, Nbr)>),
+    Bundled(PureAllIter<'a>),
     /// Iterator over frozen packed CSR
     Frozen(ImmutableCsrIterator<'a>),
     /// Iterator over memory-mapped frozen CSR (owns its mapping handle)
@@ -1334,7 +1383,12 @@ mod tests {
         let mut inner = BundledCsr::with_capacity(8, 16);
         for dst in [5u32, 6] {
             inner
-                .insert_edge(0, VertexId::edge_endpoint_key(dst, 0), EdgeId(dst as u64), 0)
+                .insert_edge(
+                    0,
+                    VertexId::edge_endpoint_key(dst, 0),
+                    EdgeId(dst as u64),
+                    0,
+                )
                 .unwrap();
         }
         let variant = CsrVariant::Bundled(Box::new(inner));

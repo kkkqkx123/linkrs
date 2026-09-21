@@ -170,6 +170,72 @@ impl MutableCsr {
         self.overflow_chunks.get(vid).is_none_or(Vec::is_empty)
     }
 
+    /// Sort one primary row into `(endpoint, rank, edge_id)` order.
+    ///
+    /// Maintenance-only entry: sorting moves slots, so every previously
+    /// issued `EdgePosition` for this row becomes stale and the caller must
+    /// relocate through the edge-id key first. The reuse hint is dropped and
+    /// the live index is rebuilt into its sorted form. Overflow chunks stay
+    /// in insertion order and remain the unsorted suffix. New writes keep
+    /// the hot path (primary gap fill, then overflow tail) and therefore
+    /// mark the row unsorted again as observed by `is_row_sorted`; the next
+    /// maintenance pass re-sorts. No watermark or sorted flag is persisted:
+    /// order is observed in memory and rebuilt on load.
+    pub fn sort_row(&mut self, vid: u32) -> bool {
+        let idx = vid as usize;
+        if idx >= self.vertex_capacity() || self.rows.primary_capacities[idx] == 0 {
+            return false;
+        }
+        let degree = self.rows.degrees[idx] as usize;
+        if degree <= 1 {
+            return false;
+        }
+        let base = self.rows.adj_offsets[idx] as usize;
+        if base.saturating_add(degree) > self.hot_list.len()
+            || base.saturating_add(degree) > self.cold_list.len()
+        {
+            return false;
+        }
+        let mut order: Vec<usize> = (0..degree).collect();
+        let hot = &self.hot_list[base..base + degree];
+        let already = order.windows(2).all(|w| {
+            let a = &hot[w[0]];
+            let b = &hot[w[1]];
+            (a.endpoint, a.rank, a.edge_id.0) <= (b.endpoint, b.rank, b.edge_id.0)
+        });
+        if already {
+            return false;
+        }
+        order.sort_by(|&a, &b| {
+            let ha = &hot[a];
+            let hb = &hot[b];
+            (ha.endpoint, ha.rank, ha.edge_id.0).cmp(&(hb.endpoint, hb.rank, hb.edge_id.0))
+        });
+        let hot_src = self.hot_list[base..base + degree].to_vec();
+        let cold_src = self.cold_list[base..base + degree].to_vec();
+        for (dst, src) in order.iter().enumerate() {
+            self.hot_list[base + dst] = hot_src[*src];
+            self.cold_list[base + dst] = cold_src[*src];
+        }
+        self.invalidate_reuse_hint(idx);
+        self.rebuild_live_set_for_vertex(vid);
+        true
+    }
+
+    /// Sort every primary row that is out of order. Returns reordered rows.
+    ///
+    /// Same maintenance-only invalidation as `sort_row`, applied row by row.
+    pub fn sort_all_rows(&mut self) -> usize {
+        let rows = self.vertex_capacity();
+        let mut reordered = 0usize;
+        for vid in 0..rows {
+            if self.sort_row(vid as u32) {
+                reordered += 1;
+            }
+        }
+        reordered
+    }
+
     pub(crate) fn compact_overflow_for_vertex(
         &mut self,
         vid: u32,

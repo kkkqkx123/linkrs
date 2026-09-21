@@ -70,6 +70,147 @@ impl EdgeStore {
         });
     }
 
+    /// Fill a caller buffer with visible neighbors whose key falls in the
+    /// inclusive `[lower, upper]` range. The CSR layer narrows sorted rows
+    /// by bisection and scans unsorted rows linearly; visibility is then
+    /// decided by the version authority above, never by row stamps.
+    pub(crate) fn fill_visible_threshold_into(
+        &self,
+        csr: &CsrShardSet,
+        src: u32,
+        lower: Option<(u32, i64)>,
+        upper: Option<(u32, i64)>,
+        ts: Timestamp,
+        out: &mut Vec<Nbr>,
+    ) {
+        out.clear();
+        csr.visit_threshold(src, lower, upper, |nbr| {
+            out.push(nbr);
+            true
+        });
+        self.mvcc.retain_visible(out, ts);
+    }
+
+    /// Fill one shared buffer with the visible neighbors of many vertices.
+    ///
+    /// Hoisted caller-side dispatch: consecutive same-group runs match the
+    /// shard variant once and loop their rows with the concrete type, so a
+    /// batched adjacency scan pays one dispatch per shard instead of one
+    /// per row. Visibility stays with the version authority per entry.
+    pub(crate) fn fill_visible_batch_into(
+        &self,
+        csr: &CsrShardSet,
+        vids: &[u32],
+        ts: Timestamp,
+        out: &mut Vec<Nbr>,
+        offsets: &mut Vec<usize>,
+    ) {
+        use super::super::super::CsrVariant;
+        out.clear();
+        offsets.clear();
+        offsets.reserve(vids.len() + 1);
+        let mut idx = 0usize;
+        while idx < vids.len() {
+            let Some(gid) = csr.group_of(vids[idx]) else {
+                offsets.push(out.len());
+                idx += 1;
+                continue;
+            };
+            let mut run_end = idx + 1;
+            while run_end < vids.len() {
+                match csr.group_of(vids[run_end]) {
+                    Some(next_gid) if next_gid == gid => run_end += 1,
+                    _ => break,
+                }
+            }
+            let Some(variant) = csr.group_variant(gid) else {
+                for _ in idx..run_end {
+                    offsets.push(out.len());
+                }
+                idx = run_end;
+                continue;
+            };
+            let group_bits = csr.group_bits();
+            let route_local =
+                |vid: u32| -> u32 { super::super::super::node_group::local_vid(vid, group_bits) };
+            match variant {
+                CsrVariant::Multiple(csr_inner) => {
+                    for vid in &vids[idx..run_end] {
+                        offsets.push(out.len());
+                        csr_inner.visit_physical(route_local(*vid), |nbr| {
+                            if self.is_visible(nbr.edge_id, ts) {
+                                out.push(nbr);
+                            }
+                            true
+                        });
+                    }
+                }
+                CsrVariant::Single(csr_inner) => {
+                    for vid in &vids[idx..run_end] {
+                        offsets.push(out.len());
+                        csr_inner.visit_physical(route_local(*vid), |nbr| {
+                            if self.is_visible(nbr.edge_id, ts) {
+                                out.push(nbr);
+                            }
+                            true
+                        });
+                    }
+                }
+                CsrVariant::Pure(csr_inner) => {
+                    for vid in &vids[idx..run_end] {
+                        offsets.push(out.len());
+                        csr_inner.visit_physical(route_local(*vid), |nbr| {
+                            if self.is_visible(nbr.edge_id, ts) {
+                                out.push(nbr);
+                            }
+                            true
+                        });
+                    }
+                }
+                CsrVariant::Bundled(csr_inner) => {
+                    for vid in &vids[idx..run_end] {
+                        offsets.push(out.len());
+                        csr_inner.visit_physical(route_local(*vid), |nbr| {
+                            if self.is_visible(nbr.edge_id, ts) {
+                                out.push(nbr);
+                            }
+                            true
+                        });
+                    }
+                }
+                CsrVariant::Frozen(csr_inner) => {
+                    for vid in &vids[idx..run_end] {
+                        offsets.push(out.len());
+                        csr_inner.visit_physical(route_local(*vid), |nbr| {
+                            if self.is_visible(nbr.edge_id, ts) {
+                                out.push(nbr);
+                            }
+                            true
+                        });
+                    }
+                }
+                CsrVariant::Mapped(csr_inner) => {
+                    for vid in &vids[idx..run_end] {
+                        offsets.push(out.len());
+                        csr_inner.visit_physical(route_local(*vid), |nbr| {
+                            if self.is_visible(nbr.edge_id, ts) {
+                                out.push(nbr);
+                            }
+                            true
+                        });
+                    }
+                }
+                CsrVariant::None { .. } => {
+                    for _ in idx..run_end {
+                        offsets.push(out.len());
+                    }
+                }
+            }
+            idx = run_end;
+        }
+        offsets.push(out.len());
+    }
+
     /// Out-direction visit without allocation, for traversal fan-out.
     pub(crate) fn visit_out_with_gate<F>(
         &self,

@@ -148,12 +148,7 @@ fn remap_direction(
                     inline_value,
                 )?;
             } else {
-                rebuilt.insert_edge(
-                    new_src,
-                    new_nbr.to_vertex_id(),
-                    new_nbr.edge_id,
-                    0,
-                )?;
+                rebuilt.insert_edge(new_src, new_nbr.to_vertex_id(), new_nbr.edge_id, 0)?;
             }
             if new_nbr.delete_ts != Timestamp::MAX {
                 let _ = rebuilt.delete_edge(new_src, new_nbr.edge_id, new_nbr.delete_ts);

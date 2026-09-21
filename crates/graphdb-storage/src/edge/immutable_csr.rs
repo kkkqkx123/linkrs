@@ -364,6 +364,64 @@ impl ImmutableCsr {
         }
     }
 
+    /// Packed rows are always sorted by `(endpoint, rank, edge_id)`.
+    pub fn is_row_sorted(&self, _src_vid: u32) -> bool {
+        true
+    }
+
+    /// Visit live entries whose `(endpoint, rank)` key falls in the inclusive
+    /// `[lower, upper]` range. The packed row is sorted, so the window is
+    /// bisected and only the window is scanned for liveness.
+    pub fn visit_threshold<F>(
+        &self,
+        src_vid: u32,
+        lower: Option<(u32, i64)>,
+        upper: Option<(u32, i64)>,
+        mut f: F,
+    ) where
+        F: FnMut(Nbr) -> bool,
+    {
+        let Some((start, end)) = self.row_window(src_vid) else {
+            return;
+        };
+        let hot = &self.hot_entries[start..end];
+        let cold = &self.cold_entries[start..end];
+        let lo = match lower {
+            Some((lo_ep, lo_rank)) => {
+                hot.partition_point(|h| (h.endpoint, h.rank) < (lo_ep, lo_rank))
+            }
+            None => 0,
+        };
+        let hi = match upper {
+            Some((hi_ep, hi_rank)) => {
+                hot.partition_point(|h| (h.endpoint, h.rank) <= (hi_ep, hi_rank))
+            }
+            None => hot.len(),
+        };
+        for (h, c) in hot[lo..hi].iter().zip(&cold[lo..hi]) {
+            if c.is_live() {
+                if !f(Nbr::from_parts(*h, *c)) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Fill a caller buffer with the same range content as `visit_threshold`.
+    pub fn fill_threshold_into(
+        &self,
+        src_vid: u32,
+        lower: Option<(u32, i64)>,
+        upper: Option<(u32, i64)>,
+        out: &mut Vec<Nbr>,
+    ) {
+        out.clear();
+        self.visit_threshold(src_vid, lower, upper, |nbr| {
+            out.push(nbr);
+            true
+        });
+    }
+
     /// Read-only view of one packed slot without mutating state.
     pub fn nbr_at_offset(&self, src_vid: u32, offset: i32) -> Option<Nbr> {
         if offset < 0 {

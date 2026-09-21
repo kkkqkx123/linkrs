@@ -68,7 +68,7 @@ pub use bundled_csr::{decode_scalar, encode_scalar, BundledCsr};
 pub use frozen_serving::{MappedFrozen, MappedFrozenIterator, MappedFrozenRowIter};
 pub use graphdb_core::types::INVALID_EDGE_ID;
 pub use immutable_csr::{FrozenRowIter, ImmutableCsr, ImmutableCsrIterator};
-pub use pure_csr::{PureRowIter, PureTopologyCsr};
+pub use pure_csr::{PureAllIter, PureRowIter, PureTopologyCsr};
 
 /// Resolved record form for an edge table, persisted in `meta.bin`.
 ///

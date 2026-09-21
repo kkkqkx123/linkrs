@@ -84,7 +84,11 @@ pub(crate) use row::PACKED_CSR_DENSITY;
 /// Single-writer discipline: this type carries no internal locks. Concurrent
 /// readers are safe while no mutation is in flight; concurrent writers must
 /// be serialized by the caller (table or transaction layer). Vertex-level
-/// locking is a caller decision, not a property of this struct.
+/// locking is a caller decision, not a property of this struct. Multi-core
+/// work is carried by shard-level parallelism over `NodeGroup` shards
+/// (freeze, reclaim, read-only scans); point-write parallelism is an import
+/// pressure decision above this layer, and no row lock is added here before
+/// that measurement.
 pub struct MutableCsr {
     hot_list: Vec<HotNbr>,
     cold_list: Vec<ColdStamps>,

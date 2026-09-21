@@ -328,11 +328,31 @@ impl MappedFrozen {
 
     fn from_map(map: Arc<memmap2::Mmap>) -> StorageResult<Self> {
         let (rows, entries, edge_count, columns) = parse_header(&map)?;
+        let degree_bytes = map
+            .get(columns.degrees.start..columns.degrees.end())
+            .ok_or_else(|| {
+                serving_error(format!(
+                    "serving degree column out of range at byte {}",
+                    columns.degrees.start
+                ))
+            })?;
+        if degree_bytes.len() != rows.saturating_mul(4) {
+            return Err(serving_error(format!(
+                "serving degree column length mismatch: holds {} bytes, layout needs {}",
+                degree_bytes.len(),
+                rows.saturating_mul(4)
+            )));
+        }
         let mut offsets = Vec::with_capacity(rows);
-        let mut base = 0u32;
-        for row in 0..rows {
-            let degree = read_u32_le_at(&map, columns.degrees.start + row * 4)?;
-            offsets.push(base);
+        let mut base: u64 = 0;
+        for chunk in degree_bytes.chunks_exact(4) {
+            let degree = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as u64;
+            if base > u32::MAX as u64 {
+                return Err(serving_error(format!(
+                    "serving row offset overflow at entry {base}"
+                )));
+            }
+            offsets.push(base as u32);
             base = base.saturating_add(degree);
         }
         if base as usize != entries {
@@ -561,6 +581,106 @@ impl MappedFrozen {
         } else {
             self.degree_at(idx) as usize
         }
+    }
+
+    /// Mapped rows inherit the frozen sort order.
+    pub fn is_row_sorted(&self, _src_vid: u32) -> bool {
+        true
+    }
+
+    /// Threshold range inside one mapped row, mirroring the heap bisection.
+    fn threshold_range(
+        &self,
+        start: usize,
+        end: usize,
+        lower: Option<(u32, i64)>,
+        upper: Option<(u32, i64)>,
+    ) -> (usize, usize) {
+        let key_at = |idx: usize| (self.endpoint_at(idx), self.rank_at(idx));
+        let lo = match lower {
+            Some((lo_ep, lo_rank)) => {
+                let mut lo = start;
+                let mut hi = end;
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    if key_at(mid) < (lo_ep, lo_rank) {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                lo
+            }
+            None => start,
+        };
+        let hi = match upper {
+            Some((hi_ep, hi_rank)) => {
+                let mut lo = lo;
+                let mut hi = end;
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    if key_at(mid) <= (hi_ep, hi_rank) {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                lo
+            }
+            None => end,
+        };
+        (lo, hi)
+    }
+
+    /// Visit live entries whose `(endpoint, rank)` key falls in the inclusive
+    /// `[lower, upper]` range. The mapped row is sorted, so the window is
+    /// bisected before the liveness filter.
+    pub fn visit_threshold<F>(
+        &self,
+        src_vid: u32,
+        lower: Option<(u32, i64)>,
+        upper: Option<(u32, i64)>,
+        mut f: F,
+    ) where
+        F: FnMut(Nbr) -> bool,
+    {
+        let Some((start, end)) = self.row_window(src_vid) else {
+            return;
+        };
+        if start == end {
+            return;
+        }
+        let (lo, hi) = self.threshold_range(start, end, lower, upper);
+        for idx in lo..hi {
+            let hot = HotNbr {
+                endpoint: self.endpoint_at(idx),
+                rank: self.rank_at(idx),
+                edge_id: self.edge_id_at(idx),
+            };
+            let cold = ColdStamps {
+                delete_ts: self.delete_at(idx),
+            };
+            if cold.is_live() && hot.edge_id != INVALID_EDGE_ID {
+                if !f(Nbr::from_parts(hot, cold)) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Fill a caller buffer with the same range content as `visit_threshold`.
+    pub fn fill_threshold_into(
+        &self,
+        src_vid: u32,
+        lower: Option<(u32, i64)>,
+        upper: Option<(u32, i64)>,
+        out: &mut Vec<Nbr>,
+    ) {
+        out.clear();
+        self.visit_threshold(src_vid, lower, upper, |nbr| {
+            out.push(nbr);
+            true
+        });
     }
 
     /// Timestamp-filtered read of one row.

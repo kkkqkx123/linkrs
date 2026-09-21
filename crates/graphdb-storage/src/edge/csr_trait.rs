@@ -2,6 +2,25 @@
 //!
 //! Unified trait interface for different CSR implementations.
 //! Supports runtime polymorphism for edge storage selection.
+//!
+//! Vertex lifecycle is owned above this layer: vertex tables tombstone
+//! vertex records and propagate survivors through edge remapping, so this
+//! trait exposes no vertex-scoped bulk delete. Incident-edge cleanup
+//! composes the row-scoped deletes below with the table-level reclaim and
+//! remap passes.
+//!
+//! Row sort contract: mutable rows sort by `(endpoint, rank, edge_id)` on
+//! the maintenance path only. Sorting moves slots, so every previously
+//! issued `EdgePosition` for the row goes stale like after a compaction or
+//! rebalance, and callers relocate through the edge-id key first. The
+//! primary block holds the sorted prefix while overflow chunks stay in
+//! insertion order as the unsorted suffix; new writes fill primary gaps or
+//! spill to the overflow tail and therefore mark the row unsorted again as
+//! observed by `is_row_sorted`. No sort watermark is persisted: order is
+//! observed in memory and the live index is rebuilt on sort and on load.
+//! Threshold scans route internally on `is_row_sorted`: sorted primaries
+//! bisect the key window, unsorted rows and every overflow suffix scan
+//! linearly.
 
 use graphdb_core::StorageResult;
 
@@ -13,7 +32,9 @@ pub trait CsrBase: std::fmt::Debug + Send + Sync {
     /// reads are safe while no writer holds exclusive access, but any
     /// concurrent mutation requires caller-side mutual exclusion. The
     /// `Send + Sync` bounds express single-writer transfer across threads,
-    /// not lock-free concurrent writes.
+    /// not lock-free concurrent writes. Multi-core scaling comes from
+    /// shard-level parallelism over `NodeGroup` shards above this trait;
+    /// the CSR lock model itself stays single-writer with no row locks.
     fn vertex_capacity(&self) -> usize;
 
     fn edge_count(&self) -> u64;

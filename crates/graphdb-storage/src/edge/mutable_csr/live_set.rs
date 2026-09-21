@@ -59,8 +59,8 @@ impl LiveKeySet {
         match self {
             Self::Hash(map) => map.contains_key(key),
             Self::Sorted(vec) => {
-                vec.partition_point(|(k, _)| k < key) < vec.len()
-                    && vec[vec.partition_point(|(k, _)| k < key)].0 == *key
+                let idx = vec.partition_point(|(k, _)| k < key);
+                idx < vec.len() && vec[idx].0 == *key
             }
         }
     }
@@ -96,39 +96,37 @@ impl LiveKeySet {
     /// Insert a key-position pair, converting to hash when currently sorted.
     ///
     /// The hot write path always arrives here; converting to hash keeps
-    /// the insert O(1).  The next structural rebuild may re-promote.
+    /// repeated inserts O(1).  The next structural rebuild may re-promote.
     pub(crate) fn insert(&mut self, key: (u32, i64), position: EdgePosition) {
         match self {
             Self::Hash(map) => {
                 map.insert(key, position);
             }
             Self::Sorted(_) => {
-                let map: HashMap<_, _> = std::mem::take(self)
-                    .into_sorted()
-                    .into_iter()
-                    .collect();
+                let sorted = std::mem::take(self).into_sorted();
+                let mut map = HashMap::with_capacity(sorted.len() + 1);
+                map.extend(sorted);
+                map.insert(key, position);
                 *self = Self::Hash(map);
-                if let Self::Hash(map) = self {
-                    map.insert(key, position);
-                }
             }
         }
     }
 
-    /// Remove a key, converting to hash when currently sorted.
+    /// Remove a key in place, keeping the sorted form when sorted.
+    ///
+    /// Single deletes are the common mutation between rebuilds; staying
+    /// sorted avoids a full hash rebuild and keeps point lookups on the
+    /// cache-friendly binary search. Inserts still promote to hash (see
+    /// `insert`) so bulk growth stays amortized.
     pub(crate) fn remove(&mut self, key: &(u32, i64)) {
         match self {
             Self::Hash(map) => {
                 map.remove(key);
             }
-            Self::Sorted(_) => {
-                let map: HashMap<_, _> = std::mem::take(self)
-                    .into_sorted()
-                    .into_iter()
-                    .collect();
-                *self = Self::Hash(map);
-                if let Self::Hash(map) = self {
-                    map.remove(key);
+            Self::Sorted(vec) => {
+                let idx = vec.partition_point(|(k, _)| k < key);
+                if idx < vec.len() && vec[idx].0 == *key {
+                    vec.remove(idx);
                 }
             }
         }

@@ -466,11 +466,7 @@ fn bench_tombstone_dense_insert() {
     }
     // Delete the first half
     for k in 0..FILL / 2 {
-        let _ = csr.delete_edge_by_dst(
-            HUB,
-            VertexId::edge_endpoint_key(k, 0),
-            2,
-        );
+        let _ = csr.delete_edge_by_dst(HUB, VertexId::edge_endpoint_key(k, 0), 2);
     }
     csr.reset_baseline_counters();
     // Insert new edges into the tombstone-dense row
@@ -508,12 +504,9 @@ fn bench_overflow_multi_block_traversal() {
     let count = 8192u64;
     for k in 0..count {
         let dst = VertexId::edge_endpoint_key(k as u32, 0);
-        csr.insert_edge(HUB, dst, EdgeId(k), 1)
-            .expect("insert");
+        csr.insert_edge(HUB, dst, EdgeId(k), 1).expect("insert");
     }
-    let chunks = csr
-        .get_overflow_chunks(HUB)
-        .map_or(0, |c| c.len());
+    let chunks = csr.get_overflow_chunks(HUB).map_or(0, |c| c.len());
     // Scan the wide row
     let start = Instant::now();
     let mut visited = 0usize;
@@ -653,7 +646,12 @@ fn bench_freeze_reclaim() {
 
     println!(
         "freeze reclaim      : removed {} edges in {:.3}s (before={} after={}, mem {}->{} bytes)",
-        removed, secs, before_compact, csr.edge_count(), before_mem, after_mem
+        removed,
+        secs,
+        before_compact,
+        csr.edge_count(),
+        before_mem,
+        after_mem
     );
     println!(
         "  after compact: overflow_allocs={}, primary_allocs={}, live_set_rebuilds={}",
@@ -662,6 +660,122 @@ fn bench_freeze_reclaim() {
         csr.live_set_rebuild_count()
     );
     black_box((removed, before_edges));
+}
+
+/// Followup acceptance benches: pure append, wide-row point query,
+/// threshold filter, small batch touching few rows, large vertex delete,
+/// codec time. These six form the开工基线 and acceptance basis for the
+/// sort, dispatch-hoisting, serving-batch, adaptive-codec, sharding and
+/// tuning followups. Thresholds stay observational until these run.
+fn bench_followup_pure_append() {
+    let mut csr = MutableCsr::with_capacity(VERTICES as usize, 65536);
+    let start = Instant::now();
+    let mut edge_id = 0u64;
+    for src in 0..VERTICES {
+        for k in 0..16u32 {
+            let dst = VertexId::edge_endpoint_key((src + k * 31) % VERTICES, 0);
+            csr.insert_edge(src, dst, EdgeId(edge_id), 1)
+                .expect("insert");
+            edge_id += 1;
+        }
+    }
+    let secs = start.elapsed().as_secs_f64();
+    println!(
+        "followup pure append: {:>10.0} edges/s ({:.3}s, {} edges)",
+        edge_id as f64 / secs,
+        secs,
+        edge_id
+    );
+    black_box(edge_id);
+}
+
+fn bench_followup_wide_point(csr: &MutableCsr) {
+    let start = Instant::now();
+    let mut hits = 0usize;
+    for i in 0..20_000u32 {
+        let src = (i * 37) % VERTICES;
+        let dst = VertexId::edge_endpoint_key((src + (i % 16) * 31) % VERTICES, 0);
+        if csr.get_edge_physical(src, dst).is_some() {
+            hits += 1;
+        }
+    }
+    let secs = start.elapsed().as_secs_f64();
+    println!(
+        "followup wide point: {hits} hits in {secs:.3}s ({:.1} ns/lookup)",
+        secs * 1e9 / 20_000.0
+    );
+    black_box(hits);
+}
+
+fn bench_followup_threshold(csr: &MutableCsr) {
+    let mut sorted = csr.clone();
+    let reordered = sorted.sort_all_rows();
+    for (name, table) in [("unsorted", csr), ("sorted", &sorted)] {
+        let start = Instant::now();
+        let mut visited = 0usize;
+        for src in (0..VERTICES).step_by(8) {
+            table.visit_threshold(src, Some((100, 0)), Some((3000, 0)), |_| {
+                visited += 1;
+                true
+            });
+        }
+        let secs = start.elapsed().as_secs_f64();
+        println!(
+            "followup threshold {name} (reordered={reordered}): {visited} visits in {secs:.3}s"
+        );
+        black_box(visited);
+    }
+}
+
+fn bench_followup_small_batch() {
+    let mut csr = MutableCsr::with_capacity(VERTICES as usize, 65536);
+    build_uniform(&mut csr, 8);
+    let groups: Vec<(u32, Vec<(u32, i64, EdgeId, Timestamp)>)> = (0..4u32)
+        .map(|src| {
+            let batch = (0..16u32)
+                .map(|k| (9000 + k, 0, EdgeId(1_000_000 + (src * 16 + k) as u64), 2))
+                .collect();
+            (src, batch)
+        })
+        .collect();
+    let start = Instant::now();
+    let inserted = csr.batch_put_edges(&groups, true).expect("batch");
+    let secs = start.elapsed().as_secs_f64();
+    println!("followup small batch: {inserted} edges in {secs:.3}s (touched 4 rows)");
+    black_box(inserted);
+}
+
+fn bench_followup_large_delete(csr: &mut MutableCsr) {
+    let src = 0u32;
+    let start = Instant::now();
+    let mut deleted = 0usize;
+    for k in 0..32u32 {
+        deleted += csr.delete_edge_by_dst(
+            src,
+            VertexId::edge_endpoint_key((src + k * 31) % VERTICES, 0),
+            3,
+        );
+    }
+    let secs = start.elapsed().as_secs_f64();
+    println!("followup large delete: {deleted} edges in {secs:.3}s (single wide row)");
+    black_box(deleted);
+}
+
+fn bench_followup_codec(csr: &MutableCsr) {
+    let start = Instant::now();
+    let encoded = csr.dump();
+    let encoded_secs = start.elapsed().as_secs_f64();
+    let start = Instant::now();
+    let raw = csr.dump_raw();
+    let raw_secs = start.elapsed().as_secs_f64();
+    println!(
+        "followup codec: encoded {} bytes in {:.3}s, raw {} bytes in {:.3}s",
+        encoded.len(),
+        encoded_secs,
+        raw.len(),
+        raw_secs
+    );
+    black_box((encoded.len(), raw.len()));
 }
 
 fn main() {
@@ -715,6 +829,14 @@ fn main() {
     println!("\n--- properties ---");
     bench_properties(2);
     bench_properties(8);
+
+    println!("\n--- followup acceptance (six baselines) ---");
+    bench_followup_pure_append();
+    bench_followup_wide_point(&wide);
+    bench_followup_threshold(&wide);
+    bench_followup_small_batch();
+    bench_followup_codec(&wide);
+    bench_followup_large_delete(&mut wide);
 
     println!("\n--- final counters ---");
     bench_counters_report(&wide);
