@@ -17,10 +17,10 @@
 //! insertion order as the unsorted suffix; new writes fill primary gaps or
 //! spill to the overflow tail and therefore mark the row unsorted again as
 //! observed by `is_row_sorted`. No sort watermark is persisted: order is
-//! observed in memory and the live index is rebuilt on sort and on load.
-//! Threshold scans route internally on `is_row_sorted`: sorted primaries
-//! bisect the key window, unsorted rows and every overflow suffix scan
-//! linearly.
+//! cached in a memory-resident per-row flag and the live index is rebuilt
+//! on sort and on load. Threshold scans route internally on the cached
+//! flag: sorted primaries bisect the key window, unsorted rows and every
+//! overflow suffix scan linearly.
 
 use graphdb_core::StorageResult;
 

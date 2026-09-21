@@ -382,7 +382,9 @@ mod tests {
         );
         assert_eq!(stats.get_value(MetricType::EdgeOrphanRows).unwrap_or(0), 0);
         assert_eq!(
-            stats.get_value(MetricType::EdgeLiveAuthorityOrphans).unwrap_or(0),
+            stats
+                .get_value(MetricType::EdgeLiveAuthorityOrphans)
+                .unwrap_or(0),
             0
         );
 
@@ -407,15 +409,25 @@ mod tests {
         table.mvcc.edge_timestamps.remove(&EdgeId(0));
         let watermarks =
             graphdb_transaction::MvccWatermarks::from_parts(300, 300, None, CommitLsn::ZERO);
-        assert!(table.reclaim_authority_with_watermarks(&watermarks, 0).is_err());
+        assert!(table
+            .reclaim_authority_with_watermarks(&watermarks, 0)
+            .is_err());
         let reported = stats.get_value(MetricType::EdgeOrphanMappings).unwrap_or(0)
             + stats.get_value(MetricType::EdgeOrphanRows).unwrap_or(0)
-            + stats.get_value(MetricType::EdgeLiveAuthorityOrphans).unwrap_or(0);
+            + stats
+                .get_value(MetricType::EdgeLiveAuthorityOrphans)
+                .unwrap_or(0);
         assert!(reported > 0, "reclaim refusal must emit orphan counters");
         // Storage refusal never flows through the import discard counters:
         // the two layers keep distinct metric names by construction.
-        assert_eq!(stats.get_value(MetricType::ImportAcceptedRows).unwrap_or(0), 0);
-        assert_eq!(stats.get_value(MetricType::ImportDroppedRows).unwrap_or(0), 0);
+        assert_eq!(
+            stats.get_value(MetricType::ImportAcceptedRows).unwrap_or(0),
+            0
+        );
+        assert_eq!(
+            stats.get_value(MetricType::ImportDroppedRows).unwrap_or(0),
+            0
+        );
     }
 
     #[test]

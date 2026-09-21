@@ -120,9 +120,8 @@ pub(crate) fn read_ops(dir: &Path) -> StorageResult<Vec<EdgeWalOp>> {
             break;
         }
         let mut len_bytes = [0u8; 8];
-        file.read_exact(&mut len_bytes).map_err(|_| {
-            StorageError::deserialize_error("torn edge WAL tail entry".to_string())
-        })?;
+        file.read_exact(&mut len_bytes)
+            .map_err(|_| StorageError::deserialize_error("torn edge WAL tail entry".to_string()))?;
         let len = u64::from_le_bytes(len_bytes) as usize;
         if len == 0 || len > 64 * 1024 * 1024 {
             return Err(StorageError::deserialize_error(format!(
@@ -254,9 +253,15 @@ mod tests {
         append_ops(dir.path(), &wal_ops()).expect("append succeeds");
         let salvaged = discard_torn_tail(dir.path()).expect("repair succeeds");
         assert_eq!(salvaged, wal_ops().len());
-        assert_eq!(read_ops(dir.path()).expect("load succeeds").len(), wal_ops().len());
+        assert_eq!(
+            read_ops(dir.path()).expect("load succeeds").len(),
+            wal_ops().len()
+        );
 
         let empty = tempfile::tempdir().expect("temporary empty directory");
-        assert_eq!(discard_torn_tail(empty.path()).expect("missing log reads zero"), 0);
+        assert_eq!(
+            discard_torn_tail(empty.path()).expect("missing log reads zero"),
+            0
+        );
     }
 }

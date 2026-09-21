@@ -79,7 +79,8 @@ fn sparse_span_materializes_only_touched_groups() {
     let mut set = multi_set();
     set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
     let far = 1u32 << 20;
-    set.insert_edge(far, endpoint(2, 0), EdgeId(1), 100).unwrap();
+    set.insert_edge(far, endpoint(2, 0), EdgeId(1), 100)
+        .unwrap();
     // Two vertices a million rows apart still cost two groups, not a dense
     // array over the span.
     assert_eq!(set.group_count(), 2);
