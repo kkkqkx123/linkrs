@@ -16,6 +16,10 @@ impl EdgeStore {
     /// the orphan audit. The orphan audit stays as file-damage detection: a
     /// nonzero mismatch means torn or corrupt files, not a recoverable crash
     /// window.
+    ///
+    /// Rebuild order is fixed: topology groups, then timestamp shards, then
+    /// property shards, then the owner map last. The owner map derives from
+    /// topology, so it must never be rebuilt before the rows it points at.
     pub(crate) fn load_incremental(&mut self, dir: &Path) -> StorageResult<()> {
         let manifest_file = manifest_path(dir);
         if !manifest_file.exists() {

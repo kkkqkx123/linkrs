@@ -421,6 +421,24 @@ impl EdgeStore {
         }
         let (orphan_mappings, orphan_csr_rows, live_orphans) = self.copy_audit();
         if orphan_mappings + orphan_csr_rows + live_orphans > 0 {
+            // The refusal is observable, not just logged: the same three
+            // counters the load path reports are emitted here so the
+            // watermark-driven background pass doubles as the periodic
+            // authority-versus-projection audit.
+            if let Some(stats) = &self.stats_manager {
+                stats.add_value_with_amount(
+                    graphdb_metrics::MetricType::EdgeOrphanMappings,
+                    orphan_mappings as u64,
+                );
+                stats.add_value_with_amount(
+                    graphdb_metrics::MetricType::EdgeOrphanRows,
+                    orphan_csr_rows as u64,
+                );
+                stats.add_value_with_amount(
+                    graphdb_metrics::MetricType::EdgeLiveAuthorityOrphans,
+                    live_orphans as u64,
+                );
+            }
             return Err(StorageError::data_corruption(format!(
                 "reclaim_authority: audit nonzero (mappings={}, csr_rows={}, live_orphans={}), refusing reclaim",
                 orphan_mappings, orphan_csr_rows, live_orphans

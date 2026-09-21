@@ -151,6 +151,34 @@ impl EdgeStore {
         drift
     }
 
+    /// Periodic authority-versus-projection audit with metric emission.
+    ///
+    /// Runs the same [`EdgeStore::audit_copy_drift`] report the load,
+    /// freeze and reclaim paths enforce, and additionally emits the three
+    /// orphan counters through the table metrics registry so drift is
+    /// observable between those gates. Read-only: never mutates table
+    /// state. Callers are the watermark-driven maintenance passes; the
+    /// write path itself stays free of full-table walks.
+    pub fn audit_and_report(&self) -> Vec<String> {
+        let drift = self.audit_copy_drift();
+        if let Some(stats) = &self.stats_manager {
+            let (orphan_mappings, orphan_csr_rows, live_orphans) = self.copy_audit();
+            stats.add_value_with_amount(
+                graphdb_metrics::MetricType::EdgeOrphanMappings,
+                orphan_mappings as u64,
+            );
+            stats.add_value_with_amount(
+                graphdb_metrics::MetricType::EdgeOrphanRows,
+                orphan_csr_rows as u64,
+            );
+            stats.add_value_with_amount(
+                graphdb_metrics::MetricType::EdgeLiveAuthorityOrphans,
+                live_orphans as u64,
+            );
+        }
+        drift
+    }
+
     /// Replay one write-ahead log operation idempotently.
     ///
     /// Called only during load recovery with `wal_dir` cleared so replayed
@@ -336,6 +364,58 @@ mod tests {
         assert_eq!(loaded.out_edges(0, 500).len(), 1);
         assert!(loaded.has_edge(0, 2, 0, 500));
         assert!(!loaded.has_edge(0, 1, 0, 500));
+    }
+
+    #[test]
+    fn audit_and_report_emits_orphan_counters() {
+        use graphdb_metrics::{MetricType, StatsManager};
+        let mut table = audit_table();
+        let stats = std::sync::Arc::new(StatsManager::new());
+        table.set_stats_manager(stats.clone());
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        assert!(table.audit_and_report().is_empty());
+        assert_eq!(
+            stats.get_value(MetricType::EdgeOrphanMappings).unwrap_or(0),
+            0
+        );
+        assert_eq!(stats.get_value(MetricType::EdgeOrphanRows).unwrap_or(0), 0);
+        assert_eq!(
+            stats.get_value(MetricType::EdgeLiveAuthorityOrphans).unwrap_or(0),
+            0
+        );
+
+        // Injected authority-only deletion surfaces as drift and reaches
+        // the counters through the same report.
+        table.mvcc.record_deletion(EdgeId(0), 50);
+        assert!(!table.audit_and_report().is_empty());
+    }
+
+    #[test]
+    fn reclaim_refusal_reports_orphan_counters() {
+        use graphdb_metrics::{MetricType, StatsManager};
+        let mut table = audit_table();
+        let stats = std::sync::Arc::new(StatsManager::new());
+        table.set_stats_manager(stats.clone());
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        // The refusal gate counts orphans, not stamp drift: drop the
+        // authority record so both CSR directions and the property row
+        // dangle.
+        table.mvcc.edge_timestamps.remove(&EdgeId(0));
+        let watermarks =
+            graphdb_transaction::MvccWatermarks::from_parts(300, 300, None, CommitLsn::ZERO);
+        assert!(table.reclaim_authority_with_watermarks(&watermarks, 0).is_err());
+        let reported = stats.get_value(MetricType::EdgeOrphanMappings).unwrap_or(0)
+            + stats.get_value(MetricType::EdgeOrphanRows).unwrap_or(0)
+            + stats.get_value(MetricType::EdgeLiveAuthorityOrphans).unwrap_or(0);
+        assert!(reported > 0, "reclaim refusal must emit orphan counters");
+        // Storage refusal never flows through the import discard counters:
+        // the two layers keep distinct metric names by construction.
+        assert_eq!(stats.get_value(MetricType::ImportAcceptedRows).unwrap_or(0), 0);
+        assert_eq!(stats.get_value(MetricType::ImportDroppedRows).unwrap_or(0), 0);
     }
 
     #[test]

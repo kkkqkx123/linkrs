@@ -1,5 +1,4 @@
-use super::super::super::{EdgeId, Timestamp, VertexId};
-use super::super::serialization::MUTABLE_CSR_FORMAT_RAW_VERSION;
+use super::super::super::{EdgeId, VertexId};
 use super::super::MutableCsr;
 use crate::edge::Nbr;
 
@@ -120,7 +119,7 @@ fn test_topology_encoding_rejects_garbage_marker() {
 }
 
 #[test]
-fn raw_dump_load_roundtrip_matches_encoded_mode() {
+fn single_marker_dump_load_roundtrip() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(2, 16, 8);
     for i in 0..30i64 {
         csr.insert_edge(0u32, VertexId::from_int64(i + 1), EdgeId(i as u64 + 1), 1)
@@ -133,16 +132,19 @@ fn raw_dump_load_roundtrip_matches_encoded_mode() {
             EdgeId(1000 + i as u64),
             2,
         )
-        .unwrap();
+            .unwrap();
     }
     assert!(csr.delete_edge(0u32, EdgeId(5), 3).unwrap());
 
-    let raw = csr.dump_raw();
-    let marker = u32::from_le_bytes(raw[0..4].try_into().expect("raw header present"));
-    assert_eq!(marker, MUTABLE_CSR_FORMAT_RAW_VERSION);
+    let payload = csr.dump();
+    let marker = u32::from_le_bytes(payload[0..4].try_into().expect("header present"));
+    assert_eq!(
+        marker,
+        super::super::serialization::MUTABLE_CSR_FORMAT_VERSION
+    );
 
     let mut loaded = MutableCsr::new();
-    loaded.load(&raw).expect("raw dump loads by marker");
+    loaded.load(&payload).expect("dump loads by marker");
     assert_eq!(loaded.edge_count(), csr.edge_count());
 
     let mut expected = Vec::new();
@@ -156,35 +158,29 @@ fn raw_dump_load_roundtrip_matches_encoded_mode() {
     let mut actual_one = Vec::new();
     loaded.fill_physical_into(1u32, &mut actual_one);
     assert_eq!(actual_one, expected_one);
-
-    assert!(loaded
-        .get_edge(0u32, VertexId::from_int64(5), Timestamp::MAX)
-        .is_none());
-    assert_eq!(
-        loaded
-            .get_edge(0u32, VertexId::from_int64(5), 2)
-            .expect("pre-delete version stays visible")
-            .edge_id,
-        EdgeId(5)
-    );
-
-    // Encoded dumps still load: the loader accepts both markers.
-    let mut from_encoded = MutableCsr::new();
-    from_encoded.load(&csr.dump()).expect("encoded dump loads");
-    assert_eq!(from_encoded.edge_count(), csr.edge_count());
 }
 
 #[test]
-fn raw_dump_rejects_bad_marker_and_truncation() {
+fn retired_raw_marker_is_rejected() {
     let mut csr = MutableCsr::with_capacity(4, 16);
     csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(7), 1)
         .unwrap();
 
-    let mut bad_marker = csr.dump_raw();
+    // The retired direct-dump marker (9) is damage now, not an alternate
+    // mode: rewrite a valid payload's marker and the load must refuse it.
+    let mut payload = csr.dump();
+    payload[0..4].copy_from_slice(&9u32.to_le_bytes());
+    let body_len = payload.len() - 4;
+    let resealed = crc32fast::hash(&payload[..body_len]);
+    payload[body_len..].copy_from_slice(&resealed.to_le_bytes());
+    let err = MutableCsr::new().load(&payload).expect_err("marker 9 must fail");
+    assert!(err.to_string().contains("Unsupported mutable CSR format version"));
+
+    let mut bad_marker = csr.dump();
     bad_marker[0..4].copy_from_slice(&99u32.to_le_bytes());
     assert!(MutableCsr::new().load(&bad_marker).is_err());
 
-    let raw = csr.dump_raw();
-    assert!(MutableCsr::new().load(&raw[..raw.len() - 1]).is_err());
+    let encoded = csr.dump();
+    assert!(MutableCsr::new().load(&encoded[..encoded.len() - 1]).is_err());
     assert!(MutableCsr::new().load(&[]).is_err());
 }

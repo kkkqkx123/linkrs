@@ -4,8 +4,14 @@
 //! operations before returning success; checkpoints truncate the log after the
 //! new snapshot is durable. Recovery loads the checkpoint base then replays
 //! the log in order; replay is idempotent so a repeated replay yields the
-//! same state. A torn tail fails the load instead of entering service with a
-//! partial prefix.
+//! same state.
+//!
+//! Torn-tail policy: [`read_ops`] fails the load instead of entering service
+//! with a partial prefix. Repair is an explicit offline step,
+//! [`discard_torn_tail`], which truncates the file at the last valid entry
+//! and reports how many operations survived. It must only run while no
+//! writer holds the table, under the same single-writer discipline as every
+//! other mutation.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -90,25 +96,33 @@ pub(crate) fn append_ops(dir: &Path, ops: &[EdgeWalOp]) -> StorageResult<()> {
 /// trailing entry fails closed so recovery never enters
 /// service with a partial prefix.
 pub(crate) fn read_ops(dir: &Path) -> StorageResult<Vec<EdgeWalOp>> {
+    use std::io::Seek as _;
     let path = wal_path(dir);
     if !path.exists() {
         return Ok(Vec::new());
     }
     let mut file = std::fs::File::open(&path)
         .map_err(|e| StorageError::io_error(format!("Failed to open edge WAL: {}", e)))?;
+    let file_len = file
+        .metadata()
+        .map_err(|e| StorageError::io_error(format!("Failed to stat edge WAL: {}", e)))?
+        .len();
     let mut ops = Vec::new();
     loop {
-        let mut len_bytes = [0u8; 8];
-        match file.read_exact(&mut len_bytes) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(e) => {
-                return Err(StorageError::deserialize_error(format!(
-                    "edge WAL entry length unreadable: {}",
-                    e
-                )));
-            }
+        // Clean EOF breaks before any read: a failed length read below
+        // always means bytes remain but no full entry does. Checking the
+        // position first (instead of probing with a read) keeps even a
+        // sub-length fragment from being consumed and mistaken for clean.
+        let pos = file
+            .stream_position()
+            .map_err(|e| StorageError::io_error(format!("Failed to stat edge WAL: {}", e)))?;
+        if pos == file_len {
+            break;
         }
+        let mut len_bytes = [0u8; 8];
+        file.read_exact(&mut len_bytes).map_err(|_| {
+            StorageError::deserialize_error("torn edge WAL tail entry".to_string())
+        })?;
         let len = u64::from_le_bytes(len_bytes) as usize;
         if len == 0 || len > 64 * 1024 * 1024 {
             return Err(StorageError::deserialize_error(format!(
@@ -124,12 +138,6 @@ pub(crate) fn read_ops(dir: &Path) -> StorageResult<Vec<EdgeWalOp>> {
         })?;
         ops.push(op);
     }
-    let mut trailer = [0u8; 1];
-    if file.read(&mut trailer).unwrap_or(0) != 0 {
-        return Err(StorageError::deserialize_error(
-            "unexpected trailing data in edge WAL".to_string(),
-        ));
-    }
     Ok(ops)
 }
 
@@ -141,4 +149,114 @@ pub(crate) fn truncate(dir: &Path) -> StorageResult<()> {
             .map_err(|e| StorageError::io_error(format!("Failed to truncate edge WAL: {}", e)))?;
     }
     Ok(())
+}
+
+/// Offline repair for a torn tail: truncate the log at the last valid entry
+/// boundary and return the salvaged operation count.
+///
+/// Only run while no writer holds the table. A clean log is left untouched
+/// and reports its full count; a missing log reports zero. Every discarded
+/// byte is logged, never silent.
+///
+/// Invoked explicitly by operators, never by the load path, so normal builds
+/// report no in-crate callers.
+#[allow(dead_code)]
+pub(crate) fn discard_torn_tail(dir: &Path) -> StorageResult<usize> {
+    const MAX_ENTRY_LEN: usize = 64 * 1024 * 1024;
+    let path = wal_path(dir);
+    if !path.exists() {
+        return Ok(0);
+    }
+    let bytes = std::fs::read(&path)
+        .map_err(|e| StorageError::io_error(format!("Failed to read edge WAL: {}", e)))?;
+    let mut offset = 0usize;
+    let mut salvaged = 0usize;
+    while offset < bytes.len() {
+        let remaining = bytes.len() - offset;
+        if remaining < 8 {
+            break;
+        }
+        let len = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
+        if len == 0 || len > MAX_ENTRY_LEN || remaining - 8 < len {
+            break;
+        }
+        if postcard::from_bytes::<EdgeWalOp>(&bytes[offset + 8..offset + 8 + len]).is_err() {
+            break;
+        }
+        offset += 8 + len;
+        salvaged += 1;
+    }
+    // A non-empty tail the reader would reject (torn entry or trailing
+    // garbage) is damage only past the salvaged prefix.
+    if offset != bytes.len() {
+        log::warn!(
+            "edge WAL repair: truncating {} torn tail bytes at offset {}, salvaged {} ops",
+            bytes.len() - offset,
+            offset,
+            salvaged,
+        );
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .map_err(|e| StorageError::io_error(format!("Failed to open edge WAL: {}", e)))?;
+        file.set_len(offset as u64)
+            .map_err(|e| StorageError::io_error(format!("Failed to truncate edge WAL: {}", e)))?;
+    }
+    Ok(salvaged)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wal_ops() -> Vec<EdgeWalOp> {
+        vec![
+            EdgeWalOp::Insert {
+                src: 0,
+                dst: 1,
+                rank: 0,
+                properties: Vec::new(),
+                create_ts: 100,
+            },
+            EdgeWalOp::Delete {
+                src: 0,
+                dst: 1,
+                rank: 0,
+                delete_ts: 150,
+            },
+        ]
+    }
+
+    #[test]
+    fn torn_tail_fails_load_and_repair_salvages_prefix() {
+        let dir = tempfile::tempdir().expect("temporary WAL directory");
+        append_ops(dir.path(), &wal_ops()).expect("append succeeds");
+        // Simulate a crashed commit: half an entry lands on disk.
+        {
+            use std::io::Write as _;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(wal_path(dir.path()))
+                .expect("WAL opens for damage injection");
+            file.write_all(&[0x09, 0x00]).expect("partial length lands");
+        }
+        assert!(read_ops(dir.path()).is_err());
+
+        let salvaged = discard_torn_tail(dir.path()).expect("repair succeeds");
+        assert_eq!(salvaged, wal_ops().len());
+        let ops = read_ops(dir.path()).expect("load succeeds after repair");
+        assert_eq!(ops.len(), wal_ops().len());
+    }
+
+    #[test]
+    fn clean_log_repair_is_a_noop() {
+        let dir = tempfile::tempdir().expect("temporary WAL directory");
+        append_ops(dir.path(), &wal_ops()).expect("append succeeds");
+        let salvaged = discard_torn_tail(dir.path()).expect("repair succeeds");
+        assert_eq!(salvaged, wal_ops().len());
+        assert_eq!(read_ops(dir.path()).expect("load succeeds").len(), wal_ops().len());
+
+        let empty = tempfile::tempdir().expect("temporary empty directory");
+        assert_eq!(discard_torn_tail(empty.path()).expect("missing log reads zero"), 0);
+    }
 }

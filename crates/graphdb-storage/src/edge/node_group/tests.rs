@@ -59,6 +59,37 @@ fn reads_never_create_groups() {
 }
 
 #[test]
+fn dropped_group_invalidates_cached_route() {
+    let mut set = CsrShardSet::new(EdgeStrategy::Multiple, 2, 8, RecordForm::Columnar).unwrap();
+    // Group size 4: vid 1 routes to group 0, vid 5 to group 1.
+    set.insert_edge(1, endpoint(2, 0), EdgeId(0), 100).unwrap();
+    set.insert_edge(5, endpoint(6, 0), EdgeId(1), 100).unwrap();
+    assert!(set.get_edge(5, endpoint(6, 0), 200).is_some());
+    assert!(set.rollback_insert(5, EdgeId(1)));
+    set.truncate_trailing_empty_groups();
+    assert!(!set.existing_group_ids().contains(&1));
+    // A stale cached triple would still route here; invalidation forces the
+    // map miss that reads as empty.
+    assert!(set.get_edge(5, endpoint(6, 0), 200).is_none());
+    assert!(set.edges_of(5, 200).is_empty());
+}
+
+#[test]
+fn sparse_span_materializes_only_touched_groups() {
+    let mut set = multi_set();
+    set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
+    let far = 1u32 << 20;
+    set.insert_edge(far, endpoint(2, 0), EdgeId(1), 100).unwrap();
+    // Two vertices a million rows apart still cost two groups, not a dense
+    // array over the span.
+    assert_eq!(set.group_count(), 2);
+    assert!(set.address_span_rows() >= far as usize);
+    // Untouched groups between them read as empty without materializing.
+    assert!(set.edges_of(1 << 19, 200).is_empty());
+    assert_eq!(set.group_count(), 2);
+}
+
+#[test]
 fn dirty_tracking_per_group() {
     let mut set = multi_set();
     assert!(set.dirty_group_ids().is_empty());

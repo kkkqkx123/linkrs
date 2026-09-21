@@ -458,52 +458,6 @@ impl CsrVariant {
             }
         }
     }
-
-    /// Borrow-based direct dump reusing caller-owned column buffers.
-    ///
-    /// Same variant tagging as `dump_into_with_scratch`, but the multi-edge
-    /// form writes its topology columns at native widths (raw version
-    /// marker) instead of the integer column encoding. The single-edge and
-    /// frozen forms keep their own canonical bytes: the raw mode is defined
-    /// only for the multi-edge column layout, so other forms persist
-    /// unchanged rather than being forced through an encoding they do not
-    /// define. The loader dispatches every form by marker.
-    pub fn dump_into_with_scratch_raw(
-        &self,
-        out: &mut Vec<u8>,
-        scratch: &mut super::mutable_csr::persistence::CsrDumpScratch,
-    ) {
-        match self {
-            CsrVariant::None { vertex_capacity } => {
-                out.push(0u8);
-                out.extend((*vertex_capacity as u64).to_le_bytes());
-            }
-            CsrVariant::Multiple(csr) => {
-                out.push(1u8);
-                csr.dump_into_with_scratch_raw(out, scratch);
-            }
-            CsrVariant::Single(csr) => {
-                out.push(2u8);
-                csr.dump_into(out);
-            }
-            CsrVariant::Frozen(csr) => {
-                out.push(3u8);
-                csr.dump_into(out);
-            }
-            CsrVariant::Mapped(csr) => {
-                out.push(3u8);
-                csr.dump_into(out);
-            }
-            CsrVariant::Pure(csr) => {
-                out.push(4u8);
-                csr.dump_into(out);
-            }
-            CsrVariant::Bundled(csr) => {
-                out.push(5u8);
-                csr.dump_into(out);
-            }
-        }
-    }
 }
 
 impl MutableCsrTrait for CsrVariant {

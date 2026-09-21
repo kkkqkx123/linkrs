@@ -2001,6 +2001,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn nonzero_rank_is_rejected() {
+        let mut csr = PureTopologyCsr::with_capacity(4, 16);
+        let err = csr
+            .insert_edge(0, VertexId::edge_endpoint_key(1, 1), EdgeId(0), 0)
+            .expect_err("nonzero rank has no meaning without a rank column");
+        assert!(err.to_string().contains("rank must be 0"));
+        assert_eq!(csr.edge_count(), 0);
+    }
+
+    #[test]
     fn wide_row_absent_key_short_circuits() {
         let mut csr = PureTopologyCsr::with_capacity(16, 64);
         for dst in 0..12u32 {

@@ -258,16 +258,12 @@ fn serving_state_machine_full_cycle() {
 
 #[test]
 fn persistence_live_markers_are_current() {
-    // Guards the documented layout in `edge_table::persistence`: the two
-    // mutable dump markers are the only version-like negotiation left, and
-    // they select the two live write modes, not history.
+    // Guards the documented layout in `edge_table::persistence`: the single
+    // mutable dump marker is the only version-like negotiation left. It
+    // selects the live write mode, not history.
     assert_eq!(
         crate::edge::mutable_csr::serialization::MUTABLE_CSR_FORMAT_VERSION,
         8
-    );
-    assert_eq!(
-        crate::edge::mutable_csr::serialization::MUTABLE_CSR_FORMAT_RAW_VERSION,
-        9
     );
 }
 

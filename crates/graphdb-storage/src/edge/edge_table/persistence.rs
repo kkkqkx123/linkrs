@@ -6,12 +6,10 @@
 //!   manifest share one atomic unit.
 //! - `groups_manifest.bin`: address width plus existing out/in group id lists.
 //! - `out_g{gid}.bin` / `in_g{gid}.bin`: header + one `CsrVariant` dump per
-//!   existing group, written only for dirty groups; topology columns use the
-//!   integer column path with per-column encoding, or the raw direct dump at
-//!   native widths when `EdgeTableConfig::csr_dump_raw` selects speed over
-//!   size. The dump marker records which of the two live modes wrote the
-//!   group, so loads accept both and reject anything else. Missing groups
-//!   read as empty and never produce files.
+//!   existing group, written only for dirty groups; multi-edge topology
+//!   columns use the single integer column layout (marker 8) with
+//!   per-column encoding. Missing groups read as empty and never produce
+//!   files.
 //! - `ts_g{gid}.bin`: authoritative timestamps for the owning group's edges,
 //!   falling with the same dirt as the group.
 //! - `props_g{gid}.bin`: property rows for the owning group's edges,
@@ -32,16 +30,15 @@
 //! |------|---------|---------|
 //! | `meta.bin` | header only | no version, header section validated |
 //! | `groups_manifest.bin` | address width plus existing group id lists | no version |
-//! | `out_g/in_g` group dumps (encoded mode) | integer column path per column, marker 8 | live write mode 8 |
-//! | `out_g/in_g` group dumps (raw mode) | native widths, marker 9 | live write mode 9; the two modes are selected per group by `csr_dump_raw`, or per checkpoint kind when `csr_dump_adaptive` is set; loads accept both and reject anything else |
+//! | `out_g/in_g` group dumps | integer column path per column, marker 8 | single live write mode 8; loads accept 8 and reject anything else |
 //! | frozen group dumps | integer column path per column plus trailing CRC32 | no format version, trailing bytes rejected |
 //! | single group dumps | edge-count header plus columns plus trailing CRC32 | no format version, trailing bytes rejected |
 //! | pure group dumps | endpoints plus edge ids plus trailing CRC32 | no format version |
 //! | bundled group dumps | topology payload plus value columns plus valid bits plus CRC32 | no format version, trailing bytes rejected |
 //! | `*.serving` sidecars | flat columns, trailing CRC32; magic only, no format version; a bad cache is discarded and rebuilt from authority | cache only, never authority |
 //! | `*.append` sidecars | address width plus op sections | no version, decode fails closed |
-//! | property shards | visibility plus current values; duplicate names/ids and unknown encoding tags rejected | no version, encoding tags validated |
-//! | `edge_wal.bin` | length-prefixed postcard ops; torn tails fail the load | no version |
+//! | property shards | page-framed visibility plus current values (page layer carries per-page CRC32); duplicate names/ids and unknown encoding tags rejected | no version, encoding tags validated |
+//! | `edge_wal.bin` | length-prefixed postcard ops; torn tails fail the load, repairable offline by truncating at the last valid entry | no version |
 //! | `CsrVariant` tag | 0=None, 1=Multiple, 2=Single, 3=Frozen/Mapped, 4=Pure, 5=Bundled; unknown tags rejected | dispatch tag, not a format version |
 
 use super::super::{CsrBase, CsrVariant};
@@ -245,32 +242,6 @@ pub fn serialize_csr_with_scratch(
     buf.extend_from_slice(&0u64.to_le_bytes());
     let start = buf.len();
     csr.dump_into_with_scratch(buf, scratch);
-    let len = (buf.len() - start) as u64;
-    buf[len_pos..len_pos + 8].copy_from_slice(&len.to_le_bytes());
-
-    Ok(())
-}
-
-/// Serialize one sharded CSR in direct-dump mode reusing caller-owned
-/// column buffers.
-///
-/// Same framing as `serialize_csr_with_scratch`; the multi-edge form lands
-/// at native column widths for speed-sensitive checkpoints. Selected by
-/// `EdgeTableConfig::csr_dump_raw`. Loads dispatch by version marker, so
-/// mixed-mode group files in one table load without conversion.
-pub fn serialize_csr_with_scratch_raw(
-    csr: &CsrVariant,
-    section_id: u32,
-    buf: &mut Vec<u8>,
-    scratch: &mut crate::edge::mutable_csr::persistence::CsrDumpScratch,
-) -> StorageResult<()> {
-    write_header_to(buf, section_id)
-        .map_err(|e| StorageError::io_error(format!("Failed to write CSR header: {}", e)))?;
-
-    let len_pos = buf.len();
-    buf.extend_from_slice(&0u64.to_le_bytes());
-    let start = buf.len();
-    csr.dump_into_with_scratch_raw(buf, scratch);
     let len = (buf.len() - start) as u64;
     buf[len_pos..len_pos + 8].copy_from_slice(&len.to_le_bytes());
 
