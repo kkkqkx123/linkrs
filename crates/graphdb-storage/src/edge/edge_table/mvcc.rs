@@ -125,10 +125,7 @@ impl AuthorityMap {
         for (idx, slot) in self.slots.iter_mut().enumerate() {
             let eligible = slot.is_some_and(|ts| {
                 ts.delete_ts != Timestamp::MAX
-                    && crate::mvcc_visibility::Visibility::is_gc_eligible(
-                        ts.delete_ts,
-                        watermark,
-                    )
+                    && crate::mvcc_visibility::Visibility::is_gc_eligible(ts.delete_ts, watermark)
             });
             if eligible && is_gone(EdgeId(idx as u64)) {
                 *slot = None;

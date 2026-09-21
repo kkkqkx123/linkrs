@@ -32,8 +32,8 @@
 //! |------|---------|
 //! | `meta.bin` | header only |
 //! | `groups_manifest.bin` | address width plus existing group id lists |
-//! | `out_g/in_g` group dumps (encoded mode) | integer column path per column |
-//! | `out_g/in_g` group dumps (raw mode) | native widths; the two modes are live write modes selected per group by `csr_dump_raw` |
+//! | `out_g/in_g` group dumps (encoded mode) | integer column path per column, marker 8 |
+//! | `out_g/in_g` group dumps (raw mode) | native widths, marker 9; the two modes are live write modes selected per group by `csr_dump_raw`, or per checkpoint kind when `csr_dump_adaptive` is set |
 //! | frozen group dumps | integer column path per column |
 //! | bundled group dumps | topology payload plus value columns |
 //! | `*.serving` sidecars | flat columns, trailing CRC32; a bad cache is discarded and rebuilt |

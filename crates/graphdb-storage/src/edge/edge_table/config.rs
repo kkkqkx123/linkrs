@@ -84,14 +84,19 @@ pub enum MemoryIntent {
 }
 
 /// Thresholds that trigger automatic maintenance on the write path.
+///
+/// Tuning source is checkpoint flushed bytes per live edge, see
+/// `docs/plan/csr_baseline_notes.md`; retune requires running the reclaim
+/// benches first.
 #[derive(Debug, Clone, Copy)]
 pub struct AutoMaintenanceConfig {
     /// Run property compaction when deleted-but-not-reclaimed property rows
-    /// exceed this ratio of total rows. Set to 0.0 to disable.
+    /// exceed this ratio of total rows. Recommended range 0.1..=0.25.
+    /// Set to 0.0 to disable.
     pub property_compact_ratio: f32,
     /// Minimum tracked tombstones arming the write-path reclaim pass when the
-    /// watermark did not advance. Below this count with an unchanged watermark
-    /// the commit skips the group scan entirely.
+    /// watermark did not advance. Recommended range 2..=8. Below this count
+    /// with an unchanged watermark the commit skips the group scan entirely.
     pub reclaim_tombstone_threshold: usize,
 }
 

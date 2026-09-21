@@ -15,8 +15,8 @@
 //! `compact_vertex_with_reporting`), so the two columns never drift.
 //!
 //! A deleted slot keeps its stale raw word but clears its validity bit;
-//! the positional revert with value restores both.  The value-blind trait
-//! revert restores the topology only and leaves the slot NULL.
+//! the positional revert revives the retained word, and the value-blind
+//! trait revert follows the same path.
 //!
 //! Known limitation: the frozen packer stores topology only, so freezing a
 //! group with valid values is rejected; migrate to the columnar form first

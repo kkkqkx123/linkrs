@@ -13,7 +13,9 @@ use crate::edge::csr_trait::{CsrBase, MutableCsrTrait};
 use graphdb_core::types::Timestamp;
 
 /// Upper bound of rows reclaimed in one write-path maintenance pass, so a
-/// small write never triggers a large rebuild pause.
+/// small write never triggers a large rebuild pause. Recommended range
+/// 16..=64 from the reclaim pause versus throughput tradeoff; tune against
+/// checkpoint flushed bytes per live edge, see `docs/plan/csr_baseline_notes.md`.
 pub(crate) const MAX_VERTEX_RECLAIM_PER_PASS: usize = 32;
 
 impl EdgeStore {

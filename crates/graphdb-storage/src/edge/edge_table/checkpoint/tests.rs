@@ -158,7 +158,8 @@ fn corrupt_serving_falls_back_to_authoritative() {
 }
 
 #[test]
-fn mutable_flush_removes_stale_serving() {    use graphdb_core::types::Timestamp;
+fn mutable_flush_removes_stale_serving() {
+    use graphdb_core::types::Timestamp;
     let mut table = make_table();
     table
         .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
@@ -274,7 +275,11 @@ fn persistence_live_markers_are_current() {
 fn memory_intent_serving_load_stays_correct() {
     use crate::edge::edge_table::config::MemoryIntent;
     use graphdb_core::types::Timestamp;
-    for intent in [MemoryIntent::HeapDefault, MemoryIntent::ReadServing, MemoryIntent::BulkLoad] {
+    for intent in [
+        MemoryIntent::HeapDefault,
+        MemoryIntent::ReadServing,
+        MemoryIntent::BulkLoad,
+    ] {
         let mut config = EdgeTableConfig::default();
         config.memory_intent = intent;
         let schema = EdgeSchema {
@@ -305,10 +310,14 @@ fn memory_intent_serving_load_stays_correct() {
                 crate::compression::CompressionType::Zstd { level: 3 },
             )
             .expect("flush should succeed");
-        let mut loaded =
-            EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+        let mut loaded = EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
         loaded.load(dir.path()).expect("load should succeed");
-        assert_eq!(loaded.out_edges(0, 200).len(), 1, "{:?} serves reads", intent);
+        assert_eq!(
+            loaded.out_edges(0, 200).len(),
+            1,
+            "{:?} serves reads",
+            intent
+        );
         assert!(loaded.audit_copy_drift().is_empty());
     }
 }
@@ -592,7 +601,10 @@ fn truncated_properties_payload_is_rejected() {
     let payload = table.properties.dump();
     assert!(!payload.is_empty());
     let mut reloaded = make_table();
-    assert!(reloaded.properties.load(&payload[..payload.len() / 2]).is_err());
+    assert!(reloaded
+        .properties
+        .load(&payload[..payload.len() / 2])
+        .is_err());
 }
 
 #[test]
@@ -1613,7 +1625,9 @@ fn missing_groups_leave_no_files() {
     // timestamp, property and serving files. Hole groups must leave nothing
     // behind, and the manifest roundtrip must list existing groups alone.
     let mut table = make_table();
-    table.insert_edge(1_000_000, 1_000_001, 0, &[], 100).unwrap();
+    table
+        .insert_edge(1_000_000, 1_000_001, 0, &[], 100)
+        .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     table
         .flush(
@@ -1637,9 +1651,7 @@ fn missing_groups_leave_no_files() {
         }
     }
     // Mutable groups never carry a serving sidecar either.
-    assert!(
-        !serving_path_for(&dir.path().join(out_group_file(244))).exists()
-    );
+    assert!(!serving_path_for(&dir.path().join(out_group_file(244))).exists());
     let mut loaded = make_table();
     loaded.load(dir.path()).expect("load should succeed");
     assert_eq!(

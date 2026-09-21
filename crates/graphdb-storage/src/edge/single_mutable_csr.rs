@@ -238,7 +238,7 @@ impl SingleMutableCsr {
         if probe.edge_id == INVALID_EDGE_ID
             || probe.endpoint != dst_ep
             || probe.rank != dst_rank
-            || probe.delete_ts < Timestamp::MAX
+            || !self.cold_slots[src_idx].is_live()
         {
             return 0;
         }

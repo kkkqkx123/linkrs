@@ -177,8 +177,7 @@ mod tests {
             schema_version: 1,
             record_form: RecordForm::default(),
         };
-        let mut table =
-            EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+        let mut table = EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
         for dst in [3u32, 1, 2] {
             table
                 .insert_edge(0, dst, 0, &[], 100)

@@ -74,6 +74,12 @@ impl EdgeStore {
         self.load_property_shards(dir, &manifest)?;
         self.load_segment_stats(dir)?;
         let owner_stats = self.rebuild_owner_map_with_stats();
+        if let Some(stats) = &self.stats_manager {
+            stats.add_value_with_amount(
+                graphdb_metrics::MetricType::EdgeRelocatedOrphans,
+                owner_stats.relocated_orphans as u64,
+            );
+        }
         if owner_stats.relocated_orphans > 0 {
             log::info!(
                 "EdgeTable[{}] rebuilt owner map: mapped={}, relocated_orphans={} to group {}",
@@ -103,6 +109,20 @@ impl EdgeStore {
         // recovered above via the embedded tail. A nonzero count here means
         // corrupt or regressed files and the load stays fail-closed.
         let (orphan_mappings, orphan_csr_rows, live_orphans) = self.copy_audit();
+        if let Some(stats) = &self.stats_manager {
+            stats.add_value_with_amount(
+                graphdb_metrics::MetricType::EdgeOrphanMappings,
+                orphan_mappings as u64,
+            );
+            stats.add_value_with_amount(
+                graphdb_metrics::MetricType::EdgeOrphanRows,
+                orphan_csr_rows as u64,
+            );
+            stats.add_value_with_amount(
+                graphdb_metrics::MetricType::EdgeLiveAuthorityOrphans,
+                live_orphans as u64,
+            );
+        }
         if orphan_mappings + orphan_csr_rows + live_orphans > 0 {
             // Storage-side refusal: corrupt or regressed checkpoint files fail
             // the open. This is never an import discard — import drops count

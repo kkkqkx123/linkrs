@@ -198,6 +198,16 @@ pub enum MetricType {
     BloomQueries,
     BloomHits,
     BloomHitRatePermille,
+    // Edge orphan audit observability
+    EdgeOrphanRows,
+    EdgeOrphanMappings,
+    EdgeLiveAuthorityOrphans,
+    EdgeRelocatedOrphans,
+    // Import discard observability
+    ImportDroppedRows,
+    ImportAcceptedRows,
+    // Serving cache fallback observability
+    ServingFallbackCount,
 }
 
 /// Reason a checkpoint was triggered.

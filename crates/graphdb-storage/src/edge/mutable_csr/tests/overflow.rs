@@ -1,8 +1,6 @@
 use super::super::super::{EdgeId, Timestamp, VertexId};
 use super::super::overflow::OVERFLOW_REPACK_CHUNKS_PER_VERTEX;
-use super::super::row::{
-    graded_overflow_chunk_edges, OVERFLOW_CHUNK_MAX, OVERFLOW_CHUNK_MIN,
-};
+use super::super::row::{graded_overflow_chunk_edges, OVERFLOW_CHUNK_MAX, OVERFLOW_CHUNK_MIN};
 use super::super::MutableCsr;
 
 #[test]

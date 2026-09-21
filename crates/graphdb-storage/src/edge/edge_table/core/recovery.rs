@@ -105,7 +105,10 @@ impl EdgeStore {
             match self.mvcc.edge_timestamps.get(&nbr.edge_id) {
                 None => {
                     if seen_orphan_reported.insert(nbr.edge_id) {
-                        drift.push(format!("edge {:?} has CSR row but no authority", nbr.edge_id));
+                        drift.push(format!(
+                            "edge {:?} has CSR row but no authority",
+                            nbr.edge_id
+                        ));
                     }
                 }
                 Some(info) => {
@@ -120,10 +123,11 @@ impl EdgeStore {
         }
         if !self.properties.is_inline_stub() {
             for edge_id in self.properties.edge_ids() {
-                let authority_deleted =
-                    self.mvcc.edge_timestamps.get(&edge_id).map(|info| {
-                        info.delete_ts != graphdb_core::types::Timestamp::MAX
-                    });
+                let authority_deleted = self
+                    .mvcc
+                    .edge_timestamps
+                    .get(&edge_id)
+                    .map(|info| info.delete_ts != graphdb_core::types::Timestamp::MAX);
                 match authority_deleted {
                     None => {
                         drift.push(format!(
@@ -137,10 +141,7 @@ impl EdgeStore {
                             .get_row_for_edge(edge_id)
                             .map(|row| self.properties.is_deleted_at_row(row));
                         if row_deleted != Some(expected) {
-                            drift.push(format!(
-                                "edge {:?} property deleted-state drift",
-                                edge_id
-                            ));
+                            drift.push(format!("edge {:?} property deleted-state drift", edge_id));
                         }
                     }
                 }
@@ -309,12 +310,8 @@ mod tests {
         assert!(table.audit_copy_drift().is_empty());
 
         assert!(table.delete_edge(0, 1, 0, 160).unwrap());
-        let watermarks = graphdb_transaction::MvccWatermarks::from_parts(
-            300,
-            300,
-            None,
-            CommitLsn::ZERO,
-        );
+        let watermarks =
+            graphdb_transaction::MvccWatermarks::from_parts(300, 300, None, CommitLsn::ZERO);
         table.compact_csr_only_with_watermarks(&watermarks, 0, 0.2);
         assert!(table.audit_copy_drift().is_empty());
 
@@ -392,12 +389,8 @@ mod tests {
             "pin-cache maintenance must never refresh the reuse hint"
         );
 
-        let watermarks = graphdb_transaction::MvccWatermarks::from_parts(
-            200,
-            200,
-            None,
-            CommitLsn::ZERO,
-        );
+        let watermarks =
+            graphdb_transaction::MvccWatermarks::from_parts(200, 200, None, CommitLsn::ZERO);
         table.maybe_run_auto_maintenance_with_watermarks(&watermarks, 0);
         assert_eq!(table.out_csr.tombstone_reuse_cutoff(), 200);
         assert_eq!(table.in_csr.tombstone_reuse_cutoff(), 200);

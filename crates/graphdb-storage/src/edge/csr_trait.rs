@@ -157,8 +157,9 @@ pub trait MutableCsrTrait: CsrBase {
 
     /// Delete the edge at `position` when it still holds `expected` id.
     ///
-    /// Stale positions are refused with `Ok(false)`. The default falls back
-    /// to the edge-id path; row stores override it with a direct slot write.
+    /// Stale positions are refused with `Ok(false)`. The default suits
+    /// position-less stores and resolves by edge id; positional stores
+    /// override it with a direct slot write.
     fn delete_edge_at_position(
         &mut self,
         src_vid: u32,
@@ -171,8 +172,8 @@ pub trait MutableCsrTrait: CsrBase {
 
     /// Revert the deletion at `position` when it still holds `expected` id.
     ///
-    /// Stale positions are refused with `false`. The default falls back to
-    /// the edge-id path.
+    /// Stale positions are refused with `false`. The default suits
+    /// position-less stores; positional stores override it.
     fn revert_delete_at_position(
         &mut self,
         src_vid: u32,

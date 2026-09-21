@@ -1,7 +1,8 @@
 //! Incremental checkpoint: per-group topology, timestamp and property shards
 //! plus segment statistics and a manifest.
 //!
-//! Layout of one edge-table directory, version 5:
+//! Layout of one edge-table directory (edge-directory layout, distinct from
+//! the per-group CSR payload markers 8/9 bound in `edge_table::persistence`):
 //! - `meta.bin`: header section only (label ids, schema, next edge id), with
 //!   the manifest commit tail appended so metadata and manifest share one
 //!   atomic unit.

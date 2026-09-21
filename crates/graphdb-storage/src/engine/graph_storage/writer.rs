@@ -722,8 +722,9 @@ pub(crate) fn delete_vertex(
 /// mid-fanout failure aborts the shared timestamp instead of leaving
 /// per-edge commits behind. Aborted stamps stay hidden through the pending
 /// gate, and explicit transactions keep per-edge restore entries through the
-/// mutation recorder. Very large fanouts should be chunked by the caller;
-/// each call is one atomic unit.
+/// mutation recorder. Very large fanouts must be chunked by the caller into
+/// one call per chunk; each call stays an independent atomic unit and a
+/// failed chunk leaves prior committed chunks intact, never a half-chunk.
 pub(crate) fn delete_vertex_with_edges(
     ctx: &GraphStorageContext,
     space: &str,
@@ -734,7 +735,14 @@ pub(crate) fn delete_vertex_with_edges(
         let ts = ctx.get_write_timestamp()?;
         let mut failed: Option<StorageError> = None;
         for edge in &edges {
-            let previous = reader::get_edge(ctx, space, &edge.src, &edge.dst, &edge.edge_type, edge.ranking)?;
+            let previous = reader::get_edge(
+                ctx,
+                space,
+                &edge.src,
+                &edge.dst,
+                &edge.edge_type,
+                edge.ranking,
+            )?;
             match delete_edge_at_timestamp(
                 ctx,
                 space,

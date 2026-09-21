@@ -12,15 +12,10 @@
 //! replay on top of the new form.
 //!
 //! Inline value semantics, pinned here so the query layer never misreads:
-//! a delete drops the row from both directions (erase, not tombstone), so
-//! no id-keyed or endpoint read observes a deleted slot; the stale word
-//! dies with the row and only the authority tombstone remains. Keyed revert
-//! cannot revive an erased row and reports false instead of reviving a
-//! wrong generation. The positional rollback path (out-direction revert with
-//! the reporting-pass position after an in-direction miss) restores the
-//! erased topology slot with its retained word, so a rolled-back batch reads
-//! the original value. Validity bits persist across checkpoints, so a
-//! reload never defaults a blind slot to valid.
+//! a bundled delete clears the validity bit while retaining the stale word,
+//! and both the single-key undo and the batch rollback revive the retained
+//! word through the same positional path. Validity bits persist across
+//! checkpoints, so a reload never defaults a blind slot to valid.
 //!
 //! Online contract: the switch holds `&mut self`, which already serializes
 //! every writer in this crate (single-writer discipline), so no concurrent
@@ -92,6 +87,14 @@ impl EdgeStore {
     /// Requires exclusive access and a checkpoint afterwards. Migrating to
     /// the current form is a no-op success.
     pub fn migrate_record_form(&mut self, target: RecordForm) -> StorageResult<MigrateStats> {
+        if self.pending_add_column.is_some()
+            || self.pending_drop_column.is_some()
+            || self.pending_rename_column.is_some()
+        {
+            return Err(StorageError::invalid_operation(
+                "record-form migration rejects a pending schema change".to_string(),
+            ));
+        }
         let rebuilt = self.rebuild_record_form(target)?;
         self.publish_rebuilt_form(rebuilt, target)
     }
@@ -107,12 +110,23 @@ impl EdgeStore {
     /// checkpoint afterwards is mandatory
     /// ([`Self::is_migration_checkpoint_required`]); pre-switch WAL redo is
     /// fenced at switch time and never replays onto the new form.
-    pub fn switch_record_form_online(
-        &mut self,
-        target: RecordForm,
-    ) -> StorageResult<MigrateStats> {
+    pub fn switch_record_form_online(&mut self, target: RecordForm) -> StorageResult<MigrateStats> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
+        }
+        // Consecutive switches stay allowed: every switch rebuilds purely
+        // from live state and fences pre-switch WAL redo again, so a crash
+        // before the mandatory checkpoint still recovers to the pre-switch
+        // checkpoint in the old form, never to a mixed form. Pending schema
+        // changes are rejected because the rebuild reads the published
+        // schema and would silently drop staged state.
+        if self.pending_add_column.is_some()
+            || self.pending_drop_column.is_some()
+            || self.pending_rename_column.is_some()
+        {
+            return Err(StorageError::invalid_operation(
+                "record-form switch rejects a pending schema change".to_string(),
+            ));
         }
         let rebuilt = self.rebuild_record_form(target)?;
         self.publish_rebuilt_form(rebuilt, target)

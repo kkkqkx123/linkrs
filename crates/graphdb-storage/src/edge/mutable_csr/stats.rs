@@ -23,17 +23,12 @@ impl MutableCsr {
         self.live_set_rebuild_count
     }
 
-    pub fn vertex_expansion_count(&self) -> u64 {
-        self.vertex_expansion_count
-    }
-
     pub fn reset_baseline_counters(&mut self) {
         self.overflow_chunk_allocs = 0;
         self.primary_block_allocs = 0;
         self.repack_count = 0;
         self.tombstone_reuse_count = 0;
         self.live_set_rebuild_count = 0;
-        self.vertex_expansion_count = 0;
     }
 }
 
@@ -120,9 +115,8 @@ impl MutableCsr {
     /// Fraction of overflow rows that hold exactly one chunk.
     ///
     /// Skewed rows that stay single-block after merge are the common
-    /// case; a ratio near 1.0 confirms the merge threshold and
-    /// vertex-level expansion are working.  Returns 0.0 when no vertex
-    /// carries overflow.
+    /// case; a ratio near 1.0 confirms the merge threshold is working.
+    /// Returns 0.0 when no vertex carries overflow.
     pub fn single_block_overflow_ratio(&self) -> f32 {
         let mut total_overflow_rows = 0usize;
         let mut single_block_rows = 0usize;

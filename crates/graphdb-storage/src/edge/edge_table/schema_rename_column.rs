@@ -44,7 +44,9 @@ impl EdgeStore {
     /// Validate a rename-column request and snapshot the affected names.
     ///
     /// Touches nothing: the physical column, the schema, the name cache and
-    /// history stay unchanged until publishing.
+    /// history stay unchanged until publishing. Renaming preserves column
+    /// arity, so inline record forms need no rebuild hint here, unlike
+    /// add/drop which change the property count.
     pub fn prepare_rename_property(&mut self, old_name: &str, new_name: &str) -> StorageResult<()> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());

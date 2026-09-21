@@ -1139,21 +1139,20 @@ impl EdgeStore {
         let Some(edge_id) = edge_id else {
             return Ok(false);
         };
-        // Bundled slots cannot revert by id: the id-keyed variant path
-        // cannot rewrite the value column, so revert positionally with an
-        // explicit NULL. Topology returns, the stale word is dropped, and
-        // the slot reads NULL afterwards.
+        // Bundled slots clear the validity bit on delete while retaining the
+        // stale word, so both the single-key undo and the batch rollback
+        // revive the retained word through the same positional path.
         let (out_ok, in_ok) = if self.is_bundled() {
             let out_ok = match self.out_csr.locate_edge(src, edge_id) {
                 Some((position, _)) => self
                     .out_csr
-                    .bundled_revert_with_value(src, position, edge_id, ts, None),
+                    .revert_delete_at_position(src, position, edge_id, ts),
                 None => false,
             };
             let in_ok = match self.in_csr.locate_edge(dst, edge_id) {
                 Some((position, _)) => self
                     .in_csr
-                    .bundled_revert_with_value(dst, position, edge_id, ts, None),
+                    .revert_delete_at_position(dst, position, edge_id, ts),
                 None => false,
             };
             (out_ok, in_ok)
@@ -1462,7 +1461,13 @@ mod tests {
         let mut table = batch_table();
         for dst in 1..=200u32 {
             table
-                .insert_edge(0, dst, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+                .insert_edge(
+                    0,
+                    dst,
+                    0,
+                    &[("weight".to_string(), Value::Double(1.0))],
+                    100,
+                )
                 .unwrap();
         }
         // A committed edge outside the fanout: duplicating it fails the whole
@@ -1537,7 +1542,10 @@ mod tests {
         );
         table.compact_csr_only_with_watermarks(&watermarks, 0, 0.2);
         let stats = table.rebuild_owner_map_with_stats();
-        assert_eq!(stats.mapped, 1, "one surviving topology edge maps to group 0");
+        assert_eq!(
+            stats.mapped, 1,
+            "one surviving topology edge maps to group 0"
+        );
         assert_eq!(
             stats.relocated_orphans, 1,
             "the reclaimed tombstone converges with a count"

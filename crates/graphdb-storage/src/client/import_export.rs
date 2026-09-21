@@ -58,6 +58,21 @@ pub(crate) struct ImportEdgeStats {
     pub dropped_invalid: usize,
 }
 
+impl ImportEdgeStats {
+    fn report(&self, stats: Option<&graphdb_metrics::StatsManager>) {
+        if let Some(stats) = stats {
+            stats.add_value_with_amount(
+                graphdb_metrics::MetricType::ImportAcceptedRows,
+                self.accepted as u64,
+            );
+            stats.add_value_with_amount(
+                graphdb_metrics::MetricType::ImportDroppedRows,
+                self.dropped_invalid as u64,
+            );
+        }
+    }
+}
+
 /// Accepted/dropped counts for one vertex CSV import, mirroring the edge
 /// contract above: unparsable rows are dropped with a count, never coerced
 /// to id zero.
@@ -69,6 +84,21 @@ pub(crate) struct ImportVertexStats {
     pub dropped_invalid: usize,
 }
 
+impl ImportVertexStats {
+    fn report(&self, stats: Option<&graphdb_metrics::StatsManager>) {
+        if let Some(stats) = stats {
+            stats.add_value_with_amount(
+                graphdb_metrics::MetricType::ImportAcceptedRows,
+                self.accepted as u64,
+            );
+            stats.add_value_with_amount(
+                graphdb_metrics::MetricType::ImportDroppedRows,
+                self.dropped_invalid as u64,
+            );
+        }
+    }
+}
+
 /// Import a space from CSV files under `path/<space_name>/`.
 ///
 /// Expects a `schema.json` metadata file and `<tag>.csv` / `<edge_type>.csv` data files.
@@ -76,6 +106,18 @@ pub(crate) fn import_space_impl<S: StorageWriter + StorageSchemaOps + ?Sized>(
     storage: &mut S,
     space: &str,
     path: &Path,
+) -> Result<(), StorageError> {
+    import_space_impl_with_stats(storage, space, path, None)
+}
+
+/// Import a space, reporting accepted/dropped row counts to the metrics
+/// registry when one is supplied. Storage open/recovery failures keep their
+/// own fail-closed error path and never flow through these counts.
+pub(crate) fn import_space_impl_with_stats<S: StorageWriter + StorageSchemaOps + ?Sized>(
+    storage: &mut S,
+    space: &str,
+    path: &Path,
+    stats_manager: Option<&graphdb_metrics::StatsManager>,
 ) -> Result<(), StorageError> {
     let base = path.join(space);
     if !base.exists() {
@@ -127,7 +169,13 @@ pub(crate) fn import_space_impl<S: StorageWriter + StorageSchemaOps + ?Sized>(
 
             let csv_path = base.join(format!("{tag_name}.csv"));
             if csv_path.exists() {
-                let stats = import_vertex_csv_from_path(space, tag_name, &csv_path, storage)?;
+                let stats = import_vertex_csv_from_path(
+                    space,
+                    tag_name,
+                    &csv_path,
+                    storage,
+                    stats_manager,
+                )?;
                 if stats.dropped_invalid > 0 {
                     log::warn!(
                         "Import of tag '{tag_name}' dropped {} invalid rows, accepted {}",
@@ -174,7 +222,8 @@ pub(crate) fn import_space_impl<S: StorageWriter + StorageSchemaOps + ?Sized>(
 
             let csv_path = base.join(format!("{et_name}.csv"));
             if csv_path.exists() {
-                let stats = import_edge_csv_from_path(space, et_name, &csv_path, storage)?;
+                let stats =
+                    import_edge_csv_from_path(space, et_name, &csv_path, storage, stats_manager)?;
                 if stats.dropped_invalid > 0 {
                     log::warn!(
                         "Import of edge type '{et_name}' dropped {} invalid rows, accepted {}",
@@ -199,6 +248,7 @@ pub(crate) fn import_vertex_csv_from_path<W: StorageWriter + ?Sized>(
     tag_name: &str,
     csv_path: &Path,
     writer: &mut W,
+    stats_manager: Option<&graphdb_metrics::StatsManager>,
 ) -> Result<ImportVertexStats, StorageError> {
     let file = std::fs::File::open(csv_path).map_err(|e| {
         StorageError::io_error(format!("Failed to open {}: {e}", csv_path.display()))
@@ -287,6 +337,7 @@ pub(crate) fn import_vertex_csv_from_path<W: StorageWriter + ?Sized>(
         stats.accepted,
         stats.dropped_invalid,
     );
+    stats.report(stats_manager);
     Ok(stats)
 }
 
@@ -303,6 +354,7 @@ pub(crate) fn import_edge_csv_from_path<W: StorageWriter + ?Sized>(
     edge_type: &str,
     csv_path: &Path,
     writer: &mut W,
+    stats_manager: Option<&graphdb_metrics::StatsManager>,
 ) -> Result<ImportEdgeStats, StorageError> {
     let file = std::fs::File::open(csv_path).map_err(|e| {
         StorageError::io_error(format!("Failed to open {}: {e}", csv_path.display()))
@@ -391,6 +443,7 @@ pub(crate) fn import_edge_csv_from_path<W: StorageWriter + ?Sized>(
         stats.accepted,
         stats.dropped_invalid,
     );
+    stats.report(stats_manager);
     Ok(stats)
 }
 
@@ -415,7 +468,7 @@ mod tests {
             "src,dst,ranking\n1,2,0\n,3,0\n4,abc,0\n5,6,0\n",
         );
         let mut writer = MockStorage::new().expect("mock writer builds");
-        let stats = import_edge_csv_from_path("space", "knows", &csv, &mut writer)
+        let stats = import_edge_csv_from_path("space", "knows", &csv, &mut writer, None)
             .expect("import succeeds with drops");
         assert_eq!(
             stats,
@@ -431,8 +484,37 @@ mod tests {
         let dir = tempfile::tempdir().expect("temporary import directory");
         let csv = write_csv(dir.path(), "knows.csv", "src,dst,ranking\n");
         let mut writer = MockStorage::new().expect("mock writer builds");
-        let stats = import_edge_csv_from_path("space", "knows", &csv, &mut writer)
+        let stats = import_edge_csv_from_path("space", "knows", &csv, &mut writer, None)
             .expect("empty import succeeds");
         assert_eq!(stats, ImportEdgeStats::default());
+    }
+
+    #[test]
+    fn import_drops_reach_metrics_registry() {
+        use graphdb_metrics::MetricType;
+        let dir = tempfile::tempdir().expect("temporary import directory");
+        let csv = write_csv(
+            dir.path(),
+            "knows.csv",
+            "src,dst,ranking\n1,2,0\n,3,0\n5,6,0\n",
+        );
+        let mut writer = MockStorage::new().expect("mock writer builds");
+        let registry = graphdb_metrics::StatsManager::new();
+        let stats = import_edge_csv_from_path("space", "knows", &csv, &mut writer, Some(&registry))
+            .expect("import succeeds with drops");
+        assert_eq!(stats.accepted, 2);
+        assert_eq!(stats.dropped_invalid, 1);
+        assert_eq!(
+            registry
+                .get_value(MetricType::ImportAcceptedRows)
+                .unwrap_or(0),
+            2
+        );
+        assert_eq!(
+            registry
+                .get_value(MetricType::ImportDroppedRows)
+                .unwrap_or(0),
+            1
+        );
     }
 }

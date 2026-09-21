@@ -108,7 +108,10 @@ impl EdgeStore {
             }
         }
         if removed > 0 {
-            log::debug!("remove_orphan_group_files: removed {} orphan files", removed);
+            log::debug!(
+                "remove_orphan_group_files: removed {} orphan files",
+                removed
+            );
         }
         removed
     }

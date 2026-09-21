@@ -107,30 +107,14 @@ impl EdgeStore {
             .collect()
     }
 
-    /// Rebuild the owner map from topology plus authority leftovers.
-    ///
-    /// Topology edges take their current owner; timestamps or property rows
-    /// without topology (reclaimed physical rows whose authority tombstone
-    /// survives) fall back to the smallest materialized owner so they stay
-    /// in an existing shard. Every fallback is counted in the returned
-    /// stats and debug-logged: orphans converge to a deterministic group
-    /// with an observable count, never silently dropped.
-    pub(crate) fn rebuild_owner_map(&mut self) {
-        let stats = self.rebuild_owner_map_with_stats();
-        if stats.relocated_orphans > 0 {
-            log::debug!(
-                "rebuild_owner_map: {} orphan timestamps/property rows converged to group {}",
-                stats.relocated_orphans,
-                stats.fallback_group,
-            );
-        }
-    }
-
     /// Rebuild the owner map, reporting convergence counts.
     ///
-    /// Same rebuild as [`Self::rebuild_owner_map`], but returns the counts
-    /// instead of only logging them so load and reshard paths can assert
-    /// and tests can observe orphan convergence directly.
+    /// Topology edges take their current owner; timestamps or property rows
+    /// without topology fall back to the smallest materialized owner so they
+    /// stay in an existing shard. Every fallback is counted in the returned
+    /// stats: orphans converge to a deterministic group with an observable
+    /// count, never silently dropped. Load and reshard paths assert on the
+    /// counts and tests observe orphan convergence directly.
     pub(crate) fn rebuild_owner_map_with_stats(&mut self) -> OwnerRebuildStats {
         self.edge_owner.clear();
         let use_out = self.schema.oe_strategy != super::super::super::EdgeStrategy::None;

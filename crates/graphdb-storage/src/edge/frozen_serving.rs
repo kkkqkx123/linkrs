@@ -283,7 +283,10 @@ impl MappedFrozen {
     /// Open and validate a serving file. Any structural problem is an error;
     /// callers fall back to the authoritative checkpoint.
     pub fn open(path: &Path) -> StorageResult<Self> {
-        Self::open_with_intent(path, crate::edge::edge_table::config::MemoryIntent::HeapDefault)
+        Self::open_with_intent(
+            path,
+            crate::edge::edge_table::config::MemoryIntent::HeapDefault,
+        )
     }
 
     /// Open and validate a serving file under a declared memory intent.

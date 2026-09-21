@@ -220,7 +220,20 @@ impl EdgeStore {
             &mut stats,
         )?;
         self.config.node_group_bits = new_group_bits;
-        self.rebuild_owner_map();
+        let owner_stats = self.rebuild_owner_map_with_stats();
+        if let Some(stats) = &self.stats_manager {
+            stats.add_value_with_amount(
+                graphdb_metrics::MetricType::EdgeRelocatedOrphans,
+                owner_stats.relocated_orphans as u64,
+            );
+        }
+        let drift = self.audit_copy_drift();
+        if !drift.is_empty() {
+            return Err(graphdb_core::StorageError::db_error(format!(
+                "reshard drifted authority and projection: {}",
+                drift.join("; ")
+            )));
+        }
         log::debug!(
             "EdgeTable[{}] resharded width {} -> {}; out_groups={}, in_groups={}, edges={}",
             self.label,
@@ -306,7 +319,27 @@ impl EdgeStore {
                 .unwrap_or(1024);
             self.build_property_index(pool_capacity)?;
         }
-        self.rebuild_owner_map();
+        let owner_stats = self.rebuild_owner_map_with_stats();
+        if let Some(metrics) = &self.stats_manager {
+            metrics.add_value_with_amount(
+                graphdb_metrics::MetricType::EdgeRelocatedOrphans,
+                owner_stats.relocated_orphans as u64,
+            );
+        }
+        let drift = self.audit_copy_drift();
+        if !drift.is_empty() {
+            return Err(graphdb_core::StorageError::db_error(format!(
+                "remap drifted authority and projection: {}",
+                drift.join("; ")
+            )));
+        }
+        let (_, _, live_orphans) = self.copy_audit();
+        if let Some(stats) = &self.stats_manager {
+            stats.add_value_with_amount(
+                graphdb_metrics::MetricType::EdgeLiveAuthorityOrphans,
+                live_orphans as u64,
+            );
+        }
 
         log::debug!(
             "EdgeTable[{}] remapped vertex IDs (src_mapping={}, dst_mapping={}); out_groups={}, in_groups={}, row_misses={}, neighbor_misses={}, entries={}",

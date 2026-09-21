@@ -312,6 +312,9 @@ impl EdgeStore {
                             serving.display(),
                             error,
                         );
+                        if let Some(stats) = &self.stats_manager {
+                            stats.add_value(graphdb_metrics::MetricType::ServingFallbackCount);
+                        }
                     }
                 }
             } else {
@@ -319,15 +322,17 @@ impl EdgeStore {
                     "serving cache bypassed for group {} with pending append delta",
                     gid,
                 );
+                if let Some(stats) = &self.stats_manager {
+                    stats.add_value(graphdb_metrics::MetricType::ServingFallbackCount);
+                }
             }
             super::super::persistence::load_csr(&path, variant, expected)?;
             if let CsrVariant::Frozen(csr) = &*variant {
                 if let Err(error) = write_serving_file(csr, &serving) {
-                    log::debug!(
-                        "serving cache rebuild failed for group {}: {}",
-                        gid,
-                        error,
-                    );
+                    log::warn!("serving cache rebuild failed for group {}: {}", gid, error,);
+                    if let Some(stats) = &self.stats_manager {
+                        stats.add_value(graphdb_metrics::MetricType::ServingFallbackCount);
+                    }
                 }
             }
             // Sidecars replay the write-through delta on top of the base;

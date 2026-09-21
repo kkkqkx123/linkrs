@@ -1,5 +1,5 @@
 use super::super::csr_shared::is_reclaimable_cold;
-use super::super::{ColdStamps, EdgeId, HotNbr, Nbr, Timestamp};
+use super::super::{EdgeId, Nbr, Timestamp};
 use super::overflow::OverflowChunk;
 use super::MutableCsr;
 
@@ -263,50 +263,9 @@ impl MutableCsr {
             self.rebuild_live_set_for_vertex(vid);
             return;
         }
-        // Vertex-level expansion: absorb overflow entries into the primary
-        // block so the row reads entirely from primary without overflow
-        // indirection.  The primary block is expanded at the tail of the
-        // hot/cold lists; the old block becomes dead gaps reclaimable by
-        // the next full compaction.
-        let idx = vid as usize;
-        if idx < self.vertex_capacity() && self.rows.primary_capacities[idx] > 0 {
-            let degree = self.rows.degrees[idx] as usize;
-            let needed = degree + kept.len();
-            let target_cap = Self::sized_row_capacity(needed);
-            // Only expand when the target fits within the chunk-edge
-            // budget; wider rows stay with a single overflow chunk.
-            if target_cap <= self.overflow_chunk_edges {
-                let current_cap = self.rows.primary_capacities[idx] as usize;
-                let old_offset = self.rows.adj_offsets[idx] as usize;
-                let new_offset = self.hot_list.len();
-                // Copy primary entries to the new tail block.
-                let hot_src = self.hot_list[old_offset..old_offset + degree].to_vec();
-                let cold_src = self.cold_list[old_offset..old_offset + degree].to_vec();
-                self.hot_list.extend_from_slice(&hot_src);
-                self.cold_list.extend_from_slice(&cold_src);
-                // Append overflow entries right after primary.
-                for nbr in &kept {
-                    self.hot_list.push(nbr.hot());
-                    self.cold_list.push(nbr.cold());
-                }
-                // Fill remaining capacity with gap sentinels.
-                self.hot_list
-                    .resize(new_offset + target_cap, HotNbr::dead_gap());
-                self.cold_list
-                    .resize(new_offset + target_cap, ColdStamps::dead_gap());
-                self.rows.adj_offsets[idx] = new_offset as u32;
-                self.rows.degrees[idx] = needed as u32;
-                self.rows.primary_capacities[idx] = target_cap as u32;
-                if target_cap > current_cap {
-                    self.add_capacity(target_cap - current_cap);
-                }
-                self.invalidate_reuse_hint(idx);
-                self.rebuild_live_set_for_vertex(vid);
-                self.vertex_expansion_count += 1;
-                return;
-            }
-        }
-        // Fallback: consolidate into one overflow chunk.
+        // Consolidate into one overflow chunk. Primary-tail expansion was
+        // removed: merged rows stay on the single-chunk path so compaction
+        // never copies primary blocks.
         let single = OverflowChunk::consolidated(&kept);
         let new_cap = single.capacity();
         self.add_capacity(new_cap);

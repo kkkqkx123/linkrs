@@ -107,8 +107,8 @@ macro_rules! dispatch {
 /// Ordering is promised per form, never globally: mutable, single, pure and
 /// bundled rows are insertion-ordered and promise no order; frozen and
 /// mapped rows are packed sorted by `(endpoint, rank, edge_id)` and promise
-/// that order plus key-interval bisection. Freeze, compaction and serving
-/// rebuilds may change the order; the query layer must never depend on an
+/// that order plus key-interval bisection. Freeze, compaction, compression
+/// and serving rebuilds may change the order; the query layer must never depend on an
 /// unpromised order. [`MutableCsr::is_row_sorted`](super::MutableCsr::is_row_sorted)
 /// reports the advisory per-row state for plan selection.
 ///
@@ -611,12 +611,10 @@ impl MutableCsrTrait for CsrVariant {
                 csr.delete_edge_at_position(src_vid, position, expected, ts)
             }
             _ => {
-                debug_assert!(
-                    false,
-                    "row position must not cross variants; re-resolve by edge id"
-                );
-                self.delete_edge(src_vid, expected, ts)
-            },
+                return Err(StorageError::invalid_operation(
+                    "row position must not cross variants; re-resolve by edge id".to_string(),
+                ));
+            }
         }
     }
 
@@ -640,8 +638,8 @@ impl MutableCsrTrait for CsrVariant {
                     false,
                     "row position must not cross variants; re-resolve by edge id"
                 );
-                self.revert_delete_by_edge_id(src_vid, expected, ts)
-            },
+                return false;
+            }
         }
     }
 

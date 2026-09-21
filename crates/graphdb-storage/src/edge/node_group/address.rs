@@ -9,6 +9,12 @@ use graphdb_core::{StorageError, StorageResult};
 use super::super::mutable_csr::PACKED_CSR_DENSITY;
 
 /// Default address bits per node group: 12 bits cover 4096 rows.
+///
+/// Selection guidance: dense id spaces below 1M vertices keep the default;
+/// sparse wide spans prefer smaller widths to keep each materialized group
+/// dense, while huge dense tables may raise it to cut group counts. Width
+/// changes are offline only via `EdgeStore::reshard` followed by a
+/// checkpoint; see the group-width drill in `checkpoint/tests.rs`.
 pub const DEFAULT_NODE_GROUP_BITS: u32 = 12;
 /// Rows per leaf region inside a group. A default group holds 16 regions;
 /// region dirt and density merges operate at this granularity.
