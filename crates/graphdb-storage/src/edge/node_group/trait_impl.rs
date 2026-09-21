@@ -9,7 +9,7 @@
 use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
 
-use super::super::{CsrBase, EdgePosition, MutableCsrTrait, Nbr};
+use super::super::{csr_shared::decode_endpoint_pair, CsrBase, EdgePosition, MutableCsrTrait, Nbr};
 use super::{local_vid, CsrShardSet};
 
 impl CsrBase for CsrShardSet {
@@ -72,8 +72,7 @@ impl MutableCsrTrait for CsrShardSet {
             })?
             .variant
             .insert_edge(local, dst, edge_id, ts)?;
-        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
-        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
+        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
         let nbr = Nbr::with_create_ts(decoded_endpoint, decoded_rank, edge_id, ts);
         self.mark_region_insert(gid, local);
         self.record_append_insert(gid, local, nbr);

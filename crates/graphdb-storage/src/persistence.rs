@@ -36,14 +36,9 @@ pub mod section {
     pub const EDGE_PROPS_SHARD: u32 = 0x0208;
     /// Per-table segment statistics snapshot for scan pruning.
     pub const EDGE_SEGMENT_STATS: u32 = 0x0209;
-
-    #[allow(unused)]
-    // reserved for future property-table file
-    pub const PROPERTY_TABLE: u32 = 0x0301;
 }
 
 /// Write a persistence header (magic + section_id) into a buffer
-#[allow(unused)]
 pub fn write_header(buf: &mut Vec<u8>, section_id: u32) {
     buf.extend_from_slice(&PERSISTENCE_MAGIC);
     buf.extend_from_slice(&section_id.to_le_bytes());

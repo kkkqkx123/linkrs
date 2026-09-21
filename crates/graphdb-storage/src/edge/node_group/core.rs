@@ -9,7 +9,10 @@ use graphdb_core::types::{EdgeId, EdgeStrategy, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
 use std::collections::BTreeMap;
 
-use super::super::{CsrBase, CsrVariant, EdgePut, MutableCsrTrait, Nbr, RecordForm, RowEdgeBatch};
+use super::super::{
+    csr_shared::decode_endpoint_pair, CsrBase, CsrVariant, EdgePut, MutableCsrTrait, Nbr,
+    RecordForm, RowEdgeBatch,
+};
 use super::{
     group_id_for, group_size, local_vid, regions_per_group, validate_group_bits, CsrShardSet,
     GroupDirty, RegionDirty, Shard, ShardAppendLog,
@@ -238,8 +241,7 @@ impl CsrShardSet {
             })?
             .variant
             .insert_edge_with_value(local, dst, edge_id, value)?;
-        let (decoded_vid, decoded_rank) = dst.decode_edge_endpoint();
-        let decoded_endpoint = decoded_vid.as_u64().unwrap_or(0) as u32;
+        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
         let nbr = Nbr::with_create_ts(decoded_endpoint, decoded_rank, edge_id, ts);
         self.mark_region_insert(gid, local);
         self.record_append_insert(gid, local, nbr);
@@ -401,8 +403,7 @@ impl CsrShardSet {
                     let mut rows: BTreeMap<u32, Vec<EdgePut>> = BTreeMap::new();
                     for (src, dst, edge_id) in &group_edges {
                         let local = local_vid(*src, group_bits);
-                        let (vid, rank) = dst.decode_edge_endpoint();
-                        let endpoint = vid.as_u64().unwrap_or(0) as u32;
+                        let (endpoint, rank) = decode_endpoint_pair(*dst);
                         rows.entry(local)
                             .or_default()
                             .push((endpoint, rank, *edge_id, ts));
@@ -423,8 +424,7 @@ impl CsrShardSet {
                 }
                 for (src, dst, edge_id) in &group_edges {
                     let local = local_vid(*src, group_bits);
-                    let (vid, rank) = dst.decode_edge_endpoint();
-                    let endpoint = vid.as_u64().unwrap_or(0) as u32;
+                    let (endpoint, rank) = decode_endpoint_pair(*dst);
                     let nbr = Nbr::with_create_ts(endpoint, rank, *edge_id, ts);
                     self.mark_region_insert(gid, local);
                     self.record_append_insert(gid, local, nbr);
@@ -441,8 +441,7 @@ impl CsrShardSet {
                         })?;
                         shard.variant.insert_edge(local, dst, edge_id, ts)?;
                     }
-                    let (vid, rank) = dst.decode_edge_endpoint();
-                    let endpoint = vid.as_u64().unwrap_or(0) as u32;
+                    let (endpoint, rank) = decode_endpoint_pair(dst);
                     let nbr = Nbr::with_create_ts(endpoint, rank, edge_id, ts);
                     self.mark_region_insert(gid, local);
                     self.record_append_insert(gid, local, nbr);

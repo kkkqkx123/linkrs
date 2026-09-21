@@ -97,3 +97,34 @@ fn test_sized_row_capacity_pins_density_formula() {
         prev = cap;
     }
 }
+
+#[test]
+fn test_graded_sizing_beats_naive_doubling_for_small_rows() {
+    // Control against naive geometric growth: doubling from the tiny-row
+    // floor would reserve 8 slots for a 5-edge row and keep doubling past
+    // every small growth step, while the density sizing reserves exactly the
+    // packed target. Small rows must stay small; large rows converge to the
+    // same linear reserve either way.
+    use super::super::row::graded_overflow_chunk_edges;
+    for live in [1usize, 5, 9, 33] {
+        let graded = MutableCsr::sized_row_capacity(live);
+        let doubled = live.next_power_of_two().max(4);
+        assert!(
+            graded <= doubled,
+            "live={live} graded={graded} doubled={doubled}"
+        );
+        assert!(graded >= live, "live={live} graded={graded}");
+    }
+    for live in [100usize, 1000] {
+        let graded = MutableCsr::sized_row_capacity(live);
+        assert!((graded as f32 - live as f32 / PACKED_CSR_DENSITY).abs() < 2.0);
+    }
+    // Overflow grading shares the same discipline: monotonic, floored for
+    // small rows, capped at one allocation unit for supernodes.
+    let mut prev = 0usize;
+    for live in [0usize, 1, 5, 8, 9, 100, 5000, 1_000_000] {
+        let chunk = graded_overflow_chunk_edges(live);
+        assert!(chunk >= prev, "live={live} chunk={chunk} prev={prev}");
+        prev = chunk;
+    }
+}

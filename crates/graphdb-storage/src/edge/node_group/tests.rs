@@ -517,6 +517,18 @@ fn sparse_address_space_costs_only_existing_groups() {
     assert!(set.get_edge(5000, endpoint(2, 0), 200).is_none());
     assert_eq!(set.group_count(), 2);
     assert_eq!(set.edge_count(), 1);
+    // Memory stays proportional to materialized groups, never the span: two
+    // groups cost two groups' reservations plus the container shell, while a
+    // dense reservation for the whole span would exceed it by two orders of
+    // magnitude.
+    let per_group = set.group_size() * 12 + 4096;
+    assert!(
+        set.used_memory_size() < 2 * per_group + 1_000_000,
+        "sparse memory {} must stay near two groups, not the {}-row span",
+        set.used_memory_size(),
+        set.address_span_rows(),
+    );
+    assert!(set.address_span_rows() > set.vertex_capacity());
 }
 
 #[test]

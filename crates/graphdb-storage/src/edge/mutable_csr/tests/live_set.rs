@@ -168,3 +168,42 @@ fn wide_row_index_memory_stays_proportional_to_width() {
     assert!(csr.live_sets.heap_bytes_total() <= 200 * entry);
     assert_eq!(csr.live_key_count(0), 200);
 }
+
+#[test]
+fn huge_degree_index_agrees_with_scan_and_stays_proportional() {
+    // Cost transparency at supernode scale: a multi-thousand-edge row keeps
+    // one index entry per live key, indexed hits and misses agree with the
+    // physical scan path, and narrowing drops the index with exactly one
+    // rebuild while heap memory returns to zero.
+    let mut csr = MutableCsr::with_overflow_chunk_edges(4, 4096, 64);
+    for i in 0..2000i64 {
+        csr.insert_edge(0u32, VertexId::from_int64(i + 1), EdgeId(i as u64 + 1), 1)
+            .unwrap();
+    }
+    assert!(csr.live_sets.get(&0).is_some());
+    assert_eq!(csr.live_key_count(0), 2000);
+    let entry = std::mem::size_of::<((u32, i64), super::super::write::EdgePosition)>() + 8;
+    assert!(csr.live_sets.heap_bytes_total() <= 2000 * entry);
+    for probe in [1i64, 777, 2000] {
+        let key = VertexId::from_int64(probe);
+        assert_eq!(
+            csr.get_edge(0u32, key, 1).map(|nbr| nbr.edge_id),
+            csr.get_edge_physical(0u32, key).map(|nbr| nbr.edge_id),
+        );
+    }
+    assert!(csr
+        .get_edge(0u32, VertexId::from_int64(999_999), 1)
+        .is_none());
+    assert!(csr
+        .get_edge_physical(0u32, VertexId::from_int64(999_999))
+        .is_none());
+    let rebuilds_before = csr.live_set_rebuild_count();
+    for i in 0..1992i64 {
+        assert!(csr.delete_edge(0u32, EdgeId(i as u64 + 1), 2).unwrap());
+    }
+    csr.rebuild_live_set_for_vertex(0);
+    assert_eq!(csr.live_set_rebuild_count(), rebuilds_before + 1);
+    assert!(csr.live_sets.get(&0).is_none());
+    assert_eq!(csr.live_sets.heap_bytes_total(), 0);
+    assert_eq!(csr.live_key_count(0), 8);
+}
