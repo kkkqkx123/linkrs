@@ -376,6 +376,7 @@ impl MutableCsr {
         self.reuse_hint = vec![super::core::REUSE_HINT_UNKNOWN; vertex_capacity];
         self.live_counts = vec![0; vertex_capacity];
         self.tombstone_counts = vec![0; vertex_capacity];
+        self.primary_sorted = vec![false; vertex_capacity];
         self.live_sets.clear();
         self.live_sets.ensure_capacity(vertex_capacity);
         for (vid, keys) in live_keys.into_iter().enumerate() {

@@ -48,6 +48,7 @@ impl MutableCsr {
             reuse_hint: vec![REUSE_HINT_UNKNOWN; vertex_cap],
             live_counts: vec![0; vertex_cap],
             tombstone_counts: vec![0; vertex_cap],
+            primary_sorted: vec![true; vertex_cap],
             edge_count: 0,
             total_edge_capacity: 0,
             overflow_chunk_allocs: 0,
@@ -117,6 +118,7 @@ impl MutableCsr {
             .resize(new_vertex_capacity, REUSE_HINT_UNKNOWN);
         self.live_counts.resize(new_vertex_capacity, 0);
         self.tombstone_counts.resize(new_vertex_capacity, 0);
+        self.primary_sorted.resize(new_vertex_capacity, true);
         self.overflow_chunks.ensure_capacity(new_vertex_capacity);
         self.live_sets.ensure_capacity(new_vertex_capacity);
     }
@@ -169,6 +171,7 @@ impl MutableCsr {
         self.reuse_hint.fill(REUSE_HINT_UNKNOWN);
         self.live_counts.fill(0);
         self.tombstone_counts.fill(0);
+        self.primary_sorted.fill(true);
         self.total_edge_capacity = self
             .rows
             .primary_capacities
@@ -199,6 +202,37 @@ impl MutableCsr {
     /// Reset every reuse hint after a whole-table rebuild.
     pub(crate) fn reset_reuse_hints(&mut self) {
         self.reuse_hint.fill(REUSE_HINT_UNKNOWN);
+    }
+
+    /// Cached primary order of one row for threshold scans.
+    ///
+    /// True only when the primary window is known to arrive in key order;
+    /// false always falls back to the linear scan, so a stale false costs
+    /// speed but never correctness.
+    pub(crate) fn primary_sorted_flag(&self, src_idx: usize) -> bool {
+        self.primary_sorted[src_idx]
+    }
+
+    /// Clear the cached order after a primary write of a new key.
+    ///
+    /// Deletes, reverts and order-preserving moves must not call this:
+    /// they keep the key order intact.
+    pub(crate) fn mark_primary_unsorted(&mut self, src_idx: usize) {
+        if let Some(flag) = self.primary_sorted.get_mut(src_idx) {
+            *flag = false;
+        }
+    }
+
+    /// Establish the cached order after the maintenance sort.
+    pub(crate) fn mark_primary_sorted(&mut self, src_idx: usize) {
+        if let Some(flag) = self.primary_sorted.get_mut(src_idx) {
+            *flag = true;
+        }
+    }
+
+    /// Drop every cached order after a rebuild with unknown row order.
+    pub(crate) fn reset_primary_sorted(&mut self) {
+        self.primary_sorted.fill(false);
     }
 }
 

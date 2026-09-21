@@ -119,6 +119,15 @@ pub struct MutableCsr {
     live_counts: Vec<u32>,
     /// Incremental tombstone count per vertex (narrow rows only).
     tombstone_counts: Vec<u32>,
+    /// Cached primary-block key order per vertex: true when the primary
+    /// window arrives in `(endpoint, rank, edge_id)` order.
+    ///
+    /// Threshold scans consult this instead of probing the whole row on
+    /// every query. New and empty rows start ordered; any primary write of
+    /// a new key clears the row, cold-only deletes and order-preserving
+    /// moves keep it, and the maintenance sort establishes it. Memory-only:
+    /// never persisted, rebuilt to unordered on load.
+    primary_sorted: Vec<bool>,
 
     edge_count: u64,
     total_edge_capacity: usize,
@@ -176,6 +185,7 @@ impl Clone for MutableCsr {
             reuse_hint: self.reuse_hint.clone(),
             live_counts: self.live_counts.clone(),
             tombstone_counts: self.tombstone_counts.clone(),
+            primary_sorted: self.primary_sorted.clone(),
             edge_count: self.edge_count,
             total_edge_capacity: self.total_edge_capacity,
             overflow_chunk_allocs: self.overflow_chunk_allocs,

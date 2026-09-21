@@ -140,6 +140,7 @@ impl MutableCsr {
         }
         self.rows.degrees[idx] = placed as u32;
         self.invalidate_reuse_hint(idx);
+        self.mark_primary_unsorted(idx);
         let placed_live = live.len().min(slots);
         let overflow_live: Vec<Nbr> = live.into_iter().skip(placed_live).collect();
         let placed_pinned = pinned.len().min(slots.saturating_sub(placed_live));
@@ -173,20 +174,23 @@ impl MutableCsr {
     ///
     /// Maintenance-only entry: sorting moves slots, so every previously
     /// issued `EdgePosition` for this row becomes stale and the caller must
-    /// relocate through the edge-id key first. The reuse hint is dropped and
-    /// the live index is rebuilt into its sorted form. Overflow chunks stay
-    /// in insertion order and remain the unsorted suffix. New writes keep
-    /// the hot path (primary gap fill, then overflow tail) and therefore
-    /// mark the row unsorted again as observed by `is_row_sorted`; the next
-    /// maintenance pass re-sorts. No watermark or sorted flag is persisted:
-    /// order is observed in memory and rebuilt on load.
+    /// relocate through the edge-id key first. The reuse hint is dropped,
+    /// the cached primary order is established, and the live index is
+    /// rebuilt into its sorted form. Overflow chunks stay in insertion
+    /// order and remain the unsorted suffix. New writes keep the hot path
+    /// (primary gap fill, then overflow tail) and therefore clear the cached
+    /// order again; the next maintenance pass re-sorts. The flag is never
+    /// persisted: load resets every row to unordered and the maintenance
+    /// pass re-establishes order.
     pub fn sort_row(&mut self, vid: u32) -> bool {
         let idx = vid as usize;
         if idx >= self.vertex_capacity() || self.rows.primary_capacities[idx] == 0 {
+            self.mark_primary_sorted(idx);
             return false;
         }
         let degree = self.rows.degrees[idx] as usize;
         if degree <= 1 {
+            self.mark_primary_sorted(idx);
             return false;
         }
         let base = self.rows.adj_offsets[idx] as usize;
@@ -203,6 +207,7 @@ impl MutableCsr {
             (a.endpoint, a.rank, a.edge_id.0) <= (b.endpoint, b.rank, b.edge_id.0)
         });
         if already {
+            self.mark_primary_sorted(idx);
             return false;
         }
         order.sort_by(|&a, &b| {
@@ -217,6 +222,7 @@ impl MutableCsr {
             self.cold_list[base + dst] = cold_src[*src];
         }
         self.invalidate_reuse_hint(idx);
+        self.mark_primary_sorted(idx);
         self.rebuild_live_set_for_vertex(vid);
         true
     }

@@ -139,6 +139,7 @@ impl MutableCsr {
         if degree < self.rows.primary_capacities[src_idx] as usize {
             let base = self.rows.adj_offsets[src_idx] as usize;
             self.set_slot(base + degree, nbr_with_ts);
+            self.mark_primary_unsorted(src_idx);
             self.rows.degrees[src_idx] += 1;
             self.live_counts[src_idx] += 1;
             self.track_live_insert(
@@ -173,6 +174,7 @@ impl MutableCsr {
                             .is_some_and(|cold| is_reclaimable_cold(&cold, cutoff));
                         if reclaimable {
                             self.set_slot(base + slot, nbr_with_ts);
+                            self.mark_primary_unsorted(src_idx);
                             self.invalidate_reuse_hint(src_idx);
                             self.live_counts[src_idx] += 1;
                             self.tombstone_counts[src_idx] =
@@ -198,6 +200,7 @@ impl MutableCsr {
                     .is_some_and(|cold| is_reclaimable_cold(&cold, cutoff));
                 if reclaimable {
                     self.set_slot(base + i, nbr_with_ts);
+                    self.mark_primary_unsorted(src_idx);
                     self.invalidate_reuse_hint(src_idx);
                     self.live_counts[src_idx] += 1;
                     self.tombstone_counts[src_idx] =
@@ -911,6 +914,7 @@ impl MutableCsr {
                 if degree < cap {
                     let base = self.rows.adj_offsets[src_idx] as usize;
                     self.set_slot(base + degree, nbr);
+                    self.mark_primary_unsorted(src_idx);
                     self.rows.degrees[src_idx] += 1;
                 } else {
                     self.append_overflow(*src_vid, nbr, live);

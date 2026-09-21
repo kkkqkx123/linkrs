@@ -35,10 +35,10 @@ impl MutableCsr {
 
     /// Whether the primary block of one row arrives in key order.
     ///
-    /// Sorted-prefix probe behind threshold scans: after a maintenance sort
-    /// the primary block is ordered while overflow chunks stay in insertion
-    /// order as the unsorted suffix, so this reports true even when the
-    /// whole row is hybrid.
+    /// Ground-truth order probe over the primary window: threshold scans
+    /// consult the cached per-row flag instead of paying this walk on every
+    /// query. After a maintenance sort the primary block is ordered while
+    /// overflow chunks stay in insertion order as the unsorted suffix.
     pub fn is_primary_sorted(&self, src_vid: u32) -> bool {
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
@@ -178,43 +178,9 @@ impl MutableCsr {
         endpoint: u32,
         rank: i64,
     ) -> Option<Nbr> {
-        use super::super::INVALID_EDGE_ID;
-        let (hot, cold) = self.primary_pair(src_idx);
-        for (h, c) in hot.iter().zip(cold.iter()) {
-            if h.endpoint == endpoint
-                && h.rank == rank
-                && h.edge_id != INVALID_EDGE_ID
-                && c.is_live()
-            {
-                return Some(Nbr::from_parts(*h, *c));
-            }
-        }
-        if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
-            for (hot, cold) in single.hot_slice().iter().zip(single.cold_slice()) {
-                if hot.endpoint == endpoint
-                    && hot.rank == rank
-                    && hot.edge_id != INVALID_EDGE_ID
-                    && cold.is_live()
-                {
-                    return Some(Nbr::from_parts(*hot, *cold));
-                }
-            }
-            return None;
-        }
-        if let Some(chunks) = self.overflow_chunks.get(src_vid) {
-            for chunk in chunks {
-                for (hot, cold) in chunk.hot_slice().iter().zip(chunk.cold_slice()) {
-                    if hot.endpoint == endpoint
-                        && hot.rank == rank
-                        && hot.edge_id != INVALID_EDGE_ID
-                        && cold.is_live()
-                    {
-                        return Some(Nbr::from_parts(*hot, *cold));
-                    }
-                }
-            }
-        }
-        None
+        self.scan_row_for_key(src_idx, endpoint, rank, |hot, cold| {
+            hot.edge_id != INVALID_EDGE_ID && cold.is_live()
+        })
     }
 
     /// Every physically stored entry of one vertex without timestamp filtering.
@@ -548,21 +514,35 @@ impl MutableCsr {
         rank: i64,
         ts: Timestamp,
     ) -> Option<Nbr> {
+        self.scan_row_for_key(src_idx, endpoint, rank, |hot, cold| {
+            Nbr::from_parts(hot, cold).is_alive_at(ts)
+        })
+    }
+
+    /// Shared primary-then-overflow key scan behind the point lookups.
+    ///
+    /// Single traversal for the physical and timestamped queries; only the
+    /// acceptance predicate differs, so the consolidated-row fast path and
+    /// the chain fallback cannot drift apart.
+    fn scan_row_for_key(
+        &self,
+        src_idx: usize,
+        endpoint: u32,
+        rank: i64,
+        mut accept: impl FnMut(HotNbr, ColdStamps) -> bool,
+    ) -> Option<Nbr> {
         let (hot, cold) = self.primary_pair(src_idx);
         for (h, c) in hot.iter().zip(cold.iter()) {
-            if h.endpoint == endpoint && h.rank == rank {
-                let nbr = Nbr::from_parts(*h, *c);
-                if nbr.is_alive_at(ts) {
-                    return Some(nbr);
-                }
+            if h.endpoint == endpoint && h.rank == rank && accept(*h, *c) {
+                return Some(Nbr::from_parts(*h, *c));
             }
         }
-
         let src_vid = src_idx as u32;
         if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
             for i in 0..single.len() {
                 if let Some(nbr) = single.slot_at(i) {
-                    if nbr.endpoint == endpoint && nbr.rank == rank && nbr.is_alive_at(ts) {
+                    if nbr.endpoint == endpoint && nbr.rank == rank && accept(nbr.hot(), nbr.cold())
+                    {
                         return Some(nbr);
                     }
                 }
@@ -573,14 +553,16 @@ impl MutableCsr {
             for chunk in chunks {
                 for i in 0..chunk.len() {
                     if let Some(nbr) = chunk.slot_at(i) {
-                        if nbr.endpoint == endpoint && nbr.rank == rank && nbr.is_alive_at(ts) {
+                        if nbr.endpoint == endpoint
+                            && nbr.rank == rank
+                            && accept(nbr.hot(), nbr.cold())
+                        {
                             return Some(nbr);
                         }
                     }
                 }
             }
         }
-
         None
     }
 
@@ -590,8 +572,9 @@ impl MutableCsr {
     /// Sorted primary prefixes bisect to the key window and filter for
     /// liveness inside it, then the overflow suffix always scans linearly.
     /// Unsorted primaries scan linearly with the same key predicate. The
-    /// prefix probe is `is_primary_sorted`, so hybrid rows (sorted primary
-    /// plus unsorted overflow) still bisect the prefix. Only live entries
+    /// prefix probe is the cached per-row order flag, so hybrid rows (sorted
+    /// primary plus unsorted overflow) still bisect the prefix without
+    /// paying a full sortedness walk on every query. Only live entries
     /// (`delete_ts == MAX`) are visited; snapshot visibility stays above.
     pub fn visit_threshold<F>(
         &self,
@@ -620,7 +603,7 @@ impl MutableCsr {
             true
         };
         let (hot, cold) = self.primary_pair(src_idx);
-        if self.is_primary_sorted(src_vid) && hot.len() > 1 {
+        if self.primary_sorted_flag(src_idx) && hot.len() > 1 {
             let lo = match lower {
                 Some((lo_ep, lo_rank)) => {
                     hot.partition_point(|h| (h.endpoint, h.rank) < (lo_ep, lo_rank))

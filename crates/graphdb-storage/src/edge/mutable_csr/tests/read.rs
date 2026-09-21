@@ -65,3 +65,65 @@ fn consolidated_row_reads_single_block() {
         .expect("single-block row answers point lookups");
     assert_eq!(hit.edge_id, EdgeId(17));
 }
+
+#[test]
+fn primary_sorted_flag_tracks_writes_and_sort() {
+    let mut csr = MutableCsr::with_capacity(4, 64);
+    assert!(csr.primary_sorted_flag(0));
+    // Any primary key write clears the flag, even an in-order append.
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(30, 0), EdgeId(1), 1)
+        .unwrap();
+    assert!(!csr.primary_sorted_flag(0));
+    // A single-entry row sorts trivially and re-establishes the flag.
+    assert!(!csr.sort_row(0u32));
+    assert!(csr.primary_sorted_flag(0));
+    assert!(csr.is_primary_sorted(0u32));
+    // Out-of-order second key clears again; the maintenance sort restores.
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(2), 1)
+        .unwrap();
+    assert!(!csr.primary_sorted_flag(0));
+    assert!(!csr.is_primary_sorted(0u32));
+    assert!(csr.sort_row(0u32));
+    assert!(csr.primary_sorted_flag(0));
+    assert!(csr.is_primary_sorted(0u32));
+    // Cold-only deletes keep the key order, so the flag survives.
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(20, 0), EdgeId(3), 1)
+        .unwrap();
+    assert!(csr.sort_row(0u32));
+    assert!(csr.delete_edge(0u32, EdgeId(2), 2).unwrap());
+    assert!(csr.primary_sorted_flag(0));
+    assert!(csr.is_primary_sorted(0u32));
+}
+
+#[test]
+fn threshold_matches_linear_results_on_both_flag_states() {
+    let mut csr = MutableCsr::with_capacity(4, 64);
+    for (endpoint, edge) in [(50u32, 1u64), (10, 2), (30, 3), (20, 4), (40, 5)] {
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key(endpoint, 0),
+            EdgeId(edge),
+            1,
+        )
+        .unwrap();
+    }
+    assert!(!csr.primary_sorted_flag(0));
+    let mut unsorted_window = Vec::new();
+    csr.fill_threshold_into(0u32, Some((15, 0)), Some((45, 0)), &mut unsorted_window);
+    assert!(csr.sort_row(0u32));
+    assert!(csr.primary_sorted_flag(0));
+    let mut sorted_window = Vec::new();
+    csr.fill_threshold_into(0u32, Some((15, 0)), Some((45, 0)), &mut sorted_window);
+    let mut unsorted_keys: Vec<(u32, i64)> = unsorted_window
+        .iter()
+        .map(|nbr| (nbr.endpoint, nbr.rank))
+        .collect();
+    let mut sorted_keys: Vec<(u32, i64)> = sorted_window
+        .iter()
+        .map(|nbr| (nbr.endpoint, nbr.rank))
+        .collect();
+    unsorted_keys.sort_unstable();
+    sorted_keys.sort_unstable();
+    assert_eq!(unsorted_keys, sorted_keys);
+    assert_eq!(sorted_keys, vec![(20, 0), (30, 0), (40, 0)]);
+}

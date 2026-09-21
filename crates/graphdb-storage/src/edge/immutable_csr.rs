@@ -137,33 +137,13 @@ impl ImmutableCsr {
     /// by `(endpoint, rank, edge_id)`. Timestamp-filtered reads
     /// observe the same logical entries as the source table.
     pub fn pack_from_mutable(csr: &MutableCsr) -> Self {
-        let rows = csr.vertex_capacity();
-        let mut hot_entries = Vec::with_capacity(csr.edge_count() as usize);
-        let mut cold_entries = Vec::with_capacity(csr.edge_count() as usize);
-        let mut degrees = Vec::with_capacity(rows);
-        let mut row_buf = Vec::new();
-        let mut live = 0u64;
-        for local in 0..rows {
-            csr.fill_physical_into(local as u32, &mut row_buf);
-            sort_packed_row(&mut row_buf);
-            degrees.push(row_buf.len() as u32);
-            for nbr in &row_buf {
-                if nbr.edge_id != INVALID_EDGE_ID && nbr.delete_ts == Timestamp::MAX {
-                    live += 1;
-                }
-                hot_entries.push(nbr.hot());
-                cold_entries.push(nbr.cold());
-            }
-        }
-        let mut packed = Self {
-            hot_entries,
-            cold_entries,
-            degrees,
-            offsets: Vec::with_capacity(rows),
-            edge_count: live,
-        };
-        packed.rebuild_offsets();
-        packed
+        Self::pack_from_rows(
+            csr.vertex_capacity(),
+            csr.edge_count() as usize,
+            |local, row| {
+                csr.fill_physical_into(local, row);
+            },
+        )
     }
 
     /// Pack every physical entry of a single-edge CSR, sorted the same way.
@@ -171,14 +151,31 @@ impl ImmutableCsr {
     /// Rows hold at most one entry; the packed form is uniform with the
     /// multi-edge pack so one frozen type serves both strategies.
     pub fn pack_single_from(csr: &SingleMutableCsr) -> Self {
-        let rows = csr.vertex_capacity();
-        let mut hot_entries = Vec::new();
-        let mut cold_entries = Vec::new();
+        Self::pack_from_rows(
+            csr.vertex_capacity(),
+            csr.edge_count() as usize,
+            |local, row| {
+                csr.fill_physical_into(local, row);
+            },
+        )
+    }
+
+    /// Shared pack over a row-fill closure: extract, sort, append, count.
+    ///
+    /// Single packing entry so the multi-edge and single-edge packs cannot
+    /// drift apart; only the row source differs.
+    fn pack_from_rows(
+        rows: usize,
+        edge_hint: usize,
+        mut fill_row: impl FnMut(u32, &mut Vec<Nbr>),
+    ) -> Self {
+        let mut hot_entries = Vec::with_capacity(edge_hint);
+        let mut cold_entries = Vec::with_capacity(edge_hint);
         let mut degrees = Vec::with_capacity(rows);
         let mut row_buf = Vec::new();
         let mut live = 0u64;
         for local in 0..rows {
-            csr.fill_physical_into(local as u32, &mut row_buf);
+            fill_row(local as u32, &mut row_buf);
             sort_packed_row(&mut row_buf);
             degrees.push(row_buf.len() as u32);
             for nbr in &row_buf {
@@ -501,10 +498,13 @@ impl ImmutableCsr {
 
     /// Reclaim one row in place, leaving every other row untouched.
     ///
-    /// Eligible tombstones of `vid` are dropped and reported; live entries
-    /// keep their sorted order. Other rows are copied verbatim with fresh
-    /// offsets, so the work stays proportional to the table only through the
-    /// single rebuild all frozen compacts pay.
+    /// Eligible tombstones of `vid` are compacted out of the row window with
+    /// a write-pointer pass, then the vacated tail range is drained once so
+    /// later rows slide forward; their offsets shift by the removed count.
+    /// No entry outside the row window is copied and no second table-sized
+    /// buffer is allocated, so the work stays proportional to the row degree
+    /// plus the trailing offset fixup. Removed entries are reported in row
+    /// order; live entries keep their sorted order.
     pub fn compact_row(
         &mut self,
         vid: u32,
@@ -521,33 +521,31 @@ impl ImmutableCsr {
         if self.reclaimable_count(vid, cutoff) == 0 {
             return 0;
         }
-        let rows = self.degrees.len();
-        let mut removed = 0usize;
-        let mut kept_hot = Vec::with_capacity(self.hot_entries.len());
-        let mut kept_cold = Vec::with_capacity(self.cold_entries.len());
-        let mut new_degrees = Vec::with_capacity(rows);
-        for row in 0..rows {
-            let start = self.offsets[row] as usize;
-            let degree = self.degrees[row] as usize;
-            let end = start.saturating_add(degree).min(self.hot_entries.len());
-            let mut kept = 0usize;
-            for entry in start..end {
-                let cold = self.cold_entries[entry];
-                if row == idx && is_reclaimable_cold(&cold, cutoff) {
-                    on_edge_removed(self.hot_entries[entry].edge_id, cold.delete_ts);
-                    removed += 1;
-                } else {
-                    kept_hot.push(self.hot_entries[entry]);
-                    kept_cold.push(cold);
-                    kept += 1;
+        let Some((start, end)) = self.row_window(vid) else {
+            return 0;
+        };
+        let mut write = start;
+        for read in start..end {
+            let hot = self.hot_entries[read];
+            let cold = self.cold_entries[read];
+            if is_reclaimable_cold(&cold, cutoff) {
+                on_edge_removed(hot.edge_id, cold.delete_ts);
+            } else {
+                if write != read {
+                    self.hot_entries[write] = hot;
+                    self.cold_entries[write] = cold;
                 }
+                write += 1;
             }
-            new_degrees.push(kept as u32);
         }
-        self.hot_entries = kept_hot;
-        self.cold_entries = kept_cold;
-        self.degrees = new_degrees;
-        self.rebuild_offsets();
+        let removed = end - write;
+        self.hot_entries.drain(write..end);
+        self.cold_entries.drain(write..end);
+        self.degrees[idx] = (write - start) as u32;
+        let shift = removed as u32;
+        for off in self.offsets.iter_mut().skip(idx + 1) {
+            *off -= shift;
+        }
         removed
     }
 
@@ -1395,6 +1393,71 @@ mod tests {
             .map(|nbr| nbr.endpoint)
             .collect();
         assert_eq!(keys, vec![1, 3]);
+    }
+
+    #[test]
+    fn compact_row_leaves_other_rows_untouched() {
+        let mut mutable = MutableCsr::with_capacity(4, 32);
+        for (row, base) in [(0u32, 10u64), (1, 20), (2, 30)] {
+            for i in 0..4 {
+                mutable
+                    .insert_edge(
+                        row,
+                        packed_endpoint(base as u32 + i as u32, 0),
+                        EdgeId(base + i),
+                        1,
+                    )
+                    .unwrap();
+            }
+        }
+        mutable.delete_edge(1, EdgeId(21), 5).unwrap();
+        mutable.delete_edge(1, EdgeId(23), 5).unwrap();
+        let mut frozen = ImmutableCsr::pack_from_mutable(&mutable);
+        let before_0 = frozen.physical_edges_of(0);
+        let before_2 = frozen.physical_edges_of(2);
+        let live_before = frozen.edge_count();
+        let mut removed = Vec::new();
+        let dropped = frozen.compact_row(1, 10, &mut |id, ts| removed.push((id, ts)));
+        assert_eq!(dropped, 2);
+        assert_eq!(removed, vec![(EdgeId(21), 5), (EdgeId(23), 5)]);
+        assert_eq!(frozen.physical_edges_of(0), before_0);
+        assert_eq!(frozen.physical_edges_of(2), before_2);
+        assert_eq!(frozen.row_degree(0), 4);
+        assert_eq!(frozen.row_degree(1), 2);
+        assert_eq!(frozen.row_degree(2), 4);
+        assert_eq!(frozen.edge_count(), live_before);
+        assert_eq!(frozen.reclaimable_count(1, 10), 0);
+        let keys: Vec<u32> = frozen
+            .physical_edges_of(1)
+            .iter()
+            .map(|nbr| nbr.endpoint)
+            .collect();
+        assert_eq!(keys, vec![20, 22]);
+        assert_eq!(frozen.edges_of(1, 10).len(), 2);
+        assert_eq!(
+            frozen
+                .get_edge(2, packed_endpoint(31, 0), 10)
+                .map(|n| n.edge_id),
+            Some(EdgeId(31))
+        );
+    }
+
+    #[test]
+    fn compact_row_without_reclaimable_changes_nothing() {
+        let mut frozen = ImmutableCsr::pack_from_mutable(&sample_mutable());
+        let before: Vec<Vec<Nbr>> = (0..8u32).map(|vid| frozen.physical_edges_of(vid)).collect();
+        let live_before = frozen.edge_count();
+        let mut removed = Vec::new();
+        assert_eq!(
+            frozen.compact_row(0, 4, &mut |id, ts| removed.push((id, ts))),
+            0
+        );
+        assert!(removed.is_empty());
+        assert_eq!(frozen.compact_row(9, 10, &mut |_, _| {}), 0);
+        assert_eq!(frozen.compact_row(0, Timestamp::MAX, &mut |_, _| {}), 0);
+        let after: Vec<Vec<Nbr>> = (0..8u32).map(|vid| frozen.physical_edges_of(vid)).collect();
+        assert_eq!(before, after);
+        assert_eq!(frozen.edge_count(), live_before);
     }
 
     #[test]

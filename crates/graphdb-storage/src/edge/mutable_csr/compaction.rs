@@ -105,6 +105,7 @@ impl MutableCsr {
         self.live_sets.clear();
         self.rebuild_live_sets();
         self.reset_reuse_hints();
+        self.reset_primary_sorted();
 
         removed_count
     }

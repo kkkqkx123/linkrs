@@ -132,7 +132,7 @@ fn single_marker_dump_load_roundtrip() {
             EdgeId(1000 + i as u64),
             2,
         )
-            .unwrap();
+        .unwrap();
     }
     assert!(csr.delete_edge(0u32, EdgeId(5), 3).unwrap());
 
@@ -173,14 +173,20 @@ fn retired_raw_marker_is_rejected() {
     let body_len = payload.len() - 4;
     let resealed = crc32fast::hash(&payload[..body_len]);
     payload[body_len..].copy_from_slice(&resealed.to_le_bytes());
-    let err = MutableCsr::new().load(&payload).expect_err("marker 9 must fail");
-    assert!(err.to_string().contains("Unsupported mutable CSR format version"));
+    let err = MutableCsr::new()
+        .load(&payload)
+        .expect_err("marker 9 must fail");
+    assert!(err
+        .to_string()
+        .contains("Unsupported mutable CSR format version"));
 
     let mut bad_marker = csr.dump();
     bad_marker[0..4].copy_from_slice(&99u32.to_le_bytes());
     assert!(MutableCsr::new().load(&bad_marker).is_err());
 
     let encoded = csr.dump();
-    assert!(MutableCsr::new().load(&encoded[..encoded.len() - 1]).is_err());
+    assert!(MutableCsr::new()
+        .load(&encoded[..encoded.len() - 1])
+        .is_err());
     assert!(MutableCsr::new().load(&[]).is_err());
 }

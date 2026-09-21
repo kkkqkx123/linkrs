@@ -36,7 +36,8 @@ impl MutableCsr {
     /// Get used memory size, counting reserved topology plus indexes.
     ///
     /// Covers the primary neighbor list, the offset/degree/capacity arrays,
-    /// reserved overflow chunk buffers, the dedup live sets and this struct.
+    /// the per-row order flags, reserved overflow chunk buffers, the dedup
+    /// live sets and this struct.
     /// Tombstone authority memory is accounted by the table layer through
     /// the shared tombstone estimate so both stay on one caliber.
     pub fn used_memory_size(&self) -> usize {
@@ -45,7 +46,8 @@ impl MutableCsr {
             + self.cold_list.capacity() * std::mem::size_of::<ColdStamps>()
             + self.rows.adj_offsets.capacity() * std::mem::size_of::<u32>()
             + self.rows.degrees.capacity() * std::mem::size_of::<u32>()
-            + self.rows.primary_capacities.capacity() * std::mem::size_of::<u32>();
+            + self.rows.primary_capacities.capacity() * std::mem::size_of::<u32>()
+            + self.primary_sorted.capacity() * std::mem::size_of::<bool>();
         let overflow_reserved: usize = self
             .overflow_chunks
             .iter()
