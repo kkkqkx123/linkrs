@@ -33,7 +33,7 @@ use crate::edge::property_schema::PropertySchema;
 use crate::edge::{
     is_scalar_encodable, CsrShardSet, CsrWithProperties, MutableCsrTrait, RecordForm,
 };
-use graphdb_core::types::{EdgeId, Timestamp};
+use graphdb_core::types::{EdgeId, EdgeStrategy, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
 
 /// Outcome of one offline record-form migration.
@@ -198,6 +198,17 @@ impl EdgeStore {
     /// Each rejection names the migration entry so callers quote cost with
     /// `migration_plan` instead of treating the error as generic.
     fn check_record_form_target(&self, target: RecordForm) -> StorageResult<()> {
+        // Single strategies need fixed single slots, which only the columnar
+        // form provides. Inline forms store multiple edges per vertex, so a
+        // migration there would silently drop the single-edge contract.
+        if matches!(target, RecordForm::Pure | RecordForm::Bundled)
+            && (self.schema.oe_strategy == EdgeStrategy::Single
+                || self.schema.ie_strategy == EdgeStrategy::Single)
+        {
+            return Err(StorageError::invalid_operation(
+                crate::edge::SINGLE_REQUIRES_COLUMNAR_MSG.to_string(),
+            ));
+        }
         match target {
             RecordForm::Pure if !self.schema.properties.is_empty() => {
                 return Err(StorageError::invalid_operation(
@@ -1036,5 +1047,74 @@ mod tests {
             .revert_delete_edge(0, 1, 0, 150)
             .expect("revert reports"));
         assert!(table.get_edge(0, 1, 0, 200).is_none());
+    }
+
+    #[test]
+    fn single_strategy_auto_selects_columnar() {
+        // Single strategies need fixed single slots, which only the columnar
+        // form provides. Auto selection must not pick an inline form even
+        // when the property count would otherwise allow it.
+        let mut schema = weight_schema();
+        schema.properties.clear();
+        schema.oe_strategy = EdgeStrategy::Single;
+        schema.ie_strategy = EdgeStrategy::Single;
+        let table = EdgeStore::with_config(schema, auto_config()).expect("single table builds");
+        assert_eq!(table.schema.record_form, RecordForm::Columnar);
+        assert!(table
+            .out_csr
+            .group_variant(0)
+            .is_some_and(|v| matches!(v, crate::edge::CsrVariant::Single(_))));
+
+        // One single direction is enough to lock the whole table: the other
+        // leg keeps its own strategy while sharing the columnar form.
+        let mut one_sided = weight_schema();
+        one_sided.properties.clear();
+        one_sided.oe_strategy = EdgeStrategy::Single;
+        one_sided.ie_strategy = EdgeStrategy::Multiple;
+        let table =
+            EdgeStore::with_config(one_sided, auto_config()).expect("one-sided table builds");
+        assert_eq!(table.schema.record_form, RecordForm::Columnar);
+        assert!(table
+            .out_csr
+            .group_variant(0)
+            .is_some_and(|v| matches!(v, crate::edge::CsrVariant::Single(_))));
+        assert!(table
+            .in_csr
+            .group_variant(0)
+            .is_some_and(|v| matches!(v, crate::edge::CsrVariant::Multiple(_))));
+
+        // A single encodable scalar would otherwise select the bundled form.
+        let mut scalar = weight_schema();
+        scalar.oe_strategy = EdgeStrategy::Single;
+        scalar.ie_strategy = EdgeStrategy::Single;
+        let table = EdgeStore::with_config(scalar, auto_config()).expect("single scalar builds");
+        assert_eq!(table.schema.record_form, RecordForm::Columnar);
+        assert!(table
+            .out_csr
+            .group_variant(0)
+            .is_some_and(|v| matches!(v, crate::edge::CsrVariant::Single(_))));
+    }
+
+    #[test]
+    fn single_strategy_rejects_inline_migration() {
+        let mut schema = weight_schema();
+        schema.oe_strategy = EdgeStrategy::Single;
+        schema.ie_strategy = EdgeStrategy::Single;
+        let mut table =
+            EdgeStore::with_config(schema, EdgeTableConfig::default()).expect("columnar builds");
+        assert!(table.migration_plan(RecordForm::Pure).is_err());
+        assert!(table.migrate_record_form(RecordForm::Pure).is_err());
+        assert!(table.migration_plan(RecordForm::Bundled).is_err());
+        assert!(table.migrate_record_form(RecordForm::Bundled).is_err());
+        assert!(table.switch_record_form_online(RecordForm::Pure).is_err());
+        assert!(table
+            .switch_record_form_online(RecordForm::Bundled)
+            .is_err());
+        assert_eq!(table.schema.record_form, RecordForm::Columnar);
+
+        // Multiple strategies stay migratable: the guard only fires on a
+        // single direction, never on multi-edge tables.
+        let multi = make_columnar_table();
+        assert!(multi.migration_plan(RecordForm::Bundled).is_ok());
     }
 }

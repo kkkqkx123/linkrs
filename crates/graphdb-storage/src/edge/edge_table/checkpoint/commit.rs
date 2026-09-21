@@ -5,6 +5,8 @@ use super::super::core::EdgeStore;
 use super::super::persistence;
 use super::layout::manifest_path;
 use crate::edge::node_group::TableShardManifest;
+use crate::edge::{RecordForm, SINGLE_REQUIRES_COLUMNAR_MSG};
+use graphdb_core::types::EdgeStrategy;
 use graphdb_core::{StorageError, StorageResult};
 use std::path::Path;
 
@@ -88,11 +90,26 @@ impl EdgeStore {
         self.label_name = meta.label_name;
         self.is_open = meta.is_open;
         self.set_schema(meta.schema);
-        // Align the shard-set forms with the stored schema: a table built
-        // with a different preference loads the persisted form, never
-        // re-infers it. The sets are still empty here (groups materialize
-        // below), so replacing them drops nothing.
-        if self.out_csr.record_form() != self.schema.record_form {
+        // Fail closed on a persisted single-plus-inline combination: such a
+        // table could never be built by the guarded constructors, so loading
+        // it must not silently resume with weakened cardinality.
+        if (self.schema.oe_strategy == EdgeStrategy::Single
+            || self.schema.ie_strategy == EdgeStrategy::Single)
+            && self.schema.record_form != RecordForm::Columnar
+        {
+            return Err(StorageError::invalid_operation(
+                SINGLE_REQUIRES_COLUMNAR_MSG,
+            ));
+        }
+        // Align the shard sets with the stored schema: a table built with a
+        // different preference loads the persisted form, never re-infers it.
+        // Strategy mismatches rebuild as well so a tampered manifest cannot
+        // leave stale per-direction strategies behind; the sets are still
+        // empty here (groups materialize below), so replacing them drops
+        // nothing.
+        if self.out_csr.strategy() != self.schema.oe_strategy
+            || self.out_csr.record_form() != self.schema.record_form
+        {
             self.out_csr = crate::edge::CsrShardSet::new(
                 self.schema.oe_strategy,
                 self.config.node_group_bits,
@@ -100,7 +117,9 @@ impl EdgeStore {
                 self.schema.record_form,
             )?;
         }
-        if self.in_csr.record_form() != self.schema.record_form {
+        if self.in_csr.strategy() != self.schema.ie_strategy
+            || self.in_csr.record_form() != self.schema.record_form
+        {
             self.in_csr = crate::edge::CsrShardSet::new(
                 self.schema.ie_strategy,
                 self.config.node_group_bits,

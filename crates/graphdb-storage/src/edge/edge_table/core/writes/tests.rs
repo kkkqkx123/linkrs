@@ -164,6 +164,134 @@ fn large_delete_fanout_fails_atomically() {
 }
 
 #[test]
+fn incident_vertex_delete_commits_fanout_in_one_batch() {
+    let mut table = batch_table();
+    for dst in 1..=50u32 {
+        table
+            .insert_edge(
+                0,
+                dst,
+                0,
+                &[("weight".to_string(), Value::Double(dst as f64))],
+                100,
+            )
+            .unwrap();
+    }
+    for src in 51..=60u32 {
+        table
+            .insert_edge(
+                src,
+                0,
+                0,
+                &[("weight".to_string(), Value::Double(src as f64))],
+                100,
+            )
+            .unwrap();
+    }
+    table
+        .insert_edge(
+            70,
+            71,
+            0,
+            &[("weight".to_string(), Value::Double(9.0))],
+            100,
+        )
+        .unwrap();
+
+    // One call removes both directions: each logical edge counts once even
+    // though it is stored on both legs.
+    let deleted = table
+        .delete_incident_edges_of_vertex(Some(0), Some(0), 150)
+        .unwrap();
+    assert_eq!(deleted.len(), 60);
+    assert!(
+        deleted.windows(2).all(|w| w[0].edge_id.0 <= w[1].edge_id.0),
+        "deleted edges report in edge-id order"
+    );
+    let hub_out = deleted
+        .iter()
+        .find(|e| e.src == 0 && e.dst == 5)
+        .expect("outgoing fanout edge reported");
+    assert_eq!(
+        hub_out.properties,
+        vec![("weight".to_string(), Value::Double(5.0))]
+    );
+    let hub_in = deleted
+        .iter()
+        .find(|e| e.src == 55 && e.dst == 0)
+        .expect("incoming fanout edge reported");
+    assert_eq!(
+        hub_in.properties,
+        vec![("weight".to_string(), Value::Double(55.0))]
+    );
+
+    assert!(table.out_edges(0, 200).is_empty());
+    assert!(table.in_edges(0, 200).is_empty());
+    for dst in 1..=50u32 {
+        assert!(!table.has_edge(0, dst, 0, 200));
+    }
+    for src in 51..=60u32 {
+        assert!(!table.has_edge(src, 0, 0, 200));
+    }
+    assert!(table.has_edge(70, 71, 0, 200));
+    assert!(table.audit_copy_drift().is_empty());
+
+    // A second call over the emptied vertex is a no-op success.
+    assert!(table
+        .delete_incident_edges_of_vertex(Some(0), Some(0), 160)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn incident_vertex_delete_handles_single_direction_tables() {
+    let mut schema = batch_table().schema().clone();
+    schema.ie_strategy = EdgeStrategy::None;
+    let mut table =
+        EdgeStore::with_config(schema, EdgeTableConfig::default()).expect("out-only table builds");
+    for dst in 1..=5u32 {
+        table
+            .insert_edge(
+                0,
+                dst,
+                0,
+                &[("weight".to_string(), Value::Double(1.0))],
+                100,
+            )
+            .unwrap();
+    }
+    let deleted = table
+        .delete_incident_edges_of_vertex(Some(0), Some(0), 150)
+        .unwrap();
+    assert_eq!(deleted.len(), 5);
+    assert!(table.out_edges(0, 200).is_empty());
+    assert!(table.audit_copy_drift().is_empty());
+}
+
+#[test]
+fn incident_vertex_delete_fails_closed_on_frozen_group() {
+    use graphdb_core::types::Timestamp;
+    let mut table = batch_table();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .unwrap();
+    table
+        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+        .unwrap();
+    table
+        .freeze_group(true, 0, Timestamp::MAX, 0.0)
+        .expect("out leg freezes");
+    assert!(table
+        .delete_incident_edges_of_vertex(Some(0), None, 150)
+        .is_err());
+    // The failed batch leaves the table untouched: frozen reads still serve
+    // both edges with no copy drift.
+    assert!(table.has_edge(0, 1, 0, 200));
+    assert!(table.has_edge(0, 2, 0, 200));
+    assert!(table.audit_copy_drift().is_empty());
+}
+
+#[test]
 fn owner_rebuild_converges_reclaimed_tombstones_with_count() {
     let mut table = batch_table();
     table

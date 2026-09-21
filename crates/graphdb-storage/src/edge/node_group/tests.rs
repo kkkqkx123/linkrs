@@ -587,3 +587,46 @@ fn concurrent_reads_share_while_no_mutation_in_flight() {
     // The set is untouched by the shared reads above.
     assert_eq!(set.edge_count(), 2);
 }
+
+#[test]
+fn single_strategy_rejects_inline_forms() {
+    // Single strategies need fixed single slots, which only the columnar
+    // form provides. Inline forms would silently drop that contract.
+    assert!(CsrShardSet::new(
+        EdgeStrategy::Single,
+        DEFAULT_NODE_GROUP_BITS,
+        4096,
+        RecordForm::Pure,
+    )
+    .is_err());
+    assert!(CsrShardSet::new(
+        EdgeStrategy::Single,
+        DEFAULT_NODE_GROUP_BITS,
+        4096,
+        RecordForm::Bundled,
+    )
+    .is_err());
+    assert!(CsrShardSet::new(
+        EdgeStrategy::Single,
+        DEFAULT_NODE_GROUP_BITS,
+        4096,
+        RecordForm::Columnar,
+    )
+    .is_ok());
+    // Multi-edge tables keep all three forms: the guard only fires on a
+    // single strategy, never on the general path.
+    assert!(CsrShardSet::new(
+        EdgeStrategy::Multiple,
+        DEFAULT_NODE_GROUP_BITS,
+        4096,
+        RecordForm::Pure,
+    )
+    .is_ok());
+    assert!(CsrShardSet::new(
+        EdgeStrategy::Multiple,
+        DEFAULT_NODE_GROUP_BITS,
+        4096,
+        RecordForm::Bundled,
+    )
+    .is_ok());
+}

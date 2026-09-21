@@ -1,9 +1,23 @@
 use super::super::EdgeStore;
 use crate::edge::edge_table::staging::EdgeStagingBatch;
-use crate::edge::EdgePosition;
 use crate::edge::MutableCsrTrait;
+use crate::edge::{EdgePosition, INVALID_EDGE_ID};
 use graphdb_core::types::{EdgeId, Timestamp};
-use graphdb_core::{StorageError, StorageResult};
+use graphdb_core::{StorageError, StorageResult, Value};
+
+/// One incident edge removed by the vertex-scoped batch delete.
+///
+/// Carries the property snapshot taken before the batch applied, so the
+/// engine layer can maintain its per-edge undo records and secondary
+/// indexes without re-reading the deleted topology.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IncidentDeletedEdge {
+    pub src: u32,
+    pub dst: u32,
+    pub rank: i64,
+    pub edge_id: EdgeId,
+    pub properties: Vec<(String, Value)>,
+}
 
 impl EdgeStore {
     /// Move one staged delete into the committed structures.
@@ -288,6 +302,82 @@ impl EdgeStore {
         let mut batch = EdgeStagingBatch::new();
         batch.stage_delete(src, dst, rank, ts);
         Ok(self.commit_staging_batch(batch)? > 0)
+    }
+
+    /// Delete every authority-live incident edge of one vertex in one batch.
+    ///
+    /// `out_row` addresses the vertex on the stored out leg and `in_row` on
+    /// the stored in leg; the two address spaces differ when the endpoint
+    /// labels do, so the caller resolves each side separately and passes
+    /// `None` for a side holding nothing. Missing legs read as empty, never
+    /// as an error.
+    ///
+    /// Collection sees exactly what per-edge cascade deletes would: edges
+    /// visible through the version authority at `ts`. One prevalidation,
+    /// one topology pass and one commit carry the whole fanout, reusing the
+    /// dual-leg consistency and prefix-rollback semantics of the regular
+    /// delete path. A frozen group holding any collected edge fails the
+    /// whole batch closed with the table untouched. The returned edges
+    /// carry their pre-delete property snapshot for engine-level undo and
+    /// index maintenance, ordered by edge id.
+    pub fn delete_incident_edges_of_vertex(
+        &mut self,
+        out_row: Option<u32>,
+        in_row: Option<u32>,
+        ts: Timestamp,
+    ) -> StorageResult<Vec<IncidentDeletedEdge>> {
+        if !self.is_open {
+            return Err(StorageError::storage_not_open());
+        }
+        // Out-leg entries first so the stable sort below keeps them ahead of
+        // the same logical edge seen from the in leg; dedup then keeps one
+        // delete per logical edge.
+        let mut keys: Vec<(u32, u32, i64, EdgeId)> = Vec::new();
+        if let Some(row) = out_row {
+            if self.schema.has_out() {
+                self.out_csr.visit_physical(row, |nbr| {
+                    if nbr.edge_id != INVALID_EDGE_ID && self.is_visible(nbr.edge_id, ts) {
+                        keys.push((row, nbr.endpoint, nbr.rank, nbr.edge_id));
+                    }
+                    true
+                });
+            }
+        }
+        if let Some(row) = in_row {
+            if self.schema.has_in() {
+                self.in_csr.visit_physical(row, |nbr| {
+                    if nbr.edge_id != INVALID_EDGE_ID && self.is_visible(nbr.edge_id, ts) {
+                        keys.push((nbr.endpoint, row, nbr.rank, nbr.edge_id));
+                    }
+                    true
+                });
+            }
+        }
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        keys.sort_by_key(|(_, _, _, edge_id)| edge_id.0);
+        keys.dedup_by_key(|(_, _, _, edge_id)| *edge_id);
+
+        let mut staged: Vec<IncidentDeletedEdge> = Vec::with_capacity(keys.len());
+        let mut batch = EdgeStagingBatch::new();
+        for (src, dst, rank, edge_id) in &keys {
+            staged.push(IncidentDeletedEdge {
+                src: *src,
+                dst: *dst,
+                rank: *rank,
+                edge_id: *edge_id,
+                properties: self.properties_for_edge(*edge_id, ts),
+            });
+            batch.stage_delete(*src, *dst, *rank, ts);
+        }
+        self.commit_staging_batch(batch)?;
+        // The batch is all-or-nothing: a failure above returns with the
+        // table untouched, so every staged key is gone here. Re-checking
+        // authority visibility keeps the return contract exact even if a
+        // future apply path ever reports a silent miss.
+        staged.retain(|edge| !self.is_visible(edge.edge_id, ts));
+        Ok(staged)
     }
 
     /// Physically erase an edge inserted by an uncommitted transaction.

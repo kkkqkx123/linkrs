@@ -8,7 +8,7 @@ use crate::edge::is_scalar_encodable;
 use crate::edge::property_schema::PropertySchema;
 use crate::edge::CsrWithProperties;
 use crate::schema::{LabelVersionHistory, SchemaObjectType};
-use graphdb_core::types::{EdgeId, LabelId, Timestamp};
+use graphdb_core::types::{EdgeId, EdgeStrategy, LabelId, Timestamp};
 use graphdb_core::{StorageError, StorageResult};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -31,10 +31,17 @@ impl EdgeStore {
         // one encodable scalar selects bundled, anything else selects
         // columnar. The resolved form persists and never re-derives on load;
         // later precondition breaks must migrate explicitly.
+        // Single-direction cardinality needs fixed single slots, which only
+        // the columnar form provides. Inline forms store multiple edges per
+        // vertex, so auto selection never picks them for single strategies.
         let record_form = match config.record_form {
             RecordFormPreference::Columnar => RecordForm::Columnar,
             RecordFormPreference::Auto => {
-                if schema.properties.is_empty() {
+                if schema.oe_strategy == EdgeStrategy::Single
+                    || schema.ie_strategy == EdgeStrategy::Single
+                {
+                    RecordForm::Columnar
+                } else if schema.properties.is_empty() {
                     RecordForm::Pure
                 } else if schema.properties.len() == 1
                     && is_scalar_encodable(&schema.properties[0].data_type)
@@ -226,6 +233,11 @@ impl EdgeStore {
         &mut self.schema
     }
 
+    /// Replace the table schema and rebuild the property index cache.
+    ///
+    /// Load-only helper: the caller must validate the resolved
+    /// strategy-plus-form combination afterwards, since this setter alone
+    /// performs no cardinality check.
     pub fn set_schema(&mut self, schema: EdgeSchema) {
         // Rebuild property index cache
         self.property_index_cache.clear();

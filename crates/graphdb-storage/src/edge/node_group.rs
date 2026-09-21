@@ -84,6 +84,7 @@ pub use address::{
 };
 pub use compaction::{RegionMergeScope, GROUP_MERGE_MIN_DENSITY, REGION_MERGE_MIN_DENSITY};
 pub use dirt::{EdgeCheckpointKind, GroupDirty, RegionDirty};
+pub use freeze::{FreezeBlockReason, FreezeFeasibility};
 pub use iter::ShardCsrIterator;
 pub use manifest::TableShardManifest;
 pub use stats::NodeGroupStats;

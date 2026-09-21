@@ -47,7 +47,7 @@ pub use csr_trait::{CsrBase, MutableCsrTrait};
 pub use csr_variant::{CsrRowIter, CsrVariant};
 pub use csr_with_properties::CsrWithProperties;
 pub use edge_table::core::UpdateEdgePropertyByKeyParams;
-pub use edge_table::EdgeStore;
+pub use edge_table::{EdgeStore, IncidentDeletedEdge};
 pub use fragmentation_stats::{
     FragmentationStats, VertexFragmentation, GROUP_FRAGMENTATION_THRESHOLD,
 };
@@ -57,9 +57,9 @@ use graphdb_core::{Edge, Value};
 pub use mutable_csr::{EdgePosition, MutableCsr, MutableCsrIterator};
 pub use node_group::{
     region_id_for_local, region_local_range, regions_per_group, CsrShardSet, EdgeCheckpointKind,
-    GroupDirty, NodeGroupStats, RegionDirty, RegionMergeScope, ShardCsrIterator,
-    TableShardManifest, DEFAULT_NODE_GROUP_BITS, GROUP_MERGE_MIN_DENSITY, LEAF_REGION_ROWS,
-    REGION_MERGE_MIN_DENSITY,
+    FreezeBlockReason, FreezeFeasibility, GroupDirty, NodeGroupStats, RegionDirty,
+    RegionMergeScope, ShardCsrIterator, TableShardManifest, DEFAULT_NODE_GROUP_BITS,
+    GROUP_MERGE_MIN_DENSITY, LEAF_REGION_ROWS, REGION_MERGE_MIN_DENSITY,
 };
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
@@ -118,6 +118,14 @@ pub enum RecordFormPreference {
     #[default]
     Columnar,
 }
+
+/// Shared rejection for a single-edge strategy paired with an inline form.
+///
+/// Single directions need fixed single slots, which only the columnar form
+/// provides. Every construction, load and migration gate reports this exact
+/// wording so operators see one conflict and one way out.
+pub(crate) const SINGLE_REQUIRES_COLUMNAR_MSG: &str =
+    "single edge strategy requires the columnar record form; adjust the strategy or keep the columnar form, see migration_plan/migrate_record_form";
 
 /// Check whether a `DataType` can be encoded as a 64-bit scalar for the
 /// `Bundled` record form.
@@ -245,6 +253,11 @@ impl EdgeSchema {
     /// Validate that the schema has at least one enabled direction.
     /// Single-direction tables are supported: the write path stores only
     /// the enabled leg and reads on the missing leg report empty.
+    ///
+    /// The single-plus-inline combination is intentionally not checked here:
+    /// table creation overwrites `record_form` from the configured
+    /// preference, so the input value carries no authority. Resolved schemas
+    /// are enforced at shard construction and on load instead.
     pub fn validate(&self) -> graphdb_core::StorageResult<()> {
         if self.oe_strategy == EdgeStrategy::None && self.ie_strategy == EdgeStrategy::None {
             return Err(graphdb_core::StorageError::invalid_operation(format!(

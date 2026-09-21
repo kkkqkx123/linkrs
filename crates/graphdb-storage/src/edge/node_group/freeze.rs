@@ -19,8 +19,78 @@
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult};
 
-use super::super::{CsrVariant, ImmutableCsr, MutableCsrTrait, INVALID_EDGE_ID};
+use super::super::{CsrBase, CsrVariant, ImmutableCsr, MutableCsrTrait, INVALID_EDGE_ID};
 use super::CsrShardSet;
+
+/// Why one group cannot freeze right now.
+///
+/// Every variant maps to the exact rejection `freeze_group` would return, so
+/// a caller can quote the outcome before paying the compaction plus pack.
+/// Only `BundledValuesNeedMigration` has a remediation inside the storage
+/// layer: migrate the table to the columnar form first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreezeBlockReason {
+    /// No such group exists; nothing to freeze.
+    MissingGroup,
+    /// The group stores no edges for this edge type.
+    NoEdgesStored,
+    /// The group already holds the packed frozen form.
+    AlreadyFrozen,
+    /// The group holds bundled inline values the topology-only packer would
+    /// drop. Migrate the table to the columnar form first.
+    BundledValuesNeedMigration,
+}
+
+impl FreezeBlockReason {
+    /// Human-readable rejection matching the `freeze_group` error text.
+    pub fn message(self, gid: usize) -> String {
+        match self {
+            FreezeBlockReason::MissingGroup => {
+                format!("group {} missing, nothing to freeze", gid)
+            }
+            FreezeBlockReason::NoEdgesStored => "no edges stored for this edge type".to_string(),
+            FreezeBlockReason::AlreadyFrozen => {
+                format!("group {} is already frozen", gid)
+            }
+            FreezeBlockReason::BundledValuesNeedMigration => {
+                format!(
+                    "group {} holds bundled inline values; run migrate_record_form to the columnar form before freeze",
+                    gid
+                )
+            }
+        }
+    }
+
+    /// Whether the block is lifted by migrating to the columnar form.
+    /// Migration quoting uses this to decide between offering a migration
+    /// cost estimate and reporting a dead end.
+    pub fn needs_migration(self) -> bool {
+        matches!(self, FreezeBlockReason::BundledValuesNeedMigration)
+    }
+}
+
+/// Read-only freeze outcome for one group.
+///
+/// Computed without compaction, packing or authority traffic: calling it
+/// never changes what a later `freeze_group` would do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreezeFeasibility {
+    /// The group would freeze; carries the physical entries the packer
+    /// would carry over.
+    Ready {
+        /// Physical entries in the group, tombstones included.
+        edges: u64,
+    },
+    /// The group would be rejected, with the reason.
+    Blocked { reason: FreezeBlockReason },
+}
+
+impl FreezeFeasibility {
+    /// Whether `freeze_group` would succeed on this group right now.
+    pub fn is_ready(self) -> bool {
+        matches!(self, FreezeFeasibility::Ready { .. })
+    }
+}
 
 impl CsrShardSet {
     /// Whether one existing group is frozen.
@@ -53,38 +123,8 @@ impl CsrShardSet {
         reserve_ratio: f32,
         on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
     ) -> StorageResult<u64> {
-        let Some(shard) = self.shards.get(&gid) else {
-            return Err(StorageError::invalid_operation(format!(
-                "group {} missing, nothing to freeze",
-                gid
-            )));
-        };
-        // The frozen packer stores topology only: freezing a bundled group
-        // with valid inline values would drop them, so it is rejected up
-        // front. Run migrate_record_form to the columnar form first when a
-        // freeze is required; all-NULL bundled groups pack like pure topologies.
-        if shard.variant.bundled_has_valid_values() {
-            return Err(StorageError::invalid_operation(format!(
-                "group {} holds bundled inline values; run migrate_record_form to the columnar form before freeze",
-                gid
-            )));
-        }
-        match shard.variant {
-            CsrVariant::Multiple(_)
-            | CsrVariant::Single(_)
-            | CsrVariant::Pure(_)
-            | CsrVariant::Bundled(_) => {}
-            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => {
-                return Err(StorageError::invalid_operation(format!(
-                    "group {} is already frozen",
-                    gid
-                )));
-            }
-            CsrVariant::None { .. } => {
-                return Err(StorageError::invalid_operation(
-                    "no edges stored for this edge type".to_string(),
-                ));
-            }
+        if let Err(reason) = self.check_freeze_gate(gid) {
+            return Err(StorageError::invalid_operation(reason.message(gid)));
         }
         self.compact_group_with_reporting(gid, cutoff, reserve_ratio, on_edge_removed);
         let shard = self.shards.get_mut(&gid).ok_or_else(|| {
@@ -115,6 +155,49 @@ impl CsrShardSet {
         shard.reclaim_hint = false;
         self.clear_group_append_log(gid);
         Ok(packed_edges)
+    }
+
+    /// Read-only freeze outcome for one group.
+    ///
+    /// Runs the same gate `freeze_group` enforces, without compaction,
+    /// packing or authority traffic. A `Ready` group freezes if nothing
+    /// changes in between; a `Blocked` group reports the exact rejection
+    /// reason, including whether migrating to the columnar form lifts it.
+    pub fn freeze_feasibility(&self, gid: usize) -> FreezeFeasibility {
+        match self.check_freeze_gate(gid) {
+            Ok(()) => {
+                let edges = self
+                    .shards
+                    .get(&gid)
+                    .map(|shard| shard.variant.edge_count() as u64)
+                    .unwrap_or(0);
+                FreezeFeasibility::Ready { edges }
+            }
+            Err(reason) => FreezeFeasibility::Blocked { reason },
+        }
+    }
+
+    /// Pure freeze gate shared by the precheck and the pack.
+    ///
+    /// The frozen packer stores topology only: a bundled group with valid
+    /// inline values would lose them, so it is rejected up front and the
+    /// caller migrates to the columnar form first. All-NULL bundled groups
+    /// pack like pure topologies and pass.
+    fn check_freeze_gate(&self, gid: usize) -> Result<(), FreezeBlockReason> {
+        let Some(shard) = self.shards.get(&gid) else {
+            return Err(FreezeBlockReason::MissingGroup);
+        };
+        if shard.variant.bundled_has_valid_values() {
+            return Err(FreezeBlockReason::BundledValuesNeedMigration);
+        }
+        match shard.variant {
+            CsrVariant::Multiple(_)
+            | CsrVariant::Single(_)
+            | CsrVariant::Pure(_)
+            | CsrVariant::Bundled(_) => Ok(()),
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => Err(FreezeBlockReason::AlreadyFrozen),
+            CsrVariant::None { .. } => Err(FreezeBlockReason::NoEdgesStored),
+        }
     }
 
     /// Unfreeze one group, rebuilding its mutable variant.
@@ -307,5 +390,81 @@ mod tests {
         single.unfreeze_group(0).unwrap();
         assert!(!single.is_frozen(0));
         assert_eq!(single.edge_count(), 1);
+    }
+
+    #[test]
+    fn feasibility_matches_freeze_outcome() {
+        let mut set = sample_set();
+        let quoted = set.freeze_feasibility(0);
+        assert!(quoted.is_ready());
+        let packed = set
+            .freeze_group(0, Timestamp::MAX, 0.0, &mut |_, _| {})
+            .unwrap();
+        assert_eq!(quoted, FreezeFeasibility::Ready { edges: packed });
+
+        let blocked = set.freeze_feasibility(0);
+        assert_eq!(
+            blocked,
+            FreezeFeasibility::Blocked {
+                reason: FreezeBlockReason::AlreadyFrozen
+            }
+        );
+        assert!(!blocked.is_ready());
+        let err = set
+            .freeze_group(0, Timestamp::MAX, 0.0, &mut |_, _| {})
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains(&FreezeBlockReason::AlreadyFrozen.message(0)));
+
+        assert_eq!(
+            set.freeze_feasibility(77),
+            FreezeFeasibility::Blocked {
+                reason: FreezeBlockReason::MissingGroup
+            }
+        );
+        assert!(set
+            .freeze_group(77, Timestamp::MAX, 0.0, &mut |_, _| {})
+            .is_err());
+    }
+
+    #[test]
+    fn feasibility_flags_valued_bundled_groups() {
+        let mut valued = CsrShardSet::new(
+            EdgeStrategy::Multiple,
+            DEFAULT_NODE_GROUP_BITS,
+            64,
+            RecordForm::Bundled,
+        )
+        .unwrap();
+        valued
+            .bundled_insert_with_value(0, VertexId::edge_endpoint_key(1, 0), EdgeId(0), 1, Some(7))
+            .unwrap();
+        let blocked = valued.freeze_feasibility(0);
+        assert_eq!(
+            blocked,
+            FreezeFeasibility::Blocked {
+                reason: FreezeBlockReason::BundledValuesNeedMigration
+            }
+        );
+        assert!(FreezeBlockReason::BundledValuesNeedMigration.needs_migration());
+        assert!(valued
+            .freeze_group(0, Timestamp::MAX, 0.0, &mut |_, _| {})
+            .is_err());
+
+        let mut nulls = CsrShardSet::new(
+            EdgeStrategy::Multiple,
+            DEFAULT_NODE_GROUP_BITS,
+            64,
+            RecordForm::Bundled,
+        )
+        .unwrap();
+        nulls
+            .bundled_insert_with_value(0, VertexId::edge_endpoint_key(1, 0), EdgeId(0), 1, None)
+            .unwrap();
+        assert!(nulls.freeze_feasibility(0).is_ready());
+        nulls
+            .freeze_group(0, Timestamp::MAX, 0.0, &mut |_, _| {})
+            .unwrap();
     }
 }

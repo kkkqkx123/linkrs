@@ -6,10 +6,26 @@
 //! mutable variant with the same logical content and no authority traffic.
 
 use super::core::EdgeStore;
+use crate::edge::FreezeFeasibility;
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::StorageResult;
 
 impl EdgeStore {
+    /// Read-only freeze outcome for one group of one direction.
+    ///
+    /// `outgoing` selects the out or in shard set. Runs the same gate
+    /// `freeze_group` enforces without touching state: a `Blocked` result
+    /// carrying `needs_migration` tells the caller to quote
+    /// `migration_plan` to the columnar form instead of attempting the
+    /// freeze. Behavior of the freeze itself is unchanged.
+    pub fn freeze_feasibility(&self, outgoing: bool, gid: usize) -> FreezeFeasibility {
+        if outgoing {
+            self.out_csr.freeze_feasibility(gid)
+        } else {
+            self.in_csr.freeze_feasibility(gid)
+        }
+    }
+
     /// Freeze one group of one direction, returning its packed live count.
     ///
     /// `outgoing` selects the out or in shard set. Reclaimable tombstones
@@ -161,6 +177,41 @@ mod tests {
         assert!(table.unfreeze_group(true, 0).is_err());
         table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
         assert!(table.freeze_group(true, 0, Timestamp::MAX, 0.0).is_err());
+    }
+
+    #[test]
+    fn feasibility_reports_migration_need_before_freeze() {
+        use crate::edge::RecordFormPreference;
+        let mut config = EdgeTableConfig::default();
+        config.record_form = RecordFormPreference::Auto;
+        let mut bundled =
+            EdgeStore::with_config(frozen_test_schema(), config).expect("bundled table builds");
+        assert_eq!(bundled.schema().record_form, RecordForm::Bundled);
+        bundled
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .expect("valued insert");
+        let blocked = bundled.freeze_feasibility(true, 0);
+        assert!(!blocked.is_ready());
+        match blocked {
+            FreezeFeasibility::Blocked { reason } => {
+                assert!(reason.needs_migration())
+            }
+            _ => panic!("valued bundled group must report a migration need"),
+        }
+        // The same decision drives the migration quote: the caller prices a
+        // columnar move instead of attempting the freeze.
+        let plan = bundled
+            .migration_plan(RecordForm::Columnar)
+            .expect("columnar quote succeeds");
+        assert_eq!(plan.live_edges, 1);
+        bundled
+            .migrate_record_form(RecordForm::Columnar)
+            .expect("migrate lifts the block");
+        assert!(bundled.freeze_feasibility(true, 0).is_ready());
+
+        let table = sample_table();
+        assert!(table.freeze_feasibility(true, 0).is_ready());
+        assert!(!table.freeze_feasibility(true, 41).is_ready());
     }
 
     #[test]

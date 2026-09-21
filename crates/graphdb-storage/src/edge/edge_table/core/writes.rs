@@ -18,5 +18,7 @@ mod staging;
 mod topology;
 mod validation;
 
+pub use delete::IncidentDeletedEdge;
+
 #[cfg(test)]
 mod tests;

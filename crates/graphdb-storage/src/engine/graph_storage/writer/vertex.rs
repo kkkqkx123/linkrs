@@ -2,20 +2,24 @@ use std::collections::HashMap;
 
 use graphdb_core::metadata::IndexMetadataManager;
 use graphdb_core::types::{ColumnId, EdgeIdentifier, LabelId, TagInfo, Timestamp, VertexId};
-use graphdb_core::wal::redo::{DeleteVertexRedo, InsertVertexRedo, UpdateVertexPropRedo};
+use graphdb_core::wal::redo::{
+    DeleteEdgeRedo, DeleteVertexRedo, InsertVertexRedo, UpdateVertexPropRedo,
+};
 use graphdb_core::wal::types::WalOpType;
-use graphdb_core::{EdgeDirection, StorageError, StorageResult, Value, Vertex};
+use graphdb_core::{StorageError, StorageResult, Value, Vertex};
 use graphdb_transaction::undo_log::{
     InsertVertexUndo, RemoveVertexUndo, UndoLogEntry, UpdateVertexPropUndo,
 };
 use graphdb_transaction::wal::TransactionWalEntry;
 use graphdb_transaction::{MutationEntityKey, MutationResult};
 
+use super::super::context::helpers;
 use super::super::context::GraphStorageContext;
-use super::super::ops::{endpoint_label_id, tag_label_id};
-use super::super::reader;
+use super::super::ops::tag_label_id;
 use super::super::serial::scan_vertex_serial_column;
 use super::batch::{InsertedVertexTag, PrecheckedBatchContext, SerialBatchState};
+use crate::engine::data_store::EdgeTableKey;
+use crate::index::types::EdgeIdentity;
 
 pub(super) fn record_vertex_insert(
     ctx: &GraphStorageContext,
@@ -434,87 +438,124 @@ pub(crate) fn delete_vertex(
     Ok(())
 }
 
-/// Delete a vertex together with every incident edge in bounded chunks.
+/// Delete a vertex together with every incident edge in table-scoped batches.
 ///
-/// Each chunk owns one write timestamp and commits independently, so a
-/// mid-fanout failure aborts only the in-flight chunk instead of leaving
-/// per-edge commits behind. Aborted stamps stay hidden through the pending
-/// gate, and explicit transactions keep per-edge restore entries through the
-/// mutation recorder. A failed chunk leaves prior committed chunks intact,
-/// never a half-chunk.
+/// One write timestamp covers the whole vertex. Each edge-type table removes
+/// its incident edges through the table-level batch entrance (one staging
+/// precheck plus one commit per touched table), while the transaction layer
+/// keeps per-edge redo entries, restore records and index maintenance, so
+/// explicit transactions still roll back edge by edge. Commits and table log
+/// entries scale with the touched tables, not the edge count. A failed table
+/// batch aborts the timestamp with prior tables already committed, never a
+/// half-batch; aborted stamps stay hidden through the pending gate.
 pub(crate) fn delete_vertex_with_edges(
     ctx: &GraphStorageContext,
     space: &str,
     id: &VertexId,
 ) -> StorageResult<()> {
-    const DELETE_VERTEX_FANOUT_CHUNK: usize = 256;
-    let edges = reader::get_node_edges(ctx, space, id, EdgeDirection::Both)?;
-    if edges.is_empty() {
-        return delete_vertex(ctx, space, id);
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    let edge_types = ctx.schema_manager().list_edge_types(space)?;
+    let ts = ctx.get_write_timestamp()?;
+    for edge_info in &edge_types {
+        if let Err(error) = delete_incident_edges_of_type(ctx, space_id, id, edge_info, ts) {
+            ctx.abort_write_timestamp(ts);
+            return Err(error);
+        }
     }
-    for chunk in edges.chunks(DELETE_VERTEX_FANOUT_CHUNK) {
-        let ts = ctx.get_write_timestamp()?;
-        let mut failed: Option<StorageError> = None;
-        for edge in chunk {
-            let previous = reader::get_edge(
-                ctx,
-                space,
-                &edge.src,
-                &edge.dst,
-                &edge.edge_type,
-                edge.ranking,
-            )?;
-            match super::edge::delete_edge_at_timestamp(
-                ctx,
-                space,
-                &edge.src,
-                &edge.dst,
-                &edge.edge_type,
-                edge.ranking,
-                ts,
-            ) {
-                Ok(redo_entry) => {
-                    if let Some(previous) = previous {
-                        if let Ok(edge_info) =
-                            super::edge::resolve_edge_type(ctx, space, &edge.edge_type)
-                        {
-                            let src_label = endpoint_label_id(ctx, space, &edge_info.src_tag_name)?;
-                            let dst_label = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)?;
-                            if let (Some(src_label), Some(dst_label)) = (src_label, dst_label) {
-                                super::edge::record_edge_remove(
-                                    ctx,
-                                    EdgeIdentifier::new(
-                                        src_label,
-                                        edge.src,
-                                        dst_label,
-                                        edge.dst,
-                                        edge_info.edge_type_id,
-                                        edge.ranking,
-                                    ),
-                                    previous.props.into_iter().collect(),
-                                    redo_entry,
-                                )?;
-                            }
-                        }
-                    }
-                }
-                Err(error) => {
-                    failed = Some(error);
-                    break;
-                }
-            }
-        }
-        if let Some(error) = failed {
-            ctx.abort_write_timestamp(ts);
-            return Err(error);
-        }
-        if let Err(error) = ctx.commit_write_timestamp_ordered(ts) {
-            ctx.abort_write_timestamp(ts);
-            return Err(error);
-        }
+    if let Err(error) = ctx.commit_write_timestamp_ordered(ts) {
+        ctx.abort_write_timestamp(ts);
+        return Err(error);
     }
 
     delete_vertex(ctx, space, id)
+}
+
+/// Remove every incident edge of one vertex from every physical table of one
+/// edge type through the table-level batch entrance.
+///
+/// Each touched table commits once with the shared timestamp; the per-edge
+/// transaction redo, restore record and index maintenance keep the explicit
+/// transaction rollback path intact. Tables holding no incident edge return
+/// empty without committing.
+fn delete_incident_edges_of_type(
+    ctx: &GraphStorageContext,
+    space_id: u64,
+    id: &VertexId,
+    edge_info: &graphdb_core::types::EdgeTypeInfo,
+    ts: Timestamp,
+) -> StorageResult<()> {
+    let keys: Vec<EdgeTableKey> = ctx.data_store().with_edge_label_index(|index| {
+        index
+            .get(&edge_info.edge_type_id)
+            .cloned()
+            .unwrap_or_default()
+    });
+    for key in &keys {
+        let (src_internal, dst_internal) = ctx.data_store().with_vertex_tables(|vertex_tables| {
+            (
+                helpers::resolve_internal_id(ctx, vertex_tables, key.src_label, *id, ts),
+                helpers::resolve_internal_id(ctx, vertex_tables, key.dst_label, *id, ts),
+            )
+        });
+        if src_internal.is_none() && dst_internal.is_none() {
+            continue;
+        }
+        let Some(table) = ctx.data_store().try_get_edge_table_mut(key) else {
+            continue;
+        };
+        let deleted =
+            table
+                .write()
+                .delete_incident_edges_of_vertex(src_internal, dst_internal, ts)?;
+        if deleted.is_empty() {
+            continue;
+        }
+        for edge in &deleted {
+            let (Some(src_ext), Some(dst_ext)) = (
+                ctx.get_external_id_by_internal_id(key.src_label, edge.src),
+                ctx.get_external_id_by_internal_id(key.dst_label, edge.dst),
+            ) else {
+                return Err(StorageError::not_found(format!(
+                    "deleted edge {} -> {} lost its endpoint mapping",
+                    edge.src, edge.dst
+                )));
+            };
+            let redo = DeleteEdgeRedo {
+                src_label: key.src_label,
+                src_vid: src_ext,
+                dst_label: key.dst_label,
+                dst_vid: dst_ext,
+                edge_label: key.edge_label,
+                rank: edge.rank,
+            };
+            let redo_entry = ctx.append_wal_redo(WalOpType::DeleteEdge, ts, &redo)?;
+            super::edge::record_edge_remove(
+                ctx,
+                EdgeIdentifier::new(
+                    key.src_label,
+                    src_ext,
+                    key.dst_label,
+                    dst_ext,
+                    key.edge_label,
+                    edge.rank,
+                ),
+                edge.properties.clone(),
+                Some(redo_entry),
+            )?;
+            let src_value = Value::from(src_ext);
+            let dst_value = Value::from(dst_ext);
+            let edge_identity = EdgeIdentity::new(
+                space_id,
+                &src_value,
+                &dst_value,
+                &edge_info.edge_type_name,
+                edge.rank,
+            );
+            ctx.delete_all_edge_indexes_mvcc(&edge_identity, ts)?;
+        }
+        ctx.mark_edge_modified(key.edge_label);
+    }
+    Ok(())
 }
 
 pub(crate) fn batch_insert_vertices(
