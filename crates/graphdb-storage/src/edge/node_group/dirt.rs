@@ -112,6 +112,24 @@ impl CsrShardSet {
     /// missing (unless the direction stores nothing) so every property write
     /// leaves a group trace. The table-level property flag remains as a
     /// correctness insurance, but the regular path never needs it.
+    /// Trace a property-only write to a whole group by id.
+    ///
+    /// Group-granular counterpart of [`Self::mark_column_updated_for`] for
+    /// callers that already resolved the owner (schema fills, drops and
+    /// renames touch every row of every owner). Materializes the group when
+    /// missing so the trace is never silently dropped.
+    pub fn mark_column_updated_for_group(&mut self, gid: usize) {
+        if !self.shards.contains_key(&gid) {
+            let _ = self.ensure_group_id(gid);
+        }
+        if let Some(shard) = self.shards.get_mut(&gid) {
+            shard.dirty.column_updated = true;
+            for region in shard.regions.iter_mut() {
+                region.column_updated = true;
+            }
+        }
+    }
+
     pub fn mark_column_updated_for(&mut self, vid: u32) {
         let gid = group_id_for(vid, self.group_bits);
         let rid = region_id_for_local(local_vid(vid, self.group_bits));

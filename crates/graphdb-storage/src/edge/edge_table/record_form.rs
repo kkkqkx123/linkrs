@@ -30,9 +30,7 @@ use super::core::owner::EdgeOwnerMap;
 use super::core::EdgeStore;
 use crate::edge::bundled_csr::{decode_scalar, encode_scalar};
 use crate::edge::property_schema::PropertySchema;
-use crate::edge::{
-    is_scalar_encodable, CsrShardSet, CsrWithProperties, MutableCsrTrait, RecordForm,
-};
+use crate::edge::{CsrShardSet, CsrWithProperties, MutableCsrTrait, RecordForm};
 use graphdb_core::types::{EdgeId, EdgeStrategy, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
 
@@ -216,16 +214,16 @@ impl EdgeStore {
                 ));
             }
             RecordForm::Bundled => {
-                if self.schema.properties.len() != 1 {
-                    return Err(StorageError::invalid_operation(
-                        "bundled record form requires exactly one property; adjust the schema or keep the columnar form, see migration_plan/migrate_record_form".to_string(),
-                    ));
-                }
-                if !is_scalar_encodable(&self.schema.properties[0].data_type) {
-                    return Err(StorageError::invalid_operation(format!(
-                        "property type {:?} cannot inline into the bundled form; keep the columnar form, see migration_plan/migrate_record_form",
-                        self.schema.properties[0].data_type
-                    )));
+                // Bundled admission shares the creation-time rules so both
+                // entries refuse a bundled target for the same stated reason.
+                if let Some(reason) = crate::edge::bundled_ineligibility_reason(
+                    &self.schema.properties,
+                    self.schema.oe_strategy,
+                    self.schema.ie_strategy,
+                ) {
+                    // The single-strategy case already returned above with
+                    // the same wording; reaching here means arity or type.
+                    return Err(StorageError::invalid_operation(reason));
                 }
             }
             RecordForm::Pure | RecordForm::Columnar => {}
@@ -381,6 +379,7 @@ impl EdgeStore {
             self.mvcc.remove_edge_timestamps(edge_id);
         }
         self.segment_stats.clear();
+        self.property_column_dirt.clear();
         self.mark_properties_dirty();
         self.out_csr.mark_all_dirty();
         self.in_csr.mark_all_dirty();
@@ -600,6 +599,70 @@ mod tests {
     fn make_columnar_table() -> EdgeStore {
         EdgeStore::with_config(weight_schema(), EdgeTableConfig::default())
             .expect("columnar table builds")
+    }
+
+    #[test]
+    fn bundled_eligibility_covers_all_schema_shapes() {
+        use crate::edge::{bundled_ineligibility_reason, is_bundled_eligible};
+        let prop = |data_type| StoragePropertyDef {
+            name: "p".to_string(),
+            data_type,
+            nullable: false,
+            default_value: None,
+        };
+        // Single encodable scalar on multi-edge legs: eligible.
+        assert!(is_bundled_eligible(
+            &[prop(DataType::Double)],
+            EdgeStrategy::Multiple,
+            EdgeStrategy::Multiple,
+        ));
+        // Zero or multiple properties: arity refusal.
+        assert!(!is_bundled_eligible(
+            &[],
+            EdgeStrategy::Multiple,
+            EdgeStrategy::Multiple,
+        ));
+        assert!(!is_bundled_eligible(
+            &[prop(DataType::Double), prop(DataType::Int)],
+            EdgeStrategy::Multiple,
+            EdgeStrategy::Multiple,
+        ));
+        // Non-encodable scalar: type refusal with the migration wording.
+        assert!(!is_bundled_eligible(
+            &[prop(DataType::String)],
+            EdgeStrategy::Multiple,
+            EdgeStrategy::Multiple,
+        ));
+        let reason = bundled_ineligibility_reason(
+            &[prop(DataType::String)],
+            EdgeStrategy::Multiple,
+            EdgeStrategy::Multiple,
+        )
+        .expect("reason present");
+        assert!(reason.contains("cannot inline into the bundled form"));
+        // Single-edge directions: strategy refusal with the shared wording.
+        let reason = bundled_ineligibility_reason(
+            &[prop(DataType::Double)],
+            EdgeStrategy::Single,
+            EdgeStrategy::Multiple,
+        )
+        .expect("reason present");
+        assert_eq!(reason, crate::edge::SINGLE_REQUIRES_COLUMNAR_MSG);
+        assert!(!is_bundled_eligible(
+            &[prop(DataType::Double)],
+            EdgeStrategy::Multiple,
+            EdgeStrategy::Single,
+        ));
+        // Creation and migration agree: the plan path rejects what the
+        // selector would never pick.
+        let mut single = weight_schema();
+        single.oe_strategy = EdgeStrategy::Single;
+        assert!(bundled_ineligibility_reason(
+            &single.properties,
+            single.oe_strategy,
+            single.ie_strategy,
+        )
+        .is_some());
     }
 
     #[test]

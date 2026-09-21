@@ -291,11 +291,12 @@ impl EdgeStore {
             return Vec::new();
         }
         // Hot-only stream with the pending gate: no cold-line touch, no
-        // intermediate neighbor vector.
+        // intermediate neighbor vector. The record reuses the gate verdict
+        // above instead of re-deciding without the gate.
         let mut out = Vec::new();
         self.out_csr.visit_hot(src, |hot| {
             if self.is_visible_with_gate(hot.edge_id, ts, gate) {
-                out.push(self.edge_record_from_hot_projected(
+                out.push(self.edge_record_from_hot_projected_assume_visible(
                     VertexId::from_int64(src as i64),
                     VertexId::from_int64(hot.endpoint as i64),
                     hot.rank,
@@ -332,10 +333,12 @@ impl EdgeStore {
             return Vec::new();
         }
         // Hot-only stream mirroring the out direction with the pending gate.
+        // The record reuses the gate verdict above instead of re-deciding
+        // without the gate.
         let mut out = Vec::new();
         self.in_csr.visit_hot(dst, |hot| {
             if self.is_visible_with_gate(hot.edge_id, ts, gate) {
-                out.push(self.edge_record_from_hot_projected(
+                out.push(self.edge_record_from_hot_projected_assume_visible(
                     VertexId::from_int64(hot.endpoint as i64),
                     VertexId::from_int64(dst as i64),
                     hot.rank,
@@ -368,10 +371,21 @@ impl EdgeStore {
             .map(|nbr| {
                 let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
                 let rank = nbr.rank;
+                // Neighbors above passed the gate: decode without re-deciding.
                 let properties = if self.is_bundled() {
-                    self.bundled_properties_at(true, src, nbr.edge_id, ts, projection)
+                    self.bundled_properties_at_assume_visible(
+                        true,
+                        src,
+                        nbr.edge_id,
+                        ts,
+                        projection,
+                    )
                 } else {
-                    self.properties_for_edge_projected_columnar(nbr.edge_id, ts, projection)
+                    self.properties_for_edge_projected_columnar_assume_visible(
+                        nbr.edge_id,
+                        ts,
+                        projection,
+                    )
                 };
                 EdgeRecord {
                     src_vid: VertexId::from_int64(src as i64),
@@ -399,10 +413,21 @@ impl EdgeStore {
             .map(|nbr| {
                 let src_vid = VertexId::from_int64(nbr.endpoint as i64);
                 let rank = nbr.rank;
+                // Neighbors above passed the gate: decode without re-deciding.
                 let properties = if self.is_bundled() {
-                    self.bundled_properties_at(false, dst, nbr.edge_id, ts, projection)
+                    self.bundled_properties_at_assume_visible(
+                        false,
+                        dst,
+                        nbr.edge_id,
+                        ts,
+                        projection,
+                    )
                 } else {
-                    self.properties_for_edge_projected_columnar(nbr.edge_id, ts, projection)
+                    self.properties_for_edge_projected_columnar_assume_visible(
+                        nbr.edge_id,
+                        ts,
+                        projection,
+                    )
                 };
                 EdgeRecord {
                     src_vid,
@@ -412,99 +437,6 @@ impl EdgeStore {
                 }
             })
             .collect()
-    }
-
-    pub(crate) fn edge_record_from_nbr(
-        &self,
-        src: u32,
-        nbr: Nbr,
-        query_ts: Timestamp,
-    ) -> EdgeRecord {
-        self.edge_record_from_nbr_projected(src, nbr, query_ts, None)
-    }
-
-    /// In-leg counterpart of `edge_record_from_nbr_projected`: the row is a
-    /// destination and the neighbor endpoint is the source. Bundled values
-    /// decode from the in shard row.
-    pub(crate) fn edge_record_from_in_nbr(
-        &self,
-        dst: u32,
-        nbr: Nbr,
-        query_ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> EdgeRecord {
-        let properties = if self.is_bundled() {
-            self.bundled_properties_at(false, dst, nbr.edge_id, query_ts, projection)
-        } else {
-            self.properties_for_edge_projected_columnar(nbr.edge_id, query_ts, projection)
-        };
-        EdgeRecord {
-            src_vid: VertexId::from_int64(nbr.endpoint as i64),
-            dst_vid: VertexId::from_int64(dst as i64),
-            rank: nbr.rank,
-            properties,
-        }
-    }
-
-    pub(crate) fn edge_record_from_nbr_projected(
-        &self,
-        src: u32,
-        nbr: Nbr,
-        query_ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> EdgeRecord {
-        // The neighbors above always come from the out direction (table
-        // scans and out-row assembly), so the bundled fast path reads the
-        // out shard row directly.
-        let properties = if self.is_bundled() {
-            self.bundled_properties_at(true, src, nbr.edge_id, query_ts, projection)
-        } else {
-            self.properties_for_edge_projected_columnar(nbr.edge_id, query_ts, projection)
-        };
-        let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
-        let rank = nbr.rank;
-        EdgeRecord {
-            src_vid: VertexId::from_int64(src as i64),
-            dst_vid,
-            rank,
-            properties,
-        }
-    }
-
-    /// Assemble a record from a hot half without touching stamp lines.
-    ///
-    /// Hot-only counterpart of [`Self::edge_record_from_nbr_projected`]
-    /// for record paths that stream topology and resolve visibility by
-    /// edge id through the authority.
-    fn edge_record_from_hot_projected(
-        &self,
-        src_vid: VertexId,
-        dst_vid: VertexId,
-        rank: i64,
-        edge_id: EdgeId,
-        query: PropertyQuery<'_>,
-    ) -> EdgeRecord {
-        let PropertyQuery {
-            query_ts,
-            projection,
-            outgoing,
-        } = query;
-        let properties = if self.is_bundled() {
-            let row = if outgoing {
-                src_vid.as_int64().unwrap_or(0) as u32
-            } else {
-                dst_vid.as_int64().unwrap_or(0) as u32
-            };
-            self.bundled_properties_at(outgoing, row, edge_id, query_ts, projection)
-        } else {
-            self.properties_for_edge_projected_columnar(edge_id, query_ts, projection)
-        };
-        EdgeRecord {
-            src_vid,
-            dst_vid,
-            rank,
-            properties,
-        }
     }
 
     /// Whether this table stores its single scalar inline in the CSR.
@@ -637,6 +569,179 @@ impl EdgeStore {
             .unwrap_or_default()
     }
 
+    /// Visibility-assumed property reads: the caller already resolved
+    /// visibility through the version authority, so these entries decode
+    /// without a second authority lookup. Every adjacency, point and scan
+    /// path that filters first must use these; the checking entries above
+    /// stay for direct callers without a prior verdict.
+    pub(crate) fn bundled_properties_at_assume_visible(
+        &self,
+        outgoing: bool,
+        row: u32,
+        edge_id: EdgeId,
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Vec<(String, Value)> {
+        let _ = query_ts;
+        let Some(prop) = self.schema.properties.first() else {
+            return Vec::new();
+        };
+        if let Some(names) = projection {
+            if !names.iter().any(|n| n == &prop.name) {
+                return Vec::new();
+            }
+        }
+        let shards = if outgoing {
+            &self.out_csr
+        } else {
+            &self.in_csr
+        };
+        match shards.bundled_value_at(row, edge_id) {
+            Some((raw, true)) => vec![(prop.name.clone(), decode_scalar(raw, &prop.data_type))],
+            _ => Vec::new(),
+        }
+    }
+
+    /// Edge-id-only inline read without a visibility recheck.
+    ///
+    /// Caller must hold a prior verdict; the row scan below only locates
+    /// the owning row, it never decides visibility.
+    pub(crate) fn bundled_scan_properties_assume_visible(
+        &self,
+        edge_id: EdgeId,
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Vec<(String, Value)> {
+        for gid in self.out_csr.existing_group_ids() {
+            let base = crate::edge::node_group::group_base(gid, self.out_csr.group_bits());
+            let mut hit: Option<u32> = None;
+            if let Some(variant) = self.out_csr.group_variant(gid) {
+                for (local_vid, nbr) in variant.iter_all() {
+                    if nbr.edge_id == edge_id {
+                        hit = Some(base + local_vid.as_int64().unwrap_or(0) as u32);
+                        break;
+                    }
+                }
+            }
+            if let Some(src) = hit {
+                return self.bundled_properties_at_assume_visible(
+                    true, src, edge_id, query_ts, projection,
+                );
+            }
+        }
+        Vec::new()
+    }
+
+    /// Columnar projection without a visibility recheck.
+    ///
+    /// Caller must hold a prior authority verdict; the store read below is
+    /// purely physical (snapshot decode through the version chain).
+    pub(crate) fn properties_for_edge_projected_columnar_assume_visible(
+        &self,
+        edge_id: EdgeId,
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Vec<(String, Value)> {
+        self.properties
+            .get_projected_physical_by_edge_id(edge_id, query_ts, projection)
+            .map(|rows| {
+                rows.into_iter()
+                    .filter_map(|(name, value)| value.map(|v| (name, v)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Hot record assembly without a visibility recheck.
+    ///
+    /// For streams that already filtered through the authority (or its
+    /// pending gate): reusing that verdict also keeps gate semantics intact,
+    /// since a fresh check here would re-decide without the gate.
+    fn edge_record_from_hot_projected_assume_visible(
+        &self,
+        src_vid: VertexId,
+        dst_vid: VertexId,
+        rank: i64,
+        edge_id: EdgeId,
+        query: PropertyQuery<'_>,
+    ) -> EdgeRecord {
+        let PropertyQuery {
+            query_ts,
+            projection,
+            outgoing,
+        } = query;
+        let properties = if self.is_bundled() {
+            let row = if outgoing {
+                src_vid.as_int64().unwrap_or(0) as u32
+            } else {
+                dst_vid.as_int64().unwrap_or(0) as u32
+            };
+            self.bundled_properties_at_assume_visible(outgoing, row, edge_id, query_ts, projection)
+        } else {
+            self.properties_for_edge_projected_columnar_assume_visible(
+                edge_id, query_ts, projection,
+            )
+        };
+        EdgeRecord {
+            src_vid,
+            dst_vid,
+            rank,
+            properties,
+        }
+    }
+
+    /// Out-row record assembly without a visibility recheck.
+    pub(crate) fn edge_record_from_nbr_projected_assume_visible(
+        &self,
+        src: u32,
+        nbr: Nbr,
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> EdgeRecord {
+        let properties = if self.is_bundled() {
+            self.bundled_properties_at_assume_visible(true, src, nbr.edge_id, query_ts, projection)
+        } else {
+            self.properties_for_edge_projected_columnar_assume_visible(
+                nbr.edge_id,
+                query_ts,
+                projection,
+            )
+        };
+        let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
+        let rank = nbr.rank;
+        EdgeRecord {
+            src_vid: VertexId::from_int64(src as i64),
+            dst_vid,
+            rank,
+            properties,
+        }
+    }
+
+    /// In-row record assembly without a visibility recheck.
+    pub(crate) fn edge_record_from_in_nbr_assume_visible(
+        &self,
+        dst: u32,
+        nbr: Nbr,
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> EdgeRecord {
+        let properties = if self.is_bundled() {
+            self.bundled_properties_at_assume_visible(false, dst, nbr.edge_id, query_ts, projection)
+        } else {
+            self.properties_for_edge_projected_columnar_assume_visible(
+                nbr.edge_id,
+                query_ts,
+                projection,
+            )
+        };
+        EdgeRecord {
+            src_vid: VertexId::from_int64(nbr.endpoint as i64),
+            dst_vid: VertexId::from_int64(dst as i64),
+            rank: nbr.rank,
+            properties,
+        }
+    }
+
     /// Resolve the edge id for `(src, dst, rank)` without decoding properties.
     ///
     /// Operation-layer point lookups use it to recheck the fetched record
@@ -679,10 +784,12 @@ impl EdgeStore {
         if self.schema.has_out() {
             let dst_key = Self::edge_endpoint_key(dst, rank);
             let nbr = self.merged_get_edge(&self.out_csr, src, dst_key, ts)?;
+            // The merged lookup above already passed the authority: decode
+            // without a second verdict.
             let properties = if self.is_bundled() {
-                self.bundled_properties_at(true, src, nbr.edge_id, ts, None)
+                self.bundled_properties_at_assume_visible(true, src, nbr.edge_id, ts, None)
             } else {
-                self.properties_for_edge(nbr.edge_id, ts)
+                self.properties_for_edge_projected_columnar_assume_visible(nbr.edge_id, ts, None)
             };
 
             return Some(EdgeRecord {
@@ -696,9 +803,9 @@ impl EdgeStore {
             let src_key = Self::edge_endpoint_key(src, rank);
             let nbr = self.merged_get_edge(&self.in_csr, dst, src_key, ts)?;
             let properties = if self.is_bundled() {
-                self.bundled_properties_at(false, dst, nbr.edge_id, ts, None)
+                self.bundled_properties_at_assume_visible(false, dst, nbr.edge_id, ts, None)
             } else {
-                self.properties_for_edge(nbr.edge_id, ts)
+                self.properties_for_edge_projected_columnar_assume_visible(nbr.edge_id, ts, None)
             };
             return Some(EdgeRecord {
                 src_vid: VertexId::from_int64(src as i64),
@@ -724,10 +831,12 @@ impl EdgeStore {
         if self.schema.has_out() {
             let dst_key = Self::edge_endpoint_key(dst, rank);
             let nbr = self.merged_get_edge_with_gate(&self.out_csr, src, dst_key, ts, gate)?;
+            // The gate verdict above is reused: the checking entries would
+            // otherwise re-decide without the gate.
             let properties = if self.is_bundled() {
-                self.bundled_properties_at(true, src, nbr.edge_id, ts, None)
+                self.bundled_properties_at_assume_visible(true, src, nbr.edge_id, ts, None)
             } else {
-                self.properties_for_edge(nbr.edge_id, ts)
+                self.properties_for_edge_projected_columnar_assume_visible(nbr.edge_id, ts, None)
             };
             return Some(EdgeRecord {
                 src_vid: VertexId::from_int64(src as i64),
@@ -740,9 +849,9 @@ impl EdgeStore {
             let src_key = Self::edge_endpoint_key(src, rank);
             let nbr = self.merged_get_edge_with_gate(&self.in_csr, dst, src_key, ts, gate)?;
             let properties = if self.is_bundled() {
-                self.bundled_properties_at(false, dst, nbr.edge_id, ts, None)
+                self.bundled_properties_at_assume_visible(false, dst, nbr.edge_id, ts, None)
             } else {
-                self.properties_for_edge(nbr.edge_id, ts)
+                self.properties_for_edge_projected_columnar_assume_visible(nbr.edge_id, ts, None)
             };
             return Some(EdgeRecord {
                 src_vid: VertexId::from_int64(src as i64),
@@ -769,10 +878,16 @@ impl EdgeStore {
         if self.schema.has_out() {
             let dst_key = Self::edge_endpoint_key(dst, rank);
             let nbr = self.merged_get_edge_with_gate(&self.out_csr, src, dst_key, ts, gate)?;
+            // The gate verdict above is reused: the checking entries would
+            // otherwise re-decide without the gate.
             let properties = if self.is_bundled() {
-                self.bundled_properties_at(true, src, nbr.edge_id, ts, projection)
+                self.bundled_properties_at_assume_visible(true, src, nbr.edge_id, ts, projection)
             } else {
-                self.properties_for_edge_projected_columnar(nbr.edge_id, ts, projection)
+                self.properties_for_edge_projected_columnar_assume_visible(
+                    nbr.edge_id,
+                    ts,
+                    projection,
+                )
             };
             return Some(EdgeRecord {
                 src_vid: VertexId::from_int64(src as i64),
@@ -785,9 +900,13 @@ impl EdgeStore {
             let src_key = Self::edge_endpoint_key(src, rank);
             let nbr = self.merged_get_edge_with_gate(&self.in_csr, dst, src_key, ts, gate)?;
             let properties = if self.is_bundled() {
-                self.bundled_properties_at(false, dst, nbr.edge_id, ts, projection)
+                self.bundled_properties_at_assume_visible(false, dst, nbr.edge_id, ts, projection)
             } else {
-                self.properties_for_edge_projected_columnar(nbr.edge_id, ts, projection)
+                self.properties_for_edge_projected_columnar_assume_visible(
+                    nbr.edge_id,
+                    ts,
+                    projection,
+                )
             };
             return Some(EdgeRecord {
                 src_vid: VertexId::from_int64(src as i64),
@@ -822,11 +941,12 @@ impl EdgeStore {
 
         // Hot-only stream: visibility resolves by edge id through the
         // authority, so the cold stamp lines stay out of cache and no
-        // intermediate neighbor vector is built.
+        // intermediate neighbor vector is built. The record reuses the
+        // verdict above instead of querying the authority twice per edge.
         let mut out = Vec::new();
         self.out_csr.visit_hot(src, |hot| {
             if self.is_visible(hot.edge_id, ts) {
-                out.push(self.edge_record_from_hot_projected(
+                out.push(self.edge_record_from_hot_projected_assume_visible(
                     VertexId::from_int64(src as i64),
                     VertexId::from_int64(hot.endpoint as i64),
                     hot.rank,
@@ -879,11 +999,12 @@ impl EdgeStore {
         }
 
         // Hot-only stream mirroring the out direction: no cold-line touch,
-        // no intermediate neighbor vector.
+        // no intermediate neighbor vector. The record reuses the verdict
+        // above instead of querying the authority twice per edge.
         let mut out = Vec::new();
         self.in_csr.visit_hot(dst, |hot| {
             if self.is_visible(hot.edge_id, ts) {
-                out.push(self.edge_record_from_hot_projected(
+                out.push(self.edge_record_from_hot_projected_assume_visible(
                     VertexId::from_int64(hot.endpoint as i64),
                     VertexId::from_int64(dst as i64),
                     hot.rank,
@@ -987,10 +1108,13 @@ impl EdgeStore {
                 if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
                     continue;
                 }
-                records.push(self.edge_record_from_nbr(
+                // Gate verdict reused: the checking assembly would
+                // otherwise re-decide without the gate.
+                records.push(self.edge_record_from_nbr_projected_assume_visible(
                     src_vid.as_int64().unwrap_or(0) as u32,
                     nbr,
                     ts,
+                    None,
                 ));
             }
             return records;
@@ -1000,7 +1124,7 @@ impl EdgeStore {
             if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
                 continue;
             }
-            records.push(self.edge_record_from_in_nbr(
+            records.push(self.edge_record_from_in_nbr_assume_visible(
                 dst_vid.as_int64().unwrap_or(0) as u32,
                 nbr,
                 ts,
@@ -1025,7 +1149,9 @@ impl EdgeStore {
                 if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
                     continue;
                 }
-                records.push(self.edge_record_from_nbr_projected(
+                // Gate verdict reused: the checking assembly would
+                // otherwise re-decide without the gate.
+                records.push(self.edge_record_from_nbr_projected_assume_visible(
                     src_vid.as_int64().unwrap_or(0) as u32,
                     nbr,
                     ts,
@@ -1039,7 +1165,7 @@ impl EdgeStore {
             if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
                 continue;
             }
-            records.push(self.edge_record_from_in_nbr(
+            records.push(self.edge_record_from_in_nbr_assume_visible(
                 dst_vid.as_int64().unwrap_or(0) as u32,
                 nbr,
                 ts,

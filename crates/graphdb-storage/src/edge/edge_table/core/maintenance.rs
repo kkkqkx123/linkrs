@@ -279,8 +279,9 @@ impl EdgeStore {
             ),
             crate::edge::RecordForm::Bundled => format!(
                 "table '{}' uses Bundled inline scalar (one property). \
-                Adding a second property, using a non-encodable type, changing schema online, \
-                or freezing with valid values needs migration to Columnar followed by a checkpoint.",
+                Adding a second property, using a non-encodable type, using nonzero ranks, \
+                needing MVCC history, changing schema online, or freezing with valid values \
+                needs migration to Columnar followed by a checkpoint.",
                 self.label_name
             ),
             crate::edge::RecordForm::Columnar => format!(

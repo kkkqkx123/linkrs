@@ -467,7 +467,10 @@ impl EdgeStore {
 
         let reclaimed = self.properties.reclaim_slots(&valid_edge_ids, bound);
         if reclaimed > 0 {
-            self.mark_properties_dirty();
+            // Reclaimed rows span owner groups: trace every owner so the
+            // shrunken row sets reach their shards instead of relying on
+            // unrelated write traces.
+            self.trace_all_owner_groups_for_columns(&[]);
             log::debug!("Property slot reclaim recycled {} row(s)", reclaimed);
         }
     }

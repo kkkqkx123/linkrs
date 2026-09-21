@@ -4,7 +4,6 @@ use super::super::super::{CsrShardSet, EdgeSchema, RecordForm, RecordFormPrefere
 use super::super::config::EdgeTableConfig;
 use super::super::mvcc::MVCCManager;
 use super::EdgeStore;
-use crate::edge::is_scalar_encodable;
 use crate::edge::property_schema::PropertySchema;
 use crate::edge::CsrWithProperties;
 use crate::schema::{LabelVersionHistory, SchemaObjectType};
@@ -29,23 +28,24 @@ impl EdgeStore {
 
         // Auto derivation locks at creation: no properties selects pure,
         // one encodable scalar selects bundled, anything else selects
-        // columnar. The resolved form persists and never re-derives on load;
-        // later precondition breaks must migrate explicitly.
-        // Single-direction cardinality needs fixed single slots, which only
-        // the columnar form provides. Inline forms store multiple edges per
-        // vertex, so auto selection never picks them for single strategies.
+        // columnar. The bundled admission rules live in
+        // `is_bundled_eligible`, shared with the migration precheck so the
+        // two entries cannot drift apart. The resolved form persists and
+        // never re-derives on load; later precondition breaks must migrate
+        // explicitly.
         let record_form = match config.record_form {
             RecordFormPreference::Columnar => RecordForm::Columnar,
             RecordFormPreference::Auto => {
-                if schema.oe_strategy == EdgeStrategy::Single
-                    || schema.ie_strategy == EdgeStrategy::Single
+                if schema.properties.is_empty()
+                    && schema.oe_strategy != EdgeStrategy::Single
+                    && schema.ie_strategy != EdgeStrategy::Single
                 {
-                    RecordForm::Columnar
-                } else if schema.properties.is_empty() {
                     RecordForm::Pure
-                } else if schema.properties.len() == 1
-                    && is_scalar_encodable(&schema.properties[0].data_type)
-                {
+                } else if crate::edge::is_bundled_eligible(
+                    &schema.properties,
+                    schema.oe_strategy,
+                    schema.ie_strategy,
+                ) {
                     RecordForm::Bundled
                 } else {
                     RecordForm::Columnar
@@ -55,12 +55,26 @@ impl EdgeStore {
         // The resolved form is authoritative in memory and on disk: load
         // paths never re-infer it. Report the derivation so the locked
         // choice and its later evolution cost stay visible to operators.
-        log::info!(
-            "edge table '{}' uses record form {:?} (preference {:?})",
-            schema.label_name,
-            record_form,
-            config.record_form,
-        );
+        // Bundled is a fast path with hard limits (no rank, no MVCC version
+        // chain, no freeze with valid values, no online schema change), so
+        // an automatic pick says so loudly: evolving schemas should force
+        // the columnar form instead.
+        if record_form == RecordForm::Bundled && config.record_form == RecordFormPreference::Auto {
+            log::warn!(
+                "edge table '{}' auto-selected the Bundled inline form for '{}': \
+                no rank, no MVCC version chain, no freeze with valid values and no online schema change; \
+                force RecordFormPreference::Columnar when the schema may evolve",
+                schema.label_name,
+                schema.properties.first().map(|p| p.name.as_str()).unwrap_or(""),
+            );
+        } else {
+            log::info!(
+                "edge table '{}' uses record form {:?} (preference {:?})",
+                schema.label_name,
+                record_form,
+                config.record_form,
+            );
+        }
         let mut schema = schema;
         schema.record_form = record_form;
         let mut out_csr = CsrShardSet::new(
@@ -131,6 +145,7 @@ impl EdgeStore {
             mvcc: MVCCManager::new(),
             properties,
             properties_dirty: false,
+            property_column_dirt: HashMap::new(),
             is_open: true,
             next_edge_id: EdgeId(0),
             config,

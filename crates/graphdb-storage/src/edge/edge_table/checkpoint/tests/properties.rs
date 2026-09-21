@@ -150,6 +150,102 @@ fn encoded_values_survive_reload_with_encoding() {
     assert!(snapshot.null_count.is_some());
 }
 
+fn make_two_prop_table() -> EdgeStore {
+    let schema = EdgeSchema {
+        label_id: 0,
+        label_name: "knows".to_string(),
+        src_label: 0,
+        dst_label: 0,
+        properties: vec![
+            StoragePropertyDef::new("a".to_string(), graphdb_core::types::DataType::Int),
+            StoragePropertyDef::new("b".to_string(), graphdb_core::types::DataType::Double),
+        ],
+        oe_strategy: EdgeStrategy::Multiple,
+        ie_strategy: EdgeStrategy::Multiple,
+        schema_version: 1,
+        record_form: RecordForm::default(),
+    };
+    EdgeStore::with_config(schema, EdgeTableConfig::default()).expect("table builds")
+}
+
+#[test]
+fn point_write_tracks_group_column_scope() {
+    // Group-precise dirt: a point write to one owner records only its own
+    // column, so the next flush patches that group alone and clean groups
+    // reuse their files untouched.
+    let mut table = make_two_prop_table();
+    let props = |a: i32, b: f64| {
+        vec![
+            ("a".to_string(), Value::Int(a)),
+            ("b".to_string(), Value::Double(b)),
+        ]
+    };
+    table.insert_edge(0, 1, 0, &props(1, 1.5), 100).unwrap();
+    table
+        .insert_edge(5000, 6000, 0, &props(2, 2.5), 100)
+        .unwrap();
+    let dir = tempfile::tempdir().expect("temporary edge table directory");
+    table
+        .flush(
+            dir.path(),
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .expect("baseline flush should succeed");
+
+    let other_props = dir.path().join(props_group_file(1));
+    assert!(other_props.exists());
+    let stamp = other_props.metadata().unwrap().modified().unwrap();
+
+    table
+        .update_edge_property(0, 1, 0, "a", &Value::Int(7), 200)
+        .expect("point write should succeed");
+    let owner_zero = table.owner_gid_for(0, 1);
+    let owner_other = table.owner_gid_for(5000, 6000);
+    assert_ne!(owner_zero, owner_other);
+    let scoped = table.property_column_dirt.get(&owner_zero);
+    assert!(scoped.is_some_and(|set| set.len() == 1 && set.contains("a")));
+    assert!(!table.property_column_dirt.contains_key(&owner_other));
+
+    table
+        .flush(
+            dir.path(),
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .expect("incremental flush should succeed");
+    assert!(
+        table.property_column_dirt.is_empty(),
+        "flushed group scopes must clear"
+    );
+    assert_eq!(
+        other_props.metadata().unwrap().modified().unwrap(),
+        stamp,
+        "clean owner shard must be reused untouched"
+    );
+
+    let mut loaded = make_two_prop_table();
+    loaded.load(dir.path()).expect("load should succeed");
+    let near = loaded.get_edge(0, 1, 0, 300).expect("edge survives");
+    assert!(near
+        .properties
+        .iter()
+        .any(|(k, v)| k == "a" && *v == Value::Int(7)));
+    assert!(near
+        .properties
+        .iter()
+        .any(|(k, v)| k == "b" && *v == Value::Double(1.5)));
+    let far = loaded
+        .get_edge(5000, 6000, 0, 300)
+        .expect("far edge survives");
+    assert!(far
+        .properties
+        .iter()
+        .any(|(k, v)| k == "a" && *v == Value::Int(2)));
+    assert!(far
+        .properties
+        .iter()
+        .any(|(k, v)| k == "b" && *v == Value::Double(2.5)));
+}
+
 #[test]
 fn truncated_properties_payload_is_rejected() {
     let mut table = make_table();

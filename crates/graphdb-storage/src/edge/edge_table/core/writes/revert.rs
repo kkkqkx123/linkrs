@@ -25,7 +25,13 @@ impl EdgeStore {
                 ts_info.delete_ts = Timestamp::MAX;
             }
             let _ = self.properties.revert_deletion_for_edge(edge_id);
-            self.mark_properties_dirty();
+            // Trace the owning group so the revived row reaches its shard
+            // even when no other write marked that group.
+            if let Some(owner) = self.edge_owner.get(&edge_id) {
+                self.mark_properties_dirty_for_owner(owner);
+            } else {
+                self.mark_properties_dirty();
+            }
             self.debug_assert_copies_consistent(edge_id);
             return Ok(true);
         }
@@ -37,7 +43,11 @@ impl EdgeStore {
                 ts_info.delete_ts = Timestamp::MAX;
             }
             let _ = self.properties.revert_deletion_for_edge(edge_id);
-            self.mark_properties_dirty();
+            if let Some(owner) = self.edge_owner.get(&edge_id) {
+                self.mark_properties_dirty_for_owner(owner);
+            } else {
+                self.mark_properties_dirty();
+            }
             self.debug_assert_copies_consistent(edge_id);
             return Ok(true);
         }

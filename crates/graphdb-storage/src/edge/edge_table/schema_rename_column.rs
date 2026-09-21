@@ -136,7 +136,10 @@ impl EdgeStore {
             return Err(error);
         }
         self.pending_rename_column = None;
-        self.mark_properties_dirty();
+        // Renames change every owner shard's schema: trace them all and
+        // carry the rename into the per-group scopes.
+        self.rename_property_column_in_dirt(&pending.old_name, &pending.new_name);
+        self.trace_all_owner_groups_for_columns(&[pending.new_name.clone()]);
         Ok(())
     }
 

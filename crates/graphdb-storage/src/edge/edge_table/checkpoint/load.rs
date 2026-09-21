@@ -149,6 +149,7 @@ impl EdgeStore {
             )));
         }
         self.properties_dirty = false;
+        self.property_column_dirt.clear();
         self.out_csr.clear_all_dirty();
         self.in_csr.clear_all_dirty();
         // Reloaded state is a fresh checkpoint base: no switch is pending.

@@ -145,6 +145,48 @@ pub fn is_scalar_encodable(dt: &graphdb_core::DataType) -> bool {
     )
 }
 
+/// Whether a schema may use the `Bundled` record form.
+///
+/// Single source of truth for the bundled admission rules, shared by table
+/// creation and record-form migration: exactly one property, an encodable
+/// scalar type, and no single-edge direction. Bundled additionally carries
+/// no rank, no MVCC version chain and no freeze support for valid values,
+/// so schemas expecting those must stay columnar even when eligible here.
+pub fn is_bundled_eligible(
+    properties: &[StoragePropertyDef],
+    oe_strategy: EdgeStrategy,
+    ie_strategy: EdgeStrategy,
+) -> bool {
+    bundled_ineligibility_reason(properties, oe_strategy, ie_strategy).is_none()
+}
+
+/// Why a schema cannot use the `Bundled` record form, if it cannot.
+///
+/// Returns the same wording the migration precheck reports, so creation and
+/// migration refuse a bundled target for the same stated reason.
+pub fn bundled_ineligibility_reason(
+    properties: &[StoragePropertyDef],
+    oe_strategy: EdgeStrategy,
+    ie_strategy: EdgeStrategy,
+) -> Option<String> {
+    if oe_strategy == EdgeStrategy::Single || ie_strategy == EdgeStrategy::Single {
+        return Some(SINGLE_REQUIRES_COLUMNAR_MSG.to_string());
+    }
+    if properties.len() != 1 {
+        return Some(
+            "bundled record form requires exactly one property; adjust the schema or keep the columnar form, see migration_plan/migrate_record_form"
+                .to_string(),
+        );
+    }
+    if !is_scalar_encodable(&properties[0].data_type) {
+        return Some(format!(
+            "property type {:?} cannot inline into the bundled form; keep the columnar form, see migration_plan/migrate_record_form",
+            properties[0].data_type
+        ));
+    }
+    None
+}
+
 #[derive(Debug, Clone)]
 pub struct EdgeRecord {
     pub src_vid: VertexId,

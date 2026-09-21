@@ -30,7 +30,7 @@ use crate::edge::IndexConsistency;
 use crate::index::edge_index_manager::EdgePropertyIndex;
 use crate::schema::LabelVersionHistory;
 use graphdb_core::types::{EdgeId, LabelId, Timestamp};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 pub use super::config::{AutoMaintenanceConfig, EdgeTableConfig, UpdateEdgePropertyByKeyParams};
@@ -51,6 +51,12 @@ pub struct EdgeStore {
     pub properties: CsrWithProperties,
     /// Whether property columns changed since the last checkpoint.
     pub properties_dirty: bool,
+    /// Dirty property columns by owner group, keyed by the same owner id
+    /// that names the `props_g{gid}` shards. Narrows the incremental
+    /// property patch to the columns each group actually touched; groups
+    /// without an entry fall back to the table-wide dirty set. Cleared per
+    /// group by the flush that persists it, and fully on load or rebuild.
+    pub(crate) property_column_dirt: HashMap<u32, HashSet<String>>,
     pub is_open: bool,
     pub next_edge_id: EdgeId,
     pub config: EdgeTableConfig,

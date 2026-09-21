@@ -160,7 +160,10 @@ impl EdgeStore {
             return Err(error);
         }
         self.pending_drop_column = None;
-        self.mark_properties_dirty();
+        // Column removal changes rows in every owner: trace them all and
+        // forget the dropped column in the per-group scopes.
+        self.forget_property_column_in_dirt(&pending.name);
+        self.trace_all_owner_groups_for_columns(&[]);
         Ok(())
     }
 

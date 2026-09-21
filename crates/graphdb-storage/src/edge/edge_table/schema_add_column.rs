@@ -118,7 +118,9 @@ impl EdgeStore {
         if let Some(pending) = self.pending_add_column.as_mut() {
             pending.state = PendingAddColumnState::Filled;
         }
-        self.mark_properties_dirty();
+        // The backfill touches rows in every owner group: trace them all so
+        // no clean group is skipped, with the new column as patch scope.
+        self.trace_all_owner_groups_for_columns(&[name.clone()]);
         Ok(())
     }
 

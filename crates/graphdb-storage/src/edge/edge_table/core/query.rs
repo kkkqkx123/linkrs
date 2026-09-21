@@ -34,6 +34,25 @@ impl EdgeStore {
             .matches_predicates_for_edge(edge_id, query_ts, predicates)
     }
 
+    /// Predicate match on an already-visible edge.
+    ///
+    /// Counterpart of [`Self::matches_pushdown`] for callers holding a
+    /// prior authority verdict (scan iterators, batch filters): the column
+    /// check runs without a second visibility lookup.
+    pub fn matches_pushdown_assume_visible(
+        &self,
+        edge_id: EdgeId,
+        query_ts: Timestamp,
+        predicates: &[ScanPredicate],
+    ) -> bool {
+        if self.is_bundled() {
+            let props = self.bundled_scan_properties_assume_visible(edge_id, query_ts, None);
+            return predicates.iter().all(|p| p.matches(&props));
+        }
+        self.properties
+            .matches_predicates_for_edge(edge_id, query_ts, predicates)
+    }
+
     /// Filter edge ids by pushed predicates at the column-scan layer.
     ///
     /// Hits look up topology afterwards; misses never decode a record.
@@ -61,9 +80,23 @@ impl EdgeStore {
                     .filter(|edge_id| self.matches_pushdown(*edge_id, query_ts, predicates))
                     .collect();
             }
+            // Row-addressed walk: the iterator already yields the owning row,
+            // so each edge pays one visibility check plus one inline decode
+            // instead of a full-table row scan per edge.
             let mut out = Vec::new();
-            for (_, nbr) in self.out_csr.iter_all() {
-                if self.matches_pushdown(nbr.edge_id, query_ts, predicates) {
+            for (src_vid, nbr) in self.out_csr.iter_all() {
+                if !self.is_visible(nbr.edge_id, query_ts) {
+                    continue;
+                }
+                let row = src_vid.as_int64().unwrap_or(0) as u32;
+                let props = self.bundled_properties_at_assume_visible(
+                    true,
+                    row,
+                    nbr.edge_id,
+                    query_ts,
+                    None,
+                );
+                if predicates.iter().all(|p| p.matches(&props)) {
                     out.push(nbr.edge_id);
                 }
             }

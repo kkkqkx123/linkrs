@@ -321,27 +321,31 @@ impl<'a> Iterator for EdgeTableScanIterator<'a> {
             if pruned {
                 continue;
             }
+            // Single authority verdict per entry: predicate and projection
+            // below reuse it instead of querying the authority twice more.
             if !self.table.is_visible(nbr.edge_id, self.ts) {
                 continue;
             }
             if !self.predicates.is_empty()
-                && !self
-                    .table
-                    .matches_pushdown(nbr.edge_id, self.ts, &self.predicates)
+                && !self.table.matches_pushdown_assume_visible(
+                    nbr.edge_id,
+                    self.ts,
+                    &self.predicates,
+                )
             {
                 self.rows_filtered += 1;
                 continue;
             }
             self.current_count += 1;
             if self.outgoing {
-                return Some(self.table.edge_record_from_nbr_projected(
+                return Some(self.table.edge_record_from_nbr_projected_assume_visible(
                     row,
                     nbr,
                     self.ts,
                     self.projection.as_deref(),
                 ));
             }
-            return Some(self.table.edge_record_from_in_nbr(
+            return Some(self.table.edge_record_from_in_nbr_assume_visible(
                 row,
                 nbr,
                 self.ts,

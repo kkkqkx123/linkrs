@@ -25,6 +25,106 @@ impl EdgeStore {
         self.in_csr.mark_column_updated_for(dst);
     }
 
+    /// Mark named property columns dirty for the edge `(src, dst)`.
+    ///
+    /// Column-precise counterpart of [`Self::mark_properties_dirty_for_edge`]:
+    /// besides the table flag and the group trace it records which columns
+    /// the owning group touched, so the incremental patch rewrites only
+    /// those columns instead of the whole row. Unknown or empty column lists
+    /// degrade to the traced-group behavior.
+    pub(crate) fn mark_property_columns_dirty_for_edge(
+        &mut self,
+        src: u32,
+        dst: u32,
+        columns: &[String],
+    ) {
+        self.mark_properties_dirty_for_edge(src, dst);
+        if columns.is_empty() {
+            return;
+        }
+        let owner = self.owner_gid_for(src, dst);
+        self.property_column_dirt
+            .entry(owner)
+            .or_default()
+            .extend(columns.iter().cloned());
+    }
+
+    /// Mark property dirt for one owner group without column detail.
+    ///
+    /// Used when the touched columns are unknown (authority revives,
+    /// property-slot reclaims): the group joins the dirty set through its
+    /// trace and the flush falls back to the table-wide column set for it,
+    /// so the write is never missed.
+    pub(crate) fn mark_properties_dirty_for_owner(&mut self, owner: u32) {
+        self.properties_dirty = true;
+        if self.schema.oe_strategy != crate::edge::EdgeStrategy::None {
+            self.out_csr.mark_column_updated_for_group(owner as usize);
+        } else if self.schema.ie_strategy != crate::edge::EdgeStrategy::None {
+            self.in_csr.mark_column_updated_for_group(owner as usize);
+        }
+    }
+
+    /// Dirty columns recorded for one owner group, if any.
+    ///
+    /// `None` means the group carries no column-precise trace and the caller
+    /// must fall back to the table-wide dirty set.
+    fn property_dirty_columns_for_group(&self, gid: u32) -> Option<Vec<String>> {
+        self.property_column_dirt.get(&gid).map(|set| {
+            let mut out: Vec<String> = set.iter().cloned().collect();
+            out.sort();
+            out
+        })
+    }
+
+    /// Drop per-group column traces for groups a flush persisted.
+    fn clear_property_column_dirt_for_groups(&mut self, gids: &[u32]) {
+        for gid in gids {
+            self.property_column_dirt.remove(gid);
+        }
+    }
+
+    /// Trace every existing owner group for `columns`.
+    ///
+    /// Schema fills, drops and renames touch rows in all owners at once, so
+    /// they cannot rely on the per-edge trace left by point writes. Tracing
+    /// every owner keeps those groups in the dirty set even when no other
+    /// write marked them, and records the column scope for the incremental
+    /// patch. Dropped columns are removed from the traces instead.
+    pub(crate) fn trace_all_owner_groups_for_columns(&mut self, columns: &[String]) {
+        self.properties_dirty = true;
+        let owners = self.owner_group_ids();
+        let use_out = self.schema.oe_strategy != crate::edge::EdgeStrategy::None;
+        for gid in &owners {
+            if use_out {
+                self.out_csr.mark_column_updated_for_group(*gid as usize);
+            } else {
+                self.in_csr.mark_column_updated_for_group(*gid as usize);
+            }
+            if !columns.is_empty() {
+                self.property_column_dirt
+                    .entry(*gid)
+                    .or_default()
+                    .extend(columns.iter().cloned());
+            }
+        }
+    }
+
+    /// Forget one column in every per-group trace after a drop publish.
+    pub(crate) fn forget_property_column_in_dirt(&mut self, name: &str) {
+        for set in self.property_column_dirt.values_mut() {
+            set.remove(name);
+        }
+    }
+
+    /// Rename one column inside every per-group trace after a rename publish.
+    pub(crate) fn rename_property_column_in_dirt(&mut self, old_name: &str, new_name: &str) {
+        for set in self.property_column_dirt.values_mut() {
+            if set.remove(old_name) {
+                set.insert(new_name.to_string());
+            }
+        }
+    }
+
     /// Owner groups whose timestamp or property shards must be rewritten.
     /// Topology dirt always covers inserts and deletes; precise column
     /// traces cover property-only writes. When the table flag reports
@@ -127,6 +227,17 @@ impl EdgeStore {
         }
         let schema: Vec<PropertySchema> = self.properties.property_schema().to_vec();
         let dirty_columns: Vec<String> = self.properties.dirty_column_names();
+        // Per-group patch scopes, snapshotted before the write loop: groups
+        // with a precise trace patch only their own columns, groups without
+        // one fall back to the table-wide set so no write is ever missed.
+        let mut group_scopes: HashMap<u32, Vec<String>> = HashMap::new();
+        for gid in &dirty {
+            if let Some(scoped) = self.property_dirty_columns_for_group(*gid) {
+                if !scoped.is_empty() {
+                    group_scopes.insert(*gid, scoped);
+                }
+            }
+        }
         let topology_dirty: HashSet<u32> = self
             .out_csr
             .dirty_group_ids()
@@ -140,7 +251,8 @@ impl EdgeStore {
             )
             .collect();
         let mut written = 0u64;
-        for gid in dirty {
+        for gid in &dirty {
+            let gid = *gid;
             let path = props_group_path(dir, gid);
             let edges = by_owner.get(&gid).cloned().unwrap_or_default();
             if edges.is_empty() {
@@ -149,13 +261,17 @@ impl EdgeStore {
                 }
                 continue;
             }
-            if !topology_dirty.contains(&gid) && path.exists() && !dirty_columns.is_empty() {
+            let scope: &[String] = group_scopes
+                .get(&gid)
+                .map(Vec::as_slice)
+                .unwrap_or(&dirty_columns);
+            if !topology_dirty.contains(&gid) && path.exists() && !scope.is_empty() {
                 let incremental = Self::flush_property_shard_incremental(
                     &mut self.properties,
                     &path,
                     &schema,
                     &edges,
-                    &dirty_columns,
+                    scope,
                 )
                 .unwrap_or(None);
                 if let Some(bytes) = incremental {
@@ -200,6 +316,7 @@ impl EdgeStore {
             written += super::layout::file_bytes(&path);
         }
         self.properties.clear_dirty_columns();
+        self.clear_property_column_dirt_for_groups(&dirty);
         Ok(written)
     }
 

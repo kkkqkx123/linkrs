@@ -53,12 +53,15 @@ impl EdgeStore {
             }
             if self.is_bundled() {
                 self.write_bundled_property(src, dst, prop_name, value)?;
+                // Bundled values live in the CSR value column with no
+                // columnar shard to patch: record only the group trace.
+                self.mark_properties_dirty_for_edge(src, dst);
             } else {
                 self.properties
                     .set_property_for_edge(nbr.edge_id, prop_name, Some(value.clone()), ts)
                     .map_err(|_| StorageError::column_not_found(prop_name.to_string()))?;
+                self.mark_property_columns_dirty_for_edge(src, dst, &[prop_name.to_string()]);
             }
-            self.mark_properties_dirty_for_edge(src, dst);
             self.maybe_run_auto_maintenance();
             return Ok(true);
         }
@@ -100,14 +103,17 @@ impl EdgeStore {
                     }],
                 )?;
             }
+            // Resolve the column name before the write so the group-level
+            // dirt below can record the precise column even on the bundled
+            // path, which holds no columnar rows.
+            let prop_name_by_id = self
+                .properties
+                .column_name_by_prop_id(params.prop_id as i32)
+                .map(|name| name.to_string());
             if self.is_bundled() {
-                let prop_name = self
-                    .properties
-                    .column_name_by_prop_id(params.prop_id as i32)
-                    .map(|name| name.to_string())
-                    .ok_or_else(|| {
-                        StorageError::column_not_found(format!("prop_id={}", params.prop_id))
-                    })?;
+                let prop_name = prop_name_by_id.clone().ok_or_else(|| {
+                    StorageError::column_not_found(format!("prop_id={}", params.prop_id))
+                })?;
                 self.write_bundled_property(params.src, params.dst, &prop_name, &params.value)?;
             } else {
                 self.properties
@@ -121,7 +127,15 @@ impl EdgeStore {
                         StorageError::column_not_found(format!("prop_id={}", params.prop_id))
                     })?;
             }
-            self.mark_properties_dirty_for_edge(params.src, params.dst);
+            // Bundled tables keep values in the CSR value column, so there
+            // is no columnar shard to patch: record only the group trace.
+            if self.is_bundled() {
+                self.mark_properties_dirty_for_edge(params.src, params.dst);
+            } else if let Some(prop_name) = prop_name_by_id {
+                self.mark_property_columns_dirty_for_edge(params.src, params.dst, &[prop_name]);
+            } else {
+                self.mark_properties_dirty_for_edge(params.src, params.dst);
+            }
 
             let src_key = Self::edge_endpoint_key(params.src, params.rank);
             if let Some(ie_nbr) = self.merged_get_edge(&self.in_csr, params.dst, src_key, params.ts)
