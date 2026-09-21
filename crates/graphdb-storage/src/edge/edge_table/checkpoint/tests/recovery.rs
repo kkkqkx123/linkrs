@@ -1,4 +1,5 @@
 use super::common::make_table;
+use crate::edge::edge_table::checkpoint::snapshot::snapshot_path_for;
 use crate::edge::edge_table::checkpoint::{
     in_append_file, in_group_file, out_append_file, out_group_file, props_group_file,
     ts_group_file, GROUPS_MANIFEST_FILE,
@@ -6,7 +7,6 @@ use crate::edge::edge_table::checkpoint::{
 use crate::edge::edge_table::config::EdgeTableConfig;
 use crate::edge::edge_table::core::EdgeStore;
 use crate::edge::edge_table::persistence;
-use crate::edge::edge_table::checkpoint::snapshot::snapshot_path_for;
 use crate::edge::RecordForm;
 use graphdb_core::Value;
 use std::io::Write as _;

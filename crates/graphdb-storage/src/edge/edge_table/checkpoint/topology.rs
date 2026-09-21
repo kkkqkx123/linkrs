@@ -3,10 +3,10 @@
 use super::super::core::EdgeStore;
 use super::layout::{in_append_path, in_group_path, out_append_path, out_group_path};
 use super::snapshot_cache::{backfill_snapshot_file, sync_snapshot_file};
-use crate::edge::node_group::{decode_append_ops, encode_append_ops, TableShardManifest};
 use crate::edge::edge_table::checkpoint::snapshot::{
     snapshot_path_for, write_snapshot_file, MappedFrozen,
 };
+use crate::edge::node_group::{decode_append_ops, encode_append_ops, TableShardManifest};
 use crate::edge::{CsrBase, CsrVariant};
 use graphdb_core::{StorageError, StorageResult};
 use std::path::Path;

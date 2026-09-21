@@ -26,6 +26,7 @@ use super::schema_add_column::PendingAddColumn;
 use super::schema_drop_column::PendingDropColumn;
 use super::stats::GroupSegmentStats;
 use crate::edge::CsrWithProperties;
+use crate::edge::IndexConsistency;
 use crate::index::edge_index_manager::EdgePropertyIndex;
 use crate::schema::LabelVersionHistory;
 use graphdb_core::types::{EdgeId, LabelId, Timestamp};
@@ -72,6 +73,22 @@ pub struct EdgeStore {
     /// Secondary index write failures since the last rebuild or reset.
     /// Observability only; primary data stays authoritative.
     pub index_write_failures: u64,
+    /// Consistency contract of the secondary index. Best-effort counts
+    /// failures as lag; Strong fails the primary write on index error.
+    pub index_consistency: IndexConsistency,
+    /// Lag watermark: failure count at the last successful rebuild or reset.
+    /// Queries compare the current counter against this baseline to decide
+    /// whether the index is safe to use.
+    pub index_lag_baseline: u64,
+    /// Pool capacity the secondary index was built with, reused by automatic
+    /// rebuilds so maintenance needs no caller-provided capacity.
+    pub(crate) index_pool_capacity: u64,
+    /// Wall-clock moment the index first lagged since the last rebuild or
+    /// reset. Drives the max-staleness rebuild trigger; cleared on rebuild.
+    pub(crate) index_stale_since: Option<std::time::Instant>,
+    /// Committed write counts by owner group for hotspot observability.
+    /// Bounded by the group count; the write-hot path only increments.
+    pub(crate) group_write_counts: HashMap<u32, u64>,
 
     /// In-flight staged add-column change. Memory-only: a crash before
     /// publishing is equivalent to aborting, because reload rebuilds the

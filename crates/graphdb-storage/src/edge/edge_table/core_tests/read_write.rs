@@ -146,13 +146,20 @@ fn test_edge_property_update_keeps_current_value_only() {
 
 #[test]
 fn test_failed_insert_leaves_no_orphan_copies() {
-    // Single-direction schemas are rejected at construction: the write path
-    // assumes unconditional double writes, so the illegal combination must
-    // surface here instead of failing mid-write with a self-rollback.
+    // Single-direction tables are supported: only the stored leg is written
+    // and the missing leg reads as empty adjacency.
     let mut schema = create_test_schema();
     schema.ie_strategy = EdgeStrategy::None;
-    let result = EdgeTable::with_config(schema, EdgeTableConfig::default());
-    assert!(result.is_err());
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    assert_eq!(
+        table.storage_direction(),
+        crate::edge::StorageDirection::OutOnly
+    );
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    assert!(table.get_edge(0, 1, 0, 100).is_some());
+    assert!(table.merged_in_nbrs_with_limit(1, 100, 16).is_empty());
 }
 
 #[test]
@@ -277,12 +284,78 @@ fn test_revert_delete_keeps_authority_on_partial_failure() {
 
 #[test]
 fn test_single_direction_schema_rejected_at_construction() {
+    // Single-direction tables are supported: construction succeeds and only
+    // the stored leg serves reads and writes.
     let mut schema = create_test_schema();
     schema.oe_strategy = EdgeStrategy::Multiple;
     schema.ie_strategy = EdgeStrategy::None;
-    assert!(EdgeTable::with_config(schema, EdgeTableConfig::default()).is_err());
+    let table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    assert_eq!(
+        table.storage_direction(),
+        crate::edge::StorageDirection::OutOnly
+    );
     let mut schema = create_test_schema();
     schema.oe_strategy = EdgeStrategy::None;
     schema.ie_strategy = EdgeStrategy::Multiple;
-    assert!(EdgeTable::with_config(schema, EdgeTableConfig::default()).is_err());
+    let table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    assert_eq!(
+        table.storage_direction(),
+        crate::edge::StorageDirection::InOnly
+    );
+}
+
+#[test]
+fn test_in_only_table_serves_stored_leg_everywhere() {
+    let mut schema = create_test_schema();
+    schema.oe_strategy = EdgeStrategy::None;
+    schema.ie_strategy = EdgeStrategy::Multiple;
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    assert!(!table.is_direction_available(true));
+    assert!(table.is_direction_available(false));
+    assert!(table.direction_note(true).is_some());
+    assert!(table.direction_note(false).is_none());
+
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+        .unwrap();
+    assert!(table.has_edge(0, 1, 0, 100));
+    assert_eq!(table.edge_count(), 1);
+    let edge = table.get_edge(0, 1, 0, 100).expect("in-only point lookup");
+    assert_eq!(edge.src_vid, VertexId::from_int64(0));
+    assert_eq!(edge.dst_vid, VertexId::from_int64(1));
+    assert!(table.edge_id_of(0, 1, 0, 100).is_some());
+    assert!(table.out_edges(0, 100).is_empty());
+    assert!(table.merged_out_nbrs(0, 100).is_empty());
+    assert_eq!(table.in_edges(1, 100).len(), 1);
+    let scanned = table.scan(100);
+    assert_eq!(scanned.len(), 1);
+    assert_eq!(scanned[0].src_vid, VertexId::from_int64(0));
+    assert_eq!(scanned[0].dst_vid, VertexId::from_int64(1));
+
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+    assert!(!table.has_edge(0, 1, 0, 200));
+    assert!(table.get_edge(0, 1, 0, 200).is_none());
+    assert_eq!(table.scan(200).len(), 0);
+}
+
+#[test]
+fn test_hot_groups_rank_owner_groups_by_write_volume() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    assert!(table.hot_groups(10).is_empty());
+    assert_eq!(table.group_write_count(0), 0);
+    for dst in 1..=2u32 {
+        table.insert_edge(0, dst, 0, &[], 100).unwrap();
+    }
+    let far = 1u32 << 20;
+    table.insert_edge(far, far + 1, 0, &[], 100).unwrap();
+    let home = table.owner_gid_for(0, 1);
+    let away = table.owner_gid_for(far, far + 1);
+    assert_ne!(home, away);
+    assert_eq!(table.group_write_count(home), 2);
+    assert_eq!(table.group_write_count(away), 1);
+    let hot = table.hot_groups(2);
+    assert_eq!(hot, vec![(home, 2), (away, 1)]);
+    assert_eq!(table.hot_groups(1), vec![(home, 2)]);
+    assert_eq!(table.hot_groups(0).len(), 2);
 }

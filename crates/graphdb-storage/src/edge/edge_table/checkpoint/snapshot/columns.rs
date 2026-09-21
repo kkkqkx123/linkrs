@@ -1,6 +1,6 @@
-use crate::edge::{ColdStamps, HotNbr, Nbr};
 use super::format::{read_u32_le_at, read_u64_le_at, ColumnRange};
 use super::MappedFrozen;
+use crate::edge::{ColdStamps, HotNbr, Nbr};
 use graphdb_core::types::{EdgeId, Timestamp};
 
 impl MappedFrozen {

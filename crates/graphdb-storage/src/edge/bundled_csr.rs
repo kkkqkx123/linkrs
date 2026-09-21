@@ -42,6 +42,8 @@ use graphdb_core::types::EdgeId;
 
 use super::csr_shared::SegmentedTable;
 use super::pure_csr::PureTopologyCsr;
+use bitvec::order::Lsb0;
+use bitvec::vec::BitVec;
 
 pub(crate) mod codec;
 pub(crate) mod core;
@@ -70,12 +72,32 @@ pub struct BundledCsr {
     topology: PureTopologyCsr,
     /// Per-slot value column, parallel to the topology primary block.
     primary_values: Vec<u64>,
-    /// Per-slot validity bit, parallel to the topology primary block.
-    /// True means the slot holds a valid value; false means NULL.
-    primary_valid: Vec<bool>,
+    /// Per-slot validity bitmap, parallel to the topology primary block.
+    /// One bit per slot: true means the slot holds a valid value, false
+    /// means NULL. Bitmap form replaces the former byte-per-slot vector so
+    /// wide tables pay one bit, not one byte, per edge.
+    primary_valid: BitVec<u8, Lsb0>,
     /// Per-overflow-chunk value columns, keyed by vertex like the topology
     /// overflow table with identical chunk counts and lengths.
     overflow_values: SegmentedTable<Vec<BundledOverflowValues>>,
+}
+
+impl BundledCsr {
+    /// Number of valid (non-NULL) inline values across primary and overflow.
+    pub fn valid_value_count(&self) -> usize {
+        let mut count = self.primary_valid.count_ones();
+        for (_, chunks) in self.overflow_values.iter() {
+            for chunk in chunks.iter() {
+                count += chunk.valid.count_ones();
+            }
+        }
+        count
+    }
+
+    /// Validity bitmap length in slots, for observability and tests.
+    pub fn validity_len(&self) -> usize {
+        self.primary_valid.len()
+    }
 }
 
 impl Default for BundledCsr {

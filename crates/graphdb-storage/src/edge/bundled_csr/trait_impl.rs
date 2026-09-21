@@ -117,7 +117,7 @@ impl MutableCsrTrait for BundledCsr {
             EdgePosition::Primary { slot } => {
                 if let Some(idx) = self.primary_index(src_vid, slot) {
                     if idx < self.primary_valid.len() {
-                        self.primary_valid[idx] = true;
+                        self.primary_valid.set(idx, true);
                     }
                 }
                 true
@@ -125,8 +125,8 @@ impl MutableCsrTrait for BundledCsr {
             EdgePosition::Overflow { chunk, slot } => {
                 if let Some(chunks) = self.overflow_values.get_mut(src_vid) {
                     if let Some(c) = chunks.get_mut(chunk as usize) {
-                        if (slot as usize) < c.valid.len() {
-                            c.valid[slot as usize] = true;
+                        if (slot as usize) < c.len() {
+                            c.set_valid(slot as usize, true);
                         }
                     }
                 }
@@ -238,7 +238,7 @@ impl MutableCsrTrait for BundledCsr {
     fn used_memory_size(&self) -> usize {
         self.topology.used_memory_size()
             + self.primary_values.len() * 8
-            + self.primary_valid.len()
+            + self.primary_valid.len().div_ceil(8)
             + self
                 .overflow_values
                 .iter()

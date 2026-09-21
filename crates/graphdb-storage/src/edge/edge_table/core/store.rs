@@ -70,14 +70,15 @@ impl EdgeStore {
         )?;
         // Pre-create groups covering the configured initial row space so
         // small tables start with their full address range addressable.
+        // Single-direction tables materialize only the stored leg.
         let initial_groups = config
             .initial_vertex_capacity
             .div_ceil(out_csr.group_size())
             .max(1);
-        if schema.oe_strategy != super::super::super::EdgeStrategy::None {
+        if schema.has_out() {
             out_csr.resize_groups(initial_groups)?;
         }
-        if schema.ie_strategy != super::super::super::EdgeStrategy::None {
+        if schema.has_in() {
             in_csr.resize_groups(initial_groups)?;
         }
 
@@ -131,6 +132,11 @@ impl EdgeStore {
             property_index_cache,
             property_index: None,
             index_write_failures: 0,
+            index_consistency: crate::edge::IndexConsistency::BestEffort,
+            index_lag_baseline: 0,
+            index_pool_capacity: 0,
+            index_stale_since: None,
+            group_write_counts: HashMap::new(),
             pending_add_column: None,
             pending_drop_column: None,
             pending_rename_column: None,
@@ -163,6 +169,57 @@ impl EdgeStore {
 
     pub fn schema(&self) -> &EdgeSchema {
         &self.schema
+    }
+
+    /// Storage direction derived from the enabled CSR strategies.
+    pub fn storage_direction(&self) -> super::super::super::StorageDirection {
+        self.schema.storage_direction()
+    }
+
+    /// Whether the outgoing leg is stored and served.
+    pub fn has_out_edges(&self) -> bool {
+        self.schema.has_out()
+    }
+
+    /// Whether the incoming leg is stored and served.
+    pub fn has_in_edges(&self) -> bool {
+        self.schema.has_in()
+    }
+
+    /// Cardinality contract of the outgoing direction.
+    pub fn out_multiplicity(&self) -> super::super::super::EdgeMultiplicity {
+        self.schema.out_multiplicity()
+    }
+
+    /// Cardinality contract of the incoming direction.
+    pub fn in_multiplicity(&self) -> super::super::super::EdgeMultiplicity {
+        self.schema.in_multiplicity()
+    }
+
+    /// Whether a direction is available for reads. Missing legs read as
+    /// empty adjacency instead of failing.
+    pub fn is_direction_available(&self, outgoing: bool) -> bool {
+        if outgoing {
+            self.schema.has_out()
+        } else {
+            self.schema.has_in()
+        }
+    }
+
+    /// Human-readable reason when a direction is not stored. Returns `None`
+    /// while the direction is available. Query planning uses this to tell an
+    /// empty missing leg apart from a genuinely empty stored leg.
+    pub fn direction_note(&self, outgoing: bool) -> Option<String> {
+        if self.is_direction_available(outgoing) {
+            return None;
+        }
+        let want = if outgoing { "outgoing" } else { "incoming" };
+        Some(format!(
+            "table '{}' stores no {} leg (direction {:?}); reads on this leg are empty",
+            self.label_name,
+            want,
+            self.schema.storage_direction()
+        ))
     }
 
     pub(crate) fn schema_mut(&mut self) -> &mut EdgeSchema {

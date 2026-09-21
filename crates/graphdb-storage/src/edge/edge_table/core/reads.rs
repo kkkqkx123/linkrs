@@ -3,6 +3,7 @@
 use super::super::super::bundled_csr::decode_scalar;
 use super::super::super::csr_shared::decode_endpoint_pair;
 use super::super::super::{CsrBase, CsrShardSet, EdgeRecord, HotNbr, Nbr, RecordForm};
+use super::super::staging::EdgeStagingBatch;
 use super::EdgeStore;
 use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 use graphdb_core::Value;
@@ -80,6 +81,8 @@ impl EdgeStore {
     }
 
     /// Out-direction visit without allocation, for traversal fan-out.
+    /// Single-direction tables without the out leg report empty: the leg
+    /// stores nothing, so callers observe an empty adjacency, not an error.
     pub(crate) fn visit_out_with_gate<F>(
         &self,
         src: u32,
@@ -89,10 +92,18 @@ impl EdgeStore {
     ) where
         F: FnMut(HotNbr),
     {
+        if !self.schema.has_out() {
+            log::debug!(
+                "visit_out on table '{}' without out leg: empty adjacency",
+                self.label_name
+            );
+            return;
+        }
         self.visit_visible_with_gate(&self.out_csr, src, ts, gate, f);
     }
 
     /// In-direction visit without allocation, for traversal fan-out.
+    /// Mirrors the out leg: a missing in leg reads as empty adjacency.
     pub(crate) fn visit_in_with_gate<F>(
         &self,
         dst: u32,
@@ -102,6 +113,13 @@ impl EdgeStore {
     ) where
         F: FnMut(HotNbr),
     {
+        if !self.schema.has_in() {
+            log::debug!(
+                "visit_in on table '{}' without in leg: empty adjacency",
+                self.label_name
+            );
+            return;
+        }
         self.visit_visible_with_gate(&self.in_csr, dst, ts, gate, f);
     }
 
@@ -173,11 +191,17 @@ impl EdgeStore {
     /// Uses the physical visit path so high-degree `LIMIT` queries stop
     /// after `k` visible neighbors instead of decoding every edge plus properties.
     pub fn merged_out_nbrs_with_limit(&self, src: u32, ts: Timestamp, limit: usize) -> Vec<Nbr> {
+        if !self.schema.has_out() {
+            return Vec::new();
+        }
         self.merged_nbrs_with_limit(&self.out_csr, src, ts, limit)
     }
 
     /// First-`limit` visible in-neighbors, mirroring the out direction.
     pub fn merged_in_nbrs_with_limit(&self, dst: u32, ts: Timestamp, limit: usize) -> Vec<Nbr> {
+        if !self.schema.has_in() {
+            return Vec::new();
+        }
         self.merged_nbrs_with_limit(&self.in_csr, dst, ts, limit)
     }
 
@@ -210,7 +234,7 @@ impl EdgeStore {
         gate: &crate::mvcc_visibility::PendingGate<'_>,
         limit: usize,
     ) -> Vec<Nbr> {
-        if limit == 0 {
+        if limit == 0 || !self.schema.has_out() {
             return Vec::new();
         }
         let mut out = Vec::with_capacity(limit.min(32));
@@ -232,7 +256,7 @@ impl EdgeStore {
         gate: &crate::mvcc_visibility::PendingGate<'_>,
         limit: usize,
     ) -> Vec<Nbr> {
-        if limit == 0 {
+        if limit == 0 || !self.schema.has_in() {
             return Vec::new();
         }
         let mut out = Vec::with_capacity(limit.min(32));
@@ -263,7 +287,7 @@ impl EdgeStore {
         gate: &crate::mvcc_visibility::PendingGate<'_>,
         projection: Option<&[String]>,
     ) -> Vec<EdgeRecord> {
-        if !self.is_open {
+        if !self.is_open || !self.schema.has_out() {
             return Vec::new();
         }
         // Hot-only stream with the pending gate: no cold-line touch, no
@@ -304,7 +328,7 @@ impl EdgeStore {
         gate: &crate::mvcc_visibility::PendingGate<'_>,
         projection: Option<&[String]>,
     ) -> Vec<EdgeRecord> {
-        if !self.is_open {
+        if !self.is_open || !self.schema.has_in() {
             return Vec::new();
         }
         // Hot-only stream mirroring the out direction with the pending gate.
@@ -397,6 +421,29 @@ impl EdgeStore {
         query_ts: Timestamp,
     ) -> EdgeRecord {
         self.edge_record_from_nbr_projected(src, nbr, query_ts, None)
+    }
+
+    /// In-leg counterpart of `edge_record_from_nbr_projected`: the row is a
+    /// destination and the neighbor endpoint is the source. Bundled values
+    /// decode from the in shard row.
+    pub(crate) fn edge_record_from_in_nbr(
+        &self,
+        dst: u32,
+        nbr: Nbr,
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> EdgeRecord {
+        let properties = if self.is_bundled() {
+            self.bundled_properties_at(false, dst, nbr.edge_id, query_ts, projection)
+        } else {
+            self.properties_for_edge_projected_columnar(nbr.edge_id, query_ts, projection)
+        };
+        EdgeRecord {
+            src_vid: VertexId::from_int64(nbr.endpoint as i64),
+            dst_vid: VertexId::from_int64(dst as i64),
+            rank: nbr.rank,
+            properties,
+        }
     }
 
     pub(crate) fn edge_record_from_nbr_projected(
@@ -594,35 +641,73 @@ impl EdgeStore {
     ///
     /// Operation-layer point lookups use it to recheck the fetched record
     /// through the pending-aware gate
-    /// (`MVCCManager::is_edge_visible_with_gate`).
+    /// (`MVCCManager::is_edge_visible_with_gate`). Single-direction tables
+    /// without the out leg probe the stored in leg at the destination row,
+    /// mirroring the delete path, instead of reporting a missing edge.
     pub fn edge_id_of(&self, src: u32, dst: u32, rank: i64, ts: Timestamp) -> Option<EdgeId> {
         if !self.is_open {
             return None;
         }
-        let dst_key = Self::edge_endpoint_key(dst, rank);
-        self.merged_get_edge(&self.out_csr, src, dst_key, ts)
-            .map(|nbr| nbr.edge_id)
+        if self.schema.has_out() {
+            let dst_key = Self::edge_endpoint_key(dst, rank);
+            return self
+                .merged_get_edge(&self.out_csr, src, dst_key, ts)
+                .map(|nbr| nbr.edge_id);
+        }
+        if self.schema.has_in() {
+            log::debug!(
+                "edge_id_of on table '{}' without out leg: probing stored in leg",
+                self.label_name
+            );
+            let src_key = Self::edge_endpoint_key(src, rank);
+            return self
+                .merged_get_edge(&self.in_csr, dst, src_key, ts)
+                .map(|nbr| nbr.edge_id);
+        }
+        None
     }
 
+    /// Point lookup resolving through the stored leg.
+    ///
+    /// Mirrors `edge_id_of`: tables without the out leg answer from the in
+    /// leg so single-direction tables stay queryable instead of silent.
     pub fn get_edge(&self, src: u32, dst: u32, rank: i64, ts: Timestamp) -> Option<EdgeRecord> {
         if !self.is_open {
             return None;
         }
 
-        let dst_key = Self::edge_endpoint_key(dst, rank);
-        let nbr = self.merged_get_edge(&self.out_csr, src, dst_key, ts)?;
-        let properties = if self.is_bundled() {
-            self.bundled_properties_at(true, src, nbr.edge_id, ts, None)
-        } else {
-            self.properties_for_edge(nbr.edge_id, ts)
-        };
+        if self.schema.has_out() {
+            let dst_key = Self::edge_endpoint_key(dst, rank);
+            let nbr = self.merged_get_edge(&self.out_csr, src, dst_key, ts)?;
+            let properties = if self.is_bundled() {
+                self.bundled_properties_at(true, src, nbr.edge_id, ts, None)
+            } else {
+                self.properties_for_edge(nbr.edge_id, ts)
+            };
 
-        Some(EdgeRecord {
-            src_vid: VertexId::from_int64(src as i64),
-            dst_vid: VertexId::from_int64(dst as i64),
-            rank,
-            properties,
-        })
+            return Some(EdgeRecord {
+                src_vid: VertexId::from_int64(src as i64),
+                dst_vid: VertexId::from_int64(dst as i64),
+                rank,
+                properties,
+            });
+        }
+        if self.schema.has_in() {
+            let src_key = Self::edge_endpoint_key(src, rank);
+            let nbr = self.merged_get_edge(&self.in_csr, dst, src_key, ts)?;
+            let properties = if self.is_bundled() {
+                self.bundled_properties_at(false, dst, nbr.edge_id, ts, None)
+            } else {
+                self.properties_for_edge(nbr.edge_id, ts)
+            };
+            return Some(EdgeRecord {
+                src_vid: VertexId::from_int64(src as i64),
+                dst_vid: VertexId::from_int64(dst as i64),
+                rank,
+                properties,
+            });
+        }
+        None
     }
 
     pub fn get_edge_with_gate(
@@ -636,19 +721,37 @@ impl EdgeStore {
         if !self.is_open {
             return None;
         }
-        let dst_key = Self::edge_endpoint_key(dst, rank);
-        let nbr = self.merged_get_edge_with_gate(&self.out_csr, src, dst_key, ts, gate)?;
-        let properties = if self.is_bundled() {
-            self.bundled_properties_at(true, src, nbr.edge_id, ts, None)
-        } else {
-            self.properties_for_edge(nbr.edge_id, ts)
-        };
-        Some(EdgeRecord {
-            src_vid: VertexId::from_int64(src as i64),
-            dst_vid: VertexId::from_int64(dst as i64),
-            rank,
-            properties,
-        })
+        if self.schema.has_out() {
+            let dst_key = Self::edge_endpoint_key(dst, rank);
+            let nbr = self.merged_get_edge_with_gate(&self.out_csr, src, dst_key, ts, gate)?;
+            let properties = if self.is_bundled() {
+                self.bundled_properties_at(true, src, nbr.edge_id, ts, None)
+            } else {
+                self.properties_for_edge(nbr.edge_id, ts)
+            };
+            return Some(EdgeRecord {
+                src_vid: VertexId::from_int64(src as i64),
+                dst_vid: VertexId::from_int64(dst as i64),
+                rank,
+                properties,
+            });
+        }
+        if self.schema.has_in() {
+            let src_key = Self::edge_endpoint_key(src, rank);
+            let nbr = self.merged_get_edge_with_gate(&self.in_csr, dst, src_key, ts, gate)?;
+            let properties = if self.is_bundled() {
+                self.bundled_properties_at(false, dst, nbr.edge_id, ts, None)
+            } else {
+                self.properties_for_edge(nbr.edge_id, ts)
+            };
+            return Some(EdgeRecord {
+                src_vid: VertexId::from_int64(src as i64),
+                dst_vid: VertexId::from_int64(dst as i64),
+                rank,
+                properties,
+            });
+        }
+        None
     }
 
     pub fn get_edge_with_gate_projected(
@@ -663,19 +766,37 @@ impl EdgeStore {
         if !self.is_open {
             return None;
         }
-        let dst_key = Self::edge_endpoint_key(dst, rank);
-        let nbr = self.merged_get_edge_with_gate(&self.out_csr, src, dst_key, ts, gate)?;
-        let properties = if self.is_bundled() {
-            self.bundled_properties_at(true, src, nbr.edge_id, ts, projection)
-        } else {
-            self.properties_for_edge_projected_columnar(nbr.edge_id, ts, projection)
-        };
-        Some(EdgeRecord {
-            src_vid: VertexId::from_int64(src as i64),
-            dst_vid: VertexId::from_int64(dst as i64),
-            rank,
-            properties,
-        })
+        if self.schema.has_out() {
+            let dst_key = Self::edge_endpoint_key(dst, rank);
+            let nbr = self.merged_get_edge_with_gate(&self.out_csr, src, dst_key, ts, gate)?;
+            let properties = if self.is_bundled() {
+                self.bundled_properties_at(true, src, nbr.edge_id, ts, projection)
+            } else {
+                self.properties_for_edge_projected_columnar(nbr.edge_id, ts, projection)
+            };
+            return Some(EdgeRecord {
+                src_vid: VertexId::from_int64(src as i64),
+                dst_vid: VertexId::from_int64(dst as i64),
+                rank,
+                properties,
+            });
+        }
+        if self.schema.has_in() {
+            let src_key = Self::edge_endpoint_key(src, rank);
+            let nbr = self.merged_get_edge_with_gate(&self.in_csr, dst, src_key, ts, gate)?;
+            let properties = if self.is_bundled() {
+                self.bundled_properties_at(false, dst, nbr.edge_id, ts, projection)
+            } else {
+                self.properties_for_edge_projected_columnar(nbr.edge_id, ts, projection)
+            };
+            return Some(EdgeRecord {
+                src_vid: VertexId::from_int64(src as i64),
+                dst_vid: VertexId::from_int64(dst as i64),
+                rank,
+                properties,
+            });
+        }
+        None
     }
 
     pub fn out_edges(&self, src: u32, ts: Timestamp) -> Vec<EdgeRecord> {
@@ -689,6 +810,13 @@ impl EdgeStore {
         projection: Option<&[String]>,
     ) -> Vec<EdgeRecord> {
         if !self.is_open {
+            return Vec::new();
+        }
+        if !self.schema.has_out() {
+            log::debug!(
+                "out_edges on table '{}' without out leg: empty adjacency",
+                self.label_name
+            );
             return Vec::new();
         }
 
@@ -723,6 +851,9 @@ impl EdgeStore {
     /// high-frequency traversals use `visit_out_with_gate` or the batch
     /// accessor instead.
     pub fn merged_out_nbrs(&self, src: u32, ts: Timestamp) -> Vec<Nbr> {
+        if !self.schema.has_out() {
+            return Vec::new();
+        }
         self.merged_edges_of(&self.out_csr, src, ts)
     }
 
@@ -737,6 +868,13 @@ impl EdgeStore {
         projection: Option<&[String]>,
     ) -> Vec<EdgeRecord> {
         if !self.is_open {
+            return Vec::new();
+        }
+        if !self.schema.has_in() {
+            log::debug!(
+                "in_edges on table '{}' without in leg: empty adjacency",
+                self.label_name
+            );
             return Vec::new();
         }
 
@@ -770,6 +908,9 @@ impl EdgeStore {
     /// high-frequency traversals use `visit_in_with_gate` or the batch
     /// accessor instead.
     pub fn merged_in_nbrs(&self, dst: u32, ts: Timestamp) -> Vec<Nbr> {
+        if !self.schema.has_in() {
+            return Vec::new();
+        }
         self.merged_edges_of(&self.in_csr, dst, ts)
     }
 
@@ -791,13 +932,17 @@ impl EdgeStore {
         if !self.is_open {
             return false;
         }
-        let dst_key = Self::edge_endpoint_key(dst, rank);
-        self.merged_get_edge(&self.out_csr, src, dst_key, ts)
-            .is_some()
+        self.edge_id_of(src, dst, rank, ts).is_some()
     }
 
+    /// Live edge count on the stored leg: the out leg when stored, else the
+    /// in leg. Single-direction tables report their one leg, never zero.
     pub fn edge_count(&self) -> u64 {
-        self.out_csr.edge_count()
+        if self.schema.has_out() {
+            self.out_csr.edge_count()
+        } else {
+            self.in_csr.edge_count()
+        }
     }
 
     pub fn delta_edge_count(&self) -> u64 {
@@ -824,6 +969,10 @@ impl EdgeStore {
     /// record, so it is an offline path for index builds and scatter-gather
     /// queries; latency-sensitive traversals should use the streaming
     /// [`EdgeStore::iter`] plus per-vertex limit pushdown instead.
+    ///
+    /// Scans the stored leg: tables without the out leg iterate the in leg
+    /// with swapped endpoint assembly so single-direction tables stay
+    /// scannable instead of silent.
     pub fn scan_with_gate(
         &self,
         ts: Timestamp,
@@ -832,15 +981,30 @@ impl EdgeStore {
         if !self.is_open {
             return Vec::new();
         }
+        if self.schema.has_out() {
+            let mut records = Vec::new();
+            for (src_vid, nbr) in self.out_csr.iter_all() {
+                if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
+                    continue;
+                }
+                records.push(self.edge_record_from_nbr(
+                    src_vid.as_int64().unwrap_or(0) as u32,
+                    nbr,
+                    ts,
+                ));
+            }
+            return records;
+        }
         let mut records = Vec::new();
-        for (src_vid, nbr) in self.out_csr.iter_all() {
+        for (dst_vid, nbr) in self.in_csr.iter_all() {
             if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
                 continue;
             }
-            records.push(self.edge_record_from_nbr(
-                src_vid.as_int64().unwrap_or(0) as u32,
+            records.push(self.edge_record_from_in_nbr(
+                dst_vid.as_int64().unwrap_or(0) as u32,
                 nbr,
                 ts,
+                None,
             ));
         }
         records
@@ -855,13 +1019,28 @@ impl EdgeStore {
         if !self.is_open {
             return Vec::new();
         }
+        if self.schema.has_out() {
+            let mut records = Vec::new();
+            for (src_vid, nbr) in self.out_csr.iter_all() {
+                if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
+                    continue;
+                }
+                records.push(self.edge_record_from_nbr_projected(
+                    src_vid.as_int64().unwrap_or(0) as u32,
+                    nbr,
+                    ts,
+                    projection,
+                ));
+            }
+            return records;
+        }
         let mut records = Vec::new();
-        for (src_vid, nbr) in self.out_csr.iter_all() {
+        for (dst_vid, nbr) in self.in_csr.iter_all() {
             if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
                 continue;
             }
-            records.push(self.edge_record_from_nbr_projected(
-                src_vid.as_int64().unwrap_or(0) as u32,
+            records.push(self.edge_record_from_in_nbr(
+                dst_vid.as_int64().unwrap_or(0) as u32,
                 nbr,
                 ts,
                 projection,
@@ -889,5 +1068,142 @@ impl EdgeStore {
         projection: Option<Vec<String>>,
     ) -> EdgeTableScanIterator<'_> {
         EdgeTableScanIterator::with_projection(self, ts, projection)
+    }
+
+    /// Owner-view existence check overlaying a caller-owned staging batch.
+    ///
+    /// Default reads stay on the committed snapshot for isolation; this
+    /// helper lets the batch owner observe read-your-writes without
+    /// touching committed state. Empty batches delegate to the fast path.
+    pub fn has_edge_with_batch(
+        &self,
+        batch: &EdgeStagingBatch,
+        src: u32,
+        dst: u32,
+        rank: i64,
+        ts: Timestamp,
+    ) -> bool {
+        if batch.is_empty() {
+            return self.has_edge(src, dst, rank, ts);
+        }
+        if batch.contains_insert(src, dst, rank) {
+            return true;
+        }
+        if batch.contains_delete(src, dst, rank) {
+            return false;
+        }
+        self.has_edge(src, dst, rank, ts)
+    }
+
+    /// Owner-view point lookup overlaying a caller-owned staging batch.
+    ///
+    /// Net inserts synthesize a record from staged properties (uncommitted
+    /// edges own no edge id yet); net deletes hide the committed edge.
+    pub fn get_edge_with_batch(
+        &self,
+        batch: &EdgeStagingBatch,
+        src: u32,
+        dst: u32,
+        rank: i64,
+        ts: Timestamp,
+    ) -> Option<EdgeRecord> {
+        if batch.is_empty() {
+            return self.get_edge(src, dst, rank, ts);
+        }
+        if batch.contains_delete(src, dst, rank) {
+            return None;
+        }
+        if let Some(staged) = batch
+            .staged_inserts()
+            .iter()
+            .rev()
+            .find(|ins| ins.src == src && ins.dst == dst && ins.rank == rank)
+        {
+            return Some(EdgeRecord {
+                src_vid: VertexId::from_int64(src as i64),
+                dst_vid: VertexId::from_int64(dst as i64),
+                rank,
+                properties: staged.properties.clone(),
+            });
+        }
+        self.get_edge(src, dst, rank, ts)
+    }
+
+    /// Owner-view out adjacency overlaying a caller-owned staging batch.
+    pub fn out_edges_with_batch(
+        &self,
+        src: u32,
+        ts: Timestamp,
+        batch: &EdgeStagingBatch,
+    ) -> Vec<EdgeRecord> {
+        if batch.is_empty() {
+            return self.out_edges(src, ts);
+        }
+        let mut out: Vec<EdgeRecord> = self
+            .out_edges(src, ts)
+            .into_iter()
+            .filter(|record| {
+                let dst = record.dst_vid.as_int64().unwrap_or(-1) as u32;
+                !batch.contains_delete(src, dst, record.rank)
+            })
+            .collect();
+        for ins in batch.staged_inserts() {
+            if ins.src != src || batch.contains_delete(ins.src, ins.dst, ins.rank) {
+                continue;
+            }
+            let dst = ins.dst;
+            let rank = ins.rank;
+            if out.iter().any(|record| {
+                record.dst_vid.as_int64().unwrap_or(-1) as u32 == dst && record.rank == rank
+            }) {
+                continue;
+            }
+            out.push(EdgeRecord {
+                src_vid: VertexId::from_int64(ins.src as i64),
+                dst_vid: VertexId::from_int64(ins.dst as i64),
+                rank: ins.rank,
+                properties: ins.properties.clone(),
+            });
+        }
+        out
+    }
+
+    /// Owner-view in adjacency overlaying a caller-owned staging batch.
+    pub fn in_edges_with_batch(
+        &self,
+        dst: u32,
+        ts: Timestamp,
+        batch: &EdgeStagingBatch,
+    ) -> Vec<EdgeRecord> {
+        if batch.is_empty() {
+            return self.in_edges(dst, ts);
+        }
+        let mut out: Vec<EdgeRecord> = self
+            .in_edges(dst, ts)
+            .into_iter()
+            .filter(|record| {
+                let src = record.src_vid.as_int64().unwrap_or(-1) as u32;
+                !batch.contains_delete(src, dst, record.rank)
+            })
+            .collect();
+        for ins in batch.staged_inserts() {
+            if ins.dst != dst || batch.contains_delete(ins.src, ins.dst, ins.rank) {
+                continue;
+            }
+            let src = ins.src;
+            let rank = ins.rank;
+            if out.iter().any(|record| {
+                record.src_vid.as_int64().unwrap_or(-1) as u32 == src && record.rank == rank
+            }) {
+                continue;
+            }
+            out.push(EdgeRecord {
+                src_vid: VertexId::from_int64(ins.src as i64),
+                dst_vid: VertexId::from_int64(ins.dst as i64),
+                rank: ins.rank,
+                properties: ins.properties.clone(),
+            });
+        }
+        out
     }
 }

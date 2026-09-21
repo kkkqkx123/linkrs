@@ -85,7 +85,7 @@ impl EdgeStore {
     /// otherwise in groups own. The owner decides which timestamp and
     /// property shard carries the edge with the same dirt as its topology.
     pub(crate) fn owner_gid_for(&self, src: u32, dst: u32) -> u32 {
-        if self.schema.oe_strategy != super::super::super::EdgeStrategy::None {
+        if self.schema.has_out() {
             crate::edge::node_group::group_id_for(src, self.config.node_group_bits) as u32
         } else {
             crate::edge::node_group::group_id_for(dst, self.config.node_group_bits) as u32
@@ -95,7 +95,7 @@ impl EdgeStore {
     /// Existing owner groups in group order. Timestamp and property shards
     /// follow exactly these groups; missing groups have no shard files.
     pub(crate) fn owner_group_ids(&self) -> Vec<u32> {
-        let owner = if self.schema.oe_strategy != super::super::super::EdgeStrategy::None {
+        let owner = if self.schema.has_out() {
             &self.out_csr
         } else {
             &self.in_csr
@@ -117,7 +117,7 @@ impl EdgeStore {
     /// counts and tests observe orphan convergence directly.
     pub(crate) fn rebuild_owner_map_with_stats(&mut self) -> OwnerRebuildStats {
         self.edge_owner.clear();
-        let use_out = self.schema.oe_strategy != super::super::super::EdgeStrategy::None;
+        let use_out = self.schema.has_out();
         let owner = if use_out { &self.out_csr } else { &self.in_csr };
         let existing = owner.existing_group_ids();
         let mut mapped = 0usize;

@@ -127,6 +127,22 @@ impl EdgeStore {
             maintenance_ran += 1;
         }
 
+        // Staleness-driven secondary index rebuild: threshold or age trigger
+        // from the table config, reusing the capacity recorded at the last
+        // build. Queries fall back to segment scans while lagged, so a
+        // rebuild only restores index serving without changing results.
+        if self.property_index.is_some() {
+            let threshold = cfg.index_rebuild_failure_threshold;
+            let max_stale = cfg.index_max_stale_secs;
+            match self.rebuild_index_if_needed(threshold, max_stale) {
+                Ok(true) => maintenance_ran += 1,
+                Ok(false) => {}
+                Err(e) => {
+                    log::debug!("automatic index rebuild skipped: {}", e);
+                }
+            }
+        }
+
         maintenance_ran
     }
 
@@ -164,4 +180,115 @@ impl EdgeStore {
     }
 
     // ── Edge Property Index ──
+
+    /// Density of one group on one leg: live edges over capacity.
+    /// Observation only; the merge-scope selector owns the reclaim decision.
+    /// Missing groups report full density so they never trigger compaction.
+    pub fn group_density(&self, gid: usize, outgoing: bool) -> f32 {
+        let csr = if outgoing {
+            &self.out_csr
+        } else {
+            &self.in_csr
+        };
+        csr.group_stats(gid)
+            .map(|stats| stats.density)
+            .unwrap_or(1.0)
+    }
+
+    /// Groups below `threshold` density on either stored leg, for observability
+    /// and merge-scope selection. Clean groups report full density.
+    pub fn sparse_groups_below(&self, threshold: f32) -> Vec<(bool, usize, f32)> {
+        let mut sparse = Vec::new();
+        if self.schema.has_out() {
+            for gid in self.out_csr.existing_group_ids() {
+                let density = self.group_density(gid, true);
+                if density < threshold {
+                    sparse.push((true, gid, density));
+                }
+            }
+        }
+        if self.schema.has_in() {
+            for gid in self.in_csr.existing_group_ids() {
+                let density = self.group_density(gid, false);
+                if density < threshold {
+                    sparse.push((false, gid, density));
+                }
+            }
+        }
+        sparse
+    }
+
+    /// Whether a group should compact at the configured merge thresholds.
+    /// Multi-region spans use the group threshold, single-region spans use
+    /// the region threshold; the decision never changes the live set.
+    pub fn should_compact_group(&self, gid: usize, outgoing: bool) -> bool {
+        let threshold = self.config.group_merge_min_density;
+        self.group_density(gid, outgoing) < threshold
+    }
+
+    /// Partition insert keys by owner group so batch reservations and future
+    /// parallel applies stay group-local. Pure routing helper: no state change.
+    pub fn partition_inserts_by_owner(&self, srcs_dsts: &[(u32, u32)]) -> Vec<(u32, Vec<usize>)> {
+        use std::collections::BTreeMap;
+        let mut by_owner: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+        for (idx, (src, dst)) in srcs_dsts.iter().enumerate() {
+            by_owner
+                .entry(self.owner_gid_for(*src, *dst))
+                .or_default()
+                .push(idx);
+        }
+        by_owner.into_iter().collect()
+    }
+
+    /// Committed write count for one owner group, for hotspot observation.
+    pub fn group_write_count(&self, gid: u32) -> u64 {
+        self.group_write_counts.get(&gid).copied().unwrap_or(0)
+    }
+
+    /// Owner groups ordered by committed write volume, most-written first.
+    ///
+    /// Observation only for hotspot diagnosis and future parallel-apply
+    /// scheduling; the write path stays table-serialized for correctness.
+    /// `limit` of zero returns every tracked group.
+    pub fn hot_groups(&self, limit: usize) -> Vec<(u32, u64)> {
+        let mut groups: Vec<(u32, u64)> = self
+            .group_write_counts
+            .iter()
+            .map(|(gid, count)| (*gid, *count))
+            .collect();
+        groups.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        if limit > 0 && groups.len() > limit {
+            groups.truncate(limit);
+        }
+        groups
+    }
+
+    /// Human-readable record-form guidance: locked choice plus evolution cost.
+    /// Pure fits topology-only read-heavy types; Bundled fits one stable
+    /// scalar; Columnar fits everything else. Breaking the preconditions
+    /// needs an explicit migration followed by a mandatory checkpoint.
+    pub fn record_form_guidance(&self) -> String {
+        let form = self.schema.record_form;
+        let properties = self.schema.properties.len();
+        match form {
+            crate::edge::RecordForm::Pure => format!(
+                "table '{}' uses Pure topology (no properties, rank pinned to zero). \
+                Adding properties or nonzero ranks needs migration to Bundled or Columnar \
+                followed by a checkpoint.",
+                self.label_name
+            ),
+            crate::edge::RecordForm::Bundled => format!(
+                "table '{}' uses Bundled inline scalar (one property). \
+                Adding a second property, using a non-encodable type, changing schema online, \
+                or freezing with valid values needs migration to Columnar followed by a checkpoint.",
+                self.label_name
+            ),
+            crate::edge::RecordForm::Columnar => format!(
+                "table '{}' uses Columnar storage ({} properties). \
+                Tombstone reuse applies to the multi-edge topology only; other forms ignore \
+                the reuse cutoff. No migration needed for schema evolution.",
+                self.label_name, properties
+            ),
+        }
+    }
 }

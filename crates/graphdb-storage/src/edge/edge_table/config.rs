@@ -43,6 +43,12 @@ pub struct EdgeTableConfig {
     /// `Auto` lets the system pick Pure/Bundled/Columnar based on schema;
     /// `Columnar` forces the standard multi/single/none strategy path.
     pub record_form: RecordFormPreference,
+    /// Adapt property column encodings during checkpoints from dirty-column
+    /// values. Enabled by default; disable only to pin encodings manually.
+    pub auto_encode_on_checkpoint: bool,
+    /// Minimum rows for checkpoint-time encoding inference. Smaller columns
+    /// skip inference to avoid fitting elaborate encodings to noise.
+    pub auto_encode_min_rows: usize,
     /// Declared memory intent for read-heavy paths. `HeapDefault` keeps the
     /// historical behavior; `ReadSnapshot` marks the read-only snapshot path
     /// and `BulkLoad` the batch-ingest path so mapping hints follow intent.
@@ -78,6 +84,12 @@ pub struct AutoMaintenanceConfig {
     /// watermark did not advance. Recommended range 2..=8. Below this count
     /// with an unchanged watermark the commit skips the group scan entirely.
     pub reclaim_tombstone_threshold: usize,
+    /// Rebuild the secondary property index when lag since the last rebuild
+    /// reaches this failure count. Set to 0 to disable the count trigger.
+    pub index_rebuild_failure_threshold: u64,
+    /// Rebuild the secondary property index when any lag persists longer
+    /// than this many seconds. Set to 0 to disable the age trigger.
+    pub index_max_stale_secs: u64,
 }
 
 impl Default for AutoMaintenanceConfig {
@@ -85,6 +97,8 @@ impl Default for AutoMaintenanceConfig {
         Self {
             property_compact_ratio: 0.15,
             reclaim_tombstone_threshold: 4,
+            index_rebuild_failure_threshold: 64,
+            index_max_stale_secs: 300,
         }
     }
 }
@@ -101,6 +115,8 @@ impl Default for EdgeTableConfig {
             group_merge_min_density: crate::edge::node_group::GROUP_MERGE_MIN_DENSITY,
             auto_maintenance: AutoMaintenanceConfig::default(),
             record_form: RecordFormPreference::default(),
+            auto_encode_on_checkpoint: true,
+            auto_encode_min_rows: 128,
             memory_intent: MemoryIntent::default(),
         }
     }

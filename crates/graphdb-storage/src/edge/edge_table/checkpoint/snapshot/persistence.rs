@@ -1,9 +1,9 @@
+use super::format::snapshot_error;
+use super::MappedFrozen;
 use crate::edge::mutable_csr::serialization::{
     encode_topology_i64_column, encode_topology_u32_column, encode_topology_u64_column,
 };
 use crate::edge::{ColdStamps, HotNbr};
-use super::format::snapshot_error;
-use super::MappedFrozen;
 use graphdb_core::StorageResult;
 
 impl MappedFrozen {

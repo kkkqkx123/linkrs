@@ -84,14 +84,14 @@ fn test_index_failure_counter_drives_threshold_rebuild() {
     table
         .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
         .unwrap();
-    table.note_index_result(
+    let _ = table.note_index_result(
         "weight",
         Err(graphdb_core::StorageError::db_error(
             "injected index failure",
         )),
         1,
     );
-    table.note_index_result(
+    let _ = table.note_index_result(
         "weight",
         Err(graphdb_core::StorageError::db_error(
             "injected index failure",
@@ -333,4 +333,101 @@ fn test_property_fallback_counter_stays_flat_under_normal_load() {
         )
         .unwrap();
     assert_eq!(table.property_fallback_rewrites(), 1);
+}
+
+#[test]
+fn test_auto_maintenance_rebuilds_lagged_index() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.enable_property_index(1024).unwrap();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    let _ = table.note_index_result(
+        "weight",
+        Err(graphdb_core::StorageError::db_error(
+            "injected index failure",
+        )),
+        1,
+    );
+    let _ = table.note_index_result(
+        "weight",
+        Err(graphdb_core::StorageError::db_error(
+            "injected index failure",
+        )),
+        1,
+    );
+    assert_eq!(table.index_lag(), 2);
+    assert!(!table.is_index_usable());
+
+    table
+        .config
+        .auto_maintenance
+        .index_rebuild_failure_threshold = 2;
+    table.config.auto_maintenance.index_max_stale_secs = 0;
+    assert!(table.index_needs_rebuild(2, 0));
+    assert!(!table.index_needs_rebuild(3, 0));
+    let ran = table.maybe_run_auto_maintenance();
+    assert!(ran >= 1);
+    assert_eq!(table.index_lag(), 0);
+    assert!(table.is_index_usable());
+}
+
+#[test]
+fn test_checkpoint_adapts_constant_column_encoding() {
+    use crate::edge::EdgeSchema;
+    use crate::encoding::EncodingType;
+    let schema = EdgeSchema {
+        label_id: 0,
+        label_name: "rated".to_string(),
+        src_label: 0,
+        dst_label: 0,
+        properties: vec![
+            StoragePropertyDef {
+                name: "weight".to_string(),
+                data_type: DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            },
+            StoragePropertyDef {
+                name: "note".to_string(),
+                data_type: DataType::String,
+                nullable: true,
+                default_value: None,
+            },
+        ],
+        oe_strategy: EdgeStrategy::Multiple,
+        ie_strategy: EdgeStrategy::Multiple,
+        schema_version: 1,
+        record_form: RecordForm::default(),
+    };
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    assert_eq!(table.schema.record_form, RecordForm::Columnar);
+    let props: Vec<(String, Value)> = vec![("weight".to_string(), Value::Double(7.0))];
+    let entries: Vec<crate::edge::BatchInsertEntry> = (1..=200u32)
+        .map(|dst| (0, dst, 0, props.as_slice(), 100))
+        .collect();
+    table.insert_edges_batch(&entries).unwrap();
+    assert_eq!(
+        table.properties.column_encoding_type("weight"),
+        Some(EncodingType::None)
+    );
+
+    let dir = tempfile::tempdir().expect("temporary edge table directory");
+    table
+        .flush(
+            dir.path(),
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .expect("flush should succeed");
+    assert_eq!(
+        table.properties.column_encoding_type("weight"),
+        Some(EncodingType::Constant)
+    );
+    assert!(table.has_edge(0, 200, 0, 150));
+    let edge = table.get_edge(0, 200, 0, 150).unwrap();
+    assert!(edge
+        .properties
+        .iter()
+        .any(|(k, v)| k == "weight" && *v == Value::Double(7.0)));
 }

@@ -41,13 +41,13 @@ impl BundledCsr {
             let want = topo_lens[chunks.len()];
             let mut fresh = BundledOverflowValues::with_capacity(want.max(1));
             fresh.values.resize(want, 0);
-            fresh.valid.resize(want, false);
+            fresh.resize_valid(want, false);
             chunks.push(fresh);
         }
         for (chunk, want) in chunks.iter_mut().zip(topo_lens.iter()) {
             if chunk.len() < *want {
                 chunk.values.resize(*want, 0);
-                chunk.valid.resize(*want, false);
+                chunk.resize_valid(*want, false);
             }
         }
     }
@@ -87,7 +87,7 @@ impl BundledCsr {
                     None => (0, false),
                 };
                 self.primary_values[idx] = raw;
-                self.primary_valid[idx] = valid;
+                self.primary_valid.set(idx, valid);
                 true
             }
             EdgePosition::Overflow { chunk, slot } => {
@@ -115,7 +115,7 @@ impl BundledCsr {
                     None => (0, false),
                 };
                 c.values[slot as usize] = raw;
-                c.valid[slot as usize] = valid;
+                c.set_valid(slot as usize, valid);
                 true
             }
         }
@@ -206,15 +206,15 @@ impl BundledCsr {
             EdgePosition::Primary { slot } => {
                 if let Some(idx) = self.primary_index(src_vid, slot) {
                     if idx < self.primary_valid.len() {
-                        self.primary_valid[idx] = false;
+                        self.primary_valid.set(idx, false);
                     }
                 }
             }
             EdgePosition::Overflow { chunk, slot } => {
                 if let Some(chunks) = self.overflow_values.get_mut(src_vid) {
                     if let Some(c) = chunks.get_mut(chunk as usize) {
-                        if (slot as usize) < c.valid.len() {
-                            c.valid[slot as usize] = false;
+                        if (slot as usize) < c.len() {
+                            c.set_valid(slot as usize, false);
                         }
                     }
                 }
@@ -255,7 +255,10 @@ impl BundledCsr {
                 .copy_within(idx + 1..base + degree, idx);
             self.sync_primary_len();
             self.primary_values.copy_within(idx + 1..base + degree, idx);
-            self.primary_valid.copy_within(idx + 1..base + degree, idx);
+            for i in idx..base + degree - 1 {
+                let next = self.primary_valid.get(i + 1).map(|b| *b).unwrap_or(false);
+                self.primary_valid.set(i, next);
+            }
             self.topology.rows.degrees[src_idx] -= 1;
             self.topology.sub_capacity(1);
             self.topology.edge_count -= 1;

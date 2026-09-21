@@ -59,10 +59,11 @@ pub struct CsrWithProperties {
     /// Undo parameters keyed by id resolve through this instead of scanning.
     prop_id_index: HashMap<i32, usize>,
     visibility: Vec<RowVisibility>,
-    /// Dense edge-to-row map indexed by the table-allocated edge id.
-    /// Edge ids are monotonic per table, so direct indexing replaces the
-    /// former hash lookup; unmapped ids hold `UNMAPPED_ROW`.
-    edge_to_row: Vec<u32>,
+    /// Segmented sparse edge-to-row map indexed by the table-allocated edge id.
+    /// One segment covers `EDGE_MAP_SEGMENT_ROWS` ids; untouched segments stay
+    /// unallocated. Live entries hold row indexes, gaps hold `UNMAPPED_ROW`.
+    /// Slot order is preserved by ascending segment iteration.
+    edge_map_segments: Vec<Option<Box<[u32; 1024]>>>,
     /// Live mapping count, maintained alongside the dense map.
     edge_map_len: usize,
     /// Reverse index for O(1) row-to-edge lookup. Authoritative with

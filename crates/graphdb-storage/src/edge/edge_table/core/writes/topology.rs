@@ -1,7 +1,6 @@
 use super::super::EdgeStore;
 use crate::edge::edge_table::staging::EdgeStagingBatch;
 use crate::edge::BatchInsertEntry;
-use crate::edge::EdgeStrategy;
 use crate::edge::MutableCsrTrait;
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
@@ -19,9 +18,9 @@ impl EdgeStore {
             return Err(StorageError::storage_not_open());
         }
 
-        if self.schema.oe_strategy == EdgeStrategy::None {
+        if !self.schema.has_out() && !self.schema.has_in() {
             return Err(StorageError::invalid_operation(
-                "Cannot insert edge: out-edge strategy is None".to_string(),
+                "Cannot insert edge: table stores neither direction".to_string(),
             ));
         }
 
@@ -45,9 +44,9 @@ impl EdgeStore {
             return Err(StorageError::storage_not_open());
         }
 
-        if self.schema.oe_strategy == EdgeStrategy::None {
+        if !self.schema.has_out() && !self.schema.has_in() {
             return Err(StorageError::invalid_operation(
-                "Cannot insert edge: out-edge strategy is None".to_string(),
+                "Cannot insert edge: table stores neither direction".to_string(),
             ));
         }
 
@@ -95,31 +94,37 @@ impl EdgeStore {
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let src_key = Self::edge_endpoint_key(src, rank);
-        if let Err(e) = self.out_csr.insert_edge(src, dst_key, edge_id, ts) {
-            if let Some(row) = self.properties.remove_edge_mapping(edge_id) {
-                self.properties.release_row(row);
+        let has_out = self.schema.has_out();
+        let has_in = self.schema.has_in();
+        if has_out {
+            if let Err(e) = self.out_csr.insert_edge(src, dst_key, edge_id, ts) {
+                if let Some(row) = self.properties.remove_edge_mapping(edge_id) {
+                    self.properties.release_row(row);
+                }
+                self.mvcc.remove_edge_timestamps(edge_id);
+                self.mark_properties_dirty();
+                self.debug_assert_copies_consistent(edge_id);
+                return Err(e);
             }
-            self.mvcc.remove_edge_timestamps(edge_id);
-            self.mark_properties_dirty();
-            self.debug_assert_copies_consistent(edge_id);
-            return Err(e);
         }
 
-        if let Err(e) = self.in_csr.insert_edge(dst, src_key, edge_id, ts) {
-            // Roll back the out-direction insertion physically so no
-            // tombstone residue remains; fall back to logical deletion if
-            // the entry cannot be located.
-            if !self.out_csr.rollback_insert(src, edge_id) {
-                let _ = self.out_csr.delete_edge(src, edge_id, ts);
+        if has_in {
+            if let Err(e) = self.in_csr.insert_edge(dst, src_key, edge_id, ts) {
+                // Roll back the out-direction insertion physically so no
+                // tombstone residue remains; fall back to logical deletion if
+                // the entry cannot be located.
+                if has_out && !self.out_csr.rollback_insert(src, edge_id) {
+                    let _ = self.out_csr.delete_edge(src, edge_id, ts);
+                }
+                if let Some(row) = self.properties.remove_edge_mapping(edge_id) {
+                    self.properties.release_row(row);
+                }
+                let _ = self.properties.mark_deleted(edge_id, ts);
+                self.mvcc.remove_edge_timestamps(edge_id);
+                self.mark_properties_dirty();
+                self.debug_assert_copies_consistent(edge_id);
+                return Err(e);
             }
-            if let Some(row) = self.properties.remove_edge_mapping(edge_id) {
-                self.properties.release_row(row);
-            }
-            let _ = self.properties.mark_deleted(edge_id, ts);
-            self.mvcc.remove_edge_timestamps(edge_id);
-            self.mark_properties_dirty();
-            self.debug_assert_copies_consistent(edge_id);
-            return Err(e);
         }
 
         if self.property_index.is_some() {
@@ -140,8 +145,22 @@ impl EdgeStore {
             } else {
                 Vec::new()
             };
+            let strong = self.index_consistency == crate::edge::IndexConsistency::Strong;
             for (prop_name, result, latency) in outcomes {
-                self.note_index_result(&prop_name, result, latency);
+                let failed = result.is_err();
+                if let Err(e) = self.note_index_result(&prop_name, result, latency) {
+                    // Strong contract: roll back the just-applied edge so no
+                    // primary residue outlives its index entry.
+                    self.erase_applied_insert(src, dst, rank, edge_id, ts);
+                    return Err(e);
+                }
+                if strong && failed {
+                    self.erase_applied_insert(src, dst, rank, edge_id, ts);
+                    return Err(StorageError::invalid_operation(format!(
+                        "strong index write failed for '{}'",
+                        prop_name
+                    )));
+                }
             }
         }
 

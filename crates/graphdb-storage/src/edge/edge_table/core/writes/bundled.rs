@@ -48,7 +48,8 @@ impl EdgeStore {
     ///
     /// Read before the physical removal: the columnar `read_properties_*`
     /// helpers see no rows on inline tables, while the value column still
-    /// holds the last written word.
+    /// holds the last written word. Probes the stored legs in order so
+    /// single-direction tables resolve from their only leg.
     pub(super) fn bundled_index_pairs_for_erase(
         &self,
         src: u32,
@@ -57,10 +58,21 @@ impl EdgeStore {
         let Some(prop) = self.schema.properties.first() else {
             return Vec::new();
         };
-        match self.out_csr.bundled_value_at(src, edge_id) {
-            Some((raw, true)) => vec![(prop.name.clone(), decode_scalar(raw, &prop.data_type))],
-            _ => Vec::new(),
+        if self.schema.has_out() {
+            if let Some((raw, true)) = self.out_csr.bundled_value_at(src, edge_id) {
+                return vec![(prop.name.clone(), decode_scalar(raw, &prop.data_type))];
+            }
         }
+        if self.schema.has_in() {
+            // For dual tables the caller passes the out bound; the in leg
+            // is addressed by endpoint scan fallback via the second probe
+            // below only when the caller passes the in bound (single-dir).
+            // Probe the in leg at the same bound for InOnly tables.
+            if let Some((raw, true)) = self.in_csr.bundled_value_at(src, edge_id) {
+                return vec![(prop.name.clone(), decode_scalar(raw, &prop.data_type))];
+            }
+        }
+        Vec::new()
     }
 
     /// Bundled counterpart of [`Self::apply_staged_insert`]: the single
@@ -86,25 +98,31 @@ impl EdgeStore {
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let src_key = Self::edge_endpoint_key(src, rank);
-        if let Err(e) =
-            self.out_csr
-                .bundled_insert_with_value(src, dst_key, edge_id, ts, inline_value)
-        {
-            self.mvcc.remove_edge_timestamps(edge_id);
-            self.debug_assert_copies_consistent(edge_id);
-            return Err(e);
+        let has_out = self.schema.has_out();
+        let has_in = self.schema.has_in();
+        if has_out {
+            if let Err(e) =
+                self.out_csr
+                    .bundled_insert_with_value(src, dst_key, edge_id, ts, inline_value)
+            {
+                self.mvcc.remove_edge_timestamps(edge_id);
+                self.debug_assert_copies_consistent(edge_id);
+                return Err(e);
+            }
         }
 
-        if let Err(e) =
-            self.in_csr
-                .bundled_insert_with_value(dst, src_key, edge_id, ts, inline_value)
-        {
-            if !self.out_csr.rollback_insert(src, edge_id) {
-                let _ = self.out_csr.delete_edge(src, edge_id, ts);
+        if has_in {
+            if let Err(e) =
+                self.in_csr
+                    .bundled_insert_with_value(dst, src_key, edge_id, ts, inline_value)
+            {
+                if has_out && !self.out_csr.rollback_insert(src, edge_id) {
+                    let _ = self.out_csr.delete_edge(src, edge_id, ts);
+                }
+                self.mvcc.remove_edge_timestamps(edge_id);
+                self.debug_assert_copies_consistent(edge_id);
+                return Err(e);
             }
-            self.mvcc.remove_edge_timestamps(edge_id);
-            self.debug_assert_copies_consistent(edge_id);
-            return Err(e);
         }
 
         if self.property_index.is_some() {
@@ -125,7 +143,18 @@ impl EdgeStore {
                     Vec::new()
                 };
             for (prop_name, result, latency) in outcomes {
-                self.note_index_result(&prop_name, result, latency);
+                let failed = result.is_err();
+                if let Err(e) = self.note_index_result(&prop_name, result, latency) {
+                    self.erase_applied_insert(src, dst, rank, edge_id, ts);
+                    return Err(e);
+                }
+                if failed && self.index_consistency == crate::edge::IndexConsistency::Strong {
+                    self.erase_applied_insert(src, dst, rank, edge_id, ts);
+                    return Err(StorageError::invalid_operation(format!(
+                        "strong index write failed for '{}'",
+                        prop_name
+                    )));
+                }
             }
         }
 
@@ -162,21 +191,26 @@ impl EdgeStore {
             _ => Some(encode_scalar(&cast)),
         };
         // Row endpoints, not key halves: bundled rows are keyed by the raw
-        // vertex id with rank pinned to zero.
-        if !self
-            .out_csr
-            .bundled_set_value_by_endpoint(src, dst, inline_value)
-        {
-            return Err(StorageError::column_not_found(prop_name.to_string()));
+        // vertex id with rank pinned to zero. Single-direction tables update
+        // only the stored leg.
+        if self.schema.has_out() {
+            if !self
+                .out_csr
+                .bundled_set_value_by_endpoint(src, dst, inline_value)
+            {
+                return Err(StorageError::column_not_found(prop_name.to_string()));
+            }
         }
-        if !self
-            .in_csr
-            .bundled_set_value_by_endpoint(dst, src, inline_value)
-        {
-            return Err(StorageError::data_corruption(format!(
-                "bundled in-direction value missing for edge ({}, {})",
-                src, dst
-            )));
+        if self.schema.has_in() {
+            if !self
+                .in_csr
+                .bundled_set_value_by_endpoint(dst, src, inline_value)
+            {
+                return Err(StorageError::data_corruption(format!(
+                    "bundled in-direction value missing for edge ({}, {})",
+                    src, dst
+                )));
+            }
         }
         Ok(())
     }

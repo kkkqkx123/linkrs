@@ -1,13 +1,15 @@
 use graphdb_core::{StorageError, StorageResult};
 
 use crate::persistence::{read_u32_le, read_u64_le};
+use bitvec::order::Lsb0;
+use bitvec::vec::BitVec;
 
 use super::super::csr_shared::SegmentedTable;
 use super::super::csr_trait::CsrBase;
 use super::{BundledCsr, BundledOverflowValues};
 
 impl BundledCsr {
-    fn dump_valid_bits(out: &mut Vec<u8>, valid: &[bool]) {
+    fn dump_valid_bits(out: &mut Vec<u8>, valid: &BitVec<u8, Lsb0>) {
         out.extend_from_slice(&(valid.len() as u32).to_le_bytes());
         for chunk in valid.chunks(8) {
             let mut byte = 0u8;
@@ -20,7 +22,7 @@ impl BundledCsr {
         }
     }
 
-    fn load_valid_bits(data: &[u8], offset: &mut usize) -> StorageResult<Vec<bool>> {
+    fn load_valid_bits(data: &[u8], offset: &mut usize) -> StorageResult<BitVec<u8, Lsb0>> {
         let count = read_u32_le(data, offset)? as usize;
         let need = count.div_ceil(8);
         if data.len().saturating_sub(*offset) < need {
@@ -28,7 +30,7 @@ impl BundledCsr {
                 "bundled CSR valid-bit column too short",
             ));
         }
-        let mut out = Vec::with_capacity(count);
+        let mut out = BitVec::with_capacity(count);
         for i in 0..count {
             let byte = data[*offset + i / 8];
             out.push(byte & (1u8 << (i % 8)) != 0);

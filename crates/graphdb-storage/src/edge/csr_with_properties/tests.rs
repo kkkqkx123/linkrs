@@ -527,3 +527,36 @@ fn physical_projection_ignores_row_visibility() {
         .expect("physical row survives");
     assert_eq!(physical.len(), 2);
 }
+
+#[test]
+fn sparse_edge_map_skips_untouched_segments() {
+    let mut csr = CsrWithProperties::new(schema());
+    csr.map_insert(EdgeId(5000), 0).unwrap();
+    csr.map_insert(EdgeId(5001), 1).unwrap();
+    assert_eq!(csr.mapped_row(EdgeId(5000)), Some(0));
+    assert_eq!(csr.mapped_row(EdgeId(5001)), Some(1));
+    assert!(csr.mapped_row(EdgeId(0)).is_none());
+    assert!(csr.mapped_row(EdgeId(4096)).is_none());
+    // Untouched segments hold no allocation: one segment, not five thousand ids.
+    assert_eq!(
+        csr.edge_map_memory_bytes(),
+        CsrWithProperties::EDGE_MAP_SEGMENT_ROWS * 4
+    );
+    assert_eq!(csr.nonempty_map_segments(), vec![4]);
+    let mapped: Vec<(EdgeId, u32)> = csr.edge_mappings().collect();
+    assert_eq!(mapped, vec![(EdgeId(5000), 0), (EdgeId(5001), 1)]);
+    assert_eq!(csr.edge_mappings_in_segment(0).count(), 0);
+    assert_eq!(csr.edge_mappings_in_segment(4).count(), 2);
+
+    // Emptying the only touched segment releases it.
+    csr.map_remove(EdgeId(5000));
+    assert_eq!(
+        csr.edge_map_memory_bytes(),
+        CsrWithProperties::EDGE_MAP_SEGMENT_ROWS * 4
+    );
+    assert_eq!(csr.nonempty_map_segments(), vec![4]);
+    csr.map_remove(EdgeId(5001));
+    assert_eq!(csr.edge_map_memory_bytes(), 0);
+    assert!(csr.nonempty_map_segments().is_empty());
+    assert!(csr.mapped_row(EdgeId(5000)).is_none());
+}

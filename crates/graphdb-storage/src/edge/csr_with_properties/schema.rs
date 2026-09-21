@@ -29,7 +29,7 @@ impl CsrWithProperties {
             column_index: HashMap::new(),
             prop_id_index: HashMap::new(),
             visibility: Vec::new(),
-            edge_to_row: Vec::new(),
+            edge_map_segments: Vec::new(),
             edge_map_len: 0,
             row_to_edge: Vec::new(),
             free_list: Vec::new(),

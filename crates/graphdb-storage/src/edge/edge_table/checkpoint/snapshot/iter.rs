@@ -1,5 +1,5 @@
-use crate::edge::Nbr;
 use super::MappedFrozen;
+use crate::edge::Nbr;
 use graphdb_core::types::{Timestamp, VertexId};
 
 impl MappedFrozen {

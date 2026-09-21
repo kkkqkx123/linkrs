@@ -1,8 +1,8 @@
 use super::common::make_table;
 use crate::edge::edge_table::checkpoint::out_group_file;
+use crate::edge::edge_table::checkpoint::snapshot::snapshot_path_for;
 use crate::edge::edge_table::config::EdgeTableConfig;
 use crate::edge::edge_table::core::EdgeStore;
-use crate::edge::edge_table::checkpoint::snapshot::snapshot_path_for;
 use crate::edge::{CsrVariant, EdgeSchema, EdgeStrategy, RecordForm};
 use crate::types::StoragePropertyDef;
 use graphdb_core::Value;

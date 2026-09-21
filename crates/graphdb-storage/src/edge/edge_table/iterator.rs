@@ -45,18 +45,22 @@ impl<'a> AdjacencyBatchAccessor<'a> {
     /// Fill a caller buffer with every visible neighbor of one row.
     ///
     /// Clears the buffer first and never allocates internally beyond the
-    /// buffer growth the caller owns.
+    /// buffer growth the caller owns. Missing legs fill nothing.
     pub fn fill_into(&self, src: u32, out: &mut Vec<Nbr>) {
+        out.clear();
+        if !self.table.is_direction_available(self.outgoing) {
+            return;
+        }
         self.table.fill_visible_into(self.csr(), src, self.ts, out);
     }
 
     /// Fill a caller buffer with the first `limit` visible neighbors.
     ///
     /// Stops the physical visit after `limit` hits so high-degree `LIMIT`
-    /// queries never decode the full adjacency.
+    /// queries never decode the full adjacency. Missing legs fill nothing.
     pub fn fill_limited(&self, src: u32, out: &mut Vec<Nbr>, limit: usize) {
         out.clear();
-        if limit == 0 {
+        if limit == 0 || !self.table.is_direction_available(self.outgoing) {
             return;
         }
         out.reserve(limit.min(32));
@@ -86,6 +90,9 @@ impl<'a> AdjacencyBatchAccessor<'a> {
             batch_size
         };
         scratch.clear();
+        if !self.table.is_direction_available(self.outgoing) {
+            return;
+        }
         let table = self.table;
         let ts = self.ts;
         let mut done = false;
@@ -113,6 +120,9 @@ impl<'a> AdjacencyBatchAccessor<'a> {
 
     /// Point lookup through the shared merged row-location logic.
     pub fn lookup(&self, src: u32, dst: u32, rank: i64) -> Option<Nbr> {
+        if !self.table.is_direction_available(self.outgoing) {
+            return None;
+        }
         let csr = self.csr();
         let ts = self.ts;
         let table = self.table;
@@ -145,6 +155,7 @@ impl<'a> AdjacencyBatchAccessor<'a> {
 pub struct EdgeTableScanIterator<'a> {
     table: &'a EdgeStore,
     inner: ShardCsrIterator<'a>,
+    outgoing: bool,
     ts: Timestamp,
     /// Maximum number of records to return (None = unlimited)
     max_records: Option<usize>,
@@ -182,14 +193,21 @@ impl<'a> EdgeTableScanIterator<'a> {
     /// Predicates filter at the column-scan layer before the full projection
     /// decodes; segment statistics prune whole groups first. Uses the same
     /// row-location logic as adjacency and point lookups, and never builds
-    /// an intermediate materialized iterator.
+    /// an intermediate materialized iterator. Scans the stored leg so
+    /// single-direction tables iterate their one leg instead of an empty one.
     pub fn with_predicates(
         table: &'a EdgeStore,
         ts: Timestamp,
         projection: Option<Vec<String>>,
         predicates: Vec<ScanPredicate>,
     ) -> Self {
-        let existing = table.out_csr.existing_group_ids();
+        let outgoing = table.has_out_edges();
+        let shards = if outgoing {
+            &table.out_csr
+        } else {
+            &table.in_csr
+        };
+        let existing = shards.existing_group_ids();
         let segments_total = existing.len();
         let mut pruned_groups = HashSet::new();
         if !predicates.is_empty() {
@@ -202,7 +220,8 @@ impl<'a> EdgeTableScanIterator<'a> {
         let segments_pruned = pruned_groups.len();
         Self {
             table,
-            inner: table.out_csr.iter_all(),
+            inner: shards.iter_all(),
+            outgoing,
             ts,
             max_records: None,
             current_count: 0,
@@ -236,12 +255,20 @@ impl<'a> EdgeTableScanIterator<'a> {
     /// row stamps never filter reads.
     pub fn with_limit(table: &'a EdgeStore, ts: Timestamp, max_records: Option<usize>) -> Self {
         // Sharded scan: every physical entry in every group is visited once
-        // in group order, so no cross-group deduplication is needed.
-        let existing = table.out_csr.existing_group_ids();
+        // in group order, so no cross-group deduplication is needed. The
+        // stored leg is scanned so single-direction tables stay scannable.
+        let outgoing = table.has_out_edges();
+        let shards = if outgoing {
+            &table.out_csr
+        } else {
+            &table.in_csr
+        };
+        let existing = shards.existing_group_ids();
         let segments_total = existing.len();
         Self {
             table,
-            inner: table.out_csr.iter_all(),
+            inner: shards.iter_all(),
+            outgoing,
             ts,
             max_records,
             current_count: 0,
@@ -268,22 +295,25 @@ impl<'a> Iterator for EdgeTableScanIterator<'a> {
             }
         }
 
-        for (src_vid, nbr) in self.inner.by_ref() {
+        for (row_vid, nbr) in self.inner.by_ref() {
             self.rows_scanned += 1;
-            let src = src_vid.as_int64().unwrap_or(0) as u32;
+            let row = row_vid.as_int64().unwrap_or(0) as u32;
             // Row-granular prune verdict: entries arrive row by row, so a
             // pruned row skips every remaining entry without another group
             // lookup, and the limit below stops the walk as soon as enough
             // records are collected.
             let pruned = match self.last_row {
-                Some(cached) if cached == src => self.last_row_pruned,
+                Some(cached) if cached == row => self.last_row_pruned,
                 _ => {
-                    let pruned = self
-                        .table
-                        .out_csr
-                        .group_of(src)
+                    let shards = if self.outgoing {
+                        &self.table.out_csr
+                    } else {
+                        &self.table.in_csr
+                    };
+                    let pruned = shards
+                        .group_of(row)
                         .is_some_and(|gid| self.pruned_groups.contains(&gid));
-                    self.last_row = Some(src);
+                    self.last_row = Some(row);
                     self.last_row_pruned = pruned;
                     pruned
                 }
@@ -303,8 +333,16 @@ impl<'a> Iterator for EdgeTableScanIterator<'a> {
                 continue;
             }
             self.current_count += 1;
-            return Some(self.table.edge_record_from_nbr_projected(
-                src,
+            if self.outgoing {
+                return Some(self.table.edge_record_from_nbr_projected(
+                    row,
+                    nbr,
+                    self.ts,
+                    self.projection.as_deref(),
+                ));
+            }
+            return Some(self.table.edge_record_from_in_nbr(
+                row,
                 nbr,
                 self.ts,
                 self.projection.as_deref(),

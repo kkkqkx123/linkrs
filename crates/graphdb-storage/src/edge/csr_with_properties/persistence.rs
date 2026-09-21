@@ -1,4 +1,4 @@
-use super::{CsrWithProperties, RowVisibility, UNMAPPED_ROW};
+use super::{CsrWithProperties, RowVisibility};
 use graphdb_core::types::{EdgeId, INVALID_EDGE_ID};
 use graphdb_core::{StorageError, StorageResult, Value};
 use std::collections::HashSet;
@@ -22,11 +22,8 @@ impl CsrWithProperties {
         }
         buf.extend_from_slice(&(self.row_count as u32).to_le_bytes());
         buf.extend_from_slice(&(self.edge_map_len as u32).to_le_bytes());
-        for (slot, pos) in self.edge_to_row.iter().enumerate() {
-            if *pos == UNMAPPED_ROW {
-                continue;
-            }
-            buf.extend_from_slice(&(slot as u64).to_le_bytes());
+        for (edge_id, pos) in self.edge_mappings() {
+            buf.extend_from_slice(&(edge_id.0).to_le_bytes());
             buf.extend_from_slice(&pos.to_le_bytes());
         }
         buf.extend_from_slice(&(self.free_list.len() as u32).to_le_bytes());
@@ -142,9 +139,9 @@ impl CsrWithProperties {
         need(data, offset, 4, "edge map length")?;
         let map_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
-        self.edge_to_row.clear();
+        self.edge_map_segments.clear();
         self.edge_map_len = 0;
-        // Wire format is unchanged (entry count plus id/row pairs); the dense
+        // Wire format is unchanged (entry count plus id/row pairs); the sparse
         // map is rebuilt from the pairs. Rows must land inside the restored
         // visibility window, otherwise the payload is rejected.
         let vis_len = self.visibility.len();
@@ -159,14 +156,12 @@ impl CsrWithProperties {
                     "edge map entry outside the restored row window",
                 ));
             }
-            let slot = eid as usize;
-            if slot >= self.edge_to_row.len() {
-                self.edge_to_row.resize(slot + 1, UNMAPPED_ROW);
+            if self.mapped_row(EdgeId(eid)).is_some() {
+                return Err(StorageError::deserialize_error(
+                    "duplicate edge map entry in properties payload",
+                ));
             }
-            if self.edge_to_row[slot] == UNMAPPED_ROW {
-                self.edge_map_len += 1;
-            }
-            self.edge_to_row[slot] = pos;
+            self.map_insert(EdgeId(eid), pos as usize)?;
         }
         need(data, offset, 4, "free list length")?;
         let free_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
@@ -344,13 +339,11 @@ impl CsrWithProperties {
     fn rebuild_aux_indexes(&mut self) {
         self.row_to_edge.clear();
         self.row_to_edge.resize(self.visibility.len(), None);
-        for (slot, pos) in self.edge_to_row.iter().enumerate() {
-            if *pos == UNMAPPED_ROW {
-                continue;
-            }
-            let idx = *pos as usize;
+        let mappings: Vec<(EdgeId, u32)> = self.edge_mappings().collect();
+        for (edge_id, pos) in mappings {
+            let idx = pos as usize;
             if idx < self.row_to_edge.len() {
-                self.row_to_edge[idx] = Some(EdgeId(slot as u64));
+                self.row_to_edge[idx] = Some(edge_id);
             }
         }
         self.rebuild_schema_indexes();

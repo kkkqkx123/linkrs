@@ -16,7 +16,23 @@ impl EdgeStore {
         out_ok: bool,
         in_ok: bool,
     ) -> StorageResult<bool> {
-        if Self::fully_reverted(out_ok, in_ok) {
+        let has_out = self.schema.has_out();
+        let has_in = self.schema.has_in();
+        let out_done = !has_out || out_ok;
+        let in_done = !has_in || in_ok;
+        if out_done && in_done && (out_ok || in_ok || (!has_out && !has_in)) {
+            if let Some(ts_info) = self.mvcc.edge_timestamps.get_mut(&edge_id) {
+                ts_info.delete_ts = Timestamp::MAX;
+            }
+            let _ = self.properties.revert_deletion_for_edge(edge_id);
+            self.mark_properties_dirty();
+            self.debug_assert_copies_consistent(edge_id);
+            return Ok(true);
+        }
+        if !out_done && !in_done {
+            return Ok(false);
+        }
+        if (!has_out || out_ok) && (!has_in || in_ok) {
             if let Some(ts_info) = self.mvcc.edge_timestamps.get_mut(&edge_id) {
                 ts_info.delete_ts = Timestamp::MAX;
             }
@@ -43,21 +59,31 @@ impl EdgeStore {
         edge_id: EdgeId,
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let out_ok = match self.out_csr.locate_edge(src, edge_id) {
-            Some((position, _)) => {
-                self.out_csr
-                    .revert_delete_at_position(src, position, edge_id, ts)
-                    || self.out_csr.revert_delete_by_edge_id(src, edge_id, ts)
+        let has_out = self.schema.has_out();
+        let has_in = self.schema.has_in();
+        let out_ok = if has_out {
+            match self.out_csr.locate_edge(src, edge_id) {
+                Some((position, _)) => {
+                    self.out_csr
+                        .revert_delete_at_position(src, position, edge_id, ts)
+                        || self.out_csr.revert_delete_by_edge_id(src, edge_id, ts)
+                }
+                None => self.out_csr.revert_delete_by_edge_id(src, edge_id, ts),
             }
-            None => self.out_csr.revert_delete_by_edge_id(src, edge_id, ts),
+        } else {
+            false
         };
-        let in_ok = match self.in_csr.locate_edge(dst, edge_id) {
-            Some((position, _)) => {
-                self.in_csr
-                    .revert_delete_at_position(dst, position, edge_id, ts)
-                    || self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts)
+        let in_ok = if has_in {
+            match self.in_csr.locate_edge(dst, edge_id) {
+                Some((position, _)) => {
+                    self.in_csr
+                        .revert_delete_at_position(dst, position, edge_id, ts)
+                        || self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts)
+                }
+                None => self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts),
             }
-            None => self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts),
+        } else {
+            false
         };
         self.revive_authority_after_revert(edge_id, out_ok, in_ok)?;
         Ok(())
@@ -108,13 +134,25 @@ impl EdgeStore {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
         }
+        let has_out = self.schema.has_out();
+        let has_in = self.schema.has_in();
         let mut candidates: Vec<EdgeId> = Vec::new();
-        self.out_csr.visit_physical(src, |nbr| {
-            if nbr.endpoint == dst && nbr.rank == rank {
-                candidates.push(nbr.edge_id);
-            }
-            true
-        });
+        if has_out {
+            self.out_csr.visit_physical(src, |nbr| {
+                if nbr.endpoint == dst && nbr.rank == rank {
+                    candidates.push(nbr.edge_id);
+                }
+                true
+            });
+        }
+        if candidates.is_empty() && has_in {
+            self.in_csr.visit_physical(dst, |nbr| {
+                if nbr.endpoint == src && nbr.rank == rank {
+                    candidates.push(nbr.edge_id);
+                }
+                true
+            });
+        }
         let mut edge_id = None;
         for candidate in candidates {
             match self.mvcc.edge_timestamps.get(&candidate) {
@@ -132,24 +170,41 @@ impl EdgeStore {
         // after delete cannot find the sentinel slot. A positional revert
         // holding the pre-delete slot revives the retained word; without a
         // position the undo reports not found and leaves authority deleted.
+        // Missing legs count as reverted because they store nothing.
         let (out_ok, in_ok) = if self.is_bundled() {
-            let out_ok = match self.out_csr.locate_edge(src, edge_id) {
-                Some((position, _)) => self
-                    .out_csr
-                    .revert_delete_at_position(src, position, edge_id, ts),
-                None => false,
+            let out_ok = if has_out {
+                match self.out_csr.locate_edge(src, edge_id) {
+                    Some((position, _)) => self
+                        .out_csr
+                        .revert_delete_at_position(src, position, edge_id, ts),
+                    None => false,
+                }
+            } else {
+                true
             };
-            let in_ok = match self.in_csr.locate_edge(dst, edge_id) {
-                Some((position, _)) => self
-                    .in_csr
-                    .revert_delete_at_position(dst, position, edge_id, ts),
-                None => false,
+            let in_ok = if has_in {
+                match self.in_csr.locate_edge(dst, edge_id) {
+                    Some((position, _)) => self
+                        .in_csr
+                        .revert_delete_at_position(dst, position, edge_id, ts),
+                    None => false,
+                }
+            } else {
+                true
             };
             (out_ok, in_ok)
         } else {
             (
-                self.out_csr.revert_delete_by_edge_id(src, edge_id, ts),
-                self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts),
+                if has_out {
+                    self.out_csr.revert_delete_by_edge_id(src, edge_id, ts)
+                } else {
+                    true
+                },
+                if has_in {
+                    self.in_csr.revert_delete_by_edge_id(dst, edge_id, ts)
+                } else {
+                    true
+                },
             )
         };
         if !self.revive_authority_after_revert(edge_id, out_ok, in_ok)? {
@@ -174,7 +229,7 @@ impl EdgeStore {
                     Vec::new()
                 };
             for (prop_name, result, latency) in outcomes {
-                self.note_index_result(&prop_name, result, latency);
+                let _ = self.note_index_result(&prop_name, result, latency);
             }
         }
         self.mark_properties_dirty();

@@ -27,11 +27,12 @@ impl BundledCsr {
         for i in start..end {
             let eid = self.topology.edge_ids[i];
             if eid != INVALID_EDGE_ID.0 {
+                let valid = self.primary_valid.get(i).map(|b| *b).unwrap_or(false);
                 live.push((
                     self.topology.endpoints[i],
                     eid,
                     self.primary_values[i],
-                    self.primary_valid[i],
+                    valid,
                 ));
             }
         }
@@ -53,13 +54,13 @@ impl BundledCsr {
             self.topology.endpoints[start + offset] = *endpoint;
             self.topology.edge_ids[start + offset] = *eid;
             self.primary_values[start + offset] = *value;
-            self.primary_valid[start + offset] = *valid;
+            self.primary_valid.set(start + offset, *valid);
         }
         for i in start + sorted.len()..end {
             self.topology.endpoints[i] = u32::MAX;
             self.topology.edge_ids[i] = INVALID_EDGE_ID.0;
             self.primary_values[i] = 0;
-            self.primary_valid[i] = false;
+            self.primary_valid.set(i, false);
         }
         self.topology.mark_primary_sorted(idx);
         self.topology.rebuild_live_set_for_vertex(vid);
@@ -105,7 +106,8 @@ impl BundledCsr {
                     self.topology.endpoints[base + keep] = self.topology.endpoints[slot];
                     self.topology.edge_ids[base + keep] = self.topology.edge_ids[slot];
                     self.primary_values[base + keep] = self.primary_values[slot];
-                    self.primary_valid[base + keep] = self.primary_valid[slot];
+                    let valid = self.primary_valid.get(slot).map(|b| *b).unwrap_or(false);
+                    self.primary_valid.set(base + keep, valid);
                 }
                 keep += 1;
             }
@@ -135,12 +137,7 @@ impl BundledCsr {
                         kept_ep.push(chunk.endpoints[i]);
                         kept_eid.push(eid);
                         kept_val.push(values.and_then(|v| v.values.get(i)).copied().unwrap_or(0));
-                        kept_ok.push(
-                            values
-                                .and_then(|v| v.valid.get(i))
-                                .copied()
-                                .unwrap_or(false),
-                        );
+                        kept_ok.push(values.map(|v| v.get_valid(i)).unwrap_or(false));
                     }
                 }
             }
@@ -152,9 +149,14 @@ impl BundledCsr {
                 self.overflow_values
                     .ensure_capacity(self.topology.vertex_capacity());
                 let slot = self.overflow_values.slot_mut(vid);
-                *slot = Some(vec![BundledOverflowValues::consolidated(
-                    &kept_val, &kept_ok,
-                )]);
+                let mut consolidated_valid = bitvec::vec::BitVec::with_capacity(kept_ok.len());
+                for v in kept_ok {
+                    consolidated_valid.push(v);
+                }
+                *slot = Some(vec![BundledOverflowValues {
+                    values: kept_val,
+                    valid: consolidated_valid,
+                }]);
             }
             self.topology.rebuild_live_set_for_vertex(vid);
         } else if removed > 0 {

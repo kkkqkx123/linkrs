@@ -2,6 +2,7 @@ use super::super::csr_shared::SegmentedTable;
 use super::super::pure_csr::{PureTopologyCsr, DEFAULT_OVERFLOW_CHUNK_EDGES};
 use super::super::FragmentationStats;
 use super::BundledCsr;
+use bitvec::vec::BitVec;
 
 impl BundledCsr {
     pub fn new() -> Self {
@@ -28,7 +29,7 @@ impl BundledCsr {
                 overflow_chunk_edges,
             ),
             primary_values: Vec::with_capacity(edge_capacity),
-            primary_valid: Vec::with_capacity(edge_capacity),
+            primary_valid: BitVec::with_capacity(edge_capacity),
             overflow_values: SegmentedTable::new(),
         }
     }

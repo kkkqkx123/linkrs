@@ -1,7 +1,6 @@
 use super::super::EdgeStore;
 use crate::edge::edge_table::staging::{EdgeStagingBatch, StagedInsert};
 use crate::edge::edge_table::wal;
-use crate::edge::EdgeStrategy;
 use graphdb_core::types::EdgeId;
 use graphdb_core::{StorageError, StorageResult};
 
@@ -48,9 +47,9 @@ impl EdgeStore {
                     .to_string(),
             ));
         }
-        if batch.insert_count() > 0 && self.schema.oe_strategy == EdgeStrategy::None {
+        if batch.insert_count() > 0 && !self.schema.has_out() && !self.schema.has_in() {
             return Err(StorageError::invalid_operation(
-                "Cannot insert edge: out-edge strategy is None".to_string(),
+                "Cannot insert edge: table stores neither direction".to_string(),
             ));
         }
         self.prevalidate_staging_batch(&batch)?;
@@ -142,6 +141,12 @@ impl EdgeStore {
 
         let applied = applied_inserts.len() + applied_deletes.len();
         if applied > 0 {
+            // Hotspot observability: committed entries count once against
+            // their owner group. Cancelled pairs never reach here.
+            for (src, dst, _, _, _) in applied_inserts.iter().chain(applied_deletes.iter()) {
+                let owner = self.owner_gid_for(*src, *dst);
+                *self.group_write_counts.entry(owner).or_insert(0) += 1;
+            }
             // Backpressure is observed, not dropped: an over-limit commit
             // warns and the maintenance pass below runs synchronously.
             let mut pressured = false;
@@ -202,11 +207,16 @@ impl EdgeStore {
         // routed insert path and reports real failures there. A reservation
         // miss here only leaves sizing undone, never corrupt state, so it is
         // observed and ignored rather than aborting the batch.
-        if let Err(e) = self.out_csr.reserve_for_batch(&out_counts) {
-            log::debug!("reserve out topology skipped: {}", e);
+        // Single-direction tables reserve only the stored leg.
+        if self.schema.has_out() {
+            if let Err(e) = self.out_csr.reserve_for_batch(&out_counts) {
+                log::debug!("reserve out topology skipped: {}", e);
+            }
         }
-        if let Err(e) = self.in_csr.reserve_for_batch(&in_counts) {
-            log::debug!("reserve in topology skipped: {}", e);
+        if self.schema.has_in() {
+            if let Err(e) = self.in_csr.reserve_for_batch(&in_counts) {
+                log::debug!("reserve in topology skipped: {}", e);
+            }
         }
     }
 
@@ -216,6 +226,7 @@ impl EdgeStore {
     /// reverted. A partial revert keeps the authority deletion mark so a
     /// future timestamp tombstone can never coexist with a live authority
     /// record.
+    #[allow(dead_code)]
     #[inline]
     pub(super) fn fully_reverted(out_ok: bool, in_ok: bool) -> bool {
         out_ok && in_ok

@@ -1,5 +1,5 @@
-use crate::edge::{EdgePosition, Nbr};
 use super::MappedFrozen;
+use crate::edge::{EdgePosition, Nbr};
 
 use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};

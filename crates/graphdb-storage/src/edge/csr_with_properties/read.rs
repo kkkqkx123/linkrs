@@ -1,4 +1,4 @@
-use super::{CsrWithProperties, UNMAPPED_ROW};
+use super::CsrWithProperties;
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::Value;
 
@@ -193,17 +193,7 @@ impl CsrWithProperties {
         candidates: Option<&[EdgeId]>,
     ) -> Vec<EdgeId> {
         if predicates.is_empty() {
-            return candidates.map_or_else(
-                || {
-                    self.edge_to_row
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, row)| **row != UNMAPPED_ROW)
-                        .map(|(slot, _)| EdgeId(slot as u64))
-                        .collect()
-                },
-                <[EdgeId]>::to_vec,
-            );
+            return candidates.map_or_else(|| self.edge_ids().collect(), <[EdgeId]>::to_vec);
         }
         let resolved: Vec<(usize, &crate::cursor::ScanPredicate)> = predicates
             .iter()
@@ -230,21 +220,16 @@ impl CsrWithProperties {
                 })
                 .collect(),
             None => self
-                .edge_to_row
-                .iter()
-                .enumerate()
-                .filter_map(|(slot, row)| {
-                    if *row == UNMAPPED_ROW {
-                        return None;
-                    }
-                    let row = *row as usize;
+                .edge_mappings()
+                .filter_map(|(edge_id, row)| {
+                    let row = row as usize;
                     resolved
                         .iter()
                         .all(|(column, predicate)| {
                             self.pushdown_cell(row, *column, query_ts)
                                 .is_some_and(|value| predicate.matches_value(&value))
                         })
-                        .then_some(EdgeId(slot as u64))
+                        .then_some(edge_id)
                 })
                 .collect(),
         }

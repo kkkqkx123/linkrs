@@ -80,12 +80,12 @@ impl BundledCsr {
 
     /// Whether any slot in the table holds a valid (non-NULL) value.
     pub fn any_valid_values(&self) -> bool {
-        if self.primary_valid.iter().any(|v| *v) {
+        if self.primary_valid.count_ones() > 0 {
             return true;
         }
         self.overflow_values
             .iter()
-            .any(|(_, chunks)| chunks.iter().any(|c| c.valid.iter().any(|v| *v)))
+            .any(|(_, chunks)| chunks.iter().any(|c| c.valid.count_ones() > 0))
     }
 
     /// Read the raw value and validity of one physical slot.
@@ -93,13 +93,14 @@ impl BundledCsr {
         match position {
             EdgePosition::Primary { slot } => {
                 let idx = self.primary_index(src_vid, slot)?;
-                Some((self.primary_values[idx], self.primary_valid[idx]))
+                let valid = self.primary_valid.get(idx).map(|b| *b).unwrap_or(false);
+                Some((self.primary_values[idx], valid))
             }
             EdgePosition::Overflow { chunk, slot } => {
                 let chunks = self.overflow_values.get(src_vid)?;
                 let c = chunks.get(chunk as usize)?;
                 let value = *c.values.get(slot as usize)?;
-                let valid = *c.valid.get(slot as usize)?;
+                let valid = c.get_valid(slot as usize);
                 Some((value, valid))
             }
         }

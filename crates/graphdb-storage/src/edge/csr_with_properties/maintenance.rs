@@ -83,7 +83,7 @@ impl CsrWithProperties {
     pub fn used_memory_size(&self) -> usize {
         let mut total = std::mem::size_of::<Self>();
         total += self.visibility.capacity() * std::mem::size_of::<RowVisibility>();
-        total += self.edge_to_row.capacity() * std::mem::size_of::<u32>();
+        total += self.edge_map_memory_bytes();
         total += self.free_list.capacity() * std::mem::size_of::<u32>();
         total += self.row_to_edge.capacity() * std::mem::size_of::<Option<EdgeId>>();
         total += self.column_index.len()

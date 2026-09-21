@@ -88,6 +88,19 @@ impl EdgeStore {
         }
         let mut dirty: Vec<u32> = dirty_set.into_iter().collect();
         dirty.sort_unstable();
+        if self.config.auto_encode_on_checkpoint {
+            let dirty_names: Vec<String> = self.properties.dirty_column_names();
+            let scope: Option<Vec<String>> = (!dirty_names.is_empty()).then_some(dirty_names);
+            let adapted = self
+                .properties
+                .adapt_encodings_for_checkpoint(scope.as_deref(), self.config.auto_encode_min_rows);
+            if adapted > 0 {
+                log::debug!(
+                    "flush_property_shards: adapted {} column encodings on checkpoint",
+                    adapted
+                );
+            }
+        }
         self.properties.refresh_column_stats();
         let owners = self.owner_group_ids();
         let fallback = owners.first().copied();

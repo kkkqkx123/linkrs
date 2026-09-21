@@ -64,7 +64,9 @@ pub use node_group::{
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
 pub use bundled_csr::{decode_scalar, encode_scalar, BundledCsr};
-pub use edge_table::checkpoint::snapshot::{MappedFrozen, MappedFrozenIterator, MappedFrozenRowIter};
+pub use edge_table::checkpoint::snapshot::{
+    MappedFrozen, MappedFrozenIterator, MappedFrozenRowIter,
+};
 pub use graphdb_core::types::INVALID_EDGE_ID;
 pub use immutable_csr::{FrozenRowIter, ImmutableCsr, ImmutableCsrIterator};
 pub use pure_csr::{PureAllIter, PureRowIter, PureTopologyCsr};
@@ -172,6 +174,56 @@ impl EdgeRecord {
     }
 }
 
+/// Storage direction of an edge table, derived from the CSR strategies.
+///
+/// Both directions enabled pays double writes and double storage but serves
+/// forward and reverse traversal from local rows. Single-direction tables
+/// store only one leg and answer the missing direction as empty.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default,
+)]
+pub enum StorageDirection {
+    /// Outgoing and incoming legs stored.
+    #[default]
+    Both,
+    /// Only the outgoing leg stored.
+    OutOnly,
+    /// Only the incoming leg stored.
+    InOnly,
+}
+
+/// Cardinality contract of one direction, derived from the CSR strategy.
+///
+/// Single maps to one live edge per bound vertex, Multiple maps to many.
+/// The topology guard already rejects a second live edge on Single slots;
+/// this type makes the contract explicit for planning and error reporting.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default,
+)]
+pub enum EdgeMultiplicity {
+    /// At most one live edge per bound vertex.
+    One,
+    /// Any number of live edges per bound vertex.
+    #[default]
+    Many,
+}
+
+/// Consistency contract of the secondary property index.
+///
+/// Best-effort keeps the primary write authoritative and counts index
+/// failures as lag; Strong fails the primary write when the index write
+/// fails, for small-cardinality critical attributes.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default,
+)]
+pub enum IndexConsistency {
+    /// Primary write succeeds, index lag counted and rebuilt later.
+    #[default]
+    BestEffort,
+    /// Index failure fails the primary write.
+    Strong,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EdgeSchema {
     pub label_id: LabelId,
@@ -190,19 +242,58 @@ pub struct EdgeSchema {
 }
 
 impl EdgeSchema {
-    /// Validate that the schema has compatible CSR strategies.
-    /// Both directions must be enabled: the write path performs
-    /// unconditional double writes, so a single-direction table would
-    /// construct successfully yet fail every write on the disabled leg.
+    /// Validate that the schema has at least one enabled direction.
+    /// Single-direction tables are supported: the write path stores only
+    /// the enabled leg and reads on the missing leg report empty.
     pub fn validate(&self) -> graphdb_core::StorageResult<()> {
-        if self.oe_strategy == EdgeStrategy::None || self.ie_strategy == EdgeStrategy::None {
+        if self.oe_strategy == EdgeStrategy::None && self.ie_strategy == EdgeStrategy::None {
             return Err(graphdb_core::StorageError::invalid_operation(format!(
-                "EdgeSchema '{}': oe_strategy and ie_strategy must both be enabled. \
-                         Single-direction tables are not supported",
+                "EdgeSchema '{}': at least one of oe_strategy and ie_strategy must be enabled",
                 self.label_name
             )));
         }
         Ok(())
+    }
+
+    /// Storage direction derived from the enabled CSR strategies.
+    pub fn storage_direction(&self) -> StorageDirection {
+        match (
+            self.oe_strategy != EdgeStrategy::None,
+            self.ie_strategy != EdgeStrategy::None,
+        ) {
+            (true, true) => StorageDirection::Both,
+            (true, false) => StorageDirection::OutOnly,
+            (false, true) => StorageDirection::InOnly,
+            (false, false) => StorageDirection::Both,
+        }
+    }
+
+    /// Whether the outgoing leg is stored.
+    pub fn has_out(&self) -> bool {
+        self.oe_strategy != EdgeStrategy::None
+    }
+
+    /// Whether the incoming leg is stored.
+    pub fn has_in(&self) -> bool {
+        self.ie_strategy != EdgeStrategy::None
+    }
+
+    /// Cardinality contract of the outgoing direction.
+    pub fn out_multiplicity(&self) -> EdgeMultiplicity {
+        if self.oe_strategy == EdgeStrategy::Single {
+            EdgeMultiplicity::One
+        } else {
+            EdgeMultiplicity::Many
+        }
+    }
+
+    /// Cardinality contract of the incoming direction.
+    pub fn in_multiplicity(&self) -> EdgeMultiplicity {
+        if self.ie_strategy == EdgeStrategy::Single {
+            EdgeMultiplicity::One
+        } else {
+            EdgeMultiplicity::Many
+        }
     }
 
     /// Validate schema at creation time
@@ -545,10 +636,7 @@ mod tests {
 
         let result = schema.validate();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("must both be enabled"));
+        assert!(result.unwrap_err().to_string().contains("at least one"));
     }
 
     #[test]
@@ -566,7 +654,10 @@ mod tests {
         };
 
         let result = schema.validate();
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        assert_eq!(schema.storage_direction(), StorageDirection::OutOnly);
+        assert!(schema.has_out());
+        assert!(!schema.has_in());
     }
 
     #[test]
@@ -584,7 +675,10 @@ mod tests {
         };
 
         let result = schema.validate();
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        assert_eq!(schema.storage_direction(), StorageDirection::InOnly);
+        assert!(!schema.has_out());
+        assert!(schema.has_in());
     }
 
     #[test]

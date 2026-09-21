@@ -126,3 +126,40 @@ fn test_staging_prevalidate_rejects_batch_without_side_effects() {
     assert!(!table.has_edge(0, 2, 0, 120));
     assert!(table.has_edge(0, 1, 0, 120));
 }
+
+#[test]
+fn test_batch_overlay_reads_observe_net_effect_without_committing() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+
+    let mut batch = EdgeStore::staging_batch();
+    batch.stage_insert(0, 2, 0, &[], 110);
+    batch.stage_delete(0, 1, 0, 150);
+
+    // Default reads stay on the committed snapshot.
+    assert!(table.has_edge(0, 1, 0, 200));
+    assert!(!table.has_edge(0, 2, 0, 200));
+    assert!(table.get_edge(0, 2, 0, 200).is_none());
+
+    // Owner-view helpers overlay the batch net effect.
+    assert!(!table.has_edge_with_batch(&batch, 0, 1, 0, 200));
+    assert!(table.has_edge_with_batch(&batch, 0, 2, 0, 200));
+    assert!(table.get_edge_with_batch(&batch, 0, 1, 0, 200).is_none());
+    assert!(table.get_edge_with_batch(&batch, 0, 2, 0, 200).is_some());
+
+    let out = table.out_edges_with_batch(0, 200, &batch);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].dst_vid, graphdb_core::types::VertexId::from_int64(2));
+    assert!(table.in_edges_with_batch(1, 200, &batch).is_empty());
+    let incoming = table.in_edges_with_batch(2, 200, &batch);
+    assert_eq!(incoming.len(), 1);
+
+    // Empty batches delegate to the committed fast path.
+    let empty = EdgeStore::staging_batch();
+    assert!(table.has_edge_with_batch(&empty, 0, 1, 0, 200));
+    assert_eq!(
+        table.out_edges_with_batch(0, 200, &empty).len(),
+        table.out_edges(0, 200).len()
+    );
+}

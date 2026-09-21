@@ -141,4 +141,59 @@ impl CsrWithProperties {
         }
         encoded
     }
+
+    /// Infer encodings for checkpoint dirty columns from current values.
+    ///
+    /// Checkpoint-only entry: the write path never calls this, so hot
+    /// columns pay no re-encoding on everyday writes. `dirty_only` selects
+    /// the inference set; `None` infers every column for first-flush
+    /// completeness. Columns below `min_rows` are skipped. A column keeps
+    /// its current encoding when inference yields none or matches. Returns
+    /// the number of columns that changed encoding.
+    pub fn adapt_encodings_for_checkpoint(
+        &mut self,
+        dirty_only: Option<&[String]>,
+        min_rows: usize,
+    ) -> usize {
+        let selector = crate::encoding::EncodingSelector::default();
+        let targets: Vec<(usize, String)> = match dirty_only {
+            Some(names) if !names.is_empty() => names
+                .iter()
+                .filter_map(|name| self.column_index.get(name).map(|idx| (*idx, name.clone())))
+                .collect(),
+            _ => self
+                .property_columns
+                .iter()
+                .map(|col| col.name.clone())
+                .enumerate()
+                .map(|(idx, name)| (idx, name))
+                .collect(),
+        };
+        let mut changed = 0usize;
+        for (idx, name) in targets {
+            let Some(col) = self.property_columns.get(idx) else {
+                continue;
+            };
+            if col.len() < min_rows || col.is_empty() {
+                continue;
+            }
+            let data_type = col.data_type.clone();
+            let current = col.encoding_type();
+            let values: Vec<Option<Value>> = (0..col.len()).map(|row| col.get(row)).collect();
+            if values.is_empty() {
+                continue;
+            }
+            let selected = selector.select_for_column(&data_type, &values);
+            if selected == crate::encoding::EncodingType::None || selected == current {
+                continue;
+            }
+            if self
+                .apply_encoding_to_column(name.as_str(), selected, 255)
+                .is_ok()
+            {
+                changed += 1;
+            }
+        }
+        changed
+    }
 }

@@ -3,16 +3,25 @@ use graphdb_core::types::{EdgeId, Timestamp, INVALID_EDGE_ID};
 use graphdb_core::{StorageError, StorageResult, Value};
 
 impl CsrWithProperties {
+    fn segment_of(slot: usize) -> (usize, usize) {
+        debug_assert_eq!(Self::EDGE_MAP_SEGMENT_ROWS, 1024);
+        (
+            slot / Self::EDGE_MAP_SEGMENT_ROWS,
+            slot % Self::EDGE_MAP_SEGMENT_ROWS,
+        )
+    }
+
     /// Row mapped to `edge_id`, or `None` for unmapped ids.
     ///
-    /// Edge ids are table-allocated dense values, so this is one bounds
-    /// check plus one indexed read with no hashing.
+    /// Edge ids are table-allocated dense values; untouched segments hold no
+    /// allocation, so this is one segment lookup plus one indexed read.
     pub(crate) fn mapped_row(&self, edge_id: EdgeId) -> Option<usize> {
-        let pos = *self.edge_to_row.get(edge_id.0 as usize)?;
+        let (seg, off) = Self::segment_of(edge_id.0 as usize);
+        let pos = self.edge_map_segments.get(seg)?.as_ref()?[off];
         (pos != UNMAPPED_ROW).then_some(pos as usize)
     }
 
-    /// Record the `edge_id` to `row_idx` mapping, growing the dense map.
+    /// Record the `edge_id` to `row_idx` mapping, allocating the segment on demand.
     ///
     /// Rejects the unassignable gap sentinel explicitly: gap slots never
     /// own property rows.
@@ -23,32 +32,45 @@ impl CsrWithProperties {
             ));
         }
         let slot = edge_id.0 as usize;
-        if slot >= self.edge_to_row.len() {
-            self.edge_to_row.resize(slot + 1, UNMAPPED_ROW);
+        let (seg, off) = Self::segment_of(slot);
+        if seg >= self.edge_map_segments.len() {
+            self.edge_map_segments.resize_with(seg + 1, || None);
         }
-        if self.edge_to_row[slot] == UNMAPPED_ROW {
+        let segment = self.edge_map_segments[seg]
+            .get_or_insert_with(|| Box::new([UNMAPPED_ROW; Self::EDGE_MAP_SEGMENT_ROWS]));
+        if segment[off] == UNMAPPED_ROW {
             self.edge_map_len += 1;
         }
-        self.edge_to_row[slot] = row_idx as u32;
+        segment[off] = row_idx as u32;
         Ok(())
     }
 
     /// Drop the mapping for `edge_id`, returning its former row.
     pub(crate) fn map_remove(&mut self, edge_id: EdgeId) -> Option<usize> {
-        let slot = *self.edge_to_row.get(edge_id.0 as usize)?;
-        if slot == UNMAPPED_ROW {
+        let slot = edge_id.0 as usize;
+        let (seg, off) = Self::segment_of(slot);
+        let segment = self.edge_map_segments.get_mut(seg)?.as_mut()?;
+        if segment[off] == UNMAPPED_ROW {
             return None;
         }
-        self.edge_to_row[edge_id.0 as usize] = UNMAPPED_ROW;
+        let former = segment[off] as usize;
+        segment[off] = UNMAPPED_ROW;
         self.edge_map_len = self.edge_map_len.saturating_sub(1);
-        self.truncate_unmapped_tail();
-        Some(slot as usize)
+        if segment.iter().all(|pos| *pos == UNMAPPED_ROW) {
+            self.edge_map_segments[seg] = None;
+        }
+        self.truncate_empty_tail_segments();
+        Some(former)
     }
 
-    /// Release trailing unmapped slots so churned id ranges never pin memory.
-    fn truncate_unmapped_tail(&mut self) {
-        while self.edge_to_row.last() == Some(&UNMAPPED_ROW) {
-            self.edge_to_row.pop();
+    /// Release trailing empty segments so churned id ranges never pin memory.
+    fn truncate_empty_tail_segments(&mut self) {
+        while self
+            .edge_map_segments
+            .last()
+            .is_some_and(|seg| seg.is_none())
+        {
+            self.edge_map_segments.pop();
         }
     }
 
@@ -210,24 +232,73 @@ impl CsrWithProperties {
         self.mapped_row(edge_id).is_some()
     }
 
-    /// Iterate over all edge->row mappings (for compaction).
+    /// Iterate over all edge->row mappings in slot order (for compaction).
     pub fn edge_mappings(&self) -> impl Iterator<Item = (EdgeId, u32)> + '_ {
-        self.edge_to_row
+        self.edge_map_segments
             .iter()
             .enumerate()
-            .filter(|(_, row)| **row != UNMAPPED_ROW)
-            .map(|(slot, row)| (EdgeId(slot as u64), *row))
+            .filter_map(|(seg, segment)| {
+                segment.as_ref().map(|values| {
+                    let base = seg * Self::EDGE_MAP_SEGMENT_ROWS;
+                    values.iter().enumerate().filter_map(move |(off, row)| {
+                        (*row != UNMAPPED_ROW).then_some((EdgeId((base + off) as u64), *row))
+                    })
+                })
+            })
+            .flatten()
     }
 
     pub fn edge_ids(&self) -> impl Iterator<Item = EdgeId> + '_ {
-        self.edge_to_row
-            .iter()
-            .enumerate()
-            .filter(|(_, row)| **row != UNMAPPED_ROW)
-            .map(|(slot, _)| EdgeId(slot as u64))
+        self.edge_mappings().map(|(edge_id, _)| edge_id)
     }
 
     pub fn row_count(&self) -> usize {
         self.row_count
+    }
+
+    /// Segment granularity for sparse map scans. One segment covers this
+    /// many edge ids; empty segments are skipped by segment-aware scans so
+    /// sparse id ranges never pay a full dense walk.
+    pub const EDGE_MAP_SEGMENT_ROWS: usize = 1024;
+
+    /// Ids of segments holding at least one live mapping.
+    pub fn nonempty_map_segments(&self) -> Vec<usize> {
+        self.edge_map_segments
+            .iter()
+            .enumerate()
+            .filter_map(|(seg, segment)| {
+                segment
+                    .as_ref()
+                    .and_then(|values| values.iter().any(|row| *row != UNMAPPED_ROW).then_some(seg))
+            })
+            .collect()
+    }
+
+    /// Mappings within one segment, for segment-skipping scans.
+    pub fn edge_mappings_in_segment(
+        &self,
+        segment: usize,
+    ) -> impl Iterator<Item = (EdgeId, u32)> + '_ {
+        let base = segment * Self::EDGE_MAP_SEGMENT_ROWS;
+        self.edge_map_segments
+            .get(segment)
+            .and_then(|segment| segment.as_ref())
+            .map(|values| {
+                values.iter().enumerate().filter_map(move |(off, row)| {
+                    (*row != UNMAPPED_ROW).then_some((EdgeId((base + off) as u64), *row))
+                })
+            })
+            .into_iter()
+            .flatten()
+    }
+
+    /// Sparse map memory in bytes, for observability.
+    pub fn edge_map_memory_bytes(&self) -> usize {
+        self.edge_map_segments
+            .iter()
+            .filter(|segment| segment.is_some())
+            .count()
+            * Self::EDGE_MAP_SEGMENT_ROWS
+            * std::mem::size_of::<u32>()
     }
 }
