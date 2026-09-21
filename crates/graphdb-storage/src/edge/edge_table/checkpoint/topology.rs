@@ -26,6 +26,19 @@ fn select_dump_raw(csr_dump_raw: bool, csr_dump_adaptive: bool, bound_triggered:
     bound_triggered
 }
 
+/// One-direction checkpoint context for group flushes: destination layout,
+/// compression knobs, section ids and the shard manifest used for append-op
+/// encoding.
+pub(crate) struct GroupFlush<'a> {
+    pub dir: &'a Path,
+    pub page_size: usize,
+    pub level: i32,
+    pub outgoing: bool,
+    pub section_id: u32,
+    pub append_section_id: u32,
+    pub manifest: &'a TableShardManifest,
+}
+
 impl EdgeStore {
     /// Write one direction group by group, each in its own mode.
     ///
@@ -38,16 +51,14 @@ impl EdgeStore {
     /// sidecar stays bounded; the bound-triggered rewrite never marks the
     /// checkpoint as rebalanced. Clean groups whose base files exist are
     /// skipped and contribute zero bytes. Returns `(bytes, rebalanced_any)`.
-    pub(crate) fn flush_group_set(
-        &mut self,
-        dir: &Path,
-        page_size: usize,
-        level: i32,
-        outgoing: bool,
-        section_id: u32,
-        append_section_id: u32,
-        manifest: &TableShardManifest,
-    ) -> StorageResult<(u64, bool)> {
+    pub(crate) fn flush_group_set(&mut self, flush: &GroupFlush<'_>) -> StorageResult<(u64, bool)> {
+        let dir = flush.dir;
+        let page_size = flush.page_size;
+        let level = flush.level;
+        let outgoing = flush.outgoing;
+        let section_id = flush.section_id;
+        let append_section_id = flush.append_section_id;
+        let manifest = flush.manifest;
         let existing: Vec<usize> = if outgoing {
             self.out_csr.existing_group_ids()
         } else {
@@ -228,7 +239,7 @@ impl EdgeStore {
         expected_section: u32,
     ) -> StorageResult<Vec<u8>> {
         use std::io::Read;
-        let mut cursor = &raw[..];
+        let mut cursor = raw;
         let mut header_buf = [0u8; crate::persistence::HEADER_SIZE];
         cursor.read_exact(&mut header_buf)?;
         {

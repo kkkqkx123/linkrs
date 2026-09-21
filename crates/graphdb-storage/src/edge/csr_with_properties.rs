@@ -65,6 +65,9 @@ impl RowVisibility {
 /// Row slot holding no edge mapping inside the dense edge map.
 const UNMAPPED_ROW: u32 = u32::MAX;
 
+/// Exported property row: `(create_ts, delete_ts, per-column values)`.
+pub type ExportedRow = (Timestamp, Option<Timestamp>, Vec<(String, Option<Value>)>);
+
 #[derive(Debug, Clone)]
 pub struct CsrWithProperties {
     property_schema: Vec<PropertySchema>,
@@ -331,9 +334,9 @@ impl CsrWithProperties {
                 provided[*idx] = Some(value);
             }
         }
-        for i in 0..self.property_schema.len() {
+        for (i, slot) in provided.into_iter().enumerate() {
             let col = &mut self.property_columns[i];
-            match provided[i] {
+            match slot {
                 Some(v) => {
                     // Value provided: versioned write with the given value
                     col.set_versioned(row_idx, Some(v), create_ts)?;
@@ -1731,10 +1734,7 @@ impl CsrWithProperties {
     /// column (nulls as `None`). Unknown edges yield `None`. The export
     /// carries plain values only; version history stays memory-only and is
     /// collapsed on checkpoint, matching the whole-file dump contract.
-    pub fn export_row(
-        &self,
-        edge_id: EdgeId,
-    ) -> Option<(Timestamp, Option<Timestamp>, Vec<(String, Option<Value>)>)> {
+    pub fn export_row(&self, edge_id: EdgeId) -> Option<ExportedRow> {
         let pos = self.mapped_row(edge_id)?;
         let vis = *self.visibility.get(pos)?;
         let values = self

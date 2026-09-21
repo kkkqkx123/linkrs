@@ -682,6 +682,9 @@ impl PureTopologyCsr {
         }
         let (start, end) = self.primary_window(src_idx);
         for idx in start..end {
+            if self.edge_ids[idx] == INVALID_EDGE_ID.0 {
+                continue;
+            }
             let h = super::HotNbr {
                 endpoint: self.endpoints[idx],
                 rank: 0,
@@ -694,6 +697,9 @@ impl PureTopologyCsr {
         if let Some(chunks) = self.overflow_chunks.get(src_vid) {
             for chunk in chunks {
                 for i in 0..chunk.len() {
+                    if chunk.edge_ids[i] == INVALID_EDGE_ID.0 {
+                        continue;
+                    }
                     let h = super::HotNbr {
                         endpoint: chunk.endpoints[i],
                         rank: 0,
@@ -884,18 +890,17 @@ impl PureTopologyCsr {
                 None => endpoints.len(),
             };
             for (endpoint, eid) in endpoints[lo..hi].iter().zip(&edge_ids[lo..hi]) {
-                if *eid != INVALID_EDGE_ID.0 {
-                    if !f(self.make_nbr(*endpoint, EdgeId(*eid))) {
-                        return;
-                    }
+                if *eid != INVALID_EDGE_ID.0 && !f(self.make_nbr(*endpoint, EdgeId(*eid))) {
+                    return;
                 }
             }
         } else {
             for (endpoint, eid) in endpoints.iter().zip(edge_ids.iter()) {
-                if *eid != INVALID_EDGE_ID.0 && in_range(*endpoint) {
-                    if !f(self.make_nbr(*endpoint, EdgeId(*eid))) {
-                        return;
-                    }
+                if *eid != INVALID_EDGE_ID.0
+                    && in_range(*endpoint)
+                    && !f(self.make_nbr(*endpoint, EdgeId(*eid)))
+                {
+                    return;
                 }
             }
         }
@@ -903,10 +908,11 @@ impl PureTopologyCsr {
             for chunk in chunks {
                 for i in 0..chunk.len() {
                     let eid = chunk.edge_ids[i];
-                    if eid != INVALID_EDGE_ID.0 && in_range(chunk.endpoints[i]) {
-                        if !f(self.make_nbr(chunk.endpoints[i], EdgeId(eid))) {
-                            return;
-                        }
+                    if eid != INVALID_EDGE_ID.0
+                        && in_range(chunk.endpoints[i])
+                        && !f(self.make_nbr(chunk.endpoints[i], EdgeId(eid)))
+                    {
+                        return;
                     }
                 }
             }
@@ -1220,11 +1226,11 @@ impl CsrBase for PureTopologyCsr {
         self.rows.primary_capacities.resize(vertex_capacity, 0);
 
         let mut running_offset = 0u32;
-        for vid in 0..vertex_capacity {
+        for (vid, &degree) in degrees.iter().enumerate() {
             self.rows.adj_offsets[vid] = running_offset;
-            self.rows.degrees[vid] = degrees[vid];
-            self.rows.primary_capacities[vid] = degrees[vid];
-            running_offset += degrees[vid];
+            self.rows.degrees[vid] = degree;
+            self.rows.primary_capacities[vid] = degree;
+            running_offset += degree;
         }
 
         self.endpoints = endpoints;
@@ -1614,9 +1620,7 @@ impl MutableCsrTrait for PureTopologyCsr {
         }
 
         if let Some(set) = self.live_sets.get(src_vid) {
-            let Some(position) = set.position(&target_endpoint) else {
-                return None;
-            };
+            let position = set.position(&target_endpoint)?;
             let nbr = match position {
                 EdgePosition::Primary { slot } => {
                     let base = self.rows.adj_offsets[src_idx] as usize;

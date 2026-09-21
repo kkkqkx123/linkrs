@@ -157,9 +157,10 @@ pub trait MutableCsrTrait: CsrBase {
 
     /// Delete the edge at `position` when it still holds `expected` id.
     ///
-    /// Stale positions are refused with `Ok(false)`. The default suits
-    /// position-less stores and resolves by edge id; positional stores
-    /// override it with a direct slot write.
+    /// Stale positions are refused with `Ok(false)`. Position-less stores
+    /// fail closed with an error so a cross-variant position can never fall
+    /// back to an id scan silently; positional stores override it with a
+    /// direct slot write.
     fn delete_edge_at_position(
         &mut self,
         src_vid: u32,
@@ -167,13 +168,17 @@ pub trait MutableCsrTrait: CsrBase {
         expected: EdgeId,
         ts: Timestamp,
     ) -> StorageResult<bool> {
-        self.delete_edge(src_vid, expected, ts)
+        let _ = (src_vid, expected, ts);
+        Err(graphdb_core::StorageError::invalid_operation(
+            "row position is not supported by this CSR form; re-resolve by edge id".to_string(),
+        ))
     }
 
     /// Revert the deletion at `position` when it still holds `expected` id.
     ///
-    /// Stale positions are refused with `false`. The default suits
-    /// position-less stores; positional stores override it.
+    /// Stale positions are refused with `false`. Position-less stores report
+    /// `false` so cross-form reuse is observable instead of silently
+    /// succeeding through another path; positional stores override it.
     fn revert_delete_at_position(
         &mut self,
         src_vid: u32,
@@ -181,7 +186,8 @@ pub trait MutableCsrTrait: CsrBase {
         expected: EdgeId,
         ts: Timestamp,
     ) -> bool {
-        self.revert_delete_by_edge_id(src_vid, expected, ts)
+        let _ = (src_vid, _position, expected, ts);
+        false
     }
 
     /// Delete an edge by its offset position in the primary block.

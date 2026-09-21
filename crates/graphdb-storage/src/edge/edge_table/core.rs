@@ -84,7 +84,8 @@ pub struct EdgeStore {
     /// The owner is the out group when out edges exist, otherwise the in
     /// group. Shard files follow the owner groups with the same dirt, so
     /// small writes rewrite only dirty owners. Rebuilt on load, remap and
-    /// reshard; orphan timestamps without topology fall back to group zero.
+    /// reshard; orphan timestamps without topology converge to the first
+    /// existing group and are counted as relocated orphans.
     pub(crate) edge_owner: owner::EdgeOwnerMap,
     /// Per-group segment statistics for scan pruning, collected at each
     /// checkpoint and restored on load. Bounds widen monotonically so pruning

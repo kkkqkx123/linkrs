@@ -23,7 +23,7 @@ impl EdgeStore {
         cutoff: Timestamp,
         reserve_ratio: f32,
     ) -> StorageResult<u64> {
-        if outgoing {
+        let packed = if outgoing {
             let shards = &mut self.out_csr;
             let mvcc = &mut self.mvcc;
             shards.freeze_group(
@@ -33,7 +33,7 @@ impl EdgeStore {
                 &mut |edge_id: EdgeId, delete_ts: Timestamp| {
                     mvcc.record_deletion(edge_id, delete_ts);
                 },
-            )
+            )?
         } else {
             let shards = &mut self.in_csr;
             let mvcc = &mut self.mvcc;
@@ -44,8 +44,16 @@ impl EdgeStore {
                 &mut |edge_id: EdgeId, delete_ts: Timestamp| {
                     mvcc.record_deletion(edge_id, delete_ts);
                 },
-            )
+            )?
+        };
+        let drift = self.audit_copy_drift();
+        if !drift.is_empty() {
+            return Err(graphdb_core::StorageError::data_corruption(format!(
+                "freeze_group drift after pack: {}",
+                drift.join("; ")
+            )));
         }
+        Ok(packed)
     }
 
     /// Unfreeze one group of one direction, returning its restored live count.

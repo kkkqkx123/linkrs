@@ -2,7 +2,7 @@ use super::super::csr_shared::{
     can_revert_delete, decide_slot_delete, decode_endpoint_pair, is_reclaimable_cold,
     DeleteSlotOutcome,
 };
-use super::super::{ColdStamps, EdgeId, HotNbr, Nbr, Timestamp, VertexId};
+use super::super::{ColdStamps, EdgeId, HotNbr, Nbr, RowEdgeBatch, Timestamp, VertexId};
 use super::core::REUSE_HINT_UNKNOWN;
 use super::overflow::OVERFLOW_REPACK_CHUNKS_PER_VERTEX;
 use super::MutableCsr;
@@ -641,7 +641,8 @@ impl MutableCsr {
                 .enumerate()
                 .find_map(|(i, (h, c))| {
                     let probe = Nbr::from_parts(*h, *c);
-                    (probe.edge_id == edge_id && can_revert_delete(&probe, ts)).then(|| (i, probe))
+                    (probe.edge_id == edge_id && can_revert_delete(&probe, ts))
+                        .then_some((i, probe))
                 })
         };
         if let Some((i, probe)) = found {
@@ -835,7 +836,7 @@ impl MutableCsr {
     /// uniqueness. Returns the inserted edge count.
     pub fn batch_put_edges(
         &mut self,
-        groups: &[(u32, Vec<(u32, i64, EdgeId, Timestamp)>)],
+        groups: &[RowEdgeBatch],
         check_duplicates: bool,
     ) -> StorageResult<usize> {
         if check_duplicates {

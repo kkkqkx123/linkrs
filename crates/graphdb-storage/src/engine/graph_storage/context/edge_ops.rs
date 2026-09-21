@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use crate::edge::{EdgeRecord, HotNbr};
+use crate::edge::{BatchInsertEntry, EdgeRecord, HotNbr};
 use crate::engine::data_store::EdgeTableKey;
 use crate::engine::{EdgeOperationParams, InsertEdgeParams, InsertEdgesBatchParams};
 use crate::mvcc_visibility::PendingGate;
 use crate::vertex::ShardedVertexTable;
 use graphdb_core::types::{LabelId, Timestamp, VertexId};
-use graphdb_core::{StorageError, StorageResult, Value};
+use graphdb_core::{StorageError, StorageResult};
 
 use super::helpers;
 use super::GraphStorageContext;
@@ -185,7 +185,7 @@ impl GraphStorageContext {
         for ((actual_src, actual_dst), indices) in partitions {
             let key = EdgeTableKey::new(actual_src, actual_dst, params.edge_label);
             let template_key = EdgeTableKey::new(0, 0, params.edge_label);
-            let entries: Vec<(u32, u32, i64, &[(String, Value)], Timestamp)> = indices
+            let entries: Vec<BatchInsertEntry> = indices
                 .iter()
                 .map(|&index| {
                     let (src_internal, dst_internal, _, _) = resolved[index];

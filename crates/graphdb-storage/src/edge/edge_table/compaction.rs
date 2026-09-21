@@ -11,6 +11,7 @@ use super::core::EdgeStore;
 use super::stats::DeletionStats;
 use crate::edge::csr_trait::{CsrBase, MutableCsrTrait};
 use graphdb_core::types::Timestamp;
+use graphdb_core::StorageResult;
 
 /// Upper bound of rows reclaimed in one write-path maintenance pass, so a
 /// small write never triggers a large rebuild pause. Recommended range
@@ -88,6 +89,10 @@ impl EdgeStore {
                     self.mvcc.record_deletion(edge_id, delete_ts);
                 },
             );
+        }
+        let drift = self.audit_copy_drift();
+        if !drift.is_empty() {
+            log::warn!("compact_csr_only drift after rebuild: {}", drift.join("; "));
         }
         removed_edges.len()
     }
@@ -402,35 +407,33 @@ impl EdgeStore {
     /// property row is gone are removed, and only when the deletion timestamp
     /// is below the watermark-derived cutoff. The cutoff comes from the
     /// shared watermark capture, never from the table-local pin. A nonzero
-    /// cross-copy audit aborts the reclaim so dangling references never lose
+    /// cross-copy audit fails closed so dangling references never lose
     /// their authority record.
     pub fn reclaim_authority_with_watermarks(
         &mut self,
         watermarks: &graphdb_transaction::MvccWatermarks,
         margin: Timestamp,
-    ) -> usize {
+    ) -> StorageResult<usize> {
+        use graphdb_core::StorageError;
         let cutoff = watermarks.safe_gc_timestamp_with_margin(margin);
         if cutoff == Timestamp::MAX {
-            return 0;
+            return Ok(0);
         }
         let (orphan_mappings, orphan_csr_rows, live_orphans) = self.copy_audit();
         if orphan_mappings + orphan_csr_rows + live_orphans > 0 {
-            log::debug!(
-                "reclaim_authority: audit nonzero (mappings={}, csr_rows={}, live_orphans={}), skipping",
-                orphan_mappings,
-                orphan_csr_rows,
-                live_orphans
-            );
-            return 0;
+            return Err(StorageError::data_corruption(format!(
+                "reclaim_authority: audit nonzero (mappings={}, csr_rows={}, live_orphans={}), refusing reclaim",
+                orphan_mappings, orphan_csr_rows, live_orphans
+            )));
         }
         let mut live_topology = std::collections::HashSet::new();
         for (_, nbr) in self.out_csr.iter_all().chain(self.in_csr.iter_all()) {
             live_topology.insert(nbr.edge_id);
         }
         let properties = &self.properties;
-        self.mvcc.reclaim_below(cutoff, |edge_id| {
+        Ok(self.mvcc.reclaim_below(cutoff, |edge_id| {
             !live_topology.contains(&edge_id) && !properties.contains_edge(edge_id)
-        })
+        }))
     }
 
     pub fn compact_properties(&mut self, bound: Timestamp) {

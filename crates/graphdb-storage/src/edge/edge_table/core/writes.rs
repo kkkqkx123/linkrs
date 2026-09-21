@@ -5,6 +5,7 @@ use super::super::config::UpdateEdgePropertyByKeyParams;
 use super::super::staging::{EdgeStagingBatch, StagedInsert};
 use super::EdgeStore;
 use crate::edge::bundled_csr::encode_scalar;
+use crate::edge::BatchInsertEntry;
 use crate::types::PropertyId;
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
@@ -43,10 +44,7 @@ impl EdgeStore {
     /// slice order with the same per-entry effects as repeated `insert_edge`
     /// calls, including out/in symmetry and rollback of the applied prefix on
     /// failure.
-    pub fn insert_edges_batch(
-        &mut self,
-        entries: &[(u32, u32, i64, &[(String, Value)], Timestamp)],
-    ) -> StorageResult<()> {
+    pub fn insert_edges_batch(&mut self, entries: &[BatchInsertEntry]) -> StorageResult<()> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
         }
@@ -99,6 +97,12 @@ impl EdgeStore {
     pub fn commit_staging_batch(&mut self, mut batch: EdgeStagingBatch) -> StorageResult<usize> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
+        }
+        if self.migration_pending_checkpoint {
+            return Err(StorageError::invalid_operation(
+                "table requires a checkpoint after record-form switch before further writes"
+                    .to_string(),
+            ));
         }
         if batch.insert_count() > 0
             && self.schema.oe_strategy == super::super::super::EdgeStrategy::None
@@ -210,7 +214,7 @@ impl EdgeStore {
                 );
             }
             for (_, _, _, edge_id, _) in applied_inserts.iter().chain(applied_deletes.iter()) {
-                self.debug_assert_copies_consistent(*edge_id);
+                self.ensure_copies_consistent(*edge_id)?;
             }
         }
         self.commit_scratch = scratch;
@@ -252,8 +256,16 @@ impl EdgeStore {
             }
             in_counts.push((dst, 1));
         }
-        let _ = self.out_csr.reserve_for_batch(&out_counts);
-        let _ = self.in_csr.reserve_for_batch(&in_counts);
+        // Best-effort sizing only: the apply loop below reserves through the
+        // routed insert path and reports real failures there. A reservation
+        // miss here only leaves sizing undone, never corrupt state, so it is
+        // observed and ignored rather than aborting the batch.
+        if let Err(e) = self.out_csr.reserve_for_batch(&out_counts) {
+            log::debug!("reserve out topology skipped: {}", e);
+        }
+        if let Err(e) = self.in_csr.reserve_for_batch(&in_counts) {
+            log::debug!("reserve in topology skipped: {}", e);
+        }
     }
 
     /// Convert staged property values to column positions with cast values.
@@ -1073,6 +1085,38 @@ impl EdgeStore {
         true
     }
 
+    /// Release-mode cross-copy consistency check for one edge.
+    ///
+    /// Same predicates as the debug-only probe below, but fail-closed:
+    /// a property row without authority or a deleted-state mismatch
+    /// returns an error instead of continuing silently. Used on commit
+    /// success paths; error rollback paths keep the debug-only probe so
+    /// the original failure stays visible.
+    pub(crate) fn ensure_copies_consistent(&self, edge_id: EdgeId) -> StorageResult<()> {
+        if self.properties.get_row_for_edge(edge_id).is_some()
+            && !self.mvcc.edge_timestamps.contains_key(&edge_id)
+        {
+            return Err(StorageError::data_corruption(format!(
+                "property row mapping without authority entry for {:?}",
+                edge_id
+            )));
+        }
+        if !self.properties.is_inline_stub() {
+            if let Some(info) = self.mvcc.edge_timestamps.get(&edge_id) {
+                if let Some(row) = self.properties.get_row_for_edge(edge_id) {
+                    let expected_deleted = info.delete_ts != Timestamp::MAX;
+                    if self.properties.is_deleted_at_row(row) != expected_deleted {
+                        return Err(StorageError::data_corruption(format!(
+                            "property deleted-state drift from authority for {:?}",
+                            edge_id
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Debug-only cross-copy consistency check for one edge.
     ///
     /// Release builds skip the whole body (zero overhead): every arm is a
@@ -1139,9 +1183,10 @@ impl EdgeStore {
         let Some(edge_id) = edge_id else {
             return Ok(false);
         };
-        // Bundled slots clear the validity bit on delete while retaining the
-        // stale word, so both the single-key undo and the batch rollback
-        // revive the retained word through the same positional path.
+        // Erase forms drop the edge id on delete, so an id-keyed locate
+        // after delete cannot find the sentinel slot. A positional revert
+        // holding the pre-delete slot revives the retained word; without a
+        // position the undo reports not found and leaves authority deleted.
         let (out_ok, in_ok) = if self.is_bundled() {
             let out_ok = match self.out_csr.locate_edge(src, edge_id) {
                 Some((position, _)) => self
@@ -1192,6 +1237,11 @@ impl EdgeStore {
         Ok(true)
     }
 
+    /// Single property point write with its own log entry.
+    ///
+    /// Own atomic unit outside topology batches: one WAL append plus one
+    /// column write. Topology visibility still comes from the version
+    /// authority; the column version chain only carries values.
     pub fn update_edge_property(
         &mut self,
         src: u32,
@@ -1203,6 +1253,12 @@ impl EdgeStore {
     ) -> StorageResult<bool> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
+        }
+        if self.migration_pending_checkpoint {
+            return Err(StorageError::invalid_operation(
+                "table requires a checkpoint after record-form switch before further writes"
+                    .to_string(),
+            ));
         }
 
         // Validate property exists via cache
@@ -1292,6 +1348,12 @@ impl EdgeStore {
     ) -> StorageResult<bool> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
+        }
+        if self.migration_pending_checkpoint {
+            return Err(StorageError::invalid_operation(
+                "table requires a checkpoint after record-form switch before further writes"
+                    .to_string(),
+            ));
         }
 
         let dst_key = Self::edge_endpoint_key(params.dst, params.rank);

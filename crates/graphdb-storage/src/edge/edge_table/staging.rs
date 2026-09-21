@@ -246,12 +246,17 @@ impl EdgeStagingBatch {
 /// allocations plus repeated hash-table growth from every small commit.
 /// Buffers never cross a commit boundary with live contents: each commit
 /// takes them empty and returns them empty on every exit path.
+/// Applied entry: `(src, dst, rank, edge_id, ts)`.
+type AppliedEdge = (u32, u32, i64, EdgeId, Timestamp);
+
+/// Edge identity key inside commit scratch: `(src, dst, rank)`.
+type EdgeKey = (u32, u32, i64);
+
 #[derive(Debug, Default)]
 pub(crate) struct CommitScratch {
-    pub applied_inserts: Vec<(u32, u32, i64, EdgeId, Timestamp)>,
-    pub insert_by_key:
-        std::collections::HashMap<(u32, u32, i64), (u32, u32, i64, EdgeId, Timestamp)>,
-    pub applied_deletes: Vec<(u32, u32, i64, EdgeId, Timestamp)>,
+    pub applied_inserts: Vec<AppliedEdge>,
+    pub insert_by_key: std::collections::HashMap<EdgeKey, AppliedEdge>,
+    pub applied_deletes: Vec<AppliedEdge>,
 }
 
 impl CommitScratch {

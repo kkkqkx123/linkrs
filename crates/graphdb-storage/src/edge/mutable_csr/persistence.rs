@@ -381,10 +381,9 @@ impl MutableCsr {
                 recomputed += 1;
             }
         }
-        for vid in 0..vertex_capacity {
+        for (vid, keys) in live_keys.iter_mut().enumerate() {
             let row_offset = adj_offsets[vid] as usize;
             let degree = degrees[vid] as usize;
-            let keys = &mut live_keys[vid];
             for i in 0..degree {
                 match (hot_list.get(row_offset + i), cold_list.get(row_offset + i)) {
                     (Some(hot), Some(cold)) if hot.edge_id != INVALID_EDGE_ID && cold.is_live() => {
@@ -397,7 +396,7 @@ impl MutableCsr {
                 }
             }
         }
-        for vid in 0..vertex_capacity {
+        for (vid, row_keys) in live_keys.iter_mut().enumerate() {
             let chunk_count = read_u32_le(data, &mut offset)? as usize;
             let mut chunks = Vec::with_capacity(chunk_count);
             for chunk_idx in 0..chunk_count {
@@ -416,7 +415,7 @@ impl MutableCsr {
                 {
                     if hot.edge_id != INVALID_EDGE_ID && cold.is_live() {
                         recomputed += 1;
-                        live_keys[vid].push((
+                        row_keys.push((
                             (hot.endpoint, hot.rank),
                             EdgePosition::Overflow {
                                 chunk: chunk_idx as u32,

@@ -271,7 +271,7 @@ impl BundledCsr {
             return false;
         }
         let mut sorted = live.clone();
-        sorted.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+        sorted.sort_by_key(|a| (a.0, a.1));
         if sorted
             .iter()
             .map(|(e, id, _, _)| (*e, *id))
@@ -798,7 +798,7 @@ impl BundledCsr {
         }
         *offset += need;
         // Padding bits must be zero, otherwise the payload is corrupt.
-        if count % 8 != 0 {
+        if !count.is_multiple_of(8) {
             let last = data[*offset - 1];
             let used = count % 8;
             if last >> used != 0 {

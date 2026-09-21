@@ -9,6 +9,15 @@ use graphdb_core::Value;
 
 use super::super::iterator::EdgeTableScanIterator;
 
+/// Query-time context for projecting the property payload of one edge record.
+#[derive(Clone, Copy)]
+struct PropertyQuery<'a> {
+    query_ts: Timestamp,
+    projection: Option<&'a [String]>,
+    /// Selects the shard row holding the inline value for bundled tables.
+    outgoing: bool,
+}
+
 impl EdgeStore {
     /// Single visibility gate for topology reads. Row stamps never decide
     /// visibility; only the version authority does.
@@ -68,147 +77,6 @@ impl EdgeStore {
             }
             true
         });
-    }
-
-    /// Fill a caller buffer with visible neighbors whose key falls in the
-    /// inclusive `[lower, upper]` range. The CSR layer narrows sorted rows
-    /// by bisection and scans unsorted rows linearly; visibility is then
-    /// decided by the version authority above, never by row stamps.
-    pub(crate) fn fill_visible_threshold_into(
-        &self,
-        csr: &CsrShardSet,
-        src: u32,
-        lower: Option<(u32, i64)>,
-        upper: Option<(u32, i64)>,
-        ts: Timestamp,
-        out: &mut Vec<Nbr>,
-    ) {
-        out.clear();
-        csr.visit_threshold(src, lower, upper, |nbr| {
-            out.push(nbr);
-            true
-        });
-        self.mvcc.retain_visible(out, ts);
-    }
-
-    /// Fill one shared buffer with the visible neighbors of many vertices.
-    ///
-    /// Hoisted caller-side dispatch: consecutive same-group runs match the
-    /// shard variant once and loop their rows with the concrete type, so a
-    /// batched adjacency scan pays one dispatch per shard instead of one
-    /// per row. Visibility stays with the version authority per entry.
-    pub(crate) fn fill_visible_batch_into(
-        &self,
-        csr: &CsrShardSet,
-        vids: &[u32],
-        ts: Timestamp,
-        out: &mut Vec<Nbr>,
-        offsets: &mut Vec<usize>,
-    ) {
-        use super::super::super::CsrVariant;
-        out.clear();
-        offsets.clear();
-        offsets.reserve(vids.len() + 1);
-        let mut idx = 0usize;
-        while idx < vids.len() {
-            let Some(gid) = csr.group_of(vids[idx]) else {
-                offsets.push(out.len());
-                idx += 1;
-                continue;
-            };
-            let mut run_end = idx + 1;
-            while run_end < vids.len() {
-                match csr.group_of(vids[run_end]) {
-                    Some(next_gid) if next_gid == gid => run_end += 1,
-                    _ => break,
-                }
-            }
-            let Some(variant) = csr.group_variant(gid) else {
-                for _ in idx..run_end {
-                    offsets.push(out.len());
-                }
-                idx = run_end;
-                continue;
-            };
-            let group_bits = csr.group_bits();
-            let route_local =
-                |vid: u32| -> u32 { super::super::super::node_group::local_vid(vid, group_bits) };
-            match variant {
-                CsrVariant::Multiple(csr_inner) => {
-                    for vid in &vids[idx..run_end] {
-                        offsets.push(out.len());
-                        csr_inner.visit_physical(route_local(*vid), |nbr| {
-                            if self.is_visible(nbr.edge_id, ts) {
-                                out.push(nbr);
-                            }
-                            true
-                        });
-                    }
-                }
-                CsrVariant::Single(csr_inner) => {
-                    for vid in &vids[idx..run_end] {
-                        offsets.push(out.len());
-                        csr_inner.visit_physical(route_local(*vid), |nbr| {
-                            if self.is_visible(nbr.edge_id, ts) {
-                                out.push(nbr);
-                            }
-                            true
-                        });
-                    }
-                }
-                CsrVariant::Pure(csr_inner) => {
-                    for vid in &vids[idx..run_end] {
-                        offsets.push(out.len());
-                        csr_inner.visit_physical(route_local(*vid), |nbr| {
-                            if self.is_visible(nbr.edge_id, ts) {
-                                out.push(nbr);
-                            }
-                            true
-                        });
-                    }
-                }
-                CsrVariant::Bundled(csr_inner) => {
-                    for vid in &vids[idx..run_end] {
-                        offsets.push(out.len());
-                        csr_inner.visit_physical(route_local(*vid), |nbr| {
-                            if self.is_visible(nbr.edge_id, ts) {
-                                out.push(nbr);
-                            }
-                            true
-                        });
-                    }
-                }
-                CsrVariant::Frozen(csr_inner) => {
-                    for vid in &vids[idx..run_end] {
-                        offsets.push(out.len());
-                        csr_inner.visit_physical(route_local(*vid), |nbr| {
-                            if self.is_visible(nbr.edge_id, ts) {
-                                out.push(nbr);
-                            }
-                            true
-                        });
-                    }
-                }
-                CsrVariant::Mapped(csr_inner) => {
-                    for vid in &vids[idx..run_end] {
-                        offsets.push(out.len());
-                        csr_inner.visit_physical(route_local(*vid), |nbr| {
-                            if self.is_visible(nbr.edge_id, ts) {
-                                out.push(nbr);
-                            }
-                            true
-                        });
-                    }
-                }
-                CsrVariant::None { .. } => {
-                    for _ in idx..run_end {
-                        offsets.push(out.len());
-                    }
-                }
-            }
-            idx = run_end;
-        }
-        offsets.push(out.len());
     }
 
     /// Out-direction visit without allocation, for traversal fan-out.
@@ -408,9 +276,11 @@ impl EdgeStore {
                     VertexId::from_int64(hot.endpoint as i64),
                     hot.rank,
                     hot.edge_id,
-                    ts,
-                    projection,
-                    true,
+                    PropertyQuery {
+                        query_ts: ts,
+                        projection,
+                        outgoing: true,
+                    },
                 ));
             }
             true
@@ -446,9 +316,11 @@ impl EdgeStore {
                     VertexId::from_int64(dst as i64),
                     hot.rank,
                     hot.edge_id,
-                    ts,
-                    projection,
-                    false,
+                    PropertyQuery {
+                        query_ts: ts,
+                        projection,
+                        outgoing: false,
+                    },
                 ));
             }
             true
@@ -556,18 +428,20 @@ impl EdgeStore {
     ///
     /// Hot-only counterpart of [`Self::edge_record_from_nbr_projected`]
     /// for record paths that stream topology and resolve visibility by
-    /// edge id through the authority. `outgoing` selects the shard row
-    /// holding the inline value for bundled tables.
-    pub(crate) fn edge_record_from_hot_projected(
+    /// edge id through the authority.
+    fn edge_record_from_hot_projected(
         &self,
         src_vid: VertexId,
         dst_vid: VertexId,
         rank: i64,
         edge_id: EdgeId,
-        query_ts: Timestamp,
-        projection: Option<&[String]>,
-        outgoing: bool,
+        query: PropertyQuery<'_>,
     ) -> EdgeRecord {
+        let PropertyQuery {
+            query_ts,
+            projection,
+            outgoing,
+        } = query;
         let properties = if self.is_bundled() {
             let row = if outgoing {
                 src_vid.as_int64().unwrap_or(0) as u32
@@ -646,7 +520,7 @@ impl EdgeStore {
             if let Some(variant) = self.out_csr.group_variant(gid) {
                 for (local_vid, nbr) in variant.iter_all() {
                     if nbr.edge_id == edge_id {
-                        hit = Some(base as u32 + local_vid.as_int64().unwrap_or(0) as u32);
+                        hit = Some(base + local_vid.as_int64().unwrap_or(0) as u32);
                         break;
                     }
                 }
@@ -827,9 +701,11 @@ impl EdgeStore {
                     VertexId::from_int64(hot.endpoint as i64),
                     hot.rank,
                     hot.edge_id,
-                    ts,
-                    projection,
-                    true,
+                    PropertyQuery {
+                        query_ts: ts,
+                        projection,
+                        outgoing: true,
+                    },
                 ));
             }
             true
@@ -872,9 +748,11 @@ impl EdgeStore {
                     VertexId::from_int64(dst as i64),
                     hot.rank,
                     hot.edge_id,
-                    ts,
-                    projection,
-                    false,
+                    PropertyQuery {
+                        query_ts: ts,
+                        projection,
+                        outgoing: false,
+                    },
                 ));
             }
             true

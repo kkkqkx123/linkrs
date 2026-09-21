@@ -17,8 +17,9 @@
 //! rows and out neighbors live in the dst space.
 //!
 //! Observability: row and neighbor mapping misses are counted and debug
-//! logged. Unmapped endpoints keep their original value. Misses never decide
-//! correctness; they only expose caller mapping construction defects.
+//! logged. Unmapped endpoints keep their original value so sparse rebuilds
+//! stay total; every miss increments the returned counters for the caller
+//! to observe.
 //!
 //! Edge-id counter discipline: `next_edge_id` only guarantees monotonicity
 //! without collision, never crash-to-crash stability. Empty-table reload falls
@@ -77,6 +78,15 @@ fn remap_endpoint_key_counted(
     }
 }
 
+/// Target shard layout for one remap rebuild direction.
+#[derive(Clone, Copy)]
+struct RebuildLayout {
+    strategy: EdgeStrategy,
+    group_bits: u32,
+    overflow_chunk_edges: usize,
+    form: RecordForm,
+}
+
 /// Rebuild one direction into a fresh shard set with translated rows and
 /// neighbors. Tombstoned entries are re-marked so snapshot visibility is
 /// preserved. Trailing empty groups are dropped; non-empty strategies keep
@@ -85,12 +95,15 @@ fn remap_direction(
     old: &CsrShardSet,
     row_mapping: Option<&HashMap<u32, u32>>,
     neighbor_mapping: Option<&HashMap<u32, u32>>,
-    strategy: EdgeStrategy,
-    group_bits: u32,
-    overflow_chunk_edges: usize,
-    form: RecordForm,
+    layout: RebuildLayout,
     stats: &mut RemapStats,
 ) -> StorageResult<CsrShardSet> {
+    let RebuildLayout {
+        strategy,
+        group_bits,
+        overflow_chunk_edges,
+        form,
+    } = layout;
     let mut rebuilt = CsrShardSet::new(strategy, group_bits, overflow_chunk_edges, form)?;
     if strategy == EdgeStrategy::None {
         return Ok(rebuilt);
@@ -132,7 +145,7 @@ fn remap_direction(
             // no inline state.
             let inline_value = if form == RecordForm::Bundled {
                 let base = crate::edge::node_group::group_base(gid, old.group_bits());
-                let old_local = src.saturating_sub(base as u32);
+                let old_local = src.saturating_sub(base);
                 old.group_variant(gid)
                     .and_then(|variant| variant.bundled_value_by_edge_id(old_local, nbr.edge_id))
                     .and_then(|(raw, valid)| valid.then_some(raw))
@@ -203,20 +216,24 @@ impl EdgeStore {
             &self.out_csr,
             None,
             None,
-            self.schema.oe_strategy,
-            new_group_bits,
-            self.config.overflow_chunk_edges,
-            self.out_csr.record_form(),
+            RebuildLayout {
+                strategy: self.schema.oe_strategy,
+                group_bits: new_group_bits,
+                overflow_chunk_edges: self.config.overflow_chunk_edges,
+                form: self.out_csr.record_form(),
+            },
             &mut stats,
         )?;
         self.in_csr = remap_direction(
             &self.in_csr,
             None,
             None,
-            self.schema.ie_strategy,
-            new_group_bits,
-            self.config.overflow_chunk_edges,
-            self.in_csr.record_form(),
+            RebuildLayout {
+                strategy: self.schema.ie_strategy,
+                group_bits: new_group_bits,
+                overflow_chunk_edges: self.config.overflow_chunk_edges,
+                form: self.in_csr.record_form(),
+            },
             &mut stats,
         )?;
         self.config.node_group_bits = new_group_bits;
@@ -292,20 +309,24 @@ impl EdgeStore {
             &self.out_csr,
             src_mapping,
             dst_mapping,
-            self.schema.oe_strategy,
-            self.config.node_group_bits,
-            self.config.overflow_chunk_edges,
-            self.out_csr.record_form(),
+            RebuildLayout {
+                strategy: self.schema.oe_strategy,
+                group_bits: self.config.node_group_bits,
+                overflow_chunk_edges: self.config.overflow_chunk_edges,
+                form: self.out_csr.record_form(),
+            },
             &mut stats,
         )?;
         self.in_csr = remap_direction(
             &self.in_csr,
             dst_mapping,
             src_mapping,
-            self.schema.ie_strategy,
-            self.config.node_group_bits,
-            self.config.overflow_chunk_edges,
-            self.in_csr.record_form(),
+            RebuildLayout {
+                strategy: self.schema.ie_strategy,
+                group_bits: self.config.node_group_bits,
+                overflow_chunk_edges: self.config.overflow_chunk_edges,
+                form: self.in_csr.record_form(),
+            },
             &mut stats,
         )?;
 

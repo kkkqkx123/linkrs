@@ -49,7 +49,7 @@ impl EdgeStore {
                 return Vec::new();
             };
         let mut set: HashSet<u32> = HashSet::new();
-        for gid in dirty.into_iter().chain(column_traced.into_iter()) {
+        for gid in dirty.into_iter().chain(column_traced) {
             set.insert(gid as u32);
         }
         if set.is_empty() && self.properties_dirty {

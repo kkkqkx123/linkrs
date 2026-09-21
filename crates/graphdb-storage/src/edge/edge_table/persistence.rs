@@ -28,18 +28,21 @@
 //! lengths, CRC); the table below is the single contract. Corrupt markers
 //! fail closed; new capability lands on the current layout only.
 //!
-//! | File | Layout |
-//! |------|---------|
-//! | `meta.bin` | header only |
-//! | `groups_manifest.bin` | address width plus existing group id lists |
-//! | `out_g/in_g` group dumps (encoded mode) | integer column path per column, marker 8 |
-//! | `out_g/in_g` group dumps (raw mode) | native widths, marker 9; the two modes are live write modes selected per group by `csr_dump_raw`, or per checkpoint kind when `csr_dump_adaptive` is set |
-//! | frozen group dumps | integer column path per column |
-//! | bundled group dumps | topology payload plus value columns |
-//! | `*.serving` sidecars | flat columns, trailing CRC32; a bad cache is discarded and rebuilt |
-//! | `*.append` sidecars | address width plus op sections |
-//! | property shards | visibility plus current values; duplicate names/ids and unknown encoding tags rejected |
-//! | `edge_wal.bin` | length-prefixed postcard ops; torn tails fail the load |
+//! | File | Layout | Version |
+//! |------|---------|---------|
+//! | `meta.bin` | header only | no version, header section validated |
+//! | `groups_manifest.bin` | address width plus existing group id lists | no version |
+//! | `out_g/in_g` group dumps (encoded mode) | integer column path per column, marker 8 | live write mode 8 |
+//! | `out_g/in_g` group dumps (raw mode) | native widths, marker 9 | live write mode 9; the two modes are selected per group by `csr_dump_raw`, or per checkpoint kind when `csr_dump_adaptive` is set; loads accept both and reject anything else |
+//! | frozen group dumps | integer column path per column plus trailing CRC32 | no format version, trailing bytes rejected |
+//! | single group dumps | edge-count header plus columns plus trailing CRC32 | no format version, trailing bytes rejected |
+//! | pure group dumps | endpoints plus edge ids plus trailing CRC32 | no format version |
+//! | bundled group dumps | topology payload plus value columns plus valid bits plus CRC32 | no format version, trailing bytes rejected |
+//! | `*.serving` sidecars | flat columns, trailing CRC32; magic only, no format version; a bad cache is discarded and rebuilt from authority | cache only, never authority |
+//! | `*.append` sidecars | address width plus op sections | no version, decode fails closed |
+//! | property shards | visibility plus current values; duplicate names/ids and unknown encoding tags rejected | no version, encoding tags validated |
+//! | `edge_wal.bin` | length-prefixed postcard ops; torn tails fail the load | no version |
+//! | `CsrVariant` tag | 0=None, 1=Multiple, 2=Single, 3=Frozen/Mapped, 4=Pure, 5=Bundled; unknown tags rejected | dispatch tag, not a format version |
 
 use super::super::{CsrBase, CsrVariant};
 use super::mvcc::EdgeTimestamps;

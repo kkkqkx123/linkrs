@@ -348,8 +348,8 @@ impl MappedFrozen {
         }
         let mut offsets = Vec::with_capacity(rows);
         let mut base: u64 = 0;
-        for chunk in degree_bytes.chunks_exact(4) {
-            let degree = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as u64;
+        for chunk in degree_bytes.as_chunks::<4>().0 {
+            let degree = u32::from_le_bytes(*chunk) as u64;
             if base > u32::MAX as u64 {
                 return Err(serving_error(format!(
                     "serving row offset overflow at entry {base}"
@@ -417,6 +417,50 @@ impl MappedFrozen {
             .expect("serving row window validated against column ranges")
     }
 
+    /// Decode the hot halves of a validated row window as one chunked pass.
+    ///
+    /// Every column slice holds exactly `end - start` entries by the width
+    /// contract of [`Self::row_column_bytes`], so the zips cannot truncate.
+    fn row_hot_slots(&self, start: usize, end: usize) -> impl Iterator<Item = HotNbr> + '_ {
+        let endpoints = self
+            .row_column_bytes(self.columns.endpoints, 4, start, end)
+            .as_chunks::<4>()
+            .0;
+        let ranks = self
+            .row_column_bytes(self.columns.ranks, 8, start, end)
+            .as_chunks::<8>()
+            .0;
+        let edge_ids = self
+            .row_column_bytes(self.columns.edge_ids, 8, start, end)
+            .as_chunks::<8>()
+            .0;
+        endpoints
+            .iter()
+            .zip(ranks)
+            .zip(edge_ids)
+            .map(|((e, r), id)| HotNbr {
+                endpoint: u32::from_le_bytes(*e),
+                rank: i64::from_le_bytes(*r),
+                edge_id: EdgeId(u64::from_le_bytes(*id)),
+            })
+    }
+
+    /// Decode every slot of a validated row window as one chunked pass.
+    fn row_slots(&self, start: usize, end: usize) -> impl Iterator<Item = Nbr> + '_ {
+        let deletes = self
+            .row_column_bytes(self.columns.deletes, 8, start, end)
+            .as_chunks::<8>()
+            .0;
+        self.row_hot_slots(start, end)
+            .zip(deletes)
+            .map(|(hot, d)| Nbr {
+                endpoint: hot.endpoint,
+                rank: hot.rank,
+                edge_id: hot.edge_id,
+                delete_ts: u64::from_le_bytes(*d),
+            })
+    }
+
     /// Fill a caller buffer with every hot half of one row.
     ///
     /// Hot-only counterpart of `fill_physical_into`: topology columns are
@@ -430,30 +474,8 @@ impl MappedFrozen {
         if start == end {
             return;
         }
-        let endpoints = self.row_column_bytes(self.columns.endpoints, 4, start, end);
-        let ranks = self.row_column_bytes(self.columns.ranks, 8, start, end);
-        let edge_ids = self.row_column_bytes(self.columns.edge_ids, 8, start, end);
         out.reserve(end - start);
-        let rank_chunks = ranks.chunks_exact(8);
-        let id_chunks = edge_ids.chunks_exact(8);
-        for (endpoint, rank, edge_id) in endpoints
-            .chunks_exact(4)
-            .zip(rank_chunks)
-            .zip(id_chunks)
-            .map(|((e, r), id)| {
-                (
-                    u32::from_le_bytes([e[0], e[1], e[2], e[3]]),
-                    i64::from_le_bytes([r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]]),
-                    u64::from_le_bytes([id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]]),
-                )
-            })
-        {
-            out.push(HotNbr {
-                endpoint,
-                rank,
-                edge_id: EdgeId(edge_id),
-            });
-        }
+        out.extend(self.row_hot_slots(start, end));
     }
 
     /// Fill a caller buffer with every cold half of one row.
@@ -470,12 +492,9 @@ impl MappedFrozen {
         }
         let deletes = self.row_column_bytes(self.columns.deletes, 8, start, end);
         out.reserve(end - start);
-        for delete in deletes.chunks_exact(8) {
+        for delete in deletes.as_chunks::<8>().0 {
             out.push(ColdStamps {
-                delete_ts: u64::from_le_bytes([
-                    delete[0], delete[1], delete[2], delete[3], delete[4], delete[5], delete[6],
-                    delete[7],
-                ]),
+                delete_ts: u64::from_le_bytes(*delete),
             });
         }
     }
@@ -663,10 +682,8 @@ impl MappedFrozen {
             let cold = ColdStamps {
                 delete_ts: self.delete_at(idx),
             };
-            if cold.is_live() && hot.edge_id != INVALID_EDGE_ID {
-                if !f(Nbr::from_parts(hot, cold)) {
-                    return;
-                }
+            if cold.is_live() && hot.edge_id != INVALID_EDGE_ID && !f(Nbr::from_parts(hot, cold)) {
+                return;
             }
         }
     }
@@ -708,38 +725,8 @@ impl MappedFrozen {
         if start == end {
             return;
         }
-        let endpoints = self.row_column_bytes(self.columns.endpoints, 4, start, end);
-        let ranks = self.row_column_bytes(self.columns.ranks, 8, start, end);
-        let edge_ids = self.row_column_bytes(self.columns.edge_ids, 8, start, end);
-        let deletes = self.row_column_bytes(self.columns.deletes, 8, start, end);
         out.reserve(end - start);
-        let mut rank_chunks = ranks.chunks_exact(8);
-        let mut id_chunks = edge_ids.chunks_exact(8);
-        let mut delete_chunks = deletes.chunks_exact(8);
-        for endpoint in endpoints.chunks_exact(4) {
-            let rank = rank_chunks.next().expect("rank column matches row window");
-            let edge_id = id_chunks.next().expect("edge-id column matches row window");
-            let delete = delete_chunks
-                .next()
-                .expect("delete column matches row window");
-            let nbr = Nbr {
-                endpoint: u32::from_le_bytes([endpoint[0], endpoint[1], endpoint[2], endpoint[3]]),
-                rank: i64::from_le_bytes([
-                    rank[0], rank[1], rank[2], rank[3], rank[4], rank[5], rank[6], rank[7],
-                ]),
-                edge_id: EdgeId(u64::from_le_bytes([
-                    edge_id[0], edge_id[1], edge_id[2], edge_id[3], edge_id[4], edge_id[5],
-                    edge_id[6], edge_id[7],
-                ])),
-                delete_ts: u64::from_le_bytes([
-                    delete[0], delete[1], delete[2], delete[3], delete[4], delete[5], delete[6],
-                    delete[7],
-                ]),
-            };
-            if nbr.is_alive_at(ts) {
-                out.push(nbr);
-            }
-        }
+        out.extend(self.row_slots(start, end).filter(|nbr| nbr.is_alive_at(ts)));
     }
 
     /// First timestamp-visible entry matching an endpoint key: key-range
@@ -792,40 +779,14 @@ impl MappedFrozen {
         if start == end {
             return;
         }
-        let endpoints = self.row_column_bytes(self.columns.endpoints, 4, start, end);
-        let ranks = self.row_column_bytes(self.columns.ranks, 8, start, end);
-        let edge_ids = self.row_column_bytes(self.columns.edge_ids, 8, start, end);
-        let deletes = self.row_column_bytes(self.columns.deletes, 8, start, end);
         out.reserve(end - start);
-        let mut rank_chunks = ranks.chunks_exact(8);
-        let mut id_chunks = edge_ids.chunks_exact(8);
-        let mut delete_chunks = deletes.chunks_exact(8);
-        for endpoint in endpoints.chunks_exact(4) {
-            let rank = rank_chunks.next().expect("rank column matches row window");
-            let edge_id = id_chunks.next().expect("edge-id column matches row window");
-            let delete = delete_chunks
-                .next()
-                .expect("delete column matches row window");
-            out.push(Nbr {
-                endpoint: u32::from_le_bytes([endpoint[0], endpoint[1], endpoint[2], endpoint[3]]),
-                rank: i64::from_le_bytes([
-                    rank[0], rank[1], rank[2], rank[3], rank[4], rank[5], rank[6], rank[7],
-                ]),
-                edge_id: EdgeId(u64::from_le_bytes([
-                    edge_id[0], edge_id[1], edge_id[2], edge_id[3], edge_id[4], edge_id[5],
-                    edge_id[6], edge_id[7],
-                ])),
-                delete_ts: u64::from_le_bytes([
-                    delete[0], delete[1], delete[2], delete[3], delete[4], delete[5], delete[6],
-                    delete[7],
-                ]),
-            });
-        }
+        out.extend(self.row_slots(start, end));
     }
 
     /// Visit every physically stored entry of one row without allocating.
     ///
-    /// Decodes from one slice per column instead of one scalar read per slot.
+    /// Decodes from one slice per column instead of one bounds-checked scalar
+    /// read per slot.
     pub fn visit_physical<F>(&self, src_vid: u32, mut f: F)
     where
         F: FnMut(Nbr) -> bool,
@@ -836,33 +797,7 @@ impl MappedFrozen {
         if start == end {
             return;
         }
-        let endpoints = self.row_column_bytes(self.columns.endpoints, 4, start, end);
-        let ranks = self.row_column_bytes(self.columns.ranks, 8, start, end);
-        let edge_ids = self.row_column_bytes(self.columns.edge_ids, 8, start, end);
-        let deletes = self.row_column_bytes(self.columns.deletes, 8, start, end);
-        let mut rank_chunks = ranks.chunks_exact(8);
-        let mut id_chunks = edge_ids.chunks_exact(8);
-        let mut delete_chunks = deletes.chunks_exact(8);
-        for endpoint in endpoints.chunks_exact(4) {
-            let rank = rank_chunks.next().expect("rank column matches row window");
-            let edge_id = id_chunks.next().expect("edge-id column matches row window");
-            let delete = delete_chunks
-                .next()
-                .expect("delete column matches row window");
-            let nbr = Nbr {
-                endpoint: u32::from_le_bytes([endpoint[0], endpoint[1], endpoint[2], endpoint[3]]),
-                rank: i64::from_le_bytes([
-                    rank[0], rank[1], rank[2], rank[3], rank[4], rank[5], rank[6], rank[7],
-                ]),
-                edge_id: EdgeId(u64::from_le_bytes([
-                    edge_id[0], edge_id[1], edge_id[2], edge_id[3], edge_id[4], edge_id[5],
-                    edge_id[6], edge_id[7],
-                ])),
-                delete_ts: u64::from_le_bytes([
-                    delete[0], delete[1], delete[2], delete[3], delete[4], delete[5], delete[6],
-                    delete[7],
-                ]),
-            };
+        for nbr in self.row_slots(start, end) {
             if !f(nbr) {
                 return;
             }
@@ -884,24 +819,7 @@ impl MappedFrozen {
         if start == end {
             return;
         }
-        let endpoints = self.row_column_bytes(self.columns.endpoints, 4, start, end);
-        let ranks = self.row_column_bytes(self.columns.ranks, 8, start, end);
-        let edge_ids = self.row_column_bytes(self.columns.edge_ids, 8, start, end);
-        let mut rank_chunks = ranks.chunks_exact(8);
-        let mut id_chunks = edge_ids.chunks_exact(8);
-        for endpoint in endpoints.chunks_exact(4) {
-            let rank = rank_chunks.next().expect("rank column matches row window");
-            let edge_id = id_chunks.next().expect("edge-id column matches row window");
-            let hot = HotNbr {
-                endpoint: u32::from_le_bytes([endpoint[0], endpoint[1], endpoint[2], endpoint[3]]),
-                rank: i64::from_le_bytes([
-                    rank[0], rank[1], rank[2], rank[3], rank[4], rank[5], rank[6], rank[7],
-                ]),
-                edge_id: EdgeId(u64::from_le_bytes([
-                    edge_id[0], edge_id[1], edge_id[2], edge_id[3], edge_id[4], edge_id[5],
-                    edge_id[6], edge_id[7],
-                ])),
-            };
+        for hot in self.row_hot_slots(start, end) {
             if !f(hot) {
                 return;
             }

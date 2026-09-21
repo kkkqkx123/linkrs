@@ -67,6 +67,10 @@ impl AuthorityMap {
         self.live
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.live == 0
+    }
+
     pub fn clear(&mut self) {
         self.slots.clear();
         self.live = 0;

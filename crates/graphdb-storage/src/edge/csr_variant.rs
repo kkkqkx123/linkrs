@@ -96,13 +96,15 @@ macro_rules! dispatch {
 ///
 /// All variants promise one shared row-view semantic: a row walk yields the
 /// physically stored entries of one vertex, each exactly once, as assembled
-/// `Nbr` records. Three access shapes serve it with unified naming: the
-/// borrowed [`Self::visit_physical`] walk (no allocation, preferred for
-/// inline forms and hot scans), the zero-alloc [`Self::fill_physical_into`]
-/// caller-buffer fill (preferred for batch scans), and the allocating
-/// `physical_edges_of` accessor (test and offline use only). No new
-/// traversal dialect may be added per variant; new needs go through these
-/// three.
+/// `Nbr` records. Gap sentinels are excluded by every walk; tombstones are
+/// included so reclaim and audit paths observe them. Visibility is decided
+/// by the version authority above, never by these walks. Three access shapes
+/// serve it with unified naming: the borrowed [`Self::visit_physical`] walk
+/// (no allocation, preferred for inline forms and hot scans), the zero-alloc
+/// [`Self::fill_physical_into`] caller-buffer fill (preferred for batch
+/// scans), and the allocating `physical_edges_of` accessor (test and offline
+/// use only). No new traversal dialect may be added per variant; new needs
+/// go through these three.
 ///
 /// Ordering is promised per form, never globally: mutable, single, pure and
 /// bundled rows are insertion-ordered and promise no order; frozen and
@@ -610,11 +612,9 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Bundled(csr) => {
                 csr.delete_edge_at_position(src_vid, position, expected, ts)
             }
-            _ => {
-                return Err(StorageError::invalid_operation(
-                    "row position must not cross variants; re-resolve by edge id".to_string(),
-                ));
-            }
+            _ => Err(StorageError::invalid_operation(
+                "row position must not cross variants; re-resolve by edge id".to_string(),
+            )),
         }
     }
 
@@ -638,7 +638,7 @@ impl MutableCsrTrait for CsrVariant {
                     false,
                     "row position must not cross variants; re-resolve by edge id"
                 );
-                return false;
+                false
             }
         }
     }

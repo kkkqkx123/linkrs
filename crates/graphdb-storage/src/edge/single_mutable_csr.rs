@@ -265,10 +265,7 @@ impl SingleMutableCsr {
         }
 
         let (dst_ep, dst_rank) = decode_endpoint_pair(dst);
-        let probe = match self.slot_at(src_idx) {
-            Some(probe) => probe,
-            None => return None,
-        };
+        let probe = self.slot_at(src_idx)?;
 
         if !probe.is_alive_at(ts) {
             return None;

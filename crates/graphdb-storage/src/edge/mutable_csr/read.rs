@@ -1,5 +1,5 @@
 use super::super::csr_shared::decode_endpoint_pair;
-use super::super::{ColdStamps, EdgeId, HotNbr, Nbr, Timestamp, VertexId};
+use super::super::{ColdStamps, EdgeId, HotNbr, Nbr, Timestamp, VertexId, INVALID_EDGE_ID};
 use super::write::EdgePosition;
 use super::MutableCsr;
 
@@ -156,9 +156,7 @@ impl MutableCsr {
             );
         }
         if let Some(set) = self.live_sets.get(&src_vid) {
-            let Some(position) = set.position(&(decoded_endpoint, decoded_rank)) else {
-                return None;
-            };
+            let position = set.position(&(decoded_endpoint, decoded_rank))?;
             if let Some(nbr) = self.slot_at_position(src_vid, src_idx, position) {
                 if nbr.endpoint == decoded_endpoint
                     && nbr.rank == decoded_rank
@@ -234,7 +232,8 @@ impl MutableCsr {
     ///
     /// Same content as the allocating accessor above, without the per-vertex
     /// allocation. Batch scans reuse one buffer across vertices and slice it
-    /// per vertex instead of collecting one vector per vertex.
+    /// per vertex instead of collecting one vector per vertex. Gap sentinels
+    /// are excluded; tombstones are included for reclaim and audit paths.
     pub fn fill_physical_into(&self, src_vid: u32, out: &mut Vec<Nbr>) {
         out.clear();
         let src_idx = src_vid as usize;
@@ -246,7 +245,8 @@ impl MutableCsr {
         out.extend(
             hot.iter()
                 .zip(cold.iter())
-                .map(|(h, c)| Nbr::from_parts(*h, *c)),
+                .map(|(h, c)| Nbr::from_parts(*h, *c))
+                .filter(|nbr| nbr.edge_id != INVALID_EDGE_ID),
         );
         if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
             out.reserve(single.len());
@@ -275,7 +275,8 @@ impl MutableCsr {
     /// Hot-only counterpart of [`Self::visit_physical`] for traversals that
     /// resolve visibility through the version authority by `edge_id`. Stamps
     /// stay out of cache on this walk. Consolidated rows read their single
-    /// overflow block without the chain loop.
+    /// overflow block without the chain loop. Gap sentinels are skipped;
+    /// tombstones are visited.
     pub fn visit_hot<F>(&self, src_vid: u32, mut f: F)
     where
         F: FnMut(HotNbr) -> bool,
@@ -285,12 +286,18 @@ impl MutableCsr {
             return;
         }
         for h in self.primary_hot(src_idx) {
+            if h.edge_id == INVALID_EDGE_ID {
+                continue;
+            }
             if !f(*h) {
                 return;
             }
         }
         if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
             for h in single.hot_slice() {
+                if h.edge_id == INVALID_EDGE_ID {
+                    continue;
+                }
                 if !f(*h) {
                     return;
                 }
@@ -300,6 +307,9 @@ impl MutableCsr {
         if let Some(chunks) = self.overflow_chunks.get(src_vid) {
             for chunk in chunks {
                 for h in chunk.hot_slice() {
+                    if h.edge_id == INVALID_EDGE_ID {
+                        continue;
+                    }
                     if !f(*h) {
                         return;
                     }
@@ -312,7 +322,8 @@ impl MutableCsr {
     ///
     /// The visitor returns false to stop early. Visibility is decided by the
     /// version authority above this layer. Consolidated rows read their
-    /// single overflow block without the chain loop.
+    /// single overflow block without the chain loop. Gap sentinels are
+    /// skipped; tombstones are visited.
     pub fn visit_physical<F>(&self, src_vid: u32, mut f: F)
     where
         F: FnMut(Nbr) -> bool,
@@ -323,6 +334,9 @@ impl MutableCsr {
         }
         let (hot, cold) = self.primary_pair(src_idx);
         for (h, c) in hot.iter().zip(cold.iter()) {
+            if h.edge_id == INVALID_EDGE_ID {
+                continue;
+            }
             if !f(Nbr::from_parts(*h, *c)) {
                 return;
             }
@@ -356,7 +370,8 @@ impl MutableCsr {
     /// the [`EdgePosition`] of each entry, so a later delete or revert can
     /// address the slot directly instead of rescanning the row. Positions
     /// stay valid only until the next compaction, rebalance, repack or
-    /// removal of this row; positional writes revalidate the edge id.
+    /// removal of this row; positional writes revalidate the edge id. Gap
+    /// sentinels are skipped; tombstones are visited.
     pub fn visit_physical_with_position<F>(&self, src_vid: u32, mut f: F)
     where
         F: FnMut(EdgePosition, Nbr) -> bool,
@@ -367,6 +382,9 @@ impl MutableCsr {
         }
         let (hot, cold) = self.primary_pair(src_idx);
         for (i, (h, c)) in hot.iter().zip(cold.iter()).enumerate() {
+            if h.edge_id == INVALID_EDGE_ID {
+                continue;
+            }
             if !f(
                 EdgePosition::Primary { slot: i as u32 },
                 Nbr::from_parts(*h, *c),
@@ -636,10 +654,11 @@ impl MutableCsr {
         if let Some(single) = self.overflow_chunks.single_chunk(src_vid) {
             for i in 0..single.len() {
                 if let Some(nbr) = single.slot_at(i) {
-                    if nbr.delete_ts == Timestamp::MAX && in_range(nbr.endpoint, nbr.rank) {
-                        if !f(nbr) {
-                            return;
-                        }
+                    if nbr.delete_ts == Timestamp::MAX
+                        && in_range(nbr.endpoint, nbr.rank)
+                        && !f(nbr)
+                    {
+                        return;
                     }
                 }
             }
@@ -649,10 +668,11 @@ impl MutableCsr {
             for chunk in chunks {
                 for i in 0..chunk.len() {
                     if let Some(nbr) = chunk.slot_at(i) {
-                        if nbr.delete_ts == Timestamp::MAX && in_range(nbr.endpoint, nbr.rank) {
-                            if !f(nbr) {
-                                return;
-                            }
+                        if nbr.delete_ts == Timestamp::MAX
+                            && in_range(nbr.endpoint, nbr.rank)
+                            && !f(nbr)
+                        {
+                            return;
                         }
                     }
                 }

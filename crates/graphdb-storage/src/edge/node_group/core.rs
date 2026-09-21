@@ -9,7 +9,7 @@ use graphdb_core::types::{EdgeId, EdgeStrategy, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
 use std::collections::BTreeMap;
 
-use super::super::{CsrBase, CsrVariant, MutableCsrTrait, Nbr, RecordForm};
+use super::super::{CsrBase, CsrVariant, EdgePut, MutableCsrTrait, Nbr, RecordForm, RowEdgeBatch};
 use super::{
     group_id_for, group_size, local_vid, regions_per_group, validate_group_bits, CsrShardSet,
     GroupDirty, RegionDirty, Shard, ShardAppendLog,
@@ -327,13 +327,10 @@ impl CsrShardSet {
     where
         F: FnMut(Nbr, Option<u64>) -> bool,
     {
-        match self.route(src_vid) {
-            Some((gid, local)) => {
-                if let Some(shard) = self.shards.get(&gid) {
-                    shard.variant.visit_physical_with_values(local, f);
-                }
+        if let Some((gid, local)) = self.route(src_vid) {
+            if let Some(shard) = self.shards.get(&gid) {
+                shard.variant.visit_physical_with_values(local, f);
             }
-            None => {}
         }
     }
 
@@ -400,9 +397,8 @@ impl CsrShardSet {
                 Some(CsrVariant::Multiple(_))
             );
             if is_multiple {
-                let batch: Vec<(u32, Vec<(u32, i64, EdgeId, Timestamp)>)> = {
-                    let mut rows: BTreeMap<u32, Vec<(u32, i64, EdgeId, Timestamp)>> =
-                        BTreeMap::new();
+                let batch: Vec<RowEdgeBatch> = {
+                    let mut rows: BTreeMap<u32, Vec<EdgePut>> = BTreeMap::new();
                     for (src, dst, edge_id) in &group_edges {
                         let local = local_vid(*src, group_bits);
                         let (vid, rank) = dst.decode_edge_endpoint();

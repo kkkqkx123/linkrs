@@ -134,8 +134,10 @@ fn decode_bitpacked_payload(payload: &[u8], count: usize) -> StorageResult<Vec<u
         )));
     }
     let words: Vec<u64> = payload[9..]
-        .chunks_exact(8)
-        .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap_or([0u8; 8])))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|chunk| u64::from_le_bytes(*chunk))
         .collect();
     if payload[9..].len() != words.len() * 8 {
         return Err(StorageError::deserialize_error(
@@ -384,8 +386,10 @@ fn decode_bitpacked_payload_u32(payload: &[u8], count: usize) -> StorageResult<V
         )));
     }
     let words: Vec<u64> = payload[5..]
-        .chunks_exact(8)
-        .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap_or([0u8; 8])))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|chunk| u64::from_le_bytes(*chunk))
         .collect();
     if payload[5..].len() != words.len() * 8 {
         return Err(StorageError::deserialize_error(

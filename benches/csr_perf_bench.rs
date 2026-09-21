@@ -19,7 +19,7 @@ use graphdb::core::types::{EdgeId, Timestamp, VertexId};
 use graphdb::core::{DataType, Value};
 use graphdb::storage::edge::mutable_csr::MutableCsr;
 use graphdb::storage::edge::property_schema::PropertySchema;
-use graphdb::storage::edge::CsrWithProperties;
+use graphdb::storage::edge::{CsrWithProperties, RowEdgeBatch};
 
 const VERTICES: u32 = 4096;
 
@@ -176,7 +176,7 @@ fn bench_point_lookup_narrow(csr: &MutableCsr) {
     let start = Instant::now();
     let mut hits = 0usize;
     for src in 0..VERTICES {
-        let dst = VertexId::edge_endpoint_key((src ^ (0 * 7919)) % VERTICES, 0);
+        let dst = VertexId::edge_endpoint_key(src % VERTICES, 0);
         if csr.get_edge(src, dst, 1).is_some() {
             hits += 1;
         }
@@ -262,7 +262,7 @@ fn bench_scan_filtered_alloc_vs_visit(csr: &MutableCsr, label: &str) {
     let mut counted = 0usize;
     for src in 0..VERTICES {
         csr.visit_physical(src, |nbr| {
-            if nbr.is_alive_at(1) {
+            if nbr.delete_ts > 1 {
                 counted += 1;
             }
             true
@@ -279,7 +279,7 @@ fn bench_scan_filtered_alloc_vs_visit(csr: &MutableCsr, label: &str) {
     black_box((visited, counted));
 }
 
-fn build_batch_groups(degree: u32) -> Vec<(u32, Vec<(u32, i64, EdgeId, Timestamp)>)> {
+fn build_batch_groups(degree: u32) -> Vec<RowEdgeBatch> {
     let mut edge_id = 0u64;
     let mut groups = Vec::with_capacity(VERTICES as usize);
     for src in 0..VERTICES {
@@ -730,7 +730,7 @@ fn bench_followup_threshold(csr: &MutableCsr) {
 fn bench_followup_small_batch() {
     let mut csr = MutableCsr::with_capacity(VERTICES as usize, 65536);
     build_uniform(&mut csr, 8);
-    let groups: Vec<(u32, Vec<(u32, i64, EdgeId, Timestamp)>)> = (0..4u32)
+    let groups: Vec<RowEdgeBatch> = (0..4u32)
         .map(|src| {
             let batch = (0..16u32)
                 .map(|k| (9000 + k, 0, EdgeId(1_000_000 + (src * 16 + k) as u64), 2))

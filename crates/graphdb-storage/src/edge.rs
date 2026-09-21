@@ -70,43 +70,46 @@ pub use graphdb_core::types::INVALID_EDGE_ID;
 pub use immutable_csr::{FrozenRowIter, ImmutableCsr, ImmutableCsrIterator};
 pub use pure_csr::{PureAllIter, PureRowIter, PureTopologyCsr};
 
+/// One edge batch-insert entry: `(src, dst, rank, properties, ts)`.
+pub type BatchInsertEntry<'a> = (u32, u32, i64, &'a [(String, Value)], Timestamp);
+
+/// Decoded neighbor for bulk puts: `(endpoint, rank, edge_id, ts)`.
+pub type EdgePut = (u32, i64, EdgeId, Timestamp);
+
+/// One source row's bulk-put batch: `(local_src, entries)`.
+pub type RowEdgeBatch = (u32, Vec<EdgePut>);
+
 /// Resolved record form for an edge table, persisted in `meta.bin`.
 ///
 /// Determined once at table creation by the selector; never re-inferred on
 /// load.  A schema change that breaks the form's preconditions requires an
 /// offline rebuild to a different form.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default,
+)]
 pub enum RecordForm {
     /// Pure topology: 12 bytes/edge, no rank, no timestamps.
     Pure,
     /// Bundled: 20 bytes/edge, inline single scalar value column.
     Bundled,
     /// Standard columnar property storage (default / fallback).
+    #[default]
     Columnar,
-}
-
-impl Default for RecordForm {
-    fn default() -> Self {
-        RecordForm::Columnar
-    }
 }
 
 /// User-facing preference for record form selection at table creation time.
 ///
 /// `Auto` lets the system pick the optimal form based on the schema;
 /// `Columnar` forces the standard multi/single/none strategy path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default,
+)]
 pub enum RecordFormPreference {
     /// Auto-select Pure/Bundled/Columnar based on schema properties.
     Auto,
     /// Force columnar storage regardless of schema.
+    #[default]
     Columnar,
-}
-
-impl Default for RecordFormPreference {
-    fn default() -> Self {
-        RecordFormPreference::Columnar
-    }
 }
 
 /// Check whether a `DataType` can be encoded as a 64-bit scalar for the
@@ -308,19 +311,14 @@ pub struct HotNbr {
     pub edge_id: EdgeId,
 }
 
-/// Cold timestamp half of a CSR slot: physical MVCC replicas.
+/// Cold timestamp half of a CSR slot: physical MVCC replica.
 ///
-/// `create_ts` mirrors the creation stamp kept for compaction and debugging,
-/// `delete_ts` the deletion stamp (`Timestamp::MAX` means alive). Query
-/// paths must never decide visibility from these fields; the version
+/// Only `delete_ts` is stored inline (`Timestamp::MAX` means alive).
+/// `create_ts` lives in the `EdgeTimestamps` authority and is consulted
+/// on-demand for visibility. This keeps the cold half at 8 bytes. Query
+/// paths must never decide visibility from this field alone; the version
 /// authority owns that decision. Touched only by writes, deletes, rollback,
 /// compaction and persistence assembly, never by topology scans.
-///
-/// Both stamps stay in the row: point-in-time reads filter on them directly
-/// Cold timestamp half of a CSR edge slot. Only `delete_ts` is needed
-/// inline: `create_ts` lives in the `EdgeTimestamps` authority and is
-/// consulted on-demand for MVCC visibility. This keeps the cold half at
-/// 8 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColdStamps {
     pub delete_ts: Timestamp,
@@ -438,16 +436,16 @@ impl Nbr {
         }
     }
 
-    /// Check if this edge is physically alive at the given timestamp.
+    /// Check if this edge is physically reclaimable at the given cutoff.
     ///
     /// Physical reclaim probe only: compares the projected `delete_ts` replica
     /// without the authority `create_ts`. Query visibility must go through the
     /// version authority
     /// ([`crate::mvcc_visibility::Visibility::is_edge_visible`]); using this
     /// probe for queries would fork a second visibility decision that drifts
-    /// from the authority.
+    /// from the authority. Restricted to crate-internal maintenance paths.
     #[inline]
-    pub fn is_alive_at(&self, ts: Timestamp) -> bool {
+    pub(crate) fn is_alive_at(&self, ts: Timestamp) -> bool {
         ts < self.delete_ts
     }
 

@@ -284,22 +284,18 @@ impl MutableCsr {
         let mut present = false;
         let (hot, cold) = self.primary_pair(idx);
         for (h, c) in hot.iter().zip(cold.iter()) {
-            if c.is_live() {
-                if h.endpoint == endpoint && h.rank == rank {
-                    present = true;
-                    break;
-                }
+            if c.is_live() && h.endpoint == endpoint && h.rank == rank {
+                present = true;
+                break;
             }
         }
         if !present {
             if let Some(chunks) = self.overflow_chunks.get(vid) {
                 'outer: for chunk in chunks {
                     for (hot, cold) in chunk.hot_slice().iter().zip(chunk.cold_slice()) {
-                        if cold.is_live() {
-                            if hot.endpoint == endpoint && hot.rank == rank {
-                                present = true;
-                                break 'outer;
-                            }
+                        if cold.is_live() && hot.endpoint == endpoint && hot.rank == rank {
+                            present = true;
+                            break 'outer;
                         }
                     }
                 }

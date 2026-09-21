@@ -44,8 +44,7 @@ pub(crate) const OVERFLOW_CHUNK_MAX: usize = 4096;
 /// rows never shrink their chunk size as they grow.
 pub(crate) fn graded_overflow_chunk_edges(live: usize) -> usize {
     live.next_power_of_two()
-        .max(OVERFLOW_CHUNK_MIN)
-        .min(OVERFLOW_CHUNK_MAX)
+        .clamp(OVERFLOW_CHUNK_MIN, OVERFLOW_CHUNK_MAX)
 }
 
 impl MutableCsr {

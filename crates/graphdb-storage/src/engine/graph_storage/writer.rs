@@ -716,25 +716,28 @@ pub(crate) fn delete_vertex(
     Ok(())
 }
 
-/// Delete a vertex together with every incident edge as one fanout unit.
+/// Delete a vertex together with every incident edge in bounded chunks.
 ///
-/// All edge deletes share a single write timestamp and commit once, so a
-/// mid-fanout failure aborts the shared timestamp instead of leaving
+/// Each chunk owns one write timestamp and commits independently, so a
+/// mid-fanout failure aborts only the in-flight chunk instead of leaving
 /// per-edge commits behind. Aborted stamps stay hidden through the pending
 /// gate, and explicit transactions keep per-edge restore entries through the
-/// mutation recorder. Very large fanouts must be chunked by the caller into
-/// one call per chunk; each call stays an independent atomic unit and a
-/// failed chunk leaves prior committed chunks intact, never a half-chunk.
+/// mutation recorder. A failed chunk leaves prior committed chunks intact,
+/// never a half-chunk.
 pub(crate) fn delete_vertex_with_edges(
     ctx: &GraphStorageContext,
     space: &str,
     id: &VertexId,
 ) -> StorageResult<()> {
+    const DELETE_VERTEX_FANOUT_CHUNK: usize = 256;
     let edges = reader::get_node_edges(ctx, space, id, EdgeDirection::Both)?;
-    if !edges.is_empty() {
+    if edges.is_empty() {
+        return delete_vertex(ctx, space, id);
+    }
+    for chunk in edges.chunks(DELETE_VERTEX_FANOUT_CHUNK) {
         let ts = ctx.get_write_timestamp()?;
         let mut failed: Option<StorageError> = None;
-        for edge in &edges {
+        for edge in chunk {
             let previous = reader::get_edge(
                 ctx,
                 space,

@@ -60,9 +60,10 @@ impl EdgeStore {
     /// Audit-only (load path plus tests); a nonzero count means corrupt files
     /// or a write-path regression.
     ///
-    /// Live-authority orphans (a live authority entry with no CSR row, as
-    /// produced by a silent Single-slot overwrite) are reported separately
-    /// by [`EdgeStore::live_authority_orphans`] and also reject the load.
+    /// Live-authority orphans (a live authority entry with no CSR row) are
+    /// reported separately by [`EdgeStore::live_authority_orphans`] and also
+    /// reject the load. The single-slot form rejects conflicting overwrites,
+    /// so any such orphan indicates a regression, never an expected overwrite.
     pub fn loaded_copy_mismatches(&self) -> (usize, usize) {
         let (orphan_mappings, orphan_csr_rows, _) = self.copy_audit();
         (orphan_mappings, orphan_csr_rows)

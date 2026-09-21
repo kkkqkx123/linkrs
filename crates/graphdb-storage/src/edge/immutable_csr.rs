@@ -55,7 +55,7 @@ fn frozen_row_key(nbr: &Nbr) -> (u32, i64, u64) {
 /// queries filter them by timestamp inside the key range.
 fn sort_packed_row(row: &mut Vec<Nbr>) {
     row.retain(|nbr| nbr.edge_id != INVALID_EDGE_ID);
-    row.sort_by(|a, b| frozen_row_key(a).cmp(&frozen_row_key(b)));
+    row.sort_by_key(frozen_row_key);
 }
 
 /// `(endpoint, rank)` key range inside one sorted frozen row, as
@@ -399,10 +399,8 @@ impl ImmutableCsr {
             None => hot.len(),
         };
         for (h, c) in hot[lo..hi].iter().zip(&cold[lo..hi]) {
-            if c.is_live() {
-                if !f(Nbr::from_parts(*h, *c)) {
-                    return;
-                }
+            if c.is_live() && !f(Nbr::from_parts(*h, *c)) {
+                return;
             }
         }
     }

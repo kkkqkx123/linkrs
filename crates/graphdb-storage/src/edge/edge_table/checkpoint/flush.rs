@@ -2,6 +2,7 @@
 
 use super::super::core::EdgeStore;
 use super::layout::{file_bytes, manifest_path};
+use super::topology::GroupFlush;
 use crate::edge::node_group::{EdgeCheckpointKind, TableShardManifest};
 use crate::edge::CsrBase;
 use graphdb_core::StorageResult;
@@ -62,25 +63,25 @@ impl EdgeStore {
         flushed_bytes += self.flush_property_shards(dir, page_size, level)?;
         self.refresh_segment_stats();
         flushed_bytes += self.flush_segment_stats(dir, page_size, level)?;
-        let (out_bytes, out_rebalanced) = self.flush_group_set(
+        let (out_bytes, out_rebalanced) = self.flush_group_set(&GroupFlush {
             dir,
             page_size,
             level,
-            true,
-            crate::persistence::section::EDGE_OUT_CSR,
-            crate::persistence::section::EDGE_OUT_APPEND,
-            &manifest,
-        )?;
+            outgoing: true,
+            section_id: crate::persistence::section::EDGE_OUT_CSR,
+            append_section_id: crate::persistence::section::EDGE_OUT_APPEND,
+            manifest: &manifest,
+        })?;
         flushed_bytes += out_bytes;
-        let (in_bytes, in_rebalanced) = self.flush_group_set(
+        let (in_bytes, in_rebalanced) = self.flush_group_set(&GroupFlush {
             dir,
             page_size,
             level,
-            false,
-            crate::persistence::section::EDGE_IN_CSR,
-            crate::persistence::section::EDGE_IN_APPEND,
-            &manifest,
-        )?;
+            outgoing: false,
+            section_id: crate::persistence::section::EDGE_IN_CSR,
+            append_section_id: crate::persistence::section::EDGE_IN_APPEND,
+            manifest: &manifest,
+        })?;
         flushed_bytes += in_bytes;
         let kind = if out_rebalanced || in_rebalanced {
             EdgeCheckpointKind::Rebalance

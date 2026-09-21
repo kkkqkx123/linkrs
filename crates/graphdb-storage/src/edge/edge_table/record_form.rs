@@ -12,10 +12,12 @@
 //! replay on top of the new form.
 //!
 //! Inline value semantics, pinned here so the query layer never misreads:
-//! a bundled delete clears the validity bit while retaining the stale word,
-//! and both the single-key undo and the batch rollback revive the retained
-//! word through the same positional path. Validity bits persist across
-//! checkpoints, so a reload never defaults a blind slot to valid.
+//! a bundled delete clears the validity bit while retaining the stale word
+//! for the slot that held it. A positional revert holding the pre-delete
+//! slot revives the retained word; an id-keyed lookup after an erase-form
+//! delete cannot locate the sentinel slot and reports not found. Validity
+//! bits persist across checkpoints, so a reload never defaults a blind slot
+//! to valid.
 //!
 //! Online contract: the switch holds `&mut self`, which already serializes
 //! every writer in this crate (single-writer discipline), so no concurrent
@@ -87,6 +89,7 @@ impl EdgeStore {
     /// Requires exclusive access and a checkpoint afterwards. Migrating to
     /// the current form is a no-op success.
     pub fn migrate_record_form(&mut self, target: RecordForm) -> StorageResult<MigrateStats> {
+        self.ensure_no_pending_migration()?;
         if self.pending_add_column.is_some()
             || self.pending_drop_column.is_some()
             || self.pending_rename_column.is_some()
@@ -114,12 +117,12 @@ impl EdgeStore {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
         }
-        // Consecutive switches stay allowed: every switch rebuilds purely
-        // from live state and fences pre-switch WAL redo again, so a crash
-        // before the mandatory checkpoint still recovers to the pre-switch
-        // checkpoint in the old form, never to a mixed form. Pending schema
-        // changes are rejected because the rebuild reads the published
+        // A second switch before the mandatory checkpoint is rejected: the
+        // pre-switch base is still the old checkpoint, so another rebuild
+        // would fence new-form redo that has no durable base yet. Pending
+        // schema changes are rejected because the rebuild reads the published
         // schema and would silently drop staged state.
+        self.ensure_no_pending_migration()?;
         if self.pending_add_column.is_some()
             || self.pending_drop_column.is_some()
             || self.pending_rename_column.is_some()
@@ -139,6 +142,16 @@ impl EdgeStore {
     /// and load, which re-establish the checkpoint base.
     pub fn is_migration_checkpoint_required(&self) -> bool {
         self.migration_pending_checkpoint
+    }
+
+    fn ensure_no_pending_migration(&self) -> StorageResult<()> {
+        if self.migration_pending_checkpoint {
+            return Err(StorageError::invalid_operation(
+                "record-form switch requires a checkpoint before further switches or writes"
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 
     /// Executable pre-switch checklist: prechecks, cost estimate and the
@@ -408,7 +421,7 @@ impl EdgeStore {
         let mut live = Vec::new();
         let mut dropped = Vec::new();
         for gid in shards.existing_group_ids() {
-            let base = crate::edge::node_group::group_base(gid, shards.group_bits()) as u32;
+            let base = crate::edge::node_group::group_base(gid, shards.group_bits());
             let Some(variant) = shards.group_variant(gid) else {
                 continue;
             };
@@ -750,6 +763,7 @@ mod tests {
 
     #[test]
     fn migrate_columnar_bundled_roundtrip() {
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
         let mut table = make_columnar_table();
         assert_eq!(table.schema.record_form, RecordForm::Columnar);
         table
@@ -770,6 +784,14 @@ mod tests {
             edge.properties,
             vec![("weight".to_string(), Value::Double(1.5))]
         );
+        // The migration arms the mandatory-checkpoint fence; flushing the
+        // new form lifts it so further switches are legal again.
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("mandatory checkpoint");
         // Same-form migration is a no-op success.
         let noop = table
             .migrate_record_form(RecordForm::Bundled)
@@ -872,6 +894,7 @@ mod tests {
 
     #[test]
     fn online_switch_roundtrip_keeps_reads_and_writes() {
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
         let mut table = make_columnar_table();
         table
             .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
@@ -884,15 +907,26 @@ mod tests {
         assert_eq!(forward.edges_moved, 1);
         assert_eq!(table.schema.record_form, RecordForm::Bundled);
         assert!(table.is_migration_checkpoint_required());
-        // Reads see the new form with identical content; writes continue.
+        // Reads see the new form with identical content. Writes stay fenced
+        // until the mandatory checkpoint persists the switched form.
         let edge = table.get_edge(0, 1, 0, 200).expect("edge present");
         assert_eq!(
             edge.properties,
             vec![("weight".to_string(), Value::Double(1.5))]
         );
+        assert!(table
+            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 200)
+            .is_err());
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("mandatory checkpoint");
+        assert!(!table.is_migration_checkpoint_required());
         table
             .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 200)
-            .expect("write after switch");
+            .expect("write after checkpoint");
         assert!(table.audit_copy_drift().is_empty());
 
         let back = table

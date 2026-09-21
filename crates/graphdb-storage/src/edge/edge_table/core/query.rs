@@ -11,14 +11,18 @@ impl EdgeStore {
     /// Whether one edge matches every pushed predicate at `query_ts`.
     ///
     /// Column-scan pushdown: only predicate columns are read through their
-    /// null bitmaps, with no intermediate record materialization. Visibility
-    /// stays with the authority; callers check it separately.
+    /// null bitmaps, with no intermediate record materialization. Topology
+    /// and attribute checks share the version authority: invisible edges
+    /// never match even when their projected row still carries values.
     pub fn matches_pushdown(
         &self,
         edge_id: EdgeId,
         query_ts: Timestamp,
         predicates: &[ScanPredicate],
     ) -> bool {
+        if !self.is_visible(edge_id, query_ts) {
+            return false;
+        }
         if self.is_bundled() {
             // Single inline value evaluated with the shared predicate
             // matcher; a NULL slot yields no properties so nothing matches,
@@ -66,21 +70,22 @@ impl EdgeStore {
             return out;
         }
         if let Some(ids) = candidates {
-            return self
-                .properties
-                .filter_edge_ids_by_predicates(predicates, query_ts, Some(ids));
+            let hits =
+                self.properties
+                    .filter_edge_ids_by_predicates(predicates, query_ts, Some(ids));
+            return self.visible_only(hits, query_ts);
         }
         if predicates.is_empty() {
-            return self
+            let hits = self
                 .properties
                 .filter_edge_ids_by_predicates(predicates, query_ts, None);
+            return self.visible_only(hits, query_ts);
         }
         if let Some(indexed) = self.index_candidate_edge_ids(predicates, query_ts) {
-            return self.properties.filter_edge_ids_by_predicates(
-                predicates,
-                query_ts,
-                Some(&indexed),
-            );
+            let hits =
+                self.properties
+                    .filter_edge_ids_by_predicates(predicates, query_ts, Some(&indexed));
+            return self.visible_only(hits, query_ts);
         }
         let pruned = self.pruned_owner_groups(predicates);
         if pruned.is_empty() {
@@ -88,9 +93,10 @@ impl EdgeStore {
                 "filter_edge_ids: no usable index or segment prune, full property walk over {} rows",
                 self.properties.row_count()
             );
-            return self
+            let hits = self
                 .properties
                 .filter_edge_ids_by_predicates(predicates, query_ts, None);
+            return self.visible_only(hits, query_ts);
         }
         let survivors: Vec<EdgeId> = self
             .properties
@@ -101,8 +107,16 @@ impl EdgeStore {
                     .is_none_or(|owner| !pruned.contains(&owner))
             })
             .collect();
-        self.properties
-            .filter_edge_ids_by_predicates(predicates, query_ts, Some(&survivors))
+        let hits =
+            self.properties
+                .filter_edge_ids_by_predicates(predicates, query_ts, Some(&survivors));
+        self.visible_only(hits, query_ts)
+    }
+
+    fn visible_only(&self, hits: Vec<EdgeId>, query_ts: Timestamp) -> Vec<EdgeId> {
+        hits.into_iter()
+            .filter(|edge_id| self.is_visible(*edge_id, query_ts))
+            .collect()
     }
 
     /// Owner groups provably excluding the pushed predicates.

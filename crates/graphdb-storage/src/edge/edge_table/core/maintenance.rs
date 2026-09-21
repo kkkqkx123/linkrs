@@ -150,8 +150,15 @@ impl EdgeStore {
             self.in_csr.clear_tombstone_reuse_cutoff();
         }
         let mut ran = self.run_auto_maintenance_pass(bound);
-        if self.reclaim_authority_with_watermarks(watermarks, margin) > 0 {
-            ran += 1;
+        match self.reclaim_authority_with_watermarks(watermarks, margin) {
+            Ok(reclaimed) => {
+                if reclaimed > 0 {
+                    ran += 1;
+                }
+            }
+            Err(e) => {
+                log::warn!("authority reclaim refused on audit drift: {}", e);
+            }
         }
         ran
     }
