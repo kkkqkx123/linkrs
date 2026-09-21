@@ -10,6 +10,12 @@ use graphdb_core::wal::{EntityRef, IndexMutation, IndexOperation, OutboxIntent};
 use graphdb_core::Value;
 
 use super::checkpoint::load_generation_build_state;
+use super::checkpoint::{
+    build_vertex_index_data, remove_generation_build_state, resolve_crash_recovery,
+    save_generation_build_state, write_generation_checkpoint,
+};
+use super::generation::GenerationFaultPoint;
+use super::wal_replay::replay_wal_partition;
 
 fn setup_context() -> GraphStorageContext {
     GraphStorageContext::new()
@@ -82,7 +88,7 @@ fn wal_catch_up_uses_only_intent_entities() {
     let mut rebuilt_reverse = std::collections::BTreeMap::new();
     rebuilt_reverse.insert(b"snapshot-reverse".to_vec(), IndexRecord::new(10));
 
-    let (forward, reverse) = super::replay_wal_partition(
+    let (forward, reverse) = replay_wal_partition(
         (active_forward, active_reverse),
         (rebuilt_forward, rebuilt_reverse),
         10,
@@ -297,7 +303,7 @@ fn rebuild_restarts_after_incremental_replay_failure() {
             .create_checkpoint()
             .expect("initial checkpoint should succeed");
 
-        super::inject_generation_fault(super::GenerationFaultPoint::IncrementalReplay);
+        super::inject_generation_fault(GenerationFaultPoint::IncrementalReplay);
         let result = storage.rebuild_tag_index("test_space", "person_name_idx");
         super::clear_generation_faults();
         assert!(
@@ -381,7 +387,7 @@ fn test_generation_build_state_save_load_remove_roundtrip() {
     let state = generation_state(42, 100);
 
     // Save
-    super::save_generation_build_state(&ctx, space_id, index_name, &state)
+    save_generation_build_state(&ctx, space_id, index_name, &state)
         .expect("build state should save");
     assert_eq!(state.state, GenerationState::Building);
     assert_eq!(state.generation, IndexGeneration::new(42));
@@ -398,7 +404,7 @@ fn test_generation_build_state_save_load_remove_roundtrip() {
     assert!(loaded.barrier_lsn.is_none());
 
     // Remove
-    super::remove_generation_build_state(&ctx, space_id, index_name)
+    remove_generation_build_state(&ctx, space_id, index_name)
         .expect("build state should remove");
     let after_remove =
         load_generation_build_state(&ctx, space_id, index_name).expect("load should succeed");
@@ -412,7 +418,7 @@ fn test_generation_build_state_transitions_are_persistent() {
     let index_name = "transition_idx";
 
     let mut state = generation_state(1, 10);
-    super::save_generation_build_state(&ctx, space_id, index_name, &state)
+    save_generation_build_state(&ctx, space_id, index_name, &state)
         .expect("Building state should save");
 
     // Transition to CatchingUp
@@ -420,7 +426,7 @@ fn test_generation_build_state_transitions_are_persistent() {
         .transition_to_catching_up()
         .expect("Building should transition to CatchingUp");
     assert_eq!(state.state, GenerationState::CatchingUp);
-    super::save_generation_build_state(&ctx, space_id, index_name, &state)
+    save_generation_build_state(&ctx, space_id, index_name, &state)
         .expect("CatchingUp state should save");
 
     let loaded = load_generation_build_state(&ctx, space_id, index_name)
@@ -434,7 +440,7 @@ fn test_generation_build_state_transitions_are_persistent() {
         .expect("CatchingUp should transition to Publishing");
     assert_eq!(state.state, GenerationState::Publishing);
     assert_eq!(state.barrier_lsn, Some(CommitLsn::new(50)));
-    super::save_generation_build_state(&ctx, space_id, index_name, &state)
+    save_generation_build_state(&ctx, space_id, index_name, &state)
         .expect("Publishing state should save");
 
     let loaded = load_generation_build_state(&ctx, space_id, index_name)
@@ -458,11 +464,11 @@ fn test_crash_recovery_discards_incomplete_building_state() {
 
     // Simulate crash during Building: save Building state then recover
     let state = generation_state(1, 10);
-    super::save_generation_build_state(&ctx, space_id, index_name, &state)
+    save_generation_build_state(&ctx, space_id, index_name, &state)
         .expect("Building state should save");
 
     // Recover (should discard incomplete build)
-    super::resolve_crash_recovery(&ctx, space_id, index_name).expect("recovery should succeed");
+    resolve_crash_recovery(&ctx, space_id, index_name).expect("recovery should succeed");
 
     let after =
         load_generation_build_state(&ctx, space_id, index_name).expect("load should succeed");
@@ -483,11 +489,11 @@ fn test_crash_recovery_discards_incomplete_catching_up_state() {
     state
         .transition_to_catching_up()
         .expect("Building should transition to CatchingUp");
-    super::save_generation_build_state(&ctx, space_id, index_name, &state)
+    save_generation_build_state(&ctx, space_id, index_name, &state)
         .expect("CatchingUp state should save");
 
     // Recover (should discard incomplete catch-up)
-    super::resolve_crash_recovery(&ctx, space_id, index_name).expect("recovery should succeed");
+    resolve_crash_recovery(&ctx, space_id, index_name).expect("recovery should succeed");
 
     let after =
         load_generation_build_state(&ctx, space_id, index_name).expect("load should succeed");
@@ -511,11 +517,11 @@ fn test_crash_recovery_preserves_publishing_state() {
     state
         .transition_to_publishing(CommitLsn::new(50))
         .expect("CatchingUp should transition to Publishing");
-    super::save_generation_build_state(&ctx, space_id, index_name, &state)
+    save_generation_build_state(&ctx, space_id, index_name, &state)
         .expect("Publishing state should save");
 
     // Recover (should NOT discard Publishing state since the manifest may be published)
-    super::resolve_crash_recovery(&ctx, space_id, index_name).expect("recovery should succeed");
+    resolve_crash_recovery(&ctx, space_id, index_name).expect("recovery should succeed");
 
     let after =
         load_generation_build_state(&ctx, space_id, index_name).expect("load should succeed");
@@ -540,7 +546,7 @@ fn test_generation_build_state_not_found_for_missing_index() {
 #[test]
 fn test_remove_generation_build_state_on_clean_state_is_noop() {
     let (_temp, ctx) = setup_persistent_context();
-    let result = super::remove_generation_build_state(&ctx, 1u64, "no_state_idx");
+    let result = remove_generation_build_state(&ctx, 1u64, "no_state_idx");
     assert!(result.is_ok());
 }
 
@@ -583,7 +589,7 @@ fn test_build_vertex_index_data_handles_empty_input() {
 
     let vertices = vec![];
     let (forward, reverse) =
-        super::build_vertex_index_data(0, &index, &vertices, graphdb_core::types::MAX_TIMESTAMP)
+        build_vertex_index_data(0, &index, &vertices, graphdb_core::types::MAX_TIMESTAMP)
             .expect("build should succeed with empty input");
     assert!(forward.is_empty(), "forward map should be empty");
     assert!(reverse.is_empty(), "reverse map should be empty");
@@ -605,7 +611,7 @@ fn test_flush_index_data_writes_valid_files() {
     let mut reverse = BTreeMap::new();
     reverse.insert(vec![3, 4, 5], IndexRecord::new(MAX_TIMESTAMP));
 
-    super::write_generation_checkpoint(&gen_dir, &forward, &reverse).expect("flush should succeed");
+    write_generation_checkpoint(&gen_dir, &forward, &reverse).expect("flush should succeed");
 
     assert!(
         gen_dir.join("forward_chunks/chunk_index.bin").exists(),

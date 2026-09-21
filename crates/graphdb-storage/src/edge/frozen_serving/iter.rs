@@ -1,6 +1,6 @@
-use super::super::{EdgePosition, Nbr};
+use super::super::Nbr;
 use super::MappedFrozen;
-use graphdb_core::types::{EdgeId, Timestamp, VertexId};
+use graphdb_core::types::{Timestamp, VertexId};
 
 impl MappedFrozen {
     /// Iterate timestamp-visible entries across all rows without materializing

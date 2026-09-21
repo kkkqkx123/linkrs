@@ -1,403 +1,318 @@
-# CSR Variants
+# CSR 变体详解
 
-> **Historical document.** Describes the pre-restructure variant set.
-> `MultiSingleMutableCsr`, `LabeledMutableCsr` and the immutable `Csr` have
-> been removed; `Nbr.prop_offset` no longer exists. Current variants are
-> `Multiple`, `Single` and `None` only — see [overview.md](overview.md).: Implementation Details
+本文描述当前七种 `CsrVariant` 变体的实现细节。
+历史形态（`MultiSingle`、`Labeled`、旧不可变 `Csr`、
+`prop_offset` 行内属性偏移）均已删除，不再记录。
 
-## 1. MutableCsr (Multiple Variant)
+## 0. 通用基础：槽位两半与哨兵
 
-**File**: `crates/graphdb-storage/src/storage/edge/mutable_csr.rs`
+除 `None` 外，所有变体共享同一槽位语义：
 
-### Purpose
-Standard multi-edge CSR for general cases where vertices can have many outgoing edges.
+- 热端 `HotNbr { endpoint: u32, rank: i64, edge_id: EdgeId }`（24 字节）：
+  遍历所需的全部拓扑；只走热端的扫描不触碰冷端缓存行。
+- 冷端 `ColdStamps { delete_ts: Timestamp }`（8 字节）：物理 MVCC 副本，
+  `Timestamp::MAX` 表示存活；`create_ts` 只存放在版本权威
+  （`edge_timestamps`）中，行内不保留。
+- API 边界组装为 `Nbr`（32 字节）：`HotNbr + ColdStamps`。
+- 空位填充一律用 `Nbr::dead_gap()`（不可分配边 ID + 空删除窗口），
+  永不存活；越界扫描报缺席而非幽灵边。
 
-### Layout
+共享删除状态机（`csr_shared.rs` 的 `decide_slot_delete`）：
+异戳墓碑上再删报写写冲突；同戳再删幂等返回 `false`；
+回滚窗口仅允许撤销发生在回滚点及之前的删除。
+共享顶点容量增长（`grown_vertex_capacity`，1.25 倍向上取整）。
+
+---
+
+## 1. Multiple（`MutableCsr`）：通用多边行
+
+### 用途
+
+默认通用形态：每顶点可有多条出边，度数无界。
+
+### 布局
 
 ```
-Memory Layout:
-+-----------------------------+
-|  Vertex 0  | Vertex 1 | ... |  Primary blocks (contiguous)
-+-----------------------------+
-         |
-         +--> Overflows (append-only at end)
-              +----------------+
-              |  Overflow V0   |
-              |  Overflow V1   |
-              |  ...           |
-              +----------------+
+主块（hot_list / cold_list 连续扁平，VertexBookkeeping 寻址）：
++-----------------------------------+
+|V0 主块 | V1 主块 | V2 主块 | ...  |  adj_offsets / degrees / primary_capacities
++-----------------------------------+
+     |
+     +--> 溢出块（按顶点分段稀疏表，每满一块追加一块，从不拷贝旧块）
+          +---> [chunk1] -> [chunk2]   分级定长块
+
+零度行：延迟分配，主块无槽位；每行固定成本 12 字节
+（offset + degree + capacity），溢出与存活索引按段稀疏分配。
 ```
 
-### Data Structures
+### 数据结构
 
 ```rust
 pub struct MutableCsr {
-    nbr_list: Vec<Nbr>,              // All edges, flat
-    adj_offsets: Vec<u32>,           // Where each vertex's edges start
-    primary_capacities: Vec<u32>,    // Preallocated size per vertex
-    degrees: Vec<u32>,               // Actual edge count per vertex
-    overflow_starts: Vec<u32>,       // Where overflow block begins (NO_OVERFLOW = none)
-    overflow_counts: Vec<u32>,       // Edge count in overflow
-    overflow_capacities: Vec<u32>,   // Overflow capacity per vertex
-    edge_count: AtomicU64,           // Total active edge count
-    vertex_capacity: usize,
+    hot_list: Vec<HotNbr>,        // 主块拓扑一半
+    cold_list: Vec<ColdStamps>,   // 主块时间戳一半（等长步进）
+    rows: VertexBookkeeping,      // adj_offsets / degrees / primary_capacities
+    overflow_chunks: OverflowStorage,      // 按顶点分段稀疏溢出表
+    overflow_chunk_edges: usize,  // 每溢出块边数
+    live_sets: LiveSetStorage,    // 宽行存活端点集（窄行直接扫描，无需建集）
+    tombstone_reuse_cutoff: Timestamp, // 热路径墓碑复用水位（内存态，不持久化）
+    reuse_hint: Vec<u32>,         // 每顶点首个已知可复用槽提示（内存态）
+    live_counts: Vec<u32>,        // 窄行存活计数
+    tombstone_counts: Vec<u32>,   // 窄行墓碑计数
+    primary_sorted: Vec<bool>,    // 主块键序缓存（内存态，不持久化）
+    edge_count: u64,
     total_edge_capacity: usize,
 }
 ```
 
-### Two-Level Storage Strategy
-
-**Primary Block**:
-- Fixed pre-allocated space for each vertex (default: 4 edges)
-- Located at `adj_offsets[v]` with size `primary_capacities[v]`
-- Fast insertion if space available
-
-**Overflow Block**:
-- Created when primary fills up
-- Appended to the end of `nbr_list`
-- Grows dynamically via `expand_vertex_capacity()` (doubles capacity)
-
-### Insertion Logic
+### 写入逻辑
 
 ```
-insert_edge(src, dst, edge_id, prop_offset, ts):
-  1. Check duplicate: neighbor + active (delete_ts == u32::MAX)
-  2. If primary has space and no overflow allocated:
-     -> Write to primary block
-  3. Else:
-     -> If no overflow or overflow full: expand_vertex_capacity()
-     -> Write to overflow block
-  4. Update degree counter, increment edge_count
+insert_edge(src, dst, edge_id, ts):
+  1. 宽行查存活集 / 窄行扫描：存活 (endpoint, rank) 重复 -> EdgeAlreadyExists
+  2. 主块有空位（含水位下可复用墓碑）-> 写主块
+  3. 否则追加到溢出尾块；尾块满则新分配一块（定长，不倍增拷贝）
+  4. 更新度数与 edge_count；新键使该行 primary_sorted 置假
 ```
 
-### Fragmentation
+删除走共享状态机盖 `delete_ts` 戳；空溢出块在移除路径上立即摘除，
+不存在不可达块。按顶点块数上限触发写路径重排，
+移除上报逐边回调 `(edge_id, delete_ts)` 以便调用方集中提升删除。
 
-**When does it occur?**
-- Each `expand_vertex_capacity()` for a vertex allocates new space at the end of `nbr_list`
-- Old overflow block becomes unreachable -> internal fragmentation
+### 行序约定
 
-**Detection**:
-```rust
-csr.fragmentation_ratio()  // Returns wasted_capacity / total_capacity
-```
+主块在维护路径上按 `(endpoint, rank, edge_id)` 排序为有序前缀，
+溢出尾部保持插入序为无序后缀；新写回填主块空位或 spill 到溢出尾，
+行即重新标记为无序。阈值扫描走 `primary_sorted` 缓存：
+有序主块二分键窗口，无序行与溢出后缀线性扫描。
 
-### Compaction
+### 操作复杂度
 
-**Operation**:
-- O(V + E) time, O(E) space
-- Merges primary + overflow into flat CSR
-- Removes soft-deleted edges (delete_ts < u32::MAX)
-- Reserves `reserve_ratio` free space for future growth per vertex
-
-### Operations Complexity
-
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| `insert_edge` | O(1) amortized | Spills to overflow when full |
-| `delete_edge` (by ID) | O(degree) | Scans primary + overflow |
-| `get_edge` | O(degree) | Scans both levels |
-| `edges_of` | O(degree) | Returns all valid edges |
-| `compact_with_ts` | O(V + E) | Defragments storage |
+| 操作 | 复杂度 | 说明 |
+|---|---|---|
+| `insert_edge` | O(1) 摊销 | 宽行集合判重 O(1)，窄行扫描 O(degree) |
+| `delete_edge`（按 ID） | O(degree) | 主块 + 溢出定位 |
+| `get_edge` / `edges_of` | O(degree) | 仅供测试的戳过滤；生产走版本权威 |
+| `compact_vertex_with_reporting` | O(行宽) | 行内回收，消除溢出 |
+| `compact_with_ts_reporting` | O(V + E) | 整表重建，消除溢出链 |
 
 ---
 
-## 2. SingleMutableCsr (Single Variant)
+## 2. Single（`SingleMutableCsr`）：一对一
 
-**File**: `crates/graphdb-storage/src/storage/edge/single_mutable_csr.rs`
+### 用途
 
-### Purpose
-Optimized for one-to-one relationships where each vertex has **at most one outgoing edge**.
+每顶点至多一条存活边：一对一关系（配偶、现雇主等）。
 
-### Use Cases
-- "Spouse" relationships
-- "Current employer"
-- Any strict single-edge semantic
-
-### Layout
+### 布局
 
 ```
-Direct array indexing:
+直接下标数组（槽序号即行号，无偏移数组）：
 +---+---+---+---+
-| V0| V1| V2| V3|  nbr_list (one Nbr per vertex)
+| V0| V1| V2| V3|  hot_slots[i] + cold_slots[i]
 +---+---+---+---+
- 0   1   2   3
 ```
 
-### Data Structures
+### 数据结构
 
 ```rust
 pub struct SingleMutableCsr {
-    nbr_list: Vec<Nbr>,          // One edge per vertex (may be inactive)
-    edge_count: AtomicU64,       // Count of active edges
-    vertex_capacity: usize,
+    hot_slots: Vec<HotNbr>,     // 每顶点一槽拓扑
+    cold_slots: Vec<ColdStamps>,// 每顶点一槽时间戳
+    edge_count: u64,
 }
 ```
 
-### Operations Complexity
+空槽为 `dead_gap()`；单行天然有序（`is_row_sorted` 恒真）。
 
-| Operation | Complexity |
-|-----------|-----------|
+### 并发与冲突语义
+
+本层无时间戳排序检查：槽内有存活边时第二次插入直接报
+`Conflict` 错误（从不静默覆盖，调用方须先删后建）；
+墓碑槽或空槽接受任意时间戳重建。快照可见性由上层版本权威裁决。
+
+### 操作复杂度
+
+| 操作 | 复杂度 |
+|---|---|
 | `insert_edge` | O(1) |
-| `delete_edge` | O(1) |
-| `get_edge` | O(1) |
-| `edges_of` | O(1) |
-
-### Concurrency Limitation
-
-**Critical**: This CSR does NOT support concurrent writes at the same timestamp.
-
-**Behavior**:
-- Each vertex can have at most 1 logically valid edge
-- Newer timestamps **overwrite** older ones
-- If two updates arrive with same/non-monotonic timestamp, the later one is **silently rejected**
-
-**Example**:
-```
-T1: insert_edge(v0, v1, ts=100) succeeds
-T2: insert_edge(v0, v2, ts=99)  rejected (99 < 100)
-T3: insert_edge(v0, v3, ts=100) rejected (100 == 100, not >)
-```
-
-**Workarounds**:
-1. Ensure timestamp monotonicity at upper layers (WAL, transaction log)
-2. Use `MutableCsr` if concurrent writes needed
+| `delete_edge` / `delete_edge_by_dst`（0 或 1） | O(1) |
+| `get_edge` / `edges_of` | O(1) |
+| 回收（`compact_vertex_with_reporting`） | O(1)：截止线下墓碑清槽上报 |
 
 ---
 
-## 3. MultiSingleMutableCsr (MultiSingle Variant)
+## 3. Pure（`PureTopologyCsr`）：纯拓扑
 
-**File**: `crates/graphdb-storage/src/storage/edge/multi_single_mutable_csr.rs`
+### 用途
 
-### Purpose
-Each vertex has multiple edges, but limited to a fixed capacity per vertex.
+无 rank、无时间戳、无属性的纯拓扑边：12 字节/边，
+rank 恒为 0。
 
-### Use Case
-- Memory-constrained scenarios
-- Known upper bound on edges per vertex
+### 布局
 
-### Layout
+结构镜像 `MutableCsr`（主块 + 分段稀疏溢出表 + 宽行存活集），
+但每槽仅 `(endpoint: u32, edge_id: u64)` 两列，
+无热冷时间戳一半。读时现场组装 `Nbr`
+（`rank = 0`，`delete_ts = Timestamp::MAX`），不存不查 MVCC 状态。
 
-```
-Flat array with stride = edges_per_vertex:
-+---------+---------+---------+
-| V0[0..N)| V1[0..N)| V2[0..N)|  ...
-+---------+---------+---------+
-counts = [2, 1, 3, ...]
-```
+物理删除用 `INVALID_EDGE_ID` 覆写边 ID，端点槽保留以维持
+位置引用有效。窄行阈值以上（`LIVE_SET_WIDTH_BOUND = 8`）建集，
+窄行直接扫描。
 
-### Data Structures
+### 约束
 
-```rust
-pub struct MultiSingleMutableCsr {
-    edges: Vec<Nbr>,                 // Flat array with vertex stride
-    edges_per_vertex: usize,         // Fixed capacity per vertex
-    counts: Vec<u32>,               // Active edge count per vertex
-    edge_count: AtomicU64,
-    vertex_capacity: usize,
-}
-```
-
-### Insertion Behavior
-- Returns `false` if vertex's edge count reaches `edges_per_vertex`
-- No overflow, strict capacity
-- Updates existing edge with same dst if ts is newer
-
-### Operations Complexity
-
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| `insert_edge` | O(degree) | Duplicate check + linear scan |
-| `delete_edge` (by ID) | O(degree) | Scans vertex block |
-| `get_edge` | O(degree) | Linear scan |
-| `edges_of` | O(degree) | Returns valid edges |
-| `compact_with_ts` | O(degree) | Shifts within fixed blocks |
+- rank 非零的写入被拒绝（纯拓扑无 rank 列）；
+- 有属性的表不能选此形态（属性无处存放）。
 
 ---
 
-## 4. LabeledMutableCsr (Labeled Variant)
+## 4. Bundled（`BundledCsr`）：拓扑 + 内联单标量
 
-**File**: `crates/graphdb-storage/src/storage/edge/labeled_mutable_csr.rs`
+### 用途
 
-### Purpose
-Multi-label CSR where edges from the same source-destination pair may have different labels.
+恰好一个内联数值属性、读多写少、模式稳定的边类型：
+20 字节/边（拓扑 12 + 值 8）。类型编解码集中在
+`encode_scalar` / `decode_scalar`，行内只存 64 位裸词，
+类型由发布模式在读时解析，行内不存类型。
 
-### Use Case
-- Multi-label graphs (e.g., "friend", "colleague", "family" on same pair)
-- Efficient label-filtered traversal
+### 布局
 
-### Layout
+值列与拓扑列槽位平行：`primary_values` / `primary_valid`
+紧随主块端点与边 ID 块；每个拓扑溢出块有等长平行的
+`BundledOverflowValues` 块。所有拓扑变更走共享纯拓扑入口
+（定位插入、定位删除）或逐槽镜像其移动
+（`rollback_insert`、`compact_vertex_with_reporting`），
+两列永不漂移。
 
-```
-Label-grouped storage:
-+---------------------------------+
-| nbr_list (flattened by label)  |
-+---------------------------------+
+删除槽保留陈旧裸词但清有效位；定位回滚恢复保留裸词。
 
-Per-vertex mapping:
-label_ranges[v] = [
-  { label: 1, offset: 0, count: 3 },
-  { label: 5, offset: 3, count: 2 },
-  ...
-]
-```
+### 边界（有意不再扩展）
 
-### Data Structures
-
-```rust
-pub struct LabeledMutableCsr {
-    nbr_list: Vec<Nbr>,                    // All edges, flat
-    label_ranges: Vec<Vec<LabelRange>>,    // Label -> (offset, count) per vertex
-    degrees: Vec<u32>,                     // Total edges per vertex
-    edge_count: AtomicU64,
-    vertex_capacity: usize,
-}
-
-struct LabelRange {
-    label: LabelId,
-    offset: u32,
-    count: u32,
-}
-```
-
-### Operations Complexity
-
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| `insert_edge` (with label) | O(K) | K = distinct labels at vertex (linear scan, then sort) |
-| `get_edge` (by label) | O(K + degree) | Linear scan on label ranges |
-| `edges_of` (all) | O(degree) | Return all label groups |
-
-Note: The basic `MutableCsrTrait::insert_edge()` (without label) assigns label 0.
+- 冻结打包器只存拓扑：带有效值的组冻结被拒绝，
+  需冻结时先迁移到列式形态；
+- 多属性、不可编码类型、在线模式变更归列式形态——
+  本形态限定单列，不再加列。
 
 ---
 
-## 5. Immutable Csr
+## 5. Frozen（`ImmutableCsr`）：冻结紧凑组
 
-**File**: `crates/graphdb-storage/src/storage/edge/csr.rs`
+### 用途
 
-### Purpose
-Read-only, compact snapshot for:
-- Static analysis
-- Batch-loaded data
-- Persistent storage format (frozen segments)
+读为主的冻结组：单段连续邻居 + 按行度数表。
+空行无槽位；无容量数组、无溢出链、无存活索引、无锁：
+冻结组仅付条目加两张小按行数组的成本。
 
-### Layout
+### 布局
 
 ```
-Flat CSR (no overflow, no fragmentation):
-+--------------------------------+
-|  All edges, contiguous          |  edges (Vec<ImmutableNbr>)
-+--------------------------------+
-
-Offset array:
-+----------------+
-| Offsets[V]     |  offsets (Vec<u32>)
-| Last entry     |  = total edge count
-+----------------+
+hot_entries / cold_entries 按行首尾相连，每行按
+(endpoint, rank, edge_id) 排序；degrees[row] 为行长，
+offsets[row] 为行内起始（内存态，打包与加载时重建，不持久化）。
 ```
 
-### Data Structures
+冻结保留被打包可变组的全部邻居字节（含边 ID、删除戳与墓碑），
+仅丢弃无边的预留空位哨兵。冻结改变物理布局与行序，
+时间戳过滤读在前后观察到相同逻辑内容，而非相同字节序。
+可见性权威仍在上层，行戳仍是物理副本。
 
-```rust
-pub struct Csr {
-    offsets: Vec<u32>,           // Where each vertex's edges start
-    edges: Vec<ImmutableNbr>,   // Contiguous edge data
-    edge_count: AtomicU64,
-    vertex_capacity: usize,
-}
-```
-
-### Key Differences from Mutable CSR
-
-| Aspect | Mutable | Immutable |
-|--------|---------|-----------|
-| Storage | Vec (growable) with overflow | Vec (compact, no overflow) |
-| Neighbor type | `Nbr` (with delete_ts) | `ImmutableNbr` (single timestamp) |
-| Fragmentation | Yes (overflow blocks) | No (flat layout) |
-| Mutations | `insert_edge`, `delete_edge` | Build-only (`batch_put_edges_with_timestamps`) |
-| Memory | Higher (capacity > usage) | Lower (capacity == usage) |
-| Lookup | O(degree) with timestamp | O(degree) snapshot |
-
-### Construction
-
-```rust
-// From mutable entries
-let csr = Csr::from_nbr_entries(&entries, vertex_capacity);
-
-// With batch builder
-csr.batch_put_edges_with_timestamps(
-    &src_list, &dst_list, &edge_ids, &prop_offsets, &timestamps,
-);
-```
-
-### Operations
-
-| Operation | Behavior |
-|-----------|----------|
-| `get_edge` | Direct array lookup, no timestamp filtering |
-| `edges_of` | Returns all edges slice, O(degree) |
-| `dump` / `load` | Serialization of flat layout |
-| `insert_edge` | Not available (read-only) |
+点查在键区间内二分，返回区间内首个时间戳可见版本；
+扫描在有序行上线性进行。所有变更入口拒绝写入：
+冻结组须显式解冻回可变形态后方可再写，写路径无隐式解冻。
 
 ---
 
-## 6. None (Placeholder Variant)
+## 6. Mapped（`MappedFrozen`）：内存映射服务视图
 
-**File**: `crates/graphdb-storage/src/storage/edge/csr_variant.rs`
+### 用途
 
-### Purpose
-Placeholder for relationships with **no edges stored**.
+与 `Frozen` 相同只读内容的内存映射视图：查询直接走 mmap
+的扁平列文件按需分页，而非 open 时把整组解码进堆。
 
-### Data Structure
+### 文件布局（小端）
+
+- 魔数（u32）、行数 / 条目数 / 存活边数（u64 × 3）
+- 五组 `(offset u64, length u64)` 列描述子：
+  度数、端点、rank、边 ID、删除戳
+- 列区：`rows` 个 u32 度数；`entries` 个 u32 端点、
+  i64 rank、u64 边 ID、u64 删除戳
+- 尾部 CRC32（覆盖之前全部字节，与堆检查点同校验模式）
+
+列宽固定，任意槽一次小端解码即可寻址，无需全文件解码；
+行偏移在 open 时内存重建，不持久化。
+
+### 服务缓存状态机（派生缓存，检查点为准）
+
+| 状态 | 含义 |
+|---|---|
+| 缺席 | 无边车文件；冻结/映射基在冲盘时缺则补，可变基保持缺席 |
+| 有效 | 边车通过校验且与基一致；加载直接映射，跳过权威解码 |
+| 陈旧 | 基被重写为可变或组已消失；冲盘删边车，读路径不可见 |
+| 过期 | 边车校验失败或有只读视图无法吸收的追加增量；回退权威基并重建，计数告警而不静默、不失败加载 |
+
+句柄引用计数（`Arc<Mmap>`）：克隆共享同一映射，
+持视图的读者在边车替换期间保持旧文件存活。
+`clear()` 语义特殊：映射在堆外无法清空，组回退为 `None` 占位。
+
+---
+
+## 7. None：占位
+
+### 用途
+
+模式存在但该方向不存边。仅存顶点容量，不存边。
 
 ```rust
-None { vertex_capacity: usize }  // Only stores capacity, no edges
+None { vertex_capacity: usize }  // 仅容量，无边
 ```
 
-### Behavior
+### 行为
 
-| Operation | Result |
-|-----------|--------|
+| 操作 | 结果 |
+|---|---|
 | `edge_count()` | 0 |
-| `insert_edge()` | `false` (rejected) |
-| `delete_edge()` | `false` (rejected) |
+| `insert_edge()` | 报拒绝错误（`invalid_operation`，写路径到此即判错） |
+| `delete_edge()` | 报拒绝错误（同上） |
+| `delete_edge_by_dst()` | 0（无边可删） |
 | `get_edge()` | `None` |
-| `edges_of()` | Empty vec |
-| `iter()` | Empty iterator |
-| Memory | `sizeof(usize)` |
+| `edges_of()` / 遍历 | 空 |
+| 内存 | `sizeof(usize)` 量级 |
 
-### Serialization
+注意 `EdgeSchema::validate` 拒绝任一方向为 `None` 的表，
+因此 `None` 只出现在组级回退（如 `Mapped` 清空后）与
+单测构造中，不出现在正常建表的持久模式里。
+
+### 序列化
 
 ```
-dump(): [0u8, vertex_capacity (8 bytes)] // Tag 0 = None
-load(): Deserializes vertex_capacity, recreates None variant
+dump(): [0u8, vertex_capacity (8 字节小端)]
+load(): 反序列化容量，重建 None 变体
 ```
 
 ---
 
-## Trait Implementation Matrix
+## Trait 实现矩阵
 
-| Trait Method | Multiple | Single | MultiSingle | Labeled | Immutable (Csr) | None |
-|--------------|----------|--------|-------------|---------|-----------------|------|
-| `vertex_capacity` | Yes | Yes | Yes | Yes | Yes | Yes |
-| `edge_count` | Yes | Yes | Yes | Yes | Yes | Yes (0) |
-| `dump` / `load` | Yes | Yes | Yes | Yes | Yes | Yes |
-| `insert_edge` | Yes | Yes | Yes | Yes | N/A | No |
-| `delete_edge` | Yes | Yes | Yes | Yes | N/A | No |
-| `get_edge` | Yes | Yes | Yes | Yes | Yes | No |
-| `edges_of` | Yes | Yes | Yes | Yes | Yes | Yes (empty) |
-| `compact_with_ts` | Yes | No-op | Yes | Yes | N/A | No-op |
-| `used_memory_size` | Yes | Yes | Yes | Yes | Yes | Yes |
+| Trait 方法 | Multiple | Single | Pure | Bundled | Frozen | Mapped | None |
+|---|---|---|---|---|---|---|---|
+| `vertex_capacity` | 有 | 有 | 有 | 有 | 有 | 有 | 有 |
+| `edge_count` | 有 | 有 | 有 | 有 | 有 | 有 | 有（0） |
+| `dump` / `load` / `dump_into` | 有 | 有 | 有 | 有 | 有 | 有（读边车/堆） | 有 |
+| `insert_edge` | 有 | 有 | 有 | 有（经拓扑） | 拒绝 | 拒绝 | 拒绝（报错） |
+| `delete_edge` 系列 | 有 | 有 | 有（物理） | 有（经拓扑） | 拒绝/0 | 拒绝/0 | 报错/`Ok(false)`/0（按入口） |
+| `get_edge` / `edges_of`（测试原语） | 有 | 有 | 有（组装） | 有（组装） | 有 | 有 | 空 |
+| `visit_physical` / `fill_physical_into` | 有 | 有 | 有 | 有 | 有 | 有 | 空 |
+| `compact_vertex_with_reporting` | 有 | 有（清槽） | 有 | 有（双列） | 无操作 | 无操作 | 无操作 |
+| `used_memory_size` | 有 | 有 | 有 | 有 | 有 | 有 | 有 |
 
----
+## 选型对照：何时用谁
 
-## Comparison: When to Use Which
-
-| Scenario | Variant | Reason |
-|----------|---------|--------|
-| "Friends" (multi-edge, general) | `Multiple` | Default, handles any case |
-| "Spouse" (one-to-one) | `Single` | O(1) access, memory efficient |
-| "Followers" (bounded multi-edge, ~1K per vertex) | `MultiSingle` | Fixed memory, predictable layout |
-| "Collaborates on project/paper/team" (multi-label) | `Labeled` | Efficient label filtering |
-| Analytical snapshot, batch-loaded data | `Immutable` (Csr) | Flat, compact, read-only |
-| Schema exists but no actual edges stored | `None` | Zero overhead |
+| 场景 | 记录形态 + 变体 | 原因 |
+|---|---|---|
+| 好友、关注（通用多边） | Columnar + `Multiple` | 默认，最灵活 |
+| 配偶、现雇主（一对一） | Columnar + `Single` | O(1)，内存省，冲突显式报错 |
+| 无属性纯拓扑大图 | `Pure` | 12 字节/边，最省 |
+| 单数值属性且读多写少 | `Bundled` | 20 字节/边，免属性表一次跳转 |
+| 读为主、长期不变的组 | `Frozen` / `Mapped` | 紧凑有序行；mmap 视图免全量解码 |
+| 模式存在但该方向无边 | `None`（组级占位） | 零开销 |

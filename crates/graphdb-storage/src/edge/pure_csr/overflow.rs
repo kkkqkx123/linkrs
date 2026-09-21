@@ -1,6 +1,6 @@
 use graphdb_core::types::EdgeId;
 
-use super::super::csr_shared::{OverflowChunkSpec, OverflowTable};
+use super::super::csr_shared::OverflowTable;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PureOverflowChunk {

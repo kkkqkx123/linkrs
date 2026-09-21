@@ -87,21 +87,25 @@ impl CsrShardSet {
 
     /// Whole-set fragmentation statistics, summed across groups.
     /// Observation metric only; collection triggers use per-vertex counts.
+    /// Sums every group reporting detailed stats; groups without reserved
+    /// row capacity contribute nothing. Returns none when no group reports.
     pub fn fragmentation_stats(&self) -> Option<FragmentationStats> {
-        if self.strategy != EdgeStrategy::Multiple {
-            return None;
-        }
         let mut total_capacity = 0usize;
         let mut reachable_edges = 0usize;
         let mut dead_entries = 0usize;
         let mut wasted_capacity = 0usize;
+        let mut reported = false;
         for shard in self.shards.values() {
             if let Some(stats) = shard.variant.fragmentation_stats() {
+                reported = true;
                 total_capacity += stats.total_capacity;
                 reachable_edges += stats.reachable_edges;
                 dead_entries += stats.dead_entries;
                 wasted_capacity += stats.wasted_capacity;
             }
+        }
+        if !reported {
+            return None;
         }
         Some(FragmentationStats::with_dead_info(
             total_capacity,

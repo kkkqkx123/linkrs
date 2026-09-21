@@ -41,6 +41,10 @@ impl MutableCsrTrait for CsrVariant {
         ts: Timestamp,
         on_deleted: &mut dyn FnMut(EdgeId),
     ) -> usize {
+        // Count-returning deletes report zero for read-only and empty forms:
+        // frozen and mapped groups need an explicit unfreeze first, and the
+        // placeholder holds no edges. Result-returning deletes below refuse
+        // those forms with an error instead of a silent zero.
         match self {
             CsrVariant::Multiple(csr) => {
                 csr.delete_edge_by_dst_reporting(src_vid, dst, ts, on_deleted)
@@ -71,6 +75,9 @@ impl MutableCsrTrait for CsrVariant {
                 ts,
                 &mut |edge_id, position| on_deleted(edge_id, Some(position)),
             ),
+            CsrVariant::Single(csr) => {
+                csr.delete_edge_by_dst_reporting_positioned(src_vid, dst, ts, on_deleted)
+            }
             CsrVariant::Pure(csr) => {
                 csr.delete_edge_by_dst_reporting_positioned(src_vid, dst, ts, on_deleted)
             }
@@ -86,6 +93,7 @@ impl MutableCsrTrait for CsrVariant {
     fn locate_edge(&self, src_vid: u32, edge_id: EdgeId) -> Option<(EdgePosition, Nbr)> {
         match self {
             CsrVariant::Multiple(csr) => csr.locate_edge(src_vid, edge_id),
+            CsrVariant::Single(csr) => csr.locate_edge(src_vid, edge_id),
             CsrVariant::Pure(csr) => csr.locate_edge(src_vid, edge_id),
             CsrVariant::Bundled(csr) => csr.locate_edge(src_vid, edge_id),
             CsrVariant::Frozen(csr) => csr.locate_edge(src_vid, edge_id),
@@ -103,6 +111,9 @@ impl MutableCsrTrait for CsrVariant {
     ) -> StorageResult<bool> {
         match self {
             CsrVariant::Multiple(csr) => {
+                csr.delete_edge_at_position(src_vid, position, expected, ts)
+            }
+            CsrVariant::Single(csr) => {
                 csr.delete_edge_at_position(src_vid, position, expected, ts)
             }
             CsrVariant::Pure(csr) => csr.delete_edge_at_position(src_vid, position, expected, ts),
@@ -124,6 +135,9 @@ impl MutableCsrTrait for CsrVariant {
     ) -> bool {
         match self {
             CsrVariant::Multiple(csr) => {
+                csr.revert_delete_at_position(src_vid, position, expected, ts)
+            }
+            CsrVariant::Single(csr) => {
                 csr.revert_delete_at_position(src_vid, position, expected, ts)
             }
             CsrVariant::Pure(csr) => csr.revert_delete_at_position(src_vid, position, expected, ts),
@@ -153,7 +167,9 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Bundled(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
             CsrVariant::Frozen(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
             CsrVariant::Mapped(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
-            CsrVariant::None { .. } => Ok(false),
+            CsrVariant::None { .. } => Err(StorageError::invalid_operation(
+                "no edges stored for this edge type".to_string(),
+            )),
         }
     }
 
@@ -262,14 +278,7 @@ impl MutableCsrTrait for CsrVariant {
     }
 
     fn vertex_needs_compact(&self, vid: u32, cutoff: Timestamp) -> bool {
-        match self {
-            CsrVariant::Multiple(csr) => csr.vertex_needs_compact(vid, cutoff),
-            CsrVariant::Single(csr) => csr.reclaimable_count(vid, cutoff) > 0,
-            CsrVariant::Pure(_) | CsrVariant::Bundled(_) => false,
-            CsrVariant::Frozen(csr) => csr.reclaimable_count(vid, cutoff) > 0,
-            CsrVariant::Mapped(_) => false,
-            CsrVariant::None { .. } => false,
-        }
+        self.reclaimable_count(vid, cutoff) > 0
     }
 
     fn vertex_census(&self, vid: u32) -> (usize, usize, usize) {
@@ -288,8 +297,10 @@ impl MutableCsrTrait for CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.vertex_reclaim_probe(vid, cutoff),
             CsrVariant::Single(csr) => csr.vertex_reclaim_probe(vid, cutoff),
-            CsrVariant::Pure(_) | CsrVariant::Bundled(_) => (0, 0),
-            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => (0, 0),
+            CsrVariant::Pure(csr) => csr.vertex_reclaim_probe(vid, cutoff),
+            CsrVariant::Bundled(csr) => csr.vertex_reclaim_probe(vid, cutoff),
+            CsrVariant::Frozen(csr) => csr.vertex_reclaim_probe(vid, cutoff),
+            CsrVariant::Mapped(csr) => csr.vertex_reclaim_probe(vid, cutoff),
             CsrVariant::None { .. } => (0, 0),
         }
     }

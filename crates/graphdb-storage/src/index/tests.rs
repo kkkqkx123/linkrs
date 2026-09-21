@@ -193,7 +193,7 @@ fn split_writes_only_the_selected_index_to_each_shard() {
     let second_prefix = KeyBuilder::build_vertex_index_prefix(1, "second").0;
     let mut shard_entries = 0;
     for shard in &manifest.manifest().shards {
-        let shard_runtime = crate::index::shard_runtime::ShardRuntime::load_with_pool_capacity(
+        let shard_runtime = crate::index::shard_runtime::shard::ShardRuntime::load_with_pool_capacity(
             shard.checkpoint_file.clone(),
             64 * 1024 * 1024,
         )
@@ -680,8 +680,7 @@ fn included_columns_survive_rebuild_from_snapshot() {
 
 #[test]
 fn wal_recovers_data_after_checkpoint() {
-    use crate::index::shard_runtime::ShardRuntime;
-    use crate::index::types::IndexRecord;
+    use crate::index::shard_runtime::shard::ShardRuntime;    use crate::index::types::IndexRecord;
     use graphdb_core::types::storage_ids::VertexId;
     use graphdb_core::wal::EntityRef;
 
@@ -738,8 +737,7 @@ fn wal_recovers_data_after_checkpoint() {
 
 #[test]
 fn checkpoint_clears_wal() {
-    use crate::index::shard_runtime::ShardRuntime;
-    use crate::index::types::IndexRecord;
+    use crate::index::shard_runtime::shard::ShardRuntime;    use crate::index::types::IndexRecord;
 
     let temp_dir = std::env::temp_dir().join("graphdb_checkpoint_test");
     let _ = std::fs::remove_dir_all(&temp_dir);

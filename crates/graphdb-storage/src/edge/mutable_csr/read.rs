@@ -150,7 +150,6 @@ impl MutableCsr {
         {
             return self.get_edge_physical_via_scan(
                 src_idx,
-                src_vid,
                 decoded_endpoint,
                 decoded_rank,
             );
@@ -167,14 +166,13 @@ impl MutableCsr {
                 }
             }
         }
-        self.get_edge_physical_via_scan(src_idx, src_vid, decoded_endpoint, decoded_rank)
+        self.get_edge_physical_via_scan(src_idx, decoded_endpoint, decoded_rank)
     }
 
     /// Primary-then-overflow physical scan without index dispatch.
     fn get_edge_physical_via_scan(
         &self,
         src_idx: usize,
-        src_vid: u32,
         endpoint: u32,
         rank: i64,
     ) -> Option<Nbr> {

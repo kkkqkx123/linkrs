@@ -25,4 +25,3 @@ pub(crate) mod shard;
 
 pub(crate) use generation::{generation_from_maps_with_pool_capacity, GenerationRuntime};
 pub(crate) use runtime::IndexRuntime;
-pub(crate) use shard::ShardRuntime;

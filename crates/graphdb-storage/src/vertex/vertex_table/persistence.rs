@@ -13,4 +13,3 @@ mod flush;
 mod flush_incremental;
 mod load;
 
-pub use encoding_select::COLUMNS_FORMAT_VERSION;

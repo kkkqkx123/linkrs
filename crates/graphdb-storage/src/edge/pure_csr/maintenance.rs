@@ -29,11 +29,6 @@ impl PureTopologyCsr {
         }
     }
 
-    /// Drop every cached order after a load with unknown row order.
-    pub(crate) fn reset_primary_sorted(&mut self) {
-        self.primary_sorted.fill(false);
-    }
-
     pub(crate) fn rebuild_live_sets(&mut self) {
         let capacity = self.vertex_capacity() as u32;
         self.live_sets.clear();

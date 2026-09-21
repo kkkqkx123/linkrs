@@ -38,12 +38,6 @@ pub mod section {
     pub const EDGE_SEGMENT_STATS: u32 = 0x0209;
 }
 
-/// Write a persistence header (magic + section_id) into a buffer
-pub fn write_header(buf: &mut Vec<u8>, section_id: u32) {
-    buf.extend_from_slice(&PERSISTENCE_MAGIC);
-    buf.extend_from_slice(&section_id.to_le_bytes());
-}
-
 /// Validate and consume a persistence header from a byte slice.
 /// Returns `section_id` on success.
 pub fn read_header(data: &mut &[u8]) -> StorageResult<u32> {
@@ -172,8 +166,9 @@ mod tests {
 
     #[test]
     fn test_read_header_valid() {
+        use std::io::Cursor;
         let mut buf = Vec::new();
-        write_header(&mut buf, section::VERTEX_META);
+        write_header_to(&mut Cursor::new(&mut buf), section::VERTEX_META).unwrap();
         let mut slice = &buf[..];
         let section_id = read_header(&mut slice).unwrap();
         assert_eq!(section_id, section::VERTEX_META);
@@ -220,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_read_versioned_payload_rejects_bad_magic() {
-        let mut buf = b"BADM".to_vec();
+        let buf = b"BADM".to_vec();
         let mut reader = std::io::Cursor::new(buf);
         assert!(read_versioned_payload(&mut reader, "test").is_err());
     }

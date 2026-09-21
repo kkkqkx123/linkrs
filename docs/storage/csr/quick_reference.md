@@ -1,189 +1,185 @@
-# CSR Quick Reference
+# CSR 速查
 
-> **Historical document.** The selection guide and examples below predate the
-> restructure: `LabeledMutableCsr`, `MultiSingleMutableCsr`, the immutable
-> `Csr`, the `prop_offset` insert parameter and `from_strategy` no longer
-> exist. Current API surface — see [overview.md](overview.md) and the code.
-
-## Variant Selection Guide
+## 变体选型指南
 
 ```
-Do you have a one-to-one relationship (spouse, current_employer)?
-  YES -> Use SingleMutableCsr (O(1) access, memory efficient)
-         WARNING: Requires monotonic timestamp ordering
-  NO  -> Continue
+有一对一关系（配偶、现雇主）？
+  YES -> Columnar + Single（O(1)，内存省；第二条存活边报 Conflict，不静默覆盖）
+  NO  -> 继续
 
-Do you have multi-label edges (same src->dst with different types)?
-  YES -> Use LabeledMutableCsr (O(log K) label lookup)
-  NO  -> Continue
+无属性、无 rank、无时间戳的纯拓扑大图？
+  YES -> Pure 记录形态（12 字节/边）
+  NO  -> 继续
 
-Do you need a general multi-edge relationship (friends, follows)?
-  YES -> Use MutableCsr (default, most flexible)
-  NO  -> Continue
+恰好一个内联数值属性、读多写少、模式稳定？
+  YES -> Bundled 记录形态（20 字节/边；要冻结须先迁回列式）
+  NO  -> 继续
 
-Do you have a known bounded edges per vertex (< 1K)?
-  YES -> Use MultiSingleMutableCsr
-  NO  -> Continue
+通用多边关系（好友、关注）？
+  YES -> Columnar + Multiple（默认，最灵活）
+  NO  -> 继续
 
-Do you store any edges at all?
-  NO  -> Use None (placeholder, zero memory)
-  YES -> Already covered above
+读为主、长期不变的组？
+  YES -> 显式 freeze 到 Frozen；open 时边车有效则走 Mapped（mmap 视图）
+  NO  -> 继续
 
-// Special case:
-// - Read-only snapshot / batch-loaded data? -> Immutable Csr (not in CsrVariant)
+该方向不存边？
+  YES -> None（组级占位；注意建表校验拒绝单向表）
 ```
 
-## Code Examples
+## 代码示例
 
-### Creating CSR from Strategy
+### 按策略建 CSR
 
 ```rust
-use crate::storage::edge::{CsrVariant, EdgeStrategy};
+use crate::edge::{CsrVariant, EdgeStrategy};
 
-// Create Multiple variant (general multi-edge)
-let csr = CsrVariant::from_strategy(
+// 通用多边
+let csr = CsrVariant::from_strategy_with_overflow(
     EdgeStrategy::Multiple,
-    1000,      // vertex capacity
-    10000,     // edge capacity
+    1000,   // 顶点容量
+    10000,  // 边容量
+    4096,   // 每溢出块边数（须 > 0）
 )?;
 
-// Create Single variant (one-to-one)
-let csr = CsrVariant::from_strategy(
+// 一对一
+let csr = CsrVariant::from_strategy_with_overflow(
     EdgeStrategy::Single,
-    1000,      // ignored for Single
-    10000,
+    1000, 0, 4096,
 )?;
 
-// Create MultiSingle variant (bounded capacity)
-let csr = CsrVariant::from_strategy(
-    EdgeStrategy::MultiSingle { max_edges: 4 },
-    1000, 10000,
-)?;
-
-// Create Labeled variant (multi-label)
-let csr = CsrVariant::from_strategy(
-    EdgeStrategy::Labeled,
-    1000, 10000,
-)?;
-
-// Create None variant (placeholder)
-let csr = CsrVariant::from_strategy(
+// 占位
+let csr = CsrVariant::from_strategy_with_overflow(
     EdgeStrategy::None,
-    1000, 10000,  // ignored for None
+    1000, 0, 4096,
 )?;
+
+// Pure / Bundled / Frozen / Mapped 不走策略工厂：
+// 由组容器按 RecordForm 经 fresh_variant() 装配，
+// 或由冻结/解冻与 mmap open 路径产生。
 ```
 
-### Insert & Query
+### 插入与查询
 
 ```rust
-use crate::storage::edge::{MutableCsrTrait, EdgeId, VertexId};
+use crate::edge::{MutableCsrTrait, EdgeId, VertexId};
 
-let mut csr = /* ... */;
+// 插入（拓扑与属性解耦：CSR 只存拓扑，无 prop_offset 参数）
+csr.insert_edge(
+    0u32,                      // 源顶点 ID
+    VertexId::from_int64(42), // 目的顶点 ID
+    EdgeId(100),               // 边 ID
+    5,                         // 时间戳
+)?; // Ok(()) 成功；存活键重复报 EdgeAlreadyExists；Single 槽被占报 Conflict
 
-// Insert edge
-let success = csr.insert_edge(
-    0u32,                           // source vertex ID
-    VertexId::from_int64(42),      // destination vertex ID
-    EdgeId(100),                    // edge ID
-    0u32,                           // property offset
-    5,                              // timestamp
-);
-
-// Query single edge
+// 单边查询（测试原语；生产走版本权威）
 let edge = csr.get_edge(0, VertexId::from_int64(42), 5);
 match edge {
     Some(nbr) => println!("Found: {:?}", nbr.edge_id),
     None => println!("Not found"),
 }
 
-// Query all neighbors
-let neighbors = csr.edges_of(0, 5);  // All edges from vertex 0 at ts=5
+// 全邻居（测试原语；生产用 visit_physical / fill_physical_into）
+let neighbors = csr.edges_of(0, 5);
 for nbr in neighbors {
-    println!("Neighbor: {:?}", nbr.neighbor);
+    println!("Neighbor: {:?}", nbr.to_vertex_id());
 }
 ```
 
-### Delete & Revert
+### 删除与回滚
 
 ```rust
-// Delete by edge ID
-csr.delete_edge(0u32, EdgeId(100), 5);
+// 按边 ID 删除
+csr.delete_edge(0u32, EdgeId(100), 5)?; // Ok(true) 删掉；Ok(false) 不存在/不可删
 
-// Delete all edges to destination
+// 删除全部到该目的的边（全匹配，返回计数）
 csr.delete_edge_by_dst(0u32, VertexId::from_int64(42), 5);
 
-// Delete by position in adjacency list
-csr.delete_edge_by_offset(0u32, 0, 5);  // Delete 1st edge
+// 按行内偏移删除（偏移按存活度数索引，非预留容量）
+csr.delete_edge_by_offset(0u32, 0, 5)?;  // 删第 1 条
 
-// Undo deletion
+// 撤销删除
 csr.revert_delete_by_offset(0u32, 0, 5);
 ```
 
-### Compaction & Maintenance
+### 回收与维护
 
 ```rust
-// Check fragmentation (wasted share of reserved capacity)
+// 查碎片（预留容量的浪费占比，0.0–1.0）
 let ratio = csr.fragmentation_ratio();
 println!("Fragmentation waste share: {:.2}", ratio);
 
-// Manual compact (Multiple variant only does real compaction)
-let removed = csr.compact_with_ts(5, 0.25);
+// 生产用按行回收（上报移除以便集中提升删除）
+let removed = csr.compact_vertex_with_reporting(0, 5, &mut |edge_id, ts| {
+    println!("promoted {:?} at {}", edge_id, ts);
+});
 println!("Removed {} edges", removed);
 ```
 
-### Iteration
+### 遍历
 
 ```rust
-let mut iter = csr.iter(5);  // Timestamp-aware iterator
+// 出借遍历（零分配，热点扫描首选；含墓碑、除空位哨兵）
+csr.visit_physical(0, |nbr| {
+    println!("Entry: {:?}", nbr.edge_id);
+    true // 返回 false 提前结束
+});
+
+// 调用方缓冲填充（批量扫描共享一缓冲）
+let mut buf = Vec::new();
+csr.fill_physical_into(0, &mut buf);
+
+// 时间戳过滤遍历（测试语义；生产可见性由版本权威裁决）
+let mut iter = csr.iter(5);
 while let Some((vertex_id, nbr)) = iter.next() {
-    println!("Vertex {}: neighbor {:?}", vertex_id, nbr.neighbor);
+    println!("Vertex {}: neighbor {:?}", vertex_id.as_int64(), nbr.edge_id);
 }
 ```
 
-### Serialization
+### 序列化
 
 ```rust
-// Dump to bytes
+// 零拷贝追加转储（与 dump 字节一致，检查点首选）
+let mut out = Vec::new();
+csr.dump_into(&mut out);
+
+// 分配式转储
 let data = csr.dump();
 
-// Load from bytes
-let mut csr2 = CsrVariant::from_strategy(EdgeStrategy::Multiple, 1000, 10000)?;
+// 加载（首字节标签分发；CRC 与结构重算校验失败即拒）
+let mut csr2 = CsrVariant::from_strategy_with_overflow(
+    EdgeStrategy::Multiple, 1000, 10000, 4096)?;
 csr2.load(&data)?;
 
-// Note: Fragmented CSR will deserialize fragmented
-// Consider compact() after load() if needed
+// 注意：碎片态原样持久化；ratio >= 0.5 的组建议先按行回收
 ```
 
-## Data Structures Reference
+## 数据结构速查
 
-### Nbr (Neighbor)
+### Nbr（组装邻居，32 字节）
+
 ```rust
 pub struct Nbr {
-    pub neighbor: VertexId,        // Target vertex
-    pub edge_id: EdgeId,           // Edge identifier
-    pub prop_offset: u32,          // Property storage offset
-    pub create_ts: Timestamp,      // Creation timestamp
-    pub delete_ts: Timestamp,      // Deletion timestamp (u32::MAX = active)
+    pub endpoint: u32,        // 邻居内部顶点 ID
+    pub rank: i64,            // 边多重 key（Pure 形态恒 0）
+    pub edge_id: EdgeId,      // 边标识
+    pub delete_ts: Timestamp, // 删除戳（Timestamp::MAX = 存活）；create_ts 在版本权威中
 }
 
 impl Nbr {
-    pub fn is_valid_at(&self, ts: Timestamp) -> bool {
-        self.create_ts <= ts && ts < self.delete_ts
-    }
+    pub fn dead_gap() -> Self;               // 永不存活的空位哨兵
+    pub fn hot(&self) -> HotNbr;             // 拆热端（24 字节）
+    pub fn cold(&self) -> ColdStamps;        // 拆冷端（8 字节）
+    pub fn from_parts(hot: HotNbr, cold: ColdStamps) -> Self;
+    pub fn to_vertex_id(&self) -> VertexId;  // (endpoint, rank) 还原完整 VertexId
 }
 ```
 
-### ImmutableNbr (for Immutable Csr)
-```rust
-pub struct ImmutableNbr {
-    pub neighbor: VertexId,
-    pub edge_id: EdgeId,
-    pub prop_offset: u32,
-    pub timestamp: Timestamp,      // Single fixed timestamp
-}
-```
+行内无 `prop_offset`（拓扑与属性解耦，属性按 `EdgeId` 存列式存储），
+无 `create_ts` 内联字段，无 `ImmutableNbr` 类型（冻结形态同样组装 `Nbr`）。
 
 ### EdgeSchema
+
 ```rust
 pub struct EdgeSchema {
     pub label_id: LabelId,
@@ -191,160 +187,185 @@ pub struct EdgeSchema {
     pub src_label: LabelId,
     pub dst_label: LabelId,
     pub properties: Vec<StoragePropertyDef>,
-    pub oe_strategy: EdgeStrategy,  // Outgoing direction CSR
-    pub ie_strategy: EdgeStrategy,  // Incoming direction CSR
+    pub oe_strategy: EdgeStrategy,  // 出方向 CSR
+    pub ie_strategy: EdgeStrategy,  // 入方向 CSR
+    pub schema_version: u64,
+    pub record_form: RecordForm,    // Pure / Bundled / Columnar（默认）
 }
 ```
 
-### NbrWithoutEdgeId
+`validate`：两方向须同为启用（非 `None`），单向表构造即拒。
+
+### RecordForm
+
 ```rust
-pub struct NbrWithoutEdgeId {
-    pub neighbor: VertexId,
-    pub prop_offset: u32,
-    pub create_ts: Timestamp,
-    pub delete_ts: Timestamp,
+pub enum RecordForm {
+    Pure,      // 12 字节/边，无 rank、无时间戳
+    Bundled,   // 20 字节/边，内联单个标量
+    #[default]
+    Columnar,  // 标准列式（默认/回退）
 }
 ```
 
-## Trait Reference
+## Trait 速查
 
-### CsrBase (All variants)
+### CsrBase（全变体）
+
 ```rust
 pub trait CsrBase: Debug + Send + Sync {
     fn vertex_capacity(&self) -> usize;
     fn edge_count(&self) -> u64;
     fn dump(&self) -> Vec<u8>;
     fn load(&mut self, data: &[u8]) -> StorageResult<()>;
+    fn dump_into(&self, out: &mut Vec<u8>); // 零拷贝追加，默认经 dump 实现
 }
 ```
 
-### MutableCsrTrait (Mutable variants)
+### MutableCsrTrait（可变变体；Frozen/Mapped/None 为拒绝或空实现）
+
 ```rust
 pub trait MutableCsrTrait: CsrBase {
-    fn insert_edge(...) -> bool;
-    fn delete_edge(...) -> bool;
-    fn delete_edge_by_dst(...) -> bool;
-    fn delete_edge_by_offset(...) -> bool;
-    fn revert_delete_by_offset(...) -> bool;
-    fn get_edge(...) -> Option<Nbr>;
-    fn edges_of(...) -> Vec<Nbr>;
-    fn compact_with_ts(...) -> usize { 0 }  // default no-op
+    fn insert_edge(&mut self, src_vid: u32, dst: VertexId,
+                   edge_id: EdgeId, ts: Timestamp) -> StorageResult<()>;
+    fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId,
+                   ts: Timestamp) -> StorageResult<bool>;
+    fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId,
+                          ts: Timestamp) -> usize; // 全匹配，返回计数
+    fn delete_edge_by_offset(&mut self, src_vid: u32, offset: i32,
+                             ts: Timestamp) -> StorageResult<bool>;
+    fn revert_delete_by_offset(&mut self, src_vid: u32, offset: i32,
+                               ts: Timestamp) -> bool;
+    fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr>;
+    fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr>;
+    fn compact_vertex_with_reporting(&mut self, vid: u32, cutoff: Timestamp,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp)) -> usize;
+    fn reclaimable_count(&self, vid: u32, cutoff: Timestamp) -> usize;
+    fn vertex_reclaim_probe(&self, vid: u32, cutoff: Timestamp) -> (usize, usize);
     fn used_memory_size(&self) -> usize;
 }
 ```
 
-## Files & Locations
+旧 `compact_with_ts`（无上报）已删除；`delete_edge_by_dst` 全匹配语义，
+无首个匹配变体。
 
-| File | Contains |
-|------|----------|
-| `csr_variant.rs` | CsrVariant enum, dispatch macros, serialization tags |
-| `csr_trait.rs` | CsrBase, MutableCsrTrait trait definitions |
-| `mutable_csr.rs` | Multiple variant (two-level with overflow) |
-| `single_mutable_csr.rs` | Single variant (O(1) direct array) |
-| `multi_single_mutable_csr.rs` | MultiSingle variant (bounded slots) |
-| `labeled_mutable_csr.rs` | Labeled variant (label-grouped edges) |
-| `csr.rs` | Immutable variant (flat, read-only) |
-| `fragmentation_stats.rs` | Metrics collection |
-| `edge_table/mod.rs` | EdgeTable (out_csr + in_csr + segments + properties) |
-| `property_table.rs` | Edge property storage |
+## 文件与位置
 
-> 删除定位不经过布隆：边 CSR 读路径无任何布隆咨询；如未来需要删除定位加速，重新立项并附命中率度量。
+| 文件 | 内容 |
+|---|---|
+| `edge.rs` | `Nbr`/`HotNbr`/`ColdStamps`、`EdgeSchema`、`RecordForm` |
+| `csr_variant.rs` | `CsrVariant` 七变体枚举、`dispatch!` 宏、序列化标签 |
+| `csr_variant/` | core（工厂/清理/统计）、persistence、trait_impl、read、maintenance、values、iter |
+| `csr_trait.rs` | `CsrBase`、`MutableCsrTrait` 定义 |
+| `mutable_csr.rs` + `mutable_csr/` | Multiple 变体（core、row、write、read、overflow、compaction…） |
+| `single_mutable_csr.rs` | Single 变体（O(1) 直接槽） |
+| `pure_csr.rs` + `pure_csr/` | Pure 变体（端点 + 边 ID） |
+| `bundled_csr.rs` + `bundled_csr/` | Bundled 变体（拓扑 + 内联值列） |
+| `immutable_csr.rs` + `immutable_csr/` | Frozen 变体（紧凑只读组） |
+| `frozen_serving.rs` + `frozen_serving/` | Mapped 变体（mmap 服务视图） |
+| `node_group.rs` + `node_group/` | 组分片容器、脏标记、追加日志、冻结/解冻、回收 |
+| `edge_table.rs` + `edge_table/` | `EdgeStore`（分片表、提交、检查点、MVCC、WAL、模式机） |
+| `csr_with_properties.rs` + 同名目录 | 列式属性存储（`EdgeId` 索引） |
+| `fragmentation_stats.rs` | 口径统计、组门限、按顶点视图 |
+| `csr_shared.rs` | 删除状态机、顶点增长、溢出表、`VertexBookkeeping` |
 
-## Common Pitfalls
+> 边 CSR 读路径无布隆咨询；如未来需要删除定位加速，
+> 重新立项并附命中率度量。
 
-### 1. Forgetting Timestamp Filtering
+## 常见坑
+
+### 1. 拿测试原语当生产读
+
 ```rust
-// Wrong: May return deleted edges
-let edges = csr.edges_of(0, u32::MAX);
-
-// Correct: Respects soft-delete
+// 错：行戳过滤不是可见性裁决
 let edges = csr.edges_of(0, current_ts);
+
+// 对：生产遍历走版本权威归并；行层只用 visit_physical / fill_physical_into 取物理项
+csr.visit_physical(0, |nbr| { /* 按 edge_id 到权威查可见性 */ true });
 ```
 
-### 2. Ignoring SingleMutableCsr Concurrency Limitation
-```rust
-// Wrong: Non-monotonic timestamps silently rejected
-insert_edge(v, dst1, ts=100);
-insert_edge(v, dst2, ts=99);   // Silently rejected!
+### 2. 误判 Single 语义
 
-// Correct: Ensure monotonic ordering or use MutableCsr
+```rust
+// 错：以为第二条静默覆盖或按时间戳排序
+csr.insert_edge(v, dst1, id1, 100)?;
+csr.insert_edge(v, dst2, id2, 99);   // 报 Conflict，不是静默拒绝也不是覆盖
+
+// 对：先删后建；墓碑槽重建接受任意时间戳
+csr.delete_edge(v, id1, 150)?;
+csr.insert_edge(v, dst2, id2, 140)?; // 合法
 ```
 
-### 3. Not Compacting High-Fragmentation CSRs
-```rust
-// Wrong: Serialization bloats to 5x size
-let data = csr.dump();  // If ratio > 2.0
+### 3. 高碎片直接序列化
 
-// Correct: Compact before serialization
-if csr.fragmentation_ratio() > 1.5 {
-    csr.compact_with_ts(ts, 0.25);
+```rust
+// 错：脏组载荷被空位与墓碑撑大
+let data = csr.dump();
+
+// 对：超组门限先按行回收
+if csr.fragmentation_ratio() >= GROUP_FRAGMENTATION_THRESHOLD {
+    // 逐行 compact_vertex_with_reporting(...)
 }
 let data = csr.dump();
 ```
 
-### 4. Forgetting Offset is 0-indexed
-```rust
-// Wrong: Offset 1 means 2nd edge, not 1st
-csr.delete_edge_by_offset(0, 1, ts);  // Deletes 2nd edge!
+### 4. 偏移按容量索引
 
-// Correct: Offset 0 = 1st edge
-csr.delete_edge_by_offset(0, 0, ts);  // Deletes 1st edge
+```rust
+// 错：偏移按存活度数索引，不是预留容量
+csr.delete_edge_by_offset(0, 5, ts);  // 度数不足 6 即越界失败
+
+// 对：偏移 0 = 第 1 条存活边
+csr.delete_edge_by_offset(0, 0, ts);
 ```
 
-### 5. MultiSingle Capacity Limit
-```rust
-// Wrong: Assuming unlimited edges per vertex
-for i in 0..100 {
-    csr.insert_edge(0, dsts[i], ids[i], 0, 1);  // May fail silently
-}
+### 5. 跨变体复用行位置
 
-// Correct: Check return value and plan around max_edges
+```rust
+// 错：从 Multiple 拿的 EdgePosition 拿到解冻后的 Frozen 解释
+// 对：任何层间交接先按 edge_id 重解；定位写对无位置形态 fail-closed，不回退扫描
 ```
 
-## Performance Characteristics
+## 性能特征
 
-### Lookup Complexity
+### 查询复杂度
 
-| Operation | Multiple | Single | MultiSingle | Labeled | Immutable (Csr) |
-|-----------|----------|--------|-------------|---------|-----------------|
-| `get_edge` | O(degree) | O(1) | O(degree) | O(K + degree) | O(degree) |
+| 操作 | Multiple | Single | Pure | Bundled | Frozen/Mapped |
+|---|---|---|---|---|---|
+| `get_edge` | O(degree) | O(1) | O(degree) | O(degree) | O(log degree) 二分后取首个可见 |
 | `edges_of` | O(degree) | O(1) | O(degree) | O(degree) | O(degree) |
-| `insert_edge` | O(1)* | O(1) | O(degree) | O(K) | N/A |
-| `delete_edge` | O(degree) | O(1) | O(degree) | O(N) | N/A |
-| `compact_with_ts` | O(V+E) | N/A | O(V*K) | O(N) | N/A |
+| `insert_edge` | O(1) 摊销* | O(1) | O(1) 摊销* | O(1) 摊销* | 拒绝 |
+| `delete_edge` | O(degree) | O(1) | O(degree) | O(degree) | 拒绝 |
+| 行回收 | O(行宽) | O(1) | O(行宽) | O(行宽) | 无操作 |
 
-*MutableCsr: O(1) amortized, worst-case O(degree) when expanding overflow
+*Multiple/Pure/Bundled：O(1) 摊销；宽行集合判重 O(1)，
+窄行扫描 O(degree)；溢出满时分配定长新块（不拷贝旧块）。
 
-### Memory Characteristics
+### 内存特征
 
-| Variant | Space | Fragmentation |
-|---------|-------|----------------|
-| Multiple | O(E + V) | Yes (overflow blocks) |
-| Single | O(V) | No |
-| MultiSingle | O(V * K) | No (fixed blocks) |
-| Labeled | O(E + V*K) | Minimal |
-| Immutable (Csr) | O(E + V) | No (flat) |
-| None | O(1) | No |
+| 变体 | 空间 | 碎片 |
+|---|---|---|
+| Multiple | O(E + V) + 宽行存活集 | 有（空位 + 墓碑；溢出空块即摘） |
+| Single | O(V) | 仅单槽墓碑 |
+| Pure | O(E + V)，12 字节/边 | 同 Multiple（无时间戳列） |
+| Bundled | O(E + V)，20 字节/边 | 同 Multiple（双列同步） |
+| Frozen | O(E + V)，无容量/溢出/索引 | 无（紧凑有序） |
+| Mapped | 文件页按需换入 + 行偏移表 | 无 |
+| None | O(1) | 无 |
 
-## Testing
-
-### Running Tests
+## 测试
 
 ```bash
-# Test CSR variants
-cargo test --lib storage::edge::csr_variant -- --nocapture
+# CSR 变体分发
+cargo test --lib edge::csr_variant -- --nocapture
 
-# Test all edge module
-cargo test --lib storage::edge -- --nocapture
-
-# Test with output
-cargo test --lib -- --nocapture --test-threads=1
+# 全部边模块
+cargo test --lib edge -- --nocapture
 ```
 
-## Documentation
+## 文档
 
-- [Overview](overview.md) - High-level CSR architecture
-- [Variants](variants.md) - Deep dive into each CSR implementation
-- [Dispatch](dispatch.md) - Runtime selection & polymorphism
-- [Fragmentation](fragmentation.md) - Memory management & compaction
-- **[Quick Reference](quick_reference.md)** - This file
+- [总览](overview.md)——架构全貌
+- [变体](variants.md)——七种变体实现细节
+- [分发](dispatch.md)——选择与多态分发
+- [碎片](fragmentation.md)——内存管理与回收
+- **[速查](quick_reference.md)**——本文件

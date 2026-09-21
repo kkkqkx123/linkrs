@@ -33,7 +33,8 @@ use super::mutable_csr::serialization::{
     encode_topology_i64_column, encode_topology_u32_column, encode_topology_u64_column,
 };
 use super::{
-    ColdStamps, CsrBase, EdgeId, HotNbr, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_EDGE_ID,
+    ColdStamps, CsrBase, EdgeId, EdgePosition, HotNbr, MutableCsrTrait, Nbr, Timestamp, VertexId,
+    INVALID_EDGE_ID,
 };
 
 /// Unassigned single slot: no edge id, never alive at any timestamp.
@@ -319,6 +320,114 @@ impl SingleMutableCsr {
         }
         let edge_id = self.hot_slots[src_idx].edge_id;
         self.delete_edge(src, edge_id, ts)
+    }
+
+    /// Locate the single slot holding `edge_id`, if any.
+    ///
+    /// Returns the row-local primary position alongside a copy, including
+    /// tombstoned slots so delete and revert callers can act on them.
+    pub fn locate_edge(&self, src: u32, edge_id: EdgeId) -> Option<(EdgePosition, Nbr)> {
+        let probe = self.slot_at(src as usize)?;
+        if probe.edge_id == INVALID_EDGE_ID || probe.edge_id != edge_id {
+            return None;
+        }
+        Some((EdgePosition::Primary { slot: 0 }, probe))
+    }
+
+    /// Delete the single slot at `position` when it holds `expected`.
+    ///
+    /// Only the row-local primary slot zero is valid; every other position
+    /// is stale and refused without touching any slot.
+    pub fn delete_edge_at_position(
+        &mut self,
+        src: u32,
+        position: EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
+        if !matches!(position, EdgePosition::Primary { slot: 0 }) {
+            return Ok(false);
+        }
+        let src_idx = src as usize;
+        if src_idx >= self.vertex_capacity() {
+            return Ok(false);
+        }
+        let probe = match self.slot_at(src_idx) {
+            Some(probe) => probe,
+            None => return Ok(false),
+        };
+        if probe.edge_id == INVALID_EDGE_ID || probe.edge_id != expected {
+            return Ok(false);
+        }
+        if matches!(
+            decide_slot_delete(&probe, expected, ts)?,
+            DeleteSlotOutcome::AlreadyStamped
+        ) {
+            return Ok(false);
+        }
+        self.cold_slots[src_idx].delete_ts = ts;
+        self.edge_count -= 1;
+        Ok(true)
+    }
+
+    /// Revert the single-slot deletion at `position` when it holds `expected`.
+    pub fn revert_delete_at_position(
+        &mut self,
+        src: u32,
+        position: EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+    ) -> bool {
+        if !matches!(position, EdgePosition::Primary { slot: 0 }) {
+            return false;
+        }
+        let src_idx = src as usize;
+        if src_idx >= self.vertex_capacity() {
+            return false;
+        }
+        let probe = match self.slot_at(src_idx) {
+            Some(probe) => probe,
+            None => return false,
+        };
+        if probe.edge_id == INVALID_EDGE_ID || probe.edge_id != expected {
+            return false;
+        }
+        if can_revert_delete(&probe, ts) {
+            self.cold_slots[src_idx].delete_ts = Timestamp::MAX;
+            self.edge_count += 1;
+            return true;
+        }
+        false
+    }
+
+    /// Delete the single matching entry, reporting its row-local position.
+    pub fn delete_edge_by_dst_reporting_positioned(
+        &mut self,
+        src: u32,
+        dst: VertexId,
+        ts: Timestamp,
+        on_deleted: &mut dyn FnMut(EdgeId, Option<EdgePosition>),
+    ) -> usize {
+        let src_idx = src as usize;
+        if src_idx >= self.vertex_capacity() {
+            return 0;
+        }
+        let (dst_ep, dst_rank) = decode_endpoint_pair(dst);
+        let probe = match self.slot_at(src_idx) {
+            Some(probe) => probe,
+            None => return 0,
+        };
+        if probe.edge_id == INVALID_EDGE_ID
+            || probe.endpoint != dst_ep
+            || probe.rank != dst_rank
+            || !self.cold_slots[src_idx].is_live()
+        {
+            return 0;
+        }
+        self.cold_slots[src_idx].delete_ts = ts;
+        self.edge_count -= 1;
+        on_deleted(probe.edge_id, Some(EdgePosition::Primary { slot: 0 }));
+        1
     }
 
     pub fn nbr_at_offset(&self, src: u32, offset: i32) -> Option<Nbr> {
@@ -846,6 +955,40 @@ impl MutableCsrTrait for SingleMutableCsr {
         on_deleted: &mut dyn FnMut(EdgeId),
     ) -> usize {
         SingleMutableCsr::delete_edge_by_dst_reporting(self, src, dst, ts, on_deleted)
+    }
+
+    fn delete_edge_by_dst_reporting_positioned(
+        &mut self,
+        src: u32,
+        dst: VertexId,
+        ts: Timestamp,
+        on_deleted: &mut dyn FnMut(EdgeId, Option<EdgePosition>),
+    ) -> usize {
+        SingleMutableCsr::delete_edge_by_dst_reporting_positioned(self, src, dst, ts, on_deleted)
+    }
+
+    fn locate_edge(&self, src: u32, edge_id: EdgeId) -> Option<(EdgePosition, Nbr)> {
+        SingleMutableCsr::locate_edge(self, src, edge_id)
+    }
+
+    fn delete_edge_at_position(
+        &mut self,
+        src: u32,
+        position: EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
+        SingleMutableCsr::delete_edge_at_position(self, src, position, expected, ts)
+    }
+
+    fn revert_delete_at_position(
+        &mut self,
+        src: u32,
+        position: EdgePosition,
+        expected: EdgeId,
+        ts: Timestamp,
+    ) -> bool {
+        SingleMutableCsr::revert_delete_at_position(self, src, position, expected, ts)
     }
 
     fn delete_edge_by_offset(

@@ -3,7 +3,7 @@ use crate::index::manifest::{GenerationBuildState, IndexManifest, IndexShard};
 use crate::index::EdgeIndexOps;
 use graphdb_core::metadata::index_manager::IndexMetadataManager;
 use graphdb_core::types::{CommitLsn, Index, IndexStatus, SnapshotTimestamp};
-use graphdb_core::{StorageError, StorageResult, Value};
+use graphdb_core::{StorageError, StorageResult};
 
 use super::super::context::GraphStorageContext;
 use super::checkpoint::{

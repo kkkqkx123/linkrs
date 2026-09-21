@@ -1,5 +1,6 @@
 use super::super::csr_shared::SegmentedTable;
 use super::super::pure_csr::{PureTopologyCsr, DEFAULT_OVERFLOW_CHUNK_EDGES};
+use super::super::FragmentationStats;
 use super::BundledCsr;
 
 impl BundledCsr {
@@ -45,5 +46,21 @@ impl BundledCsr {
         self.primary_values.clear();
         self.primary_valid.clear();
         self.overflow_values.clear();
+    }
+
+    pub fn fragmentation_ratio(&self) -> f32 {
+        self.topology.fragmentation_ratio()
+    }
+
+    pub(crate) fn wasted_bytes_estimate(&self) -> usize {
+        const SLOT_BYTES: usize = 4 + 8 + 8;
+        self.topology
+            .total_edge_capacity
+            .saturating_sub(self.topology.edge_count as usize)
+            * SLOT_BYTES
+    }
+
+    pub fn get_fragmentation_stats(&self) -> FragmentationStats {
+        self.topology.get_fragmentation_stats()
     }
 }

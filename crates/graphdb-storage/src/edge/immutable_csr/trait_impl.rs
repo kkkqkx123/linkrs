@@ -133,8 +133,9 @@ impl MutableCsrTrait for ImmutableCsr {
         ImmutableCsr::vertex_census(self, vid)
     }
 
-    fn vertex_reclaim_probe(&self, _vid: u32, _cutoff: Timestamp) -> (usize, usize) {
-        (0, 0)
+    fn vertex_reclaim_probe(&self, vid: u32, cutoff: Timestamp) -> (usize, usize) {
+        let (_, dead, _) = ImmutableCsr::vertex_census(self, vid);
+        (dead, ImmutableCsr::reclaimable_count(self, vid, cutoff))
     }
 
     fn row_gap(&self, _vid: u32) -> usize {

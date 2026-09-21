@@ -1,5 +1,9 @@
 use super::*;
-use crate::edge::MutableCsrTrait;
+use crate::edge::{ImmutableCsr, MutableCsrTrait, Nbr};
+use graphdb_core::types::{EdgeId, VertexId};
+use std::path::PathBuf;
+
+use super::format::{SERVING_CRC_LEN, SERVING_HEADER_LEN};
 
 fn sample_frozen() -> ImmutableCsr {
     use super::super::MutableCsr;

@@ -13,8 +13,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use graphdb_core::types::{EdgeId, Timestamp, INVALID_EDGE_ID};
-use graphdb_core::{DataType, StorageError, StorageResult, Value};
+use graphdb_core::types::{EdgeId, Timestamp};
+use graphdb_core::Value;
 
 use crate::edge::property_schema::PropertySchema;
 use crate::vertex::column::Column;

@@ -90,30 +90,58 @@ impl CsrVariant {
 
     /// Get fragmentation ratio for diagnostics
     ///
-    /// Returns:
-    /// - `Multiple(ratio)`: Fragmentation ratio of the CSR
-    /// - `Single/None`: 0.0 (no fragmentation)
+    /// Covers every variant holding reserved row capacity: the multi-edge
+    /// store plus the pure-topology and bundled forms sharing its
+    /// primary-plus-overflow layout. Single-slot, frozen, mapped and empty
+    /// forms report zero: single slots carry no reserved gaps beyond their
+    /// tombstone, frozen and mapped rows are packed without gaps, and the
+    /// placeholder holds no edges.
     pub fn fragmentation_ratio(&self) -> f32 {
         match self {
             CsrVariant::Multiple(csr) => csr.fragmentation_ratio(),
+            CsrVariant::Pure(csr) => csr.fragmentation_ratio(),
+            CsrVariant::Bundled(csr) => csr.fragmentation_ratio(),
             _ => 0.0,
         }
     }
 
-    /// Estimate wasted bytes due to fragmentation (only for Multiple strategy).
+    /// Estimate wasted bytes due to fragmentation.
+    ///
+    /// Same coverage as the ratio above; other variants report zero.
     pub fn wasted_bytes_estimate(&self) -> usize {
         match self {
             CsrVariant::Multiple(csr) => csr.wasted_bytes_estimate(),
+            CsrVariant::Pure(csr) => csr.wasted_bytes_estimate(),
+            CsrVariant::Bundled(csr) => csr.wasted_bytes_estimate(),
             _ => 0,
         }
     }
 
     /// Get fragmentation statistics for this CSR variant.
     ///
-    /// Returns `Some(stats)` for MutableCsr variant, `None` for others.
+    /// Returns `Some(stats)` for variants holding reserved row capacity,
+    /// `None` for the remaining forms.
     pub fn fragmentation_stats(&self) -> Option<super::super::FragmentationStats> {
         match self {
             CsrVariant::Multiple(csr) => {
+                let stats = csr.get_fragmentation_stats();
+                Some(FragmentationStats::with_dead_info(
+                    stats.total_capacity,
+                    stats.reachable_edges,
+                    stats.dead_entries,
+                    stats.wasted_capacity,
+                ))
+            }
+            CsrVariant::Pure(csr) => {
+                let stats = csr.get_fragmentation_stats();
+                Some(FragmentationStats::with_dead_info(
+                    stats.total_capacity,
+                    stats.reachable_edges,
+                    stats.dead_entries,
+                    stats.wasted_capacity,
+                ))
+            }
+            CsrVariant::Bundled(csr) => {
                 let stats = csr.get_fragmentation_stats();
                 Some(FragmentationStats::with_dead_info(
                     stats.total_capacity,

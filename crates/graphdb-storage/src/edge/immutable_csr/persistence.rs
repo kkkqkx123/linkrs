@@ -1,5 +1,4 @@
 use super::super::csr_trait::CsrBase;
-use super::super::mutable_csr::persistence::CsrDumpScratch;
 use super::super::mutable_csr::serialization::{
     decode_topology_i64_column, decode_topology_u32_column, decode_topology_u64_column,
     encode_topology_i64_column, encode_topology_u32_column, encode_topology_u64_column,

@@ -175,3 +175,92 @@ fn bundled_row_iter_matches_allocating_read() {
     assert_eq!(via_iter, variant.edges_of(0, 1));
     assert_eq!(via_iter.len(), 2);
 }
+
+#[test]
+fn pure_variant_reports_fragmentation_and_holes() {
+    let mut inner = PureTopologyCsr::with_capacity(8, 16);
+    for dst in [1u32, 2, 3, 4] {
+        inner
+            .insert_edge(
+                0,
+                VertexId::edge_endpoint_key(dst, 0),
+                EdgeId(dst as u64),
+                0,
+            )
+            .unwrap();
+    }
+    inner.delete_edge(0, EdgeId(2), 0).unwrap();
+    let variant = CsrVariant::Pure(Box::new(inner));
+    assert!(variant.fragmentation_ratio() > 0.0);
+    assert!(variant.wasted_bytes_estimate() > 0);
+    let stats = variant.fragmentation_stats().unwrap();
+    assert!(stats.wasted_capacity > 0);
+    assert_eq!(variant.reclaimable_count(0, 7), 1);
+    assert!(variant.vertex_needs_compact(0, 7));
+    let (dead, reclaimable) = variant.vertex_reclaim_probe(0, 7);
+    assert_eq!((dead, reclaimable), (1, 1));
+}
+
+#[test]
+fn bundled_variant_reports_fragmentation() {
+    let mut inner = BundledCsr::with_capacity(8, 16);
+    for dst in [1u32, 2, 3] {
+        inner
+            .insert_edge(
+                0,
+                VertexId::edge_endpoint_key(dst, 0),
+                EdgeId(dst as u64),
+                0,
+            )
+            .unwrap();
+    }
+    let variant = CsrVariant::Bundled(Box::new(inner));
+    assert!(variant.fragmentation_ratio() > 0.0);
+    assert!(variant.fragmentation_stats().is_some());
+}
+
+#[test]
+fn single_variant_supports_positional_writes() {
+    let mut csr =
+        CsrVariant::from_strategy_with_overflow(EdgeStrategy::Single, 10, 100, 4096).unwrap();
+    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    let (position, nbr) = csr.locate_edge(0, EdgeId(100)).unwrap();
+    assert_eq!(nbr.edge_id, EdgeId(100));
+    assert!(csr
+        .delete_edge_at_position(0, position, EdgeId(100), 2)
+        .unwrap());
+    assert_eq!(csr.edge_count(), 0);
+    assert!(csr.revert_delete_at_position(0, position, EdgeId(100), 2));
+    assert_eq!(csr.edge_count(), 1);
+    let stale = crate::edge::EdgePosition::Overflow { chunk: 0, slot: 0 };
+    assert!(!csr.revert_delete_at_position(0, stale, EdgeId(100), 2));
+    assert!(csr
+        .delete_edge_at_position(0, stale, EdgeId(100), 3)
+        .unwrap_or(false)
+        == false);
+}
+
+#[test]
+fn none_variant_offset_delete_fails_closed() {
+    let mut csr =
+        CsrVariant::from_strategy_with_overflow(EdgeStrategy::None, 10, 100, 4096).unwrap();
+    assert!(csr.delete_edge_by_offset(0, 0, 1).is_err());
+}
+
+#[test]
+fn frozen_variant_probe_reports_dead_entries() {
+    let mut inner = MutableCsr::with_capacity(8, 64);
+    inner
+        .insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .unwrap();
+    inner
+        .insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+        .unwrap();
+    inner.delete_edge(0, EdgeId(100), 5).unwrap();
+    let variant = CsrVariant::Frozen(Box::new(ImmutableCsr::pack_from_mutable(&inner)));
+    let (dead, reclaimable) = variant.vertex_reclaim_probe(0, 9);
+    assert_eq!(dead, 1);
+    assert_eq!(reclaimable, 1);
+    assert!(variant.vertex_needs_compact(0, 9));
+}

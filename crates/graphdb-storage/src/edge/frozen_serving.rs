@@ -56,18 +56,7 @@
 //! checkpoint serving helpers and the group load path; no other module
 //! creates or removes sidecars.
 
-use std::fs::File;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-use graphdb_core::{StorageError, StorageResult};
-
-use super::csr_shared::decode_endpoint_pair;
-use super::mutable_csr::serialization::{
-    encode_topology_i64_column, encode_topology_u32_column, encode_topology_u64_column,
-};
-use super::{ColdStamps, EdgePosition, HotNbr, ImmutableCsr, Nbr, INVALID_EDGE_ID};
-use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 
 pub(crate) mod columns;
 pub(crate) mod format;
@@ -82,7 +71,6 @@ mod tests;
 
 use format::ServingColumns;
 pub use format::{serving_path_for, write_serving_file};
-pub(crate) use format::{SERVING_CRC_LEN, SERVING_HEADER_LEN, SERVING_MAGIC};
 pub use iter::{MappedFrozenIterator, MappedFrozenRowIter};
 
 /// Memory-mapped read view of one frozen group serving file.

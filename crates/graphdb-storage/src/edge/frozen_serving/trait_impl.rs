@@ -1,6 +1,6 @@
 use super::super::{EdgePosition, Nbr};
 use super::MappedFrozen;
-use crate::edge::{CsrBase, MutableCsrTrait};
+
 use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
 
@@ -137,8 +137,9 @@ impl crate::edge::MutableCsrTrait for MappedFrozen {
         MappedFrozen::vertex_census(self, vid)
     }
 
-    fn vertex_reclaim_probe(&self, _vid: u32, _cutoff: Timestamp) -> (usize, usize) {
-        (0, 0)
+    fn vertex_reclaim_probe(&self, vid: u32, _cutoff: Timestamp) -> (usize, usize) {
+        let (_, dead, _) = MappedFrozen::vertex_census(self, vid);
+        (dead, 0)
     }
 
     fn row_gap(&self, _vid: u32) -> usize {

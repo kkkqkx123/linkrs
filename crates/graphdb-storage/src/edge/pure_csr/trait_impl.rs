@@ -682,8 +682,12 @@ impl MutableCsrTrait for PureTopologyCsr {
         removed
     }
 
-    fn reclaimable_count(&self, _vid: u32, _cutoff: Timestamp) -> usize {
-        0
+    fn reclaimable_count(&self, vid: u32, _cutoff: Timestamp) -> usize {
+        let idx = vid as usize;
+        if idx >= self.vertex_capacity() {
+            return 0;
+        }
+        self.vertex_census(vid).1
     }
 
     fn vertex_census(&self, vid: u32) -> (usize, usize, usize) {

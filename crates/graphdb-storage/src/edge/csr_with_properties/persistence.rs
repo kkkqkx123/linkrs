@@ -1,7 +1,7 @@
 use super::{CsrWithProperties, RowVisibility, UNMAPPED_ROW};
-use graphdb_core::types::{EdgeId, Timestamp, INVALID_EDGE_ID};
+use graphdb_core::types::{EdgeId, INVALID_EDGE_ID};
 use graphdb_core::{StorageError, StorageResult, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 impl CsrWithProperties {
     pub fn dump(&self) -> Vec<u8> {

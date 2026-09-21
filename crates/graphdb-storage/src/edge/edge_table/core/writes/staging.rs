@@ -2,7 +2,6 @@ use super::super::EdgeStore;
 use crate::edge::edge_table::staging::{EdgeStagingBatch, StagedInsert};
 use crate::edge::edge_table::wal;
 use crate::edge::EdgeStrategy;
-use crate::edge::MutableCsrTrait;
 use graphdb_core::types::EdgeId;
 use graphdb_core::{StorageError, StorageResult};
 

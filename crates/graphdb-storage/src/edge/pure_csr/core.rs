@@ -1,7 +1,7 @@
 use graphdb_core::types::{EdgeId, Timestamp};
 
 use super::super::csr_shared::{grown_vertex_capacity, VertexBookkeeping, DEFAULT_VERTEX_CAPACITY};
-use super::super::Nbr;
+use super::super::{FragmentationStats, Nbr};
 use super::live_set::PureLiveSetStorage;
 use super::overflow::PureOverflowStorage;
 use super::{
@@ -117,5 +117,41 @@ impl PureTopologyCsr {
             .map(|cap| *cap as usize)
             .sum();
         self.edge_count = 0;
+    }
+
+    pub fn fragmentation_ratio(&self) -> f32 {
+        if self.total_edge_capacity == 0 {
+            return 0.0;
+        }
+        self.total_edge_capacity.saturating_sub(self.edge_count as usize) as f32
+            / self.total_edge_capacity as f32
+    }
+
+    pub(crate) fn wasted_bytes_estimate(&self) -> usize {
+        const SLOT_BYTES: usize = 4 + 8;
+        self.total_edge_capacity
+            .saturating_sub(self.edge_count as usize)
+            * SLOT_BYTES
+    }
+
+    pub fn get_fragmentation_stats(&self) -> FragmentationStats {
+        let live_edges = self.edge_count as usize;
+        let mut physical_entries = 0usize;
+        for vid in 0..self.vertex_capacity() {
+            physical_entries += self.rows.degrees[vid] as usize;
+        }
+        for (_, chunks) in self.overflow_chunks.iter() {
+            for chunk in chunks {
+                physical_entries += chunk.len();
+            }
+        }
+        let dead_entries = physical_entries.saturating_sub(live_edges);
+        let wasted_capacity = self.total_edge_capacity.saturating_sub(live_edges);
+        FragmentationStats::with_dead_info(
+            self.total_edge_capacity,
+            live_edges,
+            dead_entries,
+            wasted_capacity,
+        )
     }
 }
