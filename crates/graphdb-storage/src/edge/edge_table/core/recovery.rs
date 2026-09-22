@@ -21,6 +21,40 @@ impl EdgeStore {
         self.load_incremental(path.as_ref())
     }
 
+    /// Read-only WAL diagnosis for an offline table directory.
+    ///
+    /// Never mutates the log. Reports the last valid entry boundary and the
+    /// salvageable operation count. The load path stays fail-closed; run this
+    /// after a torn-tail load failure, then trigger repair explicitly.
+    pub fn diagnose_edge_wal_at<P: AsRef<std::path::Path>>(
+        path: P,
+    ) -> StorageResult<super::super::wal::EdgeWalDiagnosis> {
+        super::super::wal::diagnose_ops(path.as_ref())
+    }
+
+    /// Explicit offline WAL repair for a table directory.
+    ///
+    /// Truncates the log at the last valid entry and returns the salvaged
+    /// operation count. Only run while no writer holds the table, under the
+    /// same single-writer discipline as every other mutation. Never called by
+    /// the load path.
+    pub fn repair_edge_wal_at<P: AsRef<std::path::Path>>(path: P) -> StorageResult<usize> {
+        super::super::wal::discard_torn_tail(path.as_ref())
+    }
+
+    /// Read-only WAL diagnosis for this table's log directory.
+    ///
+    /// Fails when the table has no checkpoint directory yet, when redo has no
+    /// home and there is nothing to diagnose.
+    pub fn diagnose_wal(&self) -> StorageResult<super::super::wal::EdgeWalDiagnosis> {
+        let Some(dir) = self.wal_dir.clone() else {
+            return Err(graphdb_core::StorageError::invalid_operation(
+                "edge table has no WAL directory before the first checkpoint".to_string(),
+            ));
+        };
+        Self::diagnose_edge_wal_at(dir)
+    }
+
     /// Fail-closed cross-copy audit used by [`EdgeStore::load`].
     ///
     /// Damage detection only: returns `(orphan property mappings, orphan CSR

@@ -471,6 +471,98 @@ impl CsrShardSet {
         Ok(inserted)
     }
 
+    /// Bulk insert with per-edge timestamps, partitioned by group.
+    ///
+    /// Direct-write counterpart of `batch_put_edges` for initial loads with
+    /// heterogeneous timestamps: input is `(src, dst, edge_id, ts)` quads at
+    /// global addresses, rows are grouped by shard, each `Multiple` group is
+    /// written through its bulk path (single reservation, single live-set
+    /// rebuild per row) preserving each edge timestamp, and other variants
+    /// fall back to per-edge inserts. Dirt and append-log entries are
+    /// recorded per inserted edge exactly like the single-edge path.
+    /// Duplicate keys are rejected before any write when `check_duplicates`
+    /// is set; bulk-import callers prevalidate once and pass false.
+    pub fn batch_put_edges_with_ts(
+        &mut self,
+        edges: &[(u32, VertexId, EdgeId, Timestamp)],
+        check_duplicates: bool,
+    ) -> StorageResult<usize> {
+        if self.strategy == EdgeStrategy::None {
+            return Err(StorageError::invalid_operation(
+                "no edges stored for this edge type".to_string(),
+            ));
+        }
+        let mut by_group: BTreeMap<usize, Vec<(u32, VertexId, EdgeId, Timestamp)>> =
+            BTreeMap::new();
+        for (src, dst, edge_id, ts) in edges {
+            let gid = group_id_for(*src, self.group_bits);
+            by_group
+                .entry(gid)
+                .or_default()
+                .push((*src, *dst, *edge_id, *ts));
+        }
+        let mut inserted = 0usize;
+        for (gid, group_edges) in by_group {
+            let group_bits = self.group_bits;
+            self.ensure_group_id(gid)?;
+            let is_multiple = matches!(
+                self.shards.get(&gid).map(|shard| &shard.variant),
+                Some(CsrVariant::Multiple(_))
+            );
+            if is_multiple {
+                let batch: Vec<RowEdgeBatch> = {
+                    let mut rows: BTreeMap<u32, Vec<EdgePut>> = BTreeMap::new();
+                    for (src, dst, edge_id, ts) in &group_edges {
+                        let local = local_vid(*src, group_bits);
+                        let (endpoint, rank) = decode_endpoint_pair(*dst);
+                        rows.entry(local)
+                            .or_default()
+                            .push((endpoint, rank, *edge_id, *ts));
+                    }
+                    rows.into_iter().collect()
+                };
+                {
+                    let shard = self.shards.get_mut(&gid).ok_or_else(|| {
+                        StorageError::invalid_operation(format!("missing group {} on insert", gid))
+                    })?;
+                    let CsrVariant::Multiple(csr) = &mut shard.variant else {
+                        return Err(StorageError::invalid_operation(format!(
+                            "missing group {} on insert",
+                            gid
+                        )));
+                    };
+                    inserted += csr.batch_put_edges(&batch, check_duplicates)?;
+                }
+                for (src, dst, edge_id, ts) in &group_edges {
+                    let local = local_vid(*src, group_bits);
+                    let (endpoint, rank) = decode_endpoint_pair(*dst);
+                    let nbr = Nbr::with_create_ts(endpoint, rank, *edge_id, *ts);
+                    self.mark_region_insert(gid, local);
+                    self.record_append_insert(gid, local, nbr);
+                }
+            } else {
+                for (src, dst, edge_id, ts) in group_edges {
+                    let local = local_vid(src, group_bits);
+                    {
+                        let shard = self.shards.get_mut(&gid).ok_or_else(|| {
+                            StorageError::invalid_operation(format!(
+                                "missing group {} on insert",
+                                gid
+                            ))
+                        })?;
+                        shard.variant.insert_edge(local, dst, edge_id, ts)?;
+                    }
+                    let (endpoint, rank) = decode_endpoint_pair(dst);
+                    let nbr = Nbr::with_create_ts(endpoint, rank, edge_id, ts);
+                    self.mark_region_insert(gid, local);
+                    self.record_append_insert(gid, local, nbr);
+                    inserted += 1;
+                }
+            }
+        }
+        Ok(inserted)
+    }
+
     /// Pre-size touched rows once for an incoming batch.
     ///
     /// Groups missing rows are materialized first; each `Multiple` group

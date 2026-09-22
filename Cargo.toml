@@ -306,3 +306,7 @@ harness = false
 [[bench]]
 name = "csr_perf_bench"
 harness = false
+
+[[bench]]
+name = "edge_point_write_bench"
+harness = false

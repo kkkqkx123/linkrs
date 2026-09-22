@@ -35,6 +35,7 @@ use std::sync::{Arc, Mutex};
 
 pub use super::config::{AutoMaintenanceConfig, EdgeTableConfig, UpdateEdgePropertyByKeyParams};
 pub use super::iterator::EdgeTableScanIterator;
+pub use index::EdgeIndexStatus;
 pub use writes::IncidentDeletedEdge;
 
 /// Node-group sharded edge store: one sharded CSR per direction with MVCC

@@ -374,6 +374,35 @@ fn test_auto_maintenance_rebuilds_lagged_index() {
 }
 
 #[test]
+fn test_index_status_snapshot_reports_lag_and_staleness() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.enable_property_index(1024).unwrap();
+    let clean = table.index_status();
+    assert!(clean.enabled);
+    assert_eq!(clean.lag, 0);
+    assert_eq!(clean.stale_secs, 0);
+    assert!(clean.usable);
+
+    let _ = table.note_index_result(
+        "weight",
+        Err(graphdb_core::StorageError::db_error(
+            "injected index failure",
+        )),
+        1,
+    );
+    let lagged = table.index_status();
+    assert_eq!(lagged.lag, 1);
+    assert_eq!(lagged.failures, 1);
+    assert!(!lagged.usable);
+    // Stale age is wall-clock based: assert the report path stays
+    // consistent with the snapshot instead of sleeping for a second.
+    let reported = table.report_index_status();
+    assert_eq!(reported, lagged);
+    assert_eq!(table.index_stale_secs(), lagged.stale_secs);
+}
+
+#[test]
 fn test_checkpoint_adapts_constant_column_encoding() {
     use crate::edge::EdgeSchema;
     use crate::encoding::EncodingType;

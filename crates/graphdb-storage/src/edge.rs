@@ -47,7 +47,7 @@ pub use csr_trait::{CsrBase, MutableCsrTrait};
 pub use csr_variant::{CsrRowIter, CsrVariant};
 pub use csr_with_properties::CsrWithProperties;
 pub use edge_table::core::UpdateEdgePropertyByKeyParams;
-pub use edge_table::{EdgeStore, IncidentDeletedEdge};
+pub use edge_table::{EdgeIndexStatus, EdgeStore, IncidentDeletedEdge};
 pub use fragmentation_stats::{
     FragmentationStats, VertexFragmentation, GROUP_FRAGMENTATION_THRESHOLD,
 };

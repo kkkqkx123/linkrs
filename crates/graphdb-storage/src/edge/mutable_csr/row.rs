@@ -47,7 +47,39 @@ pub(crate) fn graded_overflow_chunk_edges(live: usize) -> usize {
         .clamp(OVERFLOW_CHUNK_MIN, OVERFLOW_CHUNK_MAX)
 }
 
+/// Live width at or above which a row uses the dedicated high-degree path.
+///
+/// Past this width the per-chunk cap stops applying: the row consolidates
+/// into one dedicated contiguous block with spare instead of a chain of
+/// capped chunks, so scans touch the primary block plus one overflow block.
+/// Source: supernode appends past 16k live edges otherwise hold four or more
+/// capped chunks and pay a chain walk on every scan; the dedicated block
+/// restores the single-block fast path. Recommended range 8192..=32768.
+/// Retuning requires rerunning the supernode append benchmark first.
+pub(crate) const HIGH_DEGREE_LIVE_THRESHOLD: usize = 16_384;
+/// Overflow chunk size for high-degree rows, four times the default chunk.
+///
+/// Large enough to keep a 100k-degree row within a handful of blocks between
+/// consolidations, small enough that one idle huge row does not pin tens of
+/// megabytes. Used only above the threshold; smaller rows keep the graded
+/// capped sizing.
+pub(crate) const HIGH_DEGREE_CHUNK_EDGES: usize = 16_384;
+/// Spare reservation kept inside a high-degree consolidation, as a share of
+/// the consolidated length. Matches the packed density gap so the next burst
+/// lands in reserved space instead of allocating a fresh tail chunk.
+pub(crate) const HIGH_DEGREE_SPARE_DIVISOR: usize = 4;
+
 impl MutableCsr {
+    /// Whether one row qualifies for the dedicated high-degree path.
+    pub fn is_high_degree_row(&self, vid: u32) -> bool {
+        self.live_key_count(vid) >= HIGH_DEGREE_LIVE_THRESHOLD
+    }
+
+    /// Overflow block count of one row, zero when the row holds no overflow.
+    pub fn overflow_chunk_count(&self, vid: u32) -> usize {
+        self.overflow_chunks.chunk_count(vid)
+    }
+
     /// Row capacity holding `live` entries at the packed density target.
     pub(crate) fn sized_row_capacity(live: usize) -> usize {
         if live == 0 {
@@ -58,6 +90,11 @@ impl MutableCsr {
 
     /// Effective overflow chunk size for a row with `live` live entries.
     pub(crate) fn effective_chunk_edges(&self, live: usize) -> usize {
+        if live >= HIGH_DEGREE_LIVE_THRESHOLD {
+            return graded_overflow_chunk_edges(live)
+                .max(HIGH_DEGREE_CHUNK_EDGES)
+                .max(1);
+        }
         graded_overflow_chunk_edges(live)
             .min(self.overflow_chunk_edges)
             .max(1)
@@ -157,8 +194,15 @@ impl MutableCsr {
             rest.extend_from_slice(&overflow_live);
             rest.extend_from_slice(&overflow_pinned);
             // Same single-block consolidation as the repack path: leftover
-            // overflow reads as one block after the primary row.
-            let single = OverflowChunk::consolidated(&rest);
+            // overflow reads as one block after the primary row. High-degree
+            // leftovers keep spare so the next burst stays in the block.
+            let single = if rest.len() >= HIGH_DEGREE_LIVE_THRESHOLD {
+                let spare =
+                    (rest.len() / HIGH_DEGREE_SPARE_DIVISOR).max(HIGH_DEGREE_CHUNK_EDGES / 2);
+                OverflowChunk::consolidated_with_reserve(&rest, spare)
+            } else {
+                OverflowChunk::consolidated(&rest)
+            };
             let new_overflow_cap = single.capacity();
             self.sub_capacity(old_overflow_cap);
             self.add_capacity(new_overflow_cap);
@@ -270,8 +314,14 @@ impl MutableCsr {
         }
         // Consolidate into one overflow chunk. Primary-tail expansion was
         // removed: merged rows stay on the single-chunk path so compaction
-        // never copies primary blocks.
-        let single = OverflowChunk::consolidated(&kept);
+        // never copies primary blocks. High-degree rows keep spare inside
+        // the dedicated block so the next burst lands in reserved space.
+        let single = if kept.len() >= HIGH_DEGREE_LIVE_THRESHOLD {
+            let spare = (kept.len() / HIGH_DEGREE_SPARE_DIVISOR).max(HIGH_DEGREE_CHUNK_EDGES / 2);
+            OverflowChunk::consolidated_with_reserve(&kept, spare)
+        } else {
+            OverflowChunk::consolidated(&kept)
+        };
         let new_cap = single.capacity();
         self.add_capacity(new_cap);
         self.overflow_chunks.insert(vid, vec![single]);

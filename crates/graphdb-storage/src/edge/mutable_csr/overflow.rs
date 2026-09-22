@@ -111,6 +111,21 @@ impl OverflowChunk {
         chunk.extend_from_slice(slots);
         chunk
     }
+
+    /// Single contiguous chunk holding `slots` plus reserved spare capacity.
+    ///
+    /// High-degree consolidation target: the spare keeps the next burst of
+    /// appends inside the same dedicated block instead of allocating a fresh
+    /// graded tail chunk per burst. Spare is capped so one huge row cannot
+    /// pin unbounded reservation; later bursts beyond the spare grow fresh
+    /// tail chunks until the next consolidation.
+    pub fn consolidated_with_reserve(slots: &[Nbr], spare: usize) -> Self {
+        let mut chunk = OverflowChunk::default();
+        chunk.hot.reserve(slots.len().saturating_add(spare));
+        chunk.cold.reserve(slots.len().saturating_add(spare));
+        chunk.extend_from_slice(slots);
+        chunk
+    }
 }
 
 /// Single benchmarked per-vertex overflow bound. Past this many chunks a row

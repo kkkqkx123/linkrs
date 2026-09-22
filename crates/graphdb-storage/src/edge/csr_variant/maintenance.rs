@@ -26,6 +26,24 @@ impl CsrVariant {
         }
     }
 
+    /// Reclaim a listed row set of a frozen group in one linear pass.
+    ///
+    /// Production replacement for repeated per-row frozen compactions: one
+    /// table-proportional pass instead of one trailing memmove per row.
+    /// Only the frozen variant compacts; every other variant reports zero
+    /// so callers keep their existing per-row path for mutable groups.
+    pub fn compact_frozen_rows_batched(
+        &mut self,
+        vids: &[u32],
+        cutoff: Timestamp,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+    ) -> usize {
+        match self {
+            CsrVariant::Frozen(csr) => csr.compact_rows_batched(vids, cutoff, on_edge_removed),
+            _ => 0,
+        }
+    }
+
     /// Sort one primary row into key order on the maintenance path.
     ///
     /// Same invalidation as the underlying stores: positions go stale and

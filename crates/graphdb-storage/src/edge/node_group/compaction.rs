@@ -166,7 +166,9 @@ impl CsrShardSet {
     /// the region window are visited; other regions never move. Marks the
     /// region deleted when entries were dropped so the next checkpoint
     /// merges the rebuilt rows. Rows holding overflow are rebalanced into
-    /// primary gaps on the same pass.
+    /// primary gaps on the same pass. Frozen groups bypass the per-row walk
+    /// and merge once at group scope so one region request never pays one
+    /// trailing memmove per row.
     pub fn compact_region_with_reporting(
         &mut self,
         gid: usize,
@@ -174,6 +176,9 @@ impl CsrShardSet {
         cutoff: Timestamp,
         on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
     ) -> usize {
+        if self.is_frozen(gid) {
+            return self.compact_group_with_reporting(gid, cutoff, 0.0, on_edge_removed);
+        }
         let group_size = self.group_size();
         let (start, end) = region_local_range(region, group_size);
         let Some(shard) = self.shards.get_mut(&gid) else {
@@ -192,6 +197,35 @@ impl CsrShardSet {
             shard.dirty.deleted = true;
             if let Some(slot) = shard.regions.get_mut(region) {
                 slot.deleted = true;
+            }
+        }
+        removed
+    }
+
+    /// Reclaim a listed local-row set of one frozen group in one pass.
+    ///
+    /// Collect-then-merge entry for frozen groups: callers gather reclaimable
+    /// rows across regions and merge once instead of paying one trailing
+    /// memmove per row. Mutable groups report zero; their rows use the
+    /// regular per-row path. Marks the group deleted when entries drop so
+    /// the next checkpoint persists the rebuilt base.
+    pub fn compact_frozen_rows_batched(
+        &mut self,
+        gid: usize,
+        locals: &[u32],
+        cutoff: Timestamp,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+    ) -> usize {
+        let Some(shard) = self.shards.get_mut(&gid) else {
+            return 0;
+        };
+        let removed = shard
+            .variant
+            .compact_frozen_rows_batched(locals, cutoff, on_edge_removed);
+        if removed > 0 {
+            shard.dirty.deleted = true;
+            for region in shard.regions.iter_mut() {
+                region.deleted = true;
             }
         }
         removed

@@ -19,8 +19,35 @@ use std::path::{Path, PathBuf};
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult, Value};
 
-pub(crate) fn wal_path(dir: &Path) -> PathBuf {
+pub fn wal_path(dir: &Path) -> PathBuf {
     dir.join("edge_wal.bin")
+}
+
+/// Read-only diagnosis of one edge WAL file.
+///
+/// Never mutates the file: reports where the last valid entry ends, how many
+/// operations survive, and how many trailing bytes the load path would reject.
+/// Operators run this first; repair stays an explicit separate step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EdgeWalDiagnosis {
+    /// Total file size in bytes; zero when the log is missing.
+    pub file_bytes: u64,
+    /// End offset of the last valid entry; the truncation point repair uses.
+    pub valid_bytes: u64,
+    /// Operations in the valid prefix; the salvageable count.
+    pub valid_ops: usize,
+    /// Trailing bytes past the valid prefix that fail the load.
+    pub torn_bytes: u64,
+    /// Whether the load path would reject this file.
+    pub has_torn_tail: bool,
+    /// Human-readable cause of the torn tail; `None` on a clean log.
+    pub error: Option<String>,
+}
+
+impl EdgeWalDiagnosis {
+    pub fn is_clean(&self) -> bool {
+        !self.has_torn_tail
+    }
 }
 
 /// Logical redo operation for one committed edge write.
@@ -92,6 +119,96 @@ pub(crate) fn append_ops(dir: &Path, ops: &[EdgeWalOp]) -> StorageResult<()> {
     Ok(())
 }
 
+/// Maximum accepted WAL entry payload: bounds memory during scans.
+const MAX_ENTRY_LEN: usize = 64 * 1024 * 1024;
+
+/// Scan one WAL image, returning the valid prefix boundary, the operation
+/// count inside it, and the first tail failure if any.
+fn scan_prefix(bytes: &[u8]) -> (usize, usize, Option<String>) {
+    let mut offset = 0usize;
+    let mut ops = 0usize;
+    while offset < bytes.len() {
+        let remaining = bytes.len() - offset;
+        if remaining < 8 {
+            return (
+                offset,
+                ops,
+                Some(format!(
+                    "truncated length header at offset {}: {} of 8 bytes present",
+                    offset, remaining
+                )),
+            );
+        }
+        let len =
+            u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
+        if len == 0 || len > MAX_ENTRY_LEN {
+            return (
+                offset,
+                ops,
+                Some(format!(
+                    "invalid entry length {} at offset {}",
+                    len, offset
+                )),
+            );
+        }
+        if remaining - 8 < len {
+            return (
+                offset,
+                ops,
+                Some(format!(
+                    "truncated payload at offset {}: header claims {} bytes, {} remain",
+                    offset,
+                    len,
+                    remaining - 8
+                )),
+            );
+        }
+        if let Err(e) =
+            postcard::from_bytes::<EdgeWalOp>(&bytes[offset + 8..offset + 8 + len])
+        {
+            return (
+                offset,
+                ops,
+                Some(format!("corrupt entry at offset {}: {}", offset, e)),
+            );
+        }
+        offset += 8 + len;
+        ops += 1;
+    }
+    (offset, ops, None)
+}
+
+/// Read-only diagnosis of the table log at `dir`.
+///
+/// Missing logs report a clean empty diagnosis. Never truncates or rewrites;
+/// use [`discard_torn_tail`] for the explicit repair step.
+pub fn diagnose_ops(dir: &Path) -> StorageResult<EdgeWalDiagnosis> {
+    let path = wal_path(dir);
+    if !path.exists() {
+        return Ok(EdgeWalDiagnosis {
+            file_bytes: 0,
+            valid_bytes: 0,
+            valid_ops: 0,
+            torn_bytes: 0,
+            has_torn_tail: false,
+            error: None,
+        });
+    }
+    let bytes = std::fs::read(&path)
+        .map_err(|e| StorageError::io_error(format!("Failed to read edge WAL: {}", e)))?;
+    let (valid_bytes, valid_ops, error) = scan_prefix(&bytes);
+    let file_bytes = bytes.len() as u64;
+    let has_torn_tail = error.is_some();
+    Ok(EdgeWalDiagnosis {
+        file_bytes,
+        valid_bytes: valid_bytes as u64,
+        valid_ops,
+        torn_bytes: file_bytes - valid_bytes as u64,
+        has_torn_tail,
+        error,
+    })
+}
+
 /// Read the log operations in order. A missing log reads as empty. A torn
 /// trailing entry fails closed so recovery never enters
 /// service with a partial prefix.
@@ -119,21 +236,37 @@ pub(crate) fn read_ops(dir: &Path) -> StorageResult<Vec<EdgeWalOp>> {
         if pos == file_len {
             break;
         }
+        let entry_index = ops.len();
         let mut len_bytes = [0u8; 8];
-        file.read_exact(&mut len_bytes)
-            .map_err(|_| StorageError::deserialize_error("torn edge WAL tail entry".to_string()))?;
+        file.read_exact(&mut len_bytes).map_err(|_| {
+            StorageError::deserialize_error(format!(
+                "torn edge WAL tail entry {} at offset {} of {} bytes; \
+                run diagnose_ops for the last valid entry, repair offline with discard_torn_tail",
+                entry_index, pos, file_len
+            ))
+        })?;
         let len = u64::from_le_bytes(len_bytes) as usize;
-        if len == 0 || len > 64 * 1024 * 1024 {
+        if len == 0 || len > MAX_ENTRY_LEN {
             return Err(StorageError::deserialize_error(format!(
-                "edge WAL entry has invalid length: {}",
-                len
+                "edge WAL entry {} has invalid length {} at offset {} of {} bytes; \
+                run diagnose_ops for the last valid entry, repair offline with discard_torn_tail",
+                entry_index, len, pos, file_len
             )));
         }
         let mut data = vec![0u8; len];
-        file.read_exact(&mut data)
-            .map_err(|_| StorageError::deserialize_error("torn edge WAL tail entry".to_string()))?;
+        file.read_exact(&mut data).map_err(|_| {
+            StorageError::deserialize_error(format!(
+                "torn edge WAL tail entry {} at offset {} of {} bytes (claims {} payload bytes); \
+                run diagnose_ops for the last valid entry, repair offline with discard_torn_tail",
+                entry_index, pos, file_len, len
+            ))
+        })?;
         let op: EdgeWalOp = postcard::from_bytes(&data).map_err(|e| {
-            StorageError::deserialize_error(format!("edge WAL entry corrupt: {}", e))
+            StorageError::deserialize_error(format!(
+                "edge WAL entry {} corrupt at offset {} of {} bytes: {}; \
+                run diagnose_ops for the last valid entry, repair offline with discard_torn_tail",
+                entry_index, pos, file_len, e
+            ))
         })?;
         ops.push(op);
     }
@@ -157,34 +290,16 @@ pub(crate) fn truncate(dir: &Path) -> StorageResult<()> {
 /// and reports its full count; a missing log reports zero. Every discarded
 /// byte is logged, never silent.
 ///
-/// Invoked explicitly by operators, never by the load path, so normal builds
-/// report no in-crate callers.
-#[allow(dead_code)]
-pub(crate) fn discard_torn_tail(dir: &Path) -> StorageResult<usize> {
-    const MAX_ENTRY_LEN: usize = 64 * 1024 * 1024;
+/// Invoked explicitly by operators, never by the load path. Run
+/// [`diagnose_ops`] first for a read-only report of the truncation point.
+pub fn discard_torn_tail(dir: &Path) -> StorageResult<usize> {
     let path = wal_path(dir);
     if !path.exists() {
         return Ok(0);
     }
     let bytes = std::fs::read(&path)
         .map_err(|e| StorageError::io_error(format!("Failed to read edge WAL: {}", e)))?;
-    let mut offset = 0usize;
-    let mut salvaged = 0usize;
-    while offset < bytes.len() {
-        let remaining = bytes.len() - offset;
-        if remaining < 8 {
-            break;
-        }
-        let len = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
-        if len == 0 || len > MAX_ENTRY_LEN || remaining - 8 < len {
-            break;
-        }
-        if postcard::from_bytes::<EdgeWalOp>(&bytes[offset + 8..offset + 8 + len]).is_err() {
-            break;
-        }
-        offset += 8 + len;
-        salvaged += 1;
-    }
+    let (offset, salvaged, _) = scan_prefix(&bytes);
     // A non-empty tail the reader would reject (torn entry or trailing
     // garbage) is damage only past the salvaged prefix.
     if offset != bytes.len() {
@@ -263,5 +378,46 @@ mod tests {
             discard_torn_tail(empty.path()).expect("missing log reads zero"),
             0
         );
+    }
+
+    #[test]
+    fn diagnosis_is_read_only_and_reports_truncation_point() {
+        let dir = tempfile::tempdir().expect("temporary WAL directory");
+        append_ops(dir.path(), &wal_ops()).expect("append succeeds");
+        let before = std::fs::read(wal_path(dir.path())).expect("WAL image");
+        let clean = diagnose_ops(dir.path()).expect("clean diagnosis");
+        assert!(!clean.has_torn_tail);
+        assert!(clean.error.is_none());
+        assert_eq!(clean.valid_ops, wal_ops().len());
+        assert_eq!(clean.valid_bytes, clean.file_bytes);
+        assert_eq!(clean.torn_bytes, 0);
+
+        {
+            use std::io::Write as _;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(wal_path(dir.path()))
+                .expect("WAL opens for damage injection");
+            file.write_all(&[0x09, 0x00]).expect("partial length lands");
+        }
+        let torn = diagnose_ops(dir.path()).expect("torn diagnosis");
+        assert!(torn.has_torn_tail);
+        assert_eq!(torn.valid_ops, wal_ops().len());
+        assert_eq!(torn.valid_bytes, before.len() as u64);
+        assert_eq!(torn.torn_bytes, 2);
+        assert!(torn.error.is_some());
+        // Diagnosis never mutates: the torn tail still fails the load.
+        assert!(read_ops(dir.path()).is_err());
+        let after = std::fs::read(wal_path(dir.path())).expect("WAL image");
+        assert_eq!(after.len(), before.len() + 2);
+    }
+
+    #[test]
+    fn missing_log_diagnoses_clean_empty() {
+        let empty = tempfile::tempdir().expect("temporary empty directory");
+        let diagnosis = diagnose_ops(empty.path()).expect("missing log diagnosis");
+        assert!(!diagnosis.has_torn_tail);
+        assert_eq!(diagnosis.valid_ops, 0);
+        assert_eq!(diagnosis.file_bytes, 0);
     }
 }

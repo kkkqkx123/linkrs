@@ -1,8 +1,8 @@
 use super::super::EdgeStore;
 use crate::edge::edge_table::staging::EdgeStagingBatch;
 use crate::edge::BatchInsertEntry;
-use crate::edge::MutableCsrTrait;
-use graphdb_core::types::{EdgeId, Timestamp};
+use crate::edge::{CsrBase, MutableCsrTrait};
+use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult, Value};
 
 impl EdgeStore {
@@ -55,6 +55,226 @@ impl EdgeStore {
             batch.stage_insert(*src, *dst, *rank, property_values, *ts);
         }
         self.commit_staging_batch(batch).map(|_| ())
+    }
+
+    /// Whether the table is empty for a direct partitioned bulk import.
+    fn is_empty_for_bulk_import(&self) -> bool {
+        self.next_edge_id == EdgeId(0)
+            && self.out_csr.edge_count() == 0
+            && self.in_csr.edge_count() == 0
+    }
+
+    /// Partitioned direct-write bulk import for initial loads.
+    ///
+    /// Empty-table fast path mirroring the partitioned direct-pack idea:
+    /// one prevalidation, one write-ahead append, one reservation pass per
+    /// direction, then one grouped topology write per direction preserving
+    /// per-edge timestamps, followed by batched authority, property, owner
+    /// and index writes. Topology uses the grouped bulk path (single
+    /// reservation and single live-set rebuild per row) instead of the
+    /// per-entry insert loop, so wide fanouts avoid per-edge index
+    /// maintenance during the topology phase. The commit point is unchanged:
+    /// groups stay dirty with their append sidecars and the next checkpoint
+    /// persists through the existing manifest protocol. Non-empty tables
+    /// must use `insert_edges_batch`; bundled tables must use the regular
+    /// staging path so inline values ride the value column.
+    pub fn bulk_import_edges(&mut self, entries: &[BatchInsertEntry]) -> StorageResult<usize> {
+        if !self.is_open {
+            return Err(StorageError::storage_not_open());
+        }
+        if self.migration_pending_checkpoint {
+            return Err(StorageError::invalid_operation(
+                "table requires a checkpoint after record-form switch before further writes"
+                    .to_string(),
+            ));
+        }
+        if !self.schema.has_out() && !self.schema.has_in() {
+            return Err(StorageError::invalid_operation(
+                "Cannot insert edge: table stores neither direction".to_string(),
+            ));
+        }
+        if self.is_bundled() {
+            return Err(StorageError::invalid_operation(
+                "bulk import rejects bundled tables: use insert_edges_batch so inline values ride the value column"
+                    .to_string(),
+            ));
+        }
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        if !self.is_empty_for_bulk_import() {
+            return Err(StorageError::invalid_operation(
+                "bulk import requires an empty table: use insert_edges_batch for incremental writes"
+                    .to_string(),
+            ));
+        }
+        let mut batch = EdgeStagingBatch::new();
+        for (src, dst, rank, property_values, ts) in entries {
+            batch.stage_insert(*src, *dst, *rank, property_values, *ts);
+        }
+        self.prevalidate_staging_batch(&batch)?;
+        let mut converted: Vec<Vec<(usize, Value)>> = Vec::with_capacity(entries.len());
+        for (_, _, _, property_values, _) in entries {
+            converted.push(self.convert_property_values(property_values)?);
+        }
+        if let Some(dir) = self.wal_dir.clone() {
+            let ops: Vec<crate::edge::edge_table::wal::EdgeWalOp> = entries
+                .iter()
+                .map(|(src, dst, rank, property_values, ts)| {
+                    crate::edge::edge_table::wal::EdgeWalOp::Insert {
+                        src: *src,
+                        dst: *dst,
+                        rank: *rank,
+                        properties: property_values.to_vec(),
+                        create_ts: *ts,
+                    }
+                })
+                .collect();
+            crate::edge::edge_table::wal::append_ops(&dir, &ops)?;
+        }
+        let mut by_src: Vec<u32> = entries.iter().map(|(src, _, _, _, _)| *src).collect();
+        by_src.sort_unstable();
+        let mut out_counts: Vec<(u32, usize)> = Vec::new();
+        for src in by_src {
+            if let Some(last) = out_counts.last_mut() {
+                if last.0 == src {
+                    last.1 += 1;
+                    continue;
+                }
+            }
+            out_counts.push((src, 1));
+        }
+        let mut by_dst: Vec<u32> = entries.iter().map(|(_, dst, _, _, _)| *dst).collect();
+        by_dst.sort_unstable();
+        let mut in_counts: Vec<(u32, usize)> = Vec::new();
+        for dst in by_dst {
+            if let Some(last) = in_counts.last_mut() {
+                if last.0 == dst {
+                    last.1 += 1;
+                    continue;
+                }
+            }
+            in_counts.push((dst, 1));
+        }
+        if self.schema.has_out() {
+            if let Err(e) = self.out_csr.reserve_for_batch(&out_counts) {
+                log::debug!("bulk import reserve out skipped: {}", e);
+            }
+        }
+        if self.schema.has_in() {
+            if let Err(e) = self.in_csr.reserve_for_batch(&in_counts) {
+                log::debug!("bulk import reserve in skipped: {}", e);
+            }
+        }
+        let base = self.next_edge_id.0;
+        let ids: Vec<EdgeId> = (0..entries.len())
+            .map(|i| EdgeId(base + i as u64))
+            .collect();
+        self.next_edge_id = EdgeId(base + entries.len() as u64);
+        let has_out = self.schema.has_out();
+        let has_in = self.schema.has_in();
+        let mut out_quads: Vec<(u32, VertexId, EdgeId, Timestamp)> =
+            Vec::with_capacity(entries.len());
+        let mut in_quads: Vec<(u32, VertexId, EdgeId, Timestamp)> =
+            Vec::with_capacity(entries.len());
+        for (i, (src, dst, rank, _, ts)) in entries.iter().enumerate() {
+            let edge_id = ids[i];
+            if has_out {
+                out_quads.push((*src, Self::edge_endpoint_key(*dst, *rank), edge_id, *ts));
+            }
+            if has_in {
+                in_quads.push((*dst, Self::edge_endpoint_key(*src, *rank), edge_id, *ts));
+            }
+        }
+        if has_out && !out_quads.is_empty() {
+            if let Err(e) = self.out_csr.batch_put_edges_with_ts(&out_quads, false) {
+                for (src, _, edge_id, _) in &out_quads {
+                    self.out_csr.rollback_insert(*src, *edge_id);
+                }
+                self.next_edge_id = EdgeId(base);
+                return Err(e);
+            }
+        }
+        if has_in && !in_quads.is_empty() {
+            if let Err(e) = self.in_csr.batch_put_edges_with_ts(&in_quads, false) {
+                for (src, _, edge_id, _) in &out_quads {
+                    self.out_csr.rollback_insert(*src, *edge_id);
+                }
+                for (dst, _, edge_id, _) in &in_quads {
+                    self.in_csr.rollback_insert(*dst, *edge_id);
+                }
+                self.next_edge_id = EdgeId(base);
+                return Err(e);
+            }
+        }
+        let inline = self.properties.is_inline_stub();
+        let mut applied = 0usize;
+        for (i, (src, dst, rank, _, ts)) in entries.iter().enumerate() {
+            let edge_id = ids[i];
+            self.mvcc.record_creation(edge_id, *ts);
+            if !inline {
+                if let Err(e) = self
+                    .properties
+                    .insert_for_edge_at(edge_id, &converted[i], *ts)
+                {
+                    for (j, (rsrc, rdst, rrank, _, rts)) in entries.iter().enumerate() {
+                        self.erase_applied_insert(*rsrc, *rdst, *rrank, ids[j], *rts);
+                    }
+                    self.next_edge_id = EdgeId(base);
+                    return Err(e);
+                }
+            }
+            if self.property_index.is_some() && !inline {
+                let label = self.label;
+                let outcomes: Vec<(String, StorageResult<()>, u64)> =
+                    if let Some(ref mut index) = self.property_index {
+                        converted[i]
+                            .iter()
+                            .map(|(prop_idx, prop_value)| {
+                                let started = std::time::Instant::now();
+                                let prop_name = &self.schema.properties[*prop_idx].name;
+                                let result = index
+                                    .insert(prop_name, prop_value, *src, *dst, *rank, label, *ts);
+                                let latency = started.elapsed().as_millis() as u64;
+                                (prop_name.clone(), result, latency)
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                for (prop_name, result, latency) in outcomes {
+                    if let Err(e) = self.note_index_result(&prop_name, result, latency) {
+                        for (j, (rsrc, rdst, rrank, _, rts)) in entries.iter().enumerate() {
+                            self.erase_applied_insert(*rsrc, *rdst, *rrank, ids[j], *rts);
+                        }
+                        self.next_edge_id = EdgeId(base);
+                        return Err(e);
+                    }
+                }
+            }
+            self.edge_owner
+                .insert(edge_id, self.owner_gid_for(*src, *dst));
+            applied += 1;
+        }
+        self.mark_properties_dirty();
+        for (src, dst, _, _, _) in entries {
+            let owner = self.owner_gid_for(*src, *dst);
+            *self.group_write_counts.entry(owner).or_insert(0) += 1;
+        }
+        if let Some(ts) = entries.iter().map(|(_, _, _, _, ts)| *ts).max() {
+            let pressured = self.check_and_apply_write_backpressure(ts);
+            self.maybe_run_auto_maintenance();
+            if pressured {
+                log::warn!(
+                    "edge table '{}' over mutable CSR budget, synchronous maintenance ran",
+                    self.label_name
+                );
+            }
+        }
+        for edge_id in &ids {
+            self.ensure_copies_consistent(*edge_id)?;
+        }
+        Ok(applied)
     }
 
     /// Move one staged insert into the committed structures.

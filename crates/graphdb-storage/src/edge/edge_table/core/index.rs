@@ -15,6 +15,31 @@ use std::collections::HashSet;
 
 use super::super::iterator::EdgeTableScanIterator;
 
+/// Point-in-time secondary index observability snapshot.
+///
+/// Lets operators poll one value instead of racing several counters: the lag
+/// watermark since the last rebuild baseline, the wall-clock age of that lag,
+/// and whether candidate lookups currently serve from the index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgeIndexStatus {
+    /// Whether a property index is built.
+    pub enabled: bool,
+    /// Active consistency contract.
+    pub consistency: IndexConsistency,
+    /// Total index write failures since the last counter reset.
+    pub failures: u64,
+    /// Failure count at the last rebuild baseline.
+    pub baseline: u64,
+    /// Failures since the baseline; zero means the index is current.
+    pub lag: u64,
+    /// Whether candidate lookups may serve from the index.
+    pub usable: bool,
+    /// Seconds since the index first lagged; zero while current.
+    pub stale_secs: u64,
+    /// Pool capacity recorded at the last build, reused by auto rebuilds.
+    pub pool_capacity: u64,
+}
+
 impl EdgeStore {
     /// Secondary index write failures since the last rebuild or reset.
     pub fn index_failure_count(&self) -> u64 {
@@ -28,9 +53,54 @@ impl EdgeStore {
             .saturating_sub(self.index_lag_baseline)
     }
 
+    /// Seconds since the index first lagged; zero while current or disabled.
+    pub fn index_stale_secs(&self) -> u64 {
+        if self.index_lag() == 0 {
+            return 0;
+        }
+        self.index_stale_since
+            .map(|since| since.elapsed().as_secs())
+            .unwrap_or(0)
+    }
+
     /// Whether the index is safe to serve candidate lookups.
     pub fn is_index_usable(&self) -> bool {
         self.property_index.is_some() && self.index_lag() == 0
+    }
+
+    /// One-call observability snapshot for monitoring polls.
+    ///
+    /// Read-only. Poll this on a timer even without writes: the write-path
+    /// auto maintenance only runs on commits, so an idle table keeps its lag
+    /// until a background pass calls `rebuild_index_if_needed`.
+    pub fn index_status(&self) -> EdgeIndexStatus {
+        EdgeIndexStatus {
+            enabled: self.property_index.is_some(),
+            consistency: self.index_consistency,
+            failures: self.index_write_failures,
+            baseline: self.index_lag_baseline,
+            lag: self.index_lag(),
+            usable: self.is_index_usable(),
+            stale_secs: self.index_stale_secs(),
+            pool_capacity: self.index_pool_capacity,
+        }
+    }
+
+    /// Log-and-return observability report for the secondary index.
+    ///
+    /// Read-only. Warns once per poll while lagged so a long BestEffort lag
+    /// is noticeable; Strong mode still fails the primary write at write
+    /// time and is reserved for small-cardinality critical attributes.
+    pub fn report_index_status(&self) -> EdgeIndexStatus {
+        let status = self.index_status();
+        if status.enabled && status.lag > 0 {
+            log::warn!(
+                "edge table '{}' secondary index lagged: lag={} stale_secs={} consistency={:?}; \
+                queries fall back to segment scans until a rebuild restores serving",
+                self.label_name, status.lag, status.stale_secs, status.consistency,
+            );
+        }
+        status
     }
 
     /// Consistency contract of the secondary index.
@@ -80,7 +150,10 @@ impl EdgeStore {
     /// Rebuild the property index when the staleness policy demands it.
     ///
     /// Returns true when a rebuild ran. Uses the capacity recorded at the
-    /// last build so automatic maintenance needs no caller capacity.
+    /// last build so automatic maintenance needs no caller capacity. This is
+    /// the shared background rebuild task: both the write-path auto
+    /// maintenance and idle-time timer passes call here, so lag clears
+    /// without new writes once the policy trips.
     pub fn rebuild_index_if_needed(
         &mut self,
         failure_threshold: u64,
@@ -89,8 +162,14 @@ impl EdgeStore {
         if !self.index_needs_rebuild(failure_threshold, max_stale_secs) {
             return Ok(false);
         }
+        let lag_before = self.index_lag();
+        let stale_before = self.index_stale_secs();
         let capacity = self.index_pool_capacity;
         self.build_property_index(capacity)?;
+        log::info!(
+            "edge table '{}' rebuilt secondary index: cleared lag={} stale_secs={}",
+            self.label_name, lag_before, stale_before,
+        );
         Ok(true)
     }
 
@@ -117,6 +196,11 @@ impl EdgeStore {
         self.index_write_failures = self.index_write_failures.saturating_add(1);
         if was_clean && self.index_stale_since.is_none() {
             self.index_stale_since = Some(std::time::Instant::now());
+            log::warn!(
+                "edge table '{}' secondary index started lagging on '{}' (consistency {:?}); \
+                queries fall back to segment scans until a rebuild",
+                self.label_name, prop_name, self.index_consistency,
+            );
         }
         if let Some(stats) = &self.stats_manager {
             stats.record_index_operation(self.label as u64, prop_name, latency_ms, false);

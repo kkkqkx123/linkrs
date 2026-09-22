@@ -45,11 +45,14 @@ pub mod wal;
 
 // Re-export commonly used types
 pub use config::EdgeTableConfig;
-pub use core::{EdgeStore, IncidentDeletedEdge, UpdateEdgePropertyByKeyParams};
+pub use core::{
+    EdgeIndexStatus, EdgeStore, IncidentDeletedEdge, UpdateEdgePropertyByKeyParams,
+};
 pub use iterator::{AdjacencyBatchAccessor, EdgeTableScanIterator, DEFAULT_ADJACENCY_BATCH};
 pub use record_form::MigrateStats;
 pub use staging::{EdgeStagingBatch, StagedDelete, StagedInsert};
 pub use stats::{DeletionStats, GroupSegmentStats, ScanPruneReport, TombstoneStats};
+pub use wal::EdgeWalDiagnosis;
 
 // Re-export from parent
 pub use super::{ColdStamps, CsrBase, CsrVariant, HotNbr, Nbr};

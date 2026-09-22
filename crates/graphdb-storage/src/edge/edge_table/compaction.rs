@@ -104,7 +104,8 @@ impl EdgeStore {
     /// inspection, so the pause stays proportional to the dirty groups
     /// rather than the size of the table. Each visited row pays a single
     /// fused dead/reclaimable probe instead of a census plus an eligibility
-    /// walk.
+    /// walk. Frozen groups merge once per direction through the batched
+    /// frozen path instead of one trailing memmove per row.
     pub fn compact_reclaimable_vertices(&mut self, bound: Timestamp, max_vertices: usize) -> usize {
         if bound == Timestamp::MAX || max_vertices == 0 {
             return 0;
@@ -128,22 +129,49 @@ impl EdgeStore {
             if !out_scan && !in_scan {
                 continue;
             }
+            let out_frozen = self.out_csr.is_frozen(gid);
+            let in_frozen = self.in_csr.is_frozen(gid);
+            if out_frozen || in_frozen {
+                let reclaimed = self.compact_frozen_group_rows(
+                    gid,
+                    bound,
+                    max_vertices - visited,
+                    out_scan && out_frozen,
+                    in_scan && in_frozen,
+                    &mut removed_edges,
+                );
+                visited += reclaimed;
+                let mutable_work_left = (out_scan && !out_frozen) || (in_scan && !in_frozen);
+                if !mutable_work_left {
+                    if self.frozen_group_has_no_dead(gid, bound) {
+                        if out_scan && out_frozen {
+                            self.out_csr.clear_reclaim_hint(gid);
+                        }
+                        if in_scan && in_frozen {
+                            self.in_csr.clear_reclaim_hint(gid);
+                        }
+                    }
+                    continue;
+                }
+            }
             let rows = crate::edge::node_group::group_size(group_bits);
             let base = crate::edge::node_group::group_base(gid, group_bits);
             let mut group_done = true;
             let mut any_dead = false;
+            let out_row_scan = out_scan && !self.out_csr.is_frozen(gid);
+            let in_row_scan = in_scan && !self.in_csr.is_frozen(gid);
             for local in 0..rows {
                 if visited >= max_vertices {
                     group_done = false;
                     break;
                 }
                 let vid = base.saturating_add(local as u32);
-                let (out_dead, out_reclaimable) = if out_scan {
+                let (out_dead, out_reclaimable) = if out_row_scan {
                     self.out_csr.vertex_reclaim_probe(vid, bound)
                 } else {
                     (0, 0)
                 };
-                let (in_dead, in_reclaimable) = if in_scan {
+                let (in_dead, in_reclaimable) = if in_row_scan {
                     self.in_csr.vertex_reclaim_probe(vid, bound)
                 } else {
                     (0, 0)
@@ -175,6 +203,168 @@ impl EdgeStore {
                     self.out_csr.clear_reclaim_hint(gid);
                 }
                 if in_scan {
+                    self.in_csr.clear_reclaim_hint(gid);
+                }
+            }
+        }
+        removed_edges.len()
+    }
+
+    /// Collect-then-merge reclaim for frozen groups owning `gid`.
+    ///
+    /// Gathers up to `budget` reclaimable local rows across the requested
+    /// frozen directions and merges each direction once through the batched
+    /// frozen path. Returns the collected row count against the caller row
+    /// budget, not the removed edge count. Mutable directions are ignored;
+    /// their rows use the regular per-row path.
+    fn compact_frozen_group_rows(
+        &mut self,
+        gid: usize,
+        bound: Timestamp,
+        budget: usize,
+        do_out: bool,
+        do_in: bool,
+        removed_edges: &mut std::collections::HashSet<graphdb_core::types::EdgeId>,
+    ) -> usize {
+        if bound == Timestamp::MAX || budget == 0 || (!do_out && !do_in) {
+            return 0;
+        }
+        let group_bits = self.out_csr.group_bits();
+        let rows = crate::edge::node_group::group_size(group_bits);
+        let base = crate::edge::node_group::group_base(gid, group_bits);
+        let mut collected = 0usize;
+        if do_out {
+            let mut locals = Vec::new();
+            for local in 0..rows {
+                if collected >= budget {
+                    break;
+                }
+                let vid = base.saturating_add(local as u32);
+                let (_, reclaimable) = self.out_csr.vertex_reclaim_probe(vid, bound);
+                if reclaimable > 0 {
+                    locals.push(local as u32);
+                    collected += 1;
+                }
+            }
+            if !locals.is_empty() {
+                self.out_csr.compact_frozen_rows_batched(
+                    gid,
+                    &locals,
+                    bound,
+                    &mut |edge_id, delete_ts| {
+                        removed_edges.insert(edge_id);
+                        self.mvcc.record_deletion(edge_id, delete_ts);
+                    },
+                );
+            }
+        }
+        if do_in {
+            let mut locals = Vec::new();
+            for local in 0..rows {
+                if collected >= budget {
+                    break;
+                }
+                let vid = base.saturating_add(local as u32);
+                let (_, reclaimable) = self.in_csr.vertex_reclaim_probe(vid, bound);
+                if reclaimable > 0 {
+                    locals.push(local as u32);
+                    collected += 1;
+                }
+            }
+            if !locals.is_empty() {
+                self.in_csr.compact_frozen_rows_batched(
+                    gid,
+                    &locals,
+                    bound,
+                    &mut |edge_id, delete_ts| {
+                        removed_edges.insert(edge_id);
+                        self.mvcc.record_deletion(edge_id, delete_ts);
+                    },
+                );
+            }
+        }
+        collected
+    }
+
+    /// Whether frozen groups owning `gid` hold no physical tombstones.
+    ///
+    /// Hint-clearing probe for the frozen path: scans the group rows for any
+    /// dead entry, eligible or not, so the reclaim hint survives while any
+    /// tombstone physically remains.
+    fn frozen_group_has_no_dead(&self, gid: usize, bound: Timestamp) -> bool {
+        let group_bits = self.out_csr.group_bits();
+        let rows = crate::edge::node_group::group_size(group_bits);
+        let base = crate::edge::node_group::group_base(gid, group_bits);
+        for local in 0..rows {
+            let vid = base.saturating_add(local as u32);
+            if self.out_csr.is_frozen(gid) {
+                let (dead, _) = self.out_csr.vertex_reclaim_probe(vid, bound);
+                if dead > 0 {
+                    return false;
+                }
+            }
+            if self.in_csr.is_frozen(gid) {
+                let (dead, _) = self.in_csr.vertex_reclaim_probe(vid, bound);
+                if dead > 0 {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Sweep every frozen group holding delete history at group scope.
+    ///
+    /// Explicit frozen-GC entry: each frozen group with a reclaim hint merges
+    /// once through the group path instead of one trailing memmove per row.
+    /// Reports distinct reclaimed edge ids. Mutable groups are untouched;
+    /// their rows use the regular bounded reclaim pass.
+    pub fn compact_frozen_reclaimable_groups(&mut self, bound: Timestamp) -> usize {
+        if bound == Timestamp::MAX {
+            return 0;
+        }
+        let mut gids: Vec<usize> = self.out_csr.existing_group_ids();
+        for gid in self.in_csr.existing_group_ids() {
+            if !gids.contains(&gid) {
+                gids.push(gid);
+            }
+        }
+        gids.sort_unstable();
+        let mut removed_edges = std::collections::HashSet::new();
+        for gid in gids {
+            let out_frozen =
+                self.out_csr.is_frozen(gid) && self.out_csr.group_needs_reclaim_scan(gid);
+            let in_frozen = self.in_csr.is_frozen(gid) && self.in_csr.group_needs_reclaim_scan(gid);
+            if !out_frozen && !in_frozen {
+                continue;
+            }
+            if out_frozen {
+                self.out_csr.compact_group_with_reporting(
+                    gid,
+                    bound,
+                    0.0,
+                    &mut |edge_id, delete_ts| {
+                        removed_edges.insert(edge_id);
+                        self.mvcc.record_deletion(edge_id, delete_ts);
+                    },
+                );
+            }
+            if in_frozen {
+                self.in_csr.compact_group_with_reporting(
+                    gid,
+                    bound,
+                    0.0,
+                    &mut |edge_id, delete_ts| {
+                        removed_edges.insert(edge_id);
+                        self.mvcc.record_deletion(edge_id, delete_ts);
+                    },
+                );
+            }
+            if self.frozen_group_has_no_dead(gid, bound) {
+                if out_frozen {
+                    self.out_csr.clear_reclaim_hint(gid);
+                }
+                if in_frozen {
                     self.in_csr.clear_reclaim_hint(gid);
                 }
             }
