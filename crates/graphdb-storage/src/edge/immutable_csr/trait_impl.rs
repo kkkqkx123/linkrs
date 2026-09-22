@@ -114,11 +114,15 @@ impl MutableCsrTrait for ImmutableCsr {
 
     fn compact_vertex_with_reporting(
         &mut self,
-        vid: u32,
-        cutoff: Timestamp,
-        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+        _vid: u32,
+        _cutoff: Timestamp,
+        _on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
     ) -> usize {
-        ImmutableCsr::compact_row(self, vid, cutoff, on_edge_removed)
+        // Single-row frozen reclaim is prohibited: production frozen reclaim
+        // uses the group paths (`compact_with_cutoff`, `compact_rows_batched`
+        // or `compact_group_with_reporting`) with one linear pass. Direct
+        // `ImmutableCsr::compact_row` stays as the offline tooling entry only.
+        0
     }
 
     fn reclaimable_count(&self, vid: u32, cutoff: Timestamp) -> usize {

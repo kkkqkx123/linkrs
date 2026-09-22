@@ -112,10 +112,14 @@ fn frozen_writes_are_rejected() {
     assert!(!frozen.revert_delete_by_edge_id(0, EdgeId(2), 9));
     assert!(!frozen.revert_delete_by_offset(0, 0, 9));
     assert!(!frozen.revert_delete_at_position(0, EdgePosition::Primary { slot: 0 }, EdgeId(2), 9));
+    // Single-row frozen reclaim is prohibited through the trait entry; the
+    // group paths reclaim instead. The offline `compact_row` tooling entry
+    // below still covers the single-row mechanics.
     assert_eq!(
         frozen.compact_vertex_with_reporting(0, 9, &mut |_, _| {}),
-        1
+        0
     );
+    assert_eq!(frozen.compact_rows_batched(&[0], 9, &mut |_, _| {}), 1);
     assert_eq!(frozen.reclaimable_count(0, 9), 0);
     assert!(!frozen.vertex_needs_compact(0, 9));
     assert_eq!(frozen.row_gap(0), 0);

@@ -136,6 +136,22 @@ pub(crate) const SINGLE_REQUIRES_COLUMNAR_MSG: &str =
 pub(crate) const INLINE_FORM_SCHEMA_CHANGE_MSG: &str =
     "schema change on an inline-form table requires a record-form rebuild (migrate_record_form or switch_record_form_online)";
 
+/// Whether one direction may pair a strategy with a record form.
+///
+/// Single source of truth for the single-plus-inline rule, shared by shard
+/// construction, fresh-variant creation and migration prechecks.
+pub fn validate_strategy_form(
+    strategy: EdgeStrategy,
+    record_form: RecordForm,
+) -> graphdb_core::StorageResult<()> {
+    if strategy == EdgeStrategy::Single && record_form != RecordForm::Columnar {
+        return Err(graphdb_core::StorageError::invalid_operation(
+            SINGLE_REQUIRES_COLUMNAR_MSG.to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Check whether a `DataType` can be encoded as a 64-bit scalar for the
 /// `Bundled` record form.
 pub fn is_scalar_encodable(dt: &graphdb_core::DataType) -> bool {
@@ -315,6 +331,37 @@ impl EdgeSchema {
                 "EdgeSchema '{}': at least one of oe_strategy and ie_strategy must be enabled",
                 self.label_name
             )));
+        }
+        Ok(())
+    }
+
+    /// Validate a resolved schema carrying its authoritative record form.
+    ///
+    /// Central entry for all strategy-plus-form rules so construction, load
+    /// and migration report one conflict with one way out. Checks direction
+    /// presence, single-plus-inline pairing, pure arity and bundled
+    /// admission through the shared helpers.
+    pub fn validate_resolved(&self) -> graphdb_core::StorageResult<()> {
+        self.validate()?;
+        validate_strategy_form(self.oe_strategy, self.record_form)?;
+        validate_strategy_form(self.ie_strategy, self.record_form)?;
+        match self.record_form {
+            RecordForm::Pure if !self.properties.is_empty() => {
+                return Err(graphdb_core::StorageError::invalid_operation(
+                    "pure record form requires zero properties; drop properties or keep the columnar form, see migration_plan/migrate_record_form"
+                        .to_string(),
+                ));
+            }
+            RecordForm::Bundled => {
+                if let Some(reason) = bundled_ineligibility_reason(
+                    &self.properties,
+                    self.oe_strategy,
+                    self.ie_strategy,
+                ) {
+                    return Err(graphdb_core::StorageError::invalid_operation(reason));
+                }
+            }
+            RecordForm::Pure | RecordForm::Columnar => {}
         }
         Ok(())
     }

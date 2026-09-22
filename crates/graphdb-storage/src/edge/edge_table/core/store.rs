@@ -77,6 +77,7 @@ impl EdgeStore {
         }
         let mut schema = schema;
         schema.record_form = record_form;
+        schema.validate_resolved()?;
         let mut out_csr = CsrShardSet::new(
             schema.oe_strategy,
             config.node_group_bits,

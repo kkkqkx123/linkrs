@@ -31,14 +31,8 @@ impl CsrShardSet {
                 "overflow_chunk_edges must be greater than zero",
             ));
         }
-        // Single strategies need fixed single slots, which only the columnar
-        // form provides. Inline forms store multiple edges per vertex, so the
-        // combination would silently drop the single-edge contract.
-        if strategy == EdgeStrategy::Single && record_form != RecordForm::Columnar {
-            return Err(StorageError::invalid_operation(
-                super::super::SINGLE_REQUIRES_COLUMNAR_MSG,
-            ));
-        }
+        // Central single-plus-inline rule lives with the schema helpers.
+        super::super::validate_strategy_form(strategy, record_form)?;
         let mut set = Self {
             strategy,
             group_bits,
@@ -112,14 +106,8 @@ impl CsrShardSet {
     }
 
     pub(crate) fn fresh_variant(&self) -> StorageResult<CsrVariant> {
-        // Local guard for the constructor invariant: a single strategy never
-        // pairs with an inline form, so fresh groups cannot silently drop
-        // the single-edge contract even if a future caller skips the check.
-        if self.strategy == EdgeStrategy::Single && self.record_form != RecordForm::Columnar {
-            return Err(StorageError::invalid_operation(
-                super::super::SINGLE_REQUIRES_COLUMNAR_MSG,
-            ));
-        }
+        // Local guard for the constructor invariant through the shared helper.
+        super::super::validate_strategy_form(self.strategy, self.record_form)?;
         // Only the columnar multi-edge store reuses primary tombstones, so
         // only that branch seeds the reuse cutoff. Pure and bundled groups
         // hold no reuse state and intentionally ignore the hint.

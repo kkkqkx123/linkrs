@@ -131,10 +131,9 @@ impl SingleMutableCsr {
         if self.segments.len() < need_segments {
             self.segments.resize_with(need_segments, || None);
         }
-        let need_words = self.vertex_capacity.div_ceil(64);
-        if self.present.len() < need_words {
-            self.present.resize(need_words, 0);
-        }
+        // The present bitmap stays lazy: missing words read as absent through
+        // `has_present`, and `set_present` grows on demand. Pre-sizing it
+        // here would charge every sparse wide span for its full logical width.
     }
 
     pub(crate) fn allocated_segments(&self) -> usize {

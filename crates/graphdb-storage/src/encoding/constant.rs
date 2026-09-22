@@ -244,14 +244,14 @@ impl ConstantColumn {
             })?;
             Some(v)
         };
-        // Overrides section is mandatory; files without it are rejected,
+        // Overrides section is mandatory; truncated files are rejected,
         // never silently accepted as empty.
         let mut overrides = HashMap::new();
         let mut ov_count_bytes = [0u8; 4];
         reader.read_exact(&mut ov_count_bytes).map_err(|e| {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
                 StorageError::deserialize_error(
-                    "ConstantColumn missing overrides section: old format without overrides is not supported".to_string(),
+                    "ConstantColumn truncated: missing overrides section".to_string(),
                 )
             } else {
                 StorageError::io_error(e.to_string())
@@ -401,9 +401,9 @@ mod tests {
         assert_eq!(restored.get(1), Some(Value::Int(2)));
         assert_eq!(restored.get(2), Some(Value::Int(1)));
         assert_eq!(restored.get(3), Some(Value::Int(3)));
-        // Old format without overrides section is rejected.
+        // Truncated image without overrides section is rejected.
         let mut old_buf = Vec::new();
-        // Manually write old format without overrides tail
+        // Manually write truncated image without overrides tail
         old_buf.extend_from_slice(&(5u32.to_le_bytes()));
         old_buf.push(1);
         let bytes = postcard::to_allocvec(&Value::Int(7)).unwrap();

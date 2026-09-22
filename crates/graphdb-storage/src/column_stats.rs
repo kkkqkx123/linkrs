@@ -4,19 +4,13 @@
 //! Provides min/max values, null counts, and encoding metadata
 //! that can be used for predicate pushdown and range pruning.
 //!
-//! Format version 1: HLL registers and null flags are mandatory. Truncated
-//! old files are rejected fail-closed, never silently defaulted. Old data
-//! needs an offline rebuild through a checkpoint; there is no silent
-//! compatibility path.
+//! Truncated files are rejected; there is no silent defaulting.
 
 use std::io::{Read, Write};
 
 use crate::encoding::EncodingType;
 use crate::stats::HyperLogLog;
 use graphdb_core::{StorageResult, Value};
-
-/// Persistent column statistics format version, currently 1.
-pub const COLUMN_STATS_FORMAT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnStats {
@@ -155,14 +149,13 @@ impl ColumnStats {
         reader.read_exact(&mut nb)?;
         let raw_size = u64::from_le_bytes(nb);
 
-        // HLL tail and null flags are mandatory; truncated old files are
+        // HLL tail and null flags are mandatory; truncated files are
         // rejected, never silently defaulted.
         let mut tail = [0u8; 1];
         reader.read_exact(&mut tail).map_err(|e| {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
                 graphdb_core::StorageError::deserialize_error(
-                    "ColumnStats truncated: missing HLL tail, old format is not supported; rebuild offline through a checkpoint"
-                        .to_string(),
+                    "ColumnStats truncated: missing HLL tail".to_string(),
                 )
             } else {
                 graphdb_core::StorageError::io_error(e.to_string())
@@ -177,8 +170,7 @@ impl ColumnStats {
         reader.read_exact(&mut flags).map_err(|e| {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
                 graphdb_core::StorageError::deserialize_error(
-                    "ColumnStats truncated: missing null flags, old format is not supported; rebuild offline through a checkpoint"
-                        .to_string(),
+                    "ColumnStats truncated: missing null flags".to_string(),
                 )
             } else {
                 graphdb_core::StorageError::io_error(e.to_string())
@@ -673,14 +665,13 @@ mod tests {
     }
 
     #[test]
-    fn test_truncated_stats_reject_with_rebuild_guidance() {
-        assert_eq!(COLUMN_STATS_FORMAT_VERSION, 1);
+    fn test_truncated_stats_reject() {
         let mut stats = ColumnStats::new(EncodingType::Alp, 1024, 4096);
         stats.min_value = Some(Value::Double(1.5));
         let mut buf = Vec::new();
         stats.serialize_meta(&mut buf).unwrap();
         let truncated = &buf[..buf.len() - 1];
         let err = ColumnStats::deserialize_meta(&mut &truncated[..]).unwrap_err();
-        assert!(err.to_string().contains("rebuild offline"));
+        assert!(err.to_string().contains("truncated"));
     }
 }

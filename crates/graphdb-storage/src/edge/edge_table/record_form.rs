@@ -31,7 +31,7 @@ use super::core::EdgeStore;
 use crate::edge::bundled_csr::{decode_scalar, encode_scalar};
 use crate::edge::property_schema::PropertySchema;
 use crate::edge::{CsrShardSet, CsrWithProperties, MutableCsrTrait, RecordForm};
-use graphdb_core::types::{EdgeId, EdgeStrategy, Timestamp};
+use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
 
 /// Outcome of one offline record-form migration.
@@ -196,17 +196,9 @@ impl EdgeStore {
     /// Each rejection names the migration entry so callers quote cost with
     /// `migration_plan` instead of treating the error as generic.
     fn check_record_form_target(&self, target: RecordForm) -> StorageResult<()> {
-        // Single strategies need fixed single slots, which only the columnar
-        // form provides. Inline forms store multiple edges per vertex, so a
-        // migration there would silently drop the single-edge contract.
-        if matches!(target, RecordForm::Pure | RecordForm::Bundled)
-            && (self.schema.oe_strategy == EdgeStrategy::Single
-                || self.schema.ie_strategy == EdgeStrategy::Single)
-        {
-            return Err(StorageError::invalid_operation(
-                crate::edge::SINGLE_REQUIRES_COLUMNAR_MSG.to_string(),
-            ));
-        }
+        // Shared strategy-plus-form rules through the central schema helpers.
+        crate::edge::validate_strategy_form(self.schema.oe_strategy, target)?;
+        crate::edge::validate_strategy_form(self.schema.ie_strategy, target)?;
         match target {
             RecordForm::Pure if !self.schema.properties.is_empty() => {
                 return Err(StorageError::invalid_operation(
@@ -221,8 +213,6 @@ impl EdgeStore {
                     self.schema.oe_strategy,
                     self.schema.ie_strategy,
                 ) {
-                    // The single-strategy case already returned above with
-                    // the same wording; reaching here means arity or type.
                     return Err(StorageError::invalid_operation(reason));
                 }
             }
