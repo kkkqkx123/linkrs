@@ -120,8 +120,7 @@ impl MutableCsrTrait for ImmutableCsr {
     ) -> usize {
         // Single-row frozen reclaim is prohibited: production frozen reclaim
         // uses the group paths (`compact_with_cutoff`, `compact_rows_batched`
-        // or `compact_group_with_reporting`) with one linear pass. Direct
-        // `ImmutableCsr::compact_row` stays as the offline tooling entry only.
+        // or `compact_group_with_reporting`) with one linear pass.
         0
     }
 

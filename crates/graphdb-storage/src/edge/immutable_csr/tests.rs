@@ -113,8 +113,7 @@ fn frozen_writes_are_rejected() {
     assert!(!frozen.revert_delete_by_offset(0, 0, 9));
     assert!(!frozen.revert_delete_at_position(0, EdgePosition::Primary { slot: 0 }, EdgeId(2), 9));
     // Single-row frozen reclaim is prohibited through the trait entry; the
-    // group paths reclaim instead. The offline `compact_row` tooling entry
-    // below still covers the single-row mechanics.
+    // group paths reclaim instead.
     assert_eq!(
         frozen.compact_vertex_with_reporting(0, 9, &mut |_, _| {}),
         0
@@ -320,7 +319,7 @@ fn frozen_compact_drops_eligible_tombstones_in_place() {
 }
 
 #[test]
-fn compact_row_leaves_other_rows_untouched() {
+fn batched_single_row_leaves_other_rows_untouched() {
     let mut mutable = MutableCsr::with_capacity(4, 32);
     for (row, base) in [(0u32, 10u64), (1, 20), (2, 30)] {
         for i in 0..4 {
@@ -341,7 +340,7 @@ fn compact_row_leaves_other_rows_untouched() {
     let before_2 = frozen.physical_edges_of(2);
     let live_before = frozen.edge_count();
     let mut removed = Vec::new();
-    let dropped = frozen.compact_row(1, 10, &mut |id, ts| removed.push((id, ts)));
+    let dropped = frozen.compact_rows_batched(&[1], 10, &mut |id, ts| removed.push((id, ts)));
     assert_eq!(dropped, 2);
     assert_eq!(removed, vec![(EdgeId(21), 5), (EdgeId(23), 5)]);
     assert_eq!(frozen.physical_edges_of(0), before_0);
@@ -367,18 +366,22 @@ fn compact_row_leaves_other_rows_untouched() {
 }
 
 #[test]
-fn compact_row_without_reclaimable_changes_nothing() {
+fn batched_without_reclaimable_changes_nothing() {
     let mut frozen = ImmutableCsr::pack_from_mutable(&sample_mutable());
     let before: Vec<Vec<Nbr>> = (0..8u32).map(|vid| frozen.physical_edges_of(vid)).collect();
     let live_before = frozen.edge_count();
     let mut removed = Vec::new();
     assert_eq!(
-        frozen.compact_row(0, 4, &mut |id, ts| removed.push((id, ts))),
+        frozen.compact_rows_batched(&[0], 4, &mut |id, ts| removed.push((id, ts))),
         0
     );
     assert!(removed.is_empty());
-    assert_eq!(frozen.compact_row(9, 10, &mut |_, _| {}), 0);
-    assert_eq!(frozen.compact_row(0, Timestamp::MAX, &mut |_, _| {}), 0);
+    assert_eq!(frozen.compact_rows_batched(&[9], 10, &mut |_, _| {}), 0);
+    assert_eq!(
+        frozen.compact_rows_batched(&[0], Timestamp::MAX, &mut |_, _| {}),
+        0
+    );
+    assert_eq!(frozen.compact_rows_batched(&[], 10, &mut |_, _| {}), 0);
     let after: Vec<Vec<Nbr>> = (0..8u32).map(|vid| frozen.physical_edges_of(vid)).collect();
     assert_eq!(before, after);
     assert_eq!(frozen.edge_count(), live_before);
@@ -399,7 +402,7 @@ fn mutable_row_sorted_reflects_insertion_order() {
 }
 
 #[test]
-fn batched_frozen_reclaim_matches_per_row_loop() {
+fn batched_subset_matches_full_table_reclaim() {
     let mut mutable = MutableCsr::with_capacity(8, 64);
     mutable
         .insert_edge(0, packed_endpoint(10, 0), EdgeId(1), 1)
@@ -423,15 +426,11 @@ fn batched_frozen_reclaim_matches_per_row_loop() {
         .unwrap();
     let cutoff = 9 as Timestamp;
 
-    // Offline single-row loop, one trailing memmove per row.
-    let mut by_row = ImmutableCsr::pack_from_mutable(&mutable);
-    let mut row_reported = Vec::new();
-    let mut row_removed = 0usize;
-    for vid in 0..8u32 {
-        row_removed += by_row.compact_row(vid, cutoff, &mut |id, ts| {
-            row_reported.push((id, ts));
-        });
-    }
+    // Full-table single pass over every row.
+    let mut by_cutoff = ImmutableCsr::pack_from_mutable(&mutable);
+    let mut cutoff_reported = Vec::new();
+    let cutoff_removed =
+        by_cutoff.compact_with_cutoff(cutoff, &mut |id, ts| cutoff_reported.push((id, ts)));
 
     // Production batched path, one linear pass for the listed rows.
     let mut batched = ImmutableCsr::pack_from_mutable(&mutable);
@@ -441,14 +440,14 @@ fn batched_frozen_reclaim_matches_per_row_loop() {
         batched_reported.push((id, ts));
     });
 
-    assert_eq!(row_removed, 2);
-    assert_eq!(batched_removed, row_removed);
-    assert_eq!(batched_reported, row_reported);
-    assert_eq!(batched.edge_count(), by_row.edge_count());
+    assert_eq!(cutoff_removed, 2);
+    assert_eq!(batched_removed, cutoff_removed);
+    assert_eq!(batched_reported, cutoff_reported);
+    assert_eq!(batched.edge_count(), by_cutoff.edge_count());
     for vid in 0..8u32 {
         assert_eq!(
             batched.physical_edges_of(vid),
-            by_row.physical_edges_of(vid),
+            by_cutoff.physical_edges_of(vid),
             "row {} diverges",
             vid
         );

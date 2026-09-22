@@ -322,7 +322,7 @@ impl EdgeStore {
         }
         if !self.bulk_import_rank_pinned(entries) {
             return Err(StorageError::invalid_operation(
-                "bulk import rejects bundled tables: use insert_edges_batch so inline values ride the value column"
+                "bulk import rejects ranked batches on bundled tables: use insert_edges_batch so inline values ride the value column, or migrate to the columnar form first, see migration_plan/migrate_record_form/switch_record_form_online"
                     .to_string(),
             ));
         }

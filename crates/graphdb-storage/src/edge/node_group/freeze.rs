@@ -54,7 +54,7 @@ impl FreezeBlockReason {
             }
             FreezeBlockReason::BundledValuesNeedMigration => {
                 format!(
-                    "group {} holds bundled inline values; run migrate_record_form to the columnar form before freeze",
+                    "group {} holds bundled inline values; run migration_plan/migrate_record_form/switch_record_form_online to the columnar form before freeze",
                     gid
                 )
             }

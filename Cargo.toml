@@ -310,3 +310,7 @@ harness = false
 [[bench]]
 name = "edge_point_write_bench"
 harness = false
+
+[[bench]]
+name = "edge_group_commit_bench"
+harness = false

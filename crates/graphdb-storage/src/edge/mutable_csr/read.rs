@@ -224,6 +224,120 @@ impl MutableCsr {
         }
     }
 
+    /// Fill a caller buffer with the physical entries of many vertices.
+    ///
+    /// Batched counterpart of [`Self::fill_physical_into`] for fan-out scans:
+    /// one clear plus one reservation serves every listed vertex, and `starts`
+    /// records the boundary of each vertex so the caller slices per vertex
+    /// without a second lookup. Gap sentinels are excluded; tombstones are
+    /// included, matching the single-vertex walk exactly.
+    pub fn fill_physical_into_batched(
+        &self,
+        src_vids: &[u32],
+        out: &mut Vec<Nbr>,
+        starts: &mut Vec<usize>,
+    ) {
+        out.clear();
+        starts.clear();
+        starts.reserve(src_vids.len().saturating_add(1));
+        let mut total = 0usize;
+        for vid in src_vids {
+            let src_idx = *vid as usize;
+            if src_idx < self.vertex_capacity() {
+                let (start, end) = self.primary_window(src_idx);
+                total = total.saturating_add(end.saturating_sub(start));
+                if let Some(single) = self.overflow_chunks.single_chunk(*vid) {
+                    total = total.saturating_add(single.len());
+                } else if let Some(chunks) = self.overflow_chunks.get(*vid) {
+                    for chunk in chunks {
+                        total = total.saturating_add(chunk.len());
+                    }
+                }
+            }
+        }
+        out.reserve(total);
+        for vid in src_vids {
+            starts.push(out.len());
+            let src_idx = *vid as usize;
+            if src_idx >= self.vertex_capacity() {
+                continue;
+            }
+            let (hot, cold) = self.primary_pair(src_idx);
+            out.extend(
+                hot.iter()
+                    .zip(cold.iter())
+                    .map(|(h, c)| Nbr::from_parts(*h, *c))
+                    .filter(|nbr| nbr.edge_id != INVALID_EDGE_ID),
+            );
+            if let Some(single) = self.overflow_chunks.single_chunk(*vid) {
+                for i in 0..single.len() {
+                    if let Some(nbr) = single.slot_at(i) {
+                        out.push(nbr);
+                    }
+                }
+                continue;
+            }
+            if let Some(chunks) = self.overflow_chunks.get(*vid) {
+                for chunk in chunks {
+                    for i in 0..chunk.len() {
+                        if let Some(nbr) = chunk.slot_at(i) {
+                            out.push(nbr);
+                        }
+                    }
+                }
+            }
+        }
+        starts.push(out.len());
+    }
+
+    /// Visit every physically stored hot half of many vertices without
+    /// allocating and without touching the stamp lines.
+    ///
+    /// Batched counterpart of [`Self::visit_hot`] for fan-out traversals that
+    /// resolve visibility through the version authority by `edge_id`.
+    pub fn visit_hot_batched<F>(&self, src_vids: &[u32], mut f: F)
+    where
+        F: FnMut(u32, HotNbr) -> bool,
+    {
+        for vid in src_vids {
+            let src_idx = *vid as usize;
+            if src_idx >= self.vertex_capacity() {
+                continue;
+            }
+            for h in self.primary_hot(src_idx) {
+                if h.edge_id == INVALID_EDGE_ID {
+                    continue;
+                }
+                if !f(*vid, *h) {
+                    return;
+                }
+            }
+            if let Some(single) = self.overflow_chunks.single_chunk(*vid) {
+                for h in single.hot_slice() {
+                    if h.edge_id == INVALID_EDGE_ID {
+                        continue;
+                    }
+                    if !f(*vid, *h) {
+                        return;
+                    }
+                }
+                continue;
+            }
+            if let Some(chunks) = self.overflow_chunks.get(*vid) {
+                for chunk in chunks {
+                    for h in chunk.hot_slice() {
+                        if h.edge_id == INVALID_EDGE_ID {
+                            continue;
+                        }
+                        if !f(*vid, *h) {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Visit every physically stored hot half of one vertex without
     /// allocating and without touching the stamp lines.
     ///
@@ -665,5 +779,55 @@ impl MutableCsr {
             out.push(nbr);
             true
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn packed_endpoint(endpoint: u32, rank: i64) -> VertexId {
+        VertexId::edge_endpoint_key(endpoint, rank)
+    }
+
+    #[test]
+    fn batched_physical_fill_matches_single_vertex_walks() {
+        let mut csr = MutableCsr::with_capacity(4, 32);
+        for (row, base) in [(0u32, 10u64), (1, 20), (2, 30)] {
+            for i in 0..3 {
+                csr.insert_edge(
+                    row,
+                    packed_endpoint(base as u32 + i as u32, 0),
+                    EdgeId(base + i),
+                    1,
+                )
+                .expect("insert builds row");
+            }
+        }
+        csr.delete_edge(1, EdgeId(21), 5)
+            .expect("delete leaves tombstone");
+        let vids = [0u32, 1, 2, 9];
+        let mut batched = Vec::new();
+        let mut starts = Vec::new();
+        csr.fill_physical_into_batched(&vids, &mut batched, &mut starts);
+        assert_eq!(starts.len(), vids.len().saturating_add(1));
+        let mut single = Vec::new();
+        for (pos, vid) in vids.iter().enumerate() {
+            csr.fill_physical_into(*vid, &mut single);
+            assert_eq!(&batched[starts[pos]..starts[pos + 1]], single.as_slice());
+        }
+        let mut visited = Vec::new();
+        csr.visit_hot_batched(&vids, |vid, hot| {
+            visited.push((vid, hot.edge_id));
+            true
+        });
+        let mut expected = Vec::new();
+        for vid in vids {
+            csr.visit_hot(vid, |hot| {
+                expected.push((vid, hot.edge_id));
+                true
+            });
+        }
+        assert_eq!(visited, expected);
     }
 }

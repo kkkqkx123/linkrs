@@ -303,12 +303,12 @@ impl EdgeStore {
 
     /// Candidate edges from the secondary property index for one filter.
     ///
-    /// Serves only every-equality conjunctions whose columns all carry an
+    /// Serves equality and range conjunctions whose columns all carry an
     /// index, and only while the index carries no write lag since the last
     /// rebuild baseline: any lag falls back to the segment path instead of
-    /// risking dropped hits. Multiple equalities intersect per-column hit
-    /// sets; range predicates never serve from this path and fall back to
-    /// the segment scan. Stale entries resolve through the
+    /// risking dropped hits. Multiple predicates intersect per-predicate hit
+    /// sets with early exit on empty; unencodable bounds fall back to the
+    /// segment scan. Stale entries resolve through the
     /// visibility authority, and the caller verifies every candidate back
     /// against the property columns.
     pub(crate) fn index_candidate_edge_ids(
@@ -323,17 +323,53 @@ impl EdgeStore {
         if !self.is_index_usable() {
             return None;
         }
+        let codec = graphdb_core::value::ordered_codec::OrderedCodec::new();
         let mut merged: Option<HashSet<EdgeId>> = None;
         for predicate in predicates {
-            let (column, value) = match predicate {
-                ScanPredicate::ColumnEqual { column, value } => (column, value),
-                ScanPredicate::ColumnRange { .. } => return None,
+            let (column, lower, upper) = match predicate {
+                ScanPredicate::ColumnEqual { column, value } => {
+                    let (lower, upper) = codec.prefix_bounds(value).ok()?;
+                    (column, lower, upper)
+                }
+                ScanPredicate::ColumnRange {
+                    column,
+                    lower,
+                    upper,
+                    include_lower,
+                    include_upper,
+                } => {
+                    let byte_lower = match lower {
+                        None => Vec::new(),
+                        Some(value) => {
+                            let encoded = codec.encode(value).ok()?;
+                            if *include_lower {
+                                encoded
+                            } else {
+                                graphdb_core::value::ordered_codec::OrderedCodec::prefix_upper_bound(
+                                    &encoded,
+                                )
+                            }
+                        }
+                    };
+                    let byte_upper = match upper {
+                        None => Vec::new(),
+                        Some(value) => {
+                            let encoded = codec.encode(value).ok()?;
+                            if *include_upper {
+                                graphdb_core::value::ordered_codec::OrderedCodec::prefix_upper_bound(
+                                    &encoded,
+                                )
+                            } else {
+                                encoded
+                            }
+                        }
+                    };
+                    (column, byte_lower, byte_upper)
+                }
             };
             if !index.has_index(column) {
                 return None;
             }
-            let codec = graphdb_core::value::ordered_codec::OrderedCodec::new();
-            let (lower, upper) = codec.prefix_bounds(value).ok()?;
             let mut hits = HashSet::new();
             for ((src, dst, rank), _) in index.lookup(column, &lower, &upper) {
                 if let Some(edge_id) = self.edge_id_of(src, dst, rank, query_ts) {

@@ -196,9 +196,11 @@ impl EdgeStore {
     /// address width. Reads the old width group by group and writes the new
     /// width, then switches the manifest on the next checkpoint. There is no
     /// online width-change branch: callers must hold exclusive access and
-    /// checkpoint after a successful reshard. Vertex ids are unchanged, so
-    /// the property index needs no rebuild. Widths outside `1..=20` are
-    /// rejected; the current width is a no-op success.
+    /// checkpoint after a successful reshard. A successful width change arms
+    /// the mandatory-checkpoint fence, so writes are rejected until the next
+    /// checkpoint persists the new width; the equal-width no-op arms nothing.
+    /// Vertex ids are unchanged, so the property index needs no rebuild.
+    /// Widths outside `1..=20` are rejected; the current width is a no-op success.
     ///
     /// Operation guide: run offline with no other writer, flush with
     /// `flush_incremental` after success, then reload to verify. The edge
@@ -255,6 +257,11 @@ impl EdgeStore {
                 drift.join("; ")
             )));
         }
+        // The new width is memory-only until the next checkpoint persists
+        // it: fence writes the same way a record-form switch does, so a
+        // crash before the checkpoint recovers to the pre-reshard base with
+        // no mixed-width state ever built on top.
+        self.migration_pending_checkpoint = true;
         log::debug!(
             "EdgeTable[{}] resharded width {} -> {}; out_groups={}, in_groups={}, edges={}",
             self.label,
@@ -647,6 +654,34 @@ mod tests {
         assert!(table.reshard(0).is_err());
         assert!(table.reshard(21).is_err());
         assert!(table.get_edge(0, 1, 0, 200).is_some());
+    }
+
+    #[test]
+    fn test_reshard_arms_mandatory_checkpoint_fence() {
+        let mut table = make_table();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        let current = table.config.node_group_bits;
+        assert!(current > 1);
+        table.reshard(current - 1).expect("width change succeeds");
+        // Reads keep serving the new width, but writes stay fenced until
+        // the mandatory checkpoint persists it.
+        assert!(table.is_migration_checkpoint_required());
+        assert!(table.get_edge(0, 1, 0, 200).is_some());
+        assert!(table.insert_edge(2, 3, 0, &[], 200).is_err());
+        assert!(table.audit_copy_drift().is_empty());
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("mandatory checkpoint");
+        assert!(!table.is_migration_checkpoint_required());
+        table
+            .insert_edge(2, 3, 0, &[], 200)
+            .expect("write after checkpoint");
+        assert!(table.get_edge(2, 3, 0, 300).is_some());
+        assert!(table.audit_copy_drift().is_empty());
     }
 
     #[test]

@@ -196,29 +196,12 @@ impl EdgeStore {
     /// Each rejection names the migration entry so callers quote cost with
     /// `migration_plan` instead of treating the error as generic.
     fn check_record_form_target(&self, target: RecordForm) -> StorageResult<()> {
-        // Shared strategy-plus-form rules through the central schema helpers.
-        crate::edge::validate_strategy_form(self.schema.oe_strategy, target)?;
-        crate::edge::validate_strategy_form(self.schema.ie_strategy, target)?;
-        match target {
-            RecordForm::Pure if !self.schema.properties.is_empty() => {
-                return Err(StorageError::invalid_operation(
-                    "pure record form requires zero properties; drop properties or keep the columnar form, see migration_plan/migrate_record_form".to_string(),
-                ));
-            }
-            RecordForm::Bundled => {
-                // Bundled admission shares the creation-time rules so both
-                // entries refuse a bundled target for the same stated reason.
-                if let Some(reason) = crate::edge::bundled_ineligibility_reason(
-                    &self.schema.properties,
-                    self.schema.oe_strategy,
-                    self.schema.ie_strategy,
-                ) {
-                    return Err(StorageError::invalid_operation(reason));
-                }
-            }
-            RecordForm::Pure | RecordForm::Columnar => {}
-        }
-        Ok(())
+        crate::edge::validate_record_form_target(
+            &self.schema.properties,
+            self.schema.oe_strategy,
+            self.schema.ie_strategy,
+            target,
+        )
     }
 
     /// Pure rebuild shared by the offline and online entries: extract,
@@ -450,8 +433,10 @@ impl EdgeStore {
                 };
                 if target != RecordForm::Columnar && nbr.rank != 0 {
                     return Err(StorageError::invalid_operation(format!(
-                        "nonzero rank {} cannot migrate to {:?}; keep the columnar form",
-                        nbr.rank, target
+                        "nonzero rank {} cannot migrate to {:?}; {}",
+                        nbr.rank,
+                        target,
+                        crate::edge::BUNDLED_RANK_REQUIRES_COLUMNAR_MSG
                     )));
                 }
                 let row = base + local_vid.as_int64().unwrap_or(0) as u32;
@@ -499,10 +484,6 @@ impl EdgeStore {
             },
         };
         match target {
-            RecordForm::Pure if !props.is_empty() => Err(StorageError::invalid_operation(format!(
-                "edge {:?} carries properties into the pure form; keep the columnar form",
-                edge_id
-            ))),
             RecordForm::Bundled if props.len() > 1 => {
                 Err(StorageError::invalid_operation(format!(
                     "edge {:?} carries multiple properties into the bundled form; keep the columnar form",
@@ -954,8 +935,17 @@ mod tests {
         assert!(table.has_edge(2, 3, 0, 200));
         assert!(!table.has_edge(0, 1, 0, 200));
 
-        // A failing plan reports the same error the switch would.
-        assert!(table.migration_plan(RecordForm::Pure).is_err());
+        // A failing plan reports the same error the switch would, worded by
+        // the shared pure-form constant.
+        let err = table
+            .migration_plan(RecordForm::Pure)
+            .expect_err("pure plan must fail");
+        assert!(
+            err.to_string()
+                .contains(crate::edge::PURE_REQUIRES_ZERO_PROPERTIES_MSG),
+            "unexpected wording: {}",
+            err
+        );
         assert_eq!(table.schema.record_form, RecordForm::Columnar);
     }
 

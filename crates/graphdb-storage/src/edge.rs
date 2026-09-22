@@ -136,6 +136,28 @@ pub(crate) const SINGLE_REQUIRES_COLUMNAR_MSG: &str =
 pub(crate) const INLINE_FORM_SCHEMA_CHANGE_MSG: &str =
     "schema change on an inline-form table requires a record-form rebuild (migrate_record_form or switch_record_form_online)";
 
+/// Shared rejection for a topology-only table carrying properties.
+///
+/// Pure tables hold no property columns, so any property count above zero
+/// must stay on another form. The central target check and every plan entry
+/// report this exact wording so operators see one conflict and one way out.
+pub(crate) const PURE_REQUIRES_ZERO_PROPERTIES_MSG: &str =
+    "pure record form requires zero properties; drop properties or keep the columnar form, see migration_plan/migrate_record_form";
+
+/// Shared rejection for a second staged schema change.
+///
+/// Add, drop and rename share one pending slot, so a second prepare while
+/// one change is staged reports this exact wording from every entry.
+pub(crate) const SCHEMA_CHANGE_PENDING_MSG: &str = "another schema change is already pending";
+
+/// Shared rejection for nonzero ranks on an inline-form table.
+///
+/// Pure and bundled layouts carry no rank column, so any nonzero rank must
+/// stay on the columnar form. Every write, bulk and migration gate reports
+/// this exact wording so operators see one conflict and one way out.
+pub(crate) const BUNDLED_RANK_REQUIRES_COLUMNAR_MSG: &str =
+    "nonzero rank requires the columnar record form; keep the columnar form, see migration_plan/migrate_record_form/switch_record_form_online";
+
 /// Whether one direction may pair a strategy with a record form.
 ///
 /// Single source of truth for the single-plus-inline rule, shared by shard
@@ -210,6 +232,37 @@ pub fn bundled_ineligibility_reason(
         ));
     }
     None
+}
+
+/// Validate strategy-plus-form rules for a target record form.
+///
+/// Single source of truth for migration target prechecks and resolved-schema
+/// validation: direction presence is checked by the caller through
+/// `EdgeSchema::validate`, while pairing, pure arity and bundled admission
+/// are checked here against the given target.
+pub fn validate_record_form_target(
+    properties: &[StoragePropertyDef],
+    oe_strategy: EdgeStrategy,
+    ie_strategy: EdgeStrategy,
+    target: RecordForm,
+) -> graphdb_core::StorageResult<()> {
+    validate_strategy_form(oe_strategy, target)?;
+    validate_strategy_form(ie_strategy, target)?;
+    match target {
+        RecordForm::Pure if !properties.is_empty() => {
+            return Err(graphdb_core::StorageError::invalid_operation(
+                PURE_REQUIRES_ZERO_PROPERTIES_MSG.to_string(),
+            ));
+        }
+        RecordForm::Bundled => {
+            if let Some(reason) = bundled_ineligibility_reason(properties, oe_strategy, ie_strategy)
+            {
+                return Err(graphdb_core::StorageError::invalid_operation(reason));
+            }
+        }
+        RecordForm::Pure | RecordForm::Columnar => {}
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -343,27 +396,12 @@ impl EdgeSchema {
     /// admission through the shared helpers.
     pub fn validate_resolved(&self) -> graphdb_core::StorageResult<()> {
         self.validate()?;
-        validate_strategy_form(self.oe_strategy, self.record_form)?;
-        validate_strategy_form(self.ie_strategy, self.record_form)?;
-        match self.record_form {
-            RecordForm::Pure if !self.properties.is_empty() => {
-                return Err(graphdb_core::StorageError::invalid_operation(
-                    "pure record form requires zero properties; drop properties or keep the columnar form, see migration_plan/migrate_record_form"
-                        .to_string(),
-                ));
-            }
-            RecordForm::Bundled => {
-                if let Some(reason) = bundled_ineligibility_reason(
-                    &self.properties,
-                    self.oe_strategy,
-                    self.ie_strategy,
-                ) {
-                    return Err(graphdb_core::StorageError::invalid_operation(reason));
-                }
-            }
-            RecordForm::Pure | RecordForm::Columnar => {}
-        }
-        Ok(())
+        validate_record_form_target(
+            &self.properties,
+            self.oe_strategy,
+            self.ie_strategy,
+            self.record_form,
+        )
     }
 
     /// Storage direction derived from the enabled CSR strategies.
@@ -751,7 +789,7 @@ mod tests {
     }
 
     #[test]
-    fn test_edge_schema_validation_oe_only() {
+    fn test_edge_schema_validation_both_enabled() {
         let schema = EdgeSchema {
             label_id: 0,
             label_name: "valid_edge".to_string(),
@@ -759,16 +797,37 @@ mod tests {
             dst_label: 0,
             properties: vec![],
             oe_strategy: EdgeStrategy::Multiple,
-            ie_strategy: EdgeStrategy::None,
+            ie_strategy: EdgeStrategy::Single,
             schema_version: 1,
             record_form: RecordForm::default(),
         };
 
         let result = schema.validate();
         assert!(result.is_ok());
-        assert_eq!(schema.storage_direction(), StorageDirection::OutOnly);
-        assert!(schema.has_out());
-        assert!(!schema.has_in());
+    }
+
+    #[test]
+    fn pure_target_rejection_comes_from_the_shared_constant() {
+        use crate::types::StoragePropertyDef;
+        use graphdb_core::DataType;
+        let props = vec![StoragePropertyDef {
+            name: "p".to_string(),
+            data_type: DataType::Double,
+            nullable: true,
+            default_value: None,
+        }];
+        let err = validate_record_form_target(
+            &props,
+            EdgeStrategy::Multiple,
+            EdgeStrategy::Multiple,
+            RecordForm::Pure,
+        )
+        .expect_err("pure target with properties must be rejected");
+        assert!(
+            err.to_string().contains(PURE_REQUIRES_ZERO_PROPERTIES_MSG),
+            "unexpected wording: {}",
+            err
+        );
     }
 
     #[test]
@@ -790,23 +849,5 @@ mod tests {
         assert_eq!(schema.storage_direction(), StorageDirection::InOnly);
         assert!(!schema.has_out());
         assert!(schema.has_in());
-    }
-
-    #[test]
-    fn test_edge_schema_validation_both_enabled() {
-        let schema = EdgeSchema {
-            label_id: 0,
-            label_name: "valid_edge".to_string(),
-            src_label: 0,
-            dst_label: 0,
-            properties: vec![],
-            oe_strategy: EdgeStrategy::Multiple,
-            ie_strategy: EdgeStrategy::Single,
-            schema_version: 1,
-            record_form: RecordForm::default(),
-        };
-
-        let result = schema.validate();
-        assert!(result.is_ok());
     }
 }

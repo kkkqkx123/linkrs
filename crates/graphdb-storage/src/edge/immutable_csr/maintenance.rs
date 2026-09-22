@@ -3,62 +3,6 @@ use super::super::{EdgeId, Timestamp};
 use super::ImmutableCsr;
 
 impl ImmutableCsr {
-    /// Reclaim one row in place, leaving every other row untouched.
-    ///
-    /// Offline and single-row tooling entry only: the drain memmoves every
-    /// trailing entry and the offset fixup walks every trailing row, so one
-    /// call costs proportional to the trailing table size. Production
-    /// reclaim must use the group path (`compact_with_cutoff` or
-    /// `compact_rows_batched`) which pays one linear pass for any number of
-    /// rows. Eligible tombstones of `vid` are compacted out of the row
-    /// window with a write-pointer pass, then the vacated tail range is
-    /// drained once so later rows slide forward; their offsets shift by the
-    /// removed count. Removed entries are reported in row order; live
-    /// entries keep their sorted order.
-    pub fn compact_row(
-        &mut self,
-        vid: u32,
-        cutoff: Timestamp,
-        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
-    ) -> usize {
-        if cutoff == Timestamp::MAX {
-            return 0;
-        }
-        let idx = vid as usize;
-        if idx >= self.degrees.len() {
-            return 0;
-        }
-        if self.reclaimable_count(vid, cutoff) == 0 {
-            return 0;
-        }
-        let Some((start, end)) = self.row_window(vid) else {
-            return 0;
-        };
-        let mut write = start;
-        for read in start..end {
-            let hot = self.hot_entries[read];
-            let cold = self.cold_entries[read];
-            if is_reclaimable_cold(&cold, cutoff) {
-                on_edge_removed(hot.edge_id, cold.delete_ts);
-            } else {
-                if write != read {
-                    self.hot_entries[write] = hot;
-                    self.cold_entries[write] = cold;
-                }
-                write += 1;
-            }
-        }
-        let removed = end - write;
-        self.hot_entries.drain(write..end);
-        self.cold_entries.drain(write..end);
-        self.degrees[idx] = (write - start) as u32;
-        let shift = removed as u32;
-        for off in self.offsets.iter_mut().skip(idx + 1) {
-            *off -= shift;
-        }
-        removed
-    }
-
     /// Drop GC-eligible tombstones in place without unfreezing.
     ///
     /// Rows stay sorted because filtering preserves order; degrees, offsets

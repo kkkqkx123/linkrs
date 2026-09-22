@@ -293,9 +293,9 @@ pub trait MutableCsrTrait: CsrBase {
     ///
     /// Mutable-row entry only: production reclaim of frozen rows must go
     /// through the group-batched entries (one linear pass for any number of
-    /// rows) instead of one call per row. Frozen implementations keep this
-    /// entry for offline and single-row tooling; every production trigger
-    /// dispatches frozen groups to the batched path before reaching here.
+    /// rows) instead of one call per row. Frozen implementations reject the
+    /// single-row entry; every production trigger dispatches frozen groups
+    /// to the batched path before reaching here.
     fn compact_vertex_with_reporting(
         &mut self,
         _vid: u32,

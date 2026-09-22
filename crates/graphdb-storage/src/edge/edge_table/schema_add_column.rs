@@ -66,7 +66,7 @@ impl EdgeStore {
             || self.pending_rename_column.is_some()
         {
             return Err(StorageError::invalid_operation(
-                "another schema change is already pending".to_string(),
+                crate::edge::SCHEMA_CHANGE_PENDING_MSG.to_string(),
             ));
         }
         if self.properties.has_property(&name) {
@@ -253,6 +253,36 @@ mod tests {
             record_form: RecordForm::default(),
         };
         EdgeStore::with_config(schema, EdgeTableConfig::default()).expect("table builds")
+    }
+
+    #[test]
+    fn pending_conflict_uses_the_shared_wording_everywhere() {
+        let mut table = make_table();
+        table
+            .prepare_add_property("score".to_string(), DataType::Int, true, None)
+            .expect("first prepare succeeds");
+        // Add, drop and rename share one pending slot: every second prepare
+        // reports the same conflict from the same constant.
+        let drop_err = table
+            .prepare_drop_property("weight")
+            .expect_err("second staged change must be rejected");
+        let rename_err = table
+            .prepare_rename_property("weight", "mass")
+            .expect_err("second staged change must be rejected");
+        assert!(
+            drop_err
+                .to_string()
+                .contains(crate::edge::SCHEMA_CHANGE_PENDING_MSG),
+            "unexpected wording: {}",
+            drop_err
+        );
+        assert!(
+            rename_err
+                .to_string()
+                .contains(crate::edge::SCHEMA_CHANGE_PENDING_MSG),
+            "unexpected wording: {}",
+            rename_err
+        );
     }
 
     #[test]

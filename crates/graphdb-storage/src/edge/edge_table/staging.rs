@@ -33,10 +33,16 @@
 //! expose the per-owner split and the write skew. The skew snapshot is the
 //! contention benchmark gate: partitioned lock-free applies or vertex-level
 //! locks are only introduced when it proves a bottleneck with measured data,
-//! never speculatively. Batches holding tens of
-//! thousands of entries are correct but hold the table lock for the whole
-//! apply, so callers with very large fanouts should chunk explicitly and
-//! treat each chunk as its own atomic unit.
+//! never speculatively.
+//!
+//! Capacity contract: one batch is one atomic unit and holds the table lock
+//! for the whole apply with prefix rollback on failure, so commit latency
+//! grows with batch size. Batches holding tens of thousands of entries are
+//! correct; callers with very large fanouts chunk explicitly and treat each
+//! chunk as its own atomic unit. The `edge_group_commit_bench` records
+//! per-batch commit times across distributions and sizes, and the write-gate
+//! bench records the gate-wait share bounding the sharding decision;
+//! chunking follows those measurements, never a parallel-write change.
 
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::Value;

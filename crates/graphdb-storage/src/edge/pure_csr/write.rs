@@ -37,8 +37,9 @@ impl PureTopologyCsr {
 
         if decoded_rank != 0 {
             return Err(StorageError::conflict(format!(
-                "[PureTopologyCsr] rank must be 0, got {}",
-                decoded_rank
+                "[PureTopologyCsr] rank must be 0, got {}; {}",
+                decoded_rank,
+                crate::edge::BUNDLED_RANK_REQUIRES_COLUMNAR_MSG
             )));
         }
 

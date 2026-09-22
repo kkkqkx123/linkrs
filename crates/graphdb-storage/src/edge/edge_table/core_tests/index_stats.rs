@@ -504,7 +504,10 @@ fn test_multi_equality_intersection_matches_full_scan() {
         include_lower: true,
         include_upper: true,
     }];
-    assert!(table.index_candidate_edge_ids(&range, 200).is_none());
+    let range_candidates = table
+        .index_candidate_edge_ids(&range, 200)
+        .expect("range conjunction must serve from index");
+    assert_eq!(range_candidates.len(), 3);
     assert_eq!(table.filter_edge_ids(&range, 200, None).len(), 3);
     assert!(table.index_candidate_edge_ids(&[], 200).is_none());
 }

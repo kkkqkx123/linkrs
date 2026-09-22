@@ -57,7 +57,7 @@ impl EdgeStore {
     ///
     /// Hits look up topology afterwards; misses never decode a record.
     /// Index first, segment statistics second, full walk last: an
-    /// every-equality conjunction over lag-free indexed columns resolves to
+    /// equality-or-range conjunction over lag-free indexed columns resolves to
     /// index candidates (verified back against the columns), otherwise whole
     /// owner groups provably excluding the predicates are skipped before the
     /// property walk. A full walk without either aid logs an observation so

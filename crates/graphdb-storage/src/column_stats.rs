@@ -12,6 +12,13 @@ use crate::encoding::EncodingType;
 use crate::stats::HyperLogLog;
 use graphdb_core::{StorageResult, Value};
 
+/// Persistent format version of the column statistics payload.
+///
+/// Written as the first byte by `serialize_meta` and checked first by
+/// `deserialize_meta`. Unknown versions are rejected without migration:
+/// old payloads never silently decode under a newer layout.
+pub const COLUMN_STATS_FORMAT_VERSION: u8 = 1;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnStats {
     pub min_value: Option<Value>,
@@ -64,6 +71,9 @@ impl ColumnStats {
     pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
         let mut written = 0usize;
 
+        writer.write_all(&[COLUMN_STATS_FORMAT_VERSION])?;
+        written += 1;
+
         writer.write_all(&[self.min_value.is_some() as u8])?;
         written += 1;
         if let Some(ref v) = self.min_value {
@@ -109,6 +119,24 @@ impl ColumnStats {
 
     pub fn deserialize_meta(reader: &mut impl Read) -> StorageResult<Self> {
         let mut buf = [0u8; 1];
+
+        // Version gate first: payloads written without a version byte or
+        // under another version are rejected instead of misdecoded.
+        reader.read_exact(&mut buf).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                graphdb_core::StorageError::deserialize_error(
+                    "ColumnStats truncated: missing format version".to_string(),
+                )
+            } else {
+                graphdb_core::StorageError::io_error(e.to_string())
+            }
+        })?;
+        if buf[0] != COLUMN_STATS_FORMAT_VERSION {
+            return Err(graphdb_core::StorageError::deserialize_error(format!(
+                "unsupported ColumnStats format version {}, expected {}; old formats are rejected without migration",
+                buf[0], COLUMN_STATS_FORMAT_VERSION
+            )));
+        }
 
         reader.read_exact(&mut buf)?;
         let has_min = buf[0] != 0;
@@ -673,5 +701,31 @@ mod tests {
         let truncated = &buf[..buf.len() - 1];
         let err = ColumnStats::deserialize_meta(&mut &truncated[..]).unwrap_err();
         assert!(err.to_string().contains("truncated"));
+    }
+
+    #[test]
+    fn test_unknown_format_version_rejected() {
+        let mut stats = ColumnStats::new(EncodingType::Alp, 1024, 4096);
+        stats.min_value = Some(Value::Double(1.5));
+        let mut buf = Vec::new();
+        stats.serialize_meta(&mut buf).unwrap();
+        assert_eq!(buf[0], COLUMN_STATS_FORMAT_VERSION);
+        // Payloads from another version never decode: the gate rejects
+        // before any field is read.
+        buf[0] = COLUMN_STATS_FORMAT_VERSION.wrapping_add(1);
+        let err = ColumnStats::deserialize_meta(&mut &buf[..]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("unsupported ColumnStats format version"));
+        assert!(msg.contains("rejected without migration"));
+        // A version-less prefix (legacy layout) fails at the same gate:
+        // with no bounds recorded the first byte is zero, never the version.
+        let bare = ColumnStats::new(EncodingType::Alp, 1024, 4096);
+        let mut bare_buf = Vec::new();
+        bare.serialize_meta(&mut bare_buf).unwrap();
+        let legacy = &bare_buf[1..];
+        let err = ColumnStats::deserialize_meta(&mut &legacy[..]).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("unsupported ColumnStats format version"));
     }
 }

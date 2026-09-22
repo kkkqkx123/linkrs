@@ -69,7 +69,7 @@ impl EdgeStore {
             || self.pending_rename_column.is_some()
         {
             return Err(StorageError::invalid_operation(
-                "another schema change is already pending".to_string(),
+                crate::edge::SCHEMA_CHANGE_PENDING_MSG.to_string(),
             ));
         }
         let schema_index = self

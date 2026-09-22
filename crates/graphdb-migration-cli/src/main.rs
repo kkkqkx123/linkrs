@@ -3,6 +3,7 @@ use graphdb_migration::{
     generate_edge_plan, generate_edge_plan_with_expand, generate_vertex_plan,
     generate_vertex_plan_with_expand, MigrationEvent, MigrationEventListener, MigrationFileLock,
 };
+use graphdb_storage::edge::EdgeStore;
 use graphdb_storage::{GraphStorage, StorageReader};
 use std::path::PathBuf;
 
@@ -118,6 +119,27 @@ enum Commands {
         label: String,
         #[arg(long, default_value = "false")]
         is_edge: bool,
+    },
+    /// Diagnose one edge-table WAL directory without touching it.
+    ///
+    /// Read-only: reports the last valid entry boundary and the torn tail
+    /// the load path would reject. Run this first after a torn-tail load
+    /// failure; repair stays a separate explicit step.
+    EdgeWalDiagnose {
+        /// Edge-table checkpoint directory holding `edge_wal.bin`.
+        #[arg(long)]
+        path: PathBuf,
+    },
+    /// Truncate the torn tail of one edge-table WAL directory.
+    ///
+    /// Explicit offline repair: truncates the log at the last valid entry
+    /// and prints the salvaged prefix plus the discarded tail. Only run
+    /// while no writer holds the table. The load path never truncates on
+    /// its own and stays fail-closed without this command.
+    EdgeWalRepair {
+        /// Edge-table checkpoint directory holding `edge_wal.bin`.
+        #[arg(long)]
+        path: PathBuf,
     },
 }
 
@@ -288,6 +310,34 @@ fn main() -> anyhow::Result<()> {
                     );
                 }
             }
+        }
+        Commands::EdgeWalDiagnose { path } => {
+            let diagnosis = EdgeStore::diagnose_edge_wal_at(&path)?;
+            println!(
+                "edge WAL diagnosis for {}: file_bytes={} valid_bytes={} valid_ops={} torn_bytes={} clean={}",
+                path.display(),
+                diagnosis.file_bytes,
+                diagnosis.valid_bytes,
+                diagnosis.valid_ops,
+                diagnosis.torn_bytes,
+                diagnosis.is_clean(),
+            );
+            if let Some(cause) = diagnosis.error {
+                println!("torn cause: {}", cause);
+                println!("load stays fail-closed; repair explicitly with edge-wal-repair");
+            }
+        }
+        Commands::EdgeWalRepair { path } => {
+            let report = EdgeStore::repair_edge_wal_at_reported(&path)?;
+            println!(
+                "edge WAL repair for {}: file_bytes={} valid_bytes={} valid_ops={} torn_bytes={} repaired={}",
+                path.display(),
+                report.file_bytes,
+                report.valid_bytes,
+                report.valid_ops,
+                report.torn_bytes,
+                report.repaired,
+            );
         }
     }
     Ok(())
