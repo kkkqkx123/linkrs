@@ -40,8 +40,9 @@ pub struct EdgeTableConfig {
     /// write path when the configured thresholds are exceeded.
     pub auto_maintenance: AutoMaintenanceConfig,
     /// User-facing preference for record form selection at table creation.
-    /// `Auto` lets the system pick Pure/Bundled/Columnar based on schema;
-    /// `Columnar` forces the standard multi/single/none strategy path.
+    /// `Auto` derives the safe default (pure for empty schemas, otherwise
+    /// columnar); `Columnar` forces the standard multi/single/none strategy
+    /// path; `Bundled` explicitly opts into the single-scalar inline form.
     pub record_form: RecordFormPreference,
     /// Adapt property column encodings during checkpoints from dirty-column
     /// values. Enabled by default; disable only to pin encodings manually.

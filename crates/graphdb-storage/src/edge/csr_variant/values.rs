@@ -31,10 +31,14 @@ impl CsrVariant {
     /// Read one edge's inline value within its source row.
     ///
     /// Paired value half of a bundled topology walk: resolve the edge id
-    /// from the topology walk first, then read its value here.
+    /// from the topology walk first, then read its value here. Frozen and
+    /// mapped groups packed from a valued bundled group serve their carried
+    /// values; other forms and unvalued packs report no value.
     pub fn bundled_value_by_edge_id(&self, src_vid: u32, edge_id: EdgeId) -> Option<(u64, bool)> {
         match self {
             CsrVariant::Bundled(csr) => csr.value_by_edge_id(src_vid, edge_id),
+            CsrVariant::Frozen(csr) => csr.value_by_edge_id(src_vid, edge_id),
+            CsrVariant::Mapped(csr) => csr.bundled_value_by_edge_id(src_vid, edge_id),
             _ => None,
         }
     }
@@ -56,6 +60,8 @@ impl CsrVariant {
     pub fn bundled_value_by_endpoint(&self, src_vid: u32, endpoint: u32) -> Option<(u64, bool)> {
         match self {
             CsrVariant::Bundled(csr) => csr.value_by_endpoint(src_vid, endpoint),
+            CsrVariant::Frozen(csr) => csr.value_by_endpoint(src_vid, endpoint),
+            CsrVariant::Mapped(csr) => csr.bundled_value_by_endpoint(src_vid, endpoint),
             _ => None,
         }
     }
@@ -96,13 +102,16 @@ impl CsrVariant {
     /// Paired topology-plus-value walk for bundled rows: this is the only
     /// bundled traversal yielding values. Topology-only walks
     /// (`visit_physical`, `fill_physical_into`, row iterators) never yield
-    /// values and must not be paired ad hoc elsewhere.
+    /// values and must not be paired ad hoc elsewhere. Frozen and mapped
+    /// groups walk their carried value columns the same way.
     pub fn visit_physical_with_values<F>(&self, src_vid: u32, mut f: F)
     where
         F: FnMut(Nbr, Option<u64>) -> bool,
     {
         match self {
             CsrVariant::Bundled(csr) => csr.visit_physical_with_values(src_vid, f),
+            CsrVariant::Frozen(csr) => csr.visit_physical_with_values(src_vid, f),
+            CsrVariant::Mapped(csr) => csr.visit_physical_with_values(src_vid, f),
             _ => self.visit_physical(src_vid, |nbr| f(nbr, None)),
         }
     }
@@ -111,6 +120,8 @@ impl CsrVariant {
     pub fn bundled_has_valid_values(&self) -> bool {
         match self {
             CsrVariant::Bundled(csr) => csr.any_valid_values(),
+            CsrVariant::Frozen(csr) => csr.any_valid_values(),
+            CsrVariant::Mapped(csr) => csr.any_valid_values(),
             _ => false,
         }
     }

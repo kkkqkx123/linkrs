@@ -18,14 +18,14 @@
 //! the positional revert revives the retained word, and the value-blind
 //! trait revert follows the same path.
 //!
-//! Known limitation: the frozen packer stores topology only, so freezing a
-//! group with valid values is rejected; migrate to the columnar form first
-//! when a freeze is required.
+//! Freezing carries the value column slot-parallel into the packed frozen
+//! layout, so valued bundled groups freeze and unfreeze with their inline
+//! content intact; the mmap serving sidecar mirrors the same columns.
 //!
 //! Suitability boundary: this form fits exactly one inline scalar attribute
 //! on a read-heavy, schema-stable edge type. Anything else (multiple
-//! attributes, non-encodable types, online schema changes, freeze without a
-//! prior migration) belongs to the columnar form, which is also the default.
+//! attributes, non-encodable types, online schema changes) belongs to the
+//! columnar form, which is also the default.
 //! The bundled form is intentionally not extended beyond a single column.
 //!
 //! Layout by responsibility (`bundled_csr/` subdirectory):

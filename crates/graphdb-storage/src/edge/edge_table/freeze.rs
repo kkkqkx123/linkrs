@@ -14,10 +14,7 @@ impl EdgeStore {
     /// Read-only freeze outcome for one group of one direction.
     ///
     /// `outgoing` selects the out or in shard set. Runs the same gate
-    /// `freeze_group` enforces without touching state: a `Blocked` result
-    /// carrying `needs_migration` tells the caller to quote
-    /// `migration_plan` to the columnar form instead of attempting the
-    /// freeze. Behavior of the freeze itself is unchanged.
+    /// `freeze_group` enforces without touching state.
     pub fn freeze_feasibility(&self, outgoing: bool, gid: usize) -> FreezeFeasibility {
         if outgoing {
             self.out_csr.freeze_feasibility(gid)
@@ -180,10 +177,10 @@ mod tests {
     }
 
     #[test]
-    fn feasibility_reports_migration_need_before_freeze() {
+    fn valued_bundled_freeze_preserves_values() {
         use crate::edge::RecordFormPreference;
         let config = EdgeTableConfig {
-            record_form: RecordFormPreference::Auto,
+            record_form: RecordFormPreference::Bundled,
             ..Default::default()
         };
         let mut bundled =
@@ -192,52 +189,49 @@ mod tests {
         bundled
             .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
             .expect("valued insert");
-        let blocked = bundled.freeze_feasibility(true, 0);
-        assert!(!blocked.is_ready());
-        match blocked {
-            FreezeFeasibility::Blocked { reason } => {
-                assert!(reason.needs_migration())
-            }
-            _ => panic!("valued bundled group must report a migration need"),
-        }
-        // The same decision drives the migration quote: the caller prices a
-        // columnar move instead of attempting the freeze.
-        let plan = bundled
-            .migration_plan(RecordForm::Columnar)
-            .expect("columnar quote succeeds");
-        assert_eq!(plan.live_edges, 1);
-        bundled
-            .migrate_record_form(RecordForm::Columnar)
-            .expect("migrate lifts the block");
         assert!(bundled.freeze_feasibility(true, 0).is_ready());
+        assert!(bundled.freeze_feasibility(false, 0).is_ready());
 
-        let table = sample_table();
-        assert!(table.freeze_feasibility(true, 0).is_ready());
-        assert!(!table.freeze_feasibility(true, 41).is_ready());
-    }
-
-    #[test]
-    fn valued_bundled_freeze_fails_without_state_change() {
-        use crate::edge::RecordFormPreference;
-        let config = EdgeTableConfig {
-            record_form: RecordFormPreference::Auto,
-            ..Default::default()
-        };
-        let mut bundled =
-            EdgeStore::with_config(frozen_test_schema(), config).expect("bundled table builds");
-        assert_eq!(bundled.schema().record_form, RecordForm::Bundled);
-        bundled
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
-            .expect("valued insert");
         let before: Vec<EdgeRecord> =
             crate::edge::edge_table::iterator::EdgeTableScanIterator::new(&bundled, 200).collect();
         assert_eq!(before.len(), 1);
-        assert!(bundled.freeze_group(true, 0, Timestamp::MAX, 0.0).is_err());
-        assert!(!bundled.out_csr.is_frozen(0));
+        bundled.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
+        bundled.freeze_group(false, 0, Timestamp::MAX, 0.0).unwrap();
+        assert!(bundled.out_csr.is_frozen(0));
+        assert!(bundled.in_csr.is_frozen(0));
+
+        // Frozen reads serve the carried inline value on both legs.
+        let frozen: Vec<EdgeRecord> =
+            crate::edge::edge_table::iterator::EdgeTableScanIterator::new(&bundled, 200).collect();
+        assert_eq!(frozen.len(), 1);
+        assert_eq!(frozen[0].properties, before[0].properties);
+        assert_eq!(
+            bundled
+                .get_edge(0, 1, 0, 200)
+                .expect("frozen edge readable")
+                .properties,
+            vec![("weight".to_string(), Value::Double(1.0))]
+        );
+
+        // Writes stay rejected while frozen; unfreezing restores the live
+        // bundled group with values intact and writes working again.
+        assert!(bundled.insert_edge(1, 9, 0, &[], 400).is_err());
+        bundled.unfreeze_group(true, 0).unwrap();
+        bundled.unfreeze_group(false, 0).unwrap();
         let after: Vec<EdgeRecord> =
             crate::edge::edge_table::iterator::EdgeTableScanIterator::new(&bundled, 200).collect();
-        assert_eq!(after.len(), before.len());
+        assert_eq!(after.len(), 1);
         assert_eq!(after[0].properties, before[0].properties);
+        bundled
+            .insert_edge(1, 9, 0, &[("weight".to_string(), Value::Double(2.0))], 400)
+            .expect("writes resume after unfreeze");
+        assert_eq!(
+            bundled
+                .get_edge(1, 9, 0, 500)
+                .expect("new edge readable")
+                .properties,
+            vec![("weight".to_string(), Value::Double(2.0))]
+        );
     }
 
     #[test]

@@ -19,15 +19,13 @@
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult};
 
-use super::super::{CsrBase, CsrVariant, ImmutableCsr, MutableCsrTrait, INVALID_EDGE_ID};
+use super::super::{CsrBase, CsrVariant, ImmutableCsr, MutableCsrTrait, Nbr, INVALID_EDGE_ID};
 use super::CsrShardSet;
 
 /// Why one group cannot freeze right now.
 ///
 /// Every variant maps to the exact rejection `freeze_group` would return, so
 /// a caller can quote the outcome before paying the compaction plus pack.
-/// Only `BundledValuesNeedMigration` has a remediation inside the storage
-/// layer: migrate the table to the columnar form first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FreezeBlockReason {
     /// No such group exists; nothing to freeze.
@@ -36,9 +34,6 @@ pub enum FreezeBlockReason {
     NoEdgesStored,
     /// The group already holds the packed frozen form.
     AlreadyFrozen,
-    /// The group holds bundled inline values the topology-only packer would
-    /// drop. Migrate the table to the columnar form first.
-    BundledValuesNeedMigration,
 }
 
 impl FreezeBlockReason {
@@ -52,20 +47,7 @@ impl FreezeBlockReason {
             FreezeBlockReason::AlreadyFrozen => {
                 format!("group {} is already frozen", gid)
             }
-            FreezeBlockReason::BundledValuesNeedMigration => {
-                format!(
-                    "group {} holds bundled inline values; run migration_plan/migrate_record_form/switch_record_form_online to the columnar form before freeze",
-                    gid
-                )
-            }
         }
-    }
-
-    /// Whether the block is lifted by migrating to the columnar form.
-    /// Migration quoting uses this to decide between offering a migration
-    /// cost estimate and reporting a dead end.
-    pub fn needs_migration(self) -> bool {
-        matches!(self, FreezeBlockReason::BundledValuesNeedMigration)
     }
 }
 
@@ -134,9 +116,9 @@ impl CsrShardSet {
             CsrVariant::Multiple(csr) => ImmutableCsr::pack_from_mutable(csr),
             CsrVariant::Single(csr) => ImmutableCsr::pack_single_from(csr),
             // Pure and bundled groups pack directly into the frozen layout:
-            // no temporary mutable rebuild, no fabricated timestamps. The
-            // valid-value guard above already ran before compaction, so this
-            // bundled pack only ever sees the all-NULL topology case.
+            // no temporary mutable rebuild, no fabricated timestamps.
+            // Bundled values travel slot-parallel in row order, so valued
+            // groups freeze with their properties intact.
             CsrVariant::Pure(csr) => ImmutableCsr::pack_from_pure(csr),
             CsrVariant::Bundled(csr) => ImmutableCsr::pack_from_bundled(csr),
             CsrVariant::Frozen(_) | CsrVariant::Mapped(_) | CsrVariant::None { .. } => {
@@ -178,18 +160,10 @@ impl CsrShardSet {
     }
 
     /// Pure freeze gate shared by the precheck and the pack.
-    ///
-    /// The frozen packer stores topology only: a bundled group with valid
-    /// inline values would lose them, so it is rejected up front and the
-    /// caller migrates to the columnar form first. All-NULL bundled groups
-    /// pack like pure topologies and pass.
     fn check_freeze_gate(&self, gid: usize) -> Result<(), FreezeBlockReason> {
         let Some(shard) = self.shards.get(&gid) else {
             return Err(FreezeBlockReason::MissingGroup);
         };
-        if shard.variant.bundled_has_valid_values() {
-            return Err(FreezeBlockReason::BundledValuesNeedMigration);
-        }
         match shard.variant {
             CsrVariant::Multiple(_)
             | CsrVariant::Single(_)
@@ -205,7 +179,9 @@ impl CsrShardSet {
     /// Replays every packed row through the regular insert entry and restores
     /// deletion stamps through the regular delete entry, so the rebuilt rows
     /// carry the same logical content in fresh physical order. Gap sentinels
-    /// are not replayed: they are reserved-slot fillers, never edges. The
+    /// are not replayed: they are reserved-slot fillers, never edges. Bundled
+    /// groups additionally replay their carried values through the regular
+    /// valued insert entry, restoring the same words and validity bits. The
     /// rebuilt shape follows the set strategy. Only frozen groups unfreeze;
     /// anything else is rejected.
     pub fn unfreeze_group(&mut self, gid: usize) -> StorageResult<u64> {
@@ -236,26 +212,65 @@ impl CsrShardSet {
         };
         let mut variant = self.fresh_variant()?;
         let rows = frozen.vertex_capacity();
-        let mut row_buf = Vec::new();
-        for local in 0..rows {
-            frozen.fill_physical_into(local as u32, &mut row_buf);
-            for nbr in &row_buf {
-                if nbr.edge_id == INVALID_EDGE_ID {
-                    continue;
+        if variant.is_bundled() {
+            // Valued replay: every packed slot restores its word and
+            // validity through the regular valued insert entry, so the
+            // rebuilt bundled group holds the same inline content in fresh
+            // physical order. Deletions replay through the regular delete
+            // entry afterwards, which clears validity but retains the word
+            // exactly like the live write path.
+            let mut valued_buf: Vec<(Nbr, Option<u64>)> = Vec::new();
+            for local in 0..rows {
+                valued_buf.clear();
+                frozen.visit_physical_with_values(local as u32, |nbr, value| {
+                    valued_buf.push((nbr, value));
+                    true
+                });
+                for (nbr, value) in &valued_buf {
+                    if nbr.edge_id == INVALID_EDGE_ID {
+                        continue;
+                    }
+                    variant.insert_edge_with_value(
+                        local as u32,
+                        nbr.to_vertex_id(),
+                        nbr.edge_id,
+                        *value,
+                    )?;
+                    if nbr.delete_ts != Timestamp::MAX {
+                        let deleted =
+                            variant.delete_edge(local as u32, nbr.edge_id, nbr.delete_ts)?;
+                        if !deleted {
+                            return Err(StorageError::invalid_operation(format!(
+                                "unfreeze replay missed edge {:?} in group {}",
+                                nbr.edge_id, gid
+                            )));
+                        }
+                    }
                 }
-                variant.insert_edge(
-                    local as u32,
-                    nbr.to_vertex_id(),
-                    nbr.edge_id,
-                    Timestamp::MAX,
-                )?;
-                if nbr.delete_ts != Timestamp::MAX {
-                    let deleted = variant.delete_edge(local as u32, nbr.edge_id, nbr.delete_ts)?;
-                    if !deleted {
-                        return Err(StorageError::invalid_operation(format!(
-                            "unfreeze replay missed edge {:?} in group {}",
-                            nbr.edge_id, gid
-                        )));
+            }
+        } else {
+            let mut row_buf = Vec::new();
+            for local in 0..rows {
+                frozen.fill_physical_into(local as u32, &mut row_buf);
+                for nbr in &row_buf {
+                    if nbr.edge_id == INVALID_EDGE_ID {
+                        continue;
+                    }
+                    variant.insert_edge(
+                        local as u32,
+                        nbr.to_vertex_id(),
+                        nbr.edge_id,
+                        Timestamp::MAX,
+                    )?;
+                    if nbr.delete_ts != Timestamp::MAX {
+                        let deleted =
+                            variant.delete_edge(local as u32, nbr.edge_id, nbr.delete_ts)?;
+                        if !deleted {
+                            return Err(StorageError::invalid_operation(format!(
+                                "unfreeze replay missed edge {:?} in group {}",
+                                nbr.edge_id, gid
+                            )));
+                        }
                     }
                 }
             }
@@ -429,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn feasibility_flags_valued_bundled_groups() {
+    fn valued_bundled_groups_freeze_with_values_intact() {
         let mut valued = CsrShardSet::new(
             EdgeStrategy::Multiple,
             DEFAULT_NODE_GROUP_BITS,
@@ -440,18 +455,41 @@ mod tests {
         valued
             .bundled_insert_with_value(0, VertexId::edge_endpoint_key(1, 0), EdgeId(0), 1, Some(7))
             .unwrap();
-        let blocked = valued.freeze_feasibility(0);
-        assert_eq!(
-            blocked,
-            FreezeFeasibility::Blocked {
-                reason: FreezeBlockReason::BundledValuesNeedMigration
-            }
-        );
-        assert!(FreezeBlockReason::BundledValuesNeedMigration.needs_migration());
-        assert!(valued
+        valued
+            .bundled_insert_with_value(0, VertexId::edge_endpoint_key(2, 0), EdgeId(1), 1, None)
+            .unwrap();
+        assert!(valued.freeze_feasibility(0).is_ready());
+        valued
             .freeze_group(0, Timestamp::MAX, 0.0, &mut |_, _| {})
-            .is_err());
+            .unwrap();
+        assert!(valued.is_frozen(0));
+        // Frozen reads serve the carried values in packed row order.
+        let frozen = valued.group_variant(0).expect("frozen group present");
+        assert_eq!(
+            frozen.bundled_value_by_edge_id(0, EdgeId(0)),
+            Some((7, true))
+        );
+        assert_eq!(
+            frozen.bundled_value_by_edge_id(0, EdgeId(1)),
+            Some((0, false))
+        );
+        let mut seen = Vec::new();
+        valued.visit_physical_with_values(0, |nbr, value| {
+            seen.push((nbr.edge_id, value));
+            true
+        });
+        assert_eq!(seen, vec![(EdgeId(0), Some(7)), (EdgeId(1), None)]);
+        // Unfreezing replays values back into a live bundled group.
+        valued.unfreeze_group(0).unwrap();
+        assert!(!valued.is_frozen(0));
+        let live = valued.group_variant(0).expect("live group present");
+        assert_eq!(live.bundled_value_by_edge_id(0, EdgeId(0)), Some((7, true)));
+        assert_eq!(
+            live.bundled_value_by_edge_id(0, EdgeId(1)),
+            Some((0, false))
+        );
 
+        // All-NULL bundled groups freeze exactly like before.
         let mut nulls = CsrShardSet::new(
             EdgeStrategy::Multiple,
             DEFAULT_NODE_GROUP_BITS,

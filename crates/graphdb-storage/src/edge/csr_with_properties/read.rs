@@ -1,6 +1,9 @@
 use super::CsrWithProperties;
+use crate::cursor::{PredicateRange, ScanPredicate};
+use crate::vertex::column::zone_map::ZONE_MAP_CHUNK_ROWS;
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::Value;
+use std::collections::HashSet;
 
 impl CsrWithProperties {
     /// Read the property row for `edge_id` at `query_ts`, decoding only the
@@ -23,34 +26,15 @@ impl CsrWithProperties {
         if !vis.is_visible_at(query_ts) {
             return None;
         }
-        match projection {
-            None => Some(
-                self.property_schema
-                    .iter()
-                    .enumerate()
-                    .map(|(i, s)| {
-                        let v = self.property_columns[i].get_at_ts(pos, query_ts);
-                        (s.name.clone(), v)
-                    })
-                    .collect(),
-            ),
-            Some(names) => {
-                if names.is_empty() {
-                    return Some(Vec::new());
-                }
-                Some(
-                    self.property_schema
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, s)| names.iter().any(|n| n == &s.name))
-                        .map(|(i, s)| {
-                            let v = self.property_columns[i].get_at_ts(pos, query_ts);
-                            (s.name.clone(), v)
-                        })
-                        .collect(),
-                )
-            }
-        }
+        Some(
+            self.resolve_projection(projection)
+                .into_iter()
+                .map(|(i, name)| {
+                    let v = self.property_columns[i].get_at_ts(pos, query_ts);
+                    (name.to_string(), v)
+                })
+                .collect(),
+        )
     }
 
     /// Test-only row-stamp filtered read; production uses physical read plus authority gate.
@@ -61,6 +45,38 @@ impl CsrWithProperties {
         query_ts: Timestamp,
     ) -> Option<Vec<(String, Option<Value>)>> {
         self.get_projected_by_edge_id(edge_id, query_ts, None)
+    }
+
+    /// Resolve a projection to `(column position, name)` pairs in schema order.
+    ///
+    /// One hash lookup per requested name instead of one string scan per
+    /// schema column, so wide schemas never pay a quadratic match and the
+    /// hot batch path performs no string comparison at all. Unknown names
+    /// are skipped and an empty list resolves to no columns, matching the
+    /// historical filter semantics exactly. The pairs borrow the schema, so
+    /// resolution itself allocates no name strings; only materialized output
+    /// cells clone their column name.
+    fn resolve_projection<'s>(&'s self, projection: Option<&[String]>) -> Vec<(usize, &'s str)> {
+        match projection {
+            None => self
+                .property_schema
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (i, s.name.as_str()))
+                .collect(),
+            Some(names) => {
+                if names.is_empty() {
+                    return Vec::new();
+                }
+                let wanted: HashSet<&str> = names.iter().map(|n| n.as_str()).collect();
+                self.property_schema
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| wanted.contains(s.name.as_str()))
+                    .map(|(i, s)| (i, s.name.as_str()))
+                    .collect()
+            }
+        }
     }
 
     /// Physical property projection without row visibility filtering.
@@ -81,44 +97,25 @@ impl CsrWithProperties {
         if pos >= self.visibility.len() {
             return None;
         }
-        match projection {
-            None => Some(
-                self.property_schema
-                    .iter()
-                    .enumerate()
-                    .map(|(i, s)| {
-                        let v = self.property_columns[i].get_at_ts(pos, query_ts);
-                        (s.name.clone(), v)
-                    })
-                    .collect(),
-            ),
-            Some(names) => {
-                if names.is_empty() {
-                    return Some(Vec::new());
-                }
-                Some(
-                    self.property_schema
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, s)| names.iter().any(|n| n == &s.name))
-                        .map(|(i, s)| {
-                            let v = self.property_columns[i].get_at_ts(pos, query_ts);
-                            (s.name.clone(), v)
-                        })
-                        .collect(),
-                )
-            }
-        }
+        Some(
+            self.resolve_projection(projection)
+                .into_iter()
+                .map(|(i, name)| {
+                    let v = self.property_columns[i].get_at_ts(pos, query_ts);
+                    (name.to_string(), v)
+                })
+                .collect(),
+        )
     }
 
     /// Physical property projection for many edges without visibility filtering.
     ///
     /// Batch form of [`Self::get_projected_physical_by_edge_id`]: the
     /// projection resolves to column indices once and every edge reuses the
-    /// mapping, so a projected adjacency pays one schema scan instead of one
-    /// per edge. Output order follows the input; each entry carries the same
-    /// contract as the single-edge call (`None` for inline tables, unmapped
-    /// edges and out-of-range rows).
+    /// mapping, so a projected adjacency pays one hash-based schema pass
+    /// instead of one string scan per edge. Output order follows the input;
+    /// each entry carries the same contract as the single-edge call (`None`
+    /// for inline tables, unmapped edges and out-of-range rows).
     pub fn get_projected_physical_batch_by_edge_ids(
         &self,
         edge_ids: &[EdgeId],
@@ -128,25 +125,7 @@ impl CsrWithProperties {
         if self.inline {
             return edge_ids.iter().map(|_| None).collect();
         }
-        let columns: Vec<(usize, String)> = match projection {
-            None => self
-                .property_schema
-                .iter()
-                .enumerate()
-                .map(|(i, s)| (i, s.name.clone()))
-                .collect(),
-            Some(names) => {
-                if names.is_empty() {
-                    return edge_ids.iter().map(|_| Some(Vec::new())).collect();
-                }
-                self.property_schema
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, s)| names.iter().any(|n| n == &s.name))
-                    .map(|(i, s)| (i, s.name.clone()))
-                    .collect()
-            }
-        };
+        let columns = self.resolve_projection(projection);
         edge_ids
             .iter()
             .map(|edge_id| {
@@ -159,7 +138,7 @@ impl CsrWithProperties {
                         .iter()
                         .map(|(i, name)| {
                             let v = self.property_columns[*i].get_at_ts(pos, query_ts);
-                            (name.clone(), v)
+                            (name.to_string(), v)
                         })
                         .collect(),
                 )
@@ -216,21 +195,79 @@ impl CsrWithProperties {
         if predicates.is_empty() {
             return true;
         }
+        let Some(resolved) = self.resolve_predicate_columns(predicates) else {
+            return false;
+        };
         let Some(row) = self.mapped_row(edge_id) else {
             return false;
         };
-        for predicate in predicates {
-            let Some(column) = self.column_index(predicate.column()) else {
-                return false;
-            };
-            let Some(value) = self.pushdown_cell(row, column, query_ts) else {
-                return false;
-            };
-            if !predicate.matches_value(&value) {
-                return false;
+        resolved.iter().all(|(column, predicate)| {
+            self.pushdown_cell(row, *column, query_ts)
+                .is_some_and(|value| predicate.matches_value(&value))
+        })
+    }
+
+    /// Resolve predicate columns to positions once.
+    ///
+    /// Shared by the single-edge and batch matchers so a multi-edge filter
+    /// pays one schema lookup per predicate instead of one per edge.
+    /// `None` when any predicate references a missing column: the
+    /// conjunction can never match, and callers report no hit.
+    fn resolve_predicate_columns<'a>(
+        &self,
+        predicates: &'a [ScanPredicate],
+    ) -> Option<Vec<(usize, &'a ScanPredicate)>> {
+        predicates
+            .iter()
+            .map(|predicate| {
+                self.column_index(predicate.column())
+                    .map(|col| (col, predicate))
+            })
+            .collect()
+    }
+
+    /// Row-chunk liveness for one merged range set.
+    ///
+    /// One entry per zone-map chunk (`ZONE_MAP_CHUNK_ROWS` rows): a chunk is
+    /// dead only when some range provably excludes its recorded bounds.
+    /// Chunks without recorded bounds (all-null or never-written) stay live,
+    /// and rows past the computed chunks read as live, so the pre-filter
+    /// only ever skips rows that cannot match at any snapshot timestamp:
+    /// zone bounds widen monotonically and contain every non-null value any
+    /// snapshot can still observe through a version chain.
+    fn live_row_chunks(&self, ranges: &[(usize, PredicateRange)]) -> Vec<bool> {
+        let chunks = ranges
+            .iter()
+            .filter_map(|(col, _)| self.property_columns.get(*col))
+            .map(|col| col.zone_maps().len())
+            .max()
+            .unwrap_or(0);
+        let mut live = vec![true; chunks];
+        for (chunk, slot) in live.iter_mut().enumerate() {
+            for (col, range) in ranges {
+                let Some(bounds) = self
+                    .property_columns
+                    .get(*col)
+                    .and_then(|c| c.zone_maps().get(chunk))
+                else {
+                    continue;
+                };
+                let (Some(min), Some(max)) = (&bounds.min, &bounds.max) else {
+                    continue;
+                };
+                if !range.overlaps(min, max) {
+                    *slot = false;
+                    break;
+                }
             }
         }
-        true
+        live
+    }
+
+    /// Whether one row chunk may still match: chunks past the computed
+    /// liveness map hold no recorded bounds and always scan.
+    fn chunk_is_live(live: &[bool], row: usize) -> bool {
+        live.get(row / ZONE_MAP_CHUNK_ROWS).copied().unwrap_or(true)
     }
 
     /// Filter edge ids by pushed predicates at the column-scan layer.
@@ -240,6 +277,12 @@ impl CsrWithProperties {
     /// semantics throughout and no intermediate records are materialized.
     /// `candidates` bounds the scan when the caller already holds row
     /// numbers; `None` scans every mapped edge.
+    ///
+    /// Two pre-filters run before the per-row version-chain reads: the
+    /// merged column bounds short-circuit the whole scan, then the per-chunk
+    /// zone bounds skip dead 1024-row chunks, so a selective predicate over
+    /// a clustered column only decodes its surviving chunks. Output order
+    /// follows the input in both arms: skipping never reorders survivors.
     pub fn filter_edge_ids_by_predicates(
         &self,
         predicates: &[crate::cursor::ScanPredicate],
@@ -249,32 +292,35 @@ impl CsrWithProperties {
         if predicates.is_empty() {
             return candidates.map_or_else(|| self.edge_ids().collect(), <[EdgeId]>::to_vec);
         }
-        let resolved: Vec<(usize, &crate::cursor::ScanPredicate)> = predicates
-            .iter()
-            .map(|predicate| (self.column_index(predicate.column()), predicate))
-            .collect::<Vec<_>>()
-            .into_iter()
-            .filter_map(|(index, predicate)| index.map(|column| (column, predicate)))
-            .collect();
-        if resolved.len() != predicates.len() {
+        let Some(resolved) = self.resolve_predicate_columns(predicates) else {
             return Vec::new();
-        }
+        };
         // Zone-map short-circuit: every merged range must overlap its
         // column bounds, else no row can match. Bounds only widen and row
         // matching uses the same ordering, so a disjoint range provably
         // matches nothing at any snapshot timestamp. Columns without
         // recorded bounds (all-null columns included) are skipped: their
         // rows still go through the cell filter below.
-        {
-            let ranges = crate::cursor::ScanPredicate::merged_ranges(predicates);
-            for range in &ranges {
-                if let Some((min, max)) = self.prune_bounds(&range.column) {
-                    if !range.overlaps(&min, &max) {
-                        return Vec::new();
-                    }
+        let merged = ScanPredicate::merged_ranges(predicates);
+        for range in &merged {
+            if let Some((min, max)) = self.prune_bounds(&range.column) {
+                if !range.overlaps(&min, &max) {
+                    return Vec::new();
                 }
             }
         }
+        // Per-chunk liveness from the same merged ranges: every predicate
+        // column resolves here (resolution above already proved all
+        // predicate columns exist), so a missing entry is unreachable and
+        // fails closed to no match.
+        let mut ranges = Vec::with_capacity(merged.len());
+        for range in merged {
+            let Some(col) = self.column_index(&range.column) else {
+                return Vec::new();
+            };
+            ranges.push((col, range));
+        }
+        let live = self.live_row_chunks(&ranges);
         match candidates {
             Some(ids) => ids
                 .iter()
@@ -283,6 +329,9 @@ impl CsrWithProperties {
                     let Some(row) = self.mapped_row(*edge_id) else {
                         return false;
                     };
+                    if !Self::chunk_is_live(&live, row) {
+                        return false;
+                    }
                     resolved.iter().all(|(column, predicate)| {
                         self.pushdown_cell(row, *column, query_ts)
                             .is_some_and(|value| predicate.matches_value(&value))
@@ -293,6 +342,9 @@ impl CsrWithProperties {
                 .edge_mappings()
                 .filter_map(|(edge_id, row)| {
                     let row = row as usize;
+                    if !Self::chunk_is_live(&live, row) {
+                        return None;
+                    }
                     resolved
                         .iter()
                         .all(|(column, predicate)| {

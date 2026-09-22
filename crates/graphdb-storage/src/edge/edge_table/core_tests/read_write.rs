@@ -515,6 +515,60 @@ fn predicate_prune_stays_sound_across_stats_rebuild() {
 }
 
 #[test]
+fn chunk_zone_skip_matches_full_walk_across_chunks() {
+    use crate::cursor::ScanPredicate;
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    // Clustered values across three zone chunks (1024 rows each): the
+    // selective range below only overlaps the last chunk, so the first two
+    // chunks must skip their version-chain reads without dropping hits.
+    for dst in 1..=2500u32 {
+        table
+            .insert_edge(
+                0,
+                dst,
+                0,
+                &[("weight".to_string(), Value::Double(dst as f64))],
+                100,
+            )
+            .unwrap();
+    }
+    table.properties.refresh_column_stats();
+    let selective = ScanPredicate::ColumnRange {
+        column: "weight".to_string(),
+        lower: Some(Value::Double(2000.0)),
+        upper: Some(Value::Double(2100.0)),
+        include_lower: true,
+        include_upper: true,
+    };
+    let hits = table
+        .properties
+        .filter_edge_ids_by_predicates(&[selective.clone()], 150, None);
+    assert_eq!(hits.len(), 101);
+    for edge_id in &hits {
+        let props = table
+            .properties
+            .get_projected_physical_by_edge_id(*edge_id, 150, None)
+            .expect("hit owns a row");
+        let (_, value) = props
+            .iter()
+            .find(|(name, _)| name == "weight")
+            .expect("weight projected");
+        match value {
+            Some(Value::Double(v)) => assert!((2000.0..=2100.0).contains(v)),
+            other => panic!("unexpected weight cell: {:?}", other),
+        }
+    }
+    // The candidates path applies the same chunk skip with identical hits.
+    let all: Vec<EdgeId> = table.properties.edge_ids().collect();
+    let via_candidates =
+        table
+            .properties
+            .filter_edge_ids_by_predicates(&[selective], 150, Some(&all));
+    assert_eq!(via_candidates, hits);
+}
+
+#[test]
 fn fill_many_into_matches_repeated_single_row_fills() {
     let schema = create_test_schema();
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();

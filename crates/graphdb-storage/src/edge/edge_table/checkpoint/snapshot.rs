@@ -7,15 +7,18 @@
 //!
 //! File layout, everything little-endian:
 //! - magic (u32)
-//! - rows (u64), entries (u64), live edge count (u64)
-//! - five `(offset u64, length u64)` column descriptors: degrees, endpoints,
-//!   ranks, edge ids, delete stamps
+//! - rows (u64), entries (u64), live edge count (u64), flags (u64)
+//! - seven `(offset u64, length u64)` column descriptors: degrees, endpoints,
+//!   ranks, edge ids, delete stamps, bundled values, validity bytes
 //! - degrees: `rows` u32 values
 //! - endpoints: `entries` u32 values
 //! - ranks: `entries` i64 values
-//! - edge ids, delete stamps: `entries` u64 values each
+//! - edge ids, delete stamps, bundled values: `entries` u64 values each
+//! - validity: `ceil(entries / 8)` bytes, one bit per slot
 //!
-//! Column widths are fixed, so any slot is addressable by index with one
+//! The bundled value columns only occupy bytes when the flags word marks a
+//! valued snapshot; otherwise both descriptors are empty ranges. Column
+//! widths are fixed, so any slot is addressable by index with one
 //! little-endian decode and no full-file decode. Row offsets are rebuilt in
 //! memory on open and never persisted, mirroring the heap frozen form.
 //!

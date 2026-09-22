@@ -27,26 +27,33 @@ impl EdgeStore {
         }
 
         // Auto derivation locks at creation: no properties selects pure,
-        // one encodable scalar selects bundled, anything else selects
-        // columnar. The bundled admission rules live in
-        // `is_bundled_eligible`, shared with the migration precheck so the
-        // two entries cannot drift apart. The resolved form persists and
-        // never re-derives on load; later precondition breaks must migrate
-        // explicitly.
+        // anything else selects columnar. The bundled inline form is an
+        // explicit opt-in only (`RecordFormPreference::Bundled`): `Auto`
+        // never selects it, so a table only takes the inline limits (no
+        // rank, no MVCC version chain, no online schema change) when the
+        // operator asks for them by name. The bundled admission rules live
+        // in `is_bundled_eligible`, shared with the creation and migration
+        // prechecks so the entries cannot drift apart. The resolved form
+        // persists and never re-derives on load; later precondition breaks
+        // must migrate explicitly.
         let record_form = match config.record_form {
             RecordFormPreference::Columnar => RecordForm::Columnar,
+            RecordFormPreference::Bundled => {
+                if let Some(reason) = crate::edge::bundled_ineligibility_reason(
+                    &schema.properties,
+                    schema.oe_strategy,
+                    schema.ie_strategy,
+                ) {
+                    return Err(StorageError::invalid_operation(reason));
+                }
+                RecordForm::Bundled
+            }
             RecordFormPreference::Auto => {
                 if schema.properties.is_empty()
                     && schema.oe_strategy != EdgeStrategy::Single
                     && schema.ie_strategy != EdgeStrategy::Single
                 {
                     RecordForm::Pure
-                } else if crate::edge::is_bundled_eligible(
-                    &schema.properties,
-                    schema.oe_strategy,
-                    schema.ie_strategy,
-                ) {
-                    RecordForm::Bundled
                 } else {
                     RecordForm::Columnar
                 }
@@ -56,16 +63,20 @@ impl EdgeStore {
         // paths never re-infer it. Report the derivation so the locked
         // choice and its later evolution cost stay visible to operators.
         // Bundled is a fast path with hard limits (no rank, no MVCC version
-        // chain, no freeze with valid values, no online schema change), so
-        // an automatic pick says so loudly: evolving schemas should force
-        // the columnar form instead.
-        if record_form == RecordForm::Bundled && config.record_form == RecordFormPreference::Auto {
-            log::warn!(
-                "edge table '{}' auto-selected the Bundled inline form for '{}': \
-                no rank, no MVCC version chain, no freeze with valid values and no online schema change; \
-                force RecordFormPreference::Columnar when the schema may evolve",
+        // chain, no online schema change), reachable only through the
+        // explicit preference; evolving schemas stay on the columnar form
+        // without asking.
+        if record_form == RecordForm::Bundled {
+            log::info!(
+                "edge table '{}' uses the explicitly requested Bundled inline form for '{}': \
+                no rank, no MVCC version chain and no online schema change; \
+                migrate to the columnar form when those are needed",
                 schema.label_name,
-                schema.properties.first().map(|p| p.name.as_str()).unwrap_or(""),
+                schema
+                    .properties
+                    .first()
+                    .map(|p| p.name.as_str())
+                    .unwrap_or(""),
             );
         } else {
             log::info!(

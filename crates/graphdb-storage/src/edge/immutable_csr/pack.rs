@@ -6,6 +6,7 @@ use super::super::{
     INVALID_EDGE_ID,
 };
 use super::ImmutableCsr;
+use bitvec::vec::BitVec;
 
 pub(crate) fn frozen_error() -> StorageError {
     StorageError::invalid_operation(
@@ -45,6 +46,8 @@ impl ImmutableCsr {
             degrees: Vec::new(),
             offsets: Vec::new(),
             edge_count: 0,
+            values: Vec::new(),
+            valid: BitVec::new(),
         }
     }
 
@@ -55,6 +58,8 @@ impl ImmutableCsr {
         self.degrees.clear();
         self.offsets.clear();
         self.edge_count = 0;
+        self.values.clear();
+        self.valid.clear();
     }
 
     /// Row count of the packed table.
@@ -133,20 +138,23 @@ impl ImmutableCsr {
         )
     }
 
-    /// Pack a bundled group holding no valid inline values directly.
+    /// Pack a bundled group together with its inline values.
     ///
-    /// Callers check valid values first and migrate to the columnar form
-    /// when values are present; this entry only packs the topology half.
-    /// Same sorted content as routing through a temporary mutable table,
-    /// without the full copy.
+    /// Same sorted content as the topology-only pack, with the value column
+    /// carried slot-parallel in row order: a NULL slot stores a zero word
+    /// with a cleared validity bit, mirroring the bundled layout. Freezing a
+    /// valued bundled group therefore preserves its properties; unfreezing
+    /// replays them back through the regular valued insert entry.
     pub fn pack_from_bundled(csr: &BundledCsr) -> Self {
-        Self::pack_from_rows(
+        Self::pack_valued_rows(
             csr.vertex_capacity(),
             csr.edge_count() as usize,
-            |local, row| {
+            |local, row, vals| {
                 row.clear();
-                csr.visit_physical(local, |nbr| {
+                vals.clear();
+                csr.visit_physical_with_values(local, |nbr, value| {
                     row.push(nbr);
+                    vals.push(value);
                     true
                 });
             },
@@ -185,6 +193,59 @@ impl ImmutableCsr {
             degrees,
             offsets: Vec::with_capacity(rows),
             edge_count: live,
+            values: Vec::new(),
+            valid: BitVec::new(),
+        };
+        packed.rebuild_offsets();
+        packed
+    }
+
+    /// Shared pack over a row-fill closure carrying inline values.
+    ///
+    /// Valued counterpart of [`Self::pack_from_rows`]: each row's entries
+    /// sort together with their values by the same frozen key, so the value
+    /// column stays slot-parallel to the packed halves after the reorder.
+    /// Gap sentinels are dropped with their slots; tombstones travel with
+    /// their retained words like the bundled layout.
+    fn pack_valued_rows(
+        rows: usize,
+        edge_hint: usize,
+        mut fill_row: impl FnMut(u32, &mut Vec<Nbr>, &mut Vec<Option<u64>>),
+    ) -> Self {
+        let mut hot_entries = Vec::with_capacity(edge_hint);
+        let mut cold_entries = Vec::with_capacity(edge_hint);
+        let mut values = Vec::with_capacity(edge_hint);
+        let mut valid = BitVec::new();
+        let mut degrees = Vec::with_capacity(rows);
+        let mut row_buf = Vec::new();
+        let mut val_buf = Vec::new();
+        let mut pairs = Vec::new();
+        let mut live = 0u64;
+        for local in 0..rows {
+            fill_row(local as u32, &mut row_buf, &mut val_buf);
+            pairs.clear();
+            pairs.extend(row_buf.drain(..).zip(val_buf.drain(..)));
+            pairs.retain(|(nbr, _)| nbr.edge_id != INVALID_EDGE_ID);
+            pairs.sort_by_key(|(nbr, _)| frozen_row_key(nbr));
+            degrees.push(pairs.len() as u32);
+            for (nbr, value) in &pairs {
+                if nbr.edge_id != INVALID_EDGE_ID && nbr.delete_ts == Timestamp::MAX {
+                    live += 1;
+                }
+                hot_entries.push(nbr.hot());
+                cold_entries.push(nbr.cold());
+                values.push(value.unwrap_or(0));
+                valid.push(value.is_some());
+            }
+        }
+        let mut packed = Self {
+            hot_entries,
+            cold_entries,
+            degrees,
+            offsets: Vec::with_capacity(rows),
+            edge_count: live,
+            values,
+            valid,
         };
         packed.rebuild_offsets();
         packed

@@ -1,6 +1,7 @@
 use super::super::csr_shared::is_reclaimable_cold;
 use super::super::{EdgeId, Timestamp};
 use super::ImmutableCsr;
+use bitvec::vec::BitVec;
 
 impl ImmutableCsr {
     /// Drop GC-eligible tombstones in place without unfreezing.
@@ -19,9 +20,12 @@ impl ImmutableCsr {
             return 0;
         }
         let rows = self.degrees.len();
+        let valued = self.has_valued_entries();
         let mut removed = 0usize;
         let mut kept_hot = Vec::with_capacity(self.hot_entries.len());
         let mut kept_cold = Vec::with_capacity(self.cold_entries.len());
+        let mut kept_values = Vec::with_capacity(self.values.len());
+        let mut kept_valid = BitVec::new();
         let mut new_degrees = Vec::with_capacity(rows);
         for vid in 0..rows {
             let start = self.offsets[vid] as usize;
@@ -36,6 +40,10 @@ impl ImmutableCsr {
                 } else {
                     kept_hot.push(self.hot_entries[idx]);
                     kept_cold.push(cold);
+                    if valued {
+                        kept_values.push(self.values[idx]);
+                        kept_valid.push(self.valid.get(idx).map(|b| *b).unwrap_or(false));
+                    }
                     kept += 1;
                 }
             }
@@ -44,6 +52,10 @@ impl ImmutableCsr {
         self.hot_entries = kept_hot;
         self.cold_entries = kept_cold;
         self.degrees = new_degrees;
+        if valued {
+            self.values = kept_values;
+            self.valid = kept_valid;
+        }
         self.rebuild_offsets();
         removed
     }
@@ -80,8 +92,11 @@ impl ImmutableCsr {
             return 0;
         }
         let mut removed = 0usize;
+        let valued = self.has_valued_entries();
         let mut kept_hot = Vec::with_capacity(self.hot_entries.len());
         let mut kept_cold = Vec::with_capacity(self.cold_entries.len());
+        let mut kept_values = Vec::with_capacity(self.values.len());
+        let mut kept_valid = BitVec::new();
         let mut new_degrees = Vec::with_capacity(rows);
         for vid in 0..rows {
             let start = self.offsets[vid] as usize;
@@ -96,6 +111,10 @@ impl ImmutableCsr {
                 } else {
                     kept_hot.push(self.hot_entries[idx]);
                     kept_cold.push(cold);
+                    if valued {
+                        kept_values.push(self.values[idx]);
+                        kept_valid.push(self.valid.get(idx).map(|b| *b).unwrap_or(false));
+                    }
                     kept += 1;
                 }
             }
@@ -107,6 +126,10 @@ impl ImmutableCsr {
         self.hot_entries = kept_hot;
         self.cold_entries = kept_cold;
         self.degrees = new_degrees;
+        if valued {
+            self.values = kept_values;
+            self.valid = kept_valid;
+        }
         self.rebuild_offsets();
         removed
     }

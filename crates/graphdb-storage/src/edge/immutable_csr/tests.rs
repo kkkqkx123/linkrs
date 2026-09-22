@@ -145,6 +145,56 @@ fn dump_load_roundtrip_restores_reads() {
 }
 
 #[test]
+fn valued_bundled_pack_carries_values_through_dump_load() {
+    use super::super::BundledCsr;
+    let mut bundled = BundledCsr::with_capacity(8, 16);
+    bundled
+        .insert_edge_with_value(0, packed_endpoint(10, 0), EdgeId(1), Some(42))
+        .unwrap();
+    bundled
+        .insert_edge_with_value(0, packed_endpoint(9, 0), EdgeId(2), None)
+        .unwrap();
+    bundled
+        .insert_edge_with_value(3, packed_endpoint(12, 0), EdgeId(3), Some(u64::MAX))
+        .unwrap();
+    let frozen = ImmutableCsr::pack_from_bundled(&bundled);
+    assert!(frozen.has_valued_entries());
+    assert!(frozen.any_valid_values());
+    // Sorted row order carries values with their entries.
+    assert_eq!(frozen.value_by_edge_id(0, EdgeId(1)), Some((42, true)));
+    assert_eq!(frozen.value_by_edge_id(0, EdgeId(2)), Some((0, false)));
+    assert_eq!(frozen.value_by_endpoint(0, 10), Some((42, true)));
+    let mut seen = Vec::new();
+    frozen.visit_physical_with_values(0, |nbr, value| {
+        seen.push((nbr.edge_id, value));
+        true
+    });
+    assert_eq!(seen, vec![(EdgeId(2), None), (EdgeId(1), Some(42))]);
+    // Dump/load preserves the value column and validity bits.
+    let bytes = frozen.dump();
+    let mut loaded = ImmutableCsr::new();
+    loaded.load(&bytes).unwrap();
+    assert!(loaded.has_valued_entries());
+    assert!(loaded.any_valid_values());
+    assert_eq!(loaded.value_by_edge_id(0, EdgeId(1)), Some((42, true)));
+    assert_eq!(loaded.value_by_edge_id(0, EdgeId(2)), Some((0, false)));
+    assert_eq!(
+        loaded.value_by_edge_id(3, EdgeId(3)),
+        Some((u64::MAX, true))
+    );
+    // Unvalued packs stay value-free but still resolve found edges to NULL
+    // slots, matching the bundled NULL convention.
+    let plain = ImmutableCsr::pack_from_mutable(&sample_mutable());
+    assert!(!plain.has_valued_entries());
+    assert!(!plain.any_valid_values());
+    assert_eq!(plain.value_by_edge_id(0, EdgeId(1)), Some((0, false)));
+    let mut reloaded = ImmutableCsr::new();
+    reloaded.load(&plain.dump()).unwrap();
+    assert!(!reloaded.has_valued_entries());
+    assert_eq!(reloaded.value_by_edge_id(0, EdgeId(1)), Some((0, false)));
+}
+
+#[test]
 fn load_rejects_damage() {
     let bytes = ImmutableCsr::pack_from_mutable(&sample_mutable()).dump();
     let mut loaded = ImmutableCsr::new();

@@ -331,7 +331,7 @@ fn test_insert_edges_batch_on_empty_bundled_table_matches_staging_effects() {
     }
     fn bundled_config() -> EdgeTableConfig {
         EdgeTableConfig {
-            record_form: RecordFormPreference::Auto,
+            record_form: RecordFormPreference::Bundled,
             ..Default::default()
         }
     }
@@ -409,7 +409,7 @@ fn test_bundled_bulk_import_rejects_nonempty_and_ranked_batches() {
         record_form: RecordForm::default(),
     };
     let config = EdgeTableConfig {
-        record_form: RecordFormPreference::Auto,
+        record_form: RecordFormPreference::Bundled,
         ..Default::default()
     };
     let props = vec![("weight".to_string(), Value::Double(1.0))];
@@ -427,7 +427,7 @@ fn test_bundled_bulk_import_rejects_nonempty_and_ranked_batches() {
     // pins rank to zero, so a nonzero rank never commits on any path.
     let schema2 = table.schema.clone();
     let config2 = EdgeTableConfig {
-        record_form: RecordFormPreference::Auto,
+        record_form: RecordFormPreference::Bundled,
         ..Default::default()
     };
     let mut ranked = EdgeTable::with_config(schema2, config2).unwrap();
@@ -513,7 +513,7 @@ fn test_inline_form_schema_change_reports_shared_guidance() {
         record_form: RecordForm::default(),
     };
     let config = EdgeTableConfig {
-        record_form: RecordFormPreference::Auto,
+        record_form: RecordFormPreference::Bundled,
         ..Default::default()
     };
     let mut table = EdgeTable::with_config(schema, config).unwrap();

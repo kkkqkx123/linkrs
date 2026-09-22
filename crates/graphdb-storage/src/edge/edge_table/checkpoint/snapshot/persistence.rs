@@ -63,7 +63,8 @@ impl MappedFrozen {
 
     /// Authoritative checkpoint bytes rebuilt from the mapping: same
     /// layout as the heap frozen dump, so a mapped group flushes
-    /// indistinguishably from a heap frozen group.
+    /// indistinguishably from a heap frozen group. Valued sidecars rebuild
+    /// the value column and validity bytes the same way.
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
         self.dump_into(&mut result);
@@ -113,6 +114,19 @@ impl MappedFrozen {
         out.extend_from_slice(&edge_ids_payload);
         let (_, delete_payload) = encode_topology_u64_column(scratch.deletes());
         out.extend_from_slice(&delete_payload);
+        let valued = self.has_valued_entries();
+        out.extend_from_slice(&(u64::from(valued)).to_le_bytes());
+        if valued {
+            let mut values = Vec::with_capacity(self.entries);
+            for idx in 0..self.entries {
+                values.push(self.value_at(idx));
+            }
+            let (_, values_payload) = encode_topology_u64_column(&values);
+            out.extend_from_slice(&values_payload);
+            let validity = self.column_bytes(self.columns.validity);
+            out.extend_from_slice(&(validity.len() as u64).to_le_bytes());
+            out.extend_from_slice(validity);
+        }
         let crc = crc32fast::hash(&out[start..]);
         out.extend_from_slice(&crc.to_le_bytes());
     }

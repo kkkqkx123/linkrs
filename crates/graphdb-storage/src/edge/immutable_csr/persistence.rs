@@ -7,6 +7,8 @@ use super::super::mutable_csr::serialization::{
 use super::super::{ColdStamps, EdgeId, HotNbr, INVALID_EDGE_ID};
 use super::ImmutableCsr;
 use crate::persistence::read_u64_le;
+use bitvec::order::Lsb0;
+use bitvec::vec::BitVec;
 use graphdb_core::{StorageError, StorageResult};
 
 impl ImmutableCsr {
@@ -30,6 +32,8 @@ impl ImmutableCsr {
                     .len()
                     .saturating_mul(std::mem::size_of::<u32>()),
             )
+            .saturating_add(self.values.len().saturating_mul(std::mem::size_of::<u64>()))
+            .saturating_add(self.packed_valid_bytes().len())
             .saturating_add(std::mem::size_of::<Self>())
     }
 
@@ -40,7 +44,7 @@ impl ImmutableCsr {
         let (endpoint_choice, _) = encode_topology_u32_column(&endpoints);
         let (edge_id_choice, _) = encode_topology_u64_column(&edge_ids);
         let (degrees_choice, _) = encode_topology_u32_column(&self.degrees);
-        vec![
+        let mut report = vec![
             (
                 "neighbor".to_string(),
                 endpoint_choice.encoding,
@@ -59,7 +63,17 @@ impl ImmutableCsr {
                 degrees_choice.plain_bytes,
                 degrees_choice.encoded_bytes,
             ),
-        ]
+        ];
+        if self.has_valued_entries() {
+            let (values_choice, _) = encode_topology_u64_column(&self.values);
+            report.push((
+                "values".to_string(),
+                values_choice.encoding,
+                values_choice.plain_bytes,
+                values_choice.encoded_bytes,
+            ));
+        }
+        report
     }
 
     /// Dump to bytes.
@@ -73,8 +87,13 @@ impl ImmutableCsr {
     /// - encoded ranks column
     /// - encoded edge ids column
     /// - encoded delete stamps column
+    /// - has_values flag (u64, 0 or 1)
+    /// - encoded value words column (present only when the flag is set)
+    /// - validity byte count (u64) plus raw validity bytes (flag set only)
     ///
-    /// Row offsets are memory-only and never persisted; load rebuilds them.
+    /// Groups packed from non-bundled sources carry no value columns and
+    /// store a zero flag. Row offsets are memory-only and never persisted;
+    /// load rebuilds them.
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
         self.dump_into(&mut result);
@@ -112,6 +131,15 @@ impl ImmutableCsr {
         out.extend_from_slice(&edge_ids_payload);
         let (_, delete_payload) = encode_topology_u64_column(scratch.deletes());
         out.extend_from_slice(&delete_payload);
+        let valued = self.has_valued_entries();
+        out.extend_from_slice(&(u64::from(valued)).to_le_bytes());
+        if valued {
+            let (_, values_payload) = encode_topology_u64_column(&self.values);
+            out.extend_from_slice(&values_payload);
+            let valid_bytes = self.packed_valid_bytes();
+            out.extend_from_slice(&(valid_bytes.len() as u64).to_le_bytes());
+            out.extend_from_slice(valid_bytes);
+        }
         let crc = crc32fast::hash(&out[start..]);
         out.extend_from_slice(&crc.to_le_bytes());
     }
@@ -196,6 +224,38 @@ impl ImmutableCsr {
                 edge_count, recomputed
             )));
         }
+        let has_values = read_u64_le(data, &mut offset)?;
+        let (values, valid) = match has_values {
+            0 => (Vec::new(), BitVec::new()),
+            1 => {
+                let words = decode_topology_u64_column(data, &mut offset)?;
+                if words.len() != entries_len {
+                    return Err(StorageError::deserialize_error(
+                        "frozen CSR value column length mismatch",
+                    ));
+                }
+                let valid_len = read_u64_le(data, &mut offset)? as usize;
+                let want_valid = entries_len.div_ceil(8);
+                if valid_len != want_valid {
+                    return Err(StorageError::deserialize_error(format!(
+                        "frozen CSR validity length mismatch: holds {} bytes, layout needs {}",
+                        valid_len, want_valid
+                    )));
+                }
+                let valid_bytes = data.get(offset..offset + valid_len).ok_or_else(|| {
+                    StorageError::deserialize_error("frozen CSR validity bytes truncated")
+                })?;
+                offset += valid_len;
+                let mut bits = BitVec::<u8, Lsb0>::from_slice(valid_bytes);
+                bits.truncate(entries_len);
+                (words, bits)
+            }
+            other => {
+                return Err(StorageError::deserialize_error(format!(
+                    "frozen CSR value flag out of range: {other}"
+                )));
+            }
+        };
         if offset != data.len() {
             return Err(StorageError::deserialize_error(
                 "unexpected trailing data in frozen CSR payload",
@@ -205,6 +265,8 @@ impl ImmutableCsr {
         self.cold_entries = cold_entries;
         self.degrees = degrees;
         self.edge_count = edge_count;
+        self.values = values;
+        self.valid = valid;
         self.rebuild_offsets();
         Ok(())
     }

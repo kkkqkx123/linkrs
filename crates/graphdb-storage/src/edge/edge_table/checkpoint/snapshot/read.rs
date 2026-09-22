@@ -260,6 +260,62 @@ impl MappedFrozen {
         (start..end).any(|idx| self.edge_id_at(idx) == edge_id)
     }
 
+    /// Read the inline value of one edge by id within its source row.
+    ///
+    /// Mapped half of the frozen paired traversal: resolve the edge from
+    /// the topology walk first, then read its value here. Sidecars without
+    /// a value column still resolve the edge but report a NULL slot.
+    pub fn bundled_value_by_edge_id(&self, src_vid: u32, edge_id: EdgeId) -> Option<(u64, bool)> {
+        let (start, end) = self.row_window(src_vid)?;
+        for idx in start..end {
+            if self.edge_id_at(idx) == edge_id {
+                return Some((self.value_at(idx), self.valid_at(idx)));
+            }
+        }
+        None
+    }
+
+    /// Read the inline value of the first physical entry for one endpoint.
+    ///
+    /// First-match walk mirroring the heap accessor: tombstones are physical
+    /// entries and may match.
+    pub fn bundled_value_by_endpoint(&self, src_vid: u32, endpoint: u32) -> Option<(u64, bool)> {
+        let (start, end) = self.row_window(src_vid)?;
+        for idx in start..end {
+            if self.endpoint_at(idx) == endpoint && self.edge_id_at(idx) != INVALID_EDGE_ID {
+                return Some((self.value_at(idx), self.valid_at(idx)));
+            }
+        }
+        None
+    }
+
+    /// Visit every physically stored entry of one row with its inline value
+    /// (`None` for NULL slots).
+    pub fn visit_physical_with_values<F>(&self, src_vid: u32, mut f: F)
+    where
+        F: FnMut(Nbr, Option<u64>) -> bool,
+    {
+        let Some((start, end)) = self.row_window(src_vid) else {
+            return;
+        };
+        for idx in start..end {
+            let Some(nbr) = self.slot_at(idx) else {
+                continue;
+            };
+            let raw = self.value_at(idx);
+            let value = self.valid_at(idx).then_some(raw);
+            if !f(nbr, value) {
+                return;
+            }
+        }
+    }
+
+    /// Whether any slot holds a valid inline value.
+    pub fn any_valid_values(&self) -> bool {
+        let bytes = self.column_bytes(self.columns.validity);
+        bytes.iter().any(|b| *b != 0)
+    }
+
     /// Locate the first entry with `edge_id`, returning its packed slot.
     pub fn locate_edge(&self, src_vid: u32, edge_id: EdgeId) -> Option<(EdgePosition, Nbr)> {
         let (start, end) = self.row_window(src_vid)?;

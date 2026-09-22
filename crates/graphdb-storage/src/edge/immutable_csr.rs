@@ -20,12 +20,20 @@
 //! timestamp-visible version inside it. Scans stay linear over the sorted
 //! rows.
 //!
+//! A frozen group packed from a valued bundled group additionally carries
+//! the inline value column: `values`/`valid` run slot-parallel to the packed
+//! halves in the same row order, so freezing a valued bundled group preserves
+//! its properties without migrating to the columnar form. Groups packed from
+//! any other source hold no value columns and read every value as NULL.
+//!
 //! Row offsets are rebuilt in memory on open and on load, never persisted.
 //! Every mutating entry point rejects writes: a frozen group must be
 //! explicitly unfrozen back into a mutable variant before it accepts writes
 //! again. There is no implicit unfreeze on the write path.
 
 use super::{ColdStamps, HotNbr};
+use bitvec::order::Lsb0;
+use bitvec::vec::BitVec;
 
 pub(crate) mod iter;
 pub(crate) mod maintenance;
@@ -46,6 +54,10 @@ pub use iter::{FrozenRowIter, ImmutableCsrIterator};
 /// `degrees[row]` is the row length and `offsets[row]` its start inside the
 /// halves. Empty rows contribute no slots. `offsets` is memory-only state
 /// rebuilt by packing and by loading.
+///
+/// `values`/`valid` carry the bundled inline value column slot-parallel to
+/// the packed halves when the group was packed from a valued bundled group;
+/// otherwise both stay empty and every value reads as NULL.
 #[derive(Debug, Clone)]
 pub struct ImmutableCsr {
     hot_entries: Vec<HotNbr>,
@@ -53,6 +65,8 @@ pub struct ImmutableCsr {
     degrees: Vec<u32>,
     offsets: Vec<u32>,
     edge_count: u64,
+    values: Vec<u64>,
+    valid: BitVec<u8, Lsb0>,
 }
 
 impl Default for ImmutableCsr {

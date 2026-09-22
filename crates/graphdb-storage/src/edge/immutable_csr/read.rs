@@ -259,6 +259,98 @@ impl ImmutableCsr {
         None
     }
 
+    /// Whether this frozen group carries a bundled inline value column.
+    ///
+    /// Only groups packed from a valued bundled group do; every other pack
+    /// leaves the value columns empty and reads every value as NULL.
+    pub fn has_valued_entries(&self) -> bool {
+        !self.values.is_empty()
+    }
+
+    /// Raw value word plus validity at a packed index.
+    ///
+    /// Out-of-range indexes and groups without value columns read as a zero
+    /// word with a cleared bit, matching the bundled NULL convention.
+    pub(crate) fn value_at_index(&self, idx: usize) -> (u64, bool) {
+        if idx >= self.values.len() {
+            return (0, false);
+        }
+        let raw = self.values[idx];
+        let valid = self.valid.get(idx).map(|b| *b).unwrap_or(false);
+        (raw, valid)
+    }
+
+    /// Read the inline value of one edge by id within its source row.
+    ///
+    /// Paired value half of a frozen topology walk: resolve the edge from
+    /// the topology walk first, then read its value here.
+    pub fn value_by_edge_id(&self, src_vid: u32, edge_id: EdgeId) -> Option<(u64, bool)> {
+        let (start, end) = self.row_window(src_vid)?;
+        for idx in start..end {
+            if self.hot_entries[idx].edge_id == edge_id {
+                return Some(self.value_at_index(idx));
+            }
+        }
+        None
+    }
+
+    /// Read the inline value of the first physical entry for one endpoint.
+    ///
+    /// First-match walk like the bundled accessor: tombstones are physical
+    /// entries and may match, mirroring the bundled layout where deletion
+    /// clears validity but keeps the slot position.
+    pub fn value_by_endpoint(&self, src_vid: u32, endpoint: u32) -> Option<(u64, bool)> {
+        let (start, end) = self.row_window(src_vid)?;
+        for idx in start..end {
+            let hot = self.hot_entries[idx];
+            if hot.endpoint == endpoint && hot.edge_id != INVALID_EDGE_ID {
+                return Some(self.value_at_index(idx));
+            }
+        }
+        None
+    }
+
+    /// Visit every physically stored entry of one row with its inline value
+    /// (`None` for NULL slots).
+    ///
+    /// Frozen counterpart of the bundled paired traversal: topology and
+    /// value stay slot-parallel after the pack reorder, so one index serves
+    /// both halves.
+    pub fn visit_physical_with_values<F>(&self, src_vid: u32, mut f: F)
+    where
+        F: FnMut(Nbr, Option<u64>) -> bool,
+    {
+        let Some((start, end)) = self.row_window(src_vid) else {
+            return;
+        };
+        for idx in start..end {
+            let nbr = Nbr::from_parts(self.hot_entries[idx], self.cold_entries[idx]);
+            let (raw, valid) = self.value_at_index(idx);
+            if !f(nbr, valid.then_some(raw)) {
+                return;
+            }
+        }
+    }
+
+    /// Whether any slot holds a valid inline value.
+    pub fn any_valid_values(&self) -> bool {
+        self.valid.count_ones() > 0
+    }
+
+    /// Packed value words for snapshot-file writers.
+    pub(crate) fn packed_values(&self) -> &[u64] {
+        &self.values
+    }
+
+    /// Packed validity bytes for snapshot-file writers.
+    ///
+    /// Exactly covering the packed entries: trailing bits of the last byte
+    /// are zero padding, never edges.
+    pub(crate) fn packed_valid_bytes(&self) -> &[u8] {
+        let want = self.values.len().div_ceil(8);
+        self.valid.as_raw_slice().get(..want).unwrap_or(&[])
+    }
+
     /// Physical entry census of one row: `(live, dead, capacity)`.
     ///
     /// Same live/dead predicates as the mutable census; capacity equals the

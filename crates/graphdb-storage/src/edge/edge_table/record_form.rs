@@ -557,15 +557,15 @@ mod tests {
         }
     }
 
-    fn auto_config() -> EdgeTableConfig {
+    fn bundled_config() -> EdgeTableConfig {
         EdgeTableConfig {
-            record_form: RecordFormPreference::Auto,
+            record_form: RecordFormPreference::Bundled,
             ..Default::default()
         }
     }
 
     fn make_bundled_table() -> EdgeStore {
-        EdgeStore::with_config(weight_schema(), auto_config()).expect("bundled table builds")
+        EdgeStore::with_config(weight_schema(), bundled_config()).expect("bundled table builds")
     }
 
     fn make_columnar_table() -> EdgeStore {
@@ -638,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_selects_bundled_with_inline_stub() {
+    fn explicit_bundled_selects_inline_stub() {
         let table = make_bundled_table();
         assert_eq!(table.schema.record_form, RecordForm::Bundled);
         assert!(table.out_csr.is_bundled());
@@ -648,6 +648,34 @@ mod tests {
             .out_csr
             .group_variant(0)
             .is_some_and(|v| v.is_bundled()));
+    }
+
+    #[test]
+    fn auto_never_selects_bundled() {
+        // Auto only derives the safe defaults (pure for empty schemas,
+        // columnar otherwise): even a bundled-eligible single scalar stays
+        // columnar unless the operator opts into the inline form by name.
+        let table = EdgeStore::with_config(
+            weight_schema(),
+            EdgeTableConfig {
+                record_form: RecordFormPreference::Auto,
+                ..Default::default()
+            },
+        )
+        .expect("auto table builds");
+        assert_eq!(table.schema.record_form, RecordForm::Columnar);
+
+        // The explicit opt-in still works for the same schema.
+        let bundled = EdgeStore::with_config(weight_schema(), bundled_config())
+            .expect("bundled table builds");
+        assert_eq!(bundled.schema.record_form, RecordForm::Bundled);
+
+        // The explicit opt-in fails loudly on ineligible schemas instead of
+        // falling back: a single-edge direction reports the shared refusal.
+        let mut single = weight_schema();
+        single.oe_strategy = EdgeStrategy::Single;
+        single.ie_strategy = EdgeStrategy::Single;
+        assert!(EdgeStore::with_config(single, bundled_config()).is_err());
     }
 
     #[test]
@@ -756,14 +784,22 @@ mod tests {
     }
 
     #[test]
-    fn bundled_freeze_rejects_valued_groups() {
+    fn bundled_freeze_preserves_valued_groups() {
         let mut table = make_bundled_table();
         table
             .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
             .expect("insert");
-        assert!(table
+        table
             .freeze_group(true, 0, graphdb_core::types::Timestamp::MAX, 0.0)
-            .is_err());
+            .expect("valued freeze packs topology plus values");
+        let edge = table.get_edge(0, 1, 0, 200).expect("edge present");
+        assert_eq!(
+            edge.properties,
+            vec![("weight".to_string(), Value::Double(1.0))]
+        );
+        table.unfreeze_group(true, 0).expect("unfreeze restores");
+        let live = table.get_edge(0, 1, 0, 200).expect("edge present");
+        assert_eq!(live.properties, edge.properties);
 
         let mut nulls = make_bundled_table();
         nulls.insert_edge(0, 1, 0, &[], 100).expect("insert");
@@ -1096,13 +1132,18 @@ mod tests {
     #[test]
     fn single_strategy_auto_selects_columnar() {
         // Single strategies need fixed single slots, which only the columnar
-        // form provides. Auto selection must not pick an inline form even
-        // when the property count would otherwise allow it.
+        // form provides. Auto selection never picks an inline form: the
+        // bundled shape stays behind its explicit opt-in even when the
+        // property count would otherwise allow it.
         let mut schema = weight_schema();
         schema.properties.clear();
         schema.oe_strategy = EdgeStrategy::Single;
         schema.ie_strategy = EdgeStrategy::Single;
-        let table = EdgeStore::with_config(schema, auto_config()).expect("single table builds");
+        let auto = || EdgeTableConfig {
+            record_form: RecordFormPreference::Auto,
+            ..Default::default()
+        };
+        let table = EdgeStore::with_config(schema, auto()).expect("single table builds");
         assert_eq!(table.schema.record_form, RecordForm::Columnar);
         assert!(table
             .out_csr
@@ -1115,8 +1156,7 @@ mod tests {
         one_sided.properties.clear();
         one_sided.oe_strategy = EdgeStrategy::Single;
         one_sided.ie_strategy = EdgeStrategy::Multiple;
-        let table =
-            EdgeStore::with_config(one_sided, auto_config()).expect("one-sided table builds");
+        let table = EdgeStore::with_config(one_sided, auto()).expect("one-sided table builds");
         assert_eq!(table.schema.record_form, RecordForm::Columnar);
         assert!(table
             .out_csr
@@ -1127,11 +1167,12 @@ mod tests {
             .group_variant(0)
             .is_some_and(|v| matches!(v, crate::edge::CsrVariant::Multiple(_))));
 
-        // A single encodable scalar would otherwise select the bundled form.
+        // A single encodable scalar is bundled-eligible but stays columnar
+        // under Auto: the inline form needs the explicit opt-in.
         let mut scalar = weight_schema();
         scalar.oe_strategy = EdgeStrategy::Single;
         scalar.ie_strategy = EdgeStrategy::Single;
-        let table = EdgeStore::with_config(scalar, auto_config()).expect("single scalar builds");
+        let table = EdgeStore::with_config(scalar, auto()).expect("single scalar builds");
         assert_eq!(table.schema.record_form, RecordForm::Columnar);
         assert!(table
             .out_csr

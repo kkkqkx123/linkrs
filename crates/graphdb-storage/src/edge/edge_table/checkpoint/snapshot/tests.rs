@@ -164,3 +164,44 @@ fn empty_table_serves() {
     assert_eq!(mapped.dump(), frozen.dump());
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn valued_sidecar_serves_carried_values() {
+    use crate::edge::BundledCsr;
+    let mut bundled = BundledCsr::with_capacity(8, 16);
+    let key = |endpoint: u32| VertexId::edge_endpoint_key(endpoint, 0);
+    bundled
+        .insert_edge_with_value(0, key(10), EdgeId(1), Some(99))
+        .unwrap();
+    bundled
+        .insert_edge_with_value(0, key(20), EdgeId(2), None)
+        .unwrap();
+    let frozen = ImmutableCsr::pack_from_bundled(&bundled);
+    let path = serving_path("valued");
+    write_snapshot_file(&frozen, &path).unwrap();
+    let mapped = MappedFrozen::open(&path).unwrap();
+    assert!(mapped.has_valued_entries());
+    assert!(mapped.any_valid_values());
+    assert_eq!(
+        mapped.bundled_value_by_edge_id(0, EdgeId(1)),
+        Some((99, true))
+    );
+    assert_eq!(
+        mapped.bundled_value_by_edge_id(0, EdgeId(2)),
+        Some((0, false))
+    );
+    assert_eq!(mapped.bundled_value_by_endpoint(0, 10), Some((99, true)));
+    let mut seen = Vec::new();
+    mapped.visit_physical_with_values(0, |nbr, value| {
+        seen.push((nbr.edge_id, value));
+        true
+    });
+    assert_eq!(seen, vec![(EdgeId(1), Some(99)), (EdgeId(2), None)]);
+    // Same authoritative bytes as the heap dump: flushes are identical.
+    assert_eq!(mapped.dump(), frozen.dump());
+    // A heap reload from the mapped dump keeps the values.
+    let mut reloaded = ImmutableCsr::new();
+    reloaded.load(&mapped.dump()).unwrap();
+    assert_eq!(reloaded.value_by_edge_id(0, EdgeId(1)), Some((99, true)));
+    let _ = std::fs::remove_file(&path);
+}

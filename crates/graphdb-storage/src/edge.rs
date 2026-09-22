@@ -103,20 +103,30 @@ pub enum RecordForm {
 
 /// User-facing preference for record form selection at table creation time.
 ///
-/// `Auto` derives the form from the schema (no properties to pure, one
-/// encodable scalar to bundled, otherwise columnar) and reports the result
-/// through the table construction log; the resolved form then locks and
-/// persists. Later evolution breaking the preconditions must migrate
-/// explicitly. `Columnar` forces the standard multi/single/none strategy path.
+/// `Auto` derives a safe default from the schema (no properties to pure,
+/// anything else to columnar) and reports the result through the table
+/// construction log; the resolved form then locks and persists. Later
+/// evolution breaking the preconditions must migrate explicitly.
+/// `Columnar` forces the standard multi/single/none strategy path.
+/// `Bundled` is an explicit opt-in to the single-scalar inline form: `Auto`
+/// never selects it, so a table only takes the inline limits (no rank, no
+/// MVCC version chain, no online schema change) when the operator asks for
+/// them by name.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Default,
 )]
 pub enum RecordFormPreference {
-    /// Auto-select Pure/Bundled/Columnar based on schema properties.
+    /// Auto-select Pure/Columnar based on schema properties.
     Auto,
     /// Force columnar storage regardless of schema.
     #[default]
     Columnar,
+    /// Explicit opt-in to the bundled inline form for one encodable scalar.
+    ///
+    /// Creation fails when the schema is not bundled-eligible (arity, type
+    /// or single-edge direction), reporting the same reason the migration
+    /// precheck reports.
+    Bundled,
 }
 
 /// Shared rejection for a single-edge strategy paired with an inline form.
@@ -194,11 +204,13 @@ pub fn is_scalar_encodable(dt: &graphdb_core::DataType) -> bool {
 
 /// Whether a schema may use the `Bundled` record form.
 ///
-/// Single source of truth for the bundled admission rules, shared by table
-/// creation and record-form migration: exactly one property, an encodable
-/// scalar type, and no single-edge direction. Bundled additionally carries
-/// no rank, no MVCC version chain and no freeze support for valid values,
-/// so schemas expecting those must stay columnar even when eligible here.
+/// Single source of truth for the bundled admission rules, shared by the
+/// explicit `Bundled` creation preference and the migration precheck:
+/// exactly one property, an encodable scalar type, and no single-edge
+/// direction. Bundled additionally carries no rank, no MVCC version chain
+/// and no online schema change, so the `Auto` selector never picks it even
+/// when a schema is eligible here; schemas expecting those capabilities
+/// stay columnar without asking.
 pub fn is_bundled_eligible(
     properties: &[StoragePropertyDef],
     oe_strategy: EdgeStrategy,

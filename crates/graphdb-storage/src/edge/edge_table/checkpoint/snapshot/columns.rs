@@ -150,6 +150,43 @@ impl MappedFrozen {
             .expect("snapshot delete column validated at open")
     }
 
+    /// Whether this snapshot carries a bundled inline value column.
+    ///
+    /// Only sidecars written from valued frozen groups do; the value
+    /// readers below return inert defaults otherwise.
+    pub fn has_valued_entries(&self) -> bool {
+        self.columns.values.len > 0
+    }
+
+    /// Raw inline value word at a packed index.
+    ///
+    /// Zero for sidecars without a value column; callers pair it with
+    /// `valid_at` before interpreting it.
+    #[inline]
+    pub(crate) fn value_at(&self, idx: usize) -> u64 {
+        if self.columns.values.len == 0 {
+            return 0;
+        }
+        read_u64_le_at(&self.map, self.columns.values.start + idx * 8)
+            .expect("snapshot value column validated at open")
+    }
+
+    /// Validity bit at a packed index.
+    ///
+    /// False for sidecars without a value column.
+    #[inline]
+    pub(crate) fn valid_at(&self, idx: usize) -> bool {
+        if self.columns.validity.len == 0 {
+            return false;
+        }
+        let at = self.columns.validity.start + idx / 8;
+        let byte = self
+            .map
+            .get(at..at + 1)
+            .expect("snapshot validity column validated at open")[0];
+        byte & (1 << (idx % 8)) != 0
+    }
+
     /// Hot half at a packed index, decoded on demand from the mapping.
     #[inline]
     pub fn hot_at(&self, idx: usize) -> Option<HotNbr> {

@@ -22,13 +22,16 @@ match self.record_form {
 }
 ```
 
-- `RecordFormPreference::Auto` 按模式自动推导形态
-  （无属性 → `Pure`，单可编码标量 → `Bundled`，其余 → `Columnar`），
+- `RecordFormPreference::Auto` 按模式推导安全默认值
+  （无属性 → `Pure`，其余 → `Columnar`），
   选定后持久化在 `meta.bin`，加载时不再重推；建表日志报告推导结果，
   锁定后破坏形态前置条件的模式变更须走迁移（`migration_plan` /
   `migrate_record_form` / `switch_record_form_online`）并随后检查点，
   不做原地重解释。
 - `RecordFormPreference::Columnar` 强制走策略路径。
+- `RecordFormPreference::Bundled` 显式选入单标量内联形态：
+  `Auto` 永不推导 `Bundled`，只有按名指定才承担内联限制
+  （无 rank、无 MVCC 版本链、无在线改列）；不满足准入时建表直接失败。
 
 ### CsrVariant::from_strategy_with_overflow：列式形态工厂
 
@@ -58,8 +61,9 @@ pub fn from_strategy_with_overflow(
 建表 RecordFormPreference
   │
   ├─ Auto ──→ 模式推导 ──→ Pure ──────→ PureTopologyCsr
-  │                       ├─ Bundled ──→ BundledCsr
   │                       └─ Columnar ─→ 见下策略分支
+  │
+  ├─ Bundled ──→ 准入校验 ──→ BundledCsr（失败直接报错）
   │
   └─ Columnar ──→ EdgeStrategy ──┬─ Multiple ──→ MutableCsr
                                  ├─ Single ────→ SingleMutableCsr
