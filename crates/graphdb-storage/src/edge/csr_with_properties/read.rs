@@ -111,7 +111,61 @@ impl CsrWithProperties {
         }
     }
 
-    /// Read non-nullable properties for an edge by its EdgeId (no MVCC filtering).
+    /// Physical property projection for many edges without visibility filtering.
+    ///
+    /// Batch form of [`Self::get_projected_physical_by_edge_id`]: the
+    /// projection resolves to column indices once and every edge reuses the
+    /// mapping, so a projected adjacency pays one schema scan instead of one
+    /// per edge. Output order follows the input; each entry carries the same
+    /// contract as the single-edge call (`None` for inline tables, unmapped
+    /// edges and out-of-range rows).
+    pub fn get_projected_physical_batch_by_edge_ids(
+        &self,
+        edge_ids: &[EdgeId],
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Vec<Option<Vec<(String, Option<Value>)>>> {
+        if self.inline {
+            return edge_ids.iter().map(|_| None).collect();
+        }
+        let columns: Vec<(usize, String)> = match projection {
+            None => self
+                .property_schema
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (i, s.name.clone()))
+                .collect(),
+            Some(names) => {
+                if names.is_empty() {
+                    return edge_ids.iter().map(|_| Some(Vec::new())).collect();
+                }
+                self.property_schema
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| names.iter().any(|n| n == &s.name))
+                    .map(|(i, s)| (i, s.name.clone()))
+                    .collect()
+            }
+        };
+        edge_ids
+            .iter()
+            .map(|edge_id| {
+                let pos = self.mapped_row(*edge_id)?;
+                if pos >= self.visibility.len() {
+                    return None;
+                }
+                Some(
+                    columns
+                        .iter()
+                        .map(|(i, name)| {
+                            let v = self.property_columns[*i].get_at_ts(pos, query_ts);
+                            (name.clone(), v)
+                        })
+                        .collect(),
+                )
+            })
+            .collect()
+    }
     pub fn read_properties_by_edge_id(&self, edge_id: EdgeId) -> Option<Vec<(String, Value)>> {
         if self.inline {
             return None;
@@ -204,6 +258,22 @@ impl CsrWithProperties {
             .collect();
         if resolved.len() != predicates.len() {
             return Vec::new();
+        }
+        // Zone-map short-circuit: every merged range must overlap its
+        // column bounds, else no row can match. Bounds only widen and row
+        // matching uses the same ordering, so a disjoint range provably
+        // matches nothing at any snapshot timestamp. Columns without
+        // recorded bounds (all-null columns included) are skipped: their
+        // rows still go through the cell filter below.
+        {
+            let ranges = crate::cursor::ScanPredicate::merged_ranges(predicates);
+            for range in &ranges {
+                if let Some((min, max)) = self.prune_bounds(&range.column) {
+                    if !range.overlaps(&min, &max) {
+                        return Vec::new();
+                    }
+                }
+            }
         }
         match candidates {
             Some(ids) => ids

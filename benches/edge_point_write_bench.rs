@@ -109,7 +109,9 @@ fn measure_single(persistent: bool, edges: &[Edge]) -> f64 {
             .expect("setup vertices");
         let start = Instant::now();
         for edge in edges {
-            storage.insert_edge(SPACE, edge.clone()).expect("single edge");
+            storage
+                .insert_edge(SPACE, edge.clone())
+                .expect("single edge");
         }
         black_box(());
         start.elapsed().as_secs_f64() * 1000.0

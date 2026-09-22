@@ -85,7 +85,7 @@ impl EdgeStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::edge::{EdgeSchema, EdgeStrategy, RecordForm};
+    use crate::edge::{EdgeRecord, EdgeSchema, EdgeStrategy, RecordForm};
     use crate::types::StoragePropertyDef;
     use graphdb_core::types::{DataType, Timestamp, VertexId};
     use graphdb_core::Value;
@@ -214,6 +214,30 @@ mod tests {
         let table = sample_table();
         assert!(table.freeze_feasibility(true, 0).is_ready());
         assert!(!table.freeze_feasibility(true, 41).is_ready());
+    }
+
+    #[test]
+    fn valued_bundled_freeze_fails_without_state_change() {
+        use crate::edge::RecordFormPreference;
+        let config = EdgeTableConfig {
+            record_form: RecordFormPreference::Auto,
+            ..Default::default()
+        };
+        let mut bundled =
+            EdgeStore::with_config(frozen_test_schema(), config).expect("bundled table builds");
+        assert_eq!(bundled.schema().record_form, RecordForm::Bundled);
+        bundled
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .expect("valued insert");
+        let before: Vec<EdgeRecord> =
+            crate::edge::edge_table::iterator::EdgeTableScanIterator::new(&bundled, 200).collect();
+        assert_eq!(before.len(), 1);
+        assert!(bundled.freeze_group(true, 0, Timestamp::MAX, 0.0).is_err());
+        assert!(!bundled.out_csr.is_frozen(0));
+        let after: Vec<EdgeRecord> =
+            crate::edge::edge_table::iterator::EdgeTableScanIterator::new(&bundled, 200).collect();
+        assert_eq!(after.len(), before.len());
+        assert_eq!(after[0].properties, before[0].properties);
     }
 
     #[test]

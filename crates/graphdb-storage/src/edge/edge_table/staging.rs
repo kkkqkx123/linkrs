@@ -23,7 +23,17 @@
 //! rejects such residue fail-closed. Large fanouts (for example deleting
 //! every edge of a high-degree vertex) commit as one batch with the same
 //! all-or-nothing guarantee; a mid-batch failure rolls the applied prefix
-//! back instead of leaving a half-deleted graph. Batches holding tens of
+//! back instead of leaving a half-deleted graph.
+//
+//! Commit organization: the apply stays one serialized pass under the
+//! single-writer discipline, but reservation and observability are
+//! group-local. `reserve_topology_for_inserts` sizes each touched row once at
+//! the packed density target (`PACKED_CSR_DENSITY = 0.8`, fixed with no
+//! tunable set), and `staging_group_plan` plus `write_contention_snapshot`
+//! expose the per-owner split and the write skew. The skew snapshot is the
+//! contention benchmark gate: partitioned lock-free applies or vertex-level
+//! locks are only introduced when it proves a bottleneck with measured data,
+//! never speculatively. Batches holding tens of
 //! thousands of entries are correct but hold the table lock for the whole
 //! apply, so callers with very large fanouts should chunk explicitly and
 //! treat each chunk as its own atomic unit.

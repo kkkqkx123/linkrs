@@ -290,6 +290,12 @@ pub trait MutableCsrTrait: CsrBase {
     /// Returns the number of removed entries. Reported removals flow through
     /// `on_edge_removed` so tombstone promotion stays centralized.
     /// Strategies without per-row fragmentation default to no-op.
+    ///
+    /// Mutable-row entry only: production reclaim of frozen rows must go
+    /// through the group-batched entries (one linear pass for any number of
+    /// rows) instead of one call per row. Frozen implementations keep this
+    /// entry for offline and single-row tooling; every production trigger
+    /// dispatches frozen groups to the batched path before reaching here.
     fn compact_vertex_with_reporting(
         &mut self,
         _vid: u32,

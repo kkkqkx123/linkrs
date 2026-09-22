@@ -47,9 +47,7 @@ pub mod wal;
 
 // Re-export commonly used types
 pub use config::EdgeTableConfig;
-pub use core::{
-    EdgeIndexStatus, EdgeStore, IncidentDeletedEdge, UpdateEdgePropertyByKeyParams,
-};
+pub use core::{EdgeIndexStatus, EdgeStore, IncidentDeletedEdge, UpdateEdgePropertyByKeyParams};
 pub use iterator::{AdjacencyBatchAccessor, EdgeTableScanIterator, DEFAULT_ADJACENCY_BATCH};
 pub use record_form::MigrateStats;
 pub use staging::{EdgeStagingBatch, StagedDelete, StagedInsert};

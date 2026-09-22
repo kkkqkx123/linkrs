@@ -359,3 +359,183 @@ fn test_hot_groups_rank_owner_groups_by_write_volume() {
     assert_eq!(table.hot_groups(1), vec![(home, 2)]);
     assert_eq!(table.hot_groups(0).len(), 2);
 }
+
+#[test]
+fn batch_projection_matches_point_lookups() {
+    use crate::edge::{EdgeSchema, RecordForm};
+    use crate::types::StoragePropertyDef;
+    use graphdb_core::types::DataType;
+    let schema = EdgeSchema {
+        label_id: 0,
+        label_name: "knows".to_string(),
+        src_label: 0,
+        dst_label: 0,
+        properties: vec![
+            StoragePropertyDef {
+                name: "weight".to_string(),
+                data_type: DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            },
+            StoragePropertyDef {
+                name: "score".to_string(),
+                data_type: DataType::Int,
+                nullable: true,
+                default_value: None,
+            },
+        ],
+        oe_strategy: crate::edge::EdgeStrategy::Multiple,
+        ie_strategy: crate::edge::EdgeStrategy::Multiple,
+        schema_version: 1,
+        record_form: RecordForm::default(),
+    };
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table
+        .insert_edge(
+            0,
+            1,
+            0,
+            &[
+                ("weight".to_string(), Value::Double(1.5)),
+                ("score".to_string(), Value::Int(7)),
+            ],
+            100,
+        )
+        .unwrap();
+    table
+        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
+        .unwrap();
+    table
+        .insert_edge(0, 3, 0, &[("weight".to_string(), Value::Double(3.5))], 100)
+        .unwrap();
+    assert!(table.delete_edge(0, 2, 0, 300).unwrap());
+
+    // Visible edges at 400: (0,1) with both columns, (0,3) with the
+    // nullable column absent. The deleted edge stays out of the batch.
+    let ids: Vec<EdgeId> = [(0u32, 1u32), (0, 3)]
+        .iter()
+        .map(|(src, dst)| {
+            table
+                .edge_id_of(*src, *dst, 0, 400)
+                .expect("visible edge id")
+        })
+        .collect();
+    let batch = table.properties_for_edge_projected_columnar_batch_assume_visible(&ids, 400, None);
+    assert_eq!(batch.len(), 2);
+    for (i, (src, dst)) in [(0u32, 1u32), (0, 3)].iter().enumerate() {
+        let point = table.get_edge(*src, *dst, 0, 400).expect("point lookup");
+        assert_eq!(batch[i], point.properties);
+    }
+    assert_eq!(batch[0].len(), 2);
+    assert_eq!(batch[1].len(), 1);
+
+    // Projection subset resolves once for the whole batch.
+    let subset = table.properties_for_edge_projected_columnar_batch_assume_visible(
+        &ids,
+        400,
+        Some(&["score".to_string()]),
+    );
+    assert_eq!(subset.len(), 2);
+    assert!(subset[0].iter().any(|(name, _)| name == "score"));
+    assert!(subset[1].is_empty());
+
+    // Empty projection decodes nothing; unmapped edges decode to empty,
+    // mirroring the single-edge contract.
+    let empty =
+        table.properties_for_edge_projected_columnar_batch_assume_visible(&ids, 400, Some(&[]));
+    assert!(empty.iter().all(|props| props.is_empty()));
+    let mut with_ghost = ids.clone();
+    with_ghost.push(EdgeId(999_999));
+    let ghost =
+        table.properties_for_edge_projected_columnar_batch_assume_visible(&with_ghost, 400, None);
+    assert_eq!(ghost.len(), 3);
+    assert!(ghost[2].is_empty());
+}
+
+#[test]
+fn predicate_prune_stays_sound_across_stats_rebuild() {
+    use crate::cursor::ScanPredicate;
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(5.0))], 100)
+        .unwrap();
+    table.properties.refresh_column_stats();
+    // Overwrite then rebuild: bounds must keep the old extreme so the
+    // pre-rebuild snapshot still prunes soundly.
+    table
+        .update_edge_property(0, 1, 0, "weight", &Value::Double(100.0), 200)
+        .unwrap();
+    table.properties.refresh_column_stats();
+
+    let covering_old = ScanPredicate::ColumnRange {
+        column: "weight".to_string(),
+        lower: Some(Value::Double(0.0)),
+        upper: Some(Value::Double(10.0)),
+        include_lower: true,
+        include_upper: true,
+    };
+    // Snapshot 150 sees 5.0: a shrinking rebuild would prune this away.
+    let old_hits =
+        table
+            .properties
+            .filter_edge_ids_by_predicates(&[covering_old.clone()], 150, None);
+    assert_eq!(old_hits.len(), 1);
+    // Current snapshot sees 100.0: the old range matches nothing.
+    let new_hits = table
+        .properties
+        .filter_edge_ids_by_predicates(&[covering_old], 250, None);
+    assert!(new_hits.is_empty());
+
+    let covering_new = ScanPredicate::ColumnRange {
+        column: "weight".to_string(),
+        lower: Some(Value::Double(50.0)),
+        upper: Some(Value::Double(150.0)),
+        include_lower: true,
+        include_upper: true,
+    };
+    let current = table
+        .properties
+        .filter_edge_ids_by_predicates(&[covering_new], 250, None);
+    assert_eq!(current.len(), 1);
+
+    // Disjoint range exercises the early return with candidates too.
+    let disjoint = ScanPredicate::ColumnRange {
+        column: "weight".to_string(),
+        lower: Some(Value::Double(1000.0)),
+        upper: Some(Value::Double(2000.0)),
+        include_lower: true,
+        include_upper: true,
+    };
+    let edge_id = table.edge_id_of(0, 1, 0, 250).expect("edge id");
+    assert!(table
+        .properties
+        .filter_edge_ids_by_predicates(&[disjoint], 250, Some(&[edge_id]))
+        .is_empty());
+}
+
+#[test]
+fn fill_many_into_matches_repeated_single_row_fills() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    for dst in 1..=3u32 {
+        table.insert_edge(0, dst, 0, &[], 100).unwrap();
+    }
+    table.insert_edge(1, 7, 0, &[], 100).unwrap();
+    assert!(table.delete_edge(0, 2, 0, 200).unwrap());
+
+    let accessor = table.batch_accessor(true, 300);
+    let mut batched = Vec::new();
+    let mut scratch = Vec::new();
+    accessor.fill_many_into(&[0, 1, 2], &mut batched, &mut scratch);
+
+    let mut repeated = Vec::new();
+    let mut single = Vec::new();
+    for src in [0u32, 1, 2] {
+        accessor.fill_into(src, &mut single);
+        repeated.extend(single.iter().copied());
+    }
+    assert_eq!(batched, repeated);
+    // Row 0 lost (0,2) to the delete, row 2 is empty.
+    assert_eq!(batched.len(), 3);
+}

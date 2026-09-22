@@ -403,6 +403,191 @@ fn test_index_status_snapshot_reports_lag_and_staleness() {
 }
 
 #[test]
+fn test_index_lag_metrics_emit_and_clear_on_rebuild() {
+    use graphdb_metrics::{MetricType, StatsManager};
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    let stats = std::sync::Arc::new(StatsManager::new());
+    table.set_stats_manager(stats.clone());
+    table.enable_property_index(1024).unwrap();
+    table.report_index_status();
+    assert_eq!(
+        stats
+            .get_value(MetricType::EdgeIndexLag)
+            .unwrap_or(u64::MAX),
+        0
+    );
+    let _ = table.note_index_result(
+        "weight",
+        Err(graphdb_core::StorageError::db_error(
+            "injected index failure",
+        )),
+        1,
+    );
+    table.report_index_status();
+    assert_eq!(stats.get_value(MetricType::EdgeIndexLag).unwrap_or(0), 1);
+    assert!(table.rebuild_index_if_needed(1, 0).unwrap());
+    assert_eq!(stats.get_value(MetricType::EdgeIndexLag).unwrap_or(1), 0);
+    assert_eq!(table.index_lag(), 0);
+    assert!(table.is_index_usable());
+}
+
+#[test]
+fn test_multi_equality_intersection_matches_full_scan() {
+    use crate::cursor::ScanPredicate;
+    use crate::edge::EdgeSchema;
+    let schema = EdgeSchema {
+        label_id: 0,
+        label_name: "rated".to_string(),
+        src_label: 0,
+        dst_label: 0,
+        properties: vec![
+            StoragePropertyDef {
+                name: "weight".to_string(),
+                data_type: DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            },
+            StoragePropertyDef {
+                name: "tag".to_string(),
+                data_type: DataType::Int,
+                nullable: false,
+                default_value: Some(Value::Int(0)),
+            },
+        ],
+        oe_strategy: EdgeStrategy::Multiple,
+        ie_strategy: EdgeStrategy::Multiple,
+        schema_version: 1,
+        record_form: RecordForm::default(),
+    };
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    for (dst, weight, tag) in [(1u32, 10.0, 1), (2, 10.0, 2), (3, 20.0, 1), (4, 10.0, 1)] {
+        table
+            .insert_edge(
+                0,
+                dst,
+                0,
+                &[
+                    ("weight".to_string(), Value::Double(weight)),
+                    ("tag".to_string(), Value::Int(tag)),
+                ],
+                100,
+            )
+            .unwrap();
+    }
+    table.enable_property_index(1024).unwrap();
+    let both = vec![
+        ScanPredicate::ColumnEqual {
+            column: "weight".to_string(),
+            value: Value::Double(10.0),
+        },
+        ScanPredicate::ColumnEqual {
+            column: "tag".to_string(),
+            value: Value::Int(1),
+        },
+    ];
+    let indexed = table.filter_edge_ids(&both, 200, None);
+    assert_eq!(indexed.len(), 2);
+    let candidates = table
+        .index_candidate_edge_ids(&both, 200)
+        .expect("equality conjunction must serve from index");
+    assert_eq!(candidates.len(), 2);
+    let single = vec![ScanPredicate::ColumnEqual {
+        column: "weight".to_string(),
+        value: Value::Double(10.0),
+    }];
+    assert_eq!(table.filter_edge_ids(&single, 200, None).len(), 3);
+    let range = vec![ScanPredicate::ColumnRange {
+        column: "weight".to_string(),
+        lower: Some(Value::Double(5.0)),
+        upper: Some(Value::Double(15.0)),
+        include_lower: true,
+        include_upper: true,
+    }];
+    assert!(table.index_candidate_edge_ids(&range, 200).is_none());
+    assert_eq!(table.filter_edge_ids(&range, 200, None).len(), 3);
+    assert!(table.index_candidate_edge_ids(&[], 200).is_none());
+}
+
+#[test]
+fn test_checkpoint_skips_clean_columns_and_rewrites_only_dirty() {
+    use crate::edge::EdgeSchema;
+    let schema = EdgeSchema {
+        label_id: 0,
+        label_name: "rated".to_string(),
+        src_label: 0,
+        dst_label: 0,
+        properties: vec![
+            StoragePropertyDef {
+                name: "weight".to_string(),
+                data_type: DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            },
+            StoragePropertyDef {
+                name: "tag".to_string(),
+                data_type: DataType::Int,
+                nullable: false,
+                default_value: Some(Value::Int(0)),
+            },
+        ],
+        oe_strategy: EdgeStrategy::Multiple,
+        ie_strategy: EdgeStrategy::Multiple,
+        schema_version: 1,
+        record_form: RecordForm::default(),
+    };
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    for dst in 1..=4u32 {
+        table
+            .insert_edge(
+                0,
+                dst,
+                0,
+                &[
+                    ("weight".to_string(), Value::Double(f64::from(dst))),
+                    ("tag".to_string(), Value::Int(dst as i32)),
+                ],
+                100,
+            )
+            .unwrap();
+    }
+    let dir = tempfile::tempdir().expect("temporary edge table directory");
+    table
+        .flush(
+            dir.path(),
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .expect("baseline flush should succeed");
+    let before = table.column_stats_snapshot("tag").expect("tag stats exist");
+    table
+        .update_edge_property(0, 1, 0, "weight", &Value::Double(99.0), 150)
+        .unwrap();
+    table
+        .flush(
+            dir.path(),
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .expect("dirty-column flush should succeed");
+    let after = table
+        .column_stats_snapshot("tag")
+        .expect("tag stats survive");
+    assert_eq!(before.min_value, after.min_value);
+    assert_eq!(before.max_value, after.max_value);
+    assert_eq!(before.row_count, after.row_count);
+    assert!(table.has_edge(0, 1, 0, 200));
+    assert_eq!(
+        table
+            .get_edge(0, 1, 0, 200)
+            .unwrap()
+            .properties
+            .iter()
+            .find(|(k, _)| k == "weight")
+            .map(|(_, v)| v.clone()),
+        Some(Value::Double(99.0))
+    );
+}
+
+#[test]
 fn test_checkpoint_adapts_constant_column_encoding() {
     use crate::edge::EdgeSchema;
     use crate::encoding::EncodingType;

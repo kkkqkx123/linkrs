@@ -61,7 +61,7 @@ impl EdgeStore {
             crate::edge::RecordForm::Pure | crate::edge::RecordForm::Bundled
         ) {
             return Err(StorageError::invalid_operation(
-                "schema change on an inline-form table requires a record-form rebuild (migrate_record_form or switch_record_form_online)".to_string(),
+                crate::edge::INLINE_FORM_SCHEMA_CHANGE_MSG.to_string(),
             ));
         }
         if self.pending_add_column.is_some()

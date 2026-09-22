@@ -199,6 +199,10 @@ impl EdgeStore {
     /// checkpoint after a successful reshard. Vertex ids are unchanged, so
     /// the property index needs no rebuild. Widths outside `1..=20` are
     /// rejected; the current width is a no-op success.
+    ///
+    /// Operation guide: run offline with no other writer, flush with
+    /// `flush_incremental` after success, then reload to verify. The edge
+    /// logical set is unchanged and the audit must report no drift.
     pub fn reshard(&mut self, new_group_bits: u32) -> StorageResult<ReshardStats> {
         crate::edge::node_group::validate_group_bits(new_group_bits)?;
         let old_bits = self.config.node_group_bits;
@@ -628,6 +632,21 @@ mod tests {
         assert_eq!(stats.neighbor_misses, 0);
         assert!(table.get_edge(0, 1, 0, 200).is_some());
         assert_eq!(table.live_authority_orphans(), 0);
+    }
+
+    #[test]
+    fn test_reshard_equal_width_is_noop_success_and_bad_width_rejected() {
+        let mut table = make_table();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        let current = table.config.node_group_bits;
+        let stats = table.reshard(current).expect("equal width must succeed");
+        assert_eq!(stats.old_bits, current);
+        assert_eq!(stats.new_bits, current);
+        assert!(table.get_edge(0, 1, 0, 200).is_some());
+        assert!(table.audit_copy_drift().is_empty());
+        assert!(table.reshard(0).is_err());
+        assert!(table.reshard(21).is_err());
+        assert!(table.get_edge(0, 1, 0, 200).is_some());
     }
 
     #[test]

@@ -208,6 +208,9 @@ pub enum MetricType {
     ImportAcceptedRows,
     // Snapshot cache fallback observability
     SnapshotFallbackCount,
+    // Edge secondary index lag observability
+    EdgeIndexLag,
+    EdgeIndexStaleSecs,
 }
 
 /// Reason a checkpoint was triggered.

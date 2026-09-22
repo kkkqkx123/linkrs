@@ -393,3 +393,60 @@ fn mutable_row_sorted_reflects_insertion_order() {
         .unwrap();
     assert!(!mutable.is_row_sorted(0));
 }
+
+#[test]
+fn batched_frozen_reclaim_matches_per_row_loop() {
+    let mut mutable = MutableCsr::with_capacity(8, 64);
+    mutable
+        .insert_edge(0, packed_endpoint(10, 0), EdgeId(1), 1)
+        .unwrap();
+    mutable
+        .insert_edge(0, packed_endpoint(11, 0), EdgeId(2), 1)
+        .unwrap();
+    mutable
+        .insert_edge(0, packed_endpoint(12, 0), EdgeId(3), 1)
+        .unwrap();
+    mutable.delete_edge(0, EdgeId(3), 5).unwrap();
+    mutable
+        .insert_edge(1, packed_endpoint(20, 0), EdgeId(4), 1)
+        .unwrap();
+    mutable
+        .insert_edge(1, packed_endpoint(21, 0), EdgeId(5), 1)
+        .unwrap();
+    mutable.delete_edge(1, EdgeId(4), 6).unwrap();
+    mutable
+        .insert_edge(2, packed_endpoint(30, 0), EdgeId(6), 1)
+        .unwrap();
+    let cutoff = 9 as Timestamp;
+
+    // Offline single-row loop, one trailing memmove per row.
+    let mut by_row = ImmutableCsr::pack_from_mutable(&mutable);
+    let mut row_reported = Vec::new();
+    let mut row_removed = 0usize;
+    for vid in 0..8u32 {
+        row_removed += by_row.compact_row(vid, cutoff, &mut |id, ts| {
+            row_reported.push((id, ts));
+        });
+    }
+
+    // Production batched path, one linear pass for the listed rows.
+    let mut batched = ImmutableCsr::pack_from_mutable(&mutable);
+    let mut batched_reported = Vec::new();
+    let vids: Vec<u32> = (0..8u32).collect();
+    let batched_removed = batched.compact_rows_batched(&vids, cutoff, &mut |id, ts| {
+        batched_reported.push((id, ts));
+    });
+
+    assert_eq!(row_removed, 2);
+    assert_eq!(batched_removed, row_removed);
+    assert_eq!(batched_reported, row_reported);
+    assert_eq!(batched.edge_count(), by_row.edge_count());
+    for vid in 0..8u32 {
+        assert_eq!(
+            batched.physical_edges_of(vid),
+            by_row.physical_edges_of(vid),
+            "row {} diverges",
+            vid
+        );
+    }
+}

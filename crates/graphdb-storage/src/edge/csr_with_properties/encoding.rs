@@ -49,6 +49,46 @@ impl CsrWithProperties {
         })
     }
 
+    /// Global min/max bounds of one column for predicate pushdown pruning.
+    ///
+    /// Merges the per-chunk zone bounds with the same comparison used to
+    /// widen them. Bounds only ever widen (rebuilds never shrink), so they
+    /// contain every non-null value any snapshot can still observe through
+    /// a version chain, and pruning against them is sound for any snapshot
+    /// timestamp. `None` when the column is absent or holds no recorded
+    /// bounds (all-null columns included): callers must scan instead of
+    /// pruning.
+    pub fn prune_bounds(&self, column: &str) -> Option<(Value, Value)> {
+        let col = self
+            .column_index
+            .get(column)
+            .and_then(|&idx| self.property_columns.get(idx))?;
+        let mut min: Option<Value> = None;
+        let mut max: Option<Value> = None;
+        for zone in col.zone_maps() {
+            if let Some(v) = &zone.min {
+                match &min {
+                    Some(cur)
+                        if crate::vertex::column::compare_values(cur, v)
+                            != std::cmp::Ordering::Greater => {}
+                    _ => min = Some(v.clone()),
+                }
+            }
+            if let Some(v) = &zone.max {
+                match &max {
+                    Some(cur)
+                        if crate::vertex::column::compare_values(cur, v)
+                            != std::cmp::Ordering::Less => {}
+                    _ => max = Some(v.clone()),
+                }
+            }
+        }
+        match (min, max) {
+            (Some(lower), Some(upper)) => Some((lower, upper)),
+            _ => None,
+        }
+    }
+
     /// Encoding applied to one property column, if the column exists.
     pub fn column_encoding_type(&self, column: &str) -> Option<crate::encoding::EncodingType> {
         self.column_index

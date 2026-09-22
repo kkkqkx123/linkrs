@@ -86,18 +86,39 @@ impl EdgeStore {
         }
     }
 
+    /// Emit the current lag snapshot into the shared metrics registry.
+    ///
+    /// Gauge caliber: overwrites the last values so idle polls keep them
+    /// fresh. Call on a timer even without writes; the write path only
+    /// refreshes these counters on commits and rebuilds.
+    pub fn emit_index_lag_metrics(&self) {
+        let Some(stats) = &self.stats_manager else {
+            return;
+        };
+        stats.set_value(graphdb_metrics::MetricType::EdgeIndexLag, self.index_lag());
+        stats.set_value(
+            graphdb_metrics::MetricType::EdgeIndexStaleSecs,
+            self.index_stale_secs(),
+        );
+    }
+
     /// Log-and-return observability report for the secondary index.
     ///
     /// Read-only. Warns once per poll while lagged so a long BestEffort lag
     /// is noticeable; Strong mode still fails the primary write at write
     /// time and is reserved for small-cardinality critical attributes.
+    /// Also refreshes the lag gauges so threshold alerts can poll metrics.
     pub fn report_index_status(&self) -> EdgeIndexStatus {
         let status = self.index_status();
+        self.emit_index_lag_metrics();
         if status.enabled && status.lag > 0 {
             log::warn!(
                 "edge table '{}' secondary index lagged: lag={} stale_secs={} consistency={:?}; \
                 queries fall back to segment scans until a rebuild restores serving",
-                self.label_name, status.lag, status.stale_secs, status.consistency,
+                self.label_name,
+                status.lag,
+                status.stale_secs,
+                status.consistency,
             );
         }
         status
@@ -153,22 +174,27 @@ impl EdgeStore {
     /// last build so automatic maintenance needs no caller capacity. This is
     /// the shared background rebuild task: both the write-path auto
     /// maintenance and idle-time timer passes call here, so lag clears
-    /// without new writes once the policy trips.
+    /// without new writes once the policy trips. Refreshes the lag gauges
+    /// on both paths so alerts clear together with the lag.
     pub fn rebuild_index_if_needed(
         &mut self,
         failure_threshold: u64,
         max_stale_secs: u64,
     ) -> StorageResult<bool> {
         if !self.index_needs_rebuild(failure_threshold, max_stale_secs) {
+            self.emit_index_lag_metrics();
             return Ok(false);
         }
         let lag_before = self.index_lag();
         let stale_before = self.index_stale_secs();
         let capacity = self.index_pool_capacity;
         self.build_property_index(capacity)?;
+        self.emit_index_lag_metrics();
         log::info!(
             "edge table '{}' rebuilt secondary index: cleared lag={} stale_secs={}",
-            self.label_name, lag_before, stale_before,
+            self.label_name,
+            lag_before,
+            stale_before,
         );
         Ok(true)
     }
@@ -199,7 +225,9 @@ impl EdgeStore {
             log::warn!(
                 "edge table '{}' secondary index started lagging on '{}' (consistency {:?}); \
                 queries fall back to segment scans until a rebuild",
-                self.label_name, prop_name, self.index_consistency,
+                self.label_name,
+                prop_name,
+                self.index_consistency,
             );
         }
         if let Some(stats) = &self.stats_manager {
@@ -278,7 +306,9 @@ impl EdgeStore {
     /// Serves only every-equality conjunctions whose columns all carry an
     /// index, and only while the index carries no write lag since the last
     /// rebuild baseline: any lag falls back to the segment path instead of
-    /// risking dropped hits. Stale entries resolve through the
+    /// risking dropped hits. Multiple equalities intersect per-column hit
+    /// sets; range predicates never serve from this path and fall back to
+    /// the segment scan. Stale entries resolve through the
     /// visibility authority, and the caller verifies every candidate back
     /// against the property columns.
     pub(crate) fn index_candidate_edge_ids(
@@ -286,6 +316,9 @@ impl EdgeStore {
         predicates: &[ScanPredicate],
         query_ts: Timestamp,
     ) -> Option<Vec<EdgeId>> {
+        if predicates.is_empty() {
+            return None;
+        }
         let index = self.property_index.as_ref()?;
         if !self.is_index_usable() {
             return None;
@@ -369,6 +402,7 @@ impl EdgeStore {
         } else {
             None
         };
+        self.emit_index_lag_metrics();
         if build_failures > 0 {
             log::debug!(
                 "build_property_index: {} secondary writes failed, lag counter carries them",

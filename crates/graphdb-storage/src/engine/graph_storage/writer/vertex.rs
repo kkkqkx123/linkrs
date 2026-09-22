@@ -493,9 +493,7 @@ pub(crate) fn batch_delete_vertices_with_edges(
 
     // Phase 1: Cascade-delete edges for all vertices across all edge types.
     for edge_info in &edge_types {
-        if let Err(error) =
-            batch_delete_incident_edges_of_type(ctx, space_id, ids, edge_info, ts)
-        {
+        if let Err(error) = batch_delete_incident_edges_of_type(ctx, space_id, ids, edge_info, ts) {
             ctx.abort_write_timestamp(ts);
             return Err(error);
         }

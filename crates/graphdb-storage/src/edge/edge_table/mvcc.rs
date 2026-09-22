@@ -59,8 +59,8 @@ impl AuthorityMap {
         if seg >= self.segments.len() {
             self.segments.resize_with(seg + 1, || None);
         }
-        let segment = self.segments[seg]
-            .get_or_insert_with(|| Box::new([None; Self::SEGMENT_ROWS]));
+        let segment =
+            self.segments[seg].get_or_insert_with(|| Box::new([None; Self::SEGMENT_ROWS]));
         if segment[off].is_none() {
             self.live += 1;
         }
@@ -143,7 +143,9 @@ impl AuthorityMap {
     pub fn memory_bytes(&self) -> usize {
         self.segments.capacity()
             * std::mem::size_of::<Option<Box<[Option<EdgeTimestamps>; 1024]>>>()
-            + self.allocated_segments() * Self::SEGMENT_ROWS * std::mem::size_of::<Option<EdgeTimestamps>>()
+            + self.allocated_segments()
+                * Self::SEGMENT_ROWS
+                * std::mem::size_of::<Option<EdgeTimestamps>>()
     }
 
     fn truncate_empty_tail_segments(&mut self) {
@@ -162,10 +164,7 @@ impl AuthorityMap {
         out.clear();
         out.reserve(edge_ids.len());
         for id in edge_ids {
-            out.push(
-                self.get(id)
-                    .is_some_and(|ts_info| ts_info.is_alive_at(ts)),
-            );
+            out.push(self.get(id).is_some_and(|ts_info| ts_info.is_alive_at(ts)));
         }
     }
 

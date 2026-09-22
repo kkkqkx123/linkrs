@@ -304,3 +304,225 @@ fn test_insert_edges_batch_on_empty_table_rejects_without_residue() {
     table.insert_edges_batch(&clean).unwrap();
     assert_eq!(table.edge_id_of(0, 1, 0, 150).unwrap().0, 0);
 }
+
+#[test]
+fn test_insert_edges_batch_on_empty_bundled_table_matches_staging_effects() {
+    use crate::edge::{EdgeSchema, RecordForm, RecordFormPreference};
+    use crate::types::StoragePropertyDef;
+    use graphdb_core::types::DataType;
+    use graphdb_core::Value;
+    fn bundled_schema() -> EdgeSchema {
+        EdgeSchema {
+            label_id: 0,
+            label_name: "link".to_string(),
+            src_label: 0,
+            dst_label: 0,
+            properties: vec![StoragePropertyDef {
+                name: "weight".to_string(),
+                data_type: DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            }],
+            oe_strategy: EdgeStrategy::Multiple,
+            ie_strategy: EdgeStrategy::Multiple,
+            schema_version: 1,
+            record_form: RecordForm::default(),
+        }
+    }
+    fn bundled_config() -> EdgeTableConfig {
+        EdgeTableConfig {
+            record_form: RecordFormPreference::Auto,
+            ..Default::default()
+        }
+    }
+    let weight = |v: f64| vec![("weight".to_string(), Value::Double(v))];
+    let w1 = weight(1.0);
+    let w2 = weight(2.0);
+
+    // Bulk path through the batch router: empty table, zero ranks.
+    let mut bulk = EdgeTable::with_config(bundled_schema(), bundled_config()).unwrap();
+    assert_eq!(bulk.schema.record_form, RecordForm::Bundled);
+    let entries: Vec<crate::edge::BatchInsertEntry> = vec![
+        (0, 1, 0, w1.as_slice(), 100),
+        (0, 2, 0, w2.as_slice(), 110),
+        (0, 3, 0, [].as_slice(), 120),
+    ];
+    bulk.insert_edges_batch(&entries).unwrap();
+    assert_eq!(bulk.schema.record_form, RecordForm::Bundled);
+
+    // Same payload through per-edge staging commits.
+    let mut staged = EdgeTable::with_config(bundled_schema(), bundled_config()).unwrap();
+    staged.insert_edge(0, 1, 0, &w1, 100).unwrap();
+    staged.insert_edge(0, 2, 0, &w2, 110).unwrap();
+    staged.insert_edge(0, 3, 0, &[], 120).unwrap();
+
+    // Same logical content: per-edge timestamps, inline values, NULL
+    // reading as absent, contiguous ids from zero.
+    for (dst, ts) in [(1u32, 100u64), (2, 110), (3, 120)] {
+        assert!(bulk.has_edge(0, dst, 0, 150));
+        assert!(!bulk.has_edge(0, dst, 0, ts - 1));
+        assert_eq!(
+            bulk.get_edge(0, dst, 0, 150).unwrap().properties,
+            staged.get_edge(0, dst, 0, 150).unwrap().properties
+        );
+        assert_eq!(
+            bulk.edge_id_of(0, dst, 0, 150).unwrap().0,
+            staged.edge_id_of(0, dst, 0, 150).unwrap().0
+        );
+    }
+    let null_props = bulk.get_edge(0, 3, 0, 150).unwrap().properties;
+    assert!(null_props.is_empty());
+    let mut ids: Vec<u64> = (1..=3u32)
+        .map(|dst| bulk.edge_id_of(0, dst, 0, 150).unwrap().0)
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![0, 1, 2]);
+
+    // Follow-up batch on the now non-empty table commits through staging.
+    let w9 = weight(9.0);
+    let more: Vec<crate::edge::BatchInsertEntry> = vec![(0, 4, 0, w9.as_slice(), 160)];
+    bulk.insert_edges_batch(&more).unwrap();
+    assert!(bulk.has_edge(0, 4, 0, 200));
+    assert_eq!(bulk.schema.record_form, RecordForm::Bundled);
+}
+
+#[test]
+fn test_bundled_bulk_import_rejects_nonempty_and_ranked_batches() {
+    use crate::edge::{EdgeSchema, RecordForm, RecordFormPreference};
+    use crate::types::StoragePropertyDef;
+    use graphdb_core::types::DataType;
+    use graphdb_core::Value;
+    let schema = EdgeSchema {
+        label_id: 0,
+        label_name: "link".to_string(),
+        src_label: 0,
+        dst_label: 0,
+        properties: vec![StoragePropertyDef {
+            name: "weight".to_string(),
+            data_type: DataType::Double,
+            nullable: false,
+            default_value: Some(Value::Double(0.0)),
+        }],
+        oe_strategy: EdgeStrategy::Multiple,
+        ie_strategy: EdgeStrategy::Multiple,
+        schema_version: 1,
+        record_form: RecordForm::default(),
+    };
+    let config = EdgeTableConfig {
+        record_form: RecordFormPreference::Auto,
+        ..Default::default()
+    };
+    let props = vec![("weight".to_string(), Value::Double(1.0))];
+
+    // Non-empty bundled tables keep the original empty-table rejection.
+    let mut table = EdgeTable::with_config(schema, config).unwrap();
+    assert_eq!(table.schema.record_form, RecordForm::Bundled);
+    table.insert_edge(0, 1, 0, &props, 100).unwrap();
+    let one: Vec<crate::edge::BatchInsertEntry> = vec![(0, 2, 0, props.as_slice(), 110)];
+    let err = table.bulk_import_edges(&one).unwrap_err();
+    assert!(err.to_string().contains("requires an empty table"));
+
+    // Ranked batches keep the original bundled rejection on the direct
+    // import. The staging router rejects them too: the bundled topology
+    // pins rank to zero, so a nonzero rank never commits on any path.
+    let schema2 = table.schema.clone();
+    let config2 = EdgeTableConfig {
+        record_form: RecordFormPreference::Auto,
+        ..Default::default()
+    };
+    let mut ranked = EdgeTable::with_config(schema2, config2).unwrap();
+    assert_eq!(ranked.schema.record_form, RecordForm::Bundled);
+    let ranked_entries: Vec<crate::edge::BatchInsertEntry> = vec![(0, 1, 5, props.as_slice(), 100)];
+    let err = ranked.bulk_import_edges(&ranked_entries).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("inline values ride the value column"));
+    assert_eq!(ranked.edge_count(), 0);
+    let err = ranked.insert_edges_batch(&ranked_entries).unwrap_err();
+    assert!(err.to_string().contains("rank must be 0"));
+    assert_eq!(ranked.edge_count(), 0);
+}
+
+#[test]
+fn test_staging_group_plan_splits_cross_group_batch_and_keeps_atomicity() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    let mut batch = EdgeTable::staging_batch();
+    batch.stage_insert(0, 1, 0, &[], 100);
+    batch.stage_insert(5000, 6000, 0, &[], 100);
+    batch.stage_delete(1, 2, 0, 110);
+    let plan = table.staging_group_plan(&batch);
+    assert_eq!(plan.len(), 2);
+    let inserts: usize = plan.values().map(|(ins, _)| *ins).sum();
+    let deletes: usize = plan.values().map(|(_, del)| *del).sum();
+    assert_eq!(inserts, 2);
+    assert_eq!(deletes, 1);
+
+    let mut good = EdgeTable::staging_batch();
+    good.stage_insert(0, 1, 0, &[], 100);
+    good.stage_insert(5000, 6000, 0, &[], 100);
+    let applied = table.commit_staging_batch(good).unwrap();
+    assert_eq!(applied, 2);
+    assert!(table.has_edge(0, 1, 0, 200));
+    assert!(table.has_edge(5000, 6000, 0, 200));
+    let (groups, total, max, skew) = table.write_contention_snapshot();
+    assert!(groups >= 2);
+    assert_eq!(total, 2);
+    assert_eq!(max, 1);
+    assert!((skew - 1.0).abs() < 1e-9);
+    assert_eq!(table.live_authority_orphans(), 0);
+    assert_eq!(table.loaded_copy_mismatches(), (0, 0));
+
+    let mut bad = EdgeTable::staging_batch();
+    bad.stage_insert(0, 2, 0, &[], 110);
+    bad.stage_insert(5000, 6001, 0, &[], 110);
+    bad.stage_insert(0, 1, 0, &[], 110);
+    assert!(table.commit_staging_batch(bad).is_err());
+    assert!(!table.has_edge(0, 2, 0, 200));
+    assert!(!table.has_edge(5000, 6001, 0, 200));
+    assert!(table.has_edge(0, 1, 0, 200));
+}
+
+#[test]
+fn test_write_contention_snapshot_is_empty_before_commits() {
+    let schema = create_test_schema();
+    let table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    assert_eq!(table.write_contention_snapshot(), (0, 0, 0, 1.0));
+}
+
+#[test]
+fn test_inline_form_schema_change_reports_shared_guidance() {
+    use crate::edge::{EdgeSchema, RecordForm, RecordFormPreference};
+    use crate::types::StoragePropertyDef;
+    use graphdb_core::types::DataType;
+    use graphdb_core::Value;
+    let schema = EdgeSchema {
+        label_id: 0,
+        label_name: "link".to_string(),
+        src_label: 0,
+        dst_label: 0,
+        properties: vec![StoragePropertyDef {
+            name: "weight".to_string(),
+            data_type: DataType::Double,
+            nullable: false,
+            default_value: Some(Value::Double(0.0)),
+        }],
+        oe_strategy: EdgeStrategy::Multiple,
+        ie_strategy: EdgeStrategy::Multiple,
+        schema_version: 1,
+        record_form: RecordForm::default(),
+    };
+    let config = EdgeTableConfig {
+        record_form: RecordFormPreference::Auto,
+        ..Default::default()
+    };
+    let mut table = EdgeTable::with_config(schema, config).unwrap();
+    assert_eq!(table.schema.record_form, RecordForm::Bundled);
+    let shared = crate::edge::INLINE_FORM_SCHEMA_CHANGE_MSG;
+    let add_err = table
+        .prepare_add_property("extra".to_string(), DataType::Int, true, None)
+        .unwrap_err();
+    assert_eq!(add_err.message(), shared);
+    let drop_err = table.prepare_drop_property("weight").unwrap_err();
+    assert_eq!(drop_err.message(), shared);
+}

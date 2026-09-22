@@ -50,6 +50,26 @@ impl EdgeWalDiagnosis {
     }
 }
 
+/// Offline repair report for one torn-tail truncation.
+///
+/// The load path stays fail-closed: a torn tail rejects the open and never
+/// truncates silently. Repair is an explicit offline step that only runs
+/// while no writer holds the table, and every call logs before and after so
+/// the salvaged prefix and the discarded tail stay observable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EdgeWalRepairReport {
+    /// Total file size before repair in bytes.
+    pub file_bytes: u64,
+    /// End offset of the last valid entry; the truncation point used.
+    pub valid_bytes: u64,
+    /// Operations in the salvaged valid prefix.
+    pub valid_ops: usize,
+    /// Trailing bytes discarded past the valid prefix.
+    pub torn_bytes: u64,
+    /// Whether any byte was discarded.
+    pub repaired: bool,
+}
+
 /// Logical redo operation for one committed edge write.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) enum EdgeWalOp {
@@ -139,16 +159,12 @@ fn scan_prefix(bytes: &[u8]) -> (usize, usize, Option<String>) {
                 )),
             );
         }
-        let len =
-            u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
+        let len = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
         if len == 0 || len > MAX_ENTRY_LEN {
             return (
                 offset,
                 ops,
-                Some(format!(
-                    "invalid entry length {} at offset {}",
-                    len, offset
-                )),
+                Some(format!("invalid entry length {} at offset {}", len, offset)),
             );
         }
         if remaining - 8 < len {
@@ -163,9 +179,7 @@ fn scan_prefix(bytes: &[u8]) -> (usize, usize, Option<String>) {
                 )),
             );
         }
-        if let Err(e) =
-            postcard::from_bytes::<EdgeWalOp>(&bytes[offset + 8..offset + 8 + len])
-        {
+        if let Err(e) = postcard::from_bytes::<EdgeWalOp>(&bytes[offset + 8..offset + 8 + len]) {
             return (
                 offset,
                 ops,
@@ -319,6 +333,42 @@ pub fn discard_torn_tail(dir: &Path) -> StorageResult<usize> {
     Ok(salvaged)
 }
 
+/// Offline repair with a full before/after report.
+///
+/// Same explicit offline contract as [`discard_torn_tail`]: the load path
+/// never calls this, the switch defaults to reject (read fails closed), and
+/// only an explicit operator call truncates. Diagnoses first for the
+/// read-only truncation point, truncates at the last valid entry, then logs
+/// the salvaged prefix and the discarded tail with exact byte counts.
+pub fn discard_torn_tail_reported(dir: &Path) -> StorageResult<EdgeWalRepairReport> {
+    let diagnosis = diagnose_ops(dir)?;
+    let salvaged = discard_torn_tail(dir)?;
+    debug_assert_eq!(salvaged, diagnosis.valid_ops);
+    let report = EdgeWalRepairReport {
+        file_bytes: diagnosis.file_bytes,
+        valid_bytes: diagnosis.valid_bytes,
+        valid_ops: diagnosis.valid_ops,
+        torn_bytes: diagnosis.torn_bytes,
+        repaired: diagnosis.has_torn_tail,
+    };
+    if report.repaired {
+        log::warn!(
+            "edge WAL repair report: file_bytes={} valid_bytes={} valid_ops={} torn_bytes={} discarded",
+            report.file_bytes,
+            report.valid_bytes,
+            report.valid_ops,
+            report.torn_bytes,
+        );
+    } else {
+        log::debug!(
+            "edge WAL repair report: clean log file_bytes={} valid_ops={}",
+            report.file_bytes,
+            report.valid_ops,
+        );
+    }
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,5 +469,35 @@ mod tests {
         assert!(!diagnosis.has_torn_tail);
         assert_eq!(diagnosis.valid_ops, 0);
         assert_eq!(diagnosis.file_bytes, 0);
+    }
+
+    #[test]
+    fn reported_repair_defaults_to_reject_and_repairs_only_when_explicit() {
+        let dir = tempfile::tempdir().expect("temporary WAL directory");
+        append_ops(dir.path(), &wal_ops()).expect("append succeeds");
+        let clean = discard_torn_tail_reported(dir.path()).expect("clean repair reports");
+        assert!(!clean.repaired);
+        assert_eq!(clean.valid_ops, wal_ops().len());
+        assert_eq!(clean.torn_bytes, 0);
+        {
+            use std::io::Write as _;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(wal_path(dir.path()))
+                .expect("WAL opens for damage injection");
+            file.write_all(&[0x09, 0x00]).expect("partial length lands");
+        }
+        assert!(read_ops(dir.path()).is_err());
+        let report = discard_torn_tail_reported(dir.path()).expect("explicit repair reports");
+        assert!(report.repaired);
+        assert_eq!(report.valid_ops, wal_ops().len());
+        assert_eq!(report.torn_bytes, 2);
+        assert_eq!(report.valid_bytes + report.torn_bytes, report.file_bytes);
+        assert_eq!(
+            read_ops(dir.path())
+                .expect("load succeeds after explicit repair")
+                .len(),
+            wal_ops().len()
+        );
     }
 }

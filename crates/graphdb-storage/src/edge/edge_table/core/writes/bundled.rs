@@ -7,7 +7,7 @@ use graphdb_core::{StorageError, StorageResult, Value};
 impl EdgeStore {
     /// Validate one staged insert against the bundled single-property shape
     /// and encode it to its storage word (`None` for NULL/absent).
-    fn convert_bundled_value(
+    pub(super) fn convert_bundled_value(
         &self,
         property_values: &[(String, Value)],
     ) -> StorageResult<Option<u64>> {
@@ -38,7 +38,7 @@ impl EdgeStore {
     }
 
     /// Decode one stored inline word back to its indexed pair.
-    fn bundled_index_pair(&self, inline_value: Option<u64>) -> Option<(String, Value)> {
+    pub(super) fn bundled_index_pair(&self, inline_value: Option<u64>) -> Option<(String, Value)> {
         let raw = inline_value?;
         let prop = self.schema.properties.first()?;
         Some((prop.name.clone(), decode_scalar(raw, &prop.data_type)))

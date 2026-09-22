@@ -42,6 +42,18 @@ impl EdgeStore {
         super::super::wal::discard_torn_tail(path.as_ref())
     }
 
+    /// Explicit offline WAL repair with a full before/after report.
+    ///
+    /// Same fail-closed contract as [`Self::repair_edge_wal_at`]: the load
+    /// path defaults to reject, only this explicit call truncates, and the
+    /// returned report carries the salvaged prefix plus the discarded tail
+    /// byte counts with diagnostic logs on both sides.
+    pub fn repair_edge_wal_at_reported<P: AsRef<std::path::Path>>(
+        path: P,
+    ) -> StorageResult<super::super::wal::EdgeWalRepairReport> {
+        super::super::wal::discard_torn_tail_reported(path.as_ref())
+    }
+
     /// Read-only WAL diagnosis for this table's log directory.
     ///
     /// Fails when the table has no checkpoint directory yet, when redo has no

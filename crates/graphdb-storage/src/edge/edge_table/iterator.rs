@@ -137,6 +137,24 @@ impl<'a> AdjacencyBatchAccessor<'a> {
         });
         found
     }
+
+    /// Fill a caller buffer with the visible neighbors of many rows.
+    ///
+    /// Multi-row fan-out sharing one staging buffer: each row stages into
+    /// `scratch` (reused across rows, never reallocated per row) and the
+    /// survivors append to `out` in row order. Missing legs contribute
+    /// nothing. Topology only; properties still decode on demand.
+    pub fn fill_many_into(&self, srcs: &[u32], out: &mut Vec<Nbr>, scratch: &mut Vec<Nbr>) {
+        out.clear();
+        if !self.table.is_direction_available(self.outgoing) {
+            return;
+        }
+        let csr = self.csr();
+        for src in srcs {
+            self.table.fill_visible_into(csr, *src, self.ts, scratch);
+            out.extend(scratch.iter().copied());
+        }
+    }
 }
 
 /// Streaming full-table edge scan.

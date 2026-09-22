@@ -75,9 +75,15 @@ impl Column {
         }
     }
 
-    /// Recompute all chunk bounds from the current column contents.
+    /// Recompute chunk bounds from the current column contents without
+    /// shrinking them.
+    ///
+    /// Recomputation only widens: historical extrema stay, so the bounds
+    /// contain every non-null value any snapshot can still observe through
+    /// a version chain, not just the current contents. Pruning against
+    /// these bounds is therefore sound for any snapshot timestamp; the
+    /// price is the documented stale-but-conservative tradeoff.
     pub fn rebuild_zone_maps(&mut self) {
-        self.zone_maps.clear();
         for row_idx in 0..self.len() {
             // Chunk-aware base read: overlay first, then chunk encodings.
             let value = self.get(row_idx);

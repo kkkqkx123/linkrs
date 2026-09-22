@@ -127,6 +127,15 @@ pub enum RecordFormPreference {
 pub(crate) const SINGLE_REQUIRES_COLUMNAR_MSG: &str =
     "single edge strategy requires the columnar record form; adjust the strategy or keep the columnar form, see migration_plan/migrate_record_form";
 
+/// Shared rejection for schema changes on an inline-form table.
+///
+/// Pure and bundled tables carry no independent property columns, so
+/// add/drop-column must rebuild the record form first. Every staged
+/// schema gate reports this exact wording so operators see one conflict
+/// and one way out.
+pub(crate) const INLINE_FORM_SCHEMA_CHANGE_MSG: &str =
+    "schema change on an inline-form table requires a record-form rebuild (migrate_record_form or switch_record_form_online)";
+
 /// Check whether a `DataType` can be encoded as a 64-bit scalar for the
 /// `Bundled` record form.
 pub fn is_scalar_encodable(dt: &graphdb_core::DataType) -> bool {

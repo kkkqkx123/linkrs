@@ -123,6 +123,50 @@ impl EdgeStore {
         self.visit_visible_with_gate(&self.in_csr, dst, ts, gate, f);
     }
 
+    /// Collect visible hot neighbors of one row through the pending gate.
+    ///
+    /// Staging primitive behind the projected adjacency paths: topology
+    /// streams once, the authority decides per edge, and the caller decodes
+    /// properties in batch afterwards instead of interleaving one decode
+    /// per edge into the walk. Survivor order follows the row walk.
+    fn collect_visible_hots_with_gate(
+        &self,
+        csr: &CsrShardSet,
+        vid: u32,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+        out: &mut Vec<HotNbr>,
+    ) {
+        out.clear();
+        csr.visit_hot(vid, |hot| {
+            if self.is_visible_with_gate(hot.edge_id, ts, gate) {
+                out.push(hot);
+            }
+            true
+        });
+    }
+
+    /// Collect visible hot neighbors of one row without a pending gate.
+    ///
+    /// Plain-authority counterpart of
+    /// [`Self::collect_visible_hots_with_gate`] with the same ordering and
+    /// verdict contract.
+    fn collect_visible_hots(
+        &self,
+        csr: &CsrShardSet,
+        vid: u32,
+        ts: Timestamp,
+        out: &mut Vec<HotNbr>,
+    ) {
+        out.clear();
+        csr.visit_hot(vid, |hot| {
+            if self.is_visible(hot.edge_id, ts) {
+                out.push(hot);
+            }
+            true
+        });
+    }
+
     /// Single row-location entry for point lookups: physical topology lookup
     /// plus the authoritative MVCC visibility check. Adjacency, existence
     /// and record reads must funnel through here rather than reading CSR
@@ -290,27 +334,43 @@ impl EdgeStore {
         if !self.is_open || !self.schema.has_out() {
             return Vec::new();
         }
-        // Hot-only stream with the pending gate: no cold-line touch, no
-        // intermediate neighbor vector. The record reuses the gate verdict
-        // above instead of re-deciding without the gate.
-        let mut out = Vec::new();
-        self.out_csr.visit_hot(src, |hot| {
-            if self.is_visible_with_gate(hot.edge_id, ts, gate) {
-                out.push(self.edge_record_from_hot_projected_assume_visible(
-                    VertexId::from_int64(src as i64),
-                    VertexId::from_int64(hot.endpoint as i64),
-                    hot.rank,
-                    hot.edge_id,
-                    PropertyQuery {
-                        query_ts: ts,
-                        projection,
-                        outgoing: true,
-                    },
-                ));
-            }
-            true
-        });
-        out
+        // Hot-only stream with the pending gate: no cold-line touch. The
+        // walk only stages visible edges; properties decode in one batch
+        // afterwards so the projection resolves its columns once. Each
+        // record reuses the gate verdict above instead of re-deciding
+        // without the gate.
+        let mut hots = Vec::new();
+        self.collect_visible_hots_with_gate(&self.out_csr, src, ts, gate, &mut hots);
+        if self.is_bundled() {
+            return hots
+                .into_iter()
+                .map(|hot| {
+                    self.edge_record_from_hot_projected_assume_visible(
+                        VertexId::from_int64(src as i64),
+                        VertexId::from_int64(hot.endpoint as i64),
+                        hot.rank,
+                        hot.edge_id,
+                        PropertyQuery {
+                            query_ts: ts,
+                            projection,
+                            outgoing: true,
+                        },
+                    )
+                })
+                .collect();
+        }
+        let ids: Vec<EdgeId> = hots.iter().map(|hot| hot.edge_id).collect();
+        let decoded =
+            self.properties_for_edge_projected_columnar_batch_assume_visible(&ids, ts, projection);
+        hots.into_iter()
+            .zip(decoded)
+            .map(|(hot, properties)| EdgeRecord {
+                src_vid: VertexId::from_int64(src as i64),
+                dst_vid: VertexId::from_int64(hot.endpoint as i64),
+                rank: hot.rank,
+                properties,
+            })
+            .collect()
     }
 
     pub fn in_edges_with_gate(
@@ -333,26 +393,41 @@ impl EdgeStore {
             return Vec::new();
         }
         // Hot-only stream mirroring the out direction with the pending gate.
-        // The record reuses the gate verdict above instead of re-deciding
-        // without the gate.
-        let mut out = Vec::new();
-        self.in_csr.visit_hot(dst, |hot| {
-            if self.is_visible_with_gate(hot.edge_id, ts, gate) {
-                out.push(self.edge_record_from_hot_projected_assume_visible(
-                    VertexId::from_int64(hot.endpoint as i64),
-                    VertexId::from_int64(dst as i64),
-                    hot.rank,
-                    hot.edge_id,
-                    PropertyQuery {
-                        query_ts: ts,
-                        projection,
-                        outgoing: false,
-                    },
-                ));
-            }
-            true
-        });
-        out
+        // The walk only stages visible edges; properties decode in one batch
+        // afterwards. Each record reuses the gate verdict above instead of
+        // re-deciding without the gate.
+        let mut hots = Vec::new();
+        self.collect_visible_hots_with_gate(&self.in_csr, dst, ts, gate, &mut hots);
+        if self.is_bundled() {
+            return hots
+                .into_iter()
+                .map(|hot| {
+                    self.edge_record_from_hot_projected_assume_visible(
+                        VertexId::from_int64(hot.endpoint as i64),
+                        VertexId::from_int64(dst as i64),
+                        hot.rank,
+                        hot.edge_id,
+                        PropertyQuery {
+                            query_ts: ts,
+                            projection,
+                            outgoing: false,
+                        },
+                    )
+                })
+                .collect();
+        }
+        let ids: Vec<EdgeId> = hots.iter().map(|hot| hot.edge_id).collect();
+        let decoded =
+            self.properties_for_edge_projected_columnar_batch_assume_visible(&ids, ts, projection);
+        hots.into_iter()
+            .zip(decoded)
+            .map(|(hot, properties)| EdgeRecord {
+                src_vid: VertexId::from_int64(hot.endpoint as i64),
+                dst_vid: VertexId::from_int64(dst as i64),
+                rank: hot.rank,
+                properties,
+            })
+            .collect()
     }
 
     pub fn out_edges_with_gate_projected_limit(
@@ -366,33 +441,38 @@ impl EdgeStore {
         if !self.is_open || limit == 0 {
             return Vec::new();
         }
-        self.merged_out_nbrs_with_gate_limit(src, ts, gate, limit)
-            .into_iter()
-            .map(|nbr| {
-                let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
-                let rank = nbr.rank;
-                // Neighbors above passed the gate: decode without re-deciding.
-                let properties = if self.is_bundled() {
-                    self.bundled_properties_at_assume_visible(
+        let nbrs = self.merged_out_nbrs_with_gate_limit(src, ts, gate, limit);
+        if self.is_bundled() {
+            return nbrs
+                .into_iter()
+                .map(|nbr| {
+                    // Neighbors above passed the gate: decode without re-deciding.
+                    let properties = self.bundled_properties_at_assume_visible(
                         true,
                         src,
                         nbr.edge_id,
                         ts,
                         projection,
-                    )
-                } else {
-                    self.properties_for_edge_projected_columnar_assume_visible(
-                        nbr.edge_id,
-                        ts,
-                        projection,
-                    )
-                };
-                EdgeRecord {
-                    src_vid: VertexId::from_int64(src as i64),
-                    dst_vid,
-                    rank,
-                    properties,
-                }
+                    );
+                    EdgeRecord {
+                        src_vid: VertexId::from_int64(src as i64),
+                        dst_vid: VertexId::from_int64(nbr.endpoint as i64),
+                        rank: nbr.rank,
+                        properties,
+                    }
+                })
+                .collect();
+        }
+        let ids: Vec<EdgeId> = nbrs.iter().map(|nbr| nbr.edge_id).collect();
+        let decoded =
+            self.properties_for_edge_projected_columnar_batch_assume_visible(&ids, ts, projection);
+        nbrs.into_iter()
+            .zip(decoded)
+            .map(|(nbr, properties)| EdgeRecord {
+                src_vid: VertexId::from_int64(src as i64),
+                dst_vid: VertexId::from_int64(nbr.endpoint as i64),
+                rank: nbr.rank,
+                properties,
             })
             .collect()
     }
@@ -408,33 +488,38 @@ impl EdgeStore {
         if !self.is_open || limit == 0 {
             return Vec::new();
         }
-        self.merged_in_nbrs_with_gate_limit(dst, ts, gate, limit)
-            .into_iter()
-            .map(|nbr| {
-                let src_vid = VertexId::from_int64(nbr.endpoint as i64);
-                let rank = nbr.rank;
-                // Neighbors above passed the gate: decode without re-deciding.
-                let properties = if self.is_bundled() {
-                    self.bundled_properties_at_assume_visible(
+        let nbrs = self.merged_in_nbrs_with_gate_limit(dst, ts, gate, limit);
+        if self.is_bundled() {
+            return nbrs
+                .into_iter()
+                .map(|nbr| {
+                    // Neighbors above passed the gate: decode without re-deciding.
+                    let properties = self.bundled_properties_at_assume_visible(
                         false,
                         dst,
                         nbr.edge_id,
                         ts,
                         projection,
-                    )
-                } else {
-                    self.properties_for_edge_projected_columnar_assume_visible(
-                        nbr.edge_id,
-                        ts,
-                        projection,
-                    )
-                };
-                EdgeRecord {
-                    src_vid,
-                    dst_vid: VertexId::from_int64(dst as i64),
-                    rank,
-                    properties,
-                }
+                    );
+                    EdgeRecord {
+                        src_vid: VertexId::from_int64(nbr.endpoint as i64),
+                        dst_vid: VertexId::from_int64(dst as i64),
+                        rank: nbr.rank,
+                        properties,
+                    }
+                })
+                .collect();
+        }
+        let ids: Vec<EdgeId> = nbrs.iter().map(|nbr| nbr.edge_id).collect();
+        let decoded =
+            self.properties_for_edge_projected_columnar_batch_assume_visible(&ids, ts, projection);
+        nbrs.into_iter()
+            .zip(decoded)
+            .map(|(nbr, properties)| EdgeRecord {
+                src_vid: VertexId::from_int64(nbr.endpoint as i64),
+                dst_vid: VertexId::from_int64(dst as i64),
+                rank: nbr.rank,
+                properties,
             })
             .collect()
     }
@@ -650,6 +735,35 @@ impl EdgeStore {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Columnar batch projection without a visibility recheck.
+    ///
+    /// Batch form of
+    /// [`Self::properties_for_edge_projected_columnar_assume_visible`]:
+    /// the caller still holds one authority verdict per edge; this entry
+    /// only replaces N per-edge decodes with one shared column mapping.
+    /// Output order follows the input; unmapped edges decode to empty,
+    /// mirroring the single-edge contract.
+    pub(crate) fn properties_for_edge_projected_columnar_batch_assume_visible(
+        &self,
+        edge_ids: &[EdgeId],
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Vec<Vec<(String, Value)>> {
+        self.properties
+            .get_projected_physical_batch_by_edge_ids(edge_ids, query_ts, projection)
+            .into_iter()
+            .map(|rows| {
+                rows.map(|pairs| {
+                    pairs
+                        .into_iter()
+                        .filter_map(|(name, value)| value.map(|v| (name, v)))
+                        .collect()
+                })
+                .unwrap_or_default()
+            })
+            .collect()
     }
 
     /// Hot record assembly without a visibility recheck.
@@ -958,27 +1072,42 @@ impl EdgeStore {
         }
 
         // Hot-only stream: visibility resolves by edge id through the
-        // authority, so the cold stamp lines stay out of cache and no
-        // intermediate neighbor vector is built. The record reuses the
-        // verdict above instead of querying the authority twice per edge.
-        let mut out = Vec::new();
-        self.out_csr.visit_hot(src, |hot| {
-            if self.is_visible(hot.edge_id, ts) {
-                out.push(self.edge_record_from_hot_projected_assume_visible(
-                    VertexId::from_int64(src as i64),
-                    VertexId::from_int64(hot.endpoint as i64),
-                    hot.rank,
-                    hot.edge_id,
-                    PropertyQuery {
-                        query_ts: ts,
-                        projection,
-                        outgoing: true,
-                    },
-                ));
-            }
-            true
-        });
-        out
+        // authority, so the cold stamp lines stay out of cache. The walk
+        // only stages visible edges; properties decode in one batch
+        // afterwards. Each record reuses the verdict above instead of
+        // querying the authority twice per edge.
+        let mut hots = Vec::new();
+        self.collect_visible_hots(&self.out_csr, src, ts, &mut hots);
+        if self.is_bundled() {
+            return hots
+                .into_iter()
+                .map(|hot| {
+                    self.edge_record_from_hot_projected_assume_visible(
+                        VertexId::from_int64(src as i64),
+                        VertexId::from_int64(hot.endpoint as i64),
+                        hot.rank,
+                        hot.edge_id,
+                        PropertyQuery {
+                            query_ts: ts,
+                            projection,
+                            outgoing: true,
+                        },
+                    )
+                })
+                .collect();
+        }
+        let ids: Vec<EdgeId> = hots.iter().map(|hot| hot.edge_id).collect();
+        let decoded =
+            self.properties_for_edge_projected_columnar_batch_assume_visible(&ids, ts, projection);
+        hots.into_iter()
+            .zip(decoded)
+            .map(|(hot, properties)| EdgeRecord {
+                src_vid: VertexId::from_int64(src as i64),
+                dst_vid: VertexId::from_int64(hot.endpoint as i64),
+                rank: hot.rank,
+                properties,
+            })
+            .collect()
     }
 
     /// Raw out-edge neighbors of `src` (MVCC-filtered, snapshot-consistent)
@@ -1016,27 +1145,42 @@ impl EdgeStore {
             return Vec::new();
         }
 
-        // Hot-only stream mirroring the out direction: no cold-line touch,
-        // no intermediate neighbor vector. The record reuses the verdict
-        // above instead of querying the authority twice per edge.
-        let mut out = Vec::new();
-        self.in_csr.visit_hot(dst, |hot| {
-            if self.is_visible(hot.edge_id, ts) {
-                out.push(self.edge_record_from_hot_projected_assume_visible(
-                    VertexId::from_int64(hot.endpoint as i64),
-                    VertexId::from_int64(dst as i64),
-                    hot.rank,
-                    hot.edge_id,
-                    PropertyQuery {
-                        query_ts: ts,
-                        projection,
-                        outgoing: false,
-                    },
-                ));
-            }
-            true
-        });
-        out
+        // Hot-only stream mirroring the out direction: no cold-line touch.
+        // The walk only stages visible edges; properties decode in one batch
+        // afterwards. Each record reuses the verdict above instead of
+        // querying the authority twice per edge.
+        let mut hots = Vec::new();
+        self.collect_visible_hots(&self.in_csr, dst, ts, &mut hots);
+        if self.is_bundled() {
+            return hots
+                .into_iter()
+                .map(|hot| {
+                    self.edge_record_from_hot_projected_assume_visible(
+                        VertexId::from_int64(hot.endpoint as i64),
+                        VertexId::from_int64(dst as i64),
+                        hot.rank,
+                        hot.edge_id,
+                        PropertyQuery {
+                            query_ts: ts,
+                            projection,
+                            outgoing: false,
+                        },
+                    )
+                })
+                .collect();
+        }
+        let ids: Vec<EdgeId> = hots.iter().map(|hot| hot.edge_id).collect();
+        let decoded =
+            self.properties_for_edge_projected_columnar_batch_assume_visible(&ids, ts, projection);
+        hots.into_iter()
+            .zip(decoded)
+            .map(|(hot, properties)| EdgeRecord {
+                src_vid: VertexId::from_int64(hot.endpoint as i64),
+                dst_vid: VertexId::from_int64(dst as i64),
+                rank: hot.rank,
+                properties,
+            })
+            .collect()
     }
 
     /// Raw in-edge neighbors of `dst` (MVCC-filtered, snapshot-consistent)

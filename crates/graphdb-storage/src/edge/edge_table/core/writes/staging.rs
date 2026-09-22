@@ -3,6 +3,7 @@ use crate::edge::edge_table::staging::{EdgeStagingBatch, StagedInsert};
 use crate::edge::edge_table::wal;
 use graphdb_core::types::EdgeId;
 use graphdb_core::{StorageError, StorageResult};
+use std::collections::HashMap;
 
 impl EdgeStore {
     /// Create an empty staging batch for one atomic group of edge writes.
@@ -53,6 +54,15 @@ impl EdgeStore {
             ));
         }
         self.prevalidate_staging_batch(&batch)?;
+        let plan = self.staging_group_plan(&batch);
+        if !plan.is_empty() {
+            log::debug!(
+                "edge table '{}' commit split across {} owner groups for {} staged entries",
+                self.label_name,
+                plan.len(),
+                batch.len(),
+            );
+        }
         let max_ts = batch.max_timestamp();
         let inserts = batch.take_inserts();
         let deletes = batch.take_deletes();
@@ -168,11 +178,53 @@ impl EdgeStore {
         Ok(applied)
     }
 
+    /// Per-owner commit split for one staging batch.
+    ///
+    /// Pure routing helper: counts inserts and deletes per owner group so
+    /// reservation, WAL grouping and future parallel applies stay
+    /// group-local. No state change. The commit itself stays one serialized
+    /// pass with prefix rollback, so any group failure still rolls back the
+    /// whole batch and the caller observes one atomic commit.
+    pub fn staging_group_plan(&self, batch: &EdgeStagingBatch) -> HashMap<u32, (usize, usize)> {
+        let mut plan: HashMap<u32, (usize, usize)> = HashMap::new();
+        for ins in batch.staged_inserts() {
+            let owner = self.owner_gid_for(ins.src, ins.dst);
+            let entry = plan.entry(owner).or_insert((0, 0));
+            entry.0 += 1;
+        }
+        for del in batch.staged_deletes() {
+            let owner = self.owner_gid_for(del.src, del.dst);
+            let entry = plan.entry(owner).or_insert((0, 0));
+            entry.1 += 1;
+        }
+        plan
+    }
+
+    /// Contention benchmark snapshot over committed write volume.
+    ///
+    /// Returns `(groups, total, max, skew)` where skew is max over mean.
+    /// Decision gate for finer locking: partitioned lock-free applies or
+    /// vertex-level locks are only introduced when this snapshot proves a
+    /// bottleneck with measured data. The write path itself stays
+    /// table-serialized under the single-writer discipline.
+    pub fn write_contention_snapshot(&self) -> (usize, u64, u64, f64) {
+        if self.group_write_counts.is_empty() {
+            return (0, 0, 0, 1.0);
+        }
+        let groups = self.group_write_counts.len();
+        let total: u64 = self.group_write_counts.values().sum();
+        let max = self.group_write_counts.values().copied().max().unwrap_or(0);
+        let mean = total as f64 / groups as f64;
+        let skew = if mean > 0.0 { max as f64 / mean } else { 1.0 };
+        (groups, total, max, skew)
+    }
+
     /// Pre-size touched topology rows once for the staged inserts.
     ///
     /// Counts inserts per bound endpoint per direction and sizes each row a
-    /// single time, so the apply loop below lands in reserved gaps instead
-    /// of growing overflow chunk by chunk. Sizing only; inserts still flow
+    /// single time at the packed density target (`PACKED_CSR_DENSITY = 0.8`,
+    /// fixed with no tunable set), so the apply loop below lands in reserved
+    /// gaps instead of growing overflow chunk by chunk. Sizing only; inserts still flow
     /// through the regular apply path so authority, properties, dirt and
     /// append logs stay exact. Failures leave at most empty groups behind.
     fn reserve_topology_for_inserts(&mut self, inserts: &[StagedInsert]) {

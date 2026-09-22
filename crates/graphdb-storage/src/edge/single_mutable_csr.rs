@@ -8,6 +8,14 @@
 //! - "Current employer" relationship
 //! - Any single-edge semantic relationship
 //!
+//! Sparse cost: logical slots stay dense for O(1) addressing, but physical
+//! segments allocate lazily behind the `present` bitmap. Untouched sparse
+//! slots read as absent without allocating, written slots allocate their
+//! 1024-row segment on demand, and emptied segments release back to `None`.
+//! Sparse wide spans therefore pay only for materialized segments plus the
+//! bitmap, never for the full logical span. The fixed-slot addressing is
+//! kept and documented rather than replaced.
+//!
 //! Contract, unified with the table layer:
 //! - Each vertex holds at most one live edge. A second live insert into an
 //!   occupied slot is rejected with a conflict error, never silently
@@ -135,7 +143,9 @@ impl SingleMutableCsr {
 
     pub(crate) fn sparse_memory_bytes(&self) -> usize {
         self.segments.capacity() * std::mem::size_of::<Option<Box<SingleSegment>>>()
-            + self.allocated_segments() * Self::SEGMENT_ROWS * (std::mem::size_of::<HotNbr>() + std::mem::size_of::<ColdStamps>())
+            + self.allocated_segments()
+                * Self::SEGMENT_ROWS
+                * (std::mem::size_of::<HotNbr>() + std::mem::size_of::<ColdStamps>())
             + self.present.capacity() * std::mem::size_of::<u64>()
     }
 
@@ -466,7 +476,10 @@ impl SingleMutableCsr {
         if src_idx >= self.vertex_capacity() {
             return Ok(false);
         }
-        let edge_id = self.hot_at(src_idx).map(|hot| hot.edge_id).unwrap_or(INVALID_EDGE_ID);
+        let edge_id = self
+            .hot_at(src_idx)
+            .map(|hot| hot.edge_id)
+            .unwrap_or(INVALID_EDGE_ID);
         self.delete_edge(src, edge_id, ts)
     }
 
@@ -789,8 +802,14 @@ impl SingleMutableCsr {
             return 0;
         }
         let src_idx = vid as usize;
-        let edge_id = self.hot_at(src_idx).map(|h| h.edge_id).unwrap_or(INVALID_EDGE_ID);
-        let delete_ts = self.cold_at(src_idx).map(|c| c.delete_ts).unwrap_or(Timestamp::MAX);
+        let edge_id = self
+            .hot_at(src_idx)
+            .map(|h| h.edge_id)
+            .unwrap_or(INVALID_EDGE_ID);
+        let delete_ts = self
+            .cold_at(src_idx)
+            .map(|c| c.delete_ts)
+            .unwrap_or(Timestamp::MAX);
         on_edge_removed(edge_id, delete_ts);
         self.set_slot(src_idx, empty_slot());
         1
@@ -895,14 +914,22 @@ impl SingleMutableCsr {
         }
         {
             let edge_ids: Vec<u64> = (0..slot_count)
-                .map(|i| self.hot_at(i).map(|h| h.edge_id.0).unwrap_or(INVALID_EDGE_ID.0))
+                .map(|i| {
+                    self.hot_at(i)
+                        .map(|h| h.edge_id.0)
+                        .unwrap_or(INVALID_EDGE_ID.0)
+                })
                 .collect();
             let (_, edge_ids_payload) = encode_topology_u64_column(&edge_ids);
             out.extend_from_slice(&edge_ids_payload);
         }
         {
             let delete_stamps: Vec<u64> = (0..slot_count)
-                .map(|i| self.cold_at(i).map(|c| c.delete_ts).unwrap_or(ColdStamps::dead_gap().delete_ts))
+                .map(|i| {
+                    self.cold_at(i)
+                        .map(|c| c.delete_ts)
+                        .unwrap_or(ColdStamps::dead_gap().delete_ts)
+                })
                 .collect();
             let (_, delete_payload) = encode_topology_u64_column(&delete_stamps);
             out.extend_from_slice(&delete_payload);
@@ -974,8 +1001,8 @@ impl SingleMutableCsr {
             };
             let (seg, off) = Self::locate(index);
             if hot.edge_id != INVALID_EDGE_ID {
-                let segment = new_csr.segments[seg]
-                    .get_or_insert_with(|| Box::new(SingleSegment::fresh()));
+                let segment =
+                    new_csr.segments[seg].get_or_insert_with(|| Box::new(SingleSegment::fresh()));
                 segment.hot[off] = hot;
                 segment.cold[off] = cold;
                 new_csr.set_present(index, true);
@@ -1489,5 +1516,20 @@ mod tests {
         payload.extend_from_slice(&[0u8; 24]);
         let mut csr = SingleMutableCsr::new();
         assert!(csr.load(&payload).is_err());
+    }
+
+    #[test]
+    fn test_single_sparse_slots_stay_lazy_behind_present_bitmap() {
+        let mut csr = SingleMutableCsr::with_capacity(8192);
+        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+            .unwrap();
+        csr.insert_edge(7000u32, VertexId::from_int64(11), EdgeId(101), 100)
+            .unwrap();
+        assert_eq!(csr.edge_count(), 2);
+        assert_eq!(csr.allocated_segments(), 2);
+        assert!(csr.sparse_memory_bytes() < 8192 * 32);
+        assert!(csr.get_edge(1, VertexId::from_int64(10), 200).is_none());
+        assert_eq!(csr.edges_of(1, 200).len(), 0);
+        assert!(!csr.has_physical_entries(1));
     }
 }

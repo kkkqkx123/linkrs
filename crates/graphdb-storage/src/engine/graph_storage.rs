@@ -42,7 +42,9 @@ use crate::{
     StorageStats, StorageSyncContextOps,
 };
 use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
-use graphdb_core::types::{CommitLsn, PasswordInfo, SnapshotTimestamp, UserAlterInfo, UserInfo, VertexId};
+use graphdb_core::types::{
+    CommitLsn, PasswordInfo, SnapshotTimestamp, UserAlterInfo, UserInfo, VertexId,
+};
 use graphdb_core::{Edge, RoleType, StorageError, StorageResult, Value};
 use graphdb_metrics::StatsManager;
 
