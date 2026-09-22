@@ -169,7 +169,7 @@ impl CsrShardSet {
                 let edges = self
                     .shards
                     .get(&gid)
-                    .map(|shard| shard.variant.edge_count() as u64)
+                    .map(|shard| shard.variant.edge_count())
                     .unwrap_or(0);
                 FreezeFeasibility::Ready { edges }
             }

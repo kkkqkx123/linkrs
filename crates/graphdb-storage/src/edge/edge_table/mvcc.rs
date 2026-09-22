@@ -12,50 +12,73 @@ use super::Nbr;
 use graphdb_core::types::{EdgeId, Timestamp};
 use std::collections::HashMap;
 
-/// Dense per-edge visibility authority keyed by edge id.
+/// Segmented sparse per-edge visibility authority keyed by edge id.
 ///
-/// Edge ids are assigned monotonically per table, so authority records are
-/// addressed by direct subscript instead of hashing. Slots of removed edges
-/// hold `None` and read as absent (fail closed: invisible). The middle of the
-/// array is never compacted; only trailing holes are truncated on reclaim.
+/// Edge ids are table-allocated dense values; one segment covers
+/// `SEGMENT_ROWS` ids and untouched segments stay unallocated. Slots of
+/// removed edges hold `None` and read as absent (fail closed: invisible).
+/// Middle segments are never compacted; empty segments are freed in place
+/// and only trailing holes are truncated on reclaim, matching the property
+/// edge-map caliber.
 #[derive(Debug, Clone, Default)]
 pub struct AuthorityMap {
-    slots: Vec<Option<EdgeTimestamps>>,
+    segments: Vec<Option<Box<[Option<EdgeTimestamps>; 1024]>>>,
     live: usize,
 }
 
 impl AuthorityMap {
+    const SEGMENT_ROWS: usize = 1024;
+    const SEGMENT_SHIFT: u32 = 10;
+    const SEGMENT_MASK: usize = 1024 - 1;
+
     pub fn new() -> Self {
         Self {
-            slots: Vec::new(),
+            segments: Vec::new(),
             live: 0,
         }
     }
 
+    #[inline]
+    fn segment_of(edge_id: &EdgeId) -> (usize, usize) {
+        let slot = edge_id.0 as usize;
+        (slot >> Self::SEGMENT_SHIFT, slot & Self::SEGMENT_MASK)
+    }
+
     pub fn get(&self, edge_id: &EdgeId) -> Option<&EdgeTimestamps> {
-        self.slots.get(edge_id.0 as usize)?.as_ref()
+        let (seg, off) = Self::segment_of(edge_id);
+        self.segments.get(seg)?.as_ref()?[off].as_ref()
     }
 
     pub fn get_mut(&mut self, edge_id: &EdgeId) -> Option<&mut EdgeTimestamps> {
-        self.slots.get_mut(edge_id.0 as usize)?.as_mut()
+        let (seg, off) = Self::segment_of(edge_id);
+        self.segments.get_mut(seg)?.as_mut()?.get_mut(off)?.as_mut()
     }
 
     pub fn insert(&mut self, edge_id: EdgeId, ts: EdgeTimestamps) {
-        let idx = edge_id.0 as usize;
-        if self.slots.len() <= idx {
-            self.slots.resize(idx + 1, None);
+        let (seg, off) = Self::segment_of(&edge_id);
+        if seg >= self.segments.len() {
+            self.segments.resize_with(seg + 1, || None);
         }
-        if self.slots[idx].is_none() {
+        let segment = self.segments[seg]
+            .get_or_insert_with(|| Box::new([None; Self::SEGMENT_ROWS]));
+        if segment[off].is_none() {
             self.live += 1;
         }
-        self.slots[idx] = Some(ts);
+        segment[off] = Some(ts);
     }
 
     pub fn remove(&mut self, edge_id: &EdgeId) {
-        let idx = edge_id.0 as usize;
-        if idx < self.slots.len() && self.slots[idx].is_some() {
-            self.slots[idx] = None;
+        let (seg, off) = Self::segment_of(edge_id);
+        let Some(segment) = self.segments.get_mut(seg).and_then(|s| s.as_mut()) else {
+            return;
+        };
+        if segment[off].is_some() {
+            segment[off] = None;
             self.live = self.live.saturating_sub(1);
+            if segment.iter().all(|slot| slot.is_none()) {
+                self.segments[seg] = None;
+            }
+            self.truncate_empty_tail_segments();
         }
     }
 
@@ -72,33 +95,67 @@ impl AuthorityMap {
     }
 
     pub fn clear(&mut self) {
-        self.slots.clear();
+        self.segments.clear();
         self.live = 0;
     }
 
     pub fn values(&self) -> impl Iterator<Item = &EdgeTimestamps> {
-        self.slots.iter().filter_map(|slot| slot.as_ref())
+        self.segments
+            .iter()
+            .filter_map(|segment| segment.as_ref())
+            .flat_map(|values| values.iter().filter_map(|slot| slot.as_ref()))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (EdgeId, &EdgeTimestamps)> {
-        self.slots
+        self.segments
             .iter()
             .enumerate()
-            .filter_map(|(idx, slot)| slot.as_ref().map(|ts| (EdgeId(idx as u64), ts)))
+            .filter_map(|(seg, segment)| {
+                segment.as_ref().map(|values| {
+                    let base = seg * Self::SEGMENT_ROWS;
+                    values.iter().enumerate().filter_map(move |(off, slot)| {
+                        slot.as_ref().map(|ts| (EdgeId((base + off) as u64), ts))
+                    })
+                })
+            })
+            .flatten()
     }
 
     pub fn keys(&self) -> impl Iterator<Item = EdgeId> + '_ {
-        self.slots
+        self.segments
             .iter()
             .enumerate()
-            .filter(|(_, slot)| slot.is_some())
-            .map(|(idx, _)| EdgeId(idx as u64))
+            .filter_map(|(seg, segment)| {
+                segment.as_ref().map(|values| {
+                    let base = seg * Self::SEGMENT_ROWS;
+                    values.iter().enumerate().filter_map(move |(off, slot)| {
+                        slot.is_some().then_some(EdgeId((base + off) as u64))
+                    })
+                })
+            })
+            .flatten()
+    }
+
+    pub fn allocated_segments(&self) -> usize {
+        self.segments.iter().filter(|seg| seg.is_some()).count()
+    }
+
+    pub fn memory_bytes(&self) -> usize {
+        self.segments.capacity()
+            * std::mem::size_of::<Option<Box<[Option<EdgeTimestamps>; 1024]>>>()
+            + self.allocated_segments() * Self::SEGMENT_ROWS * std::mem::size_of::<Option<EdgeTimestamps>>()
+    }
+
+    fn truncate_empty_tail_segments(&mut self) {
+        while self.segments.last().is_some_and(|seg| seg.is_none()) {
+            self.segments.pop();
+        }
     }
 
     /// Batch visibility probe over `edge_ids` at `ts`, appending one flag
     /// per id to `out`.
     ///
-    /// Single loop over the dense slot array with direct subscript. Missing
+    /// One segment lookup per id with direct subscript. Missing
     /// slots read as absent (fail closed: invisible), matching `get`-based
     /// single checks.
     pub fn fill_visibility_mask(&self, edge_ids: &[EdgeId], ts: Timestamp, out: &mut Vec<bool>) {
@@ -106,9 +163,8 @@ impl AuthorityMap {
         out.reserve(edge_ids.len());
         for id in edge_ids {
             out.push(
-                self.slots.get(id.0 as usize).is_some_and(|slot| {
-                    slot.as_ref().is_some_and(|ts_info| ts_info.is_alive_at(ts))
-                }),
+                self.get(id)
+                    .is_some_and(|ts_info| ts_info.is_alive_at(ts)),
             );
         }
     }
@@ -118,28 +174,39 @@ impl AuthorityMap {
     /// Eligibility shares the single [`crate::mvcc_visibility::Visibility::is_gc_eligible`]
     /// predicate with the CSR and property reclaim paths, so the three layers
     /// cannot drift apart by one round at the boundary stamp.
-    /// Returns the reclaimed count and truncates trailing holes so a
-    /// delete-heavy table does not hold an ever-longer tail of empty slots.
+    /// Returns the reclaimed count, frees emptied segments in place and
+    /// truncates trailing holes so a delete-heavy table does not hold an
+    /// ever-longer tail of empty segments.
     pub fn reclaim_where(
         &mut self,
         watermark: Timestamp,
         is_gone: impl Fn(EdgeId) -> bool,
     ) -> usize {
         let mut reclaimed = 0usize;
-        for (idx, slot) in self.slots.iter_mut().enumerate() {
-            let eligible = slot.is_some_and(|ts| {
-                ts.delete_ts != Timestamp::MAX
-                    && crate::mvcc_visibility::Visibility::is_gc_eligible(ts.delete_ts, watermark)
-            });
-            if eligible && is_gone(EdgeId(idx as u64)) {
-                *slot = None;
-                reclaimed += 1;
+        for (seg, segment) in self.segments.iter_mut().enumerate() {
+            let Some(values) = segment.as_mut() else {
+                continue;
+            };
+            let base = seg * Self::SEGMENT_ROWS;
+            for (off, slot) in values.iter_mut().enumerate() {
+                let eligible = slot.is_some_and(|ts| {
+                    ts.delete_ts != Timestamp::MAX
+                        && crate::mvcc_visibility::Visibility::is_gc_eligible(
+                            ts.delete_ts,
+                            watermark,
+                        )
+                });
+                if eligible && is_gone(EdgeId((base + off) as u64)) {
+                    *slot = None;
+                    reclaimed += 1;
+                }
+            }
+            if values.iter().all(|slot| slot.is_none()) {
+                *segment = None;
             }
         }
         self.live = self.live.saturating_sub(reclaimed);
-        while self.slots.last().is_some_and(Option::is_none) {
-            self.slots.pop();
-        }
+        self.truncate_empty_tail_segments();
         reclaimed
     }
 }
@@ -375,8 +442,8 @@ impl MVCCManager {
 
     /// Batch form of [`Self::is_edge_visible`]: `out[i]` reports whether
     /// `edge_ids[i]` is visible at `ts` through the same single authority.
-    /// One loop over the dense slot array with direct subscript, so a staged
-    /// row pays one authority pass instead of one method call per edge.
+    /// One segment lookup per id, so a staged row pays one authority pass
+    /// instead of one method call per edge.
     pub fn are_visible(&self, edge_ids: &[EdgeId], ts: Timestamp, out: &mut Vec<bool>) {
         self.edge_timestamps.fill_visibility_mask(edge_ids, ts, out);
     }
@@ -404,19 +471,18 @@ impl MVCCManager {
     /// collection stages the row once, this pass compacts it without a
     /// second id vector. Survivor order is preserved.
     pub fn retain_visible(&self, nbrs: &mut Vec<Nbr>, ts: Timestamp) {
-        let slots = &self.edge_timestamps.slots;
         let mut write = 0usize;
         for read in 0..nbrs.len() {
-            let idx = nbrs[read].edge_id.0 as usize;
-            let visible = slots.get(idx).is_some_and(|slot| {
-                slot.as_ref().is_some_and(|stamps| {
+            let visible = self
+                .edge_timestamps
+                .get(&nbrs[read].edge_id)
+                .is_some_and(|stamps| {
                     crate::mvcc_visibility::Visibility::is_edge_visible(
                         ts,
                         stamps.create_ts,
                         stamps.delete_ts,
                     )
-                })
-            });
+                });
             if visible {
                 if write != read {
                     nbrs.swap(write, read);

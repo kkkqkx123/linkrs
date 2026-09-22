@@ -245,6 +245,7 @@ impl StorageWriter for MockStorage {
     mock_stub!(&mut self, update_vertex(_space: &str, _vertex: Vertex) -> Result<(), StorageError>, Ok(()));
     mock_stub!(&mut self, delete_vertex(_space: &str, _id: &VertexId) -> Result<(), StorageError>, Ok(()));
     mock_stub!(&mut self, delete_vertex_with_edges(_space: &str, _id: &VertexId) -> Result<(), StorageError>, Ok(()));
+    mock_stub!(&mut self, batch_delete_vertices_with_edges(_space: &str, _ids: &[VertexId]) -> Result<usize, StorageError>, Ok(0));
     mock_stub!(&mut self, batch_insert_vertices(_space: &str, _vertices: Vec<Vertex>) -> Result<Vec<VertexId>, StorageError>, Ok(Vec::new()));
     mock_stub!(&mut self, delete_tags(_space: &str, _vertex_id: &VertexId, _tag_names: &[String]) -> Result<usize, StorageError>, Ok(0));
     fn insert_edge(&mut self, _space: &str, _edge: Edge) -> Result<(), StorageError> {

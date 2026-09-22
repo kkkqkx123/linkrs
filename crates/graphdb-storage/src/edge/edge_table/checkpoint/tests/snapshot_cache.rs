@@ -243,8 +243,10 @@ fn memory_intent_snapshot_load_stays_correct() {
         MemoryIntent::ReadSnapshot,
         MemoryIntent::BulkLoad,
     ] {
-        let mut config = EdgeTableConfig::default();
-        config.memory_intent = intent;
+        let config = EdgeTableConfig {
+            memory_intent: intent,
+            ..Default::default()
+        };
         let schema = EdgeSchema {
             label_id: 0,
             label_name: "knows".to_string(),

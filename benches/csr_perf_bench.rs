@@ -765,17 +765,12 @@ fn bench_followup_codec(csr: &MutableCsr) {
     let start = Instant::now();
     let encoded = csr.dump();
     let encoded_secs = start.elapsed().as_secs_f64();
-    let start = Instant::now();
-    let raw = csr.dump_raw();
-    let raw_secs = start.elapsed().as_secs_f64();
     println!(
-        "followup codec: encoded {} bytes in {:.3}s, raw {} bytes in {:.3}s",
+        "followup codec: encoded {} bytes in {:.3}s",
         encoded.len(),
-        encoded_secs,
-        raw.len(),
-        raw_secs
+        encoded_secs
     );
-    black_box((encoded.len(), raw.len()));
+    black_box(encoded.len());
 }
 
 fn main() {

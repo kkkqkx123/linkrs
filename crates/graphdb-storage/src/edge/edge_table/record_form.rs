@@ -587,9 +587,10 @@ mod tests {
     }
 
     fn auto_config() -> EdgeTableConfig {
-        let mut config = EdgeTableConfig::default();
-        config.record_form = RecordFormPreference::Auto;
-        config
+        EdgeTableConfig {
+            record_form: RecordFormPreference::Auto,
+            ..Default::default()
+        }
     }
 
     fn make_bundled_table() -> EdgeStore {

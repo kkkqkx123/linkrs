@@ -461,6 +461,11 @@ pub trait StorageWriter: Send + Sync + std::fmt::Debug {
     fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError>;
     fn delete_vertex(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError>;
     fn delete_vertex_with_edges(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError>;
+    fn batch_delete_vertices_with_edges(
+        &mut self,
+        space: &str,
+        ids: &[VertexId],
+    ) -> Result<usize, StorageError>;
     fn batch_insert_vertices(
         &mut self,
         space: &str,

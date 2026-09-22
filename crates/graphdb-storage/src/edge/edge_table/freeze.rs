@@ -182,8 +182,10 @@ mod tests {
     #[test]
     fn feasibility_reports_migration_need_before_freeze() {
         use crate::edge::RecordFormPreference;
-        let mut config = EdgeTableConfig::default();
-        config.record_form = RecordFormPreference::Auto;
+        let config = EdgeTableConfig {
+            record_form: RecordFormPreference::Auto,
+            ..Default::default()
+        };
         let mut bundled =
             EdgeStore::with_config(frozen_test_schema(), config).expect("bundled table builds");
         assert_eq!(bundled.schema().record_form, RecordForm::Bundled);

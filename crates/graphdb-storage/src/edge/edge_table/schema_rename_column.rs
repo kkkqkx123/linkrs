@@ -139,7 +139,7 @@ impl EdgeStore {
         // Renames change every owner shard's schema: trace them all and
         // carry the rename into the per-group scopes.
         self.rename_property_column_in_dirt(&pending.old_name, &pending.new_name);
-        self.trace_all_owner_groups_for_columns(&[pending.new_name.clone()]);
+        self.trace_all_owner_groups_for_columns(std::slice::from_ref(&pending.new_name));
         Ok(())
     }
 

@@ -42,7 +42,7 @@ use crate::{
     StorageStats, StorageSyncContextOps,
 };
 use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
-use graphdb_core::types::{CommitLsn, PasswordInfo, SnapshotTimestamp, UserAlterInfo, UserInfo};
+use graphdb_core::types::{CommitLsn, PasswordInfo, SnapshotTimestamp, UserAlterInfo, UserInfo, VertexId};
 use graphdb_core::{Edge, RoleType, StorageError, StorageResult, Value};
 use graphdb_metrics::StatsManager;
 
@@ -808,6 +808,18 @@ impl GraphStorage {
     ) -> graphdb_core::StorageResult<usize> {
         self.ctx
             .batch_delete_vertices_by_i64(label, external_ids, ts)
+    }
+
+    /// Batch-delete multiple vertices together with all their incident edges.
+    pub fn batch_delete_vertices_with_edges(
+        &self,
+        space: &str,
+        ids: &[VertexId],
+    ) -> graphdb_core::StorageResult<usize> {
+        self.ctx.check_write_admission()?;
+        crate::engine::graph_storage::writer::batch_delete_vertices_with_edges(
+            &self.ctx, space, ids,
+        )
     }
 }
 

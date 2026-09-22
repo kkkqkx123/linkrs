@@ -470,6 +470,156 @@ pub(crate) fn delete_vertex_with_edges(
     delete_vertex(ctx, space, id)
 }
 
+/// Batch-delete multiple vertices together with all their incident edges.
+///
+/// One write timestamp covers the entire batch. For each edge type, one
+/// staging batch per physical table covers all vertices, reducing commits
+/// from `N * tables` to `tables`. The per-edge transaction redo, restore
+/// records and index maintenance keep the explicit transaction rollback
+/// path intact. A failed table batch aborts the timestamp with prior
+/// tables already committed; aborted stamps stay hidden through the
+/// pending gate.
+pub(crate) fn batch_delete_vertices_with_edges(
+    ctx: &GraphStorageContext,
+    space: &str,
+    ids: &[VertexId],
+) -> StorageResult<usize> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    let edge_types = ctx.schema_manager().list_edge_types(space)?;
+    let ts = ctx.get_write_timestamp()?;
+
+    // Phase 1: Cascade-delete edges for all vertices across all edge types.
+    for edge_info in &edge_types {
+        if let Err(error) =
+            batch_delete_incident_edges_of_type(ctx, space_id, ids, edge_info, ts)
+        {
+            ctx.abort_write_timestamp(ts);
+            return Err(error);
+        }
+    }
+    if let Err(error) = ctx.commit_write_timestamp_ordered(ts) {
+        ctx.abort_write_timestamp(ts);
+        return Err(error);
+    }
+
+    // Phase 2: Delete the vertices themselves.
+    let mut deleted = 0usize;
+    for id in ids {
+        delete_vertex(ctx, space, id)?;
+        deleted += 1;
+    }
+    Ok(deleted)
+}
+
+/// Batch-cascade one edge type across multiple vertices through per-table
+/// batch entrances.
+fn batch_delete_incident_edges_of_type(
+    ctx: &GraphStorageContext,
+    space_id: u64,
+    ids: &[VertexId],
+    edge_info: &graphdb_core::types::EdgeTypeInfo,
+    ts: Timestamp,
+) -> StorageResult<()> {
+    let keys: Vec<EdgeTableKey> = ctx.data_store().with_edge_label_index(|index| {
+        index
+            .get(&edge_info.edge_type_id)
+            .cloned()
+            .unwrap_or_default()
+    });
+    for key in &keys {
+        // Resolve internal IDs for all vertices in one pass.
+        let vertex_rows: Vec<(Option<u32>, Option<u32>)> =
+            ctx.data_store().with_vertex_tables(|vertex_tables| {
+                ids.iter()
+                    .map(|id| {
+                        (
+                            helpers::resolve_internal_id(
+                                ctx,
+                                vertex_tables,
+                                key.src_label,
+                                *id,
+                                ts,
+                            ),
+                            helpers::resolve_internal_id(
+                                ctx,
+                                vertex_tables,
+                                key.dst_label,
+                                *id,
+                                ts,
+                            ),
+                        )
+                    })
+                    .collect()
+            });
+        // Filter out vertices that resolve to neither direction.
+        let filtered: Vec<_> = vertex_rows
+            .iter()
+            .filter(|(s, d)| s.is_some() || d.is_some())
+            .copied()
+            .collect();
+        if filtered.is_empty() {
+            continue;
+        }
+        let Some(table) = ctx.data_store().try_get_edge_table_mut(key) else {
+            continue;
+        };
+        let deleted = table
+            .write()
+            .delete_incident_edges_of_vertices(&filtered, ts)?;
+        if deleted.is_empty() {
+            continue;
+        }
+        for edge in &deleted {
+            let (Some(src_ext), Some(dst_ext)) = (
+                ctx.get_external_id_by_internal_id(key.src_label, edge.src),
+                ctx.get_external_id_by_internal_id(key.dst_label, edge.dst),
+            ) else {
+                return Err(StorageError::not_found(format!(
+                    "deleted edge {} -> {} lost its endpoint mapping",
+                    edge.src, edge.dst
+                )));
+            };
+            let redo = DeleteEdgeRedo {
+                src_label: key.src_label,
+                src_vid: src_ext,
+                dst_label: key.dst_label,
+                dst_vid: dst_ext,
+                edge_label: key.edge_label,
+                rank: edge.rank,
+            };
+            let redo_entry = ctx.append_wal_redo(WalOpType::DeleteEdge, ts, &redo)?;
+            super::edge::record_edge_remove(
+                ctx,
+                EdgeIdentifier::new(
+                    key.src_label,
+                    src_ext,
+                    key.dst_label,
+                    dst_ext,
+                    key.edge_label,
+                    edge.rank,
+                ),
+                edge.properties.clone(),
+                Some(redo_entry),
+            )?;
+            let src_value = Value::from(src_ext);
+            let dst_value = Value::from(dst_ext);
+            let edge_identity = EdgeIdentity::new(
+                space_id,
+                &src_value,
+                &dst_value,
+                &edge_info.edge_type_name,
+                edge.rank,
+            );
+            ctx.delete_all_edge_indexes_mvcc(&edge_identity, ts)?;
+        }
+        ctx.mark_edge_modified(key.edge_label);
+    }
+    Ok(())
+}
+
 /// Remove every incident edge of one vertex from every physical table of one
 /// edge type through the table-level batch entrance.
 ///

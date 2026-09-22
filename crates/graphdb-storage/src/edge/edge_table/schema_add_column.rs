@@ -120,7 +120,7 @@ impl EdgeStore {
         }
         // The backfill touches rows in every owner group: trace them all so
         // no clean group is skipped, with the new column as patch scope.
-        self.trace_all_owner_groups_for_columns(&[name.clone()]);
+        self.trace_all_owner_groups_for_columns(std::slice::from_ref(&name));
         Ok(())
     }
 

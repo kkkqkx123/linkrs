@@ -32,10 +32,11 @@ impl EdgeStore {
 
         total += self.out_csr.used_memory_size();
         total += self.in_csr.used_memory_size();
-        // Authority records share the tombstone per-record estimate so live
-        // and deleted entries use one caliber including hash overhead.
-        total +=
-            super::super::stats::TombstoneStats::estimate_memory(self.mvcc.edge_timestamps.len());
+        // Sparse segment memory for the visibility authority and the owner
+        // map: untouched 1024-id segments stay unallocated, so wide sparse
+        // id ranges cost only their pointer table.
+        total += self.mvcc.edge_timestamps.memory_bytes();
+        total += self.edge_owner.memory_bytes();
         total += self.properties.used_memory_size();
 
         // Account for property_index_cache

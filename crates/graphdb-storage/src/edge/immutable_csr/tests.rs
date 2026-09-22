@@ -13,7 +13,7 @@ fn packed_endpoint(endpoint: u32, rank: i64) -> VertexId {
 /// order, independent of the source physical order.
 fn sorted_physical(entries: Vec<Nbr>) -> Vec<Nbr> {
     let mut sorted = entries;
-    sorted.sort_by(|a, b| super::pack::frozen_row_key(a).cmp(&super::pack::frozen_row_key(b)));
+    sorted.sort_by_key(super::pack::frozen_row_key);
     sorted
 }
 

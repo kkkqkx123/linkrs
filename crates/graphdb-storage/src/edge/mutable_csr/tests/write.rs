@@ -1,4 +1,4 @@
-use super::super::super::{EdgeId, VertexId};
+use super::super::super::{EdgeId, RowEdgeBatch, VertexId};
 use super::super::{EdgePosition, MutableCsr};
 
 #[test]
@@ -241,7 +241,7 @@ fn dense_slots_reused_after_remove_and_reinsert() {
 fn bulk_insert_matches_sequential_inserts() {
     let mut sequential = MutableCsr::with_capacity(16, 64);
     let mut bulk = MutableCsr::with_capacity(16, 64);
-    let mut groups: Vec<(u32, Vec<(u32, i64, EdgeId, u64)>)> = Vec::new();
+    let mut groups: Vec<RowEdgeBatch> = Vec::new();
     for src in 0..4u32 {
         let mut batch = Vec::new();
         for k in 0..20u64 {

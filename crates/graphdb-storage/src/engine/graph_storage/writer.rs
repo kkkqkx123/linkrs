@@ -11,6 +11,6 @@ pub(crate) use data::{
 };
 pub(crate) use edge::{delete_edge, insert_edge, update_edge};
 pub(crate) use vertex::{
-    batch_insert_vertices, delete_tags, delete_vertex, delete_vertex_with_edges, insert_vertex,
-    update_vertex,
+    batch_delete_vertices_with_edges, batch_insert_vertices, delete_tags, delete_vertex,
+    delete_vertex_with_edges, insert_vertex, update_vertex,
 };

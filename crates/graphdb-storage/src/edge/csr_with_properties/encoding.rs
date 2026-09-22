@@ -166,7 +166,6 @@ impl CsrWithProperties {
                 .iter()
                 .map(|col| col.name.clone())
                 .enumerate()
-                .map(|(idx, name)| (idx, name))
                 .collect(),
         };
         let mut changed = 0usize;

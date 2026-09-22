@@ -193,24 +193,22 @@ impl EdgeStore {
         // Row endpoints, not key halves: bundled rows are keyed by the raw
         // vertex id with rank pinned to zero. Single-direction tables update
         // only the stored leg.
-        if self.schema.has_out() {
-            if !self
+        if self.schema.has_out()
+            && !self
                 .out_csr
                 .bundled_set_value_by_endpoint(src, dst, inline_value)
-            {
-                return Err(StorageError::column_not_found(prop_name.to_string()));
-            }
+        {
+            return Err(StorageError::column_not_found(prop_name.to_string()));
         }
-        if self.schema.has_in() {
-            if !self
+        if self.schema.has_in()
+            && !self
                 .in_csr
                 .bundled_set_value_by_endpoint(dst, src, inline_value)
-            {
-                return Err(StorageError::data_corruption(format!(
-                    "bundled in-direction value missing for edge ({}, {})",
-                    src, dst
-                )));
-            }
+        {
+            return Err(StorageError::data_corruption(format!(
+                "bundled in-direction value missing for edge ({}, {})",
+                src, dst
+            )));
         }
         Ok(())
     }

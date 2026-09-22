@@ -4,67 +4,113 @@ use super::EdgeStore;
 use graphdb_core::types::{EdgeId, VertexId};
 use std::collections::HashSet;
 
-/// Dense owner-group index keyed by edge id.
+/// Segmented sparse owner-group index keyed by edge id.
 ///
-/// Edge ids are assigned monotonically per table, so the owner of every edge
-/// is addressed by direct subscript instead of hashing. Unassigned slots
-/// hold a sentinel and read as absent.
+/// Edge ids are table-allocated dense values; one segment covers
+/// `OWNER_SEGMENT_ROWS` ids and untouched segments stay unallocated.
+/// Live entries hold group ids, gaps hold `UNASSIGNED`. Slot order is
+/// preserved by ascending segment iteration, matching the property
+/// edge-map caliber. Trailing empty segments are truncated so churned id
+/// ranges never pin memory.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct EdgeOwnerMap {
-    slots: Vec<u32>,
+    segments: Vec<Option<Box<[u32; 1024]>>>,
 }
 
 impl EdgeOwnerMap {
     pub(crate) const UNASSIGNED: u32 = u32::MAX;
+    const SEGMENT_ROWS: usize = 1024;
+    const SEGMENT_SHIFT: u32 = 10;
+    const SEGMENT_MASK: usize = 1024 - 1;
 
     pub(crate) fn new() -> Self {
-        Self { slots: Vec::new() }
+        Self {
+            segments: Vec::new(),
+        }
+    }
+
+    #[inline]
+    fn segment_of(edge_id: &EdgeId) -> (usize, usize) {
+        let slot = edge_id.0 as usize;
+        (slot >> Self::SEGMENT_SHIFT, slot & Self::SEGMENT_MASK)
     }
 
     pub(crate) fn get(&self, edge_id: &EdgeId) -> Option<u32> {
-        self.slots
-            .get(edge_id.0 as usize)
-            .copied()
-            .filter(|owner| *owner != Self::UNASSIGNED)
+        let (seg, off) = Self::segment_of(edge_id);
+        let owner = self.segments.get(seg)?.as_ref()?[off];
+        (owner != Self::UNASSIGNED).then_some(owner)
     }
 
     pub(crate) fn insert(&mut self, edge_id: EdgeId, owner: u32) {
-        let idx = edge_id.0 as usize;
-        if self.slots.len() <= idx {
-            self.slots.resize(idx + 1, Self::UNASSIGNED);
+        let (seg, off) = Self::segment_of(&edge_id);
+        if seg >= self.segments.len() {
+            self.segments.resize_with(seg + 1, || None);
         }
-        self.slots[idx] = owner;
+        let segment = self.segments[seg]
+            .get_or_insert_with(|| Box::new([Self::UNASSIGNED; Self::SEGMENT_ROWS]));
+        segment[off] = owner;
     }
 
     pub(crate) fn or_insert(&mut self, edge_id: EdgeId, owner: u32) {
-        let idx = edge_id.0 as usize;
-        if self.slots.len() <= idx {
-            self.slots.resize(idx + 1, Self::UNASSIGNED);
+        let (seg, off) = Self::segment_of(&edge_id);
+        if seg >= self.segments.len() {
+            self.segments.resize_with(seg + 1, || None);
         }
-        if self.slots[idx] == Self::UNASSIGNED {
-            self.slots[idx] = owner;
+        let segment = self.segments[seg]
+            .get_or_insert_with(|| Box::new([Self::UNASSIGNED; Self::SEGMENT_ROWS]));
+        if segment[off] == Self::UNASSIGNED {
+            segment[off] = owner;
         }
     }
 
     pub(crate) fn remove(&mut self, edge_id: &EdgeId) {
-        let idx = edge_id.0 as usize;
-        if idx < self.slots.len() {
-            self.slots[idx] = Self::UNASSIGNED;
+        let (seg, off) = Self::segment_of(edge_id);
+        let Some(segment) = self.segments.get_mut(seg).and_then(|s| s.as_mut()) else {
+            return;
+        };
+        if segment[off] == Self::UNASSIGNED {
+            return;
         }
+        segment[off] = Self::UNASSIGNED;
+        if segment.iter().all(|owner| *owner == Self::UNASSIGNED) {
+            self.segments[seg] = None;
+        }
+        self.truncate_empty_tail_segments();
     }
 
     pub(crate) fn clear(&mut self) {
-        for slot in self.slots.iter_mut() {
-            *slot = Self::UNASSIGNED;
-        }
+        self.segments.clear();
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (EdgeId, u32)> + '_ {
-        self.slots
+        self.segments
             .iter()
             .enumerate()
-            .filter(|(_, owner)| **owner != Self::UNASSIGNED)
-            .map(|(idx, owner)| (EdgeId(idx as u64), *owner))
+            .filter_map(|(seg, segment)| {
+                segment.as_ref().map(|values| {
+                    let base = seg * Self::SEGMENT_ROWS;
+                    values.iter().enumerate().filter_map(move |(off, owner)| {
+                        (*owner != Self::UNASSIGNED)
+                            .then_some((EdgeId((base + off) as u64), *owner))
+                    })
+                })
+            })
+            .flatten()
+    }
+
+    pub(crate) fn allocated_segments(&self) -> usize {
+        self.segments.iter().filter(|seg| seg.is_some()).count()
+    }
+
+    pub(crate) fn memory_bytes(&self) -> usize {
+        self.segments.capacity() * std::mem::size_of::<Option<Box<[u32; 1024]>>>()
+            + self.allocated_segments() * Self::SEGMENT_ROWS * std::mem::size_of::<u32>()
+    }
+
+    fn truncate_empty_tail_segments(&mut self) {
+        while self.segments.last().is_some_and(|seg| seg.is_none()) {
+            self.segments.pop();
+        }
     }
 }
 

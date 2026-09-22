@@ -356,6 +356,13 @@ impl StorageWriter for TestStorage {
     ) -> Result<(), StorageError> {
         Ok(())
     }
+    fn batch_delete_vertices_with_edges(
+        &mut self,
+        _space: &str,
+        _ids: &[VertexId],
+    ) -> Result<usize, StorageError> {
+        Ok(0)
+    }
     fn batch_insert_vertices(
         &mut self,
         _space: &str,

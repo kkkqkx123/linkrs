@@ -236,9 +236,8 @@ fn single_variant_supports_positional_writes() {
     let stale = crate::edge::EdgePosition::Overflow { chunk: 0, slot: 0 };
     assert!(!csr.revert_delete_at_position(0, stale, EdgeId(100), 2));
     assert!(
-        csr.delete_edge_at_position(0, stale, EdgeId(100), 3)
+        !csr.delete_edge_at_position(0, stale, EdgeId(100), 3)
             .unwrap_or(false)
-            == false
     );
 }
 

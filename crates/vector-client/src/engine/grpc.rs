@@ -1,5 +1,5 @@
 #[cfg(feature = "qdrant-grpc")]
-#[allow(clippy::large_enum_variant)]
+#[allow(clippy::large_enum_variant, clippy::result_large_err)]
 pub mod proto {
     tonic::include_proto!("qdrant");
 }

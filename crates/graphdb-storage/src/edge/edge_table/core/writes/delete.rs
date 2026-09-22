@@ -380,6 +380,65 @@ impl EdgeStore {
         Ok(staged)
     }
 
+    /// Batch-delete all incident edges of multiple vertices in one staging
+    /// commit. Each `(out_row, in_row)` pair identifies one vertex's rows in
+    /// the two CSR directions. Edges deduplicated by edge ID across the
+    /// entire batch, so bidirectional edges and shared endpoints are deleted
+    /// exactly once. Returns edges ordered by edge ID.
+    pub fn delete_incident_edges_of_vertices(
+        &mut self,
+        vertex_rows: &[(Option<u32>, Option<u32>)],
+        ts: Timestamp,
+    ) -> StorageResult<Vec<IncidentDeletedEdge>> {
+        if !self.is_open {
+            return Err(StorageError::storage_not_open());
+        }
+        let mut keys: Vec<(u32, u32, i64, EdgeId)> = Vec::new();
+        for &(out_row, in_row) in vertex_rows {
+            if let Some(row) = out_row {
+                if self.schema.has_out() {
+                    self.out_csr.visit_physical(row, |nbr| {
+                        if nbr.edge_id != INVALID_EDGE_ID && self.is_visible(nbr.edge_id, ts) {
+                            keys.push((row, nbr.endpoint, nbr.rank, nbr.edge_id));
+                        }
+                        true
+                    });
+                }
+            }
+            if let Some(row) = in_row {
+                if self.schema.has_in() {
+                    self.in_csr.visit_physical(row, |nbr| {
+                        if nbr.edge_id != INVALID_EDGE_ID && self.is_visible(nbr.edge_id, ts) {
+                            keys.push((nbr.endpoint, row, nbr.rank, nbr.edge_id));
+                        }
+                        true
+                    });
+                }
+            }
+        }
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        keys.sort_by_key(|(_, _, _, edge_id)| edge_id.0);
+        keys.dedup_by_key(|(_, _, _, edge_id)| *edge_id);
+
+        let mut staged: Vec<IncidentDeletedEdge> = Vec::with_capacity(keys.len());
+        let mut batch = EdgeStagingBatch::new();
+        for (src, dst, rank, edge_id) in &keys {
+            staged.push(IncidentDeletedEdge {
+                src: *src,
+                dst: *dst,
+                rank: *rank,
+                edge_id: *edge_id,
+                properties: self.properties_for_edge(*edge_id, ts),
+            });
+            batch.stage_delete(*src, *dst, *rank, ts);
+        }
+        self.commit_staging_batch(batch)?;
+        staged.retain(|edge| !self.is_visible(edge.edge_id, ts));
+        Ok(staged)
+    }
+
     /// Physically erase an edge inserted by an uncommitted transaction.
     ///
     /// Insert-undo path: unlike a user delete (logical deletion through

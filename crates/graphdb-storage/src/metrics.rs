@@ -150,6 +150,7 @@ impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
         fn insert_vertex(&mut self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError>;
         fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError>;
         fn delete_vertex_with_edges(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError>;
+        fn batch_delete_vertices_with_edges(&mut self, space: &str, ids: &[VertexId]) -> Result<usize, StorageError>;
         fn batch_insert_vertices(&mut self, space: &str, vertices: Vec<Vertex>) -> Result<Vec<VertexId>, StorageError>;
         fn delete_tags(&mut self, space: &str, vertex_id: &VertexId, tag_names: &[String]) -> Result<usize, StorageError>;
         fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;

@@ -93,6 +93,27 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
         Ok(())
     }
 
+    fn batch_delete_vertices_with_edges(
+        &mut self,
+        space: &str,
+        ids: &[VertexId],
+    ) -> Result<usize, StorageError> {
+        let mut vertices: Vec<Vertex> = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(v) = self.inner.get_vertex(space, id)? {
+                vertices.push(v);
+            }
+        }
+        let result = StorageWriter::batch_delete_vertices_with_edges(&mut self.inner, space, ids)?;
+        for (id, vertex) in ids.iter().zip(vertices) {
+            if let Err(error) = self.sync_delete_vertex(space, id, &vertex) {
+                return Err(self.reject_staged_write(error));
+            }
+        }
+        self.commit_auto_transaction()?;
+        Ok(result)
+    }
+
     fn batch_insert_vertices(
         &mut self,
         space: &str,

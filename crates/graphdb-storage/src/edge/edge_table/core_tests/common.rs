@@ -1,7 +1,7 @@
 use crate::edge::edge_table::core::EdgeStore;
 use crate::edge::{EdgeSchema, EdgeStrategy, RecordForm};
 use crate::types::StoragePropertyDef;
-use graphdb_core::types::{CommitLsn, DataType, EdgeId, Timestamp};
+use graphdb_core::types::{CommitLsn, DataType, Timestamp};
 use graphdb_core::Value;
 
 pub(super) type EdgeTable = EdgeStore;

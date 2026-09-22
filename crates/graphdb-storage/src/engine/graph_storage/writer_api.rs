@@ -32,6 +32,17 @@ impl StorageWriter for GraphStorage {
         self.commit_auto_if_needed()
     }
 
+    fn batch_delete_vertices_with_edges(
+        &mut self,
+        space: &str,
+        ids: &[VertexId],
+    ) -> Result<usize, StorageError> {
+        self.ctx.check_write_admission()?;
+        let result = writer::batch_delete_vertices_with_edges(&self.ctx, space, ids)?;
+        self.commit_auto_if_needed()?;
+        Ok(result)
+    }
+
     fn batch_insert_vertices(
         &mut self,
         space: &str,
