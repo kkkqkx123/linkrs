@@ -31,26 +31,6 @@ impl BundledOverflowValues {
         self.valid.remove(index);
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn consolidated(values: &[u64], valid: &BitVec<u8, Lsb0>) -> Self {
-        Self {
-            values: values.to_vec(),
-            valid: valid.clone(),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn consolidated_from_slice(values: &[u64], valid: &[bool]) -> Self {
-        let mut bits = BitVec::with_capacity(valid.len());
-        for v in valid {
-            bits.push(*v);
-        }
-        Self {
-            values: values.to_vec(),
-            valid: bits,
-        }
-    }
-
     pub(crate) fn heap_bytes(&self) -> usize {
         self.values.len() * 8 + self.valid.len().div_ceil(8)
     }
@@ -64,11 +44,6 @@ impl BundledOverflowValues {
         if index < self.valid.len() {
             self.valid.set(index, value);
         }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn push_valid(&mut self, value: bool) {
-        self.valid.push(value);
     }
 
     pub(crate) fn resize_valid(&mut self, len: usize, value: bool) {

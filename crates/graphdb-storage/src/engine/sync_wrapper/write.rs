@@ -1,7 +1,7 @@
 use super::SyncWrapper;
 use crate::{StorageClient, StorageWriter};
 use graphdb_core::types::{InsertEdgeInfo, InsertVertexInfo, UpdateInfo, UpdateOp, VertexId};
-use graphdb_core::{Edge, StorageError, Value, Vertex};
+use graphdb_core::{Edge, EdgeDeleteKey, StorageError, Value, Vertex};
 use graphdb_sync::types::ChangeType;
 
 impl<S: StorageClient + 'static> SyncWrapper<S> {
@@ -233,6 +233,22 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
         result?;
         self.commit_auto_transaction()?;
         Ok(())
+    }
+
+    fn batch_delete_edges(
+        &mut self,
+        space: &str,
+        deletes: &[EdgeDeleteKey],
+    ) -> Result<usize, StorageError> {
+        let result = self.inner.batch_delete_edges(space, deletes);
+        if result.is_ok() {
+            if let Err(error) = self.sync_batch_delete_edges(space, deletes) {
+                return Err(self.reject_staged_write(error));
+            }
+        }
+        let deleted = result?;
+        self.commit_auto_transaction()?;
+        Ok(deleted)
     }
 
     fn insert_vertex_data(

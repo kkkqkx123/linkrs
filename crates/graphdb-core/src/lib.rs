@@ -34,7 +34,7 @@ pub use error::{ErrorCode, PublicError, ToPublicError};
 // Core data types
 pub use npath::{NPath, NPathEdgeIter, NPathIter, NPathVertexIter};
 pub use value::*;
-pub use vertex_edge_path::{Edge, Path, Step, Tag, Vertex};
+pub use vertex_edge_path::{Edge, EdgeDeleteKey, Path, Step, Tag, Vertex};
 
 // Expression system type
 pub use types::expr::Expression;

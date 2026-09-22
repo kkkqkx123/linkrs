@@ -11,7 +11,7 @@ use graphdb_core::types::{
     EdgeTypeInfo, EdgeTypeSchema, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
     PropertyDef, SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
-use graphdb_core::{Edge, EdgeDirection, RoleType, StorageResult, Value, Vertex};
+use graphdb_core::{Edge, EdgeDeleteKey, EdgeDirection, RoleType, StorageResult, Value, Vertex};
 use graphdb_transaction::UndoTarget;
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -281,6 +281,7 @@ impl StorageWriter for MockStorage {
             Ok(())
         }
     }
+    mock_stub!(&mut self, batch_delete_edges(_space: &str, _deletes: &[EdgeDeleteKey]) -> Result<usize, StorageError>, Ok(0));
     mock_stub!(&mut self, insert_vertex_data(_space: &str, _info: &InsertVertexInfo) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&mut self, insert_edge_data(_space: &str, _info: &InsertEdgeInfo) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&mut self, delete_vertex_data(_space: &str, _vertex_id: &str) -> Result<bool, StorageError>, Ok(true));

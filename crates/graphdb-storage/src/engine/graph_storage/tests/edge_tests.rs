@@ -565,3 +565,67 @@ fn test_get_edge_projected() {
         .expect("edge exists");
     assert_eq!(full_again.properties().len(), 2);
 }
+
+#[test]
+fn test_batch_delete_edges_removes_many_keys_under_one_timestamp() {
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    setup_knows_edge(&mut storage);
+    for (id, name) in [(1, "Alice"), (2, "Bob"), (3, "Carol"), (4, "Dave")] {
+        insert_test_vertex(&mut storage, id, name);
+    }
+    let edge = |src: i64, dst: i64| {
+        Edge::new(
+            VertexId::from_int64(src),
+            VertexId::from_int64(dst),
+            "KNOWS".to_string(),
+            0,
+            std::collections::HashMap::new(),
+        )
+    };
+    storage
+        .batch_insert_edges("test_space", vec![edge(1, 2), edge(1, 3), edge(3, 4)])
+        .unwrap();
+
+    let key = |src: i64, dst: i64| {
+        graphdb_core::EdgeDeleteKey::new(
+            VertexId::from_int64(src),
+            VertexId::from_int64(dst),
+            "KNOWS".to_string(),
+            0,
+        )
+    };
+    // Two live keys plus one missing key: the missing key is a no-op and the
+    // reported count covers the applied deletes only.
+    let deleted = storage
+        .batch_delete_edges("test_space", &[key(1, 2), key(1, 3), key(2, 4)])
+        .unwrap();
+    assert_eq!(deleted, 2);
+    let remaining = storage.scan_edges_by_type("test_space", "KNOWS").unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].src, VertexId::from_int64(3));
+    assert!(storage
+        .get_edge(
+            "test_space",
+            &VertexId::from_int64(1),
+            &VertexId::from_int64(2),
+            "KNOWS",
+            0
+        )
+        .unwrap()
+        .is_none());
+
+    // Re-deleting tombstoned keys fails like the single delete, with the
+    // surviving edge untouched.
+    assert!(storage
+        .batch_delete_edges("test_space", &[key(1, 2), key(1, 3), key(2, 4)])
+        .is_err());
+    assert_eq!(
+        storage
+            .scan_edges_by_type("test_space", "KNOWS")
+            .unwrap()
+            .len(),
+        1
+    );
+}

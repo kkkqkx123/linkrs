@@ -324,3 +324,39 @@ fn test_gated_point_lookup_resolves_visible_generation() {
     assert!(!table.has_edge(0, 1, 0, 175));
     assert!(table.has_edge(0, 1, 0, 250));
 }
+
+#[test]
+fn test_fused_point_lookup_matches_split_paths() {
+    use crate::mvcc_visibility::PendingGate;
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table.insert_edge(0, 1, 0, &[], 100).unwrap();
+    table.insert_edge(0, 2, 0, &[], 110).unwrap();
+    assert!(table.delete_edge(0, 1, 0, 150).unwrap());
+
+    let vm = graphdb_transaction::VersionManager::new();
+    let gate = PendingGate::new(&vm, None);
+    // Live, deleted, never-created and pre-creation timestamps: the fused
+    // entries must agree with the split record-plus-id lookups exactly.
+    for ts in [99, 100, 120, 150, 200] {
+        for (src, dst) in [(0, 1), (0, 2), (0, 3)] {
+            let split = table.get_edge(src, dst, 0, ts);
+            let fused = table.get_edge_with_id(src, dst, 0, ts);
+            assert_eq!(fused.is_some(), split.is_some());
+            if let (Some((fused_record, fused_id)), Some(split_record)) = (&fused, &split) {
+                assert_eq!(fused_record.rank, split_record.rank);
+                assert_eq!(fused_record.properties, split_record.properties);
+                assert_eq!(*fused_id, table.edge_id_of(src, dst, 0, ts).unwrap());
+            } else {
+                assert!(table.edge_id_of(src, dst, 0, ts).is_none());
+            }
+            let split_gated = table.get_edge_with_gate_projected(src, dst, 0, ts, &gate, None);
+            let fused_gated = table.get_edge_projected_with_id(src, dst, 0, ts, &gate, None);
+            assert_eq!(fused_gated.is_some(), split_gated.is_some());
+            if let (Some((fused_record, _)), Some(split_record)) = (&fused_gated, &split_gated) {
+                assert_eq!(fused_record.rank, split_record.rank);
+                assert_eq!(fused_record.properties, split_record.properties);
+            }
+        }
+    }
+}

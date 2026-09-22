@@ -18,13 +18,15 @@
 //! - `stats`: tombstone and deletion statistics
 //! - `freeze`: explicit per-direction group freeze and unfreeze
 //!
-//! Write batching contract: the engine layer currently commits one edge per
-//! staging batch (`insert_edge`/`delete_edge` each wrap a single staged
-//! entry in `commit_staging_batch`). A multi-entry `EdgeStagingBatch` is
-//! supported by `commit_staging_batch` for future transaction-layer batching,
-//! but no engine path builds one today. Each single-entry commit is atomic
-//! with concentrated rollback; multi-edge transaction atomicity still relies
-//! on the undo-log replay above this layer.
+//! Write batching contract: point operations (`insert_edge`/`delete_edge`)
+//! each wrap a single staged entry in `commit_staging_batch`. Batch entry
+//! points (`insert_edges_batch`/`delete_edges_batch`) assemble one
+//! multi-entry `EdgeStagingBatch` per call, committed atomically with
+//! concentrated rollback of the applied prefix on failure. An empty
+//! non-inline table routes `insert_edges_batch` through the grouped
+//! direct-write path with identical effects. Each commit is atomic;
+//! multi-edge transaction atomicity across calls still relies on the
+//! undo-log replay above this layer.
 
 pub mod checkpoint;
 pub mod compaction;

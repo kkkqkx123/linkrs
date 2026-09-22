@@ -5,7 +5,7 @@ mod edge;
 mod index_maintenance;
 mod vertex;
 
-pub(crate) use batch::batch_insert_edges;
+pub(crate) use batch::{batch_delete_edges, batch_insert_edges};
 pub(crate) use data::{
     delete_edge_data, delete_vertex_data, insert_edge_data, insert_vertex_data, update_data,
 };

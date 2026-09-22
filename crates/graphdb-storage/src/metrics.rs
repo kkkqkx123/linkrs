@@ -13,7 +13,9 @@ use graphdb_core::types::{
     EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo, PropertyDef,
     SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
-use graphdb_core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
+use graphdb_core::{
+    Edge, EdgeDeleteKey, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex,
+};
 use graphdb_sync::SyncManager;
 
 pub struct MetricsStorage<S: StorageClient> {
@@ -156,6 +158,7 @@ impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
         fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
         fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
         fn batch_insert_edges(&mut self, space: &str, edges: Vec<Edge>) -> Result<(), StorageError>;
+        fn batch_delete_edges(&mut self, space: &str, deletes: &[EdgeDeleteKey]) -> Result<usize, StorageError>;
         fn insert_vertex_data(&mut self, space: &str, info: &InsertVertexInfo) -> Result<bool, StorageError>;
         fn insert_edge_data(&mut self, space: &str, info: &InsertEdgeInfo) -> Result<bool, StorageError>;
         fn delete_vertex_data(&mut self, space: &str, vertex_id: &str) -> Result<bool, StorageError>;

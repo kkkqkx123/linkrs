@@ -304,6 +304,31 @@ impl EdgeStore {
         Ok(self.commit_staging_batch(batch)? > 0)
     }
 
+    /// Delete many edges by key in a single staging commit.
+    ///
+    /// One prevalidation and one commit carry the whole batch with the same
+    /// all-or-nothing semantics as repeated `delete_edge` calls: entries
+    /// apply in slice order and a mid-batch failure rolls the applied prefix
+    /// back with the table untouched afterwards. Keys never created report
+    /// no error and consume no tombstone, mirroring the single-delete
+    /// no-op; re-deleting an already-deleted edge fails the batch like the
+    /// single path. Returns the number of net applied deletes.
+    pub fn delete_edges_batch(
+        &mut self,
+        keys: &[(u32, u32, i64)],
+        ts: Timestamp,
+    ) -> StorageResult<usize> {
+        if !self.is_open {
+            return Err(StorageError::storage_not_open());
+        }
+
+        let mut batch = EdgeStagingBatch::new();
+        for (src, dst, rank) in keys {
+            batch.stage_delete(*src, *dst, *rank, ts);
+        }
+        self.commit_staging_batch(batch)
+    }
+
     /// Delete every authority-live incident edge of one vertex in one batch.
     ///
     /// `out_row` addresses the vertex on the stored out leg and `in_row` on

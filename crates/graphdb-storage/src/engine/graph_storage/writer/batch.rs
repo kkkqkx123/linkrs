@@ -1,11 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::engine::{BatchEdgeInsert, InsertEdgesBatchParams};
+use crate::engine::{
+    BatchEdgeDelete, BatchEdgeInsert, DeleteEdgesBatchParams, InsertEdgesBatchParams,
+};
 use crate::index::types::EdgeIdentity;
 use graphdb_core::types::{EdgeIdentifier, Index, LabelId, TagInfo, Timestamp, VertexId};
-use graphdb_core::wal::redo::InsertEdgeRedo;
+use graphdb_core::wal::redo::{DeleteEdgeRedo, InsertEdgeRedo};
 use graphdb_core::wal::types::WalOpType;
-use graphdb_core::{Edge, StorageError, StorageResult, Value};
+use graphdb_core::{Edge, EdgeDeleteKey, StorageError, StorageResult, Value};
 
 use super::super::context::GraphStorageContext;
 use super::super::ops::endpoint_label_id;
@@ -314,4 +316,206 @@ fn validate_edge_batch(
         }
     }
     Ok(())
+}
+
+/// Delete a batch of edges by key under one write timestamp.
+///
+/// Mirrors `batch_insert_edges`: one timestamp covers the whole batch, each
+/// edge type resolves its schema once, one redo per key precedes one staging
+/// commit per owner partition, then per-edge index cleanup and undo records
+/// run for the keys that prefetched live state. Keys never created delete
+/// nothing and consume no tombstone; re-deleting an already-deleted edge
+/// fails the batch exactly like the single delete. A failure aborts
+/// the timestamp with prior groups already committed; aborted stamps stay
+/// hidden through the pending gate, matching the vertex-batch contract.
+/// Returns the number of net applied deletes.
+pub(crate) fn batch_delete_edges(
+    ctx: &GraphStorageContext,
+    space: &str,
+    deletes: &[EdgeDeleteKey],
+) -> StorageResult<usize> {
+    if deletes.is_empty() {
+        return Ok(0);
+    }
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    for key in deletes {
+        let edge_type = super::edge::resolve_edge_type(ctx, space, &key.edge_type)?;
+        if endpoint_label_id(ctx, space, &edge_type.src_tag_name)?.is_none() {
+            return Err(StorageError::not_found(format!(
+                "Source tag {} not found",
+                edge_type.src_tag_name
+            )));
+        }
+        if endpoint_label_id(ctx, space, &edge_type.dst_tag_name)?.is_none() {
+            return Err(StorageError::not_found(format!(
+                "Destination tag {} not found",
+                edge_type.dst_tag_name
+            )));
+        }
+    }
+    // Prefetch previous properties for the undo records, mirroring the
+    // single-delete pre-delete read. Missing edges prefetch to `None` and
+    // are skipped below with no further effects.
+    let mut previous = Vec::with_capacity(deletes.len());
+    for key in deletes {
+        previous.push(super::super::reader::get_edge(
+            ctx,
+            space,
+            &key.src,
+            &key.dst,
+            &key.edge_type,
+            key.ranking,
+        )?);
+    }
+
+    let ts = ctx.get_write_timestamp()?;
+    let mut deleted = 0usize;
+    if let Err(e) = batch_delete_grouped(ctx, space, space_id, deletes, &previous, ts, &mut deleted)
+    {
+        ctx.abort_write_timestamp(ts);
+        return Err(e);
+    }
+
+    ctx.commit_write_timestamp_ordered(ts)?;
+
+    Ok(deleted)
+}
+
+/// Delete a batch grouped by edge type in first-seen order.
+///
+/// Each type resolves its schema once, appends one redo per existing edge in
+/// group order, commits the whole type through one staging commit per owner
+/// partition, then runs the per-edge index cleanup and undo recording in the
+/// same order.
+fn batch_delete_grouped(
+    ctx: &GraphStorageContext,
+    space: &str,
+    space_id: u64,
+    deletes: &[EdgeDeleteKey],
+    previous: &[Option<Edge>],
+    ts: Timestamp,
+    deleted: &mut usize,
+) -> StorageResult<()> {
+    let mut order: Vec<String> = Vec::new();
+    let mut by_type: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (index, key) in deletes.iter().enumerate() {
+        by_type
+            .entry(key.edge_type.clone())
+            .or_insert_with(|| {
+                order.push(key.edge_type.clone());
+                Vec::new()
+            })
+            .push(index);
+    }
+    for edge_type_name in &order {
+        let positions = by_type
+            .get(edge_type_name)
+            .ok_or_else(|| StorageError::db_error("batch type group missing".to_string()))?;
+        *deleted += delete_one_type_batch(ctx, space, space_id, deletes, positions, previous, ts)?;
+    }
+    Ok(())
+}
+
+fn delete_one_type_batch(
+    ctx: &GraphStorageContext,
+    space: &str,
+    space_id: u64,
+    deletes: &[EdgeDeleteKey],
+    positions: &[usize],
+    previous: &[Option<Edge>],
+    ts: Timestamp,
+) -> StorageResult<usize> {
+    let first = &deletes[positions[0]];
+    let edge_type = super::edge::resolve_edge_type(ctx, space, &first.edge_type)?;
+    let edge_label_id = edge_type.edge_type_id;
+    let src_label_id =
+        endpoint_label_id(ctx, space, &edge_type.src_tag_name)?.ok_or_else(|| {
+            StorageError::not_found(format!("Source tag {} not found", edge_type.src_tag_name))
+        })?;
+    let dst_label_id =
+        endpoint_label_id(ctx, space, &edge_type.dst_tag_name)?.ok_or_else(|| {
+            StorageError::not_found(format!(
+                "Destination tag {} not found",
+                edge_type.dst_tag_name
+            ))
+        })?;
+
+    let mut redo_entries = Vec::with_capacity(positions.len());
+    // Redo precedes the table commit for every key, mirroring the single
+    // delete: replay of a delete matching nothing is a no-op, while
+    // re-deleting an already-deleted edge fails in the table batch below
+    // exactly like the single path instead of reporting silent success.
+    for &index in positions {
+        let key = &deletes[index];
+        let redo = DeleteEdgeRedo {
+            src_label: src_label_id,
+            src_vid: key.src,
+            dst_label: dst_label_id,
+            dst_vid: key.dst,
+            edge_label: edge_label_id,
+            rank: key.ranking,
+        };
+        redo_entries.push(ctx.append_wal_redo(WalOpType::DeleteEdge, ts, &redo)?);
+    }
+
+    let batch_params: Vec<BatchEdgeDelete> = positions
+        .iter()
+        .map(|&index| {
+            let key = &deletes[index];
+            BatchEdgeDelete {
+                src_id: key.src,
+                dst_id: key.dst,
+                rank: key.ranking,
+            }
+        })
+        .collect();
+    let applied = ctx.delete_edges_batch(DeleteEdgesBatchParams {
+        edge_label: edge_label_id,
+        src_label: src_label_id,
+        dst_label: dst_label_id,
+        edges: &batch_params,
+        ts,
+    })?;
+
+    for (position, &index) in positions.iter().enumerate() {
+        if previous[index].is_none() {
+            continue;
+        }
+        let key = &deletes[index];
+        let src_value = Value::from(key.src);
+        let dst_value = Value::from(key.dst);
+        let edge_identity = EdgeIdentity::new(
+            space_id,
+            &src_value,
+            &dst_value,
+            &key.edge_type,
+            key.ranking,
+        );
+        ctx.delete_all_edge_indexes_mvcc(&edge_identity, ts)?;
+        let props = previous[index]
+            .as_ref()
+            .map(|edge| {
+                edge.props
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        super::edge::record_edge_remove(
+            ctx,
+            EdgeIdentifier::new(
+                src_label_id,
+                key.src,
+                dst_label_id,
+                key.dst,
+                edge_label_id,
+                key.ranking,
+            ),
+            props,
+            Some(redo_entries[position].clone()),
+        )?;
+    }
+
+    Ok(applied)
 }

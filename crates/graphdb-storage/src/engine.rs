@@ -23,6 +23,9 @@ mod data_store_test;
 #[cfg(test)]
 mod persistence_test;
 
-pub use params::{BatchEdgeInsert, EdgeOperationParams, InsertEdgeParams, InsertEdgesBatchParams};
+pub use params::{
+    BatchEdgeDelete, BatchEdgeInsert, DeleteEdgesBatchParams, EdgeOperationParams,
+    InsertEdgeParams, InsertEdgesBatchParams,
+};
 pub use persistence_coordinator::PersistenceConfig;
 pub use wal_manager::{WalManager, WalMetrics};

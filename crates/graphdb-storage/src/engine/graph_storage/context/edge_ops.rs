@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use crate::edge::{BatchInsertEntry, EdgeRecord, HotNbr};
 use crate::engine::data_store::EdgeTableKey;
-use crate::engine::{EdgeOperationParams, InsertEdgeParams, InsertEdgesBatchParams};
+use crate::engine::{
+    DeleteEdgesBatchParams, EdgeOperationParams, InsertEdgeParams, InsertEdgesBatchParams,
+};
 use crate::mvcc_visibility::PendingGate;
 use crate::vertex::ShardedVertexTable;
 use graphdb_core::types::{LabelId, Timestamp, VertexId};
@@ -227,6 +229,120 @@ impl GraphStorageContext {
         Ok(())
     }
 
+    /// Delete many edges of one edge type with one staging commit per owner
+    /// partition.
+    ///
+    /// Every endpoint resolves once under a single vertex-table read, then
+    /// keys group by owner partition so each delete lands exactly where
+    /// repeated single deletes put it. One partition lock and one staging
+    /// commit serve each group instead of one per edge. Keys whose endpoints
+    /// do not resolve delete nothing and report no error, mirroring the
+    /// single-delete no-op; keys resolving to tombstoned edges fail through
+    /// the table batch like the single path. A missing partition table
+    /// errors like the single path. Returns the number of net applied
+    /// deletes.
+    pub fn delete_edges_batch(&self, params: DeleteEdgesBatchParams) -> StorageResult<usize> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return Err(StorageError::storage_not_open());
+        }
+        if params.edges.is_empty() {
+            return Ok(0);
+        }
+        let resolved: Vec<Option<(u32, u32, LabelId, LabelId)>> = self
+            .persistent
+            .data_store
+            .with_vertex_tables(|vertex_tables| {
+                let mut resolved = Vec::with_capacity(params.edges.len());
+                for edge in params.edges {
+                    let src_internal = helpers::resolve_internal_id(
+                        self,
+                        vertex_tables,
+                        params.src_label,
+                        edge.src_id,
+                        params.ts,
+                    )
+                    .or_else(|| {
+                        helpers::resolve_internal_id_any(
+                            vertex_tables,
+                            params.src_label,
+                            edge.src_id,
+                        )
+                    });
+                    let dst_internal = helpers::resolve_internal_id(
+                        self,
+                        vertex_tables,
+                        params.dst_label,
+                        edge.dst_id,
+                        params.ts,
+                    )
+                    .or_else(|| {
+                        helpers::resolve_internal_id_any(
+                            vertex_tables,
+                            params.dst_label,
+                            edge.dst_id,
+                        )
+                    });
+                    let (Some(src_internal), Some(dst_internal)) = (src_internal, dst_internal)
+                    else {
+                        resolved.push(None);
+                        continue;
+                    };
+                    let actual_src_label = if params.src_label == 0 {
+                        helpers::resolve_internal_id_label(vertex_tables, &edge.src_id, params.ts)
+                            .unwrap_or(params.src_label)
+                    } else {
+                        params.src_label
+                    };
+                    let actual_dst_label = if params.dst_label == 0 {
+                        helpers::resolve_internal_id_label(vertex_tables, &edge.dst_id, params.ts)
+                            .unwrap_or(params.dst_label)
+                    } else {
+                        params.dst_label
+                    };
+                    resolved.push(Some((
+                        src_internal,
+                        dst_internal,
+                        actual_src_label,
+                        actual_dst_label,
+                    )));
+                }
+                resolved
+            });
+
+        let mut by_partition: HashMap<(LabelId, LabelId), Vec<(u32, u32, i64)>> = HashMap::new();
+        for (edge, slot) in params.edges.iter().zip(resolved.iter()) {
+            if let Some((src_internal, dst_internal, actual_src, actual_dst)) = slot {
+                by_partition
+                    .entry((*actual_src, *actual_dst))
+                    .or_default()
+                    .push((*src_internal, *dst_internal, edge.rank));
+            }
+        }
+        let mut partitions: Vec<((LabelId, LabelId), Vec<(u32, u32, i64)>)> =
+            by_partition.into_iter().collect();
+        partitions.sort_unstable_by_key(|(key, _)| *key);
+
+        let mut applied = 0usize;
+        let mut maintenance_requested = false;
+        for ((actual_src, actual_dst), keys) in partitions {
+            let key = EdgeTableKey::new(actual_src, actual_dst, params.edge_label);
+            let (count, requested) =
+                self.persistent
+                    .data_store
+                    .with_single_edge_table_mut(&key, |edge_table| {
+                        let count = edge_table.delete_edges_batch(&keys, params.ts)?;
+                        Ok((count, edge_table.needs_background_maintenance()))
+                    })?;
+            applied += count;
+            maintenance_requested |= requested;
+        }
+        if maintenance_requested {
+            self.schedule_background_maintenance();
+        }
+        self.mark_edge_modified(params.edge_label);
+        Ok(applied)
+    }
+
     fn resolve_edge_table_key(ctx: EdgeLabelLookupCtx) -> EdgeTableKey {
         let actual_src_label = if ctx.src_label == 0 {
             helpers::resolve_internal_id_label(ctx.vertex_tables, ctx.src_id, ctx.ts)
@@ -290,53 +406,23 @@ impl GraphStorageContext {
             .as_ref()
             .and_then(|context| context.write_timestamp);
         let gate = PendingGate::new(&self.persistent.version_manager, own_write);
-        let mut cur = ts;
-        loop {
-            let record = self.persistent.data_store.with_edge_tables(|edge_tables| {
-                edge_tables.get(&key).and_then(|arc| {
-                    arc.read()
-                        .get_edge(src_internal, dst_internal, params.rank, cur)
-                })
-            });
-            let edge_id = self.persistent.data_store.with_edge_tables(|edge_tables| {
-                edge_tables.get(&key).and_then(|arc| {
-                    arc.read()
-                        .edge_id_of(src_internal, dst_internal, params.rank, cur)
-                })
-            });
-            let Some(edge_id) = edge_id else {
-                return record;
-            };
-            let visible = self.persistent.data_store.with_edge_tables(|edge_tables| {
-                edge_tables.get(&key).map(|arc| {
-                    arc.read()
-                        .mvcc
-                        .is_edge_visible_with_gate(edge_id, cur, &gate)
-                })
-            });
-            if visible == Some(true) && record.is_some() {
-                return record;
+        // Single table lock: the fused lookup resolves the record and its
+        // edge id in one row scan, and the gate verdict reuses that id with
+        // no second scan and no second lock acquisition. One snapshot closes
+        // the lock-to-lock race window the old triple acquisition retried
+        // against, so no retry loop remains: no match reads empty, and a
+        // gate-hidden match is a filtered dirty read (a foreign uncommitted
+        // creation leaking through the plain predicate).
+        self.persistent.data_store.with_edge_tables(|edge_tables| {
+            let guard = edge_tables.get(&key)?.read();
+            let (record, edge_id) =
+                guard.get_edge_with_id(src_internal, dst_internal, params.rank, ts)?;
+            if guard.mvcc.is_edge_visible_with_gate(edge_id, ts, &gate) {
+                Some(record)
+            } else {
+                None
             }
-            if record.is_some() {
-                // Visible to the plain predicate but hidden through the
-                // gate: the creation stamp belongs to a foreign uncommitted
-                // transaction (dirty read filtered).
-                return None;
-            }
-            // No record: a foreign pending deletion may be hiding a live edge.
-            let delete_ts = self.persistent.data_store.with_edge_tables(|edge_tables| {
-                edge_tables
-                    .get(&key)
-                    .and_then(|arc| arc.read().mvcc.deletion_ts_of(edge_id))
-            });
-            if let Some(delete_ts) = delete_ts {
-                if delete_ts <= cur && gate.is_foreign_pending(cur, delete_ts) && delete_ts > 0 {
-                    cur = delete_ts - 1;
-                    continue;
-                }
-            }
-            return None;
-        }
+        })
     }
 
     /// Projected point lookup: same pending-aware recheck as `get_edge`
@@ -389,55 +475,27 @@ impl GraphStorageContext {
             .as_ref()
             .and_then(|context| context.write_timestamp);
         let gate = PendingGate::new(&self.persistent.version_manager, own_write);
-        let mut cur = ts;
-        loop {
-            let record = self.persistent.data_store.with_edge_tables(|edge_tables| {
-                edge_tables.get(&key).and_then(|arc| {
-                    arc.read().get_edge_with_gate_projected(
-                        src_internal,
-                        dst_internal,
-                        params.rank,
-                        cur,
-                        &gate,
-                        projection,
-                    )
-                })
-            });
-            let edge_id = self.persistent.data_store.with_edge_tables(|edge_tables| {
-                edge_tables.get(&key).and_then(|arc| {
-                    arc.read()
-                        .edge_id_of(src_internal, dst_internal, params.rank, cur)
-                })
-            });
-            let Some(edge_id) = edge_id else {
-                return record;
-            };
-            let visible = self.persistent.data_store.with_edge_tables(|edge_tables| {
-                edge_tables.get(&key).map(|arc| {
-                    arc.read()
-                        .mvcc
-                        .is_edge_visible_with_gate(edge_id, cur, &gate)
-                })
-            });
-            if visible == Some(true) && record.is_some() {
-                return record;
+        // Single table lock mirroring `get_edge`: the fused lookup resolves
+        // the projected record and its edge id in one gate-aware row scan,
+        // and the recheck below reuses that id with no second scan and no
+        // second lock acquisition. One snapshot closes the lock-to-lock race
+        // window, so the old retry loop collapses to a single pass.
+        self.persistent.data_store.with_edge_tables(|edge_tables| {
+            let guard = edge_tables.get(&key)?.read();
+            let (record, edge_id) = guard.get_edge_projected_with_id(
+                src_internal,
+                dst_internal,
+                params.rank,
+                ts,
+                &gate,
+                projection,
+            )?;
+            if guard.mvcc.is_edge_visible_with_gate(edge_id, ts, &gate) {
+                Some(record)
+            } else {
+                None
             }
-            if record.is_some() {
-                return None;
-            }
-            let delete_ts = self.persistent.data_store.with_edge_tables(|edge_tables| {
-                edge_tables
-                    .get(&key)
-                    .and_then(|arc| arc.read().mvcc.deletion_ts_of(edge_id))
-            });
-            if let Some(delete_ts) = delete_ts {
-                if delete_ts <= cur && gate.is_foreign_pending(cur, delete_ts) && delete_ts > 0 {
-                    cur = delete_ts - 1;
-                    continue;
-                }
-            }
-            return None;
-        }
+        })
     }
 
     pub fn delete_edge(&self, params: &EdgeOperationParams, ts: Timestamp) -> StorageResult<bool> {

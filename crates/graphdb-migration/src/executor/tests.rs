@@ -2,7 +2,7 @@ use super::*;
 use crate::plan::{MigrationTarget, VersionRange};
 use graphdb_core::types::{EdgeTypeInfo, Index, SpaceInfo, TagInfo, VertexId};
 use graphdb_core::StorageError;
-use graphdb_core::{DataType, Edge, EdgeDirection, Value, Vertex};
+use graphdb_core::{DataType, Edge, EdgeDeleteKey, EdgeDirection, Value, Vertex};
 use graphdb_storage::{
     AutoCommitBatchOps, AutoCommitGroupOps, LabelVersionHistory, MigrationHistoryRecord,
     StorageReader, StorageWriter,
@@ -409,6 +409,13 @@ impl StorageWriter for TestStorage {
     }
     fn batch_insert_edges(&mut self, _space: &str, _edges: Vec<Edge>) -> Result<(), StorageError> {
         Ok(())
+    }
+    fn batch_delete_edges(
+        &mut self,
+        _space: &str,
+        _deletes: &[EdgeDeleteKey],
+    ) -> Result<usize, StorageError> {
+        Ok(0)
     }
     fn insert_vertex_data(
         &mut self,

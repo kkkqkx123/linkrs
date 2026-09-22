@@ -1,5 +1,5 @@
 use graphdb_core::types::{InsertEdgeInfo, InsertVertexInfo, UpdateInfo, VertexId};
-use graphdb_core::{Edge, StorageError, Vertex};
+use graphdb_core::{Edge, EdgeDeleteKey, StorageError, Vertex};
 
 use crate::StorageWriter;
 
@@ -95,6 +95,17 @@ impl StorageWriter for GraphStorage {
         self.ctx.check_write_admission()?;
         writer::batch_insert_edges(&self.ctx, space, edges)?;
         self.commit_auto_if_needed()
+    }
+
+    fn batch_delete_edges(
+        &mut self,
+        space: &str,
+        deletes: &[EdgeDeleteKey],
+    ) -> Result<usize, StorageError> {
+        self.ctx.check_write_admission()?;
+        let result = writer::batch_delete_edges(&self.ctx, space, deletes)?;
+        self.commit_auto_if_needed()?;
+        Ok(result)
     }
 
     fn insert_vertex_data(

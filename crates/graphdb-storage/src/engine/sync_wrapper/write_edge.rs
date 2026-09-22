@@ -1,7 +1,7 @@
 use super::SyncWrapper;
 use crate::StorageClient;
 use graphdb_core::types::VertexId;
-use graphdb_core::{Edge, StorageError, Value};
+use graphdb_core::{Edge, EdgeDeleteKey, StorageError, Value};
 
 impl<S: StorageClient + 'static> SyncWrapper<S> {
     pub(super) fn sync_insert_edge(
@@ -85,6 +85,48 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
                     .on_edge_insert(txn_id, space_id, edge)
                     .map_err(|e| {
                         StorageError::db_error(format!("Failed to sync edge insert: {}", e))
+                    })?;
+            } else {
+                return Err(StorageError::db_error(
+                    "Synchronized writes require an operation transaction context".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn sync_batch_delete_edges(
+        &mut self,
+        space: &str,
+        deletes: &[EdgeDeleteKey],
+    ) -> Result<(), StorageError> {
+        if !self.enabled {
+            return Ok(());
+        }
+
+        let Some(sync_manager) = self.get_sync_manager() else {
+            return Ok(());
+        };
+
+        let space_id = self.inner.get_space_id(space)?;
+        let txn_id = self.get_current_txn_id();
+
+        for key in deletes {
+            if let Some(txn_id) = txn_id {
+                let src_value = Value::from(key.src);
+                let dst_value = Value::from(key.dst);
+                sync_manager
+                    .on_edge_delete(
+                        txn_id,
+                        space_id,
+                        &src_value,
+                        &dst_value,
+                        &key.edge_type,
+                        key.ranking,
+                    )
+                    .map_err(|e| {
+                        StorageError::db_error(format!("Failed to sync edge delete: {}", e))
                     })?;
             } else {
                 return Err(StorageError::db_error(

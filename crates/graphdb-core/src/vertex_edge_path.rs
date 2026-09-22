@@ -466,6 +466,29 @@ impl PartialOrd for Edge {
     }
 }
 
+/// Key of one edge for batch deletion, mirroring the identity half of `Edge.
+///
+/// Carries no properties: deletes address `(src, dst, edge_type, ranking)`
+/// only, so callers deleting many edges avoid building full payload edges.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EdgeDeleteKey {
+    pub src: VertexId,
+    pub dst: VertexId,
+    pub edge_type: String,
+    pub ranking: i64,
+}
+
+impl EdgeDeleteKey {
+    pub fn new(src: VertexId, dst: VertexId, edge_type: String, ranking: i64) -> Self {
+        Self {
+            src,
+            dst,
+            edge_type,
+            ranking,
+        }
+    }
+}
+
 /// Represents a step in a path
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Step {

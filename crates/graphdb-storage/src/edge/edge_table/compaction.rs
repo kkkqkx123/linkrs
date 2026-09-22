@@ -543,6 +543,47 @@ impl EdgeStore {
                                 self.in_csr.group_bits()
                             };
                             let base = crate::edge::node_group::group_base(gid, group_bits);
+                            let frozen = if outgoing {
+                                self.out_csr.is_frozen(gid)
+                            } else {
+                                self.in_csr.is_frozen(gid)
+                            };
+                            if frozen {
+                                let mut locals = Vec::new();
+                                for local in start..end {
+                                    let vid = base.saturating_add(local);
+                                    let needs = if outgoing {
+                                        self.out_csr.vertex_needs_compact(vid, cutoff)
+                                    } else {
+                                        self.in_csr.vertex_needs_compact(vid, cutoff)
+                                    };
+                                    if needs {
+                                        locals.push(local);
+                                    }
+                                }
+                                if !locals.is_empty() {
+                                    if outgoing {
+                                        self.out_csr.compact_frozen_rows_batched(
+                                            gid,
+                                            &locals,
+                                            cutoff,
+                                            &mut |edge_id, delete_ts| {
+                                                self.mvcc.record_deletion(edge_id, delete_ts)
+                                            },
+                                        );
+                                    } else {
+                                        self.in_csr.compact_frozen_rows_batched(
+                                            gid,
+                                            &locals,
+                                            cutoff,
+                                            &mut |edge_id, delete_ts| {
+                                                self.mvcc.record_deletion(edge_id, delete_ts)
+                                            },
+                                        );
+                                    }
+                                }
+                                continue;
+                            }
                             for local in start..end {
                                 let vid = base.saturating_add(local);
                                 let needs = if outgoing {

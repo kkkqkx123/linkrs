@@ -15,7 +15,9 @@ use graphdb_core::types::{
     CompactConfig, EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
     PropertyDef, SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
-use graphdb_core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
+use graphdb_core::{
+    Edge, EdgeDeleteKey, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex,
+};
 use graphdb_transaction::wal::recovery::{RecoveryConfig, RecoveryStats};
 use std::sync::Arc;
 
@@ -489,6 +491,11 @@ pub trait StorageWriter: Send + Sync + std::fmt::Debug {
         rank: i64,
     ) -> Result<(), StorageError>;
     fn batch_insert_edges(&mut self, space: &str, edges: Vec<Edge>) -> Result<(), StorageError>;
+    fn batch_delete_edges(
+        &mut self,
+        space: &str,
+        deletes: &[EdgeDeleteKey],
+    ) -> Result<usize, StorageError>;
 
     fn insert_vertex_data(
         &mut self,

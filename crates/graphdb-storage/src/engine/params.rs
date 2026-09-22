@@ -55,3 +55,25 @@ pub struct InsertEdgesBatchParams<'a> {
     pub edges: &'a [BatchEdgeInsert<'a>],
     pub ts: Timestamp,
 }
+
+/// One edge key inside a batch delete: endpoints plus rank.
+pub struct BatchEdgeDelete {
+    pub src_id: VertexId,
+    pub dst_id: VertexId,
+    pub rank: i64,
+}
+
+/// Parameters for a batch delete from one edge type.
+///
+/// All keys share the edge label, endpoint labels and timestamp. Endpoint
+/// labels follow the single-delete convention: zero means resolve per key.
+/// Keys never created delete nothing and consume no tombstone, mirroring
+/// the single-delete no-op; re-deleting an already-deleted edge fails the
+/// batch like the single path.
+pub struct DeleteEdgesBatchParams<'a> {
+    pub edge_label: LabelId,
+    pub src_label: LabelId,
+    pub dst_label: LabelId,
+    pub edges: &'a [BatchEdgeDelete],
+    pub ts: Timestamp,
+}

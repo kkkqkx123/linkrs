@@ -777,6 +777,25 @@ impl EdgeStore {
     /// Mirrors `edge_id_of`: tables without the out leg answer from the in
     /// leg so single-direction tables stay queryable instead of silent.
     pub fn get_edge(&self, src: u32, dst: u32, rank: i64, ts: Timestamp) -> Option<EdgeRecord> {
+        self.get_edge_with_id(src, dst, rank, ts)
+            .map(|(record, _)| record)
+    }
+
+    /// Point lookup resolving through the stored leg, paired with the edge id.
+    ///
+    /// Single fused entry for operation-layer point lookups: one physical
+    /// row scan plus the authoritative visibility verdict inside
+    /// `merged_get_edge`, with the property projection reusing that verdict
+    /// instead of deciding visibility a second time. Callers needing a
+    /// pending-aware recheck reuse the returned id instead of scanning the
+    /// row again through `edge_id_of`.
+    pub fn get_edge_with_id(
+        &self,
+        src: u32,
+        dst: u32,
+        rank: i64,
+        ts: Timestamp,
+    ) -> Option<(EdgeRecord, EdgeId)> {
         if !self.is_open {
             return None;
         }
@@ -792,12 +811,15 @@ impl EdgeStore {
                 self.properties_for_edge_projected_columnar_assume_visible(nbr.edge_id, ts, None)
             };
 
-            return Some(EdgeRecord {
-                src_vid: VertexId::from_int64(src as i64),
-                dst_vid: VertexId::from_int64(dst as i64),
-                rank,
-                properties,
-            });
+            return Some((
+                EdgeRecord {
+                    src_vid: VertexId::from_int64(src as i64),
+                    dst_vid: VertexId::from_int64(dst as i64),
+                    rank,
+                    properties,
+                },
+                nbr.edge_id,
+            ));
         }
         if self.schema.has_in() {
             let src_key = Self::edge_endpoint_key(src, rank);
@@ -807,12 +829,15 @@ impl EdgeStore {
             } else {
                 self.properties_for_edge_projected_columnar_assume_visible(nbr.edge_id, ts, None)
             };
-            return Some(EdgeRecord {
-                src_vid: VertexId::from_int64(src as i64),
-                dst_vid: VertexId::from_int64(dst as i64),
-                rank,
-                properties,
-            });
+            return Some((
+                EdgeRecord {
+                    src_vid: VertexId::from_int64(src as i64),
+                    dst_vid: VertexId::from_int64(dst as i64),
+                    rank,
+                    properties,
+                },
+                nbr.edge_id,
+            ));
         }
         None
     }
@@ -825,42 +850,8 @@ impl EdgeStore {
         ts: Timestamp,
         gate: &crate::mvcc_visibility::PendingGate<'_>,
     ) -> Option<EdgeRecord> {
-        if !self.is_open {
-            return None;
-        }
-        if self.schema.has_out() {
-            let dst_key = Self::edge_endpoint_key(dst, rank);
-            let nbr = self.merged_get_edge_with_gate(&self.out_csr, src, dst_key, ts, gate)?;
-            // The gate verdict above is reused: the checking entries would
-            // otherwise re-decide without the gate.
-            let properties = if self.is_bundled() {
-                self.bundled_properties_at_assume_visible(true, src, nbr.edge_id, ts, None)
-            } else {
-                self.properties_for_edge_projected_columnar_assume_visible(nbr.edge_id, ts, None)
-            };
-            return Some(EdgeRecord {
-                src_vid: VertexId::from_int64(src as i64),
-                dst_vid: VertexId::from_int64(dst as i64),
-                rank,
-                properties,
-            });
-        }
-        if self.schema.has_in() {
-            let src_key = Self::edge_endpoint_key(src, rank);
-            let nbr = self.merged_get_edge_with_gate(&self.in_csr, dst, src_key, ts, gate)?;
-            let properties = if self.is_bundled() {
-                self.bundled_properties_at_assume_visible(false, dst, nbr.edge_id, ts, None)
-            } else {
-                self.properties_for_edge_projected_columnar_assume_visible(nbr.edge_id, ts, None)
-            };
-            return Some(EdgeRecord {
-                src_vid: VertexId::from_int64(src as i64),
-                dst_vid: VertexId::from_int64(dst as i64),
-                rank,
-                properties,
-            });
-        }
-        None
+        self.get_edge_projected_with_id(src, dst, rank, ts, gate, None)
+            .map(|(record, _)| record)
     }
 
     pub fn get_edge_with_gate_projected(
@@ -872,6 +863,27 @@ impl EdgeStore {
         gate: &crate::mvcc_visibility::PendingGate<'_>,
         projection: Option<&[String]>,
     ) -> Option<EdgeRecord> {
+        self.get_edge_projected_with_id(src, dst, rank, ts, gate, projection)
+            .map(|(record, _)| record)
+    }
+
+    /// Pending-aware point lookup paired with the edge id.
+    ///
+    /// Fused counterpart of `get_edge_with_id` for gate-carrying callers:
+    /// one physical row scan through `merged_get_edge_with_gate`, with the
+    /// projection reusing the gate verdict instead of deciding visibility a
+    /// second time. Operation-layer rechecks reuse the returned id for the
+    /// authority gate and the deletion-stamp probe instead of scanning the
+    /// row again.
+    pub fn get_edge_projected_with_id(
+        &self,
+        src: u32,
+        dst: u32,
+        rank: i64,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+        projection: Option<&[String]>,
+    ) -> Option<(EdgeRecord, EdgeId)> {
         if !self.is_open {
             return None;
         }
@@ -889,12 +901,15 @@ impl EdgeStore {
                     projection,
                 )
             };
-            return Some(EdgeRecord {
-                src_vid: VertexId::from_int64(src as i64),
-                dst_vid: VertexId::from_int64(dst as i64),
-                rank,
-                properties,
-            });
+            return Some((
+                EdgeRecord {
+                    src_vid: VertexId::from_int64(src as i64),
+                    dst_vid: VertexId::from_int64(dst as i64),
+                    rank,
+                    properties,
+                },
+                nbr.edge_id,
+            ));
         }
         if self.schema.has_in() {
             let src_key = Self::edge_endpoint_key(src, rank);
@@ -908,12 +923,15 @@ impl EdgeStore {
                     projection,
                 )
             };
-            return Some(EdgeRecord {
-                src_vid: VertexId::from_int64(src as i64),
-                dst_vid: VertexId::from_int64(dst as i64),
-                rank,
-                properties,
-            });
+            return Some((
+                EdgeRecord {
+                    src_vid: VertexId::from_int64(src as i64),
+                    dst_vid: VertexId::from_int64(dst as i64),
+                    rank,
+                    properties,
+                },
+                nbr.edge_id,
+            ));
         }
         None
     }

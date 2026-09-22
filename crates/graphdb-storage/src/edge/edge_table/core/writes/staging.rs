@@ -220,18 +220,6 @@ impl EdgeStore {
         }
     }
 
-    /// Shared gate for authority revival on delete rollback.
-    ///
-    /// Authority may only return to live when both directions physically
-    /// reverted. A partial revert keeps the authority deletion mark so a
-    /// future timestamp tombstone can never coexist with a live authority
-    /// record.
-    #[allow(dead_code)]
-    #[inline]
-    pub(super) fn fully_reverted(out_ok: bool, in_ok: bool) -> bool {
-        out_ok && in_ok
-    }
-
     #[inline]
     pub(super) fn partial_revert_error(edge_id: EdgeId) -> StorageError {
         StorageError::invalid_operation(format!(

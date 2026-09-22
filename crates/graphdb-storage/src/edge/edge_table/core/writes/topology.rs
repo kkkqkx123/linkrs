@@ -38,7 +38,11 @@ impl EdgeStore {
     /// rebuild for the whole batch instead of one per edge. Entries apply in
     /// slice order with the same per-entry effects as repeated `insert_edge`
     /// calls, including out/in symmetry and rollback of the applied prefix on
-    /// failure.
+    /// failure. An empty non-inline table takes the grouped direct-write
+    /// path instead: no rows, no timestamps and no frozen groups exist yet,
+    /// so one log append plus one reservation pass per direction produces
+    /// exactly what the per-entry staging commit would. Bundled tables stay
+    /// on the staging path so inline values ride the value column.
     pub fn insert_edges_batch(&mut self, entries: &[BatchInsertEntry]) -> StorageResult<()> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
@@ -50,6 +54,10 @@ impl EdgeStore {
             ));
         }
 
+        if self.is_empty_for_bulk_import() && !self.is_bundled() {
+            self.bulk_import_edges(entries)?;
+            return Ok(());
+        }
         let mut batch = EdgeStagingBatch::new();
         for (src, dst, rank, property_values, ts) in entries {
             batch.stage_insert(*src, *dst, *rank, property_values, *ts);
