@@ -108,12 +108,7 @@ fn execute_properties(args: &[Value]) -> Result<Value, ExpressionError> {
         Value::Path(path) => {
             let mut all_props = std::collections::HashMap::new();
             // Get properties from source vertex
-            for tag in &path.src.tags {
-                for (k, v) in &tag.properties {
-                    all_props.insert(k.clone(), v.clone());
-                }
-            }
-            for (k, v) in &path.src.properties {
+            for (k, v) in path.src.properties().iter() {
                 all_props.insert(k.clone(), v.clone());
             }
             // Get properties from edges and destination vertices
@@ -121,12 +116,7 @@ fn execute_properties(args: &[Value]) -> Result<Value, ExpressionError> {
                 for (k, v) in &step.edge.props {
                     all_props.insert(k.clone(), v.clone());
                 }
-                for tag in &step.dst.tags {
-                    for (k, v) in &tag.properties {
-                        all_props.insert(k.clone(), v.clone());
-                    }
-                }
-                for (k, v) in &step.dst.properties {
+                for (k, v) in step.dst.properties().iter() {
                     all_props.insert(k.clone(), v.clone());
                 }
             }

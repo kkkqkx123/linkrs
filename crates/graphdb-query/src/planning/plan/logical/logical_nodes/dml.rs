@@ -8,7 +8,7 @@
 use crate::define_logical_plan_node;
 use crate::define_logical_plan_node_with_deps;
 use crate::planning::plan::core::nodes::data_modification::{
-    CopyTarget, EdgeDeleteInfo, EdgeInsertInfo, IndexDeleteInfo, TagDeleteInfo, UpdateTargetType,
+    CopyTarget, EdgeDeleteInfo, EdgeInsertInfo, IndexDeleteInfo, UpdateTargetType,
     VertexDeleteInfo, VertexInsertInfo,
 };
 
@@ -61,14 +61,6 @@ define_logical_plan_node! {
         info: EdgeDeleteInfo,
     }
     enum: DeleteEdges
-    input: ZeroInputNode
-}
-
-define_logical_plan_node! {
-    pub struct LogicalDeleteTagsNode {
-        info: TagDeleteInfo,
-    }
-    enum: DeleteTags
     input: ZeroInputNode
 }
 

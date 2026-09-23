@@ -386,7 +386,7 @@ mod tests {
     use crate::value::list::List;
     use crate::value::null::NullType;
     use crate::value::uuid::UuidValue;
-    use crate::vertex_edge_path::{Edge, Path, Vertex};
+    use crate::vertex_edge_path::{Edge, Path, Tag, Vertex};
     use crate::DataSet;
     use std::collections::HashMap;
 
@@ -446,22 +446,26 @@ mod tests {
                 DataType::DateTime,
             ),
             (
-                Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(1)))),
+                Value::Vertex(Box::new(Vertex::new(
+                    VertexId::try_from_int64(1).expect("test vertex id"),
+                    Tag::new(String::new(), HashMap::new()),
+                ))),
                 DataType::Vertex,
             ),
             (
                 Value::Edge(Box::new(Edge::new_empty(
-                    VertexId::from_int64(1),
-                    VertexId::from_int64(2),
+                    VertexId::try_from_int64(1).expect("test vertex id"),
+                    VertexId::try_from_int64(2).expect("test vertex id"),
                     "E".to_string(),
                     0,
                 ))),
                 DataType::Edge,
             ),
             (
-                Value::Path(Box::new(Path::new(Vertex::with_vid(VertexId::from_int64(
-                    1,
-                ))))),
+                Value::Path(Box::new(Path::new(Vertex::new(
+                    VertexId::try_from_int64(1).expect("test vertex id"),
+                    Tag::new(String::new(), HashMap::new()),
+                )))),
                 DataType::Path,
             ),
             (
@@ -503,7 +507,7 @@ mod tests {
                 Value::Interval(IntervalValue::new(1, 2, 3)),
                 DataType::Interval,
             ),
-            (Value::VertexId(VertexId::from_int64(1)), DataType::Vertex),
+            (Value::VertexId(VertexId::try_from_int64(1).expect("test vertex id")), DataType::Vertex),
             (Value::EdgeId(EdgeId::new(1)), DataType::Edge),
             (
                 Value::struct_(vec![("city".to_string(), Value::string("x"))]),

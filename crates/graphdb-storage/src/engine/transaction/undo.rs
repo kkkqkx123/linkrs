@@ -356,13 +356,13 @@ mod tests {
 
     #[test]
     fn checked_internal_vertex_id_rejects_non_integer_ids() {
-        assert!(checked_internal_vertex_id(&VertexId::from_string("vertex-a")).is_err());
+        assert!(checked_internal_vertex_id(&VertexId::try_from_string("vertex-a").expect("test vertex id")).is_err());
     }
 
     #[test]
     fn checked_internal_vertex_id_rejects_values_outside_u32() {
         assert!(
-            checked_internal_vertex_id(&VertexId::from_int64(i64::from(u32::MAX) + 1)).is_err()
+            checked_internal_vertex_id(&VertexId::try_from_int64(i64::from(u32::MAX) + 1).expect("test vertex id")).is_err()
         );
     }
 }

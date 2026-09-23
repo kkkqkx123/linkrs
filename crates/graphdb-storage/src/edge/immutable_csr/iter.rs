@@ -97,7 +97,7 @@ impl<'a> Iterator for ImmutableCsrIterator<'a> {
                 let nbr = self.csr.slot_at(self.idx).unwrap();
                 self.idx += 1;
                 if self.include_deleted || nbr.is_alive_at(self.ts) {
-                    return Some((VertexId::from_int64(self.row as i64), nbr));
+                    return Some((VertexId::from_u32(u32::try_from(self.row).ok()?), nbr));
                 }
             }
             self.row += 1;

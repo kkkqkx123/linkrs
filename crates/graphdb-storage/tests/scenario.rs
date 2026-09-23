@@ -17,66 +17,58 @@ use graphdb_storage::{
     StorageAdmin, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
 };
 
-// ── Scenario 1: Multi-Tag Vertex Operations ──
+// ── Scenario 1: Single-Label Vertex Operations ──
 
-/// Business scenario: A vertex has multiple roles (e.g., Person + Employee).
-/// The user inserts a vertex with two tags and expects to read all data back.
-/// In addition, scan_vertices should not return duplicates.
+/// Business scenario: A vertex carries exactly one label. The user inserts a
+/// Person vertex and expects to read all data back. In addition,
+/// scan_vertices returns one row per stored row.
 #[test]
-fn test_multi_tag_vertex_get_and_scan() {
+fn test_single_label_vertex_get_and_scan() {
     let mut storage = common::create_in_memory_storage();
     common::setup_multi_tag_schema(&mut storage);
 
-    // Insert a vertex with both Person and Employee tags
-    let vertex = common::create_multi_tag_vertex(1, "Alice", 30, "AcmeCorp", 100000);
+    // Insert a Person vertex
+    let vertex = common::create_person_vertex(1, "Alice", 30);
     storage.insert_vertex("test_space", vertex).unwrap();
 
-    // get_vertex should return data from ALL tags
+    // get_vertex returns the single tag with its properties
     let retrieved = storage
-        .get_vertex("test_space", &VertexId::from_int64(1))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+        )
         .unwrap()
         .expect("Vertex should exist");
 
     // Person properties
     assert_eq!(
-        retrieved.properties.get("name"),
+        retrieved.properties().get("name"),
         Some(&Value::string("Alice"))
     );
-    assert_eq!(retrieved.properties.get("age"), Some(&Value::BigInt(30)));
-
-    // Employee properties
     assert_eq!(
-        retrieved.properties.get("company"),
-        Some(&Value::string("AcmeCorp"))
-    );
-    assert_eq!(
-        retrieved.properties.get("salary"),
-        Some(&Value::BigInt(100000))
+        retrieved.properties().get("age"),
+        Some(&Value::BigInt(30))
     );
 
-    // Both tags should be present
-    let tag_names: Vec<&str> = retrieved.tags.iter().map(|t| t.name.as_str()).collect();
-    assert!(tag_names.contains(&"Person"), "Should have Person tag");
-    assert!(tag_names.contains(&"Employee"), "Should have Employee tag");
+    assert_eq!(retrieved.tag_name(), "Person");
 
-    // scan_vertices should NOT return duplicates (vertex with 2 tags = 1 result)
+    // scan_vertices returns the stored row
     let all_vertices = storage.scan_vertices("test_space").unwrap();
-    assert_eq!(
-        all_vertices.len(),
-        1,
-        "scan_vertices should not duplicate multi-tag vertices"
-    );
+    assert_eq!(all_vertices.len(), 1,);
 }
 
-/// Business scenario: User queries a vertex by a single tag.
-/// This should return the correct tag-specific data.
+/// Business scenario: User queries vertices by a single tag.
+/// This returns the tag-specific rows only.
 #[test]
-fn test_multi_tag_vertex_query_by_tag() {
+fn test_single_label_vertex_query_by_tag() {
     let mut storage = common::create_in_memory_storage();
     common::setup_multi_tag_schema(&mut storage);
 
-    let vertex = common::create_multi_tag_vertex(1, "Bob", 28, "BetaInc", 80000);
+    let vertex = common::create_person_vertex(1, "Bob", 28);
     storage.insert_vertex("test_space", vertex).unwrap();
+    let employee = common::create_employee_vertex(2, "BetaInc", 80000);
+    storage.insert_vertex("test_space", employee).unwrap();
 
     // Query by Person tag
     let persons = storage
@@ -84,7 +76,7 @@ fn test_multi_tag_vertex_query_by_tag() {
         .unwrap();
     assert_eq!(persons.len(), 1);
     assert_eq!(
-        persons[0].properties.get("name"),
+        persons[0].properties().get("name"),
         Some(&Value::string("Bob"))
     );
 
@@ -94,48 +86,39 @@ fn test_multi_tag_vertex_query_by_tag() {
         .unwrap();
     assert_eq!(employees.len(), 1);
     assert_eq!(
-        employees[0].properties.get("company"),
+        employees[0].properties().get("company"),
         Some(&Value::string("BetaInc"))
     );
 }
 
-/// Business scenario: User deletes a specific tag from a vertex
-/// (e.g., remove Employee role but keep Person).
+/// Business scenario: User deletes a vertex by label. The vertex row is gone
+/// afterwards.
 #[test]
-fn test_delete_tag_from_vertex() {
+fn test_delete_vertex_by_label() {
     let mut storage = common::create_in_memory_storage();
     common::setup_multi_tag_schema(&mut storage);
 
-    let vertex = common::create_multi_tag_vertex(1, "Charlie", 35, "GammaCorp", 120000);
+    let vertex = common::create_person_vertex(1, "Charlie", 35);
     storage.insert_vertex("test_space", vertex).unwrap();
 
-    // Delete the Employee tag from vertex
-    let deleted = storage
-        .delete_tags(
+    // Delete the Person vertex
+    storage
+        .delete_vertex(
             "test_space",
-            &VertexId::from_int64(1),
-            &["Employee".to_string()],
+            "Person",
+            &VertexId::try_from_int64(1).expect("test vertex id"),
         )
         .unwrap();
-    assert_eq!(deleted, 1, "Should have deleted 1 tag");
 
-    // Vertex still exists with Person tag
+    // Vertex is gone
     let retrieved = storage
-        .get_vertex("test_space", &VertexId::from_int64(1))
-        .unwrap()
-        .expect("Vertex should still exist");
-    let tag_names: Vec<&str> = retrieved.tags.iter().map(|t| t.name.as_str()).collect();
-    assert!(tag_names.contains(&"Person"), "Person tag should remain");
-    assert!(
-        !tag_names.contains(&"Employee"),
-        "Employee tag should be deleted"
-    );
-
-    // Person properties still accessible
-    assert_eq!(
-        retrieved.properties.get("name"),
-        Some(&Value::string("Charlie"))
-    );
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+        )
+        .unwrap();
+    assert!(retrieved.is_none(), "Person vertex should be deleted");
 }
 
 // ── Scenario 2: Dangling Edge Lifecycle ──
@@ -158,7 +141,7 @@ fn test_dangling_edge_detection_and_repair() {
 
     // Delete vertex 2 (Bob) WITHOUT cascade — leaves dangling edge
     storage
-        .delete_vertex("test_space", &VertexId::from_int64(2))
+        .delete_vertex("test_space", "Person", &VertexId::try_from_int64(2).expect("test vertex id"))
         .unwrap();
 
     // Detect dangling edges
@@ -171,8 +154,8 @@ fn test_dangling_edge_detection_and_repair() {
     );
     let dangling_edge = &dangling[0];
     assert_eq!(dangling_edge.edge_type, "KNOWS");
-    assert_eq!(dangling_edge.src, VertexId::from_int64(1));
-    assert_eq!(dangling_edge.dst, VertexId::from_int64(2));
+    assert_eq!(dangling_edge.src, VertexId::try_from_int64(1).expect("test vertex id"));
+    assert_eq!(dangling_edge.dst, VertexId::try_from_int64(2).expect("test vertex id"));
 
     // Repair dangling edges
     let repaired_count = storage
@@ -235,19 +218,19 @@ fn test_alter_tag_properties_with_existing_data() {
 
     // Existing data should still be readable for unchanged property
     let alice = storage
-        .get_vertex("test_space", &VertexId::from_int64(1))
+        .get_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
         .unwrap()
         .expect("Alice should exist after alter");
     assert_eq!(
-        alice.properties.get("name"),
+        alice.properties().get("name"),
         Some(&Value::string("Alice")),
         "name property should survive alteration"
     );
 
     // Insert new data with new schema
     let new_person = Vertex::new(
-        VertexId::from_int64(3),
-        vec![Tag::new(
+        VertexId::try_from_int64(3).expect("test vertex id"),
+       Tag::new(
             "Person".to_string(),
             vec![
                 ("name".to_string(), Value::string("Diana")),
@@ -255,16 +238,16 @@ fn test_alter_tag_properties_with_existing_data() {
             ]
             .into_iter()
             .collect(),
-        )],
+        ),
     );
     storage.insert_vertex("test_space", new_person).unwrap();
 
     let diana = storage
-        .get_vertex("test_space", &VertexId::from_int64(3))
+        .get_vertex("test_space", "Person", &VertexId::try_from_int64(3).expect("test vertex id"))
         .unwrap()
         .expect("Diana should exist");
     assert_eq!(
-        diana.properties.get("email"),
+        diana.properties().get("email"),
         Some(&Value::string("diana@test.com"))
     );
 }
@@ -291,20 +274,20 @@ fn test_alter_edge_type_properties() {
     let edge = storage
         .get_edge(
             "test_space",
-            &VertexId::from_int64(1),
-            &VertexId::from_int64(2),
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            &VertexId::try_from_int64(2).expect("test vertex id"),
             "KNOWS",
             0,
         )
         .unwrap()
         .expect("Edge should still exist after alter");
-    assert_eq!(edge.src, VertexId::from_int64(1));
-    assert_eq!(edge.dst, VertexId::from_int64(2));
+    assert_eq!(edge.src, VertexId::try_from_int64(1).expect("test vertex id"));
+    assert_eq!(edge.dst, VertexId::try_from_int64(2).expect("test vertex id"));
 
     // Insert a new edge with new properties
     let new_edge = Edge::new(
-        VertexId::from_int64(1),
-        VertexId::from_int64(2),
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
         1,
         vec![("weight".to_string(), Value::Double(0.5))]
@@ -316,8 +299,8 @@ fn test_alter_edge_type_properties() {
     let retrieved = storage
         .get_edge(
             "test_space",
-            &VertexId::from_int64(1),
-            &VertexId::from_int64(2),
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            &VertexId::try_from_int64(2).expect("test vertex id"),
             "KNOWS",
             1,
         )
@@ -345,8 +328,8 @@ fn test_multi_edge_type_traversal() {
 
     // Insert Employee vertex for Charlie
     let charlie_emp = Vertex::new(
-        VertexId::from_int64(3),
-        vec![Tag::new(
+        VertexId::try_from_int64(3).expect("test vertex id"),
+       Tag::new(
             "Employee".to_string(),
             vec![
                 ("company".to_string(), Value::string("AcmeCorp")),
@@ -354,7 +337,7 @@ fn test_multi_edge_type_traversal() {
             ]
             .into_iter()
             .collect(),
-        )],
+        ),
     );
     storage.insert_vertex("test_space", charlie_emp).unwrap();
 
@@ -368,8 +351,8 @@ fn test_multi_edge_type_traversal() {
 
     // WORKS_AT edge: Alice -> Charlie (works at Charlie's company)
     let works_at = Edge::new(
-        VertexId::from_int64(1),
-        VertexId::from_int64(3),
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        VertexId::try_from_int64(3).expect("test vertex id"),
         "WORKS_AT".to_string(),
         0,
         vec![("role".to_string(), Value::string("Engineer"))]
@@ -380,13 +363,13 @@ fn test_multi_edge_type_traversal() {
 
     // Alice's outgoing: KNOWS->Bob + WORKS_AT->Charlie = 2
     let alice_out = storage
-        .get_node_edges("test_space", &VertexId::from_int64(1), EdgeDirection::Out)
+        .get_node_edges("test_space", &VertexId::try_from_int64(1).expect("test vertex id"), EdgeDirection::Out)
         .unwrap();
     assert_eq!(alice_out.len(), 2, "Alice should have 2 outgoing edges");
 
     // Alice's incoming: KNOWS from Charlie (Charlie -> Alice)
     let alice_in = storage
-        .get_node_edges("test_space", &VertexId::from_int64(1), EdgeDirection::In)
+        .get_node_edges("test_space", &VertexId::try_from_int64(1).expect("test vertex id"), EdgeDirection::In)
         .unwrap();
     assert_eq!(
         alice_in.len(),
@@ -396,13 +379,13 @@ fn test_multi_edge_type_traversal() {
 
     // Charlie's incoming: KNOWS from Bob + WORKS_AT from Alice = 2
     let charlie_in = storage
-        .get_node_edges("test_space", &VertexId::from_int64(3), EdgeDirection::In)
+        .get_node_edges("test_space", &VertexId::try_from_int64(3).expect("test vertex id"), EdgeDirection::In)
         .unwrap();
     assert_eq!(charlie_in.len(), 2, "Charlie should have 2 incoming edges");
 
     // Charlie's outgoing: KNOWS -> Alice, no WORKS_AT from Charlie
     let charlie_out = storage
-        .get_node_edges("test_space", &VertexId::from_int64(3), EdgeDirection::Out)
+        .get_node_edges("test_space", &VertexId::try_from_int64(3).expect("test vertex id"), EdgeDirection::Out)
         .unwrap();
     assert_eq!(
         charlie_out.len(),
@@ -441,7 +424,7 @@ fn test_storage_stats_reflect_data_state() {
     // Note: delete_vertex does NOT cascade-delete edges. The edge still
     // exists as a dangling edge. Use delete_vertex_with_edges for cascade.
     storage
-        .delete_vertex("test_space", &VertexId::from_int64(1))
+        .delete_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
         .unwrap();
     let stats = storage.get_storage_stats();
     assert_eq!(stats.total_edges, 1, "Edge still exists as dangling edge");
@@ -463,23 +446,23 @@ fn test_batch_insert_failure_rollback_consistency() {
     // Batch insert with a duplicate ID — should fail and rollback
     let vertices = vec![
         Vertex::new(
-            VertexId::from_int64(2),
-            vec![Tag::new(
+            VertexId::try_from_int64(2).expect("test vertex id"),
+           Tag::new(
                 "Person".to_string(),
                 vec![("name".to_string(), Value::string("Bob"))]
                     .into_iter()
                     .collect(),
-            )],
+            ),
         ),
         // Duplicate ID — intentionally cause failure
         Vertex::new(
-            VertexId::from_int64(1),
-            vec![Tag::new(
+            VertexId::try_from_int64(1).expect("test vertex id"),
+           Tag::new(
                 "Person".to_string(),
                 vec![("name".to_string(), Value::string("Duplicate"))]
                     .into_iter()
                     .collect(),
-            )],
+            ),
         ),
     ];
 
@@ -488,14 +471,14 @@ fn test_batch_insert_failure_rollback_consistency() {
 
     // Alice should still exist (rollback should not affect her)
     let alice = storage
-        .get_vertex("test_space", &VertexId::from_int64(1))
+        .get_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
         .unwrap()
         .expect("Alice should still exist after failed batch");
-    assert_eq!(alice.properties.get("name"), Some(&Value::string("Alice")));
+    assert_eq!(alice.properties().get("name"), Some(&Value::string("Alice")));
 
     // Bob (vertex 2) should NOT have been inserted
     let bob = storage
-        .get_vertex("test_space", &VertexId::from_int64(2))
+        .get_vertex("test_space", "Person", &VertexId::try_from_int64(2).expect("test vertex id"))
         .unwrap();
     assert!(bob.is_none(), "Bob should not exist after rollback");
 }
@@ -539,11 +522,11 @@ fn test_multi_cycle_flush_and_load() {
         common::verify_test_data(&storage, "test_space");
 
         let charlie = storage
-            .get_vertex("test_space", &VertexId::from_int64(3))
+            .get_vertex("test_space", "Person", &VertexId::try_from_int64(3).expect("test vertex id"))
             .unwrap()
             .expect("Charlie should survive reload");
         assert_eq!(
-            charlie.properties.get("name"),
+            charlie.properties().get("name"),
             Some(&Value::string("Charlie"))
         );
 
@@ -563,27 +546,27 @@ fn test_multi_cycle_flush_and_load() {
 
         // Charlie from cycle 2 survived
         let charlie = storage
-            .get_vertex("test_space", &VertexId::from_int64(3))
+            .get_vertex("test_space", "Person", &VertexId::try_from_int64(3).expect("test vertex id"))
             .unwrap()
             .expect("Charlie should survive");
         assert_eq!(
-            charlie.properties.get("name"),
+            charlie.properties().get("name"),
             Some(&Value::string("Charlie"))
         );
 
         // Dave from cycle 3 survived
         let dave = storage
-            .get_vertex("test_space", &VertexId::from_int64(4))
+            .get_vertex("test_space", "Person", &VertexId::try_from_int64(4).expect("test vertex id"))
             .unwrap()
             .expect("Dave should survive");
-        assert_eq!(dave.properties.get("name"), Some(&Value::string("Dave")));
+        assert_eq!(dave.properties().get("name"), Some(&Value::string("Dave")));
 
         // Edge from cycle 2 survived
         let edge_13 = storage
             .get_edge(
                 "test_space",
-                &VertexId::from_int64(1),
-                &VertexId::from_int64(3),
+                &VertexId::try_from_int64(1).expect("test vertex id"),
+                &VertexId::try_from_int64(3).expect("test vertex id"),
                 "KNOWS",
                 0,
             )
@@ -595,8 +578,8 @@ fn test_multi_cycle_flush_and_load() {
         let edge_14 = storage
             .get_edge(
                 "test_space",
-                &VertexId::from_int64(1),
-                &VertexId::from_int64(4),
+                &VertexId::try_from_int64(1).expect("test vertex id"),
+                &VertexId::try_from_int64(4).expect("test vertex id"),
                 "KNOWS",
                 0,
             )
@@ -656,12 +639,12 @@ fn test_delete_vertex_with_edges_cascade() {
 
     // Delete Alice with edges
     storage
-        .delete_vertex_with_edges("test_space", &VertexId::from_int64(1))
+        .delete_vertex_with_edges("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
         .unwrap();
 
     // Alice is gone
     assert!(storage
-        .get_vertex("test_space", &VertexId::from_int64(1))
+        .get_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
         .unwrap()
         .is_none());
 
@@ -737,8 +720,8 @@ fn test_string_vertex_id_operations() {
 
     // Insert vertices with string IDs
     let alice = Vertex::new(
-        VertexId::from_string("user-alice"),
-        vec![Tag::new(
+        VertexId::try_from_string("user-alice").expect("test vertex id"),
+       Tag::new(
             "Person".to_string(),
             vec![
                 ("name".to_string(), Value::string("Alice")),
@@ -746,11 +729,11 @@ fn test_string_vertex_id_operations() {
             ]
             .into_iter()
             .collect(),
-        )],
+        ),
     );
     let bob = Vertex::new(
-        VertexId::from_string("user-bob"),
-        vec![Tag::new(
+        VertexId::try_from_string("user-bob").expect("test vertex id"),
+       Tag::new(
             "Person".to_string(),
             vec![
                 ("name".to_string(), Value::string("Bob")),
@@ -758,18 +741,18 @@ fn test_string_vertex_id_operations() {
             ]
             .into_iter()
             .collect(),
-        )],
+        ),
     );
     storage.insert_vertex("str_space", alice).unwrap();
     storage.insert_vertex("str_space", bob).unwrap();
 
     // Verify retrieval
     let alice_retrieved = storage
-        .get_vertex("str_space", &VertexId::from_string("user-alice"))
+        .get_vertex("str_space", "Person", &VertexId::try_from_string("user-alice").expect("test vertex id"))
         .unwrap()
         .expect("Alice should exist with string ID");
     assert_eq!(
-        alice_retrieved.properties.get("name"),
+        alice_retrieved.properties().get("name"),
         Some(&Value::string("Alice"))
     );
 
@@ -797,13 +780,13 @@ fn test_edge_both_direction_traversal() {
 
     // Both direction from Alice: should find 1 edge (Alice -> Bob)
     let both = storage
-        .get_node_edges("test_space", &VertexId::from_int64(1), EdgeDirection::Both)
+        .get_node_edges("test_space", &VertexId::try_from_int64(1).expect("test vertex id"), EdgeDirection::Both)
         .unwrap();
     assert_eq!(both.len(), 1, "Both traversal should find 1 edge for Alice");
 
     // Both direction from Bob: should find 1 edge (Alice -> Bob, incoming)
     let bob_both = storage
-        .get_node_edges("test_space", &VertexId::from_int64(2), EdgeDirection::Both)
+        .get_node_edges("test_space", &VertexId::try_from_int64(2).expect("test vertex id"), EdgeDirection::Both)
         .unwrap();
     assert_eq!(
         bob_both.len(),
@@ -825,8 +808,8 @@ fn test_update_vertex_properties() {
 
     // Update properties
     let updated = Vertex::new(
-        VertexId::from_int64(1),
-        vec![Tag::new(
+        VertexId::try_from_int64(1).expect("test vertex id"),
+       Tag::new(
             "Person".to_string(),
             vec![
                 ("name".to_string(), Value::string("AliceUpdated")),
@@ -834,18 +817,18 @@ fn test_update_vertex_properties() {
             ]
             .into_iter()
             .collect(),
-        )],
+        ),
     );
     storage.update_vertex("test_space", updated).unwrap();
 
     // Verify update
     let retrieved = storage
-        .get_vertex("test_space", &VertexId::from_int64(1))
+        .get_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
         .unwrap()
         .expect("Vertex should exist after update");
     assert_eq!(
-        retrieved.properties.get("name"),
+        retrieved.properties().get("name"),
         Some(&Value::string("AliceUpdated"))
     );
-    assert_eq!(retrieved.properties.get("age"), Some(&Value::BigInt(31)));
+    assert_eq!(retrieved.properties().get("age"), Some(&Value::BigInt(31)));
 }

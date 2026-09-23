@@ -224,6 +224,7 @@ pub(crate) fn insert_edge_data(
 pub(crate) fn delete_vertex_data(
     ctx: &GraphStorageContext,
     space: &str,
+    tag: &str,
     vertex_id: &str,
 ) -> StorageResult<bool> {
     let space_info = ctx
@@ -234,7 +235,7 @@ pub(crate) fn delete_vertex_data(
     let raw = parse_user_vertex_id(vertex_id)?;
     let vid = VertexId::normalize_for_vid_type(&space_info.vid_type, raw)?;
 
-    super::vertex::delete_vertex(ctx, space, &vid)?;
+    super::vertex::delete_vertex(ctx, space, tag, &vid)?;
     Ok(true)
 }
 

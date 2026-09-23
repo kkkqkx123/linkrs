@@ -2,7 +2,7 @@
 
 use super::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::data_modification::{
-    CopyFromNode, CopyToNode, DeleteEdgesNode, DeleteIndexNode, DeleteTagsNode, DeleteVerticesNode,
+    CopyFromNode, CopyToNode, DeleteEdgesNode, DeleteIndexNode, DeleteVerticesNode,
     InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode,
     UpdateEdgesNode, UpdateNode, UpdateVerticesNode,
 };
@@ -192,7 +192,6 @@ pub trait PlanNodeVisitor {
     impl_visitor_methods!(
         DeleteVertices, DeleteVerticesNode, visit_delete_vertices;
         DeleteEdges, DeleteEdgesNode, visit_delete_edges;
-        DeleteTags, DeleteTagsNode, visit_delete_tags;
         DeleteIndex, DeleteIndexNode, visit_delete_index;
     );
 
@@ -313,7 +312,6 @@ impl PlanNodeEnum {
             PlanNodeEnum::InsertEdges(node) => visitor.visit_insert_edges(node),
             PlanNodeEnum::DeleteVertices(node) => visitor.visit_delete_vertices(node),
             PlanNodeEnum::DeleteEdges(node) => visitor.visit_delete_edges(node),
-            PlanNodeEnum::DeleteTags(node) => visitor.visit_delete_tags(node),
             PlanNodeEnum::DeleteIndex(node) => visitor.visit_delete_index(node),
             PlanNodeEnum::PipeDeleteVertices(node) => visitor.visit_pipe_delete_vertices(node),
             PlanNodeEnum::PipeDeleteEdges(node) => visitor.visit_pipe_delete_edges(node),

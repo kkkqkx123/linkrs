@@ -8,40 +8,30 @@ fn test_trigger_background_freeze_execution() {
     setup_knows_edge(&mut storage);
 
     // Insert vertices
-    let alice = VertexId::from_int64(1);
-    let bob = VertexId::from_int64(2);
+    let alice = VertexId::try_from_int64(1).expect("test vertex id");
+    let bob = VertexId::try_from_int64(2).expect("test vertex id");
 
-    let v1 = Vertex {
-        vid: alice,
-        id: 0,
-        tags: vec![Tag::new(
+    let v1 = Vertex::new(
+        alice,
+        graphdb_core::vertex_edge_path::Tag::new(
             "Person".to_string(),
             [("name".to_string(), Value::string("Alice"))]
                 .iter()
                 .cloned()
                 .collect(),
-        )],
-        properties: [("name".to_string(), Value::string("Alice"))]
-            .iter()
-            .cloned()
-            .collect(),
-    };
+        ),
+    );
 
-    let v2 = Vertex {
-        vid: bob,
-        id: 0,
-        tags: vec![Tag::new(
+    let v2 = Vertex::new(
+        bob,
+        graphdb_core::vertex_edge_path::Tag::new(
             "Person".to_string(),
             [("name".to_string(), Value::string("Bob"))]
                 .iter()
                 .cloned()
                 .collect(),
-        )],
-        properties: [("name".to_string(), Value::string("Bob"))]
-            .iter()
-            .cloned()
-            .collect(),
-    };
+        ),
+    );
 
     storage.insert_vertex("test_space", v1).unwrap();
     storage.insert_vertex("test_space", v2).unwrap();
@@ -74,24 +64,19 @@ fn test_cleanup_threshold_gc_integration() {
     let _knows_edge = setup_knows_edge(&mut storage);
 
     // Create vertices
-    let alice = VertexId::from_int64(1);
+    let alice = VertexId::try_from_int64(1).expect("test vertex id");
 
     // Insert vertices
-    let v1 = Vertex {
-        vid: alice,
-        id: 0,
-        tags: vec![Tag::new(
+    let v1 = Vertex::new(
+        alice,
+        graphdb_core::vertex_edge_path::Tag::new(
             "Person".to_string(),
             [("name".to_string(), Value::string("Alice"))]
                 .iter()
                 .cloned()
                 .collect(),
-        )],
-        properties: [("name".to_string(), Value::string("Alice"))]
-            .iter()
-            .cloned()
-            .collect(),
-    };
+        ),
+    );
 
     storage.insert_vertex("test_space", v1).unwrap();
 
@@ -207,8 +192,8 @@ fn test_compact_maintenance_propagates_vertex_remap_to_edge_tables() {
     let expected_edges: Vec<(i64, i64)> = (1..=97).step_by(2).map(|src| (src, src + 2)).collect();
     for (src, dst) in &expected_edges {
         let edge = Edge::new(
-            VertexId::from_int64(*src),
-            VertexId::from_int64(*dst),
+            VertexId::try_from_int64(*src).expect("test vertex id"),
+            VertexId::try_from_int64(*dst).expect("test vertex id"),
             "KNOWS".to_string(),
             0,
             std::collections::HashMap::new(),
@@ -220,7 +205,7 @@ fn test_compact_maintenance_propagates_vertex_remap_to_edge_tables() {
     // are interleaved with survivors, forcing a real ID remap.
     for i in (2..=80).step_by(2) {
         storage
-            .delete_vertex("test_space", &VertexId::from_int64(i))
+            .delete_vertex("test_space", "Person", &VertexId::try_from_int64(i).expect("test vertex id"))
             .unwrap();
     }
 
@@ -254,7 +239,7 @@ fn test_compact_maintenance_propagates_vertex_remap_to_edge_tables() {
 
     // Deleted vertices no longer resolve.
     assert!(storage
-        .get_vertex("test_space", &VertexId::from_int64(2))
+        .get_vertex("test_space", "Person", &VertexId::try_from_int64(2).expect("test vertex id"))
         .unwrap()
         .is_none());
 
@@ -263,8 +248,8 @@ fn test_compact_maintenance_propagates_vertex_remap_to_edge_tables() {
         let retrieved = storage
             .get_edge(
                 "test_space",
-                &VertexId::from_int64(*src),
-                &VertexId::from_int64(*dst),
+                &VertexId::try_from_int64(*src).expect("test vertex id"),
+                &VertexId::try_from_int64(*dst).expect("test vertex id"),
                 "KNOWS",
                 0,
             )
@@ -277,15 +262,15 @@ fn test_compact_maintenance_propagates_vertex_remap_to_edge_tables() {
 
     // Node-edge scans resolve through remapped out/in CSRs.
     let out_edges = storage
-        .get_node_edges("test_space", &VertexId::from_int64(1), EdgeDirection::Out)
+        .get_node_edges("test_space", &VertexId::try_from_int64(1).expect("test vertex id"), EdgeDirection::Out)
         .unwrap();
     assert_eq!(out_edges.len(), 1);
-    assert_eq!(out_edges[0].dst, VertexId::from_int64(3));
+    assert_eq!(out_edges[0].dst, VertexId::try_from_int64(3).expect("test vertex id"));
     let in_edges = storage
-        .get_node_edges("test_space", &VertexId::from_int64(79), EdgeDirection::In)
+        .get_node_edges("test_space", &VertexId::try_from_int64(79).expect("test vertex id"), EdgeDirection::In)
         .unwrap();
     assert_eq!(in_edges.len(), 1);
-    assert_eq!(in_edges[0].src, VertexId::from_int64(77));
+    assert_eq!(in_edges[0].src, VertexId::try_from_int64(77).expect("test vertex id"));
 }
 
 #[test]
@@ -315,8 +300,8 @@ fn test_auto_vertex_compaction_reclaims_id_holes() {
     let expected_edges: Vec<(i64, i64)> = (1..=97).step_by(2).map(|src| (src, src + 2)).collect();
     for (src, dst) in &expected_edges {
         let edge = Edge::new(
-            VertexId::from_int64(*src),
-            VertexId::from_int64(*dst),
+            VertexId::try_from_int64(*src).expect("test vertex id"),
+            VertexId::try_from_int64(*dst).expect("test vertex id"),
             "KNOWS".to_string(),
             0,
             std::collections::HashMap::new(),
@@ -326,7 +311,7 @@ fn test_auto_vertex_compaction_reclaims_id_holes() {
     // Delete 40 vertices; holes appear but nothing is reclaimed yet.
     for i in (2..=80).step_by(2) {
         storage
-            .delete_vertex("test_space", &VertexId::from_int64(i))
+            .delete_vertex("test_space", "Person", &VertexId::try_from_int64(i).expect("test vertex id"))
             .unwrap();
     }
 
@@ -373,8 +358,8 @@ fn test_auto_vertex_compaction_reclaims_id_holes() {
         let retrieved = storage
             .get_edge(
                 "test_space",
-                &VertexId::from_int64(*src),
-                &VertexId::from_int64(*dst),
+                &VertexId::try_from_int64(*src).expect("test vertex id"),
+                &VertexId::try_from_int64(*dst).expect("test vertex id"),
                 "KNOWS",
                 0,
             )
@@ -393,7 +378,7 @@ fn test_auto_vertex_compaction_reclaims_id_holes() {
     assert_eq!(survivors.len(), 60);
     for id in survivors {
         let vertex = storage
-            .get_vertex("test_space", &VertexId::from_int64(id))
+            .get_vertex("test_space", "Person", &VertexId::try_from_int64(id).expect("test vertex id"))
             .unwrap()
             .unwrap_or_else(|| panic!("vertex v{id} lost after vertex compaction remap"));
         assert_eq!(
@@ -405,7 +390,7 @@ fn test_auto_vertex_compaction_reclaims_id_holes() {
     for id in [2i64, 40, 80] {
         assert!(
             storage
-                .get_vertex("test_space", &VertexId::from_int64(id))
+                .get_vertex("test_space", "Person", &VertexId::try_from_int64(id).expect("test vertex id"))
                 .unwrap()
                 .is_none(),
             "deleted vertex v{id} resurrected by remap"

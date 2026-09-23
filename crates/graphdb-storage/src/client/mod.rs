@@ -30,7 +30,12 @@ pub use storage_client::StorageClient;
 
 /// Read-only data and schema operations.
 pub trait StorageReader: Send + Sync + std::fmt::Debug {
-    fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
+    fn get_vertex(
+        &self,
+        space: &str,
+        tag: &str,
+        id: &VertexId,
+    ) -> Result<Option<Vertex>, StorageError>;
 
     /// Monotonic physical layout version of the vertex/edge layout.
     ///
@@ -60,20 +65,16 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     fn get_vertex_projected(
         &self,
         space: &str,
+        tag: &str,
         id: &VertexId,
         projection: &[String],
     ) -> Result<Option<Vertex>, StorageError> {
-        let vertex = self.get_vertex(space, id)?;
+        let vertex = self.get_vertex(space, tag, id)?;
         if projection.is_empty() {
             return Ok(vertex);
         }
         Ok(vertex.map(|mut v| {
-            // Single-label vertices carry properties in their tag: project
-            // each tag instead of the legacy vertex-level map.
-            for tag in &mut v.tags {
-                tag.properties.retain(|k, _| projection.contains(k));
-            }
-            v.properties.clear();
+            v.tag.properties.retain(|k, _| projection.contains(k));
             v
         }))
     }
@@ -466,11 +467,17 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
 pub trait StorageWriter: Send + Sync + std::fmt::Debug {
     fn insert_vertex(&mut self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError>;
     fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError>;
-    fn delete_vertex(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError>;
-    fn delete_vertex_with_edges(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError>;
+    fn delete_vertex(&mut self, space: &str, tag: &str, id: &VertexId) -> Result<(), StorageError>;
+    fn delete_vertex_with_edges(
+        &mut self,
+        space: &str,
+        tag: &str,
+        id: &VertexId,
+    ) -> Result<(), StorageError>;
     fn batch_delete_vertices_with_edges(
         &mut self,
         space: &str,
+        tag: &str,
         ids: &[VertexId],
     ) -> Result<usize, StorageError>;
     fn batch_insert_vertices(
@@ -478,13 +485,6 @@ pub trait StorageWriter: Send + Sync + std::fmt::Debug {
         space: &str,
         vertices: Vec<Vertex>,
     ) -> Result<Vec<VertexId>, StorageError>;
-    fn delete_tags(
-        &mut self,
-        space: &str,
-        vertex_id: &VertexId,
-        tag_names: &[String],
-    ) -> Result<usize, StorageError>;
-
     fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
     fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
     fn delete_edge(
@@ -512,7 +512,12 @@ pub trait StorageWriter: Send + Sync + std::fmt::Debug {
         space: &str,
         info: &InsertEdgeInfo,
     ) -> Result<bool, StorageError>;
-    fn delete_vertex_data(&mut self, space: &str, vertex_id: &str) -> Result<bool, StorageError>;
+    fn delete_vertex_data(
+        &mut self,
+        space: &str,
+        tag: &str,
+        vertex_id: &str,
+    ) -> Result<bool, StorageError>;
     fn delete_edge_data(
         &mut self,
         space: &str,

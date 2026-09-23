@@ -400,9 +400,9 @@ mod tests {
         ctx.insert_edge(InsertEdgeParams {
             edge_label: lives_in_label,
             src_label: person_label,
-            src_id: VertexId::from_int64(1001),
+            src_id: VertexId::try_from_int64(1001).expect("test vertex id"),
             dst_label: city_label,
-            dst_id: VertexId::from_int64(2001),
+            dst_id: VertexId::try_from_int64(2001).expect("test vertex id"),
             rank: 0,
             properties: &[("started".to_string(), Value::Int(2012))],
             ts: 5,
@@ -414,9 +414,9 @@ mod tests {
                 &EdgeOperationParams {
                     edge_label: lives_in_label,
                     src_label: person_label,
-                    src_id: VertexId::from_int64(1001),
+                    src_id: VertexId::try_from_int64(1001).expect("test vertex id"),
                     dst_label: city_label,
-                    dst_id: VertexId::from_int64(2001),
+                    dst_id: VertexId::try_from_int64(2001).expect("test vertex id"),
                     rank: 0,
                 },
                 5,

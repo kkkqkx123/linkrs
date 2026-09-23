@@ -240,10 +240,13 @@ impl GraphStorageContext {
             vid: cached
                 .external_id
                 .parse::<i64>()
-                .map(graphdb_core::types::VertexId::from_int64)
-                .unwrap_or_else(|_| {
-                    graphdb_core::types::VertexId::from_string(&cached.external_id)
-                }),
+                .ok()
+                .and_then(|parsed| {
+                    graphdb_core::types::VertexId::try_from_int64(parsed).ok()
+                })
+                .or_else(|| {
+                    graphdb_core::types::VertexId::try_from_string(&cached.external_id).ok()
+                })?,
             properties: cached.properties,
         })
     }

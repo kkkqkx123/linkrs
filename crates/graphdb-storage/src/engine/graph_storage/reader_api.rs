@@ -10,8 +10,13 @@ use super::GraphStorage;
 use super::{cursor_impl, index_manager, reader};
 
 impl StorageReader for GraphStorage {
-    fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError> {
-        reader::get_vertex(&self.ctx, space, id)
+    fn get_vertex(
+        &self,
+        space: &str,
+        tag: &str,
+        id: &VertexId,
+    ) -> Result<Option<Vertex>, StorageError> {
+        reader::get_vertex(&self.ctx, space, tag, id)
     }
 
     fn layout_version(&self) -> u64 {
@@ -25,10 +30,11 @@ impl StorageReader for GraphStorage {
     fn get_vertex_projected(
         &self,
         space: &str,
+        tag: &str,
         id: &VertexId,
         projection: &[String],
     ) -> Result<Option<Vertex>, StorageError> {
-        reader::get_vertex_projected(&self.ctx, space, id, projection)
+        reader::get_vertex_projected(&self.ctx, space, tag, id, projection)
     }
 
     fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError> {
@@ -449,11 +455,12 @@ impl StorageReader for GraphStorage {
         if let Some(index) = tag_indexes.into_iter().find(|index| index.id == index_id) {
             let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
             let space_name = plan.space.clone();
+            let tag_name = index.schema_name.clone();
             let ctx = self.ctx.clone();
             let stale_checker: Option<crate::index::types::StaleChecker> =
                 Some(Arc::new(move |entity_ref| match entity_ref {
                     graphdb_core::wal::EntityRef::Vertex(vid) => {
-                        reader::get_vertex(&ctx, &space_name, vid)
+                        reader::get_vertex(&ctx, &space_name, &tag_name, vid)
                             .ok()
                             .flatten()
                             .is_some()
@@ -470,23 +477,11 @@ impl StorageReader for GraphStorage {
 
         if let Some(index) = edge_indexes.into_iter().find(|index| index.id == index_id) {
             let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
-            let space_name = plan.space.clone();
-            let ctx = self.ctx.clone();
-            let stale_checker: Option<crate::index::types::StaleChecker> =
-                Some(Arc::new(move |entity_ref| match entity_ref {
-                    graphdb_core::wal::EntityRef::Vertex(vid) => {
-                        reader::get_vertex(&ctx, &space_name, vid)
-                            .ok()
-                            .flatten()
-                            .is_some()
-                    }
-                    graphdb_core::wal::EntityRef::Edge { .. } => true,
-                }));
             let cursor = self
                 .ctx
                 .index_data_manager()
                 .read()
-                .open_edge_index_cursor_full(space_id, &index, plan, stale_checker, None)?;
+                .open_edge_index_cursor_full(space_id, &index, plan, None, None)?;
             return Ok(Box::new(cursor));
         }
 

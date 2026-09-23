@@ -247,51 +247,6 @@ impl VertexTable {
         Ok(properties)
     }
 
-    /// Rebuild divergent primary key cells from the external id index.
-    ///
-    /// Load-time upgrade fixup: the external id is authoritative, so every
-    /// stored primary key cell must equal its derived mirror. Divergent cells
-    /// are overwritten in place (no new MVCC version; history keeps showing
-    /// the pre-upgrade value) and the repaired row count is reported.
-    pub fn repair_primary_key_mirrors(&mut self) -> StorageResult<usize> {
-        let Some(pk_def) = self
-            .schema
-            .properties
-            .get(self.schema.primary_key_index)
-            .cloned()
-        else {
-            return Ok(0);
-        };
-        let mut repaired = 0usize;
-        for (key, internal_id) in self.id_indexer.iter() {
-            let mirror = primary_key_mirror_value(&pk_def.data_type, &key)?;
-            let mirror = mirror.try_cast_to(&pk_def.data_type)?;
-            let current = self
-                .columns
-                .get_projected_at_ts(
-                    internal_id as usize,
-                    &[pk_def.name.clone()],
-                    graphdb_core::types::MAX_TIMESTAMP,
-                )
-                .into_iter()
-                .next()
-                .and_then(|(_, value)| value);
-            if current.as_ref() != Some(&mirror) {
-                self.columns
-                    .set(internal_id as usize, &[(pk_def.name.clone(), mirror)])?;
-                repaired += 1;
-            }
-        }
-        if repaired > 0 {
-            log::info!(
-                "Repaired {} primary key mirror values in vertex table '{}'",
-                repaired,
-                self.label_name
-            );
-        }
-        Ok(repaired)
-    }
-
     pub fn get_by_internal_id(&self, internal_id: u32, ts: Timestamp) -> Option<VertexRecord> {
         self.get_projected_by_internal_id(internal_id, ts, None)
     }
@@ -315,10 +270,19 @@ impl VertexTable {
         self.columns.picked_starts_at(internal_id as usize, ts)
     }
 
-    /// Live internal IDs (excludes vertices deleted at or before `ts`-visible
-    /// state), in allocation order. Used by lazy paginated scans.
-    pub fn live_ids(&self) -> Vec<u32> {
-        self.id_indexer.live_ids()
+    /// Snapshot-visible live IDs at `ts` in allocation order.
+    ///
+    /// Enumeration and point reads share this one visibility predicate:
+    /// rows invisible at `ts` (including timestamp-deleted rows awaiting
+    /// watermark-gated GC) are excluded. There is no unfiltered variant;
+    /// sizing callers use `total_count` or `id_hole_stats` instead.
+    /// Used by lazy paginated scans.
+    pub fn live_ids(&self, ts: Timestamp) -> Vec<u32> {
+        self.id_indexer
+            .live_ids()
+            .into_iter()
+            .filter(|&id| self.timestamps.is_valid(id, ts))
+            .collect()
     }
 
     /// Batch variant of [`get_projected_by_internal_id`].
@@ -361,9 +325,17 @@ impl VertexTable {
                 Some(key) => key,
                 None => continue,
             };
+            // Index keys are length-checked at insert, so a decode failure
+            // surfaces as a missing row under the existing absence contract.
             let vid = match key {
-                IdKey::Int(i) => VertexId::from_int64(i),
-                IdKey::Text(s) => VertexId::from_string(&s),
+                IdKey::Int(i) => match VertexId::try_from_int64(i).ok() {
+                    Some(vid) => vid,
+                    None => continue,
+                },
+                IdKey::Text(s) => match VertexId::try_from_string(&s).ok() {
+                    Some(vid) => vid,
+                    None => continue,
+                },
             };
             let properties: Vec<(String, Value)> = prop_row
                 .into_iter()
@@ -391,8 +363,8 @@ impl VertexTable {
                     return None;
                 }
                 match self.id_indexer.get_key(id) {
-                    Some(IdKey::Int(i)) => Some(VertexId::from_int64(i)),
-                    Some(IdKey::Text(s)) => Some(VertexId::from_string(&s)),
+                    Some(IdKey::Int(i)) => VertexId::try_from_int64(i).ok(),
+                    Some(IdKey::Text(s)) => VertexId::try_from_string(&s).ok(),
                     None => None,
                 }
             })
@@ -452,8 +424,8 @@ impl VertexTable {
             .collect();
 
         let vid = match external_id {
-            IdKey::Int(i) => VertexId::from_int64(i),
-            IdKey::Text(s) => VertexId::from_string(&s),
+            IdKey::Int(i) => VertexId::try_from_int64(i).ok()?,
+            IdKey::Text(s) => VertexId::try_from_string(&s).ok()?,
         };
 
         Some(VertexRecord {
@@ -928,7 +900,7 @@ impl<'a> VertexIterator<'a> {
         Self {
             table,
             ts,
-            live_ids: table.id_indexer.live_ids().into_iter(),
+            live_ids: table.live_ids(ts).into_iter(),
         }
     }
 }

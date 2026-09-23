@@ -234,7 +234,7 @@ impl EdgeCursor for GraphEdgeCursor {
 
         Ok(candidates
             .into_iter()
-            .map(|candidate| materialize_edge(ctx, candidate, ts))
+            .filter_map(|candidate| materialize_edge(ctx, candidate, ts))
             .collect())
     }
 }
@@ -348,17 +348,37 @@ fn scan_mutable(args: ScanArgs) {
                 *args.malformed += 1;
                 continue;
             };
-            let src_vid = VertexId::from_int64(local as i64 + base as i64);
+            let Some(global) = local.checked_add(base) else {
+                *args.malformed += 1;
+                continue;
+            };
+            let src_vid = VertexId::from_u32(global);
             if let Some(ref r) = *args.src_id_range {
                 let src_internal = src_vid.as_internal_u32().unwrap_or(u32::MAX);
-                let src_ext =
-                    resolve_vertex_id(args.ctx, src_internal, args.td.tbl_src, &src_vid, args.ts);
-                // An unparseable external id cannot satisfy a numeric range;
-                // count and skip instead of mapping it to a sentinel that
-                // silently mis-filters the row.
-                let Ok(src_int) = src_ext.parse::<i64>() else {
+                let Some(src_ext) =
+                    resolve_vertex_id(args.ctx, src_internal, args.td.tbl_src, args.ts)
+                else {
                     *args.malformed += 1;
                     continue;
+                };
+                // An external id outside the integer domain cannot satisfy a
+                // numeric range; count and skip instead of mapping it to a
+                // sentinel that silently mis-filters the row.
+                let src_int = match src_ext.as_int64() {
+                    Some(v) => v,
+                    None => match src_ext.as_u64() {
+                        Some(v) => match i64::try_from(v) {
+                            Ok(v) => v,
+                            Err(_) => {
+                                *args.malformed += 1;
+                                continue;
+                            }
+                        },
+                        None => {
+                            *args.malformed += 1;
+                            continue;
+                        }
+                    },
                 };
                 if src_int < r.start || src_int >= r.end {
                     continue;
@@ -451,9 +471,9 @@ struct EdgeCandidate {
 fn build_edge_candidate(args: EdgeBuildArgs<'_>) -> EdgeCandidate {
     let src_internal = args.src_vid.as_internal_u32().unwrap_or(u32::MAX);
     let rank = args.nbr.rank;
-    let dst_vid = VertexId::from_int64(args.nbr.endpoint as i64);
+    let dst_vid = VertexId::from_u32(args.nbr.endpoint);
 
-    let src_vid = VertexId::from_int64(src_internal as i64);
+    let src_vid = VertexId::from_u32(src_internal);
     let props: HashMap<String, Value> = args.props.into_iter().collect();
     EdgeCandidate {
         edge_type_name: args.target.edge_type_name.clone(),
@@ -466,30 +486,24 @@ fn build_edge_candidate(args: EdgeBuildArgs<'_>) -> EdgeCandidate {
     }
 }
 
-fn materialize_edge(ctx: &GraphStorageContext, candidate: EdgeCandidate, ts: Timestamp) -> Edge {
+fn materialize_edge(
+    ctx: &GraphStorageContext,
+    candidate: EdgeCandidate,
+    ts: Timestamp,
+) -> Option<Edge> {
     let src_internal = candidate.src_vid.as_internal_u32().unwrap_or(u32::MAX);
     let dst_internal = candidate.dst_vid.as_internal_u32().unwrap_or(u32::MAX);
-    let src_external = resolve_vertex_id(
-        ctx,
-        src_internal,
-        candidate.src_label,
-        &candidate.src_vid,
-        ts,
-    );
-    let dst_external = resolve_vertex_id(
-        ctx,
-        dst_internal,
-        candidate.dst_label,
-        &candidate.dst_vid,
-        ts,
-    );
-    Edge {
-        src: make_vid(&src_external),
-        dst: make_vid(&dst_external),
+    let src_external = resolve_vertex_id(ctx, src_internal, candidate.src_label, ts)
+        .unwrap_or(candidate.src_vid);
+    let dst_external = resolve_vertex_id(ctx, dst_internal, candidate.dst_label, ts)
+        .unwrap_or(candidate.dst_vid);
+    Some(Edge {
+        src: src_external,
+        dst: dst_external,
         edge_type: candidate.edge_type_name,
         ranking: candidate.rank,
         props: candidate.props,
-    }
+    })
 }
 
 /// Decode edge properties for the precomputed fetch set (projection plus
@@ -550,26 +564,12 @@ pub(crate) fn resolve_vertex_id(
     ctx: &GraphStorageContext,
     internal: u32,
     label: LabelId,
-    fallback: &VertexId,
     ts: Timestamp,
-) -> String {
-    if label != 0 {
-        ctx.get_external_id(label, internal, ts)
-            .or_else(|| {
-                ctx.get_external_id_by_internal_id(label, internal)
-                    .map(|v| format!("{}", v))
-            })
-            .unwrap_or_else(|| format!("{}", fallback))
-    } else {
-        ctx.get_external_id_any(internal, ts)
-            .unwrap_or_else(|| format!("{}", fallback))
+) -> Option<VertexId> {
+    if let Some(vid) = ctx.get_external_id_by_internal_id(label, internal) {
+        return Some(vid);
     }
-}
-
-pub(crate) fn make_vid(s: &str) -> VertexId {
-    s.parse::<i64>()
-        .map(VertexId::from_int64)
-        .unwrap_or_else(|_| VertexId::from_string(s))
+    ctx.get_external_vertex_id(label, internal, ts)
 }
 
 // ---------------------------------------------------------------------------

@@ -124,8 +124,9 @@ impl GraphVertexCursor {
         })
     }
 
-    /// Load the next non-empty table's live ids into `pending_ids`, advancing
-    /// through tables until one has ids. Sets `exhausted` when no table remains.
+    /// Load the next non-empty table's snapshot-visible live ids into
+    /// `pending_ids`, advancing through tables until one has ids. Sets
+    /// `exhausted` when no table remains.
     fn load_next_table(&mut self, tables: &HashMap<LabelId, Arc<ShardedVertexTable>>) {
         self.current_table = None;
         self.current_label = None;
@@ -135,7 +136,7 @@ impl GraphVertexCursor {
             let label_id = self.tags.labels[self.current_table_idx];
             self.current_table_idx += 1;
             if let Some(table) = tables.get(&label_id) {
-                let ids = table.live_ids();
+                let ids = table.live_ids(self.ts);
                 if !ids.is_empty() {
                     self.current_label = Some(label_id);
                     self.pending_ids = ids;
@@ -151,15 +152,9 @@ impl GraphVertexCursor {
 impl VertexCursor for GraphVertexCursor {
     fn next_batch(&mut self, batch_size: usize) -> Result<Vec<Vertex>, StorageError> {
         self.scan_batch(batch_size, |vid, internal_id, tag_name, props| {
+            let _ = internal_id;
             let props_map: HashMap<String, Value> = props.into_iter().collect();
-            Vertex {
-                vid,
-                id: internal_id,
-                // Single-label read construction fills only the tag; the
-                // vertex-level map is no longer duplicated.
-                tags: vec![Tag::new(tag_name, props_map)],
-                properties: HashMap::new(),
-            }
+            Vertex::new(vid, Tag::new(tag_name, props_map))
         })
     }
 

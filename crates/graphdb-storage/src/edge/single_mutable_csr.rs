@@ -1096,7 +1096,7 @@ impl<'a> Iterator for SingleMutableCsrIterator<'a> {
                 self.csr.get_edge_any_dst(vid as u32, self.ts)
             };
             if let Some(nbr) = nbr {
-                return Some((VertexId::from_int64(vid as i64), nbr));
+                return Some((VertexId::from_u32(u32::try_from(vid).ok()?), nbr));
             }
         }
         None

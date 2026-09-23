@@ -311,14 +311,19 @@ pub(crate) fn import_vertex_csv_from_path<W: StorageWriter + ?Sized>(
             }
         }
 
-        // Single-label input: properties travel in the tag; the writer
-        // ignores the vertex-level map.
-        let vertex = graphdb_core::Vertex {
-            vid: graphdb_core::types::VertexId::from_int64(id),
-            id,
-            tags: vec![graphdb_core::Tag::new(tag_name.to_string(), properties)],
-            properties: std::collections::HashMap::new(),
+        // Single-label input: properties travel in the tag.
+        let Ok(vid) = graphdb_core::types::VertexId::try_from_int64(id) else {
+            stats.dropped_invalid += 1;
+            log::debug!(
+                "Import of tag '{tag_name}' drops row {} with invalid ids: {line}",
+                row + 2,
+            );
+            continue;
         };
+        let vertex = graphdb_core::Vertex::new(
+            vid,
+            graphdb_core::Tag::new(tag_name.to_string(), properties),
+        );
         vertices.push(vertex);
 
         if vertices.len() >= 1000 {
@@ -402,6 +407,17 @@ pub(crate) fn import_edge_csv_from_path<W: StorageWriter + ?Sized>(
             );
             continue;
         };
+        let (Ok(src), Ok(dst)) = (
+            graphdb_core::types::VertexId::try_from_int64(src),
+            graphdb_core::types::VertexId::try_from_int64(dst),
+        ) else {
+            stats.dropped_invalid += 1;
+            log::debug!(
+                "Import of edge type '{edge_type}' drops row {} with invalid endpoints: {line}",
+                row + 2,
+            );
+            continue;
+        };
         let ranking = rank_idx
             .and_then(|i| fields.get(i))
             .and_then(|s| s.trim().trim_matches('"').parse::<i64>().ok())
@@ -418,8 +434,8 @@ pub(crate) fn import_edge_csv_from_path<W: StorageWriter + ?Sized>(
         }
 
         let edge = graphdb_core::Edge {
-            src: graphdb_core::types::VertexId::from_int64(src),
-            dst: graphdb_core::types::VertexId::from_int64(dst),
+            src,
+            dst,
             edge_type: edge_type.to_string(),
             ranking,
             props,

@@ -36,13 +36,11 @@ impl TestStorage {
             .or_default();
         let tag = graphdb_core::vertex_edge_path::Tag {
             name: label.to_string(),
-            properties: props.clone(),
+            properties: props,
         };
         let vertex = Vertex {
-            vid: VertexId::from_int64(vid),
-            id: vid,
-            tags: vec![tag],
-            properties: props,
+            vid: VertexId::try_from_int64(vid).expect("test vertex id"),
+            tag,
         };
         entry.push(vertex);
     }
@@ -57,7 +55,12 @@ impl TestStorage {
 }
 
 impl StorageReader for TestStorage {
-    fn get_vertex(&self, _space: &str, _id: &VertexId) -> Result<Option<Vertex>, StorageError> {
+    fn get_vertex(
+        &self,
+        _space: &str,
+        _tag: &str,
+        _id: &VertexId,
+    ) -> Result<Option<Vertex>, StorageError> {
         Ok(None)
     }
     fn scan_vertices(&self, _space: &str) -> Result<Vec<Vertex>, StorageError> {
@@ -324,14 +327,10 @@ impl StorageReader for TestStorage {
 
 impl StorageWriter for TestStorage {
     fn insert_vertex(&mut self, _space: &str, _vertex: Vertex) -> Result<VertexId, StorageError> {
-        Ok(VertexId::from_int64(0))
+        Ok(VertexId::try_from_int64(0).expect("test vertex id"))
     }
     fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError> {
-        let label = vertex
-            .tags
-            .first()
-            .map(|t| t.name.clone())
-            .unwrap_or_default();
+        let label = vertex.tag.name.clone();
         let mut map = self.vertices.lock().unwrap();
         if let Some(vec) = map.get_mut(&(space.to_string(), label.clone())) {
             for v in vec.iter_mut() {
@@ -346,12 +345,18 @@ impl StorageWriter for TestStorage {
         }
         Ok(())
     }
-    fn delete_vertex(&mut self, _space: &str, _id: &VertexId) -> Result<(), StorageError> {
+    fn delete_vertex(
+        &mut self,
+        _space: &str,
+        _tag: &str,
+        _id: &VertexId,
+    ) -> Result<(), StorageError> {
         Ok(())
     }
     fn delete_vertex_with_edges(
         &mut self,
         _space: &str,
+        _tag: &str,
         _id: &VertexId,
     ) -> Result<(), StorageError> {
         Ok(())
@@ -359,6 +364,7 @@ impl StorageWriter for TestStorage {
     fn batch_delete_vertices_with_edges(
         &mut self,
         _space: &str,
+        _tag: &str,
         _ids: &[VertexId],
     ) -> Result<usize, StorageError> {
         Ok(0)
@@ -369,14 +375,6 @@ impl StorageWriter for TestStorage {
         _vertices: Vec<Vertex>,
     ) -> Result<Vec<VertexId>, StorageError> {
         Ok(Vec::new())
-    }
-    fn delete_tags(
-        &mut self,
-        _space: &str,
-        _vertex_id: &VertexId,
-        _tag_names: &[String],
-    ) -> Result<usize, StorageError> {
-        Ok(0)
     }
     fn insert_edge(&mut self, _space: &str, _edge: Edge) -> Result<(), StorageError> {
         Ok(())
@@ -431,7 +429,12 @@ impl StorageWriter for TestStorage {
     ) -> Result<bool, StorageError> {
         Ok(true)
     }
-    fn delete_vertex_data(&mut self, _space: &str, _vertex_id: &str) -> Result<bool, StorageError> {
+    fn delete_vertex_data(
+        &mut self,
+        _space: &str,
+        _tag: &str,
+        _vertex_id: &str,
+    ) -> Result<bool, StorageError> {
         Ok(true)
     }
     fn delete_edge_data(
@@ -627,7 +630,7 @@ fn test_execute_add_column() {
     assert!(report.success);
     let vertices = storage.get_vertices("s", "User");
     assert_eq!(
-        vertices[0].tags[0].properties.get("email"),
+        vertices[0].tag.properties.get("email"),
         Some(&Value::string("a@b.com"))
     );
     // check history recorded
@@ -655,7 +658,7 @@ fn test_execute_drop_column() {
     let report = execute_migration_plan(&mut storage, &plan).unwrap();
     assert!(report.success);
     let vertices = storage.get_vertices("s", "User");
-    assert!(!vertices[0].tags[0].properties.contains_key("old"));
+    assert!(!vertices[0].tag.properties.contains_key("old"));
 }
 
 #[test]
@@ -684,7 +687,7 @@ fn test_execute_type_convert() {
     assert!(report.success);
     let vertices = storage.get_vertices("s", "User");
     assert_eq!(
-        vertices[0].tags[0].properties.get("age"),
+        vertices[0].tag.properties.get("age"),
         Some(&Value::BigInt(42))
     );
 }
@@ -753,7 +756,7 @@ fn test_idempotent_execution() {
     assert!(r2.success);
     let vertices = storage.get_vertices("s", "User");
     assert_eq!(
-        vertices[0].tags[0].properties.get("email"),
+        vertices[0].tag.properties.get("email"),
         Some(&Value::string("x"))
     );
     // No duplicate history? second execution will attempt to record same to_version -> our mock just pushes, but real manager would reject AlreadyExists. For test we just check no panic.
@@ -812,7 +815,7 @@ fn test_dry_run_no_commit() {
     let report = execute_migration_plan(&mut storage, &plan).unwrap();
     assert!(report.success);
     let vertices = storage.get_vertices("s", "User");
-    assert!(!vertices[0].tags[0].properties.contains_key("email"));
+    assert!(!vertices[0].tag.properties.contains_key("email"));
 }
 
 #[test]
@@ -842,7 +845,7 @@ fn test_idempotent_add_column() {
     assert!(report.success);
     let vertices = storage.get_vertices("s", "User");
     assert_eq!(
-        vertices[0].tags[0].properties.get("email"),
+        vertices[0].tag.properties.get("email"),
         Some(&Value::string("exists"))
     );
 }
@@ -882,9 +885,9 @@ fn test_expand_contract_rename() {
     let report = execute_migration_plan(&mut storage, &plan).unwrap();
     assert!(report.success);
     let vertices = storage.get_vertices("s", "User");
-    assert!(!vertices[0].tags[0].properties.contains_key("old_name"));
+    assert!(!vertices[0].tag.properties.contains_key("old_name"));
     assert_eq!(
-        vertices[0].tags[0].properties.get("new_name"),
+        vertices[0].tag.properties.get("new_name"),
         Some(&Value::string("hello"))
     );
 }
@@ -947,11 +950,11 @@ fn test_checkpoint_resume() {
     assert!(report.completed_step_indices.contains(&1));
     let vertices = storage.get_vertices("s", "User");
     assert_eq!(
-        vertices[0].tags[0].properties.get("a"),
+        vertices[0].tag.properties.get("a"),
         Some(&Value::string("v1"))
     );
     assert_eq!(
-        vertices[0].tags[0].properties.get("b"),
+        vertices[0].tag.properties.get("b"),
         Some(&Value::string("v2"))
     );
     // checkpoint file should be cleaned up after success

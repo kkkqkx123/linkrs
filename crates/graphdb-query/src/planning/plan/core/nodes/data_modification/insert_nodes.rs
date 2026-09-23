@@ -34,28 +34,23 @@ impl InsertVerticesNode {
         &self.info.space_name
     }
 
-    /// Get all tag names
-    pub fn tag_names(&self) -> Vec<String> {
-        self.info.tags.iter().map(|t| t.tag_name.clone()).collect()
+    /// Get the tag name
+    pub fn tag_name(&self) -> &str {
+        self.info.tag.tag_name.as_str()
     }
 
-    /// Get the first tag name (for backward compatibility)
-    pub fn tag_name(&self) -> Option<&str> {
-        self.info.tags.first().map(|t| t.tag_name.as_str())
+    /// Get the tag specification
+    pub fn tag(&self) -> &TagInsertSpec {
+        &self.info.tag
     }
 
-    /// Get all tag specifications
-    pub fn tags(&self) -> &[TagInsertSpec] {
-        &self.info.tags
-    }
-
-    /// Get property names of the first tag (for backward compatibility)
-    pub fn prop_names(&self) -> Option<&[String]> {
-        self.info.tags.first().map(|t| t.prop_names.as_slice())
+    /// Get property names of the tag
+    pub fn prop_names(&self) -> &[String] {
+        self.info.tag.prop_names.as_slice()
     }
 
     /// Get all values
-    pub fn values(&self) -> &[(ContextualExpression, Vec<Vec<ContextualExpression>>)] {
+    pub fn values(&self) -> &[(ContextualExpression, Vec<ContextualExpression>)] {
         &self.info.values
     }
 

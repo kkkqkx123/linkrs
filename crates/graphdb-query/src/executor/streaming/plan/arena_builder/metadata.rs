@@ -831,7 +831,6 @@ pub(super) fn sink_explain_name(spec: &SinkSpec) -> &'static str {
         SinkSpec::DeleteEdges { .. } => "DeleteEdges",
         SinkSpec::PipeDeleteVertices { .. } => "PipeDeleteVertices",
         SinkSpec::PipeDeleteEdges { .. } => "PipeDeleteEdges",
-        SinkSpec::DeleteTags { .. } => "DeleteTags",
     }
 }
 

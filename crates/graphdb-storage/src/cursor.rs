@@ -339,15 +339,16 @@ pub trait VertexCursor: Send + std::fmt::Debug {
             .into_iter()
             .map(|v| FlatVertexRecord {
                 vid: v.vid,
-                internal_id: v.id,
-                tag_name: v.tags.first().map(|t| t.name.clone()).unwrap_or_default(),
-                // Single-label reads fill only the tag: the flat row comes
-                // from the first tag, never the legacy vertex map.
-                props: v
-                    .tags
-                    .first()
-                    .map(|t| t.properties.clone().into_iter().collect())
-                    .unwrap_or_default(),
+                // No table row address exists behind this fallback path:
+                // integer vids project to their row key, anything else
+                // reports -1. Storage engines override this with real ids.
+                internal_id: v
+                    .vid
+                    .as_internal_u32()
+                    .map(|id| id as i64)
+                    .unwrap_or(-1),
+                tag_name: v.tag.name.clone(),
+                props: v.tag.properties.clone().into_iter().collect(),
             })
             .collect())
     }
@@ -573,14 +574,12 @@ mod tests {
 
     #[test]
     fn next_flat_batch_default_converts_vertices() {
-        let mut vertex = Vertex::with_vid(VertexId::from_int64(1));
-        vertex.id = 7;
         let mut props = HashMap::new();
         props.insert("age".to_string(), Value::BigInt(30));
-        vertex.add_tag(Tag::new("person".to_string(), props));
-        vertex
-            .properties
-            .insert("age".to_string(), Value::BigInt(30));
+        let vertex = Vertex::new(
+            VertexId::try_from_int64(1).expect("test vertex id"),
+            Tag::new("person".to_string(), props),
+        );
 
         let mut cursor = VecVertexCursor::new(vec![vertex]);
         let batch = cursor
@@ -588,8 +587,8 @@ mod tests {
             .expect("flat batch should succeed");
         assert_eq!(batch.len(), 1);
         let rec = &batch[0];
-        assert_eq!(rec.vid, VertexId::from_int64(1));
-        assert_eq!(rec.internal_id, 7);
+        assert_eq!(rec.vid, VertexId::try_from_int64(1).expect("test vertex id"));
+        assert_eq!(rec.internal_id, 1);
         assert_eq!(rec.tag_name, "person");
         assert_eq!(rec.props, vec![("age".to_string(), Value::BigInt(30))]);
     }

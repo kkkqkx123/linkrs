@@ -54,7 +54,7 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
     fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError> {
         let old_vertex = self
             .inner
-            .get_vertex(space, &vertex.vid)?
+            .get_vertex(space, &vertex.tag.name, &vertex.vid)?
             .ok_or_else(|| StorageError::node_not_found(vertex.vid))?;
 
         self.inner.update_vertex(space, vertex.clone())?;
@@ -65,13 +65,13 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
         Ok(())
     }
 
-    fn delete_vertex(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError> {
+    fn delete_vertex(&mut self, space: &str, tag: &str, id: &VertexId) -> Result<(), StorageError> {
         let vertex = self
             .inner
-            .get_vertex(space, id)?
+            .get_vertex(space, tag, id)?
             .ok_or_else(|| StorageError::node_not_found(*id))?;
 
-        StorageWriter::delete_vertex(&mut self.inner, space, id)?;
+        StorageWriter::delete_vertex(&mut self.inner, space, tag, id)?;
         if let Err(error) = self.sync_delete_vertex(space, &vertex.vid, &vertex) {
             return Err(self.reject_staged_write(error));
         }
@@ -79,13 +79,18 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
         Ok(())
     }
 
-    fn delete_vertex_with_edges(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError> {
+    fn delete_vertex_with_edges(
+        &mut self,
+        space: &str,
+        tag: &str,
+        id: &VertexId,
+    ) -> Result<(), StorageError> {
         let vertex = self
             .inner
-            .get_vertex(space, id)?
+            .get_vertex(space, tag, id)?
             .ok_or_else(|| StorageError::node_not_found(*id))?;
 
-        StorageWriter::delete_vertex_with_edges(&mut self.inner, space, id)?;
+        StorageWriter::delete_vertex_with_edges(&mut self.inner, space, tag, id)?;
         if let Err(error) = self.sync_delete_vertex(space, id, &vertex) {
             return Err(self.reject_staged_write(error));
         }
@@ -96,15 +101,17 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
     fn batch_delete_vertices_with_edges(
         &mut self,
         space: &str,
+        tag: &str,
         ids: &[VertexId],
     ) -> Result<usize, StorageError> {
         let mut vertices: Vec<Vertex> = Vec::with_capacity(ids.len());
         for id in ids {
-            if let Some(v) = self.inner.get_vertex(space, id)? {
+            if let Some(v) = self.inner.get_vertex(space, tag, id)? {
                 vertices.push(v);
             }
         }
-        let result = StorageWriter::batch_delete_vertices_with_edges(&mut self.inner, space, ids)?;
+        let result =
+            StorageWriter::batch_delete_vertices_with_edges(&mut self.inner, space, tag, ids)?;
         for (id, vertex) in ids.iter().zip(vertices) {
             if let Err(error) = self.sync_delete_vertex(space, id, &vertex) {
                 return Err(self.reject_staged_write(error));
@@ -125,54 +132,6 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
         }
         self.commit_auto_transaction()?;
         Ok(results)
-    }
-
-    fn delete_tags(
-        &mut self,
-        space: &str,
-        vertex_id: &VertexId,
-        tag_names: &[String],
-    ) -> Result<usize, StorageError> {
-        let previous = self.inner.get_vertex(space, vertex_id)?;
-        let result = self.inner.delete_tags(space, vertex_id, tag_names)?;
-        if result > 0 && self.enabled {
-            if let Some(manager) = self.get_sync_manager() {
-                let transaction_id = self
-                    .get_current_txn_id()
-                    .ok_or_else(|| {
-                        StorageError::db_error(
-                            "Synchronized writes require an operation transaction context"
-                                .to_string(),
-                        )
-                    })
-                    .map_err(|error| self.reject_staged_write(error))?;
-                let space_id = self
-                    .inner
-                    .get_space_id(space)
-                    .map_err(|error| self.reject_staged_write(error))?;
-                for tag in previous
-                    .into_iter()
-                    .flat_map(|vertex| vertex.tags)
-                    .filter(|tag| tag_names.iter().any(|name| name == &tag.name))
-                {
-                    let properties = tag.properties.into_iter().collect::<Vec<_>>();
-                    if let Err(error) = manager.on_vertex_change_with_txn(
-                        transaction_id,
-                        space_id,
-                        &tag.name,
-                        &Value::from(*vertex_id),
-                        &properties,
-                        ChangeType::Delete,
-                    ) {
-                        return Err(
-                            self.reject_staged_write(StorageError::db_error(error.to_string()))
-                        );
-                    }
-                }
-            }
-        }
-        self.commit_auto_transaction()?;
-        Ok(result)
     }
 
     fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
@@ -266,7 +225,12 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
         Ok(result)
     }
 
-    fn delete_vertex_data(&mut self, space: &str, vertex_id: &str) -> Result<bool, StorageError> {
+    fn delete_vertex_data(
+        &mut self,
+        space: &str,
+        tag: &str,
+        vertex_id: &str,
+    ) -> Result<bool, StorageError> {
         let vid_type = self
             .inner
             .get_space(space)?
@@ -280,8 +244,8 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
             VertexId::try_from_string(vertex_id).map_err(StorageError::invalid_input)?
         };
         let parsed_id = VertexId::normalize_for_vid_type(&vid_type, raw)?;
-        let previous = self.inner.get_vertex(space, &parsed_id)?;
-        let result = self.inner.delete_vertex_data(space, vertex_id)?;
+        let previous = self.inner.get_vertex(space, tag, &parsed_id)?;
+        let result = self.inner.delete_vertex_data(space, tag, vertex_id)?;
         if result {
             if let Some(vertex) = previous {
                 if let Err(error) = self.sync_delete_vertex(space, &vertex.vid, &vertex) {
@@ -382,16 +346,10 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
         let target = &info.update_target;
         let vertex_id = VertexId::try_from(&target.id)
             .map_err(|error| StorageError::invalid_input(error.to_string()))?;
-        let previous = self.inner.get_vertex(space, &vertex_id)?;
+        let previous = self.inner.get_vertex(space, &target.label, &vertex_id)?;
         let current = previous
             .as_ref()
-            .and_then(|vertex| {
-                vertex
-                    .tags
-                    .iter()
-                    .find(|tag| tag.name == target.label)
-                    .and_then(|tag| tag.properties.get(&target.prop))
-            })
+            .and_then(|vertex| vertex.get_property(&target.prop))
             .cloned();
         let updated_value = match (&info.update_op, current) {
             (UpdateOp::Add, Some(Value::Int(current))) => match &info.value {

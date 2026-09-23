@@ -18,9 +18,9 @@ pub struct TagInsertSpec {
 #[derive(Debug, Clone)]
 pub struct VertexInsertInfo {
     pub space_name: String,
-    pub tags: Vec<TagInsertSpec>,
+    pub tag: TagInsertSpec,
     /// (vertex_id, tag_values) pairs
-    pub values: Vec<(ContextualExpression, Vec<Vec<ContextualExpression>>)>,
+    pub values: Vec<(ContextualExpression, Vec<ContextualExpression>)>,
     /// IF NOT EXISTS flag
     pub if_not_exists: bool,
 }
@@ -99,15 +99,6 @@ pub struct EdgeDeleteInfo {
         Option<ContextualExpression>,
     )>,
     pub condition: Option<ContextualExpression>,
-}
-
-/// Tag deletion information
-#[derive(Debug, Clone)]
-pub struct TagDeleteInfo {
-    pub space_name: String,
-    pub tag_names: Vec<String>,
-    pub vertex_ids: Vec<ContextualExpression>,
-    pub is_all_tags: bool,
 }
 
 /// Index deletion information

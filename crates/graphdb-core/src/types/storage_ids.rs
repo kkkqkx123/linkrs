@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::ops::{Add, AddAssign};
+use std::ops::Add;
 
 use crate::{DataType, Value};
 
@@ -267,11 +267,39 @@ impl VertexIdKind {
 /// integer, text, an edge-endpoint key, or empty. All interpretation
 /// (ordering, display, conversion) branches on the kind; byte length is
 /// never used to infer the type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct VertexId {
     data: [u8; VERTEX_ID_MAX_SIZE],
     len: u8,
     kind: u8,
+}
+
+impl<'de> serde::Deserialize<'de> for VertexId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct RawVertexId {
+            data: [u8; VERTEX_ID_MAX_SIZE],
+            len: u8,
+            kind: u8,
+        }
+        let raw = RawVertexId::deserialize(deserializer)?;
+        let kind = VertexIdKind::from_u8(raw.kind).ok_or_else(|| {
+            serde::de::Error::invalid_value(
+                serde::de::Unexpected::Unsigned(raw.kind as u64),
+                &"a vertex id discriminant in 0..=4",
+            )
+        })?;
+        if (raw.len as usize) > VERTEX_ID_MAX_SIZE {
+            return Err(serde::de::Error::invalid_length(
+                raw.len as usize,
+                &"at most 32 payload bytes",
+            ));
+        }
+        Self::from_typed_bytes(kind, &raw.data[..raw.len as usize]).map_err(serde::de::Error::custom)
+    }
 }
 
 impl VertexId {
@@ -283,24 +311,10 @@ impl VertexId {
         }
     }
 
-    /// Trusted constructor for signed integer ids.
+    /// Construct a signed integer id, rejecting negatives with an error.
     ///
-    /// Negative values stay representable here because internal decoding
-    /// paths need them; user-facing integer ids must go through
-    /// [`VertexId::try_from_int64`], and storage write paths reject
-    /// negatives at the table choke point.
-    pub fn from_int64(id: i64) -> Self {
-        let bytes = id.to_be_bytes();
-        let mut data = [0u8; VERTEX_ID_MAX_SIZE];
-        data[..8].copy_from_slice(&bytes);
-        VertexId {
-            data,
-            len: 8,
-            kind: VertexIdKind::Int.as_u8(),
-        }
-    }
-
-    /// User-facing constructor for signed integer ids. Rejects negatives.
+    /// This is the only way to build an `Int` id: there is no infallible
+    /// bypass, so every caller handles the negative case through `Result`.
     pub fn try_from_int64(id: i64) -> Result<Self, crate::StorageError> {
         if id < 0 {
             return Err(crate::StorageError::invalid_input(format!(
@@ -308,7 +322,8 @@ impl VertexId {
                 id
             )));
         }
-        Ok(Self::from_int64(id))
+        Self::from_typed_bytes(VertexIdKind::Int, &id.to_be_bytes())
+            .map_err(crate::StorageError::invalid_input)
     }
 
     pub fn from_u64(id: u64) -> Self {
@@ -322,8 +337,44 @@ impl VertexId {
         }
     }
 
+    /// Construct an `Int` id from a `u32` row key.
+    ///
+    /// Infallible by type: every `u32` is a valid non-negative `Int` id.
+    /// This is the only non-`try_` integer constructor, reserved for
+    /// storage-internal row keys that are `u32` by construction.
+    pub fn from_u32(id: u32) -> Self {
+        let bytes = (id as i64).to_be_bytes();
+        let mut data = [0u8; VERTEX_ID_MAX_SIZE];
+        data[..8].copy_from_slice(&bytes);
+        VertexId {
+            data,
+            len: 8,
+            kind: VertexIdKind::Int.as_u8(),
+        }
+    }
+
     pub fn kind(&self) -> VertexIdKind {
         VertexIdKind::from_u8(self.kind).unwrap_or(VertexIdKind::Empty)
+    }
+
+    /// Decode the 8-byte big-endian payload without checking the kind tag.
+    ///
+    /// Callers have already matched on the kind; a short payload decodes as
+    /// `None` so every user of the bits stays total without panicking.
+    pub fn int_bits(&self) -> Option<i64> {
+        if self.len != 8 {
+            return None;
+        }
+        let arr: [u8; 8] = self.data[..8].try_into().ok()?;
+        Some(i64::from_be_bytes(arr))
+    }
+
+    pub fn uint_bits(&self) -> Option<u64> {
+        if self.len != 8 {
+            return None;
+        }
+        let arr: [u8; 8] = self.data[..8].try_into().ok()?;
+        Some(u64::from_be_bytes(arr))
     }
 
     pub fn is_empty_id(&self) -> bool {
@@ -391,6 +442,9 @@ impl VertexId {
     }
 
     /// Create from a string, returning an error if the string exceeds max size.
+    ///
+    /// This is the only way to build a `Text` id: overlong input is an error,
+    /// never a truncation.
     pub fn try_from_string(s: impl AsRef<str>) -> Result<Self, String> {
         let bytes = s.as_ref().as_bytes();
         if bytes.len() > VERTEX_ID_MAX_SIZE {
@@ -412,27 +466,6 @@ impl VertexId {
                 VertexIdKind::Text.as_u8()
             },
         })
-    }
-
-    /// Create from a string, truncating silently if too long.
-    ///
-    /// Trusted inputs only (test fixtures, keys already validated on write).
-    /// User-facing paths must use [`VertexId::try_from_string`].
-    pub fn from_string(s: impl Into<String>) -> Self {
-        let s = s.into();
-        let bytes = s.as_bytes();
-        let len = bytes.len().min(VERTEX_ID_MAX_SIZE);
-        let mut data = [0u8; VERTEX_ID_MAX_SIZE];
-        data[..len].copy_from_slice(&bytes[..len]);
-        VertexId {
-            data,
-            len: len as u8,
-            kind: if len == 0 {
-                VertexIdKind::Empty.as_u8()
-            } else {
-                VertexIdKind::Text.as_u8()
-            },
-        }
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -494,17 +527,24 @@ impl VertexId {
         let invalid = |detail: String| crate::StorageError::invalid_input(detail);
         match vid_type {
             DataType::SmallInt | DataType::Int | DataType::BigInt => match vid.kind() {
-                VertexIdKind::Int => {
-                    VertexId::try_from_int64(vid.as_int64().expect("Int kind always decodes"))
-                }
+                VertexIdKind::Int => vid
+                    .int_bits()
+                    .ok_or_else(|| invalid("Malformed integer vertex id".to_string()))
+                    .and_then(VertexId::try_from_int64),
                 VertexIdKind::Uint => {
-                    let value = vid.as_u64().expect("Uint kind always decodes");
+                    let value = vid.uint_bits().ok_or_else(|| {
+                        invalid("Malformed unsigned vertex id".to_string())
+                    })?;
                     i64::try_from(value)
-                        .map(Self::from_int64)
-                        .map_err(|_| invalid(format!("Vertex id {} overflows INT64 space", value)))
+                        .map_err(|_| {
+                            invalid(format!("Vertex id {} overflows INT64 space", value))
+                        })
+                        .and_then(VertexId::try_from_int64)
                 }
                 VertexIdKind::Text => {
-                    let text = vid.as_str().expect("Text kind with invalid UTF-8");
+                    let text = vid.as_str().ok_or_else(|| {
+                        invalid("Malformed text vertex id".to_string())
+                    })?;
                     text.parse::<i64>()
                         .map_err(|_| {
                             invalid(format!(
@@ -522,13 +562,17 @@ impl VertexId {
                 let text = match vid.kind() {
                     VertexIdKind::Text => vid
                         .as_str()
-                        .expect("Text kind with invalid UTF-8")
+                        .ok_or_else(|| invalid("Malformed text vertex id".to_string()))?
                         .to_string(),
                     VertexIdKind::Int => {
-                        vid.as_int64().expect("Int kind always decodes").to_string()
+                        vid.int_bits()
+                            .ok_or_else(|| invalid("Malformed integer vertex id".to_string()))?
+                            .to_string()
                     }
                     VertexIdKind::Uint => {
-                        vid.as_u64().expect("Uint kind always decodes").to_string()
+                        vid.uint_bits()
+                            .ok_or_else(|| invalid("Malformed unsigned vertex id".to_string()))?
+                            .to_string()
                     }
                     VertexIdKind::Empty | VertexIdKind::EdgeEndpoint => {
                         return Err(invalid(
@@ -567,10 +611,6 @@ impl VertexId {
         self.as_int64().map(|v| v as usize)
     }
 
-    pub fn zero() -> Self {
-        Self::from_int64(0)
-    }
-
     pub const fn const_default() -> Self {
         Self::new()
     }
@@ -606,29 +646,31 @@ impl VertexId {
         endpoint_bytes.copy_from_slice(&bytes[..8]);
         let mut rank_bytes = [0u8; 8];
         rank_bytes.copy_from_slice(&bytes[8..16]);
-        Some((
-            VertexId::from_int64(i64::from_be_bytes(endpoint_bytes)),
-            i64::from_be_bytes(rank_bytes),
-        ))
+        let endpoint = VertexId::try_from_int64(i64::from_be_bytes(endpoint_bytes)).ok()?;
+        Some((endpoint, i64::from_be_bytes(rank_bytes)))
     }
 }
 
 impl fmt::Display for VertexId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind() {
-            VertexIdKind::Int => write!(f, "{}", self.as_int64().expect("Int kind always decodes")),
-            VertexIdKind::Uint => write!(f, "{}", self.as_u64().expect("Uint kind always decodes")),
+            VertexIdKind::Int => match self.int_bits() {
+                Some(v) => write!(f, "{}", v),
+                None => write!(f, "{:?}", self.as_bytes()),
+            },
+            VertexIdKind::Uint => match self.uint_bits() {
+                Some(v) => write!(f, "{}", v),
+                None => write!(f, "{:?}", self.as_bytes()),
+            },
             VertexIdKind::Text => match self.as_str() {
                 Some(s) => write!(f, "\"{}\"", s),
                 None => write!(f, "{:?}", self.as_bytes()),
             },
             VertexIdKind::EdgeEndpoint => match self.try_decode_edge_endpoint() {
-                Some((endpoint, rank)) => write!(
-                    f,
-                    "edge_endpoint({}, {})",
-                    endpoint.as_int64().unwrap_or(0),
-                    rank
-                ),
+                Some((endpoint, rank)) => match endpoint.int_bits() {
+                    Some(v) => write!(f, "edge_endpoint({}, {})", v, rank),
+                    None => write!(f, "{:?}", self.as_bytes()),
+                },
                 None => write!(f, "{:?}", self.as_bytes()),
             },
             VertexIdKind::Empty => write!(f, "\"\""),
@@ -648,36 +690,22 @@ impl AsRef<[u8]> for VertexId {
     }
 }
 
-impl Add<u64> for VertexId {
-    type Output = Self;
-
-    fn add(self, rhs: u64) -> Self::Output {
-        self.checked_add(rhs)
-            .expect("Cannot add to non-integer VertexId")
-    }
-}
-
 impl VertexId {
     /// Add a `u64` offset, returning `None` for non-integer vertex IDs and
     /// on arithmetic overflow.
     pub fn checked_add(self, rhs: u64) -> Option<Self> {
         match self.kind() {
             VertexIdKind::Int => {
-                let id = self.as_int64().expect("Int kind always decodes");
-                id.checked_add_unsigned(rhs).map(Self::from_int64)
+                let id = self.int_bits()?;
+                id.checked_add_unsigned(rhs)
+                    .and_then(|next| Self::try_from_int64(next).ok())
             }
             VertexIdKind::Uint => {
-                let id = self.as_u64().expect("Uint kind always decodes");
+                let id = self.uint_bits()?;
                 id.checked_add(rhs).map(Self::from_u64)
             }
             _ => None,
         }
-    }
-}
-
-impl AddAssign<u64> for VertexId {
-    fn add_assign(&mut self, rhs: u64) {
-        *self = *self + rhs;
     }
 }
 
@@ -707,12 +735,6 @@ impl TryFrom<&Value> for VertexId {
     }
 }
 
-impl From<i64> for VertexId {
-    fn from(id: i64) -> Self {
-        Self::from_int64(id)
-    }
-}
-
 impl From<u64> for VertexId {
     fn from(id: u64) -> Self {
         Self::from_u64(id)
@@ -722,11 +744,15 @@ impl From<u64> for VertexId {
 impl From<VertexId> for Value {
     fn from(vid: VertexId) -> Self {
         match vid.kind() {
-            VertexIdKind::Int => Value::BigInt(vid.as_int64().expect("Int kind always decodes")),
-            VertexIdKind::Uint => match vid.as_u64().expect("Uint kind always decodes") {
-                value => i64::try_from(value)
+            VertexIdKind::Int => match vid.int_bits() {
+                Some(v) => Value::BigInt(v),
+                None => Value::Blob(vid.into_inner()),
+            },
+            VertexIdKind::Uint => match vid.uint_bits() {
+                Some(value) => i64::try_from(value)
                     .map(Value::BigInt)
                     .unwrap_or_else(|_| Value::Blob(vid.into_inner())),
+                None => Value::Blob(vid.into_inner()),
             },
             VertexIdKind::Text => match vid.as_str() {
                 Some(s) => Value::string(s),
@@ -741,23 +767,27 @@ impl Ord for VertexId {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match (self.kind(), other.kind()) {
             (VertexIdKind::Empty, VertexIdKind::Empty) => std::cmp::Ordering::Equal,
-            (VertexIdKind::Int, VertexIdKind::Int) => self
-                .as_int64()
-                .expect("Int kind always decodes")
-                .cmp(&other.as_int64().expect("Int kind always decodes")),
-            (VertexIdKind::Uint, VertexIdKind::Uint) => self
-                .as_u64()
-                .expect("Uint kind always decodes")
-                .cmp(&other.as_u64().expect("Uint kind always decodes")),
+            (VertexIdKind::Int, VertexIdKind::Int) => match (self.int_bits(), other.int_bits()) {
+                (Some(left), Some(right)) => left.cmp(&right),
+                _ => self.as_bytes().cmp(other.as_bytes()),
+            },
+            (VertexIdKind::Uint, VertexIdKind::Uint) => {
+                match (self.uint_bits(), other.uint_bits()) {
+                    (Some(left), Some(right)) => left.cmp(&right),
+                    _ => self.as_bytes().cmp(other.as_bytes()),
+                }
+            }
             (VertexIdKind::Int, VertexIdKind::Uint) => {
-                let left = self.as_int64().expect("Int kind always decodes") as i128;
-                let right = other.as_u64().expect("Uint kind always decodes") as i128;
-                left.cmp(&right)
+                match (self.int_bits(), other.uint_bits()) {
+                    (Some(left), Some(right)) => (left as i128).cmp(&(right as i128)),
+                    _ => self.as_bytes().cmp(other.as_bytes()),
+                }
             }
             (VertexIdKind::Uint, VertexIdKind::Int) => {
-                let left = self.as_u64().expect("Uint kind always decodes") as i128;
-                let right = other.as_int64().expect("Int kind always decodes") as i128;
-                left.cmp(&right)
+                match (self.uint_bits(), other.int_bits()) {
+                    (Some(left), Some(right)) => (left as i128).cmp(&(right as i128)),
+                    _ => self.as_bytes().cmp(other.as_bytes()),
+                }
             }
             (VertexIdKind::Text, VertexIdKind::Text) => self.as_bytes().cmp(other.as_bytes()),
             (VertexIdKind::EdgeEndpoint, VertexIdKind::EdgeEndpoint) => {
@@ -928,10 +958,9 @@ mod tests {
 
     #[test]
     fn checked_add_works_for_integer_ids() {
-        assert_eq!(
-            VertexId::from_int64(41).checked_add(1),
-            Some(VertexId::from_int64(42))
-        );
+        let base = VertexId::try_from_int64(41).expect("valid test id");
+        let next = VertexId::try_from_int64(42).expect("valid test id");
+        assert_eq!(base.checked_add(1), Some(next));
         assert_eq!(
             VertexId::from_u64(u64::MAX - 1).checked_add(1),
             Some(VertexId::from_u64(u64::MAX))
@@ -940,8 +969,9 @@ mod tests {
 
     #[test]
     fn checked_add_returns_none_for_non_integer_ids() {
-        // "abcdefgh" is 9 bytes, so it is not treated as an int64 ID.
-        assert_eq!(VertexId::from_string("abcdefghi").checked_add(1), None);
+        // "abcdefghi" is 9 bytes, so it is not treated as an int64 ID.
+        let text = VertexId::try_from_string("abcdefghi").expect("valid test id");
+        assert_eq!(text.checked_add(1), None);
     }
 
     #[test]
@@ -951,32 +981,31 @@ mod tests {
     }
 
     #[test]
-    fn add_trait_keeps_working_for_integer_ids() {
-        let next = VertexId::from_int64(1) + 1;
-        assert_eq!(next, VertexId::from_int64(2));
-
-        let mut vid = VertexId::from_int64(1);
-        vid += 2;
-        assert_eq!(vid, VertexId::from_int64(3));
-    }
-
-    #[test]
     fn eight_byte_text_is_not_an_integer() {
-        let text = VertexId::from_string("12345678");
+        let text = VertexId::try_from_string("12345678").expect("valid test id");
+        let int_form =
+            VertexId::try_from_int64(0x3132333435363738).expect("valid test id");
         assert_eq!(text.kind(), VertexIdKind::Text);
         assert_eq!(text.as_int64(), None);
         assert_eq!(text.as_str(), Some("12345678"));
         assert_eq!(text.to_string(), "\"12345678\"");
-        assert_ne!(text, VertexId::from_int64(0x3132333435363738));
+        assert_ne!(text, int_form);
     }
 
     #[test]
     fn integer_ordering_is_numeric_and_grouped_by_kind() {
-        assert!(VertexId::from_int64(-5) < VertexId::from_int64(7));
-        assert!(VertexId::from_int64(2) < VertexId::from_u64(3));
-        assert!(VertexId::from_u64(u64::MAX) > VertexId::from_int64(i64::MAX));
-        assert!(VertexId::from_int64(i64::MAX) < VertexId::from_string("a"));
-        assert!(VertexId::new() < VertexId::from_int64(0));
+        let neg_five = VertexId::from_typed_bytes(VertexIdKind::Int, &(-5i64).to_be_bytes())
+            .expect("explicit typed bytes can express Int -5");
+        let seven = VertexId::try_from_int64(7).expect("valid test id");
+        let two = VertexId::try_from_int64(2).expect("valid test id");
+        let max = VertexId::try_from_int64(i64::MAX).expect("valid test id");
+        let text_a = VertexId::try_from_string("a").expect("valid test id");
+        let zero = VertexId::try_from_int64(0).expect("valid test id");
+        assert!(neg_five < seven);
+        assert!(two < VertexId::from_u64(3));
+        assert!(VertexId::from_u64(u64::MAX) > max);
+        assert!(max < text_a);
+        assert!(VertexId::new() < zero);
     }
 
     #[test]
@@ -1002,17 +1031,20 @@ mod tests {
     #[test]
     fn vid_type_normalization_is_explicit_and_idempotent() {
         let int_space = DataType::BigInt;
-        let normalized = VertexId::normalize_for_vid_type(&int_space, VertexId::from_string("101"))
+        let text_101 = VertexId::try_from_string("101").expect("valid test id");
+        let normalized = VertexId::normalize_for_vid_type(&int_space, text_101)
             .expect("numeric text normalizes in INT space");
-        assert_eq!(normalized, VertexId::from_int64(101));
-        assert!(
-            VertexId::normalize_for_vid_type(&int_space, VertexId::from_string("abc")).is_err()
-        );
+        let int_101 = VertexId::try_from_int64(101).expect("valid test id");
+        assert_eq!(normalized, int_101);
+        let text_abc = VertexId::try_from_string("abc").expect("valid test id");
+        assert!(VertexId::normalize_for_vid_type(&int_space, text_abc).is_err());
 
         let str_space = DataType::String;
-        let text = VertexId::normalize_for_vid_type(&str_space, VertexId::from_int64(7))
+        let int_7 = VertexId::try_from_int64(7).expect("valid test id");
+        let text = VertexId::normalize_for_vid_type(&str_space, int_7)
             .expect("int normalizes in STRING space");
-        assert_eq!(text, VertexId::from_string("7"));
+        let text_7 = VertexId::try_from_string("7").expect("valid test id");
+        assert_eq!(text, text_7);
 
         let again = VertexId::normalize_for_vid_type(&int_space, normalized).expect("idempotent");
         assert_eq!(again, normalized);
@@ -1023,12 +1055,12 @@ mod tests {
         let key = VertexId::edge_endpoint_key(9, 3);
         assert_eq!(key.kind(), VertexIdKind::EdgeEndpoint);
         let (endpoint, rank) = key.try_decode_edge_endpoint().expect("valid key decodes");
-        assert_eq!(endpoint, VertexId::from_int64(9));
+        let int_9 = VertexId::try_from_int64(9).expect("valid test id");
+        assert_eq!(endpoint, int_9);
         assert_eq!(rank, 3);
-        assert!(VertexId::from_int64(9).try_decode_edge_endpoint().is_none());
-        assert!(VertexId::from_string("short")
-            .try_decode_edge_endpoint()
-            .is_none());
+        assert!(int_9.try_decode_edge_endpoint().is_none());
+        let short = VertexId::try_from_string("short").expect("valid test id");
+        assert!(short.try_decode_edge_endpoint().is_none());
         // Endpoint keys never project as vertex ids.
         assert_eq!(key.as_int64(), None);
         assert_eq!(key.as_str(), None);

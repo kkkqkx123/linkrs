@@ -493,7 +493,7 @@ impl std::fmt::Display for Value {
                 "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:06}",
                 dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.sec, dt.microsec
             ),
-            Value::Vertex(v) => write!(f, "Vertex({:?})", v.id()),
+            Value::Vertex(v) => write!(f, "Vertex({:?})", v.vid()),
             Value::Edge(e) => write!(f, "Edge({:?} -> {:?})", e.src(), e.dst()),
             Value::Path(p) => write!(f, "Path({:?})", p),
             Value::List(list) => {

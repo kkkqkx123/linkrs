@@ -1567,7 +1567,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     ///
     /// ```rust
     /// use graphdb_api::embedded::GraphDatabase;
-    /// use graphdb_api::core::Vertex;
+    /// use graphdb_api::core::{Tag, Vertex};
     /// use graphdb_api::core::types::VertexId;
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -1579,7 +1579,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     ///
     // Add vertices
     /// for i in 0..1000 {
-    ///     let vertex = Vertex::with_vid(VertexId::from_int64(i));
+    ///     let vertex = Vertex::new(VertexId::try_from_int64(i).expect("test vertex id"), Tag::new("test".to_string(), std::collections::HashMap::new()));
     ///     inserter.add_vertex(vertex);
     /// }
     ///

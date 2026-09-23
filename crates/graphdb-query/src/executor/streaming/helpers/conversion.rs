@@ -33,19 +33,16 @@ fn edge_raw_string(vid: &graphdb_core::types::storage_ids::VertexId) -> String {
 /// Convert a Vertex to row representation
 pub fn vertex_to_row(vertex: &Vertex) -> Vec<Value> {
     let mut row = vec![
-        Value::BigInt(vertex.id),
+        Value::from(vertex.vid),
         Value::string(vid_raw_string(vertex)),
     ];
 
-    // Add tags
-    for tag in &vertex.tags {
-        row.push(Value::string(tag.name.clone()));
-    }
+    row.push(Value::string(vertex.tag.name.clone()));
 
-    // Add first 3 properties from the unified tag-first view so tag-only
+    // Add first 3 properties from the single-tag view so tag-only
     // rows are not silently dropped.
-    for value in vertex.get_all_properties().into_values().take(3) {
-        row.push((*value).clone());
+    for value in vertex.properties().values().take(3) {
+        row.push(value.clone());
     }
 
     row
@@ -77,7 +74,11 @@ pub fn vertices_to_rows(
 ) -> Vec<Vec<Value>> {
     vertices
         .into_iter()
-        .filter(|v| v.id >= partition_range.start && v.id < partition_range.end)
+        .filter(|v| {
+            v.vid
+                .as_int64()
+                .is_some_and(|id| id >= partition_range.start && id < partition_range.end)
+        })
         .map(|v| vertex_to_row(&v))
         .collect()
 }

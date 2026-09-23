@@ -35,8 +35,8 @@ fn test_flush_after_vertex_update() {
     {
         let mut storage = common::open_persistent_storage(dir);
         let updated = Vertex::new(
-            VertexId::from_int64(1),
-            vec![Tag::new(
+            VertexId::try_from_int64(1).expect("test vertex id"),
+           Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string("Alice")),
@@ -44,7 +44,7 @@ fn test_flush_after_vertex_update() {
                 ]
                 .into_iter()
                 .collect(),
-            )],
+            ),
         );
         storage.update_vertex("test_space", updated).unwrap();
         storage.save_to_disk().unwrap();
@@ -54,10 +54,10 @@ fn test_flush_after_vertex_update() {
     {
         let storage = common::open_persistent_storage(dir);
         let alice = storage
-            .get_vertex("test_space", &VertexId::from_int64(1))
+            .get_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
             .unwrap()
             .unwrap();
-        assert_eq!(alice.properties.get("age"), Some(&Value::BigInt(31)));
+        assert_eq!(alice.properties().get("age"), Some(&Value::BigInt(31)));
     }
 }
 
@@ -79,8 +79,8 @@ fn test_flush_after_edge_delete() {
         storage
             .delete_edge(
                 "test_space",
-                &VertexId::from_int64(1),
-                &VertexId::from_int64(2),
+                &VertexId::try_from_int64(1).expect("test vertex id"),
+                &VertexId::try_from_int64(2).expect("test vertex id"),
                 "KNOWS",
                 0,
             )
@@ -94,8 +94,8 @@ fn test_flush_after_edge_delete() {
         let edge = storage
             .get_edge(
                 "test_space",
-                &VertexId::from_int64(1),
-                &VertexId::from_int64(2),
+                &VertexId::try_from_int64(1).expect("test vertex id"),
+                &VertexId::try_from_int64(2).expect("test vertex id"),
                 "KNOWS",
                 0,
             )

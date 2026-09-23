@@ -20,13 +20,13 @@ fn layout_version_is_monotonic_and_domain_evidence_tracks_numeric_ids() {
             .insert_vertex(
                 "test_space",
                 Vertex::new(
-                    VertexId::from_int64(id),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(id).expect("test vertex id"),
+                    Tag::new(
                         "Person".to_string(),
                         [("name".to_string(), Value::string(format!("p{id}")))]
                             .into_iter()
                             .collect(),
-                    )],
+                    ),
                 ),
             )
             .expect("insert numeric vertex");
@@ -43,13 +43,13 @@ fn layout_version_is_monotonic_and_domain_evidence_tracks_numeric_ids() {
     let rejected = storage.insert_vertex(
         "test_space",
         Vertex::new(
-            VertexId::from_string("alice"),
-            vec![Tag::new(
+            VertexId::try_from_string("alice").expect("test vertex id"),
+            Tag::new(
                 "Person".to_string(),
                 [("name".to_string(), Value::string("Alice"))]
                     .into_iter()
                     .collect(),
-            )],
+            ),
         ),
     );
     assert!(
@@ -75,13 +75,13 @@ fn layout_version_bumps_after_compaction_and_restore() {
             .insert_vertex(
                 "test_space",
                 Vertex::new(
-                    VertexId::from_int64(id),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(id).expect("test vertex id"),
+                    Tag::new(
                         "Person".to_string(),
                         [("name".to_string(), Value::string(format!("p{id}")))]
                             .into_iter()
                             .collect(),
-                    )],
+                    ),
                 ),
             )
             .expect("insert vertex");

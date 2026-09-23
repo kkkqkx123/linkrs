@@ -176,7 +176,6 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
 
         LogicalNodeEnum::DeleteEdges(n) => convert_delete_edges(n),
 
-        LogicalNodeEnum::DeleteTags(n) => convert_delete_tags(n),
 
         LogicalNodeEnum::DeleteIndex(n) => convert_delete_index(n),
 
@@ -1516,22 +1515,6 @@ fn convert_delete_edges(
         node.set_column_types(n.column_types);
     }
     PlanNodeEnum::DeleteEdges(node)
-}
-
-fn convert_delete_tags(
-    n: crate::planning::plan::logical::logical_nodes::dml::LogicalDeleteTagsNode,
-) -> PlanNodeEnum {
-    let mut node = crate::planning::plan::core::nodes::DeleteTagsNode::new(n.id, n.info);
-    if let Some(var) = n.output_var {
-        node.set_output_var(var);
-    }
-    if !n.col_names.is_empty() {
-        node.set_col_names(n.col_names);
-    }
-    if !n.column_types.is_empty() {
-        node.set_column_types(n.column_types);
-    }
-    PlanNodeEnum::DeleteTags(node)
 }
 
 fn convert_delete_index(

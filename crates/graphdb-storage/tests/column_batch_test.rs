@@ -49,8 +49,8 @@ fn setup_storage(nullable: bool) -> Arc<RwLock<GraphStorage>> {
             );
         }
         vertices.push(Vertex::new(
-            VertexId::from_int64(i),
-            vec![Tag::new("Node".to_string(), props.into_iter().collect())],
+            VertexId::try_from_int64(i).expect("test vertex id"),
+            Tag::new("Node".to_string(), props.into_iter().collect()),
         ));
     }
     storage.batch_insert_vertices("t", vertices).unwrap();
@@ -189,7 +189,7 @@ fn column_batch_selective_predicate_does_not_end_scan_early() {
     }]);
     let columns = drain_columns(&storage, &opts);
     assert_eq!(columns.len(), 1);
-    assert_eq!(columns[0][0], Value::from(VertexId::from_int64(7)));
+    assert_eq!(columns[0][0], Value::from(VertexId::try_from_int64(7).expect("test vertex id")));
 }
 
 #[test]

@@ -131,6 +131,8 @@ pub enum SourceSpec {
         space_name: String,
         index_name: String,
         index_id: u64,
+        /// Tag owning the indexed rows; covering vertex rows are rebuilt with it.
+        tag: String,
         predicate: Box<BoundIndexPredicate>,
         projection: IndexProjection,
         residual_filter: Option<graphdb_core::types::expr::Expression>,

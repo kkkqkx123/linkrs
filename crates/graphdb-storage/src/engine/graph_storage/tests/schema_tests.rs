@@ -101,13 +101,13 @@ fn test_same_schema_names_are_isolated_by_space() {
         .insert_vertex(
             "alpha",
             Vertex::new(
-                VertexId::from_int64(1),
-                vec![Tag::new(
+                VertexId::try_from_int64(1).expect("test vertex id"),
+               Tag::new(
                     "Person".to_string(),
                     vec![("name".to_string(), Value::string("Alice"))]
                         .into_iter()
                         .collect(),
-                )],
+                ),
             ),
         )
         .unwrap();
@@ -115,13 +115,13 @@ fn test_same_schema_names_are_isolated_by_space() {
         .insert_vertex(
             "beta",
             Vertex::new(
-                VertexId::from_int64(1),
-                vec![Tag::new(
+                VertexId::try_from_int64(1).expect("test vertex id"),
+               Tag::new(
                     "Person".to_string(),
                     vec![("name".to_string(), Value::string("Bob"))]
                         .into_iter()
                         .collect(),
-                )],
+                ),
             ),
         )
         .unwrap();
@@ -129,13 +129,13 @@ fn test_same_schema_names_are_isolated_by_space() {
         .insert_vertex(
             "alpha",
             Vertex::new(
-                VertexId::from_int64(2),
-                vec![Tag::new(
+                VertexId::try_from_int64(2).expect("test vertex id"),
+               Tag::new(
                     "Person".to_string(),
                     vec![("name".to_string(), Value::string("Carol"))]
                         .into_iter()
                         .collect(),
-                )],
+                ),
             ),
         )
         .unwrap();
@@ -143,13 +143,13 @@ fn test_same_schema_names_are_isolated_by_space() {
         .insert_vertex(
             "beta",
             Vertex::new(
-                VertexId::from_int64(2),
-                vec![Tag::new(
+                VertexId::try_from_int64(2).expect("test vertex id"),
+               Tag::new(
                     "Person".to_string(),
                     vec![("name".to_string(), Value::string("Dave"))]
                         .into_iter()
                         .collect(),
-                )],
+                ),
             ),
         )
         .unwrap();
@@ -158,8 +158,8 @@ fn test_same_schema_names_are_isolated_by_space() {
         .insert_edge(
             "alpha",
             Edge::new(
-                VertexId::from_int64(1),
-                VertexId::from_int64(2),
+                VertexId::try_from_int64(1).expect("test vertex id"),
+                VertexId::try_from_int64(2).expect("test vertex id"),
                 "KNOWS".to_string(),
                 0,
                 std::collections::HashMap::new(),
@@ -170,8 +170,8 @@ fn test_same_schema_names_are_isolated_by_space() {
         .insert_edge(
             "beta",
             Edge::new(
-                VertexId::from_int64(1),
-                VertexId::from_int64(2),
+                VertexId::try_from_int64(1).expect("test vertex id"),
+                VertexId::try_from_int64(2).expect("test vertex id"),
                 "KNOWS".to_string(),
                 0,
                 std::collections::HashMap::new(),
@@ -180,11 +180,11 @@ fn test_same_schema_names_are_isolated_by_space() {
         .unwrap();
 
     let alpha_vertex = storage
-        .get_vertex("alpha", &VertexId::from_int64(1))
+        .get_vertex("alpha", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
         .unwrap()
         .unwrap();
     let beta_vertex = storage
-        .get_vertex("beta", &VertexId::from_int64(1))
+        .get_vertex("beta", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
         .unwrap()
         .unwrap();
     assert_eq!(

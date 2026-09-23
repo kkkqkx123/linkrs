@@ -266,23 +266,20 @@ fn project_vertex_row(
 
 /// Convert a Value that represents a vertex ID into an EntityRef.
 fn vertex_id_to_entity_ref(v: &Value) -> Option<EntityRef> {
+    use graphdb_core::types::storage_ids::VertexId;
     match v {
-        Value::BigInt(id) => Some(EntityRef::Vertex(
-            graphdb_core::types::storage_ids::VertexId::from_int64(*id),
-        )),
-        Value::Int(id) => Some(EntityRef::Vertex(
-            graphdb_core::types::storage_ids::VertexId::from_int64(*id as i64),
-        )),
+        Value::BigInt(id) => VertexId::try_from_int64(*id).ok().map(EntityRef::Vertex),
+        Value::Int(id) => VertexId::try_from_int64(*id as i64)
+            .ok()
+            .map(EntityRef::Vertex),
         Value::String(s) => {
             // Try to parse as i64 first, then treat as string ID
             if let Ok(id) = s.parse::<i64>() {
-                Some(EntityRef::Vertex(
-                    graphdb_core::types::storage_ids::VertexId::from_int64(id),
-                ))
+                VertexId::try_from_int64(id).ok().map(EntityRef::Vertex)
             } else {
-                Some(EntityRef::Vertex(
-                    graphdb_core::types::storage_ids::VertexId::from_string(s.clone()),
-                ))
+                VertexId::try_from_string(s.clone())
+                    .ok()
+                    .map(EntityRef::Vertex)
             }
         }
         Value::Vertex(v) => Some(EntityRef::Vertex(v.vid)),

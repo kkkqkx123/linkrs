@@ -8,7 +8,7 @@ use crate::executor::expression::ExpressionError;
 use graphdb_core::types::VertexId;
 use graphdb_core::value::list::List;
 use graphdb_core::value::NullType;
-use graphdb_core::vertex_edge_path::Vertex;
+use graphdb_core::vertex_edge_path::{Tag, Vertex};
 use graphdb_core::Value;
 
 /// Graph function enumeration
@@ -189,11 +189,7 @@ fn execute_id(args: &[Value]) -> Result<Value, ExpressionError> {
 fn execute_tags(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Vertex(v) => {
-            let tags: Vec<Value> = v
-                .tags
-                .iter()
-                .map(|tag| Value::string(tag.name.clone()))
-                .collect();
+            let tags: Vec<Value> = vec![Value::string(v.tag.name.clone())];
             Ok(Value::list(List { values: tags }))
         }
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
@@ -210,17 +206,10 @@ fn execute_properties(args: &[Value]) -> Result<Value, ExpressionError> {
         Value::Vertex(v) => {
             let mut props = std::collections::HashMap::new();
             props.extend(
-                v.properties
+                v.properties()
                     .iter()
                     .map(|(k, v)| (Value::string(k.clone()), v.clone())),
             );
-            for tag in &v.tags {
-                props.extend(
-                    tag.properties
-                        .iter()
-                        .map(|(k, v)| (Value::string(k.clone()), v.clone())),
-                );
-            }
             Ok(Value::map(props))
         }
         Value::Edge(e) => Ok(Value::string_map(e.props.clone())),
@@ -275,7 +264,10 @@ fn execute_rank(args: &[Value]) -> Result<Value, ExpressionError> {
 fn execute_startnode(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Edge(e) => {
-            let vertex = Vertex::new(e.src, vec![]);
+            let vertex = Vertex::new(
+                e.src,
+                Tag::new(String::new(), std::collections::HashMap::new()),
+            );
             Ok(Value::Vertex(Box::new(vertex)))
         }
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
@@ -288,7 +280,10 @@ fn execute_startnode(args: &[Value]) -> Result<Value, ExpressionError> {
 fn execute_endnode(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Edge(e) => {
-            let vertex = Vertex::new(e.dst, vec![]);
+            let vertex = Vertex::new(
+                e.dst,
+                Tag::new(String::new(), std::collections::HashMap::new()),
+            );
             Ok(Value::Vertex(Box::new(vertex)))
         }
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
@@ -329,7 +324,7 @@ fn execute_degree(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Vertex(v) => {
             let degree = v
-                .get_all_properties()
+                .properties()
                 .keys()
                 .filter(|k| k.starts_with("neighbor_"))
                 .count();
@@ -346,10 +341,10 @@ fn execute_out_edges(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Vertex(v) => {
             let edges: Vec<Value> = v
-                .get_all_properties()
-                .into_iter()
+                .properties()
+                .iter()
                 .filter(|(k, _)| k.starts_with("out_"))
-                .map(|(_, v)| (*v).clone())
+                .map(|(_, v)| v.clone())
                 .collect();
             Ok(Value::list(List { values: edges }))
         }
@@ -364,10 +359,10 @@ fn execute_in_edges(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Vertex(v) => {
             let edges: Vec<Value> = v
-                .get_all_properties()
-                .into_iter()
+                .properties()
+                .iter()
                 .filter(|(k, _)| k.starts_with("in_"))
-                .map(|(_, v)| (*v).clone())
+                .map(|(_, v)| v.clone())
                 .collect();
             Ok(Value::list(List { values: edges }))
         }

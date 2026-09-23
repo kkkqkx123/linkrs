@@ -47,7 +47,7 @@ fn test_intent(transaction_id: TransactionId, index_id: u64, vertex_id: i64) -> 
             target: TargetId::new("native-index").expect("target should be valid"),
             index_id,
             index_generation: IndexGeneration::new(1),
-            entity_ref: EntityRef::Vertex(VertexId::from_int64(vertex_id)),
+            entity_ref: EntityRef::Vertex(VertexId::try_from_int64(vertex_id).expect("test vertex id")),
             operation: IndexOperation::Upsert,
             document_or_vector: Vec::new(),
             idempotency_key: IdempotencyKey::new(format!("intent-{transaction_id}-{vertex_id}"))
@@ -60,8 +60,8 @@ fn test_intent(transaction_id: TransactionId, index_id: u64, vertex_id: i64) -> 
 
 #[test]
 fn wal_catch_up_uses_only_intent_entities() {
-    let entity = EntityRef::Vertex(VertexId::from_int64(1));
-    let other_entity = EntityRef::Vertex(VertexId::from_int64(2));
+    let entity = EntityRef::Vertex(VertexId::try_from_int64(1).expect("test vertex id"));
+    let other_entity = EntityRef::Vertex(VertexId::try_from_int64(2).expect("test vertex id"));
     let intents = vec![test_intent(TransactionId::new(1), 7, 1)];
 
     let mut active_forward = std::collections::BTreeMap::new();
@@ -188,11 +188,11 @@ fn concurrent_rebuild_and_writes_preserve_new_index_entries() {
             .insert_vertex(
                 "test_space",
                 graphdb_core::Vertex::new(
-                    VertexId::from_int64(vertex_id),
-                    vec![graphdb_core::vertex_edge_path::Tag::new(
+                    VertexId::try_from_int64(vertex_id).expect("test vertex id"),
+                    graphdb_core::vertex_edge_path::Tag::new(
                         "Person".to_string(),
                         properties,
-                    )],
+                    ),
                 ),
             )
             .expect("initial vertex should be inserted");
@@ -218,11 +218,11 @@ fn concurrent_rebuild_and_writes_preserve_new_index_entries() {
                 .insert_vertex(
                     "test_space",
                     graphdb_core::Vertex::new(
-                        VertexId::from_int64(vertex_id),
-                        vec![graphdb_core::vertex_edge_path::Tag::new(
+                        VertexId::try_from_int64(vertex_id).expect("test vertex id"),
+                        graphdb_core::vertex_edge_path::Tag::new(
                             "Person".to_string(),
                             properties,
-                        )],
+                        ),
                     ),
                 )
                 .expect("concurrent vertex should be inserted");
@@ -240,7 +240,7 @@ fn concurrent_rebuild_and_writes_preserve_new_index_entries() {
                 &Value::string(format!("concurrent-{vertex_id}")),
             )
             .expect("index lookup should succeed");
-        assert_eq!(indexed, vec![Value::from(VertexId::from_int64(vertex_id))]);
+        assert_eq!(indexed, vec![Value::from(VertexId::try_from_int64(vertex_id).expect("test vertex id"))]);
     }
 }
 
@@ -286,13 +286,13 @@ fn rebuild_restarts_after_incremental_replay_failure() {
             .create_tag_index("test_space", &index)
             .expect("index should be created");
         let vertex = graphdb_core::Vertex::new(
-            VertexId::from_int64(1),
-            vec![graphdb_core::vertex_edge_path::Tag::new(
+            VertexId::try_from_int64(1).expect("test vertex id"),
+            graphdb_core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
                 vec![("name".to_string(), Value::string("Alice"))]
                     .into_iter()
                     .collect(),
-            )],
+            ),
         );
         storage
             .insert_vertex("test_space", vertex)
@@ -325,7 +325,7 @@ fn rebuild_restarts_after_incremental_replay_failure() {
     let indexed = storage
         .lookup_index("test_space", "person_name_idx", &Value::string("Alice"))
         .expect("rebuilt index should be readable");
-    assert_eq!(indexed, vec![Value::from(VertexId::from_int64(1))]);
+    assert_eq!(indexed, vec![Value::from(VertexId::try_from_int64(1).expect("test vertex id"))]);
 }
 
 #[test]

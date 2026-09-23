@@ -508,12 +508,12 @@ mod tests {
             write_set: Arc::new(Mutex::new(graphdb_transaction::types::WriteSet::new())),
         };
 
-        let vertex_id = VertexId::from_int64(42);
+        let vertex_id = VertexId::try_from_int64(42).expect("test vertex id");
         let edge = EdgeIdentifier {
             src_label: 3,
-            src_vid: VertexId::from_int64(1),
+            src_vid: VertexId::try_from_int64(1).expect("test vertex id"),
             dst_label: 4,
-            dst_vid: VertexId::from_int64(2),
+            dst_vid: VertexId::try_from_int64(2).expect("test vertex id"),
             edge_label: 5,
             rank: 0,
         };

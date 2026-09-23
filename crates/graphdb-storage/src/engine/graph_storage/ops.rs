@@ -14,36 +14,6 @@ use graphdb_core::{Edge, RoleType, StorageError, StorageResult, Value, Vertex};
 use super::context::GraphStorageContext;
 use super::writer;
 
-/// Render a vertex id as its raw external string without display quoting.
-///
-/// Text ids round-trip through storage as raw strings, while display adds
-/// quotes. Read paths must use this form so text ids never gain quotes.
-fn raw_external_str(vid: &VertexId) -> String {
-    if let Some(s) = vid.as_str() {
-        s.to_string()
-    } else if let Some(i) = vid.as_int64() {
-        i.to_string()
-    } else if let Some(u) = vid.as_u64() {
-        u.to_string()
-    } else {
-        format!("{:?}", vid.as_bytes())
-    }
-}
-
-/// Decode a raw external id string, falling back to the stored record.
-///
-/// Callers pass strings produced from already validated storage values, so a
-/// decode failure means local corruption. Returning the typed record keeps
-/// the edge materialization fail-closed without inventing an empty endpoint.
-fn decode_external_str_or_record(id: &str, fallback: &VertexId) -> VertexId {
-    if let Ok(parsed) = id.parse::<i64>() {
-        if let Ok(vid) = VertexId::try_from_int64(parsed) {
-            return vid;
-        }
-    }
-    VertexId::try_from_string(id).unwrap_or(*fallback)
-}
-
 // ── Type Conversion Utilities ──
 
 /// External id routed to its table operation by [`VertexId`] kind.
@@ -60,11 +30,13 @@ pub(crate) enum RoutedVertexId {
 pub(crate) fn route_vertex_id(vid: &VertexId) -> StorageResult<RoutedVertexId> {
     use graphdb_core::types::VertexIdKind;
     match vid.kind() {
-        VertexIdKind::Int => Ok(RoutedVertexId::Int(
-            vid.as_int64().expect("Int kind always decodes"),
-        )),
+        VertexIdKind::Int => vid.int_bits().map(RoutedVertexId::Int).ok_or_else(|| {
+            StorageError::invalid_input("Malformed integer vertex id".to_string())
+        }),
         VertexIdKind::Uint => {
-            let value = vid.as_u64().expect("Uint kind always decodes");
+            let value = vid.uint_bits().ok_or_else(|| {
+                StorageError::invalid_input("Malformed unsigned vertex id".to_string())
+            })?;
             i64::try_from(value).map(RoutedVertexId::Int).map_err(|_| {
                 StorageError::invalid_input(format!(
                     "Vertex id {} overflows the i64 key path",
@@ -141,28 +113,25 @@ pub(crate) fn value_to_string(value: &Value) -> String {
 }
 
 pub(crate) fn vertex_record_to_vertex(record: &VertexRecord, tag_name: &str) -> Vertex {
-    let vid = record.vid;
     let properties: HashMap<String, Value> = record.properties.iter().cloned().collect();
 
-    Vertex {
-        vid,
-        id: record.internal_id as i64,
-        tags: vec![Tag {
+    Vertex::new(
+        record.vid,
+        Tag {
             name: tag_name.to_string(),
             properties,
-        }],
-        properties: HashMap::new(),
-    }
+        },
+    )
 }
 
 pub(crate) fn edge_record_to_edge(
     record: &EdgeRecord,
     edge_type: &str,
-    src_id: &str,
-    dst_id: &str,
+    src_vid: VertexId,
+    dst_vid: VertexId,
 ) -> Edge {
     let props: HashMap<String, Value> = record.properties.iter().cloned().collect();
-    edge_record_to_edge_with_props(record, edge_type, src_id, dst_id, props)
+    edge_record_to_edge_with_props(record, edge_type, src_vid, dst_vid, props)
 }
 
 /// Like [`edge_record_to_edge`] but decodes only the requested properties.
@@ -174,8 +143,8 @@ pub(crate) fn edge_record_to_edge(
 pub(crate) fn edge_record_to_edge_projected(
     record: &EdgeRecord,
     edge_type: &str,
-    src_id: &str,
-    dst_id: &str,
+    src_vid: VertexId,
+    dst_vid: VertexId,
     projection: &[String],
 ) -> Edge {
     let props: HashMap<String, Value> = if projection.is_empty() {
@@ -188,19 +157,16 @@ pub(crate) fn edge_record_to_edge_projected(
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect()
     };
-    edge_record_to_edge_with_props(record, edge_type, src_id, dst_id, props)
+    edge_record_to_edge_with_props(record, edge_type, src_vid, dst_vid, props)
 }
 
 fn edge_record_to_edge_with_props(
     record: &EdgeRecord,
     edge_type: &str,
-    src_id: &str,
-    dst_id: &str,
+    src_vid: VertexId,
+    dst_vid: VertexId,
     props: HashMap<String, Value>,
 ) -> Edge {
-    let src_vid = decode_external_str_or_record(src_id, &record.src_vid);
-    let dst_vid = decode_external_str_or_record(dst_id, &record.dst_vid);
-
     Edge {
         src: src_vid,
         dst: dst_vid,
@@ -363,8 +329,8 @@ pub(crate) fn find_dangling_edges(
             let edge = edge_record_to_edge(
                 &record,
                 edge_type_name,
-                &raw_external_str(&src_external),
-                &raw_external_str(&dst_external),
+                src_external,
+                dst_external,
             );
             dangling_edges.push(edge);
         }
@@ -443,8 +409,9 @@ mod tests {
 
     #[test]
     fn test_vertex_record_to_vertex() {
+        let int_42 = VertexId::try_from_int64(42).expect("test vertex id");
         let record = VertexRecord {
-            vid: VertexId::from_int64(42),
+            vid: int_42,
             internal_id: 5,
             properties: vec![
                 ("name".to_string(), Value::string("Alice")),
@@ -454,35 +421,33 @@ mod tests {
 
         let vertex = vertex_record_to_vertex(&record, "Person");
 
-        assert_eq!(vertex.vid, VertexId::from_int64(42));
-        assert_eq!(vertex.id, 5);
-        assert_eq!(vertex.tags.len(), 1);
-        assert_eq!(vertex.tags[0].name, "Person");
-        // Single-label read construction fills only the tag.
-        assert!(vertex.properties.is_empty());
+        assert_eq!(vertex.vid, int_42);
+        assert_eq!(vertex.tag_name(), "Person");
         assert_eq!(
-            vertex.tags[0].properties.get("name"),
+            vertex.properties().get("name"),
             Some(&Value::string("Alice"))
         );
         assert_eq!(
-            vertex.tags[0].properties.get("age"),
+            vertex.properties().get("age"),
             Some(&Value::BigInt(30))
         );
     }
 
     #[test]
     fn test_edge_record_to_edge_int_ids() {
+        let src_vid = VertexId::try_from_int64(1).expect("test vertex id");
+        let dst_vid = VertexId::try_from_int64(2).expect("test vertex id");
         let record = EdgeRecord {
-            src_vid: VertexId::from_int64(1),
-            dst_vid: VertexId::from_int64(2),
+            src_vid,
+            dst_vid,
             rank: 0,
             properties: vec![("since".to_string(), Value::Int(2020))],
         };
 
-        let edge = edge_record_to_edge(&record, "KNOWS", "1", "2");
+        let edge = edge_record_to_edge(&record, "KNOWS", src_vid, dst_vid);
 
-        assert_eq!(edge.src, VertexId::from_int64(1));
-        assert_eq!(edge.dst, VertexId::from_int64(2));
+        assert_eq!(edge.src, src_vid);
+        assert_eq!(edge.dst, dst_vid);
         assert_eq!(edge.edge_type, "KNOWS");
         assert_eq!(edge.ranking, 0);
         assert_eq!(edge.props.get("since"), Some(&Value::Int(2020)));
@@ -490,17 +455,19 @@ mod tests {
 
     #[test]
     fn test_edge_record_to_edge_string_ids() {
+        let src_vid = VertexId::try_from_string("user-a").expect("test vertex id");
+        let dst_vid = VertexId::try_from_string("user-b").expect("test vertex id");
         let record = EdgeRecord {
-            src_vid: VertexId::from_string("user-a"),
-            dst_vid: VertexId::from_string("user-b"),
+            src_vid,
+            dst_vid,
             rank: 1,
             properties: vec![],
         };
 
-        let edge = edge_record_to_edge(&record, "FRIEND_OF", "user-a", "user-b");
+        let edge = edge_record_to_edge(&record, "FRIEND_OF", src_vid, dst_vid);
 
-        assert_eq!(edge.src, VertexId::from_string("user-a"));
-        assert_eq!(edge.dst, VertexId::from_string("user-b"));
+        assert_eq!(edge.src, src_vid);
+        assert_eq!(edge.dst, dst_vid);
         assert_eq!(edge.edge_type, "FRIEND_OF");
         assert_eq!(edge.ranking, 1);
     }

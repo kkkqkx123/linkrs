@@ -544,7 +544,7 @@ mod tests {
     fn make_entry(id: i64) -> UndoLogEntry {
         UndoLogEntry::InsertVertex(crate::undo_log::InsertVertexUndo {
             v_label: 1,
-            vid: VertexId::from_int64(id),
+            vid: VertexId::try_from_int64(id).expect("test vertex id"),
         })
     }
 
@@ -576,7 +576,7 @@ mod tests {
         let mut log = FileBackedUndoLog::new(config);
         log.add(UndoLogEntry::UpdateVertexProp(UpdateVertexPropUndo {
             v_label: 7,
-            vid: VertexId::from_int64(99),
+            vid: VertexId::try_from_int64(99).expect("test vertex id"),
             col_id: ColumnId(4),
             old_value: graphdb_core::Value::BigInt(42),
         }))
@@ -612,7 +612,10 @@ mod tests {
             .expect("Expected the failed entry to remain");
         match entry {
             UndoLogEntry::InsertVertex(undo) => {
-                assert_eq!(undo.vid, VertexId::from_int64(2));
+                assert_eq!(
+                    undo.vid,
+                    VertexId::try_from_int64(2).expect("test vertex id")
+                );
             }
             _ => panic!("Expected InsertVertex"),
         }
@@ -728,7 +731,7 @@ mod tests {
                 UndoLogEntry::InsertVertex(u) => {
                     assert_eq!(
                         u.vid,
-                        VertexId::from_int64(expected_id),
+                        VertexId::try_from_int64(expected_id).expect("test vertex id"),
                         "Expected entry {}, got {}",
                         expected_id,
                         u.vid

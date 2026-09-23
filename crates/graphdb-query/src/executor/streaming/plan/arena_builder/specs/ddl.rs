@@ -17,11 +17,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_insert_vertices
     node: &crate::planning::plan::core::nodes::data_modification::insert_nodes::InsertVerticesNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<SinkSpec, PlanBuildError> {
-    let tag_property_names: Vec<Vec<String>> = node
-        .tags()
-        .iter()
-        .map(|tag| tag.prop_names.clone())
-        .collect();
+    let tag_property_names: Vec<String> = node.prop_names().to_vec();
     Ok(SinkSpec::InsertVertices {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         vertex_properties: std::iter::once((
@@ -31,11 +27,10 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_insert_vertices
         .chain(
             tag_property_names
                 .iter()
-                .flatten()
                 .map(|name| (name.clone(), Expression::Variable(name.clone()))),
         )
         .collect(),
-        tags: node.tag_names(),
+        tag: node.tag_name().to_string(),
         tag_property_names,
         if_not_exists: node.info().if_not_exists,
     })
@@ -97,17 +92,6 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_delete_edges_sp
         src_col: "src".to_string(),
         dst_col: "dst".to_string(),
         edge_type,
-    })
-}
-
-pub(in crate::executor::streaming::plan::arena_builder) fn build_delete_tags_spec(
-    node: &crate::planning::plan::core::nodes::data_modification::delete_nodes::DeleteTagsNode,
-    exec_ctx: &ExecutionContext,
-) -> Result<SinkSpec, PlanBuildError> {
-    Ok(SinkSpec::DeleteTags {
-        space_name: exec_ctx.space_name.clone().unwrap_or_default(),
-        tag_names: node.tag_names().to_vec(),
-        vertex_ids: None,
     })
 }
 

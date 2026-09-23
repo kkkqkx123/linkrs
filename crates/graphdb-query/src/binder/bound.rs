@@ -521,7 +521,7 @@ pub struct BoundInsert {
 #[derive(Debug, Clone)]
 pub enum BoundInsertTarget {
     Vertices {
-        tags: Vec<crate::parser::ast::TagInsertSpec>,
+        tag: crate::parser::ast::TagInsertSpec,
         values: Vec<BoundVertexRow>,
     },
     Edge {
@@ -539,7 +539,7 @@ pub enum BoundInsertTarget {
 #[derive(Debug, Clone)]
 pub struct BoundVertexRow {
     pub vid: BoundExpression,
-    pub tag_values: Vec<Vec<BoundExpression>>,
+    pub values: Vec<BoundExpression>,
 }
 
 #[derive(Debug, Clone)]
@@ -593,11 +593,6 @@ pub enum BoundDeleteTarget {
     Edges {
         edge_type: Option<String>,
         edges: Vec<(BoundExpression, BoundExpression, Option<BoundExpression>)>,
-    },
-    Tags {
-        tag_names: Vec<String>,
-        vertex_ids: Vec<BoundExpression>,
-        is_all_tags: bool,
     },
     Index(String),
 }

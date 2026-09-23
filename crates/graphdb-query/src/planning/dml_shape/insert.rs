@@ -9,21 +9,16 @@ use super::render_contextual;
 pub(crate) fn render_insert(insert: &InsertStmt, values: &mut Vec<Value>) -> Option<String> {
     let mut out = String::from("INSERT ");
     match &insert.target {
-        InsertTarget::Vertices { tags, values: rows } => {
+        InsertTarget::Vertices { tag, values: rows } => {
             out.push_str("VERTEX ");
             if insert.if_not_exists {
                 out.push_str("IF NOT EXISTS ");
             }
-            for (index, tag) in tags.iter().enumerate() {
-                if index > 0 {
-                    out.push_str(", ");
-                }
-                out.push_str(&tag.tag_name);
-                if !tag.prop_names.is_empty() {
-                    out.push('(');
-                    out.push_str(&tag.prop_names.join(", "));
-                    out.push(')');
-                }
+            out.push_str(&tag.tag_name);
+            if !tag.prop_names.is_empty() {
+                out.push('(');
+                out.push_str(&tag.prop_names.join(", "));
+                out.push(')');
             }
             out.push_str(" VALUES ");
             for (row_index, row) in rows.iter().enumerate() {
@@ -31,20 +26,14 @@ pub(crate) fn render_insert(insert: &InsertStmt, values: &mut Vec<Value>) -> Opt
                     out.push_str(", ");
                 }
                 render_contextual(&mut out, values, &row.vid)?;
-                out.push_str(": ");
-                for (group_index, group) in row.tag_values.iter().enumerate() {
-                    if group_index > 0 {
-                        out.push_str(": ");
+                out.push_str(": (");
+                for (value_index, value) in row.values.iter().enumerate() {
+                    if value_index > 0 {
+                        out.push_str(", ");
                     }
-                    out.push('(');
-                    for (value_index, value) in group.iter().enumerate() {
-                        if value_index > 0 {
-                            out.push_str(", ");
-                        }
-                        render_contextual(&mut out, values, value)?;
-                    }
-                    out.push(')');
+                    render_contextual(&mut out, values, value)?;
                 }
+                out.push(')');
             }
         }
         InsertTarget::Edge {

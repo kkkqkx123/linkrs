@@ -294,7 +294,6 @@ pub enum SinkState {
     DeleteEdges { rows_deleted: u64 },
     PipeDeleteVertices { rows_deleted: u64 },
     PipeDeleteEdges { rows_deleted: u64 },
-    DeleteTags { rows_deleted: u64 },
 }
 
 // ── Exchange state ───────────────────────────────────────────────────────────

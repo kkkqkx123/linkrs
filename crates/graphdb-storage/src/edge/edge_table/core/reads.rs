@@ -346,8 +346,8 @@ impl EdgeStore {
                 .into_iter()
                 .map(|hot| {
                     self.edge_record_from_hot_projected_assume_visible(
-                        VertexId::from_int64(src as i64),
-                        VertexId::from_int64(hot.endpoint as i64),
+                        VertexId::from_u32(src),
+                        VertexId::from_u32(hot.endpoint),
                         hot.rank,
                         hot.edge_id,
                         PropertyQuery {
@@ -365,8 +365,8 @@ impl EdgeStore {
         hots.into_iter()
             .zip(decoded)
             .map(|(hot, properties)| EdgeRecord {
-                src_vid: VertexId::from_int64(src as i64),
-                dst_vid: VertexId::from_int64(hot.endpoint as i64),
+                src_vid: VertexId::from_u32(src),
+                dst_vid: VertexId::from_u32(hot.endpoint),
                 rank: hot.rank,
                 properties,
             })
@@ -403,8 +403,8 @@ impl EdgeStore {
                 .into_iter()
                 .map(|hot| {
                     self.edge_record_from_hot_projected_assume_visible(
-                        VertexId::from_int64(hot.endpoint as i64),
-                        VertexId::from_int64(dst as i64),
+                        VertexId::from_u32(hot.endpoint),
+                        VertexId::from_u32(dst),
                         hot.rank,
                         hot.edge_id,
                         PropertyQuery {
@@ -422,8 +422,8 @@ impl EdgeStore {
         hots.into_iter()
             .zip(decoded)
             .map(|(hot, properties)| EdgeRecord {
-                src_vid: VertexId::from_int64(hot.endpoint as i64),
-                dst_vid: VertexId::from_int64(dst as i64),
+                src_vid: VertexId::from_u32(hot.endpoint),
+                dst_vid: VertexId::from_u32(dst),
                 rank: hot.rank,
                 properties,
             })
@@ -455,8 +455,8 @@ impl EdgeStore {
                         projection,
                     );
                     EdgeRecord {
-                        src_vid: VertexId::from_int64(src as i64),
-                        dst_vid: VertexId::from_int64(nbr.endpoint as i64),
+                        src_vid: VertexId::from_u32(src),
+                        dst_vid: VertexId::from_u32(nbr.endpoint),
                         rank: nbr.rank,
                         properties,
                     }
@@ -469,8 +469,8 @@ impl EdgeStore {
         nbrs.into_iter()
             .zip(decoded)
             .map(|(nbr, properties)| EdgeRecord {
-                src_vid: VertexId::from_int64(src as i64),
-                dst_vid: VertexId::from_int64(nbr.endpoint as i64),
+                src_vid: VertexId::from_u32(src),
+                dst_vid: VertexId::from_u32(nbr.endpoint),
                 rank: nbr.rank,
                 properties,
             })
@@ -502,8 +502,8 @@ impl EdgeStore {
                         projection,
                     );
                     EdgeRecord {
-                        src_vid: VertexId::from_int64(nbr.endpoint as i64),
-                        dst_vid: VertexId::from_int64(dst as i64),
+                        src_vid: VertexId::from_u32(nbr.endpoint),
+                        dst_vid: VertexId::from_u32(dst),
                         rank: nbr.rank,
                         properties,
                     }
@@ -516,8 +516,8 @@ impl EdgeStore {
         nbrs.into_iter()
             .zip(decoded)
             .map(|(nbr, properties)| EdgeRecord {
-                src_vid: VertexId::from_int64(nbr.endpoint as i64),
-                dst_vid: VertexId::from_int64(dst as i64),
+                src_vid: VertexId::from_u32(nbr.endpoint),
+                dst_vid: VertexId::from_u32(dst),
                 rank: nbr.rank,
                 properties,
             })
@@ -827,10 +827,10 @@ impl EdgeStore {
                 projection,
             )
         };
-        let dst_vid = VertexId::from_int64(nbr.endpoint as i64);
+        let dst_vid = VertexId::from_u32(nbr.endpoint);
         let rank = nbr.rank;
         EdgeRecord {
-            src_vid: VertexId::from_int64(src as i64),
+            src_vid: VertexId::from_u32(src),
             dst_vid,
             rank,
             properties,
@@ -855,8 +855,8 @@ impl EdgeStore {
             )
         };
         EdgeRecord {
-            src_vid: VertexId::from_int64(nbr.endpoint as i64),
-            dst_vid: VertexId::from_int64(dst as i64),
+            src_vid: VertexId::from_u32(nbr.endpoint),
+            dst_vid: VertexId::from_u32(dst),
             rank: nbr.rank,
             properties,
         }
@@ -933,8 +933,8 @@ impl EdgeStore {
 
             return Some((
                 EdgeRecord {
-                    src_vid: VertexId::from_int64(src as i64),
-                    dst_vid: VertexId::from_int64(dst as i64),
+                    src_vid: VertexId::from_u32(src),
+                    dst_vid: VertexId::from_u32(dst),
                     rank,
                     properties,
                 },
@@ -951,8 +951,8 @@ impl EdgeStore {
             };
             return Some((
                 EdgeRecord {
-                    src_vid: VertexId::from_int64(src as i64),
-                    dst_vid: VertexId::from_int64(dst as i64),
+                    src_vid: VertexId::from_u32(src),
+                    dst_vid: VertexId::from_u32(dst),
                     rank,
                     properties,
                 },
@@ -1023,8 +1023,8 @@ impl EdgeStore {
             };
             return Some((
                 EdgeRecord {
-                    src_vid: VertexId::from_int64(src as i64),
-                    dst_vid: VertexId::from_int64(dst as i64),
+                    src_vid: VertexId::from_u32(src),
+                    dst_vid: VertexId::from_u32(dst),
                     rank,
                     properties,
                 },
@@ -1045,8 +1045,8 @@ impl EdgeStore {
             };
             return Some((
                 EdgeRecord {
-                    src_vid: VertexId::from_int64(src as i64),
-                    dst_vid: VertexId::from_int64(dst as i64),
+                    src_vid: VertexId::from_u32(src),
+                    dst_vid: VertexId::from_u32(dst),
                     rank,
                     properties,
                 },
@@ -1089,8 +1089,8 @@ impl EdgeStore {
                 .into_iter()
                 .map(|hot| {
                     self.edge_record_from_hot_projected_assume_visible(
-                        VertexId::from_int64(src as i64),
-                        VertexId::from_int64(hot.endpoint as i64),
+                        VertexId::from_u32(src),
+                        VertexId::from_u32(hot.endpoint),
                         hot.rank,
                         hot.edge_id,
                         PropertyQuery {
@@ -1108,8 +1108,8 @@ impl EdgeStore {
         hots.into_iter()
             .zip(decoded)
             .map(|(hot, properties)| EdgeRecord {
-                src_vid: VertexId::from_int64(src as i64),
-                dst_vid: VertexId::from_int64(hot.endpoint as i64),
+                src_vid: VertexId::from_u32(src),
+                dst_vid: VertexId::from_u32(hot.endpoint),
                 rank: hot.rank,
                 properties,
             })
@@ -1162,8 +1162,8 @@ impl EdgeStore {
                 .into_iter()
                 .map(|hot| {
                     self.edge_record_from_hot_projected_assume_visible(
-                        VertexId::from_int64(hot.endpoint as i64),
-                        VertexId::from_int64(dst as i64),
+                        VertexId::from_u32(hot.endpoint),
+                        VertexId::from_u32(dst),
                         hot.rank,
                         hot.edge_id,
                         PropertyQuery {
@@ -1181,8 +1181,8 @@ impl EdgeStore {
         hots.into_iter()
             .zip(decoded)
             .map(|(hot, properties)| EdgeRecord {
-                src_vid: VertexId::from_int64(hot.endpoint as i64),
-                dst_vid: VertexId::from_int64(dst as i64),
+                src_vid: VertexId::from_u32(hot.endpoint),
+                dst_vid: VertexId::from_u32(dst),
                 rank: hot.rank,
                 properties,
             })
@@ -1409,8 +1409,8 @@ impl EdgeStore {
             .find(|ins| ins.src == src && ins.dst == dst && ins.rank == rank)
         {
             return Some(EdgeRecord {
-                src_vid: VertexId::from_int64(src as i64),
-                dst_vid: VertexId::from_int64(dst as i64),
+                src_vid: VertexId::from_u32(src),
+                dst_vid: VertexId::from_u32(dst),
                 rank,
                 properties: staged.properties.clone(),
             });
@@ -1448,8 +1448,8 @@ impl EdgeStore {
                 continue;
             }
             out.push(EdgeRecord {
-                src_vid: VertexId::from_int64(ins.src as i64),
-                dst_vid: VertexId::from_int64(ins.dst as i64),
+                src_vid: VertexId::from_u32(ins.src),
+                dst_vid: VertexId::from_u32(ins.dst),
                 rank: ins.rank,
                 properties: ins.properties.clone(),
             });
@@ -1487,8 +1487,8 @@ impl EdgeStore {
                 continue;
             }
             out.push(EdgeRecord {
-                src_vid: VertexId::from_int64(ins.src as i64),
-                dst_vid: VertexId::from_int64(ins.dst as i64),
+                src_vid: VertexId::from_u32(ins.src),
+                dst_vid: VertexId::from_u32(ins.dst),
                 rank: ins.rank,
                 properties: ins.properties.clone(),
             });

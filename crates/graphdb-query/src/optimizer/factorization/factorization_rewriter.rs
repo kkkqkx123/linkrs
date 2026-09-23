@@ -648,7 +648,6 @@ impl FactorizationRewriter {
             | LogicalNodeEnum::Update(_)
             | LogicalNodeEnum::DeleteVertices(_)
             | LogicalNodeEnum::DeleteEdges(_)
-            | LogicalNodeEnum::DeleteTags(_)
             | LogicalNodeEnum::DeleteIndex(_)
             | LogicalNodeEnum::PipeDeleteVertices(_)
             | LogicalNodeEnum::PipeDeleteEdges(_)

@@ -93,8 +93,8 @@ impl MergePlanner {
 
                 Ok(VertexInsertInfo {
                     space_name,
-                    tags: vec![tag_spec],
-                    values: vec![(vid_expr, vec![prop_values])],
+                    tag: tag_spec,
+                    values: vec![(vid_expr, prop_values)],
                     if_not_exists: true,
                 })
             }
@@ -358,8 +358,8 @@ impl MergePlanner {
         };
         Ok(VertexInsertInfo {
             space_name,
-            tags: vec![tag_spec],
-            values: vec![(vid_expr, vec![prop_values])],
+            tag: tag_spec,
+            values: vec![(vid_expr, prop_values)],
             if_not_exists: true,
         })
     }

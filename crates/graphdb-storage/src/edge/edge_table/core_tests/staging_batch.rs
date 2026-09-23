@@ -150,7 +150,7 @@ fn test_batch_overlay_reads_observe_net_effect_without_committing() {
 
     let out = table.out_edges_with_batch(0, 200, &batch);
     assert_eq!(out.len(), 1);
-    assert_eq!(out[0].dst_vid, graphdb_core::types::VertexId::from_int64(2));
+    assert_eq!(out[0].dst_vid, graphdb_core::types::VertexId::try_from_int64(2).expect("test vertex id"));
     assert!(table.in_edges_with_batch(1, 200, &batch).is_empty());
     let incoming = table.in_edges_with_batch(2, 200, &batch);
     assert_eq!(incoming.len(), 1);

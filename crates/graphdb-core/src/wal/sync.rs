@@ -123,7 +123,7 @@ mod tests {
             target: TargetId::new("fulltext").expect("target should be valid"),
             index_id: 7,
             index_generation: IndexGeneration::new(3),
-            entity_ref: EntityRef::Vertex(VertexId::from_int64(42)),
+            entity_ref: EntityRef::Vertex(VertexId::try_from_int64(42).expect("test vertex id")),
             operation: IndexOperation::Upsert,
             document_or_vector: b"document".to_vec(),
             idempotency_key: IdempotencyKey::new("txn-1:0")

@@ -88,11 +88,10 @@ pub trait QueryStorage:
                 continue;
             }
 
-            // Collect all property keys across all vertices (single-label
-            // reads fill only the tag, so keys come from the tags).
+            // Collect all property keys across all vertices from their tags.
             let mut prop_keys: Vec<String> = vertices
                 .iter()
-                .flat_map(|v| v.tags.iter().flat_map(|t| t.properties.keys()))
+                .flat_map(|v| v.tag.properties.keys())
                 .cloned()
                 .collect::<std::collections::HashSet<_>>()
                 .into_iter()
@@ -105,14 +104,14 @@ pub trait QueryStorage:
             })?;
 
             // Write header
-            let mut header = vec!["vid".to_string(), "id".to_string()];
+            let mut header = vec!["vid".to_string()];
             header.extend(prop_keys.clone());
             writeln!(file, "{}", header.join(","))
                 .map_err(|e| StorageError::io_error(format!("CSV write error: {e}")))?;
 
             // Write rows
             for vertex in &vertices {
-                let mut row = vec![vertex.vid.to_string(), vertex.id.to_string()];
+                let mut row = vec![vertex.vid.to_string()];
                 for key in &prop_keys {
                     let val = vertex
                         .property_value(key)

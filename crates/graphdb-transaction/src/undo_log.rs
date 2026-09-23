@@ -580,7 +580,7 @@ mod tests {
         let mut manager = UndoLogManager::new();
 
         manager
-            .add_insert_vertex(1, VertexId::from_int64(100))
+            .add_insert_vertex(1, VertexId::try_from_int64(100).expect("test vertex id"))
             .expect("Failed to append undo log");
         manager
             .add_insert_edge(AddInsertEdgeParams {
@@ -588,8 +588,8 @@ mod tests {
                 dst_label: 2,
                 edge_label: 3,
                 rank: 0,
-                src_vid: VertexId::from_int64(100),
-                dst_vid: VertexId::from_int64(200),
+                src_vid: VertexId::try_from_int64(100).expect("test vertex id"),
+                dst_vid: VertexId::try_from_int64(200).expect("test vertex id"),
             })
             .expect("Failed to append undo log");
 
@@ -605,13 +605,13 @@ mod tests {
     fn test_execute_undo_from_index_keeps_prefix() {
         let mut manager = UndoLogManager::new();
         manager
-            .add_insert_vertex(1, VertexId::from_int64(1))
+            .add_insert_vertex(1, VertexId::try_from_int64(1).expect("test vertex id"))
             .expect("Failed to append undo log");
         manager
-            .add_insert_vertex(1, VertexId::from_int64(2))
+            .add_insert_vertex(1, VertexId::try_from_int64(2).expect("test vertex id"))
             .expect("Failed to append undo log");
         manager
-            .add_insert_vertex(1, VertexId::from_int64(3))
+            .add_insert_vertex(1, VertexId::try_from_int64(3).expect("test vertex id"))
             .expect("Failed to append undo log");
 
         let target = MockUndoTarget;
@@ -632,7 +632,7 @@ mod tests {
     fn test_insert_vertex_undo() {
         let undo = InsertVertexUndo {
             v_label: 1,
-            vid: VertexId::from_int64(100),
+            vid: VertexId::try_from_int64(100).expect("test vertex id"),
         };
 
         let target = MockUndoTarget;
@@ -646,8 +646,8 @@ mod tests {
             dst_label: 2,
             edge_label: 3,
             rank: 0,
-            src_vid: VertexId::from_int64(100),
-            dst_vid: VertexId::from_int64(200),
+            src_vid: VertexId::try_from_int64(100).expect("test vertex id"),
+            dst_vid: VertexId::try_from_int64(200).expect("test vertex id"),
         };
 
         let target = MockUndoTarget;
@@ -658,7 +658,7 @@ mod tests {
     fn test_update_vertex_prop_undo() {
         let undo = UpdateVertexPropUndo {
             v_label: 1,
-            vid: VertexId::from_int64(100),
+            vid: VertexId::try_from_int64(100).expect("test vertex id"),
             col_id: ColumnId(0),
             old_value: graphdb_core::Value::BigInt(42),
         };
@@ -671,9 +671,9 @@ mod tests {
     fn test_update_edge_prop_undo() {
         let undo = UpdateEdgePropUndo {
             src_label: 1,
-            src_vid: VertexId::from_int64(100),
+            src_vid: VertexId::try_from_int64(100).expect("test vertex id"),
             dst_label: 2,
-            dst_vid: VertexId::from_int64(200),
+            dst_vid: VertexId::try_from_int64(200).expect("test vertex id"),
             edge_label: 3,
             rank: 0,
             col_id: ColumnId(0),
@@ -688,14 +688,14 @@ mod tests {
     fn test_remove_vertex_undo() {
         let undo = RemoveVertexUndo {
             v_label: 1,
-            vid: VertexId::from_int64(100),
+            vid: VertexId::try_from_int64(100).expect("test vertex id"),
             related_edges: vec![(
                 1,
                 2,
                 3,
                 vec![RelatedEdgeInfo {
-                    src_vid: VertexId::from_int64(100),
-                    dst_vid: VertexId::from_int64(200),
+                    src_vid: VertexId::try_from_int64(100).expect("test vertex id"),
+                    dst_vid: VertexId::try_from_int64(200).expect("test vertex id"),
                     rank: 0,
                 }],
             )],
@@ -710,9 +710,9 @@ mod tests {
     fn test_remove_edge_undo() {
         let undo = RemoveEdgeUndo {
             src_label: 1,
-            src_vid: VertexId::from_int64(100),
+            src_vid: VertexId::try_from_int64(100).expect("test vertex id"),
             dst_label: 2,
-            dst_vid: VertexId::from_int64(200),
+            dst_vid: VertexId::try_from_int64(200).expect("test vertex id"),
             edge_label: 3,
             rank: 0,
         };
@@ -726,13 +726,13 @@ mod tests {
         let mut manager = UndoLogManager::new();
 
         manager
-            .add_insert_vertex(1, VertexId::from_int64(100))
+            .add_insert_vertex(1, VertexId::try_from_int64(100).expect("test vertex id"))
             .expect("Failed to append undo log");
         manager
-            .add_insert_vertex(1, VertexId::from_int64(200))
+            .add_insert_vertex(1, VertexId::try_from_int64(200).expect("test vertex id"))
             .expect("Failed to append undo log");
         manager
-            .add_insert_vertex(1, VertexId::from_int64(300))
+            .add_insert_vertex(1, VertexId::try_from_int64(300).expect("test vertex id"))
             .expect("Failed to append undo log");
 
         assert_eq!(manager.len(), 3);
@@ -748,7 +748,7 @@ mod tests {
         let mut manager = UndoLogManager::new();
 
         manager
-            .add_insert_vertex(1, VertexId::from_int64(100))
+            .add_insert_vertex(1, VertexId::try_from_int64(100).expect("test vertex id"))
             .expect("Failed to append undo log");
         manager
             .add_insert_edge(AddInsertEdgeParams {
@@ -756,8 +756,8 @@ mod tests {
                 dst_label: 2,
                 edge_label: 3,
                 rank: 0,
-                src_vid: VertexId::from_int64(100),
-                dst_vid: VertexId::from_int64(200),
+                src_vid: VertexId::try_from_int64(100).expect("test vertex id"),
+                dst_vid: VertexId::try_from_int64(200).expect("test vertex id"),
             })
             .expect("Failed to append undo log");
 
@@ -786,7 +786,7 @@ mod tests {
     fn test_undo_log_entry_enum() {
         let entry = UndoLogEntry::InsertVertex(InsertVertexUndo {
             v_label: 1,
-            vid: VertexId::from_int64(100),
+            vid: VertexId::try_from_int64(100).expect("test vertex id"),
         });
 
         let target = MockUndoTarget;

@@ -64,7 +64,10 @@ impl ColumnStorage for VariableWidthColumn {
             postcard::from_bytes::<graphdb_core::value::Geography>(bytes)
                 .ok()
                 .map(Value::Geography)
-        } else if matches!(self.data_type, DataType::Vector) {
+        } else if matches!(
+            self.data_type,
+            DataType::Vector | DataType::VectorDense(_) | DataType::VectorSparse(_)
+        ) {
             if bytes.len().is_multiple_of(std::mem::size_of::<f32>()) {
                 let dim = bytes.len() / std::mem::size_of::<f32>();
                 let mut data = Vec::with_capacity(dim);
@@ -86,9 +89,27 @@ impl ColumnStorage for VariableWidthColumn {
             graphdb_core::value::JsonB::parse(&s)
                 .ok()
                 .map(|jb| Value::JsonB(Box::new(jb)))
-        } else if matches!(self.data_type, DataType::Struct(_) | DataType::Array(_)) {
-            // Composite values are stored as postcard-encoded whole `Value`s
-            // (the serde single-track format).
+        } else if matches!(self.data_type, DataType::FixedString(_)) {
+            String::from_utf8(bytes.to_vec()).ok().map(Value::FixedString)
+        } else if matches!(
+            self.data_type,
+            DataType::Struct(_)
+                | DataType::Array(_)
+                | DataType::List(_)
+                | DataType::Map(_)
+                | DataType::Set(_)
+                | DataType::DataSet
+                | DataType::Vertex
+                | DataType::Edge
+                | DataType::Path
+                | DataType::Interval
+                | DataType::Decimal128
+                | DataType::Decimal { .. }
+                | DataType::Union(_)
+        ) {
+            // Opaque complex values are stored as postcard-encoded whole
+            // `Value`s (same single-track format as the undo log). No
+            // per-type compression or statistics pruning applies.
             postcard::from_bytes::<Value>(bytes).ok()
         } else if matches!(self.data_type, DataType::Blob) {
             Some(Value::Blob(bytes.to_vec()))
@@ -257,6 +278,12 @@ pub(crate) fn write_variable_value(data: &mut Vec<u8>, value: &Value) -> Storage
             data.extend_from_slice(&len.to_le_bytes());
             data.extend_from_slice(bytes);
         }
+        Value::FixedString(s) => {
+            let bytes = s.as_bytes();
+            let len = bytes.len() as u64;
+            data.extend_from_slice(&len.to_le_bytes());
+            data.extend_from_slice(bytes);
+        }
         Value::Blob(b) => {
             let len = b.len() as u64;
             data.extend_from_slice(&len.to_le_bytes());
@@ -293,9 +320,22 @@ pub(crate) fn write_variable_value(data: &mut Vec<u8>, value: &Value) -> Storage
             data.extend_from_slice(&len.to_le_bytes());
             data.extend_from_slice(bytes);
         }
-        // Composite values (Struct/Array) serialize the whole `Value` via
-        // postcard (serde single-track format, same as the undo log).
-        Value::Struct(_) | Value::Array(_) => {
+        // Opaque complex values serialize the whole `Value` via postcard
+        // (serde single-track format, same as the undo log). No per-type
+        // compression or statistics pruning applies.
+        Value::Struct(_)
+        | Value::Array(_)
+        | Value::List(_)
+        | Value::Map(_)
+        | Value::Set(_)
+        | Value::DataSet(_)
+        | Value::Vertex(_)
+        | Value::Edge(_)
+        | Value::Path(_)
+        | Value::Interval(_)
+        | Value::Decimal128(_)
+        | Value::VertexId(_)
+        | Value::EdgeId(_) => {
             let bytes = postcard::to_allocvec(value).map_err(|e| {
                 StorageError::invalid_input(format!("Failed to serialize composite value: {}", e))
             })?;

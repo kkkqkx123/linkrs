@@ -7,7 +7,7 @@
 use crate::{define_plan_node, define_plan_node_with_deps};
 use graphdb_core::types::expr::contextual::ContextualExpression;
 
-use super::info::{EdgeDeleteInfo, IndexDeleteInfo, TagDeleteInfo, VertexDeleteInfo};
+use super::info::{EdgeDeleteInfo, IndexDeleteInfo, VertexDeleteInfo};
 
 // ============================================================================
 // ZeroInputNode: Standalone DELETE (no input from pipe)
@@ -57,54 +57,6 @@ impl DeleteVerticesNode {
 
     pub fn condition(&self) -> Option<&ContextualExpression> {
         self.info.condition.as_ref()
-    }
-}
-
-// ============================================================================
-// ZeroInputNode: DELETE TAG / DELETE TAG *
-// ============================================================================
-
-define_plan_node! {
-    /// Delete tags node (standalone)
-    ///
-    /// Used for: DELETE TAG tag1, tag2 FROM "vid1", "vid2"
-    ///           DELETE TAG * FROM "vid1", "vid2"
-    pub struct DeleteTagsNode {
-        info: TagDeleteInfo,
-    }
-    enum: DeleteTags
-    input: ZeroInputNode
-}
-
-impl DeleteTagsNode {
-    pub fn new(id: i64, info: TagDeleteInfo) -> Self {
-        Self {
-            id,
-            info,
-            output_var: None,
-            col_names: vec!["deleted".to_string()],
-            column_types: vec![],
-        }
-    }
-
-    pub fn info(&self) -> &TagDeleteInfo {
-        &self.info
-    }
-
-    pub fn space_name(&self) -> &str {
-        &self.info.space_name
-    }
-
-    pub fn tag_names(&self) -> &[String] {
-        &self.info.tag_names
-    }
-
-    pub fn vertex_ids(&self) -> &[ContextualExpression] {
-        &self.info.vertex_ids
-    }
-
-    pub fn is_all_tags(&self) -> bool {
-        self.info.is_all_tags
     }
 }
 

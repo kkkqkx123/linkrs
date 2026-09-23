@@ -354,12 +354,7 @@ fn execute_keys(args: &[Value]) -> Result<Value, ExpressionError> {
 
     match &args[0] {
         Value::Vertex(v) => {
-            for tag in &v.tags {
-                for key in tag.properties.keys() {
-                    keys.insert(key.clone());
-                }
-            }
-            for key in v.properties.keys() {
+            for key in v.tag.properties.keys() {
                 keys.insert(key.clone());
             }
         }

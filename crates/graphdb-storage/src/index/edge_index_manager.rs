@@ -265,18 +265,15 @@ fn parse_edge_entity_ref(key: &[u8]) -> Option<EntityRef> {
 }
 
 fn value_to_vertex_id(v: &Value) -> Option<graphdb_core::types::storage_ids::VertexId> {
+    use graphdb_core::types::storage_ids::VertexId;
     match v {
-        Value::BigInt(id) => Some(graphdb_core::types::storage_ids::VertexId::from_int64(*id)),
-        Value::Int(id) => Some(graphdb_core::types::storage_ids::VertexId::from_int64(
-            *id as i64,
-        )),
+        Value::BigInt(id) => VertexId::try_from_int64(*id).ok(),
+        Value::Int(id) => VertexId::try_from_int64(*id as i64).ok(),
         Value::String(s) => {
             if let Ok(id) = s.parse::<i64>() {
-                Some(graphdb_core::types::storage_ids::VertexId::from_int64(id))
+                VertexId::try_from_int64(id).ok()
             } else {
-                Some(graphdb_core::types::storage_ids::VertexId::from_string(
-                    s.clone(),
-                ))
+                VertexId::try_from_string(s.clone()).ok()
             }
         }
         _ => None,
@@ -364,8 +361,8 @@ impl EdgePropertyIndex {
     ) -> StorageResult<()> {
         let key = Self::encode_edge_property_key(prop_value, src, dst, rank)?;
         let entity_ref = EntityRef::Edge {
-            src: graphdb_core::types::VertexId::from_int64(src as i64),
-            dst: graphdb_core::types::VertexId::from_int64(dst as i64),
+            src: graphdb_core::types::VertexId::from_u32(src),
+            dst: graphdb_core::types::VertexId::from_u32(dst),
             edge_type,
             ranking: rank,
         };

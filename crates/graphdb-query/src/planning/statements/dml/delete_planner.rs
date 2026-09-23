@@ -11,10 +11,10 @@ use crate::binder::BoundStatement;
 use crate::parser::ast::{DeleteStmt, DeleteTarget, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{
-    ArgumentNode, EdgeDeleteInfo, IndexDeleteInfo, TagDeleteInfo, VertexDeleteInfo,
+    ArgumentNode, EdgeDeleteInfo, IndexDeleteInfo, VertexDeleteInfo,
 };
 use crate::planning::plan::logical::logical_nodes::dml::{
-    LogicalDeleteEdgesNode, LogicalDeleteIndexNode, LogicalDeleteTagsNode,
+    LogicalDeleteEdgesNode, LogicalDeleteIndexNode,
     LogicalDeleteVerticesNode, LogicalPipeDeleteEdgesNode, LogicalPipeDeleteVerticesNode,
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
@@ -148,33 +148,6 @@ impl Planner for DeletePlanner {
                     condition,
                 };
                 LogicalNodeEnum::DeleteEdges(LogicalDeleteEdgesNode {
-                    id: next_node_id(),
-                    info,
-                    output_var: None,
-                    col_names: vec!["deleted".to_string()],
-                    column_types: vec![],
-                })
-            }
-            crate::binder::bound::BoundDeleteTarget::Tags {
-                tag_names,
-                vertex_ids,
-                is_all_tags,
-            } => {
-                let converted_ids: Vec<graphdb_core::types::ContextualExpression> = vertex_ids
-                    .iter()
-                    .map(|id| {
-                        crate::binder::expr_converter::bound_expr_to_contextual(id, &expr_ctx)
-                            .map_err(PlannerError::PlanGenerationFailed)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                let info = TagDeleteInfo {
-                    space_name,
-                    tag_names: tag_names.clone(),
-                    vertex_ids: converted_ids,
-                    is_all_tags: *is_all_tags,
-                };
-                LogicalNodeEnum::DeleteTags(LogicalDeleteTagsNode {
                     id: next_node_id(),
                     info,
                     output_var: None,
@@ -322,25 +295,6 @@ impl DeletePlanner {
                         column_types: vec![],
                     })
                 }
-            }
-            DeleteTarget::Tags {
-                tag_names,
-                vertex_ids,
-                is_all_tags,
-            } => {
-                let info = TagDeleteInfo {
-                    space_name,
-                    tag_names: tag_names.clone(),
-                    vertex_ids: vertex_ids.clone(),
-                    is_all_tags: *is_all_tags,
-                };
-                LogicalNodeEnum::DeleteTags(LogicalDeleteTagsNode {
-                    id: next_node_id(),
-                    info,
-                    output_var: None,
-                    col_names: vec!["deleted".to_string()],
-                    column_types: vec![],
-                })
             }
             DeleteTarget::Index(index_name) => {
                 let info = IndexDeleteInfo {

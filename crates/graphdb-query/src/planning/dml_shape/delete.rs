@@ -41,20 +41,6 @@ pub(crate) fn render_delete(delete: &DeleteStmt, values: &mut Vec<Value>) -> Opt
                 }
             }
         }
-        DeleteTarget::Tags {
-            tag_names,
-            vertex_ids,
-            is_all_tags,
-        } => {
-            out.push_str("TAG ");
-            if *is_all_tags {
-                out.push('*');
-            } else {
-                out.push_str(&tag_names.join(", "));
-            }
-            out.push_str(" FROM ");
-            render_expr_list(&mut out, values, vertex_ids)?;
-        }
         DeleteTarget::Index(name) => {
             out.push_str("INDEX ");
             out.push_str(name);

@@ -206,7 +206,6 @@ impl PlanNodeVisitor for SubqueryHostFinder {
         visit_update_edges => crate::planning::plan::core::nodes::data_modification::UpdateEdgesNode,
         visit_delete_vertices => crate::planning::plan::core::nodes::data_modification::DeleteVerticesNode,
         visit_delete_edges => crate::planning::plan::core::nodes::data_modification::DeleteEdgesNode,
-        visit_delete_tags => crate::planning::plan::core::nodes::data_modification::DeleteTagsNode,
         visit_delete_index => crate::planning::plan::core::nodes::data_modification::DeleteIndexNode,
         visit_pipe_delete_vertices => crate::planning::plan::core::nodes::data_modification::PipeDeleteVerticesNode,
         visit_pipe_delete_edges => crate::planning::plan::core::nodes::data_modification::PipeDeleteEdgesNode,

@@ -16,9 +16,9 @@ pub enum SinkSpec {
     InsertVertices {
         space_name: String,
         vertex_properties: Vec<(String, Expression)>,
-        tags: Vec<String>,
-        /// Property column names for each tag, aligned with `tags`.
-        tag_property_names: Vec<Vec<String>>,
+        tag: String,
+        /// Property column names for the single tag.
+        tag_property_names: Vec<String>,
         if_not_exists: bool,
     },
     InsertEdges {
@@ -66,11 +66,6 @@ pub enum SinkSpec {
         src_col: String,
         dst_col: String,
         edge_type: String,
-    },
-    DeleteTags {
-        space_name: String,
-        tag_names: Vec<String>,
-        vertex_ids: Option<Vec<Value>>,
     },
     CopyFrom {
         space_name: String,

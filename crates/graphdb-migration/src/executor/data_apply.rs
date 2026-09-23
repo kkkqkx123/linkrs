@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use graphdb_core::{Edge, Tag, Value, Vertex};
+use graphdb_core::{Edge, Value, Vertex};
 
 use crate::converter::convert_value;
 use crate::plan::MigrationStep;
@@ -13,10 +13,10 @@ pub(super) fn apply_step_to_vertex(
     step: &MigrationStep,
 ) -> Result<Option<Vertex>, String> {
     let mut v = vertex.clone();
-    let tag = match v.tags.iter_mut().find(|t| t.name == label) {
-        Some(t) => t,
-        None => return Ok(None),
-    };
+    if v.tag.name != label {
+        return Err(format!("vertex {} does not carry tag '{}'", v.vid, label));
+    }
+    let tag = &mut v.tag;
 
     match step {
         MigrationStep::RenameColumn { old_name, new_name } => {
@@ -105,7 +105,6 @@ pub(super) fn apply_step_to_vertex(
         | MigrationStep::DropEdgeType { .. } => return Ok(None),
     }
 
-    v.properties = merge_vertex_properties(&v.tags);
     Ok(Some(v))
 }
 
@@ -199,14 +198,4 @@ pub(super) fn apply_step_to_edge(
         | MigrationStep::CreateEdgeType { .. }
         | MigrationStep::DropEdgeType { .. } => Ok(edge.props.clone()),
     }
-}
-
-pub(super) fn merge_vertex_properties(tags: &[Tag]) -> HashMap<String, Value> {
-    let mut merged = HashMap::new();
-    for tag in tags {
-        for (k, v) in &tag.properties {
-            merged.insert(k.clone(), v.clone());
-        }
-    }
-    merged
 }

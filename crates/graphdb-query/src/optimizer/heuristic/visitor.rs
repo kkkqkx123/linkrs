@@ -50,7 +50,7 @@ use crate::planning::plan::core::nodes::control_flow::control_flow_node::{
 };
 use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
 use crate::planning::plan::core::nodes::data_modification::{
-    CopyFromNode, CopyToNode, DeleteEdgesNode, DeleteIndexNode, DeleteTagsNode, DeleteVerticesNode,
+    CopyFromNode, CopyToNode, DeleteEdgesNode, DeleteIndexNode, DeleteVerticesNode,
     InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode,
     UpdateEdgesNode, UpdateNode, UpdateVerticesNode,
 };
@@ -265,7 +265,6 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
         visit_update_edges => UpdateEdgesNode, UpdateEdges,
         visit_delete_vertices => DeleteVerticesNode, DeleteVertices,
         visit_delete_edges => DeleteEdgesNode, DeleteEdges,
-        visit_delete_tags => DeleteTagsNode, DeleteTags,
         visit_delete_index => DeleteIndexNode, DeleteIndex,
         visit_pipe_delete_vertices => PipeDeleteVerticesNode, PipeDeleteVertices,
         visit_pipe_delete_edges => PipeDeleteEdgesNode, PipeDeleteEdges,

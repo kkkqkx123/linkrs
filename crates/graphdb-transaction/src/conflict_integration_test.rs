@@ -38,9 +38,9 @@ fn test_multiple_non_conflicting_writes() {
     let ctx3 = manager.get_context(txn3).expect("Failed to get ctx3");
 
     // Record writes on different vertices
-    ctx1.record_vertex_write(VertexId::from_int64(1));
-    ctx2.record_vertex_write(VertexId::from_int64(2));
-    ctx3.record_vertex_write(VertexId::from_int64(3));
+    ctx1.record_vertex_write(VertexId::try_from_int64(1).expect("test vertex id"));
+    ctx2.record_vertex_write(VertexId::try_from_int64(2).expect("test vertex id"));
+    ctx3.record_vertex_write(VertexId::try_from_int64(3).expect("test vertex id"));
 
     // All should pass conflict check
     assert!(manager.check_write_set_conflict(txn1).is_ok());
@@ -68,7 +68,7 @@ fn test_conflicting_writes_same_vertex() {
     let ctx1 = manager.get_context(txn1).expect("Failed to get ctx1");
     let ctx2 = manager.get_context(txn2).expect("Failed to get ctx2");
 
-    let vid = VertexId::from_int64(1);
+    let vid = VertexId::try_from_int64(1).expect("test vertex id");
     ctx1.record_vertex_write(vid);
     ctx2.record_vertex_write(vid);
 
@@ -93,13 +93,13 @@ fn test_conflict_intensity_varying_overlaps() {
     // No overlap: intensity = 0.0
     let ws1 = {
         let mut ws = WriteSet::new();
-        ws.record_vertex(VertexId::from_int64(1));
+        ws.record_vertex(VertexId::try_from_int64(1).expect("test vertex id"));
         ws
     };
 
     let ws2 = {
         let mut ws = WriteSet::new();
-        ws.record_vertex(VertexId::from_int64(2));
+        ws.record_vertex(VertexId::try_from_int64(2).expect("test vertex id"));
         ws
     };
 
@@ -108,8 +108,8 @@ fn test_conflict_intensity_varying_overlaps() {
     // 50% overlap: intensity = 0.5
     let ws3 = {
         let mut ws = WriteSet::new();
-        ws.record_vertex(VertexId::from_int64(1)); // overlap with ws1
-        ws.record_vertex(VertexId::from_int64(3)); // no overlap
+        ws.record_vertex(VertexId::try_from_int64(1).expect("test vertex id")); // overlap with ws1
+        ws.record_vertex(VertexId::try_from_int64(3).expect("test vertex id")); // no overlap
         ws
     };
 
@@ -119,7 +119,7 @@ fn test_conflict_intensity_varying_overlaps() {
     // 100% overlap: intensity = 1.0
     let ws4 = {
         let mut ws = WriteSet::new();
-        ws.record_vertex(VertexId::from_int64(1));
+        ws.record_vertex(VertexId::try_from_int64(1).expect("test vertex id"));
         ws
     };
 
@@ -132,9 +132,9 @@ fn test_conflict_report_classification() {
     use crate::types::WriteSet;
     use graphdb_core::types::EdgeIdentifier;
 
-    let vid1 = VertexId::from_int64(1);
-    let vid2 = VertexId::from_int64(2);
-    let vid3 = VertexId::from_int64(3);
+    let vid1 = VertexId::try_from_int64(1).expect("test vertex id");
+    let vid2 = VertexId::try_from_int64(2).expect("test vertex id");
+    let vid3 = VertexId::try_from_int64(3).expect("test vertex id");
 
     // Vertex conflict
     let mut ws_v1 = WriteSet::new();
@@ -190,7 +190,7 @@ fn test_readonly_transaction_no_conflict() {
     let ctx_write = manager
         .get_context(txn_write)
         .expect("Failed to get write ctx");
-    ctx_write.record_vertex_write(VertexId::from_int64(1));
+    ctx_write.record_vertex_write(VertexId::try_from_int64(1).expect("test vertex id"));
 
     // Read transaction should not cause conflict
     assert!(manager.check_write_set_conflict(txn_write).is_ok());
@@ -240,7 +240,7 @@ fn test_write_set_size_tracking() {
 
     // Record vertex writes
     for i in 1..=5 {
-        ctx.record_vertex_write(VertexId::from_int64(i));
+        ctx.record_vertex_write(VertexId::try_from_int64(i).expect("test vertex id"));
     }
 
     assert_eq!(ctx.write_set_size(), 5);
@@ -272,7 +272,7 @@ fn test_sequential_conflict_cascade() {
     let ctx3 = manager.get_context(txn3).expect("Failed to get ctx3");
 
     // All write to same vertex
-    let vid = VertexId::from_int64(1);
+    let vid = VertexId::try_from_int64(1).expect("test vertex id");
     ctx1.record_vertex_write(vid);
     ctx2.record_vertex_write(vid);
     ctx3.record_vertex_write(vid);

@@ -5,6 +5,22 @@ use std::sync::atomic::Ordering;
 use super::super::GraphStorageContext;
 use super::resolve::ExternalRef;
 
+/// Render a vertex id as its raw external string without display quoting.
+///
+/// Text ids round-trip through storage as raw strings, while `Display` adds
+/// quotes. Read paths use this form so text ids never gain quotes.
+fn vid_to_raw_string(vid: &VertexId) -> String {
+    if let Some(s) = vid.as_str() {
+        s.to_string()
+    } else if let Some(i) = vid.as_int64() {
+        i.to_string()
+    } else if let Some(u) = vid.as_u64() {
+        u.to_string()
+    } else {
+        format!("{:?}", vid.as_bytes())
+    }
+}
+
 impl GraphStorageContext {
     /// Pre-allocate capacity for `additional` more vertices in the given label's table.
     /// Call before batch inserts to avoid repeated hash rehashing.
@@ -110,24 +126,25 @@ impl GraphStorageContext {
         internal_id: u32,
         ts: Timestamp,
     ) -> Option<String> {
-        self.persistent
-            .data_store
-            .with_vertex_tables(|vertex_tables| {
-                vertex_tables
-                    .get(&label)?
-                    .get_external_id(internal_id, ts)
-                    .map(|k| k.to_string())
-            })
+        self.get_external_vertex_id(label, internal_id, ts)
+            .map(|vid| vid_to_raw_string(&vid))
     }
 
-    pub fn get_external_id_any(&self, internal_id: u32, ts: Timestamp) -> Option<String> {
+    pub fn get_external_vertex_id(
+        &self,
+        label: LabelId,
+        internal_id: u32,
+        ts: Timestamp,
+    ) -> Option<VertexId> {
         self.persistent
             .data_store
             .with_vertex_tables(|vertex_tables| {
-                vertex_tables
-                    .values()
-                    .find_map(|t| t.get_external_id(internal_id, ts))
-                    .map(|k| k.to_string())
+                let table = vertex_tables.get(&label)?;
+                let key = table.get_external_id(internal_id, ts)?;
+                match key {
+                    crate::vertex::IdKey::Int(i) => VertexId::try_from_int64(i).ok(),
+                    crate::vertex::IdKey::Text(s) => VertexId::try_from_string(&s).ok(),
+                }
             })
     }
 
@@ -141,10 +158,10 @@ impl GraphStorageContext {
             .with_vertex_tables(|vertex_tables| {
                 let table = vertex_tables.get(&label)?;
                 let key = table.get_external_id_raw(internal_id)?;
-                Some(match key {
-                    crate::vertex::IdKey::Int(i) => VertexId::from_int64(i),
-                    crate::vertex::IdKey::Text(s) => VertexId::from_string(s),
-                })
+                match key {
+                    crate::vertex::IdKey::Int(i) => VertexId::try_from_int64(i).ok(),
+                    crate::vertex::IdKey::Text(s) => VertexId::try_from_string(&s).ok(),
+                }
             })
     }
 }

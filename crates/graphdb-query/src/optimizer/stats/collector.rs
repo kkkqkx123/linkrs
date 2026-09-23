@@ -433,15 +433,9 @@ impl StatisticsCollector {
                 );
             }
             for vertex in &vertices {
-                let tag_props = vertex
-                    .get_tag(tag_name)
-                    .map(|t| &t.properties)
-                    .unwrap_or(&vertex.properties);
+                let tag_props = &vertex.tag.properties;
                 for (prop_name, bucket) in distinct_per_prop.iter_mut() {
-                    if let Some(v) = tag_props
-                        .get(prop_name.as_str())
-                        .or_else(|| vertex.properties.get(prop_name.as_str()))
-                    {
+                    if let Some(v) = tag_props.get(prop_name.as_str()) {
                         bucket.insert(ndv_key(v));
                         if let Some(stat) = stats_per_prop.get_mut(prop_name) {
                             stat.observe_value(v);

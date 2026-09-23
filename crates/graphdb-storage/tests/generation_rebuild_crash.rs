@@ -64,6 +64,6 @@ fn generation_rebuild_restarts_after_publish_io_failure() {
         .expect("rebuilt index should be readable");
     assert_eq!(
         indexed,
-        vec![Value::from(graphdb_core::types::VertexId::from_int64(1))]
+        vec![Value::from(graphdb_core::types::VertexId::try_from_int64(1).expect("test vertex id"))]
     );
 }

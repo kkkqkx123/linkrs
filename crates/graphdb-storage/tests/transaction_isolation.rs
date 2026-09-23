@@ -131,19 +131,19 @@ fn test_concurrent_vertex_updates_consistency() {
             // Each thread reads different vertices
             for vertex_idx in (thread_id * 2)..(thread_id * 2 + 2) {
                 if vertex_idx < 10 {
-                    let vid = VertexId::from_int64(vertex_idx as i64);
+                    let vid = VertexId::try_from_int64(vertex_idx as i64).expect("test vertex id");
 
                     let st = storage.lock().unwrap();
-                    if let Some(v) = st.get_vertex("test_space", &vid).unwrap() {
+                    if let Some(v) = st.get_vertex("test_space", "Person", &vid).unwrap() {
                         // Verify data is consistent
-                        assert!(!v.tags.is_empty(), "Vertex should have tags");
+                        assert!(v.has_properties(), "Vertex should have properties");
                         assert!(
-                            v.properties.contains_key("name"),
+                            v.properties().contains_key("name"),
                             "Vertex should have name property"
                         );
 
                         // Verify property types are correct
-                        if let Some(name) = v.properties.get("name") {
+                        if let Some(name) = v.properties().get("name") {
                             match name {
                                 graphdb_core::Value::String(_) => {
                                     // OK

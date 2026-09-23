@@ -626,6 +626,14 @@ mod tests {
                 array_type,
                 Value::array(vec![Value::Double(1.0), Value::Double(2.0)]),
             ),
+            (
+                DataType::FixedString(8),
+                Value::FixedString("abcdef".to_string()),
+            ),
+            (
+                DataType::VectorDense(2),
+                Value::Vector(graphdb_core::value::VectorValue::dense(vec![1.0, 2.0])),
+            ),
         ] {
             let mut col = Column::new("c".to_string(), 0, data_type.clone(), true);
             assert!(crate::vertex::column::is_variable_length_type(&data_type));
@@ -635,6 +643,35 @@ mod tests {
             col.set_versioned(0, None, 20).unwrap();
             assert_eq!(col.get_at_ts(0, 10), Some(value.clone()));
             assert_eq!(col.get_at_ts(0, 20), None);
+        }
+    }
+
+    #[test]
+    fn test_extended_types_never_use_zero_step_fixed_column() {
+        // FixedString, Decimal family and Union have no fixed element size;
+        // they must route to variable-width storage.
+        for data_type in [
+            DataType::FixedString(4),
+            DataType::Decimal128,
+            DataType::Decimal {
+                precision: 10,
+                scale: 2,
+            },
+            DataType::Union(vec![DataType::Int, DataType::String]),
+            DataType::Interval,
+            DataType::List(Box::new(DataType::Int)),
+        ] {
+            assert!(
+                crate::vertex::column::is_variable_length_type(&data_type),
+                "{:?} must be variable-length",
+                data_type
+            );
+            assert_eq!(crate::vertex::column::element_size(&data_type), 0);
+            let col = Column::new("c".to_string(), 0, data_type, true);
+            assert!(matches!(
+                col.inner,
+                crate::vertex::column::column::ColumnInner::Variable(_)
+            ));
         }
     }
 

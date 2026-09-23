@@ -21,7 +21,7 @@ use super::uuid::UuidValue;
 use super::vector::VectorValue;
 use super::{ArrayValue, StructValue};
 use crate::types::storage_ids::{EdgeId, VertexId};
-use crate::vertex_edge_path::{Edge, Path, Vertex};
+use crate::vertex_edge_path::{Edge, Path, Tag, Vertex};
 use crate::DataSet;
 use crate::Value;
 use std::collections::{HashMap, HashSet};
@@ -82,18 +82,20 @@ fn all_sample_values() -> Vec<Value> {
     dataset.add_row(vec![Value::Int(1)]);
     dataset.add_row(vec![Value::Int(2)]);
 
-    let mut vertex = Vertex::with_vid(VertexId::from_int64(10));
-    vertex.tags.push(crate::vertex_edge_path::Tag::new(
-        "Person".to_string(),
-        HashMap::new(),
-    ));
+    let vertex = Vertex::new(
+        VertexId::try_from_int64(10).expect("test vertex id"),
+        Tag::new("Person".to_string(), HashMap::new()),
+    );
     let edge = Edge::new_empty(
-        VertexId::from_int64(1),
-        VertexId::from_int64(2),
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
         0,
     );
-    let path = Path::new(Vertex::with_vid(VertexId::from_int64(1)));
+    let path = Path::new(Vertex::new(
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        Tag::new(String::new(), HashMap::new()),
+    ));
 
     vec![
         Value::Empty,
@@ -145,7 +147,7 @@ fn all_sample_values() -> Vec<Value> {
         )),
         Value::Uuid(UuidValue([9u8; 16])),
         Value::Interval(IntervalValue::new(14, 3, 1000)),
-        Value::VertexId(VertexId::from_int64(99)),
+        Value::VertexId(VertexId::try_from_int64(99).expect("test vertex id")),
         Value::EdgeId(EdgeId::new(99)),
         Value::Struct(Box::new(StructValue::new(vec![
             ("city".to_string(), Value::string("x")),

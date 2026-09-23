@@ -541,7 +541,9 @@ mod tests {
         let context = txn_mgr.get_context(reader).expect("context should exist");
         let error = context
             .record_mutation(crate::types::MutationResult::new(
-                crate::types::MutationEntityKey::Vertex(crate::VertexId::from_int64(1)),
+                crate::types::MutationEntityKey::Vertex(
+                    crate::VertexId::try_from_int64(1).expect("test vertex id"),
+                ),
             ))
             .expect_err("journal write on a read-only transaction must be rejected");
         assert_eq!(error.kind(), TransactionErrorKind::ReadOnlyTransaction);

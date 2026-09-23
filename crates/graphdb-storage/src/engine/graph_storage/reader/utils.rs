@@ -15,45 +15,6 @@ pub(crate) fn vid_to_string(vid: &VertexId) -> String {
     }
 }
 
-/// Parse an external ID string back into a VertexId.
-///
-/// Strict user-visible behavior without silent truncation: numeric strings
-/// become integer ids through the rejecting constructor, negative integers
-/// fall back to text, and overlong text yields an empty id that later stages
-/// reject instead of a truncated key.
-pub(crate) fn vid_from_str(id: &str) -> VertexId {
-    if let Ok(parsed) = id.parse::<i64>() {
-        if let Ok(vid) = VertexId::try_from_int64(parsed) {
-            return vid;
-        }
-    }
-    VertexId::try_from_string(id).unwrap_or_default()
-}
-
-/// Resolve a vertex table internal index to its external ID string.
-///
-/// Mirrors the hot-path resolution: try the timestamp-valid lookup first,
-/// then the raw lookup, then fall back to the raw internal value.
-pub(crate) fn external_id_string(
-    ctx: &GraphStorageContext,
-    label: LabelId,
-    internal: u32,
-    fallback: &VertexId,
-    ts: Timestamp,
-) -> String {
-    if label != 0 {
-        ctx.get_external_id(label, internal, ts)
-            .or_else(|| {
-                ctx.get_external_id_by_internal_id(label, internal)
-                    .map(|v| vid_to_string(&v))
-            })
-            .unwrap_or_else(|| vid_to_string(fallback))
-    } else {
-        ctx.get_external_id_any(internal, ts)
-            .unwrap_or_else(|| vid_to_string(fallback))
-    }
-}
-
 pub(crate) fn record_vertex_read(ctx: &GraphStorageContext, vid: VertexId) {
     if let Some(recorder) = ctx.mutation_recorder() {
         recorder.record_vertex_read(vid);
@@ -75,23 +36,22 @@ pub(crate) fn record_schema_read(ctx: &GraphStorageContext, space: &str) {
     }
 }
 
-/// Resolve an internal vertex-table id to its external `VertexId` without the
-/// string round-trip when a direct raw lookup is available.
+/// Resolve an internal vertex-table id to its external `VertexId`.
+///
+/// Raw lookup first so edge endpoints still resolve past a vertex deletion,
+/// then the timestamp-valid lookup. Returns `None` when the row has no
+/// external key. There is no fallback value and no label-less probing:
+/// callers must pass the owning label.
 pub(crate) fn internal_to_external_vertex_id(
     ctx: &GraphStorageContext,
     label: LabelId,
     internal: u32,
-    fallback: &VertexId,
     ts: Timestamp,
-) -> VertexId {
-    if label != 0 {
-        ctx.get_external_id_by_internal_id(label, internal)
-            .unwrap_or_else(|| {
-                vid_from_str(&external_id_string(ctx, label, internal, fallback, ts))
-            })
-    } else {
-        vid_from_str(&external_id_string(ctx, 0, internal, fallback, ts))
+) -> Option<VertexId> {
+    if let Some(vid) = ctx.get_external_id_by_internal_id(label, internal) {
+        return Some(vid);
     }
+    ctx.get_external_vertex_id(label, internal, ts)
 }
 
 /// Resolve the edge table labels for a named edge type.

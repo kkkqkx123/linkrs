@@ -1495,7 +1495,6 @@ impl OptimizerEngine {
             | LogicalNodeEnum::Update(_)
             | LogicalNodeEnum::DeleteVertices(_)
             | LogicalNodeEnum::DeleteEdges(_)
-            | LogicalNodeEnum::DeleteTags(_)
             | LogicalNodeEnum::DeleteIndex(_)
             | LogicalNodeEnum::CopyFrom(_)
             | LogicalNodeEnum::CopyTo(_)

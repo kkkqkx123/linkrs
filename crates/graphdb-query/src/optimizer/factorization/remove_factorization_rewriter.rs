@@ -219,11 +219,6 @@ impl RemoveFactorizationRewriter {
                 let schema = node.compute_flat_schema(&[])?;
                 Ok((node, schema))
             }
-            LogicalNodeEnum::DeleteTags(n) => {
-                let mut node = LogicalNodeEnum::DeleteTags(n);
-                let schema = node.compute_flat_schema(&[])?;
-                Ok((node, schema))
-            }
             LogicalNodeEnum::DeleteIndex(n) => {
                 let mut node = LogicalNodeEnum::DeleteIndex(n);
                 let schema = node.compute_flat_schema(&[])?;

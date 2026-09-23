@@ -32,10 +32,16 @@ impl SeekStrategy for VertexSeek {
         let mut vertex_ids = Vec::new();
         let mut rows_scanned = 0;
 
+        let [tag] = &context.node_pattern.labels[..] else {
+            return Err(StorageError::invalid_input(
+                "vertex seek requires exactly one label".to_string(),
+            ));
+        };
+
         if let Some(ref vid) = context.node_pattern.vid {
             let vid =
                 VertexId::try_from(vid).map_err(|e| StorageError::invalid_input(e.to_string()))?;
-            if let Some(vertex) = storage.get_vertex("default", &vid)? {
+            if let Some(vertex) = storage.get_vertex("default", tag, &vid)? {
                 rows_scanned = 1;
                 if self.vertex_matches_pattern(&vertex, &context.node_pattern) {
                     vertex_ids.push(Value::from(*vertex.vid()));
@@ -45,7 +51,7 @@ impl SeekStrategy for VertexSeek {
             for vid_val in &self.resolve_vertex_ids(context)? {
                 let vid = VertexId::try_from(vid_val)
                     .map_err(|e| StorageError::invalid_input(e.to_string()))?;
-                if let Some(vertex) = storage.get_vertex("default", &vid)? {
+                if let Some(vertex) = storage.get_vertex("default", tag, &vid)? {
                     rows_scanned += 1;
                     if self.vertex_matches_pattern(&vertex, &context.node_pattern) {
                         vertex_ids.push(vid_val.clone());
@@ -123,7 +129,7 @@ impl VertexSeek {
             let has_all_labels = pattern
                 .labels
                 .iter()
-                .all(|label| vertex.tags.iter().any(|tag| tag.name == *label));
+                .all(|label| vertex.tag.name == *label);
             if !has_all_labels {
                 return false;
             }
@@ -131,9 +137,9 @@ impl VertexSeek {
 
         for (prop_name, prop_value) in &pattern.properties {
             let found = vertex
-                .get_all_properties()
+                .properties()
                 .iter()
-                .any(|(name, value)| name == prop_name && **value == *prop_value);
+                .any(|(name, value)| name == prop_name && value == prop_value);
             if !found {
                 return false;
             }

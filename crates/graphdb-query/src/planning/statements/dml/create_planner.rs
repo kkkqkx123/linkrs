@@ -64,19 +64,16 @@ impl CreatePlanner {
         properties: &[(String, ContextualExpression)],
         expr_context: &Arc<ExpressionAnalysisContext>,
     ) -> Result<VertexInsertInfo, PlannerError> {
-        if labels.is_empty() {
+        if labels.len() != 1 {
             return Err(PlannerError::PlanGenerationFailed(
-                "The CREATE node must specify at least one Label.".to_string(),
+                "The CREATE node must specify exactly one Label.".to_string(),
             ));
         }
 
-        let tag_specs: Vec<TagInsertSpec> = labels
-            .iter()
-            .map(|label| TagInsertSpec {
-                tag_name: label.clone(),
-                prop_names: properties.iter().map(|(k, _)| k.clone()).collect(),
-            })
-            .collect();
+        let tag_spec = TagInsertSpec {
+            tag_name: labels[0].clone(),
+            prop_names: properties.iter().map(|(k, _)| k.clone()).collect(),
+        };
 
         let prop_values: Vec<ContextualExpression> =
             properties.iter().map(|(_, v)| v.clone()).collect();
@@ -91,8 +88,8 @@ impl CreatePlanner {
 
         Ok(VertexInsertInfo {
             space_name,
-            tags: tag_specs,
-            values: vec![(vid_expr, vec![prop_values])],
+            tag: tag_spec,
+            values: vec![(vid_expr, prop_values)],
             if_not_exists: false,
         })
     }

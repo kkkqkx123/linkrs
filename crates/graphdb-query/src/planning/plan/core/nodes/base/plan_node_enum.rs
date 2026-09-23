@@ -11,7 +11,7 @@
 
 use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::planning::plan::core::nodes::data_modification::{
-    CopyFromNode, CopyToNode, DeleteEdgesNode, DeleteIndexNode, DeleteTagsNode, DeleteVerticesNode,
+    CopyFromNode, CopyToNode, DeleteEdgesNode, DeleteIndexNode, DeleteVerticesNode,
     InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode,
     UpdateEdgesNode, UpdateNode, UpdateVerticesNode,
 };
@@ -236,7 +236,6 @@ pub enum PlanNodeEnum {
     InsertEdges(InsertEdgesNode),
     DeleteVertices(DeleteVerticesNode),
     DeleteEdges(DeleteEdgesNode),
-    DeleteTags(DeleteTagsNode),
     DeleteIndex(DeleteIndexNode),
     PipeDeleteVertices(PipeDeleteVerticesNode),
     PipeDeleteEdges(PipeDeleteEdgesNode),
@@ -357,7 +356,6 @@ crate::define_enum_is_methods! {
     (InsertEdges, is_insert_edges),
     (DeleteVertices, is_delete_vertices),
     (DeleteEdges, is_delete_edges),
-    (DeleteTags, is_delete_tags),
     (DeleteIndex, is_delete_index),
     (PipeDeleteVertices, is_pipe_delete_vertices),
     (PipeDeleteEdges, is_pipe_delete_edges),
@@ -473,7 +471,6 @@ crate::define_enum_as_methods! {
     (InsertEdges, as_insert_edges, InsertEdgesNode),
     (DeleteVertices, as_delete_vertices, DeleteVerticesNode),
     (DeleteEdges, as_delete_edges, DeleteEdgesNode),
-    (DeleteTags, as_delete_tags, DeleteTagsNode),
     (DeleteIndex, as_delete_index, DeleteIndexNode),
     (PipeDeleteVertices, as_pipe_delete_vertices, PipeDeleteVerticesNode),
     (PipeDeleteEdges, as_pipe_delete_edges, PipeDeleteEdgesNode),
@@ -588,7 +585,6 @@ crate::define_enum_as_mut_methods! {
     (InsertEdges, as_insert_edges_mut, InsertEdgesNode),
     (DeleteVertices, as_delete_vertices_mut, DeleteVerticesNode),
     (DeleteEdges, as_delete_edges_mut, DeleteEdgesNode),
-    (DeleteTags, as_delete_tags_mut, DeleteTagsNode),
     (DeleteIndex, as_delete_index_mut, DeleteIndexNode),
     (PipeDeleteVertices, as_pipe_delete_vertices_mut, PipeDeleteVerticesNode),
     (PipeDeleteEdges, as_pipe_delete_edges_mut, PipeDeleteEdgesNode),
@@ -711,7 +707,6 @@ crate::define_all_plan_nodes! {
     (InsertEdges, InsertEdgesNode, PlanNodeCategory::Management, "InsertEdges"),
     (DeleteVertices, DeleteVerticesNode, PlanNodeCategory::Management, "DeleteVertices"),
     (DeleteEdges, DeleteEdgesNode, PlanNodeCategory::Management, "DeleteEdges"),
-    (DeleteTags, DeleteTagsNode, PlanNodeCategory::Management, "DeleteTags"),
     (DeleteIndex, DeleteIndexNode, PlanNodeCategory::Management, "DeleteIndex"),
     (PipeDeleteVertices, PipeDeleteVerticesNode, PlanNodeCategory::Management, "PipeDeleteVertices"),
     (PipeDeleteEdges, PipeDeleteEdgesNode, PlanNodeCategory::Management, "PipeDeleteEdges"),
@@ -761,7 +756,6 @@ impl PlanNodeEnum {
                 | PlanNodeEnum::InsertEdges(_)
                 | PlanNodeEnum::DeleteVertices(_)
                 | PlanNodeEnum::DeleteEdges(_)
-                | PlanNodeEnum::DeleteTags(_)
                 | PlanNodeEnum::DeleteIndex(_)
                 | PlanNodeEnum::PipeDeleteVertices(_)
                 | PlanNodeEnum::PipeDeleteEdges(_)
@@ -879,7 +873,6 @@ mod tests {
         "InsertEdges",
         "DeleteVertices",
         "DeleteEdges",
-        "DeleteTags",
         "DeleteIndex",
         "PipeDeleteVertices",
         "PipeDeleteEdges",
@@ -977,7 +970,6 @@ mod tests {
         "InsertEdges",
         "DeleteVertices",
         "DeleteEdges",
-        "DeleteTags",
         "DeleteIndex",
         "PipeDeleteVertices",
         "PipeDeleteEdges",

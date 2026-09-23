@@ -21,10 +21,10 @@ pub use control_flow::{
     ReleaseSavepointNode, RollbackNode, SavepointNode, SelectNode, StartNode,
 };
 pub use data_modification::{
-    CopyFromNode, CopyTarget, CopyToNode, DeleteEdgesNode, DeleteIndexNode, DeleteTagsNode,
+    CopyFromNode, CopyTarget, CopyToNode, DeleteEdgesNode, DeleteIndexNode,
     DeleteVerticesNode, EdgeDeleteInfo, EdgeInsertInfo, EdgeUpdateInfo, IndexDeleteInfo,
     InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode,
-    TagDeleteInfo, TagInsertSpec, UpdateEdgesNode, UpdateNode, UpdateTargetType,
+    TagInsertSpec, UpdateEdgesNode, UpdateNode, UpdateTargetType,
     UpdateVerticesNode, VertexDeleteInfo, VertexInsertInfo, VertexUpdateInfo,
 };
 pub use graph_operations::{

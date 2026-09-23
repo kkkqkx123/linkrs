@@ -143,6 +143,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_source_spec(
                 space_name: exec_ctx.space_name.clone().unwrap_or_default(),
                 index_name,
                 index_id: scan_node.index_id(),
+                tag: scan_node.schema_name().to_string(),
                 predicate: Box::new(predicate),
                 projection,
                 residual_filter: None,
@@ -206,18 +207,12 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_standalone_writ
 ) -> Result<SourceSpec, PlanBuildError> {
     let (rows, col_names) = match node {
         PlanNodeEnum::InsertVertices(insert) => {
-            let property_names = insert
-                .tags()
-                .iter()
-                .flat_map(|tag| tag.prop_names.iter().cloned())
-                .collect::<Vec<_>>();
+            let property_names = insert.prop_names().to_vec();
             let mut rows = Vec::with_capacity(insert.values().len());
-            for (vertex_id, tag_values) in insert.values() {
+            for (vertex_id, values) in insert.values() {
                 let mut row = vec![vertex_id.clone()];
-                for values in tag_values {
-                    for value in values {
-                        row.push(value.clone());
-                    }
+                for value in values {
+                    row.push(value.clone());
                 }
                 rows.push(row);
             }
@@ -292,14 +287,6 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_standalone_writ
                 .map(|value| vec![value.src.clone(), value.dst.clone()])
                 .collect::<Vec<_>>(),
             vec!["src".to_string(), "dst".to_string()],
-        ),
-        PlanNodeEnum::DeleteTags(delete) => (
-            delete
-                .vertex_ids()
-                .iter()
-                .map(|value| vec![value.clone()])
-                .collect::<Vec<_>>(),
-            vec!["vid".to_string()],
         ),
         PlanNodeEnum::CopyFrom(_) | PlanNodeEnum::CopyTo(_) => {
             // COPY is driven by file scan (FROM) or storage scan (TO), not

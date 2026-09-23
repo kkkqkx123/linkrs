@@ -427,7 +427,12 @@ mod tests {
     }
 
     impl StorageReader for MockReader {
-        fn get_vertex(&self, _space: &str, _id: &VertexId) -> Result<Option<Vertex>, StorageError> {
+        fn get_vertex(
+            &self,
+            _space: &str,
+            _tag: &str,
+            _id: &VertexId,
+        ) -> Result<Option<Vertex>, StorageError> {
             Ok(None)
         }
         fn scan_vertices(&self, _space: &str) -> Result<Vec<Vertex>, StorageError> {

@@ -92,7 +92,7 @@ impl<S: StorageClient + crate::AutoCommitGroupOps> crate::AutoCommitGroupOps for
 
 impl<S: StorageClient> StorageReader for MetricsStorage<S> {
     forward_methods!(inner;
-        fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
+        fn get_vertex(&self, space: &str, tag: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
         fn layout_version(&self) -> u64;
         fn vertex_id_domain(&self, space: &str) -> Option<std::ops::Range<i64>>;
         fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError>;
@@ -151,23 +151,22 @@ impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
     forward_methods!(inner;
         fn insert_vertex(&mut self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError>;
         fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError>;
-        fn delete_vertex_with_edges(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError>;
-        fn batch_delete_vertices_with_edges(&mut self, space: &str, ids: &[VertexId]) -> Result<usize, StorageError>;
+        fn delete_vertex_with_edges(&mut self, space: &str, tag: &str, id: &VertexId) -> Result<(), StorageError>;
+        fn batch_delete_vertices_with_edges(&mut self, space: &str, tag: &str, ids: &[VertexId]) -> Result<usize, StorageError>;
         fn batch_insert_vertices(&mut self, space: &str, vertices: Vec<Vertex>) -> Result<Vec<VertexId>, StorageError>;
-        fn delete_tags(&mut self, space: &str, vertex_id: &VertexId, tag_names: &[String]) -> Result<usize, StorageError>;
         fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
         fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
         fn batch_insert_edges(&mut self, space: &str, edges: Vec<Edge>) -> Result<(), StorageError>;
         fn batch_delete_edges(&mut self, space: &str, deletes: &[EdgeDeleteKey]) -> Result<usize, StorageError>;
         fn insert_vertex_data(&mut self, space: &str, info: &InsertVertexInfo) -> Result<bool, StorageError>;
         fn insert_edge_data(&mut self, space: &str, info: &InsertEdgeInfo) -> Result<bool, StorageError>;
-        fn delete_vertex_data(&mut self, space: &str, vertex_id: &str) -> Result<bool, StorageError>;
+        fn delete_vertex_data(&mut self, space: &str, tag: &str, vertex_id: &str) -> Result<bool, StorageError>;
         fn delete_edge_data(&mut self, space: &str, src: &str, dst: &str, rank: i64) -> Result<bool, StorageError>;
         fn update_data(&mut self, space: &str, space_id: u64, info: &UpdateInfo) -> Result<bool, StorageError>;
     );
 
-    fn delete_vertex(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError> {
-        StorageWriter::delete_vertex(&mut self.inner, space, id)
+    fn delete_vertex(&mut self, space: &str, tag: &str, id: &VertexId) -> Result<(), StorageError> {
+        StorageWriter::delete_vertex(&mut self.inner, space, tag, id)
     }
 
     fn delete_edge(

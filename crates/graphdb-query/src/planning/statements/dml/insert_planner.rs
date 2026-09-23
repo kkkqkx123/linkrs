@@ -53,34 +53,29 @@ impl InsertPlanner {
 
     /// Constructing vertex insertion information.
     ///
-    /// The parser still carries every requested tag, but storage enforces a
-    /// single tag per vertex and rejects multi tag writes up front.
+    /// The parser carries exactly one tag per vertex; storage enforces a
+    /// single tag per vertex.
     fn build_vertex_insert_info(
         &self,
         space_name: String,
-        tags: Vec<crate::parser::ast::TagInsertSpec>,
+        tag: crate::parser::ast::TagInsertSpec,
         values: Vec<VertexRow>,
         if_not_exists: bool,
     ) -> Result<VertexInsertInfo, PlannerError> {
-        // Please provide the text you would like to have translated, as well as the specific instructions regarding the conversion of tag specifications. I will then assist you with the translation.
-        let tag_specs: Vec<TagInsertSpec> = tags
-            .into_iter()
-            .map(|tag| TagInsertSpec {
-                tag_name: tag.tag_name,
-                prop_names: tag.prop_names,
-            })
-            .collect();
+        let tag_spec = TagInsertSpec {
+            tag_name: tag.tag_name,
+            prop_names: tag.prop_names,
+        };
 
-        // Convert `VertexRow` to the format `(vid, Vec<Vec(Expression>>)`
-        // Each tag corresponds to a list of attribute values.
-        let converted_values: Vec<(ContextualExpression, Vec<Vec<ContextualExpression>>)> = values
+        // Convert `VertexRow` to `(vid, Vec<Expression>)` pairs.
+        let converted_values: Vec<(ContextualExpression, Vec<ContextualExpression>)> = values
             .into_iter()
-            .map(|row| (row.vid, row.tag_values))
+            .map(|row| (row.vid, row.values))
             .collect();
 
         Ok(VertexInsertInfo {
             space_name,
-            tags: tag_specs,
+            tag: tag_spec,
             values: converted_values,
             if_not_exists,
         })
@@ -171,32 +166,26 @@ impl Planner for InsertPlanner {
         let arg_node = ArgumentNode::new(next_node_id(), "insert_args");
 
         let (insert_node, _inserted_count) = match &insert.target {
-            BoundInsertTarget::Vertices { tags, values } => {
-                if tags.is_empty() {
-                    return Err(PlannerError::PlanGenerationFailed(
-                        "INSERT VERTEX must specify at least one tag".to_string(),
-                    ));
-                }
+            BoundInsertTarget::Vertices { tag, values } => {
                 let mut rows = Vec::with_capacity(values.len());
                 for row in values {
                     let vid = convert(&row.vid)?;
                     reject_subquery(&vid)?;
-                    let mut tag_values = Vec::with_capacity(row.tag_values.len());
-                    for vals in &row.tag_values {
-                        let mut converted = Vec::with_capacity(vals.len());
-                        for value in vals {
-                            let expr = convert(value)?;
-                            reject_subquery(&expr)?;
-                            converted.push(expr);
-                        }
-                        tag_values.push(converted);
+                    let mut converted = Vec::with_capacity(row.values.len());
+                    for value in &row.values {
+                        let expr = convert(value)?;
+                        reject_subquery(&expr)?;
+                        converted.push(expr);
                     }
-                    rows.push(VertexRow { vid, tag_values });
+                    rows.push(VertexRow {
+                        vid,
+                        values: converted,
+                    });
                 }
                 let count = rows.len();
                 let info = self.build_vertex_insert_info(
                     space_name,
-                    tags.clone(),
+                    tag.clone(),
                     rows,
                     insert.if_not_exists,
                 )?;
@@ -299,7 +288,7 @@ impl Planner for InsertPlanner {
         match &insert_stmt.target {
             InsertTarget::Vertices { values, .. } => {
                 for row in values {
-                    for expr in std::iter::once(&row.vid).chain(row.tag_values.iter().flatten()) {
+                    for expr in std::iter::once(&row.vid).chain(row.values.iter()) {
                         if let Some(expr_meta) = expr.expression() {
                             exists_planner::check_expression_subqueries(
                                 expr_meta.inner(),
@@ -338,19 +327,11 @@ impl Planner for InsertPlanner {
 
         // Create the corresponding insertion nodes based on the type of the INSERT target.
         let (insert_node, _inserted_count) = match &insert_stmt.target {
-            InsertTarget::Vertices { tags, values } => {
+            InsertTarget::Vertices { tag, values } => {
                 let count = values.len();
-                // Storage accepts exactly one tag per vertex; reject early so
-                // multi tag writes fail at plan time with the same meaning as
-                // the storage write gate.
-                if tags.len() != 1 {
-                    return Err(PlannerError::PlanGenerationFailed(
-                        "INSERT VERTEX must specify exactly one tag".to_string(),
-                    ));
-                }
                 let info = self.build_vertex_insert_info(
                     space_name,
-                    tags.clone(),
+                    tag.clone(),
                     values.clone(),
                     insert_stmt.if_not_exists,
                 )?;
@@ -454,14 +435,14 @@ mod tests {
     fn test_insert_planner_new() {
         let planner = InsertPlanner::new();
         let ast = create_test_stmt_with_insert(InsertTarget::Vertices {
-            tags: vec![TagInsertSpec {
+            tag: TagInsertSpec {
                 tag_name: "person".to_string(),
                 prop_names: vec!["name".to_string(), "age".to_string()],
                 is_default_props: false,
-            }],
+            },
             values: vec![VertexRow {
                 vid: lit(Value::Int(1)),
-                tag_values: vec![vec![lit(Value::string("Alice")), lit(Value::Int(30))]],
+                values: vec![lit(Value::string("Alice")), lit(Value::Int(30))],
             }],
         });
         assert!(planner.match_planner(&ast.stmt));
@@ -470,11 +451,11 @@ mod tests {
     #[test]
     fn test_match_stmt_with_insert() {
         let ast = create_test_stmt_with_insert(InsertTarget::Vertices {
-            tags: vec![TagInsertSpec {
+            tag: TagInsertSpec {
                 tag_name: "person".to_string(),
                 prop_names: vec![],
                 is_default_props: true,
-            }],
+            },
             values: vec![],
         });
         assert!(InsertPlanner::match_stmt(&ast.stmt));
@@ -493,11 +474,11 @@ mod tests {
     fn test_extract_insert_stmt_success() {
         let planner = InsertPlanner::new();
         let target = InsertTarget::Vertices {
-            tags: vec![TagInsertSpec {
+            tag: TagInsertSpec {
                 tag_name: "person".to_string(),
                 prop_names: vec!["name".to_string()],
                 is_default_props: false,
-            }],
+            },
             values: vec![],
         };
         let stmt = create_test_stmt_with_insert(target.clone());
@@ -528,22 +509,21 @@ mod tests {
         let info = planner
             .build_vertex_insert_info(
                 "test_space".to_string(),
-                vec![TagInsertSpec {
+                TagInsertSpec {
                     tag_name: "person".to_string(),
                     prop_names: vec!["name".to_string(), "age".to_string()],
                     is_default_props: false,
-                }],
+                },
                 vec![VertexRow {
                     vid: lit(Value::Int(1)),
-                    tag_values: vec![vec![lit(Value::string("Alice")), lit(Value::Int(30))]],
+                    values: vec![lit(Value::string("Alice")), lit(Value::Int(30))],
                 }],
                 false,
             )
             .expect("Failed to build vertex insert info");
         assert_eq!(info.space_name, "test_space");
-        assert_eq!(info.tags.len(), 1);
-        assert_eq!(info.tags[0].tag_name, "person");
-        assert_eq!(info.tags[0].prop_names.len(), 2);
+        assert_eq!(info.tag.tag_name, "person");
+        assert_eq!(info.tag.prop_names.len(), 2);
         assert_eq!(info.values.len(), 1);
     }
 
@@ -581,19 +561,19 @@ mod tests {
     fn test_transform_insert_vertices() {
         let mut planner = InsertPlanner::new();
         let target = InsertTarget::Vertices {
-            tags: vec![TagInsertSpec {
+            tag: TagInsertSpec {
                 tag_name: "person".to_string(),
                 prop_names: vec!["name".to_string()],
                 is_default_props: false,
-            }],
+            },
             values: vec![
                 VertexRow {
                     vid: lit(Value::Int(1)),
-                    tag_values: vec![vec![lit(Value::string("Alice"))]],
+                    values: vec![lit(Value::string("Alice"))],
                 },
                 VertexRow {
                     vid: lit(Value::Int(2)),
-                    tag_values: vec![vec![lit(Value::string("Bob"))]],
+                    values: vec![lit(Value::string("Bob"))],
                 },
             ],
         };
@@ -659,11 +639,11 @@ mod tests {
     fn test_default_impl() {
         let planner: InsertPlanner = Default::default();
         let ast = create_test_stmt_with_insert(InsertTarget::Vertices {
-            tags: vec![TagInsertSpec {
+            tag: TagInsertSpec {
                 tag_name: "test".to_string(),
                 prop_names: vec![],
                 is_default_props: true,
-            }],
+            },
             values: vec![],
         });
         assert!(planner.match_planner(&ast.stmt));

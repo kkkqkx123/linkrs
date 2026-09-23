@@ -285,13 +285,7 @@ impl OrderedCodec {
                 let (entity, consumed) = self.decode_entity_bytes(bytes)?;
                 match entity {
                     EntityRef::Vertex(vid) => {
-                        use std::collections::HashMap;
-                        let val = Value::Vertex(Box::new(crate::Vertex {
-                            vid,
-                            id: 0,
-                            tags: Vec::new(),
-                            properties: HashMap::new(),
-                        }));
+                        let val = Value::VertexId(vid);
                         Ok((val, consumed))
                     }
                     EntityRef::Edge { .. } => Err(StorageError::deserialize_error(
@@ -1293,7 +1287,7 @@ mod tests {
     fn test_composite_key() {
         let v1 = Value::string("name");
         let v2 = Value::Int(42);
-        let vid = VertexId::from_int64(123);
+        let vid = VertexId::try_from_int64(123).expect("test vertex id");
         let entity = EntityRef::Vertex(vid);
 
         let key = codec()
@@ -1336,7 +1330,7 @@ mod tests {
 
     #[test]
     fn test_vertex_id_tie_breaker() {
-        let vid = VertexId::from_int64(42);
+        let vid = VertexId::try_from_int64(42).expect("test vertex id");
         let v = Value::string("hello");
         let key = codec()
             .encode_composite(&[&v], Some(&EntityRef::Vertex(vid)), false)
@@ -1347,7 +1341,7 @@ mod tests {
 
     #[test]
     fn test_vertex_id_entity_roundtrip_supports_max_length() {
-        let vid = VertexId::from_string("12345678901234567890123456789012");
+        let vid = VertexId::try_from_string("12345678901234567890123456789012").expect("test vertex id");
         let entity = EntityRef::Vertex(vid);
         let mut encoded = Vec::new();
         codec().encode_entity(&entity, &mut encoded).unwrap();

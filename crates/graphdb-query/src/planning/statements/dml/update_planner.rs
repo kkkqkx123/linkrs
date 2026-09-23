@@ -44,29 +44,6 @@ impl UpdatePlanner {
         }
     }
 
-    /// Build vertex update info from UPDATE statement
-    fn build_vertex_update_info(
-        &self,
-        update_stmt: &UpdateStmt,
-        vertex_id: ContextualExpression,
-        space_name: String,
-    ) -> Result<VertexUpdateInfo, PlannerError> {
-        // Convert assignments to properties HashMap
-        let mut properties = HashMap::new();
-        for assignment in &update_stmt.set_clause.assignments {
-            properties.insert(assignment.property.clone(), assignment.value.clone());
-        }
-
-        Ok(VertexUpdateInfo {
-            space_name,
-            vertex_id,
-            tag_name: None, // Will be determined at execution time
-            properties,
-            condition: update_stmt.where_clause.clone(),
-            is_upsert: update_stmt.is_upsert,
-        })
-    }
-
     /// Build edge update info from UPDATE statement
     fn build_edge_update_info(
         &self,
@@ -125,39 +102,11 @@ impl Planner for UpdatePlanner {
         );
 
         let update_target = match &update.target {
-            crate::binder::bound::BoundUpdateTarget::Vertex(vid) => {
-                let vertex_id =
-                    crate::binder::expr_converter::bound_expr_to_contextual(vid, &expr_ctx)
-                        .map_err(PlannerError::PlanGenerationFailed)?;
-
-                let mut properties = HashMap::new();
-                for assignment in &update.assignments {
-                    let value = crate::binder::expr_converter::bound_expr_to_contextual(
-                        &assignment.value,
-                        &expr_ctx,
-                    )
-                    .map_err(PlannerError::PlanGenerationFailed)?;
-                    properties.insert(assignment.property.clone(), value);
-                }
-
-                let condition = update
-                    .where_clause
-                    .as_ref()
-                    .map(|wc| {
-                        crate::binder::expr_converter::bound_expr_to_contextual(wc, &expr_ctx)
-                            .map_err(PlannerError::PlanGenerationFailed)
-                    })
-                    .transpose()?;
-
-                let vertex_info = VertexUpdateInfo {
-                    space_name,
-                    vertex_id,
-                    tag_name: None,
-                    properties,
-                    condition,
-                    is_upsert: update.is_upsert,
-                };
-                UpdateTargetType::Vertex(vertex_info)
+            crate::binder::bound::BoundUpdateTarget::Vertex(_) => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "UPDATE vertex requires a tag qualifier (use UPDATE TAG <tag> ... WHERE ...)"
+                        .to_string(),
+                ));
             }
             crate::binder::bound::BoundUpdateTarget::Edge(edge) => {
                 let crate::binder::bound::BoundEdgeUpdateTarget {
@@ -344,10 +293,11 @@ impl Planner for UpdatePlanner {
 
         // Build update target based on the update statement target
         let update_target = match &update_stmt.target {
-            UpdateTarget::Vertex(vertex_id) => {
-                let vertex_info =
-                    self.build_vertex_update_info(&update_stmt, vertex_id.clone(), space_name)?;
-                UpdateTargetType::Vertex(vertex_info)
+            UpdateTarget::Vertex(_) => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "UPDATE vertex requires a tag qualifier (use UPDATE TAG <tag> ... WHERE ...)"
+                        .to_string(),
+                ));
             }
             UpdateTarget::Edge {
                 src,

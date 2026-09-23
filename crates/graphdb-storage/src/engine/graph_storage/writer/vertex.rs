@@ -133,11 +133,11 @@ pub(crate) fn insert_vertex(
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
-    // Fail fast before allocating a write timestamp: untyped ids and
-    // non-single-tag vertices never reach storage.
-    let tag = require_single_tag(&vertex)?.clone();
+    // The vertex type carries exactly one tag by construction, so no
+    // multi-tag gate is needed: normalization runs before any timestamp is
+    // allocated and a bad id fails the whole write up front.
     let vid = VertexId::normalize_for_vid_type(&space_info.vid_type, vertex.vid)?;
-    let vertex = Vertex::new(vid, vec![tag]);
+    let vertex = Vertex::new(vid, vertex.tag);
 
     let ts = ctx.get_write_timestamp()?;
     let mut rollback = Vec::new();
@@ -161,26 +161,6 @@ pub(crate) fn insert_vertex(
     result
 }
 
-/// Single-label gate for vertex writes: exactly one tag is required.
-///
-/// Zero tags (missing label) and multiple tags are rejected before any
-/// timestamp is allocated, so a bad batch fails as a whole up front.
-fn require_single_tag(vertex: &Vertex) -> StorageResult<&Tag> {
-    match vertex.tags.as_slice() {
-        [tag] => Ok(tag),
-        [] => Err(StorageError::invalid_input(
-            "Vertex must carry exactly one tag: missing label".to_string(),
-        )),
-        tags => {
-            let names: Vec<&str> = tags.iter().map(|tag| tag.name.as_str()).collect();
-            Err(StorageError::invalid_input(format!(
-                "Multi-tag vertices are not supported: got tags [{}]",
-                names.join(", ")
-            )))
-        }
-    }
-}
-
 fn insert_vertex_at_timestamp(
     ctx: &GraphStorageContext,
     space: &str,
@@ -189,7 +169,7 @@ fn insert_vertex_at_timestamp(
     ts: Timestamp,
     rollback: &mut Vec<InsertedVertexTag>,
 ) -> StorageResult<VertexId> {
-    let tag = require_single_tag(&vertex)?;
+    let tag = &vertex.tag;
     let label_id = tag_label_id(ctx, space, &tag.name)?
         .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag.name)))?;
     let props: Vec<(String, Value)> = tag
@@ -248,7 +228,7 @@ fn insert_vertex_at_timestamp_prechecked(
     ts: Timestamp,
     rollback: &mut Vec<InsertedVertexTag>,
 ) -> StorageResult<VertexId> {
-    let tag = require_single_tag(&vertex)?;
+    let tag = &vertex.tag;
     let vid = VertexId::normalize_for_vid_type(batch.vid_type, vertex.vid)?;
     let tag_info = batch
         .tag_map
@@ -342,14 +322,14 @@ pub(crate) fn update_vertex(
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
-    let tag = require_single_tag(&vertex)?.clone();
+    let tag = &vertex.tag;
     let vid = VertexId::normalize_for_vid_type(&space_info.vid_type, vertex.vid)?;
 
     let ts = ctx.get_write_timestamp()?;
     let label_id = tag_label_id(ctx, space, &tag.name)?
         .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag.name)))?;
 
-    // Untagged updates merge the full existing row, including the primary
+    // Updates merge the full existing row, including the primary
     // key mirror, into the write set. Restating the mirror changes nothing
     // and is skipped; a divergent key still falls through to the
     // table-layer rejection below.
@@ -444,51 +424,10 @@ pub(crate) fn update_vertex(
     Ok(())
 }
 
-/// Locate the single label table owning an external id.
-///
-/// Transition helper for label-less deletes: probes every label table in
-/// order, so the cost grows linearly with the tag count. Callers that know
-/// the label should route directly to that table instead. Zero hits report
-/// not found, multiple hits reject the ambiguous delete instead of fanning
-/// out across distinct vertices sharing one id string.
-fn find_single_label_owner(
-    ctx: &GraphStorageContext,
-    tags: &[TagInfo],
-    routed: &RoutedVertexId,
-    vid: &VertexId,
-    ts: Timestamp,
-) -> StorageResult<(LabelId, String)> {
-    let mut owners: Vec<(LabelId, String)> = Vec::new();
-    for tag in tags {
-        let hit = ctx.data_store().with_vertex_tables(|tables| {
-            tables.get(&tag.tag_id).is_some_and(|table| match routed {
-                RoutedVertexId::Int(vid_int) => {
-                    table.get_internal_id_by_i64(*vid_int, ts).is_some()
-                }
-                RoutedVertexId::Text(id_str) => table.get_internal_id(id_str, ts).is_some(),
-            })
-        });
-        if hit {
-            owners.push((tag.tag_id, tag.tag_name.clone()));
-        }
-    }
-    match owners.as_slice() {
-        [(label_id, tag_name)] => Ok((*label_id, tag_name.clone())),
-        [] => Err(StorageError::vertex_not_found()),
-        _ => {
-            let names: Vec<&str> = owners.iter().map(|(_, name)| name.as_str()).collect();
-            Err(StorageError::invalid_input(format!(
-                "Vertex id {} matches multiple labels [{}]: label-scoped delete required",
-                vid,
-                names.join(", ")
-            )))
-        }
-    }
-}
-
 pub(crate) fn delete_vertex(
     ctx: &GraphStorageContext,
     space: &str,
+    tag_name: &str,
     id: &VertexId,
 ) -> StorageResult<()> {
     let space_info = ctx
@@ -496,18 +435,11 @@ pub(crate) fn delete_vertex(
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
-    let tags = ctx.schema_manager().list_tags(space)?;
+    let label_id = tag_label_id(ctx, space, tag_name)?
+        .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag_name)))?;
     let vid = VertexId::normalize_for_vid_type(&space_info.vid_type, *id)?;
     let routed = route_vertex_id(&vid)?;
     let ts = ctx.get_write_timestamp()?;
-
-    let (label_id, tag_name) = match find_single_label_owner(ctx, &tags, &routed, &vid, ts) {
-        Ok(owner) => owner,
-        Err(error) => {
-            ctx.abort_write_timestamp(ts);
-            return Err(error);
-        }
-    };
 
     let redo = DeleteVertexRedo {
         label: label_id,
@@ -553,6 +485,7 @@ pub(crate) fn delete_vertex(
 pub(crate) fn delete_vertex_with_edges(
     ctx: &GraphStorageContext,
     space: &str,
+    tag_name: &str,
     id: &VertexId,
 ) -> StorageResult<()> {
     let space_id = ctx.schema_manager().get_space_id(space)?;
@@ -574,7 +507,7 @@ pub(crate) fn delete_vertex_with_edges(
         return Err(error);
     }
 
-    delete_vertex(ctx, space, &id)
+    delete_vertex(ctx, space, tag_name, &id)
 }
 
 /// Batch-delete multiple vertices together with all their incident edges.
@@ -589,6 +522,7 @@ pub(crate) fn delete_vertex_with_edges(
 pub(crate) fn batch_delete_vertices_with_edges(
     ctx: &GraphStorageContext,
     space: &str,
+    tag_name: &str,
     ids: &[VertexId],
 ) -> StorageResult<usize> {
     if ids.is_empty() {
@@ -622,7 +556,7 @@ pub(crate) fn batch_delete_vertices_with_edges(
     // Phase 2: Delete the vertices themselves.
     let mut deleted = 0usize;
     for id in &ids {
-        delete_vertex(ctx, space, id)?;
+        delete_vertex(ctx, space, tag_name, id)?;
         deleted += 1;
     }
     Ok(deleted)
@@ -840,14 +774,11 @@ pub(crate) fn batch_insert_vertices(
         tag_map.insert(tag.tag_name.as_str(), tag);
     }
     for vertex in &vertices {
-        require_single_tag(vertex)?;
-        for tag in &vertex.tags {
-            if !tag_map.contains_key(tag.name.as_str()) {
-                return Err(StorageError::not_found(format!(
-                    "Tag {} not found",
-                    tag.name
-                )));
-            }
+        if !tag_map.contains_key(vertex.tag.name.as_str()) {
+            return Err(StorageError::not_found(format!(
+                "Tag {} not found",
+                vertex.tag.name
+            )));
         }
     }
 
@@ -855,10 +786,8 @@ pub(crate) fn batch_insert_vertices(
     {
         let mut tag_counts: HashMap<LabelId, usize> = HashMap::new();
         for vertex in &vertices {
-            for tag in &vertex.tags {
-                if let Some(info) = tag_map.get(tag.name.as_str()) {
-                    *tag_counts.entry(info.tag_id).or_insert(0) += 1;
-                }
+            if let Some(info) = tag_map.get(vertex.tag.name.as_str()) {
+                *tag_counts.entry(info.tag_id).or_insert(0) += 1;
             }
         }
         for (label_id, count) in &tag_counts {
@@ -874,9 +803,8 @@ pub(crate) fn batch_insert_vertices(
     for tag in tags.iter() {
         for prop_def in tag.properties.iter().filter(|p| p.serial) {
             let needs_scan = vertices.iter().any(|v| {
-                v.tags.iter().any(|t| {
-                    t.name == tag.tag_name && t.properties.keys().any(|k| k == &prop_def.name)
-                })
+                v.tag.name == tag.tag_name
+                    && v.tag.properties.keys().any(|k| k == &prop_def.name)
             });
             if needs_scan {
                 if let Some(scan) = scan_vertex_serial_column(ctx, tag.tag_id, &prop_def.name) {
@@ -927,54 +855,4 @@ pub(crate) fn batch_insert_vertices(
     ctx.commit_write_timestamp_ordered(ts)?;
 
     Ok(ids)
-}
-
-pub(crate) fn delete_tags(
-    ctx: &GraphStorageContext,
-    space: &str,
-    vertex_id: &VertexId,
-    tag_names: &[String],
-) -> StorageResult<usize> {
-    let space_info = ctx
-        .schema_manager()
-        .get_space(space)?
-        .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
-
-    let ts = ctx.get_write_timestamp()?;
-    let mut deleted_count = 0;
-
-    let routed = route_vertex_id(vertex_id)?;
-
-    for tag_name in tag_names {
-        if let Some(label_id) = tag_label_id(ctx, space, tag_name)? {
-            let redo = DeleteVertexRedo {
-                label: label_id,
-                vid: *vertex_id,
-            };
-            let redo_entry = ctx.append_wal_redo(WalOpType::DeleteVertex, ts, &redo)?;
-
-            let result = match &routed {
-                RoutedVertexId::Int(vid_int) => ctx.delete_vertex_by_i64(label_id, *vid_int, ts),
-                RoutedVertexId::Text(id_str) => ctx.delete_vertex(label_id, id_str, ts),
-            };
-
-            if result.is_ok() {
-                record_vertex_remove(ctx, label_id, *vertex_id, Some(redo_entry))?;
-                let vertex_id_value = Value::from(*vertex_id);
-                super::index_maintenance::delete_vertex_indexes(
-                    ctx,
-                    ctx.index_metadata_manager(),
-                    space_info.space_id,
-                    &vertex_id_value,
-                    tag_name,
-                    ts,
-                )?;
-                deleted_count += 1;
-            }
-        }
-    }
-
-    ctx.commit_write_timestamp_ordered(ts)?;
-
-    Ok(deleted_count)
 }

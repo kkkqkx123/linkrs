@@ -11,13 +11,13 @@ pub mod update_nodes;
 
 // Re-export info structures
 pub use info::{
-    EdgeDeleteInfo, EdgeInsertInfo, EdgeUpdateInfo, IndexDeleteInfo, TagDeleteInfo, TagInsertSpec,
+    EdgeDeleteInfo, EdgeInsertInfo, EdgeUpdateInfo, IndexDeleteInfo, TagInsertSpec,
     UpdateTargetType, VertexDeleteInfo, VertexInsertInfo, VertexUpdateInfo,
 };
 
 pub use copy_nodes::{CopyFromNode, CopyTarget, CopyToNode};
 pub use delete_nodes::{
-    DeleteEdgesNode, DeleteIndexNode, DeleteTagsNode, DeleteVerticesNode, PipeDeleteEdgesNode,
+    DeleteEdgesNode, DeleteIndexNode, DeleteVerticesNode, PipeDeleteEdgesNode,
     PipeDeleteVerticesNode,
 };
 pub use insert_nodes::{InsertEdgesNode, InsertVerticesNode};

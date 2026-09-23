@@ -300,7 +300,7 @@ mod tests {
     use graphdb_core::types::EdgeIdentifier;
 
     fn vid(n: i64) -> VertexId {
-        VertexId::from_int64(n)
+        VertexId::try_from_int64(n).expect("test vertex id")
     }
 
     #[test]

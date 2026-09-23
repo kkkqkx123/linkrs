@@ -84,9 +84,6 @@ fn get_edge_impl(
             rank,
         ),
     );
-    let src_str = src.to_string();
-    let dst_str = dst.to_string();
-
     // Projection pushdown: `None` fetches all columns, `Some` decodes only the
     // requested columns (`Some(&[])` is topology-only with zero property decode).
     // Query empty projection means all columns and never reaches the projected
@@ -105,7 +102,7 @@ fn get_edge_impl(
     };
     if let Some(record) = record {
         let edge =
-            edge_record_to_edge_with_projection(&record, edge_type, &src_str, &dst_str, projection);
+            edge_record_to_edge_with_projection(&record, edge_type, src, dst, projection);
         return Ok(Some(edge));
     }
 
@@ -116,15 +113,15 @@ fn get_edge_impl(
 fn edge_record_to_edge_with_projection(
     record: &EdgeRecord,
     edge_type: &str,
-    src_str: &str,
-    dst_str: &str,
+    src_vid: VertexId,
+    dst_vid: VertexId,
     projection: Option<&[String]>,
 ) -> Edge {
     match projection {
         Some(projection) => {
-            edge_record_to_edge_projected(record, edge_type, src_str, dst_str, projection)
+            edge_record_to_edge_projected(record, edge_type, src_vid, dst_vid, projection)
         }
-        None => edge_record_to_edge(record, edge_type, src_str, dst_str),
+        None => edge_record_to_edge(record, edge_type, src_vid, dst_vid),
     }
 }
 
@@ -161,7 +158,6 @@ pub(crate) fn get_node_edges_projected(
         return Ok(Vec::new());
     }
     let ts = ctx.get_read_timestamp();
-    let node_str = vid_to_string(&node_vid);
     let mut edges = Vec::new();
     for edge_info in &edge_types {
         let edge_label_id = edge_info.edge_type_id;
@@ -196,23 +192,17 @@ pub(crate) fn get_node_edges_projected(
                 for record in records {
                     let dst_internal = record.dst_vid.as_internal_u32();
                     let dst_external = match dst_internal {
-                        Some(internal) if dst_label_id != 0 => ctx
-                            .get_external_id(dst_label_id, internal, ts)
-                            .or_else(|| {
-                                ctx.get_external_id_by_internal_id(dst_label_id, internal)
-                                    .map(|v| vid_to_string(&v))
-                            })
-                            .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
-                        Some(internal) => ctx
-                            .get_external_id_any(internal, ts)
-                            .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
-                        None => vid_to_string(&record.dst_vid),
+                        Some(internal) if dst_label_id != 0 => {
+                            internal_to_external_vertex_id(ctx, dst_label_id, internal, ts)
+                                .unwrap_or(record.dst_vid)
+                        }
+                        _ => record.dst_vid,
                     };
                     let edge = edge_record_to_edge_with_projection(
                         &record,
                         edge_type_name,
-                        &node_str,
-                        &dst_external,
+                        node_vid,
+                        dst_external,
                         projection,
                     );
                     edges.push(edge);
@@ -237,23 +227,17 @@ pub(crate) fn get_node_edges_projected(
                 for record in records {
                     let src_internal = record.src_vid.as_internal_u32();
                     let src_external = match src_internal {
-                        Some(internal) if src_label_id != 0 => ctx
-                            .get_external_id(src_label_id, internal, ts)
-                            .or_else(|| {
-                                ctx.get_external_id_by_internal_id(src_label_id, internal)
-                                    .map(|v| vid_to_string(&v))
-                            })
-                            .unwrap_or_else(|| vid_to_string(&record.src_vid)),
-                        Some(internal) => ctx
-                            .get_external_id_any(internal, ts)
-                            .unwrap_or_else(|| vid_to_string(&record.src_vid)),
-                        None => vid_to_string(&record.src_vid),
+                        Some(internal) if src_label_id != 0 => {
+                            internal_to_external_vertex_id(ctx, src_label_id, internal, ts)
+                                .unwrap_or(record.src_vid)
+                        }
+                        _ => record.src_vid,
                     };
                     let edge = edge_record_to_edge_with_projection(
                         &record,
                         edge_type_name,
-                        &src_external,
-                        &node_str,
+                        src_external,
+                        node_vid,
                         projection,
                     );
                     edges.push(edge);
@@ -278,23 +262,17 @@ pub(crate) fn get_node_edges_projected(
                 for record in out_records {
                     let dst_internal = record.dst_vid.as_internal_u32();
                     let dst_external = match dst_internal {
-                        Some(internal) if dst_label_id != 0 => ctx
-                            .get_external_id(dst_label_id, internal, ts)
-                            .or_else(|| {
-                                ctx.get_external_id_by_internal_id(dst_label_id, internal)
-                                    .map(|v| vid_to_string(&v))
-                            })
-                            .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
-                        Some(internal) => ctx
-                            .get_external_id_any(internal, ts)
-                            .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
-                        None => vid_to_string(&record.dst_vid),
+                        Some(internal) if dst_label_id != 0 => {
+                            internal_to_external_vertex_id(ctx, dst_label_id, internal, ts)
+                                .unwrap_or(record.dst_vid)
+                        }
+                        _ => record.dst_vid,
                     };
                     let edge = edge_record_to_edge_with_projection(
                         &record,
                         edge_type_name,
-                        &node_str,
-                        &dst_external,
+                        node_vid,
+                        dst_external,
                         projection,
                     );
                     edges.push(edge);
@@ -321,23 +299,17 @@ pub(crate) fn get_node_edges_projected(
                 for record in in_records {
                     let src_internal = record.src_vid.as_internal_u32();
                     let src_external = match src_internal {
-                        Some(internal) if src_label_id != 0 => ctx
-                            .get_external_id(src_label_id, internal, ts)
-                            .or_else(|| {
-                                ctx.get_external_id_by_internal_id(src_label_id, internal)
-                                    .map(|v| vid_to_string(&v))
-                            })
-                            .unwrap_or_else(|| vid_to_string(&record.src_vid)),
-                        Some(internal) => ctx
-                            .get_external_id_any(internal, ts)
-                            .unwrap_or_else(|| vid_to_string(&record.src_vid)),
-                        None => vid_to_string(&record.src_vid),
+                        Some(internal) if src_label_id != 0 => {
+                            internal_to_external_vertex_id(ctx, src_label_id, internal, ts)
+                                .unwrap_or(record.src_vid)
+                        }
+                        _ => record.src_vid,
                     };
                     let edge = edge_record_to_edge_with_projection(
                         &record,
                         edge_type_name,
-                        &src_external,
-                        &node_str,
+                        src_external,
+                        node_vid,
                         projection,
                     );
                     edges.push(edge);
@@ -487,19 +459,16 @@ fn append_hot_neighbors(
                 ts,
                 |src_internal, nbr| {
                     let rank = nbr.rank;
-                    let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
-                    if let Some(dst_internal) = dst_internal_vid.as_int64() {
-                        let dst_internal = dst_internal as u32;
-                        if unique((src_internal, dst_internal, rank)) {
-                            let ext = internal_to_external_vertex_id(
-                                ctx,
-                                dst_label_id,
-                                dst_internal,
-                                &dst_internal_vid,
-                                ts,
-                            );
-                            neighbors.push(ext);
-                        }
+                    if unique((src_internal, nbr.endpoint, rank)) {
+                        let Some(ext) = internal_to_external_vertex_id(
+                            ctx,
+                            dst_label_id,
+                            nbr.endpoint,
+                            ts,
+                        ) else {
+                            return;
+                        };
+                        neighbors.push(ext);
                     }
                 },
             );
@@ -513,19 +482,16 @@ fn append_hot_neighbors(
                 ts,
                 |dst_internal, nbr| {
                     let rank = nbr.rank;
-                    let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
-                    if let Some(src_internal) = src_internal_vid.as_int64() {
-                        let src_internal = src_internal as u32;
-                        if unique((src_internal, dst_internal, rank)) {
-                            let ext = internal_to_external_vertex_id(
-                                ctx,
-                                src_label_id,
-                                src_internal,
-                                &src_internal_vid,
-                                ts,
-                            );
-                            neighbors.push(ext);
-                        }
+                    if unique((nbr.endpoint, dst_internal, rank)) {
+                        let Some(ext) = internal_to_external_vertex_id(
+                            ctx,
+                            src_label_id,
+                            nbr.endpoint,
+                            ts,
+                        ) else {
+                            return;
+                        };
+                        neighbors.push(ext);
                     }
                 },
             );
@@ -539,19 +505,16 @@ fn append_hot_neighbors(
                 ts,
                 |src_internal, nbr| {
                     let rank = nbr.rank;
-                    let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
-                    if let Some(dst_internal) = dst_internal_vid.as_int64() {
-                        let dst_internal = dst_internal as u32;
-                        if unique((src_internal, dst_internal, rank)) {
-                            let ext = internal_to_external_vertex_id(
-                                ctx,
-                                dst_label_id,
-                                dst_internal,
-                                &dst_internal_vid,
-                                ts,
-                            );
-                            neighbors.push(ext);
-                        }
+                    if unique((src_internal, nbr.endpoint, rank)) {
+                        let Some(ext) = internal_to_external_vertex_id(
+                            ctx,
+                            dst_label_id,
+                            nbr.endpoint,
+                            ts,
+                        ) else {
+                            return;
+                        };
+                        neighbors.push(ext);
                     }
                 },
             );
@@ -563,19 +526,16 @@ fn append_hot_neighbors(
                 ts,
                 |dst_internal, nbr| {
                     let rank = nbr.rank;
-                    let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
-                    if let Some(src_internal) = src_internal_vid.as_int64() {
-                        let src_internal = src_internal as u32;
-                        if unique((src_internal, dst_internal, rank)) {
-                            let ext = internal_to_external_vertex_id(
-                                ctx,
-                                src_label_id,
-                                src_internal,
-                                &src_internal_vid,
-                                ts,
-                            );
-                            neighbors.push(ext);
-                        }
+                    if unique((nbr.endpoint, dst_internal, rank)) {
+                        let Some(ext) = internal_to_external_vertex_id(
+                            ctx,
+                            src_label_id,
+                            nbr.endpoint,
+                            ts,
+                        ) else {
+                            return;
+                        };
+                        neighbors.push(ext);
                     }
                 },
             );
@@ -606,7 +566,7 @@ fn count_hot_neighbors(
                 ts,
                 |src_internal, nbr| {
                     let rank = nbr.rank;
-                    let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
+                    let dst_internal_vid = VertexId::from_u32(nbr.endpoint);
                     if let Some(dst_internal) = dst_internal_vid.as_int64() {
                         seen.insert((src_internal, dst_internal as u32, rank));
                     }
@@ -622,7 +582,7 @@ fn count_hot_neighbors(
                 ts,
                 |dst_internal, nbr| {
                     let rank = nbr.rank;
-                    let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
+                    let src_internal_vid = VertexId::from_u32(nbr.endpoint);
                     if let Some(src_internal) = src_internal_vid.as_int64() {
                         seen.insert((src_internal as u32, dst_internal, rank));
                     }
@@ -638,7 +598,7 @@ fn count_hot_neighbors(
                 ts,
                 |src_internal, nbr| {
                     let rank = nbr.rank;
-                    let dst_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
+                    let dst_internal_vid = VertexId::from_u32(nbr.endpoint);
                     if let Some(dst_internal) = dst_internal_vid.as_int64() {
                         seen.insert((src_internal, dst_internal as u32, rank));
                     }
@@ -652,7 +612,7 @@ fn count_hot_neighbors(
                 ts,
                 |dst_internal, nbr| {
                     let rank = nbr.rank;
-                    let src_internal_vid = VertexId::from_int64(nbr.endpoint as i64);
+                    let src_internal_vid = VertexId::from_u32(nbr.endpoint);
                     if let Some(src_internal) = src_internal_vid.as_int64() {
                         seen.insert((src_internal as u32, dst_internal, rank));
                     }
@@ -730,35 +690,23 @@ pub(crate) fn scan_edges_by_type(
                         let tbl_dst = guard.dst_label();
 
                         let src_external = match src_internal {
-                            Some(internal) if tbl_src != 0 => ctx
-                                .get_external_id(tbl_src, internal, ts)
-                                .or_else(|| {
-                                    ctx.get_external_id_by_internal_id(tbl_src, internal)
-                                        .map(|v| vid_to_string(&v))
-                                })
-                                .unwrap_or_else(|| vid_to_string(&record.src_vid)),
-                            Some(internal) => ctx
-                                .get_external_id_any(internal, ts)
-                                .unwrap_or_else(|| vid_to_string(&record.src_vid)),
-                            None => vid_to_string(&record.src_vid),
+                            Some(internal) if tbl_src != 0 => {
+                                internal_to_external_vertex_id(ctx, tbl_src, internal, ts)
+                                    .unwrap_or(record.src_vid)
+                            }
+                            _ => record.src_vid,
                         };
 
                         let dst_external = match dst_internal {
-                            Some(internal) if tbl_dst != 0 => ctx
-                                .get_external_id(tbl_dst, internal, ts)
-                                .or_else(|| {
-                                    ctx.get_external_id_by_internal_id(tbl_dst, internal)
-                                        .map(|v| vid_to_string(&v))
-                                })
-                                .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
-                            Some(internal) => ctx
-                                .get_external_id_any(internal, ts)
-                                .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
-                            None => vid_to_string(&record.dst_vid),
+                            Some(internal) if tbl_dst != 0 => {
+                                internal_to_external_vertex_id(ctx, tbl_dst, internal, ts)
+                                    .unwrap_or(record.dst_vid)
+                            }
+                            _ => record.dst_vid,
                         };
 
                         let edge =
-                            edge_record_to_edge(&record, edge_type, &src_external, &dst_external);
+                            edge_record_to_edge(&record, edge_type, src_external, dst_external);
                         partition_edges.push(edge);
                     }
                 }
@@ -800,24 +748,28 @@ pub(crate) fn scan_edges_by_type(
 
                         let src_external = src_internal
                             .and_then(|internal| {
-                                ctx.get_external_id(src_label_id, internal, ts).or_else(|| {
-                                    ctx.get_external_id_by_internal_id(src_label_id, internal)
-                                        .map(|v| vid_to_string(&v))
-                                })
+                                internal_to_external_vertex_id(
+                                    ctx,
+                                    src_label_id,
+                                    internal,
+                                    ts,
+                                )
                             })
-                            .unwrap_or_else(|| vid_to_string(&record.src_vid));
+                            .unwrap_or(record.src_vid);
 
                         let dst_external = dst_internal
                             .and_then(|internal| {
-                                ctx.get_external_id(dst_label_id, internal, ts).or_else(|| {
-                                    ctx.get_external_id_by_internal_id(dst_label_id, internal)
-                                        .map(|v| vid_to_string(&v))
-                                })
+                                internal_to_external_vertex_id(
+                                    ctx,
+                                    dst_label_id,
+                                    internal,
+                                    ts,
+                                )
                             })
-                            .unwrap_or_else(|| vid_to_string(&record.dst_vid));
+                            .unwrap_or(record.dst_vid);
 
                         let edge =
-                            edge_record_to_edge(&record, edge_type, &src_external, &dst_external);
+                            edge_record_to_edge(&record, edge_type, src_external, dst_external);
                         edges.push(edge);
                     }
                 }

@@ -71,7 +71,7 @@ impl<'a> Iterator for PureAllIter<'a> {
                 return None;
             }
             if let Some(nbr) = self.row.next() {
-                return Some((VertexId::from_int64(self.vid as i64), nbr));
+                return Some((VertexId::from_u32(self.vid), nbr));
             }
             self.vid += 1;
             if self.vid < self.cap {

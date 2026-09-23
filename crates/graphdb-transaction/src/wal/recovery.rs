@@ -827,7 +827,7 @@ mod tests {
 
         let redo = InsertVertexRedo {
             label,
-            vid: VertexId::from_int64(vid),
+            vid: VertexId::try_from_int64(vid).expect("test vertex id"),
             properties: vec![("name".to_string(), Value::string(name))],
         };
 
@@ -866,7 +866,7 @@ mod tests {
 
         let first_redo = InsertVertexRedo {
             label: 1,
-            vid: VertexId::from_int64(1001),
+            vid: VertexId::try_from_int64(1001).expect("test vertex id"),
             properties: vec![("name".to_string(), Value::string("Alice"))],
         };
         let first_payload = to_allocvec(&first_redo).expect("Failed to serialize first redo");
@@ -886,7 +886,7 @@ mod tests {
 
         let second_redo = InsertVertexRedo {
             label: 1,
-            vid: VertexId::from_int64(1002),
+            vid: VertexId::try_from_int64(1002).expect("test vertex id"),
             properties: vec![("name".to_string(), Value::string("Bob"))],
         };
         let second_payload = to_allocvec(&second_redo).expect("Failed to serialize second redo");
@@ -923,7 +923,10 @@ mod tests {
         let replayed = applier.replayed_vertices();
         assert_eq!(replayed.len(), 1);
         assert_eq!(replayed[0].0, 1);
-        assert_eq!(replayed[0].1, VertexId::from_int64(1002));
+        assert_eq!(
+            replayed[0].1,
+            VertexId::try_from_int64(1002).expect("test vertex id")
+        );
         assert_eq!(stats.wal_entries_replayed, 1);
         assert_eq!(stats.last_lsn, Lsn::new(second_lsn.get()));
     }
@@ -975,7 +978,7 @@ mod tests {
         writer.open().expect("WAL should reopen");
         let redo = InsertVertexRedo {
             label: 1,
-            vid: VertexId::from_int64(1002),
+            vid: VertexId::try_from_int64(1002).expect("test vertex id"),
             properties: vec![("name".to_string(), Value::string("uncommitted"))],
         };
         writer
@@ -1003,6 +1006,9 @@ mod tests {
             .expect("recovery should succeed");
         let replayed = applier.replayed_vertices();
         assert_eq!(replayed.len(), 1);
-        assert_eq!(replayed[0].1, VertexId::from_int64(1001));
+        assert_eq!(
+            replayed[0].1,
+            VertexId::try_from_int64(1001).expect("test vertex id")
+        );
     }
 }

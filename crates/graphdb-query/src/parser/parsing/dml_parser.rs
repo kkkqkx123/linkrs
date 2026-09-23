@@ -497,43 +497,6 @@ impl DmlParser {
                 };
 
                 DeleteTarget::Edges { edge_type, edges }
-            } else if ctx.match_token(TokenKind::Tag) {
-                // DELETE TAG tag_name [, tag_name ...] FROM vid [, vid ...]
-                let mut tags = vec![];
-
-                // Check whether it is a wildcard character (*).
-                if ctx.match_token(TokenKind::Star) {
-                    tags.push("*".to_string());
-                } else {
-                    // Parse the list of tags
-                    loop {
-                        let tag_name = ctx.expect_identifier()?;
-                        tags.push(tag_name);
-                        if !ctx.match_token(TokenKind::Comma) {
-                            break;
-                        }
-                    }
-                }
-
-                // The “FROM” keyword in a query
-                ctx.expect_token(TokenKind::From)?;
-
-                // Analyzing the list of vertex IDs
-                let mut vids = vec![];
-                loop {
-                    vids.push(self.parse_expression(ctx)?);
-                    if !ctx.match_token(TokenKind::Comma) {
-                        break;
-                    }
-                }
-
-                let is_all_tags = tags.iter().any(|t| t == "*");
-
-                DeleteTarget::Tags {
-                    tag_names: tags,
-                    vertex_ids: vids,
-                    is_all_tags,
-                }
             } else {
                 // The default interpretation is the deletion of vertices.
                 let mut vids = vec![];
@@ -654,6 +617,15 @@ impl DmlParser {
             }
         }
 
+        // A vertex carries exactly one tag: multi-tag INSERT is rejected here.
+        if tags.len() != 1 {
+            return Err(ParseError::new(
+                crate::parser::core::error::ParseErrorKind::UnexpectedToken,
+                "INSERT VERTEX accepts exactly one tag".to_string(),
+                ctx.current_position(),
+            ));
+        }
+
         // Analysis of the VALUES keyword
         if ctx.check_token(TokenKind::Values) {
             ctx.next_token(); // Consumption values
@@ -665,11 +637,11 @@ impl DmlParser {
             // Analyzing the video…
             let vid = self.parse_expression(ctx)?;
 
-            // Parse the attribute list (supports multiple tag value groups)
-            let mut tag_values = vec![];
+            // Parse the single attribute list `: (...)`. A second value
+            // group would address another tag and is rejected.
+            let mut props = vec![];
             if ctx.match_token(TokenKind::Colon) {
                 ctx.expect_token(TokenKind::LParen)?;
-                let mut props = vec![];
                 loop {
                     let value = self.parse_expression(ctx)?;
                     props.push(value);
@@ -678,25 +650,16 @@ impl DmlParser {
                     }
                 }
                 ctx.expect_token(TokenKind::RParen)?;
-                tag_values.push(props);
-
-                // Additional value groups for multi-tag insert (colon-separated groups)
-                while ctx.match_token(TokenKind::Colon) {
-                    ctx.expect_token(TokenKind::LParen)?;
-                    let mut props = vec![];
-                    loop {
-                        let value = self.parse_expression(ctx)?;
-                        props.push(value);
-                        if !ctx.match_token(TokenKind::Comma) {
-                            break;
-                        }
-                    }
-                    ctx.expect_token(TokenKind::RParen)?;
-                    tag_values.push(props);
+                if ctx.check_token(TokenKind::Colon) {
+                    return Err(ParseError::new(
+                        crate::parser::core::error::ParseErrorKind::UnexpectedToken,
+                        "INSERT VERTEX accepts exactly one tag value group".to_string(),
+                        ctx.current_position(),
+                    ));
                 }
             }
 
-            values.push(VertexRow { vid, tag_values });
+            values.push(VertexRow { vid, values: props });
 
             if !ctx.match_token(TokenKind::Comma) {
                 break;
@@ -706,9 +669,16 @@ impl DmlParser {
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);
 
+        let tag = tags.pop().ok_or_else(|| {
+            ParseError::new(
+                crate::parser::core::error::ParseErrorKind::UnexpectedToken,
+                "INSERT VERTEX requires exactly one tag".to_string(),
+                ctx.current_position(),
+            )
+        })?;
         Ok(Stmt::Insert(InsertStmt {
             span,
-            target: InsertTarget::Vertices { tags, values },
+            target: InsertTarget::Vertices { tag, values },
             if_not_exists,
         }))
     }

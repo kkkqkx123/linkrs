@@ -168,7 +168,6 @@ impl PlanNodeEnum {
             PlanNodeEnum::UpdateEdges(_) => "UpdateEdges",
             PlanNodeEnum::DeleteVertices(_) => "DeleteVertices",
             PlanNodeEnum::DeleteEdges(_) => "DeleteEdges",
-            PlanNodeEnum::DeleteTags(_) => "DeleteTags",
             PlanNodeEnum::DeleteIndex(_) => "DeleteIndex",
             PlanNodeEnum::Minus(_) => "Minus",
             PlanNodeEnum::Intersect(_) => "Intersect",
@@ -292,7 +291,6 @@ impl PlanNodeEnum {
             | PlanNodeEnum::InsertEdges(_)
             | PlanNodeEnum::DeleteVertices(_)
             | PlanNodeEnum::DeleteEdges(_)
-            | PlanNodeEnum::DeleteTags(_)
             | PlanNodeEnum::DeleteIndex(_)
             | PlanNodeEnum::Update(_)
             | PlanNodeEnum::UpdateVertices(_)

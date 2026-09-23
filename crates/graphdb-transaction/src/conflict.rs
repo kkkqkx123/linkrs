@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn test_conflict_intensity_full_conflict() {
-        let vid = VertexId::from_int64(1);
+        let vid = VertexId::try_from_int64(1).expect("test vertex id");
 
         let mut ws1 = WriteSet::new();
         ws1.record_vertex(vid);
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn test_analyze_conflict_vertex() {
-        let vid = VertexId::from_int64(1);
+        let vid = VertexId::try_from_int64(1).expect("test vertex id");
 
         let mut ws1 = WriteSet::new();
         ws1.record_vertex(vid);
@@ -137,8 +137,8 @@ mod tests {
 
     #[test]
     fn test_analyze_conflict_different_vertices() {
-        let vid1 = VertexId::from_int64(1);
-        let vid2 = VertexId::from_int64(2);
+        let vid1 = VertexId::try_from_int64(1).expect("test vertex id");
+        let vid2 = VertexId::try_from_int64(2).expect("test vertex id");
 
         let mut ws1 = WriteSet::new();
         ws1.record_vertex(vid1);
@@ -153,9 +153,9 @@ mod tests {
 
     #[test]
     fn test_shared_endpoint_not_conflict() {
-        let vid1 = VertexId::from_int64(1);
-        let vid2 = VertexId::from_int64(2);
-        let vid3 = VertexId::from_int64(3);
+        let vid1 = VertexId::try_from_int64(1).expect("test vertex id");
+        let vid2 = VertexId::try_from_int64(2).expect("test vertex id");
+        let vid3 = VertexId::try_from_int64(3).expect("test vertex id");
 
         let mut ws1 = WriteSet::new();
         let edge1 = graphdb_core::types::EdgeIdentifier::new(1, vid1, 1, vid2, 1, 0);
@@ -173,8 +173,8 @@ mod tests {
 
     #[test]
     fn test_has_local_write_covers_recorded_vertices() {
-        let vid = VertexId::from_int64(7);
-        let other = VertexId::from_int64(8);
+        let vid = VertexId::try_from_int64(7).expect("test vertex id");
+        let other = VertexId::try_from_int64(8).expect("test vertex id");
 
         let mut ws = WriteSet::new();
         assert!(!WriteSetAnalyzer::has_local_write(&ws, &vid));
@@ -190,9 +190,9 @@ mod tests {
     #[test]
     fn test_has_local_edge_write_covers_recorded_edges() {
         use graphdb_core::types::EdgeIdentifier;
-        let vid1 = VertexId::from_int64(1);
-        let vid2 = VertexId::from_int64(2);
-        let vid3 = VertexId::from_int64(3);
+        let vid1 = VertexId::try_from_int64(1).expect("test vertex id");
+        let vid2 = VertexId::try_from_int64(2).expect("test vertex id");
+        let vid3 = VertexId::try_from_int64(3).expect("test vertex id");
         let edge = EdgeIdentifier::new(1, vid1, 1, vid2, 1, 0);
         let other = EdgeIdentifier::new(1, vid1, 1, vid3, 1, 0);
 

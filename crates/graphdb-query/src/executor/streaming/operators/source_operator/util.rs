@@ -28,20 +28,10 @@ pub(crate) fn make_flat_vertex_record_row(
     flatten: &[String],
 ) -> Vec<Value> {
     let properties: HashMap<String, Value> = record.props.into_iter().collect();
-    let (tags, vertex_properties) = if record.tag_name.is_empty() {
-        (Vec::new(), properties)
-    } else {
-        (
-            vec![graphdb_core::Tag::new(record.tag_name, properties)],
-            HashMap::new(),
-        )
-    };
-    let vertex = Vertex {
-        vid: record.vid,
-        id: record.internal_id,
-        tags,
-        properties: vertex_properties,
-    };
+    let vertex = Vertex::new(
+        record.vid,
+        graphdb_core::Tag::new(record.tag_name, properties),
+    );
     make_flat_vertex_row(vertex, flatten)
 }
 
@@ -64,11 +54,15 @@ pub(crate) fn make_flat_vertex_row(vertex: Vertex, flatten: &[String]) -> Vec<Va
 /// and appends the columns as property slots after it.
 pub(crate) fn make_flat_covering_vertex_row(
     entity_ref: &EntityRef,
+    tag: &str,
     columns: Vec<(String, Value)>,
     flatten: &[String],
 ) -> Option<Vec<Value>> {
     let vertex_id = entity_ref_to_vertex_id(entity_ref)?;
-    let vertex = Vertex::new_with_properties(vertex_id, Vec::new(), columns.into_iter().collect());
+    let vertex = Vertex::new(
+        vertex_id,
+        graphdb_core::Tag::new(tag.to_string(), columns.into_iter().collect()),
+    );
     Some(make_flat_vertex_row(vertex, flatten))
 }
 

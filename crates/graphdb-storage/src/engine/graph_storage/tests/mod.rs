@@ -65,8 +65,8 @@ pub(super) fn setup_knows_edge(storage: &mut GraphStorage) -> u32 {
 
 pub(super) fn insert_test_vertex(storage: &mut GraphStorage, id: i64, name: &str) {
     let vertex = Vertex::new(
-        VertexId::from_int64(id),
-        vec![graphdb_core::vertex_edge_path::Tag::new(
+        VertexId::try_from_int64(id).expect("test vertex id"),
+        graphdb_core::vertex_edge_path::Tag::new(
             "Person".to_string(),
             vec![
                 ("id".to_string(), Value::BigInt(id)),
@@ -74,7 +74,7 @@ pub(super) fn insert_test_vertex(storage: &mut GraphStorage, id: i64, name: &str
             ]
             .into_iter()
             .collect(),
-        )],
+        ),
     );
     storage.insert_vertex("test_space", vertex).unwrap();
 }
@@ -109,13 +109,13 @@ pub(super) fn setup_serial_person_tag(storage: &mut GraphStorage) -> u32 {
 
 pub(super) fn insert_serial_vertex(storage: &mut GraphStorage, vid: i64, name: &str) {
     let vertex = Vertex::new(
-        VertexId::from_int64(vid),
-        vec![Tag::new(
+        VertexId::try_from_int64(vid).expect("test vertex id"),
+        Tag::new(
             "Person".to_string(),
             vec![("name".to_string(), Value::string(name))]
                 .into_iter()
                 .collect(),
-        )],
+        ),
     );
     storage.insert_vertex("test_space", vertex).unwrap();
 }

@@ -35,7 +35,6 @@ impl PlanNodeEnum {
             | PlanNodeEnum::InsertEdges(_)
             | PlanNodeEnum::DeleteVertices(_)
             | PlanNodeEnum::DeleteEdges(_)
-            | PlanNodeEnum::DeleteTags(_)
             | PlanNodeEnum::DeleteIndex(_)
             | PlanNodeEnum::Update(_)
             | PlanNodeEnum::UpdateVertices(_)

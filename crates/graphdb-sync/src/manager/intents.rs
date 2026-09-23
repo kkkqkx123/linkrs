@@ -79,7 +79,7 @@ pub(crate) fn payload_to_intent(
         } => (
             *space_id,
             index_name.as_str(),
-            EntityRef::Vertex(VertexId::from_int64(0)),
+            EntityRef::Vertex(VertexId::from_u64(0)),
             IndexOperation::Upsert,
         ),
         OutboxPayload::DropIndex {
@@ -89,19 +89,19 @@ pub(crate) fn payload_to_intent(
         } => (
             *space_id,
             index_name.as_str(),
-            EntityRef::Vertex(VertexId::from_int64(0)),
+            EntityRef::Vertex(VertexId::from_u64(0)),
             IndexOperation::Delete,
         ),
         OutboxPayload::DropSpace { space_id } => (
             *space_id,
             "__space__",
-            EntityRef::Vertex(VertexId::from_int64(0)),
+            EntityRef::Vertex(VertexId::from_u64(0)),
             IndexOperation::Delete,
         ),
         OutboxPayload::DropTag { space_id, tag_name } => (
             *space_id,
             tag_name.as_str(),
-            EntityRef::Vertex(VertexId::from_int64(0)),
+            EntityRef::Vertex(VertexId::from_u64(0)),
             IndexOperation::Delete,
         ),
     };

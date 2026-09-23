@@ -147,6 +147,7 @@ fn next_index_chunk(
         output_layout,
         cursor,
         edge_type_names,
+        tag,
         ..
     } = &mut op.kind
     else {
@@ -190,6 +191,7 @@ fn next_index_chunk(
                         EntityRef::Vertex(_) => {
                             if let Some(row) = make_flat_covering_vertex_row(
                                 &entity_ref,
+                                tag,
                                 columns,
                                 vertex_projection,
                             ) {

@@ -258,6 +258,7 @@ impl IdManager {
             .collect()
     }
 
+    /// Index-level live IDs in ascending order (see `IdIndexer::live_ids`).
     pub fn live_ids(&self) -> Vec<u32> {
         self.live_ids.iter().copied().collect()
     }
@@ -487,6 +488,12 @@ impl IdIndexer {
         manager.iter()
     }
 
+    /// Index-level live IDs in ascending order, without timestamp filtering.
+    ///
+    /// Deletions move here only when the key is removed (watermark-gated GC
+    /// or explicit index removal). Timestamp-only deletes keep the key until
+    /// GC, and lazy-reused slots rejoin on insert. Snapshot visibility must
+    /// be checked separately via the row timestamps.
     pub fn live_ids(&self) -> Vec<u32> {
         self.manager.lock().live_ids()
     }

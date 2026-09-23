@@ -122,22 +122,22 @@ impl Binder {
         stmt: &crate::parser::ast::InsertStmt,
     ) -> DBResult<BoundStatement> {
         let target = match &stmt.target {
-            InsertTarget::Vertices { tags, values } => {
+            InsertTarget::Vertices { tag, values } => {
                 let mut bound_values = Vec::with_capacity(values.len());
                 for row in values {
                     let vid = self.bind_expr(&row.vid)?;
-                    let mut tag_values = Vec::with_capacity(row.tag_values.len());
-                    for vals in &row.tag_values {
-                        let bound_vals = vals
-                            .iter()
-                            .map(|v| self.bind_expr(v))
-                            .collect::<DBResult<Vec<_>>>()?;
-                        tag_values.push(bound_vals);
-                    }
-                    bound_values.push(BoundVertexRow { vid, tag_values });
+                    let bound_vals = row
+                        .values
+                        .iter()
+                        .map(|v| self.bind_expr(v))
+                        .collect::<DBResult<Vec<_>>>()?;
+                    bound_values.push(BoundVertexRow {
+                        vid,
+                        values: bound_vals,
+                    });
                 }
                 BoundInsertTarget::Vertices {
-                    tags: tags.clone(),
+                    tag: tag.clone(),
                     values: bound_values,
                 }
             }
@@ -241,21 +241,6 @@ impl Binder {
                 BoundDeleteTarget::Edges {
                     edge_type: edge_type.clone(),
                     edges: bound,
-                }
-            }
-            DeleteTarget::Tags {
-                tag_names,
-                vertex_ids,
-                is_all_tags,
-            } => {
-                let vids = vertex_ids
-                    .iter()
-                    .map(|v| self.bind_expr(v))
-                    .collect::<DBResult<Vec<_>>>()?;
-                BoundDeleteTarget::Tags {
-                    tag_names: tag_names.clone(),
-                    vertex_ids: vids,
-                    is_all_tags: *is_all_tags,
                 }
             }
             DeleteTarget::Index(name) => BoundDeleteTarget::Index(name.clone()),

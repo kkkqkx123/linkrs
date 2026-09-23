@@ -216,17 +216,21 @@ impl ShardedVertexTable {
         ordered.into_iter().flatten().collect()
     }
 
-    /// Live global internal IDs (shard-encoded), in shard order.
+    /// Snapshot-visible live global internal IDs at `ts`, in shard order.
+    ///
+    /// Enumeration and point reads share this one visibility predicate.
+    /// There is no unfiltered variant; sizing callers use `total_count` or
+    /// `id_hole_stats` instead.
     ///
     /// Mirrors the ordering of the previous `scan_projected` so lazy
     /// paginated scans yield records in a stable order.
-    pub fn live_ids(&self) -> Vec<u32> {
+    pub fn live_ids(&self, ts: Timestamp) -> Vec<u32> {
         let mut ids = Vec::new();
         for (shard_idx, shard) in self.shards.iter().enumerate() {
             let table = shard.read();
             ids.extend(
                 table
-                    .live_ids()
+                    .live_ids(ts)
                     .into_iter()
                     .map(|local_id| self.encode_id(shard_idx, local_id)),
             );

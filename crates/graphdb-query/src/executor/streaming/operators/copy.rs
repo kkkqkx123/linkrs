@@ -262,7 +262,7 @@ fn flush_vertices(
             let vid_str = rec[mapping.vid_index].trim();
             let vid = parse_vid(vid_str)?;
             let props = collect_properties(mapping, rec);
-            Ok(Vertex::new(vid, vec![Tag::new(tag.to_string(), props)]))
+            Ok(Vertex::new(vid, Tag::new(tag.to_string(), props)))
         })
         .collect::<Result<Vec<_>, QueryError>>()?;
     let count = vertices.len() as u64;
@@ -316,9 +316,9 @@ fn parse_vid(s: &str) -> Result<VertexId, QueryError> {
         ));
     }
     if let Ok(i) = s.parse::<i64>() {
-        Ok(VertexId::from_int64(i))
+        VertexId::try_from_int64(i).map_err(|e| QueryError::execution(e.to_string()))
     } else {
-        Ok(VertexId::from_string(s))
+        VertexId::try_from_string(s).map_err(|e| QueryError::execution(e.to_string()))
     }
 }
 
@@ -781,10 +781,7 @@ pub fn execute_copy_to(
             }
             let mut count = 0u64;
             for vertex in &vertices {
-                let props = vertex
-                    .get_tag(tag)
-                    .map(|t| &t.properties)
-                    .unwrap_or(&vertex.properties);
+                let props = vertex.properties();
                 let mut cells = vec![csv_cell(&Value::from(vertex.vid), delim)];
                 cells.extend(prop_names.iter().map(|name| {
                     props

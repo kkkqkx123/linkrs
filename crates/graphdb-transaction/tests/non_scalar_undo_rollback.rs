@@ -186,7 +186,7 @@ fn sample_values() -> Vec<Value> {
 fn vertex_undo(value: Value) -> UndoLogEntry {
     UndoLogEntry::UpdateVertexProp(UpdateVertexPropUndo {
         v_label: 1u32,
-        vid: VertexId::from_int64(42),
+        vid: VertexId::try_from_int64(42).expect("test vertex id"),
         col_id: ColumnId(0),
         old_value: value,
     })
@@ -195,9 +195,9 @@ fn vertex_undo(value: Value) -> UndoLogEntry {
 fn edge_undo(value: Value) -> UndoLogEntry {
     UndoLogEntry::UpdateEdgeProp(UpdateEdgePropUndo {
         src_label: 1u32,
-        src_vid: VertexId::from_int64(42),
+        src_vid: VertexId::try_from_int64(42).expect("test vertex id"),
         dst_label: 1u32,
-        dst_vid: VertexId::from_int64(43),
+        dst_vid: VertexId::try_from_int64(43).expect("test vertex id"),
         edge_label: 2u32,
         rank: 0,
         col_id: ColumnId(0),

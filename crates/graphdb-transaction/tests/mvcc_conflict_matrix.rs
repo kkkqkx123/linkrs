@@ -19,7 +19,7 @@ use graphdb_core::types::{EdgeIdentifier, VertexId};
 use graphdb_transaction::WriteSet;
 
 fn vid(n: i64) -> VertexId {
-    VertexId::from_int64(n)
+    VertexId::try_from_int64(n).expect("test vertex id")
 }
 
 fn edge(src: i64, dst: i64, rank: i64) -> EdgeIdentifier {

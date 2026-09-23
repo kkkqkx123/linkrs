@@ -119,7 +119,6 @@ pub(crate) fn dispatch_module(node: &LogicalNodeEnum) -> &'static str {
         LogicalNodeEnum::Update(_) => "flat_leaf",
         LogicalNodeEnum::DeleteVertices(_) => "flat_leaf",
         LogicalNodeEnum::DeleteEdges(_) => "flat_leaf",
-        LogicalNodeEnum::DeleteTags(_) => "flat_leaf",
         LogicalNodeEnum::DeleteIndex(_) => "flat_leaf",
         LogicalNodeEnum::PipeDeleteVertices(_) => "flat_leaf",
         LogicalNodeEnum::PipeDeleteEdges(_) => "flat_leaf",

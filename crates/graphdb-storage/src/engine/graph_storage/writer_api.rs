@@ -20,25 +20,31 @@ impl StorageWriter for GraphStorage {
         self.commit_auto_if_needed()
     }
 
-    fn delete_vertex(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError> {
+    fn delete_vertex(&mut self, space: &str, tag: &str, id: &VertexId) -> Result<(), StorageError> {
         self.ctx.check_write_admission()?;
-        writer::delete_vertex(&self.ctx, space, id)?;
+        writer::delete_vertex(&self.ctx, space, tag, id)?;
         self.commit_auto_if_needed()
     }
 
-    fn delete_vertex_with_edges(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError> {
+    fn delete_vertex_with_edges(
+        &mut self,
+        space: &str,
+        tag: &str,
+        id: &VertexId,
+    ) -> Result<(), StorageError> {
         self.ctx.check_write_admission()?;
-        writer::delete_vertex_with_edges(&self.ctx, space, id)?;
+        writer::delete_vertex_with_edges(&self.ctx, space, tag, id)?;
         self.commit_auto_if_needed()
     }
 
     fn batch_delete_vertices_with_edges(
         &mut self,
         space: &str,
+        tag: &str,
         ids: &[VertexId],
     ) -> Result<usize, StorageError> {
         self.ctx.check_write_admission()?;
-        let result = writer::batch_delete_vertices_with_edges(&self.ctx, space, ids)?;
+        let result = writer::batch_delete_vertices_with_edges(&self.ctx, space, tag, ids)?;
         self.commit_auto_if_needed()?;
         Ok(result)
     }
@@ -50,18 +56,6 @@ impl StorageWriter for GraphStorage {
     ) -> Result<Vec<VertexId>, StorageError> {
         self.ctx.check_write_admission()?;
         let result = writer::batch_insert_vertices(&self.ctx, space, vertices)?;
-        self.commit_auto_if_needed()?;
-        Ok(result)
-    }
-
-    fn delete_tags(
-        &mut self,
-        space: &str,
-        vertex_id: &VertexId,
-        tag_names: &[String],
-    ) -> Result<usize, StorageError> {
-        self.ctx.check_write_admission()?;
-        let result = writer::delete_tags(&self.ctx, space, vertex_id, tag_names)?;
         self.commit_auto_if_needed()?;
         Ok(result)
     }
@@ -130,9 +124,14 @@ impl StorageWriter for GraphStorage {
         Ok(result)
     }
 
-    fn delete_vertex_data(&mut self, space: &str, vertex_id: &str) -> Result<bool, StorageError> {
+    fn delete_vertex_data(
+        &mut self,
+        space: &str,
+        tag: &str,
+        vertex_id: &str,
+    ) -> Result<bool, StorageError> {
         self.ctx.check_write_admission()?;
-        let result = writer::delete_vertex_data(&self.ctx, space, vertex_id)?;
+        let result = writer::delete_vertex_data(&self.ctx, space, tag, vertex_id)?;
         self.commit_auto_if_needed()?;
         Ok(result)
     }

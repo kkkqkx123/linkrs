@@ -22,7 +22,7 @@ use super::logical_nodes::control_flow::{
 };
 use super::logical_nodes::dml::{
     LogicalCopyFromNode, LogicalCopyToNode, LogicalDeleteEdgesNode, LogicalDeleteIndexNode,
-    LogicalDeleteTagsNode, LogicalDeleteVerticesNode, LogicalInsertEdgesNode,
+    LogicalDeleteVerticesNode, LogicalInsertEdgesNode,
     LogicalInsertVerticesNode, LogicalPipeDeleteEdgesNode, LogicalPipeDeleteVerticesNode,
     LogicalUpdateNode,
 };
@@ -121,7 +121,6 @@ pub enum LogicalNodeEnum {
     Update(LogicalUpdateNode),
     DeleteVertices(LogicalDeleteVerticesNode),
     DeleteEdges(LogicalDeleteEdgesNode),
-    DeleteTags(LogicalDeleteTagsNode),
     DeleteIndex(LogicalDeleteIndexNode),
     PipeDeleteVertices(LogicalPipeDeleteVerticesNode),
     PipeDeleteEdges(LogicalPipeDeleteEdgesNode),
@@ -223,7 +222,6 @@ impl LogicalNodeEnum {
             Self::Update(n) => n.id(),
             Self::DeleteVertices(n) => n.id(),
             Self::DeleteEdges(n) => n.id(),
-            Self::DeleteTags(n) => n.id(),
             Self::DeleteIndex(n) => n.id(),
             Self::PipeDeleteVertices(n) => n.id(),
             Self::PipeDeleteEdges(n) => n.id(),
@@ -301,7 +299,6 @@ impl LogicalNodeEnum {
             Self::Update(_) => "Update",
             Self::DeleteVertices(_) => "DeleteVertices",
             Self::DeleteEdges(_) => "DeleteEdges",
-            Self::DeleteTags(_) => "DeleteTags",
             Self::DeleteIndex(_) => "DeleteIndex",
             Self::PipeDeleteVertices(_) => "PipeDeleteVertices",
             Self::PipeDeleteEdges(_) => "PipeDeleteEdges",
@@ -379,7 +376,6 @@ impl LogicalNodeEnum {
             Self::Update(n) => n.col_names(),
             Self::DeleteVertices(n) => n.col_names(),
             Self::DeleteEdges(n) => n.col_names(),
-            Self::DeleteTags(n) => n.col_names(),
             Self::DeleteIndex(n) => n.col_names(),
             Self::PipeDeleteVertices(n) => n.col_names(),
             Self::PipeDeleteEdges(n) => n.col_names(),

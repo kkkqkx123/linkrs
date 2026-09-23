@@ -92,8 +92,8 @@ pub fn create_works_at_edge_type(storage: &mut GraphStorage, space: &str) -> u32
 /// Create a person vertex with name and age.
 pub fn create_person_vertex(id: i64, name: &str, age: i64) -> Vertex {
     Vertex::new(
-        VertexId::from_int64(id),
-        vec![Tag::new(
+        VertexId::try_from_int64(id).expect("test vertex id"),
+        Tag::new(
             "Person".to_string(),
             vec![
                 ("name".to_string(), Value::string(name)),
@@ -101,52 +101,33 @@ pub fn create_person_vertex(id: i64, name: &str, age: i64) -> Vertex {
             ]
             .into_iter()
             .collect(),
-        )],
+        ),
     )
 }
 
-/// Create a person+employee vertex with both tags.
+/// Create an employee vertex with company and salary.
 #[allow(dead_code)]
-pub fn create_multi_tag_vertex(
-    id: i64,
-    name: &str,
-    age: i64,
-    company: &str,
-    salary: i64,
-) -> Vertex {
-    let mut props: HashMap<String, Value> = HashMap::new();
-    props.insert("name".to_string(), Value::string(name));
-    props.insert("age".to_string(), Value::BigInt(age));
-    props.insert("company".to_string(), Value::string(company));
-    props.insert("salary".to_string(), Value::BigInt(salary));
-
-    Vertex {
-        vid: VertexId::from_int64(id),
-        id: 0,
-        tags: vec![
-            Tag::new("Person".to_string(), {
-                let mut p = HashMap::new();
-                p.insert("name".to_string(), Value::string(name));
-                p.insert("age".to_string(), Value::BigInt(age));
-                p
-            }),
-            Tag::new("Employee".to_string(), {
-                let mut p = HashMap::new();
-                p.insert("company".to_string(), Value::string(company));
-                p.insert("salary".to_string(), Value::BigInt(salary));
-                p
-            }),
-        ],
-        properties: props,
-    }
+pub fn create_employee_vertex(id: i64, company: &str, salary: i64) -> Vertex {
+    Vertex::new(
+        VertexId::try_from_int64(id).expect("test vertex id"),
+        Tag::new(
+            "Employee".to_string(),
+            vec![
+                ("company".to_string(), Value::string(company)),
+                ("salary".to_string(), Value::BigInt(salary)),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+    )
 }
 
 /// Create a KNOWS edge between two vertices.
 #[allow(dead_code)]
 pub fn create_knows_edge(src: i64, dst: i64, since: i32) -> Edge {
     Edge::new(
-        VertexId::from_int64(src),
-        VertexId::from_int64(dst),
+        VertexId::try_from_int64(src).expect("test vertex id"),
+        VertexId::try_from_int64(dst).expect("test vertex id"),
         "KNOWS".to_string(),
         0,
         vec![("since".to_string(), Value::Int(since))]
@@ -164,7 +145,7 @@ pub fn setup_basic_schema(storage: &mut GraphStorage) -> u64 {
     space_id
 }
 
-/// Setup schema with Person+Employee+KNOWS+WORKS_AT for multi-tag scenarios.
+/// Setup schema with Person+KNOWS for single-label scenarios.
 #[allow(dead_code)]
 pub fn setup_multi_tag_schema(storage: &mut GraphStorage) -> u64 {
     let space_id = create_space(storage, "test_space");
@@ -215,28 +196,28 @@ pub fn insert_test_data(storage: &mut GraphStorage, space: &str) {
 #[allow(dead_code)]
 pub fn verify_test_data(storage: &GraphStorage, space: &str) {
     let alice = storage
-        .get_vertex(space, &VertexId::from_int64(1))
+        .get_vertex(space, "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
         .unwrap()
         .expect("Alice should exist");
-    assert_eq!(alice.properties.get("name"), Some(&Value::string("Alice")));
-    assert_eq!(alice.properties.get("age"), Some(&Value::BigInt(30)));
+    assert_eq!(alice.properties().get("name"), Some(&Value::string("Alice")));
+    assert_eq!(alice.properties().get("age"), Some(&Value::BigInt(30)));
 
     let bob = storage
-        .get_vertex(space, &VertexId::from_int64(2))
+        .get_vertex(space, "Person", &VertexId::try_from_int64(2).expect("test vertex id"))
         .unwrap()
         .expect("Bob should exist");
-    assert_eq!(bob.properties.get("name"), Some(&Value::string("Bob")));
+    assert_eq!(bob.properties().get("name"), Some(&Value::string("Bob")));
 
     let edge = storage
         .get_edge(
             space,
-            &VertexId::from_int64(1),
-            &VertexId::from_int64(2),
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            &VertexId::try_from_int64(2).expect("test vertex id"),
             "KNOWS",
             0,
         )
         .unwrap()
         .expect("Edge should exist");
-    assert_eq!(edge.src, VertexId::from_int64(1));
-    assert_eq!(edge.dst, VertexId::from_int64(2));
+    assert_eq!(edge.src, VertexId::try_from_int64(1).expect("test vertex id"));
+    assert_eq!(edge.dst, VertexId::try_from_int64(2).expect("test vertex id"));
 }

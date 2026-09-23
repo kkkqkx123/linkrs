@@ -929,16 +929,6 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             },
         )),
 
-        PlanNodeEnum::DeleteTags(n) => Ok(LogicalNodeEnum::DeleteTags(
-            crate::planning::plan::logical::logical_nodes::dml::LogicalDeleteTagsNode {
-                id: n.id(),
-                info: n.info().clone(),
-                output_var: n.output_var().map(|s| s.to_string()),
-                col_names: n.col_names().to_vec(),
-                column_types: n.column_types().to_vec(),
-            },
-        )),
-
         PlanNodeEnum::DeleteIndex(n) => Ok(LogicalNodeEnum::DeleteIndex(
             crate::planning::plan::logical::logical_nodes::dml::LogicalDeleteIndexNode {
                 id: n.id(),

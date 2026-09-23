@@ -16,8 +16,8 @@ fn test_insert_and_get() {
     assert!(table.has_edge(0, 1, 0, 100));
 
     let edge = table.get_edge(0, 1, 0, 100).unwrap();
-    assert_eq!(edge.src_vid, VertexId::from_int64(0));
-    assert_eq!(edge.dst_vid, VertexId::from_int64(1));
+    assert_eq!(edge.src_vid, VertexId::try_from_int64(0).expect("test vertex id"));
+    assert_eq!(edge.dst_vid, VertexId::try_from_int64(1).expect("test vertex id"));
     assert_eq!(edge.properties.len(), 1);
 }
 
@@ -321,16 +321,16 @@ fn test_in_only_table_serves_stored_leg_everywhere() {
     assert!(table.has_edge(0, 1, 0, 100));
     assert_eq!(table.edge_count(), 1);
     let edge = table.get_edge(0, 1, 0, 100).expect("in-only point lookup");
-    assert_eq!(edge.src_vid, VertexId::from_int64(0));
-    assert_eq!(edge.dst_vid, VertexId::from_int64(1));
+    assert_eq!(edge.src_vid, VertexId::try_from_int64(0).expect("test vertex id"));
+    assert_eq!(edge.dst_vid, VertexId::try_from_int64(1).expect("test vertex id"));
     assert!(table.edge_id_of(0, 1, 0, 100).is_some());
     assert!(table.out_edges(0, 100).is_empty());
     assert!(table.merged_out_nbrs(0, 100).is_empty());
     assert_eq!(table.in_edges(1, 100).len(), 1);
     let scanned = table.scan(100);
     assert_eq!(scanned.len(), 1);
-    assert_eq!(scanned[0].src_vid, VertexId::from_int64(0));
-    assert_eq!(scanned[0].dst_vid, VertexId::from_int64(1));
+    assert_eq!(scanned[0].src_vid, VertexId::try_from_int64(0).expect("test vertex id"));
+    assert_eq!(scanned[0].dst_vid, VertexId::try_from_int64(1).expect("test vertex id"));
 
     assert!(table.delete_edge(0, 1, 0, 200).unwrap());
     assert!(!table.has_edge(0, 1, 0, 200));

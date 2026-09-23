@@ -97,29 +97,37 @@ impl Default for MockStorage {
 impl crate::stats_reader::ColumnStatsReader for MockStorage {}
 
 impl StorageReader for MockStorage {
-    fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError> {
+    fn get_vertex(
+        &self,
+        space: &str,
+        tag: &str,
+        id: &VertexId,
+    ) -> Result<Option<Vertex>, StorageError> {
         Ok(self
             .vertices
             .read()
             .get(space)
-            .and_then(|vertices| vertices.iter().find(|v| v.vid == *id).cloned()))
+            .and_then(|vertices| {
+                vertices
+                    .iter()
+                    .find(|v| v.vid == *id && v.tag.name == tag)
+                    .cloned()
+            }))
     }
 
     fn get_vertex_projected(
         &self,
         space: &str,
+        tag: &str,
         id: &VertexId,
         projection: &[String],
     ) -> Result<Option<Vertex>, StorageError> {
-        let vertex = self.get_vertex(space, id)?;
+        let vertex = self.get_vertex(space, tag, id)?;
         if projection.is_empty() {
             return Ok(vertex);
         }
         Ok(vertex.map(|mut v| {
-            for tag in &mut v.tags {
-                tag.properties.retain(|k, _| projection.contains(k));
-            }
-            v.properties.clear();
+            v.tag.properties.retain(|k, _| projection.contains(k));
             v
         }))
     }
@@ -220,7 +228,7 @@ impl StorageReader for MockStorage {
         // Filter by tag if vertices have tags
         let filtered: Vec<Vertex> = vertices
             .into_iter()
-            .filter(|v| v.tags.iter().any(|t| t.name == tag) || tag.is_empty())
+            .filter(|v| v.tag.name == tag || tag.is_empty())
             .collect();
         Ok(filtered.into_iter().skip(offset).take(limit).collect())
     }
@@ -246,11 +254,10 @@ impl StorageWriter for MockStorage {
         Ok(vertex.vid)
     }
     mock_stub!(&mut self, update_vertex(_space: &str, _vertex: Vertex) -> Result<(), StorageError>, Ok(()));
-    mock_stub!(&mut self, delete_vertex(_space: &str, _id: &VertexId) -> Result<(), StorageError>, Ok(()));
-    mock_stub!(&mut self, delete_vertex_with_edges(_space: &str, _id: &VertexId) -> Result<(), StorageError>, Ok(()));
-    mock_stub!(&mut self, batch_delete_vertices_with_edges(_space: &str, _ids: &[VertexId]) -> Result<usize, StorageError>, Ok(0));
+    mock_stub!(&mut self, delete_vertex(_space: &str, _tag: &str, _id: &VertexId) -> Result<(), StorageError>, Ok(()));
+    mock_stub!(&mut self, delete_vertex_with_edges(_space: &str, _tag: &str, _id: &VertexId) -> Result<(), StorageError>, Ok(()));
+    mock_stub!(&mut self, batch_delete_vertices_with_edges(_space: &str, _tag: &str, _ids: &[VertexId]) -> Result<usize, StorageError>, Ok(0));
     mock_stub!(&mut self, batch_insert_vertices(_space: &str, _vertices: Vec<Vertex>) -> Result<Vec<VertexId>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&mut self, delete_tags(_space: &str, _vertex_id: &VertexId, _tag_names: &[String]) -> Result<usize, StorageError>, Ok(0));
     fn insert_edge(&mut self, _space: &str, _edge: Edge) -> Result<(), StorageError> {
         if *self.fail_insert_edge.read() {
             Err(StorageError::db_error("insert_edge failed".to_string()))
@@ -287,7 +294,7 @@ impl StorageWriter for MockStorage {
     mock_stub!(&mut self, batch_delete_edges(_space: &str, _deletes: &[EdgeDeleteKey]) -> Result<usize, StorageError>, Ok(0));
     mock_stub!(&mut self, insert_vertex_data(_space: &str, _info: &InsertVertexInfo) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&mut self, insert_edge_data(_space: &str, _info: &InsertEdgeInfo) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, delete_vertex_data(_space: &str, _vertex_id: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, delete_vertex_data(_space: &str, _tag: &str, _vertex_id: &str) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&mut self, delete_edge_data(_space: &str, _src: &str, _dst: &str, _rank: i64) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&mut self, update_data(_space: &str, _space_id: u64, _info: &UpdateInfo) -> Result<bool, StorageError>, Ok(true));
 }

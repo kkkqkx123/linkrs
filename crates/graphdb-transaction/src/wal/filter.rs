@@ -164,7 +164,9 @@ mod tests {
                 target: TargetId::new("fulltext").unwrap(),
                 index_id: 1,
                 index_generation: IndexGeneration::new(1),
-                entity_ref: EntityRef::Vertex(VertexId::from_int64(lsn as i64)),
+                entity_ref: EntityRef::Vertex(
+                    VertexId::try_from_int64(lsn as i64).expect("test vertex id"),
+                ),
                 operation: graphdb_core::wal::IndexOperation::Upsert,
                 document_or_vector: vec![1, 2, 3],
                 idempotency_key: IdempotencyKey::new(format!("{}-{}", lsn, sequence)).unwrap(),

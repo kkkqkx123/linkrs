@@ -10,8 +10,8 @@ fn test_auto_commit_batch_window_reuses_snapshots() {
     for i in 0..50 {
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let vertex = Vertex::new(
-            VertexId::from_int64(1000 + i),
-            vec![Tag::new(
+            VertexId::try_from_int64(1000 + i).expect("test vertex id"),
+           Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string(format!("person_{i}"))),
@@ -19,7 +19,7 @@ fn test_auto_commit_batch_window_reuses_snapshots() {
                 ]
                 .into_iter()
                 .collect(),
-            )],
+            ),
         );
         bound.insert_vertex("test_space", vertex).unwrap();
         bound.finalize_operation(true).unwrap();
@@ -34,7 +34,7 @@ fn test_auto_commit_batch_window_reuses_snapshots() {
     storage.finalize_auto_commit_batch(&window).unwrap();
     for i in 0..50 {
         let v = storage
-            .get_vertex("test_space", &VertexId::from_int64(1000 + i))
+            .get_vertex("test_space", "Person", &VertexId::try_from_int64(1000 + i).expect("test vertex id"))
             .unwrap()
             .unwrap();
         assert_eq!(v.property_value("age"), Some(Value::BigInt(i)));
@@ -44,13 +44,13 @@ fn test_auto_commit_batch_window_reuses_snapshots() {
     // single auto-commit statement can proceed.
     let mut next = storage.bind_auto_commit_context().unwrap();
     let vertex = Vertex::new(
-        VertexId::from_int64(2000),
-        vec![Tag::new(
+        VertexId::try_from_int64(2000).expect("test vertex id"),
+       Tag::new(
             "Person".to_string(),
             vec![("name".to_string(), Value::string("after"))]
                 .into_iter()
                 .collect(),
-        )],
+        ),
     );
     next.insert_vertex("test_space", vertex).unwrap();
     next.finalize_operation(true).unwrap();
@@ -67,8 +67,8 @@ fn test_batch_window_unregisters_lazily_registered_snapshots() {
     for i in 0..20 {
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let vertex = Vertex::new(
-            VertexId::from_int64(1000 + i),
-            vec![Tag::new(
+            VertexId::try_from_int64(1000 + i).expect("test vertex id"),
+           Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string(format!("leak_{i}"))),
@@ -76,7 +76,7 @@ fn test_batch_window_unregisters_lazily_registered_snapshots() {
                 ]
                 .into_iter()
                 .collect(),
-            )],
+            ),
         );
         bound.insert_vertex("test_space", vertex).unwrap();
         bound.finalize_operation(true).unwrap();
@@ -106,8 +106,8 @@ fn test_auto_commit_batch_window_failed_statement_rolls_back_itself() {
     {
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let vertex = Vertex::new(
-            VertexId::from_int64(3001),
-            vec![Tag::new(
+            VertexId::try_from_int64(3001).expect("test vertex id"),
+           Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string("keep")),
@@ -115,7 +115,7 @@ fn test_auto_commit_batch_window_failed_statement_rolls_back_itself() {
                 ]
                 .into_iter()
                 .collect(),
-            )],
+            ),
         );
         bound.insert_vertex("test_space", vertex).unwrap();
         bound.finalize_operation(true).unwrap();
@@ -125,8 +125,8 @@ fn test_auto_commit_batch_window_failed_statement_rolls_back_itself() {
         // statement's partial write must roll back.
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let updated = Vertex::new(
-            VertexId::from_int64(3001),
-            vec![Tag::new(
+            VertexId::try_from_int64(3001).expect("test vertex id"),
+           Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string("keep")),
@@ -134,7 +134,7 @@ fn test_auto_commit_batch_window_failed_statement_rolls_back_itself() {
                 ]
                 .into_iter()
                 .collect(),
-            )],
+            ),
         );
         bound.update_vertex("test_space", updated).unwrap();
         bound.finalize_operation(false).unwrap();
@@ -142,7 +142,7 @@ fn test_auto_commit_batch_window_failed_statement_rolls_back_itself() {
     storage.finalize_auto_commit_batch(&window).unwrap();
 
     let v = storage
-        .get_vertex("test_space", &VertexId::from_int64(3001))
+        .get_vertex("test_space", "Person", &VertexId::try_from_int64(3001).expect("test vertex id"))
         .unwrap()
         .unwrap();
     assert_eq!(v.property_value("age"), Some(Value::BigInt(1)));
@@ -181,8 +181,8 @@ fn test_auto_commit_batch_window_with_unique_index() {
     for i in 0..50 {
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let vertex = Vertex::new(
-            VertexId::from_int64(1000 + i),
-            vec![Tag::new(
+            VertexId::try_from_int64(1000 + i).expect("test vertex id"),
+           Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string(format!("person_{i}"))),
@@ -190,7 +190,7 @@ fn test_auto_commit_batch_window_with_unique_index() {
                 ]
                 .into_iter()
                 .collect(),
-            )],
+            ),
         );
         bound.insert_vertex("test_space", vertex).unwrap();
         bound.finalize_operation(true).unwrap();
@@ -215,13 +215,13 @@ fn test_auto_commit_batch_window_with_unique_index() {
     {
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let duplicate = Vertex::new(
-            VertexId::from_int64(2000),
-            vec![Tag::new(
+            VertexId::try_from_int64(2000).expect("test vertex id"),
+           Tag::new(
                 "Person".to_string(),
                 vec![("name".to_string(), Value::string("person_10"))]
                     .into_iter()
                     .collect(),
-            )],
+            ),
         );
         let result = bound.insert_vertex("test_space", duplicate);
         assert!(
@@ -234,7 +234,7 @@ fn test_auto_commit_batch_window_with_unique_index() {
 
     // The failed statement left no index residue and no vertex data.
     assert!(storage
-        .get_vertex("test_space", &VertexId::from_int64(2000))
+        .get_vertex("test_space", "Person", &VertexId::try_from_int64(2000).expect("test vertex id"))
         .unwrap()
         .is_none());
     storage.finalize_auto_commit_batch(&window).unwrap();
@@ -266,8 +266,8 @@ fn test_auto_commit_batch_window_via_sync_wrapper() {
     for i in 0..10 {
         let mut bound = wrapper.bind_auto_commit_statement(&window).unwrap();
         let vertex = Vertex::new(
-            VertexId::from_int64(5000 + i),
-            vec![Tag::new(
+            VertexId::try_from_int64(5000 + i).expect("test vertex id"),
+           Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string(format!("person_{i}"))),
@@ -275,7 +275,7 @@ fn test_auto_commit_batch_window_via_sync_wrapper() {
                 ]
                 .into_iter()
                 .collect(),
-            )],
+            ),
         );
         bound.insert_vertex("test_space", vertex).unwrap();
         bound.finalize_operation(true).unwrap();
@@ -285,7 +285,7 @@ fn test_auto_commit_batch_window_via_sync_wrapper() {
 
     for i in 0..10 {
         let v = wrapper
-            .get_vertex("test_space", &VertexId::from_int64(5000 + i))
+            .get_vertex("test_space", "Person", &VertexId::try_from_int64(5000 + i).expect("test vertex id"))
             .unwrap()
             .unwrap();
         assert_eq!(v.property_value("age"), Some(Value::BigInt(i)));

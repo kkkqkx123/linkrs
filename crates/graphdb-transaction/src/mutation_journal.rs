@@ -352,7 +352,9 @@ mod tests {
             let rec = TransactionMutationRecord {
                 sequence: 0,
                 transaction_id: TransactionId(1),
-                entity_keys: vec![MutationEntityKey::Vertex(VertexId::from_int64(i))],
+                entity_keys: vec![MutationEntityKey::Vertex(
+                    VertexId::try_from_int64(i).expect("test vertex id"),
+                )],
                 resource: MutationResource::Vertex,
                 undo: None,
                 redo: None,

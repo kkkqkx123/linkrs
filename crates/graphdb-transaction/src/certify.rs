@@ -889,7 +889,7 @@ mod tests {
         let stats = TransactionStats::new();
         let ctx_a = make_context(10, false, ConcurrencyMode::Optimistic);
         let ctx_b = make_context(2, false, ConcurrencyMode::Optimistic);
-        let vid = graphdb_core::types::VertexId::from_int64(7);
+        let vid = graphdb_core::types::VertexId::try_from_int64(7).expect("test vertex id");
         ctx_a.record_vertex_write(vid);
         ctx_b.record_vertex_write(vid);
         active.insert(TransactionId(10), Arc::clone(&ctx_a));
@@ -924,7 +924,7 @@ mod tests {
         let stats = TransactionStats::new();
         let ctx_a = make_context(10, false, ConcurrencyMode::Optimistic);
         let ctx_b = make_context(11, false, ConcurrencyMode::Optimistic);
-        let vid = graphdb_core::types::VertexId::from_int64(42);
+        let vid = graphdb_core::types::VertexId::try_from_int64(42).expect("test vertex id");
         ctx_a.record_vertex_write(vid);
         ctx_b.record_vertex_write(vid);
         active.insert(TransactionId(10), Arc::clone(&ctx_a));
@@ -947,7 +947,7 @@ mod tests {
         // the start timestamp): A starts at 5, B at 10.
         let ctx_a = make_context(5, false, ConcurrencyMode::Optimistic);
         let ctx_b = make_context(10, false, ConcurrencyMode::Optimistic);
-        let vid = graphdb_core::types::VertexId::from_int64(99);
+        let vid = graphdb_core::types::VertexId::try_from_int64(99).expect("test vertex id");
         ctx_a.record_vertex_write(vid);
         ctx_b.record_vertex_write(vid);
         active.insert(TransactionId(5), Arc::clone(&ctx_a));
@@ -976,7 +976,9 @@ mod tests {
     fn test_force_publish_is_idempotent() {
         let certifier = Certifier::new();
         let mut write_set = WriteSet::new();
-        write_set.record_vertex(graphdb_core::types::VertexId::from_int64(7));
+        write_set.record_vertex(
+            graphdb_core::types::VertexId::try_from_int64(7).expect("test vertex id"),
+        );
 
         certifier.force_publish(TransactionId(10), 15, &write_set);
         certifier.force_publish(TransactionId(10), 15, &write_set);

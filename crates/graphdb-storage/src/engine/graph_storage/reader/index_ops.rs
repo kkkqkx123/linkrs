@@ -160,36 +160,24 @@ pub(crate) fn lookup_edges_by_property_range(
         let src_internal = record.src_vid.as_internal_u32();
         let dst_internal = record.dst_vid.as_internal_u32();
         let src_external = match src_internal {
-            Some(internal) if src_label != 0 => ctx
-                .get_external_id(src_label, internal, ts)
-                .or_else(|| {
-                    ctx.get_external_id_by_internal_id(src_label, internal)
-                        .map(|v| vid_to_string(&v))
-                })
-                .unwrap_or_else(|| vid_to_string(&record.src_vid)),
-            Some(internal) => ctx
-                .get_external_id_any(internal, ts)
-                .unwrap_or_else(|| vid_to_string(&record.src_vid)),
-            None => vid_to_string(&record.src_vid),
+            Some(internal) if src_label != 0 => {
+                internal_to_external_vertex_id(ctx, src_label, internal, ts)
+                    .unwrap_or(record.src_vid)
+            }
+            _ => record.src_vid,
         };
         let dst_external = match dst_internal {
-            Some(internal) if dst_label != 0 => ctx
-                .get_external_id(dst_label, internal, ts)
-                .or_else(|| {
-                    ctx.get_external_id_by_internal_id(dst_label, internal)
-                        .map(|v| vid_to_string(&v))
-                })
-                .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
-            Some(internal) => ctx
-                .get_external_id_any(internal, ts)
-                .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
-            None => vid_to_string(&record.dst_vid),
+            Some(internal) if dst_label != 0 => {
+                internal_to_external_vertex_id(ctx, dst_label, internal, ts)
+                    .unwrap_or(record.dst_vid)
+            }
+            _ => record.dst_vid,
         };
         edges.push(edge_record_to_edge(
             record,
             edge_type,
-            &src_external,
-            &dst_external,
+            src_external,
+            dst_external,
         ));
     }
 

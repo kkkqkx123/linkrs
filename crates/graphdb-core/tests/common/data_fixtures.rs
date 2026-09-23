@@ -10,11 +10,14 @@ pub fn create_simple_vertex(vid: i64, _tag_name: &str, name: &str, age: i64) -> 
     props.insert("name".to_string(), Value::string(name));
     props.insert("age".to_string(), Value::Int(age as i32));
     let tag = Tag::new("Person".to_string(), props);
-    create_vertex(VertexId::from_int64(vid), vec![tag])
+    create_vertex(
+        VertexId::try_from_int64(vid).expect("test vertex id"),
+        tag,
+    )
 }
 
-pub fn create_vertex(vid: VertexId, tags: Vec<Tag>) -> Vertex {
-    Vertex::new(vid, tags)
+pub fn create_vertex(vid: VertexId, tag: Tag) -> Vertex {
+    Vertex::new(vid, tag)
 }
 
 pub fn create_edge(src: VertexId, dst: VertexId, edge_type: &str) -> Edge {
@@ -30,10 +33,26 @@ pub fn social_network_dataset() -> (Vec<Vertex>, Vec<Edge>) {
     ];
 
     let edges = vec![
-        create_edge(VertexId::from_int64(1), VertexId::from_int64(2), "KNOWS"),
-        create_edge(VertexId::from_int64(1), VertexId::from_int64(3), "KNOWS"),
-        create_edge(VertexId::from_int64(2), VertexId::from_int64(3), "KNOWS"),
-        create_edge(VertexId::from_int64(3), VertexId::from_int64(4), "KNOWS"),
+        create_edge(
+            VertexId::try_from_int64(1).expect("test vertex id"),
+            VertexId::try_from_int64(2).expect("test vertex id"),
+            "KNOWS",
+        ),
+        create_edge(
+            VertexId::try_from_int64(1).expect("test vertex id"),
+            VertexId::try_from_int64(3).expect("test vertex id"),
+            "KNOWS",
+        ),
+        create_edge(
+            VertexId::try_from_int64(2).expect("test vertex id"),
+            VertexId::try_from_int64(3).expect("test vertex id"),
+            "KNOWS",
+        ),
+        create_edge(
+            VertexId::try_from_int64(3).expect("test vertex id"),
+            VertexId::try_from_int64(4).expect("test vertex id"),
+            "KNOWS",
+        ),
     ];
 
     (vertices, edges)

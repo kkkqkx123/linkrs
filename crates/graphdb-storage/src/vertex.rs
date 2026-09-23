@@ -38,37 +38,18 @@ pub struct VertexRecord {
     pub properties: Vec<(String, Value)>,
 }
 
-impl From<&VertexRecord> for graphdb_core::Vertex {
-    fn from(record: &VertexRecord) -> Self {
-        let properties: std::collections::HashMap<String, Value> =
-            record.properties.iter().cloned().collect();
-
-        graphdb_core::Vertex {
-            vid: record.vid,
-            id: record.internal_id as i64,
-            tags: vec![Tag {
-                name: String::new(),
-                properties,
-            }],
-            properties: std::collections::HashMap::new(),
-        }
-    }
-}
-
 impl VertexRecord {
     pub fn into_vertex_with_tag(self, tag_name: &str) -> graphdb_core::Vertex {
         let properties: std::collections::HashMap<String, Value> =
             self.properties.into_iter().collect();
 
-        graphdb_core::Vertex {
-            vid: self.vid,
-            id: self.internal_id as i64,
-            tags: vec![Tag {
+        graphdb_core::Vertex::new(
+            self.vid,
+            Tag {
                 name: tag_name.to_string(),
                 properties,
-            }],
-            properties: std::collections::HashMap::new(),
-        }
+            },
+        )
     }
 }
 

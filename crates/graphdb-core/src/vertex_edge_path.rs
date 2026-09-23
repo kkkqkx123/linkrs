@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use crate::types::VertexId;
 use crate::value::Value;
 
-/// Represents a tag in the graph, similar to Nebula's Tag structure
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Represents a tag in the graph: one label with its property map.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Tag {
     pub name: String,
     pub properties: HashMap<String, Value>,
@@ -50,147 +50,56 @@ impl Tag {
     }
 }
 
-/// Represents a vertex in the graph, similar to Nebula's Vertex structure
+/// Represents a vertex in the graph: exactly one label with its properties.
+///
+/// Single-label is enforced by construction: there is no tag list, no
+/// vertex-level property map, and no internal row id. A vertex always carries
+/// precisely one tag.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Vertex {
     pub vid: VertexId,
-    pub id: i64,
-    pub tags: Vec<Tag>,
-    pub properties: HashMap<String, Value>,
+    pub tag: Tag,
 }
 
 // Implementing a hash function manually to handle the hashing of a HashMap
 impl std::hash::Hash for Vertex {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.vid.hash(state);
-        for tag in &self.tags {
-            tag.hash(state);
-        }
-        // For a HashMap, the hashing is performed based on the order in which the key-value pairs are sorted.
-        let mut pairs: Vec<_> = self.properties.iter().collect();
-        pairs.sort_by_key(|&(k, _)| k);
-        for (k, v) in pairs {
-            k.hash(state);
-            v.hash(state);
-        }
+        self.tag.hash(state);
     }
 }
 
 impl Vertex {
-    pub fn new(vid: VertexId, tags: Vec<Tag>) -> Self {
-        Self {
-            vid,
-            id: 0,
-            tags,
-            properties: HashMap::new(),
-        }
-    }
-
-    pub fn with_vid(vid: VertexId) -> Self {
-        Self {
-            vid,
-            id: 0,
-            tags: Vec::new(),
-            properties: HashMap::new(),
-        }
-    }
-
-    pub fn new_with_properties(
-        vid: VertexId,
-        tags: Vec<Tag>,
-        properties: HashMap<String, Value>,
-    ) -> Self {
-        Self {
-            vid,
-            id: 0,
-            tags,
-            properties,
-        }
-    }
-
-    pub fn add_tag(&mut self, tag: Tag) {
-        self.tags.push(tag);
-    }
-
-    pub fn id(&self) -> i64 {
-        self.id
+    pub fn new(vid: VertexId, tag: Tag) -> Self {
+        Self { vid, tag }
     }
 
     pub fn vid(&self) -> &VertexId {
         &self.vid
     }
 
-    pub fn tags(&self) -> &[Tag] {
-        &self.tags
+    pub fn tag(&self) -> &Tag {
+        &self.tag
     }
 
-    pub fn has_tag(&self, tag_name: &str) -> bool {
-        self.tags.iter().any(|tag| tag.name == tag_name)
+    pub fn tag_name(&self) -> &str {
+        &self.tag.name
     }
 
-    pub fn get_tag(&self, tag_name: &str) -> Option<&Tag> {
-        self.tags.iter().find(|tag| tag.name == tag_name)
+    pub fn properties(&self) -> &HashMap<String, Value> {
+        &self.tag.properties
     }
 
-    pub fn get_property(&self, tag_name: &str, prop_name: &str) -> Option<&Value> {
-        for tag in &self.tags {
-            if tag.name == tag_name {
-                return tag.properties.get(prop_name);
-            }
-        }
-        None
+    pub fn get_property(&self, prop_name: &str) -> Option<&Value> {
+        self.tag.properties.get(prop_name)
     }
 
-    /// Look up a property with single-label evaluation semantics: tag
-    /// properties first, then the vertex-level map.
-    ///
-    /// Tag properties are canonical: storage fills only the single tag, so
-    /// both maps agree wherever both are populated. Shared by the per-row
-    /// expression evaluator and the scan-side flat column extraction so both
-    /// paths cannot silently diverge.
     pub fn property_value(&self, property: &str) -> Option<Value> {
-        for tag in &self.tags {
-            if let Some(val) = tag.properties.get(property) {
-                return Some(val.clone());
-            }
-        }
-        self.properties.get(property).cloned()
-    }
-
-    pub fn get_all_properties(&self) -> HashMap<String, &Value> {
-        let mut all_props = HashMap::new();
-
-        for (name, value) in &self.properties {
-            all_props.insert(name.clone(), value);
-        }
-
-        for tag in &self.tags {
-            for (name, value) in &tag.properties {
-                all_props.insert(name.clone(), value);
-            }
-        }
-
-        all_props
-    }
-
-    pub fn vertex_properties(&self) -> &HashMap<String, Value> {
-        &self.properties
-    }
-
-    pub fn set_vertex_property(&mut self, name: String, value: Value) {
-        self.properties.insert(name, value);
-    }
-
-    pub fn remove_vertex_property(&mut self, name: &str) -> Option<Value> {
-        self.properties.remove(name)
-    }
-
-    pub fn tag_count(&self) -> usize {
-        self.tags.len()
+        self.tag.properties.get(property).cloned()
     }
 
     pub fn has_properties(&self) -> bool {
-        !self.properties.is_empty() || self.tags.iter().any(|tag| !tag.properties.is_empty())
+        !self.tag.properties.is_empty()
     }
 
     fn cmp_properties(
@@ -223,36 +132,14 @@ impl Vertex {
 impl Ord for Vertex {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Use chained comparisons to improve readability.
-        self.vid
-            .cmp(&other.vid)
-            .then_with(|| self.tags.len().cmp(&other.tags.len()))
-            .then_with(|| self.cmp_tags_and_properties(other))
-    }
-}
-
-impl Vertex {
-    /// Comparing tags and attributes
-    fn cmp_tags_and_properties(&self, other: &Self) -> std::cmp::Ordering {
-        // Compare tags
-        let mut self_tags: Vec<_> = self.tags.iter().collect();
-        let mut other_tags: Vec<_> = other.tags.iter().collect();
-        self_tags.sort_by(|a, b| a.name.cmp(&b.name));
-        other_tags.sort_by(|a, b| a.name.cmp(&b.name));
-
-        // Compare each tag.
-        for (tag1, tag2) in self_tags.iter().zip(other_tags.iter()) {
-            let tag_cmp = tag1
+        self.vid.cmp(&other.vid).then_with(|| {
+            self.tag
                 .name
-                .cmp(&tag2.name)
-                .then_with(|| Vertex::cmp_properties(&tag1.properties, &tag2.properties));
-
-            if tag_cmp != std::cmp::Ordering::Equal {
-                return tag_cmp;
-            }
-        }
-
-        // Comparing vertex-level attributes
-        Vertex::cmp_properties(&self.properties, &other.properties)
+                .cmp(&other.tag.name)
+                .then_with(|| {
+                    Vertex::cmp_properties(&self.tag.properties, &other.tag.properties)
+                })
+        })
     }
 }
 
@@ -268,27 +155,7 @@ impl Vertex {
 
         size += self.vid.len();
 
-        size += self.tags.capacity() * std::mem::size_of::<Tag>();
-
-        for tag in &self.tags {
-            size += std::mem::size_of::<String>() + tag.name.capacity();
-
-            size += tag.properties.capacity()
-                * (8 + std::mem::size_of::<String>() + std::mem::size_of::<Value>());
-
-            for (k, v) in &tag.properties {
-                size += k.capacity();
-                size += v.estimated_size();
-            }
-        }
-
-        size += self.properties.capacity()
-            * (8 + std::mem::size_of::<String>() + std::mem::size_of::<Value>());
-
-        for (k, v) in &self.properties {
-            size += k.capacity();
-            size += v.estimated_size();
-        }
+        size += self.tag.estimated_size();
 
         size
     }
@@ -677,7 +544,7 @@ impl Path {
         }
 
         if let Some(last_step) = self.steps.first() {
-            *self.src = Vertex::new(last_step.edge.src, vec![]);
+            *self.src = (*last_step.dst).clone();
         }
     }
 

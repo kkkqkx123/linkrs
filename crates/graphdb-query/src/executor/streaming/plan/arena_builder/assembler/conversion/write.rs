@@ -101,26 +101,6 @@ impl ArenaPlanAssembler {
                     spec,
                 )
             }
-            PlanNodeEnum::DeleteTags(dt_node) => {
-                let (child_fid, _) = Self::push_source_op(
-                    operators,
-                    fragments,
-                    op_alloc,
-                    frag_alloc,
-                    node.id(),
-                    build_standalone_write_source(node)?,
-                );
-                let spec = build_delete_tags_spec(dt_node, exec_ctx)?;
-                Self::push_sink_op(
-                    operators,
-                    fragments,
-                    op_alloc,
-                    frag_alloc,
-                    child_fid,
-                    node.id(),
-                    spec,
-                )
-            }
             PlanNodeEnum::PipeDeleteVertices(pdv_node) => {
                 let (child_fid, _) = Self::convert_node(
                     pdv_node.input(),

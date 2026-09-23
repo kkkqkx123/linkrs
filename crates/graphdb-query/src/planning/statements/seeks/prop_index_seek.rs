@@ -274,7 +274,7 @@ fn vertex_matches_single_label(
     pattern
         .labels
         .iter()
-        .all(|label| vertex.tags.iter().any(|tag| tag.name == *label))
+        .all(|label| vertex.tag.name == *label)
 }
 
 impl SeekStrategy for PropIndexSeek {

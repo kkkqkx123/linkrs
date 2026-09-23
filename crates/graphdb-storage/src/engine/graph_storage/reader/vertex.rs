@@ -13,23 +13,26 @@ use crate::engine::graph_storage::reader::utils::*;
 pub(crate) fn get_vertex(
     ctx: &GraphStorageContext,
     space: &str,
+    tag: &str,
     id: &VertexId,
 ) -> StorageResult<Option<Vertex>> {
-    get_vertex_impl(ctx, space, id, None)
+    get_vertex_impl(ctx, space, tag, id, None)
 }
 
 pub(crate) fn get_vertex_projected(
     ctx: &GraphStorageContext,
     space: &str,
+    tag: &str,
     id: &VertexId,
     projection: &[String],
 ) -> StorageResult<Option<Vertex>> {
-    get_vertex_impl(ctx, space, id, Some(projection))
+    get_vertex_impl(ctx, space, tag, id, Some(projection))
 }
 
 fn get_vertex_impl(
     ctx: &GraphStorageContext,
     space: &str,
+    tag: &str,
     id: &VertexId,
     projection: Option<&[String]>,
 ) -> StorageResult<Option<Vertex>> {
@@ -42,55 +45,28 @@ fn get_vertex_impl(
     let id = VertexId::normalize_for_vid_type(&space_info.vid_type, *id)?;
     let routed = route_vertex_id(&id)?;
 
-    let tags = ctx.schema_manager().list_tags(space)?;
-    if tags.is_empty() {
-        return Ok(None);
-    }
+    let tag_info = ctx
+        .schema_manager()
+        .get_tag(space, tag)?
+        .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag)))?;
+    let label_id = tag_info.tag_id;
 
     let ts = ctx.get_read_timestamp();
-    let mut hits: Vec<(&str, crate::vertex::VertexRecord)> = Vec::new();
+    let record = match &routed {
+        RoutedVertexId::Int(id_int) => match projection {
+            Some(proj) => ctx.get_vertex_by_i64_projected(label_id, *id_int, proj, ts),
+            None => ctx.get_vertex_by_i64(label_id, *id_int, ts),
+        },
+        RoutedVertexId::Text(id_str) => match projection {
+            Some(proj) => ctx.get_vertex_projected(label_id, id_str, proj, ts),
+            None => ctx.get_vertex(label_id, id_str, ts),
+        },
+    };
 
-    for tag in &tags {
-        let label_id = tag.tag_id;
-        let record = match &routed {
-            RoutedVertexId::Int(id_int) => match projection {
-                Some(proj) => ctx.get_vertex_by_i64_projected(label_id, *id_int, proj, ts),
-                None => ctx.get_vertex_by_i64(label_id, *id_int, ts),
-            },
-            RoutedVertexId::Text(id_str) => match projection {
-                Some(proj) => ctx.get_vertex_projected(label_id, id_str, proj, ts),
-                None => ctx.get_vertex(label_id, id_str, ts),
-            },
-        };
-
-        if let Some(record) = record {
-            hits.push((tag.tag_name.as_str(), record));
-        }
-    }
-
-    // Single-label point lookup: one hit yields a single-tag vertex, zero
-    // hits yield None, and multiple hits violate the single-label invariant
-    // and are rejected instead of being merged.
-    match hits.as_slice() {
-        [] => Ok(None),
-        [(tag_name, record)] => {
-            let props: HashMap<String, Value> = record.properties.iter().cloned().collect();
-            Ok(Some(Vertex {
-                vid: id,
-                id: record.internal_id as i64,
-                tags: vec![Tag::new(tag_name.to_string(), props)],
-                properties: HashMap::new(),
-            }))
-        }
-        _ => {
-            let names: Vec<&str> = hits.iter().map(|(name, _)| *name).collect();
-            Err(StorageError::invalid_input(format!(
-                "Vertex id {} matches multiple labels [{}]: label-scoped lookup required",
-                id,
-                names.join(", ")
-            )))
-        }
-    }
+    Ok(record.map(|record| {
+        let props: HashMap<String, Value> = record.properties.iter().cloned().collect();
+        Vertex::new(id, Tag::new(tag.to_string(), props))
+    }))
 }
 
 pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageResult<Vec<Vertex>> {
@@ -139,12 +115,10 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
                         record_vertex_read(ctx, record.vid);
                         let props: HashMap<String, Value> =
                             record.properties.iter().cloned().collect();
-                        out.push(Vertex {
-                            vid: record.vid,
-                            id: record.internal_id as i64,
-                            tags: vec![Tag::new(tag_name.clone(), props)],
-                            properties: HashMap::new(),
-                        });
+                        out.push(Vertex::new(
+                            record.vid,
+                            Tag::new(tag_name.clone(), props),
+                        ));
                     }
                 }
             }

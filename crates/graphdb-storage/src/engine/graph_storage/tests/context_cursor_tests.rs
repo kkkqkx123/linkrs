@@ -21,13 +21,13 @@ fn bound_operation_contexts_are_isolated_across_concurrent_handles() {
         .insert_vertex(
             "test_space",
             Vertex::new(
-                VertexId::from_int64(1),
-                vec![Tag::new(
+                VertexId::try_from_int64(1).expect("test vertex id"),
+               Tag::new(
                     "Person".to_string(),
                     [("name".to_string(), Value::string("Alice"))]
                         .into_iter()
                         .collect(),
-                )],
+                ),
             ),
         )
         .expect("Failed to insert vertex at timestamp 10");
@@ -53,7 +53,7 @@ fn bound_operation_contexts_are_isolated_across_concurrent_handles() {
                 assert_eq!(context.transaction_id, Some(TransactionId::from(id + 100)));
                 assert_eq!(context.read_timestamp, 10);
                 assert!(bound
-                    .get_vertex("test_space", &VertexId::from_int64(1))
+                    .get_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
                     .expect("Concurrent read failed")
                     .is_some());
             })
@@ -86,8 +86,8 @@ fn cursor_keeps_the_read_timestamp_from_its_bound_handle() {
         .insert_vertex(
             "test_space",
             Vertex::new(
-                VertexId::from_int64(1),
-                vec![Tag::new("Person".to_string(), Default::default())],
+                VertexId::try_from_int64(1).expect("test vertex id"),
+               Tag::new("Person".to_string(), Default::default()),
             ),
         )
         .expect("Failed to insert initial vertex");
@@ -116,15 +116,15 @@ fn cursor_keeps_the_read_timestamp_from_its_bound_handle() {
         .insert_vertex(
             "test_space",
             Vertex::new(
-                VertexId::from_int64(2),
-                vec![Tag::new("Person".to_string(), Default::default())],
+                VertexId::try_from_int64(2).expect("test vertex id"),
+               Tag::new("Person".to_string(), Default::default()),
             ),
         )
         .expect("Failed to insert later vertex");
 
     let rows = cursor.next_batch(16).expect("Cursor read failed");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].vid, VertexId::from_int64(1));
+    assert_eq!(rows[0].vid, VertexId::try_from_int64(1).expect("test vertex id"));
 }
 
 #[test]
@@ -136,8 +136,8 @@ fn cursor_applies_property_projection_during_scan() {
         .insert_vertex(
             "test_space",
             Vertex::new(
-                VertexId::from_int64(1),
-                vec![Tag::new(
+                VertexId::try_from_int64(1).expect("test vertex id"),
+               Tag::new(
                     "Person".to_string(),
                     [
                         ("name".to_string(), Value::string("Alice")),
@@ -145,7 +145,7 @@ fn cursor_applies_property_projection_during_scan() {
                     ]
                     .into_iter()
                     .collect(),
-                )],
+                ),
             ),
         )
         .expect("vertex insert");
@@ -158,8 +158,8 @@ fn cursor_applies_property_projection_during_scan() {
         .expect("cursor should open");
     let rows = cursor.next_batch(8).expect("cursor batch");
     assert_eq!(rows.len(), 1);
-    assert!(rows[0].tags[0].properties.contains_key("name"));
-    assert!(!rows[0].tags[0].properties.contains_key("age"));
+    assert!(rows[0].properties().contains_key("name"));
+    assert!(!rows[0].properties().contains_key("age"));
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn test_read_operation_context_pins_and_releases_statement_snapshot() {
 
     // Reads resolve without any table-level registration.
     let vertex = bound
-        .get_vertex("test_space", &VertexId::from_int64(1))
+        .get_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
         .unwrap()
         .expect("vertex should resolve");
     assert_eq!(
@@ -243,8 +243,8 @@ fn vertex_column_stats_snapshot_matches_inserted_range() {
             .insert_vertex(
                 "test_space",
                 Vertex::new(
-                    VertexId::from_int64(i),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(i).expect("test vertex id"),
+                   Tag::new(
                         "Person".to_string(),
                         [
                             ("name".to_string(), Value::string(format!("P{i}"))),
@@ -252,7 +252,7 @@ fn vertex_column_stats_snapshot_matches_inserted_range() {
                         ]
                         .into_iter()
                         .collect(),
-                    )],
+                    ),
                 ),
             )
             .expect("insert should succeed");
@@ -294,13 +294,13 @@ fn vertex_column_stats_snapshot_row_count_excludes_deleted_rows() {
             .insert_vertex(
                 "test_space",
                 Vertex::new(
-                    VertexId::from_int64(i),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(i).expect("test vertex id"),
+                   Tag::new(
                         "Person".to_string(),
                         [("age".to_string(), Value::BigInt(i))]
                             .into_iter()
                             .collect(),
-                    )],
+                    ),
                 ),
             )
             .expect("insert should succeed");
@@ -308,7 +308,7 @@ fn vertex_column_stats_snapshot_row_count_excludes_deleted_rows() {
 
     for i in 1..=4i64 {
         storage
-            .delete_vertex("test_space", &VertexId::from_int64(i))
+            .delete_vertex("test_space", "Person", &VertexId::try_from_int64(i).expect("test vertex id"))
             .expect("delete should succeed");
     }
 
@@ -344,13 +344,13 @@ fn edge_column_stats_snapshot_matches_inserted_range() {
         .insert_vertex(
             "test_space",
             Vertex::new(
-                VertexId::from_int64(1),
-                vec![Tag::new(
+                VertexId::try_from_int64(1).expect("test vertex id"),
+               Tag::new(
                     "Person".to_string(),
                     [("name".to_string(), Value::string("Alice"))]
                         .into_iter()
                         .collect(),
-                )],
+                ),
             ),
         )
         .unwrap();
@@ -358,13 +358,13 @@ fn edge_column_stats_snapshot_matches_inserted_range() {
         .insert_vertex(
             "test_space",
             Vertex::new(
-                VertexId::from_int64(2),
-                vec![Tag::new(
+                VertexId::try_from_int64(2).expect("test vertex id"),
+               Tag::new(
                     "Person".to_string(),
                     [("name".to_string(), Value::string("Bob"))]
                         .into_iter()
                         .collect(),
-                )],
+                ),
             ),
         )
         .unwrap();
@@ -372,8 +372,8 @@ fn edge_column_stats_snapshot_matches_inserted_range() {
         .insert_edge(
             "test_space",
             Edge::new(
-                VertexId::from_int64(1),
-                VertexId::from_int64(2),
+                VertexId::try_from_int64(1).expect("test vertex id"),
+                VertexId::try_from_int64(2).expect("test vertex id"),
                 "KNOWS".to_string(),
                 0,
                 [("since".to_string(), Value::Int(2020))]
@@ -386,8 +386,8 @@ fn edge_column_stats_snapshot_matches_inserted_range() {
         .insert_edge(
             "test_space",
             Edge::new(
-                VertexId::from_int64(2),
-                VertexId::from_int64(1),
+                VertexId::try_from_int64(2).expect("test vertex id"),
+                VertexId::try_from_int64(1).expect("test vertex id"),
                 "KNOWS".to_string(),
                 0,
                 [("since".to_string(), Value::Int(2025))]

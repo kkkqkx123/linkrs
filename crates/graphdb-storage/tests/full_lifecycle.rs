@@ -69,12 +69,12 @@ fn test_index_created_after_data_insertion() {
     let alice = storage
         .lookup_index("test_space", "person_name_idx", &Value::string("Alice"))
         .unwrap();
-    assert_eq!(alice, vec![Value::from(VertexId::from_int64(1))]);
+    assert_eq!(alice, vec![Value::from(VertexId::try_from_int64(1).expect("test vertex id"))]);
 
     let bob = storage
         .lookup_index("test_space", "person_name_idx", &Value::string("Bob"))
         .unwrap();
-    assert_eq!(bob, vec![Value::from(VertexId::from_int64(2))]);
+    assert_eq!(bob, vec![Value::from(VertexId::try_from_int64(2).expect("test vertex id"))]);
 }
 
 // ── Scenario 8: Space Isolation ──
@@ -114,19 +114,19 @@ fn test_space_isolation() {
 
     // Verify isolation: same ID, different data
     let alpha_vertex = storage
-        .get_vertex("alpha", &VertexId::from_int64(1))
+        .get_vertex("alpha", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
         .unwrap()
         .unwrap();
     let beta_vertex = storage
-        .get_vertex("beta", &VertexId::from_int64(1))
+        .get_vertex("beta", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
         .unwrap()
         .unwrap();
     assert_eq!(
-        alpha_vertex.properties.get("name"),
+        alpha_vertex.properties().get("name"),
         Some(&Value::string("Alice"))
     );
     assert_eq!(
-        beta_vertex.properties.get("name"),
+        beta_vertex.properties().get("name"),
         Some(&Value::string("Bob"))
     );
 
@@ -160,7 +160,7 @@ fn test_drop_index_keeps_data_intact() {
     let names: Vec<&str> = vertices
         .iter()
         .filter_map(|v| {
-            v.properties.get("name").and_then(|v| match v {
+            v.properties().get("name").and_then(|v| match v {
                 Value::String(s) => Some(s.as_str()),
                 _ => None,
             })
@@ -191,7 +191,7 @@ fn test_scan_vertices_by_property_match() {
         .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(
-        result[0].properties.get("name"),
+        result[0].properties().get("name"),
         Some(&Value::string("Person3"))
     );
 

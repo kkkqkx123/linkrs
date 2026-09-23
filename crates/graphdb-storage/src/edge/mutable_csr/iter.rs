@@ -148,7 +148,7 @@ impl<'a> Iterator for MutableCsrIterator<'a> {
                     let nbr = Nbr::from_parts(hot[self.current_edge], cold[self.current_edge]);
                     self.current_edge += 1;
                     if self.include_deleted || nbr.is_alive_at(self.ts) {
-                        return Some((VertexId::from_int64(self.current_vertex as i64), nbr));
+                        return Some((VertexId::from_u32(u32::try_from(self.current_vertex).ok()?), nbr));
                     }
                 }
                 self.in_overflow = true;
@@ -161,7 +161,7 @@ impl<'a> Iterator for MutableCsrIterator<'a> {
                         let nbr = chunk.slot_at(self.overflow_edge_idx).unwrap();
                         self.overflow_edge_idx += 1;
                         if self.include_deleted || nbr.is_alive_at(self.ts) {
-                            return Some((VertexId::from_int64(self.current_vertex as i64), nbr));
+                            return Some((VertexId::from_u32(u32::try_from(self.current_vertex).ok()?), nbr));
                         }
                     }
                     self.overflow_chunk_idx += 1;

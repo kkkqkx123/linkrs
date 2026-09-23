@@ -27,8 +27,8 @@ fn does_not_buffer_sync_events_when_edge_insert_fails() {
 
     let mut storage = SyncWrapper::with_sync_manager(inner, sync_manager.clone());
     let edge = Edge {
-        src: VertexId::from_int64(1),
-        dst: VertexId::from_int64(2),
+        src: VertexId::try_from_int64(1).expect("test vertex id"),
+        dst: VertexId::try_from_int64(2).expect("test vertex id"),
         edge_type: "KNOWS".to_string(),
         ranking: 0,
         props: HashMap::new(),
@@ -93,7 +93,7 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
         .insert_vertex(
             "test_space",
             graphdb_core::Vertex::new(
-                VertexId::from_int64(1),
+                VertexId::try_from_int64(1).expect("test vertex id"),
                 vec![Tag::new(
                     "Person".to_string(),
                     [("name".to_string(), graphdb_core::Value::string("one"))]
@@ -127,7 +127,7 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
         .insert_vertex(
             "test_space",
             graphdb_core::Vertex::new(
-                VertexId::from_int64(2),
+                VertexId::try_from_int64(2).expect("test vertex id"),
                 vec![Tag::new(
                     "Person".to_string(),
                     [("name".to_string(), graphdb_core::Value::string("two"))]
@@ -165,14 +165,14 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
     );
     assert_eq!(
         reopened
-            .get_vertex("test_space", &VertexId::from_int64(1))
+            .get_vertex("test_space", &VertexId::try_from_int64(1).expect("test vertex id"))
             .expect("first vertex should be readable")
             .expect("first vertex should exist")
             .vid,
-        VertexId::from_int64(1)
+        VertexId::try_from_int64(1).expect("test vertex id")
     );
     assert!(reopened
-        .get_vertex("test_space", &VertexId::from_int64(2))
+        .get_vertex("test_space", &VertexId::try_from_int64(2).expect("test vertex id"))
         .expect("second vertex should be readable")
         .is_some());
 }

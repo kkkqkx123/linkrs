@@ -38,8 +38,8 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
         .map(|i| {
             let props = vec![("value".to_string(), Value::BigInt(i))];
             Vertex::new(
-                VertexId::from_int64(i),
-                vec![Tag::new("Node".to_string(), props.into_iter().collect())],
+                VertexId::try_from_int64(i).expect("test vertex id"),
+               Tag::new("Node".to_string(), props.into_iter().collect()),
             )
         })
         .collect();
@@ -127,13 +127,13 @@ fn update_widening_bounds_keeps_results_correct() {
 
     // Move one row far outside every recorded bound.
     let updated = Vertex::new(
-        VertexId::from_int64(42),
-        vec![Tag::new(
+        VertexId::try_from_int64(42).expect("test vertex id"),
+       Tag::new(
             "Node".to_string(),
             vec![("value".to_string(), Value::BigInt(99_999))]
                 .into_iter()
                 .collect(),
-        )],
+        ),
     );
     storage
         .write()

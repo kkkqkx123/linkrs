@@ -452,9 +452,9 @@ mod pending_visibility_tests {
         ctx.insert_edge(InsertEdgeParams {
             edge_label,
             src_label,
-            src_id: VertexId::from_int64(1),
+            src_id: VertexId::try_from_int64(1).expect("test vertex id"),
             dst_label,
-            dst_id: VertexId::from_int64(2),
+            dst_id: VertexId::try_from_int64(2).expect("test vertex id"),
             rank: 0,
             properties: &[],
             ts: start,
@@ -465,9 +465,9 @@ mod pending_visibility_tests {
         let params = EdgeOperationParams {
             edge_label,
             src_label,
-            src_id: VertexId::from_int64(1),
+            src_id: VertexId::try_from_int64(1).expect("test vertex id"),
             dst_label,
-            dst_id: VertexId::from_int64(2),
+            dst_id: VertexId::try_from_int64(2).expect("test vertex id"),
             rank: 0,
         };
         assert!(
@@ -475,7 +475,7 @@ mod pending_visibility_tests {
             "own edge write visible to point lookup"
         );
         let neighbors = bound
-            .out_edges_projected(edge_label, src_label, VertexId::from_int64(1), start, None)
+            .out_edges_projected(edge_label, src_label, VertexId::try_from_int64(1).expect("test vertex id"), start, None)
             .expect("traversal resolves");
         assert_eq!(neighbors.len(), 1);
 

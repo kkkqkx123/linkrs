@@ -144,17 +144,20 @@ pub(crate) fn flush_split_generation(
 }
 
 pub(crate) fn vertex_entity_ref(value: &Value) -> Option<EntityRef> {
+    use graphdb_core::types::storage_ids::VertexId;
     match value {
-        Value::BigInt(id) => Some(EntityRef::Vertex(
-            graphdb_core::types::storage_ids::VertexId::from_int64(*id),
-        )),
-        Value::Int(id) => Some(EntityRef::Vertex(
-            graphdb_core::types::storage_ids::VertexId::from_int64(*id as i64),
-        )),
-        Value::String(id) => Some(EntityRef::Vertex(id.parse::<i64>().map_or_else(
-            |_| graphdb_core::types::storage_ids::VertexId::from_string(id.clone()),
-            graphdb_core::types::storage_ids::VertexId::from_int64,
-        ))),
+        Value::BigInt(id) => VertexId::try_from_int64(*id)
+            .ok()
+            .map(EntityRef::Vertex),
+        Value::Int(id) => VertexId::try_from_int64(*id as i64)
+            .ok()
+            .map(EntityRef::Vertex),
+        Value::String(id) => id
+            .parse::<i64>()
+            .ok()
+            .and_then(|parsed| VertexId::try_from_int64(parsed).ok())
+            .or_else(|| VertexId::try_from_string(id.clone()).ok())
+            .map(EntityRef::Vertex),
         Value::Vertex(vertex) => Some(EntityRef::Vertex(vertex.vid)),
         _ => None,
     }
@@ -267,21 +270,21 @@ mod tests {
     fn vertex_entity_ref_int() {
         let v = Value::Int(42);
         let entity = vertex_entity_ref(&v).expect("should resolve");
-        assert_eq!(entity, EntityRef::Vertex(VertexId::from_int64(42)));
+        assert_eq!(entity, EntityRef::Vertex(VertexId::try_from_int64(42).expect("test vertex id")));
     }
 
     #[test]
     fn vertex_entity_ref_bigint() {
         let v = Value::BigInt(100);
         let entity = vertex_entity_ref(&v).expect("should resolve");
-        assert_eq!(entity, EntityRef::Vertex(VertexId::from_int64(100)));
+        assert_eq!(entity, EntityRef::Vertex(VertexId::try_from_int64(100).expect("test vertex id")));
     }
 
     #[test]
     fn vertex_entity_ref_string_numeric() {
         let v = Value::string("42");
         let entity = vertex_entity_ref(&v).expect("should resolve");
-        assert_eq!(entity, EntityRef::Vertex(VertexId::from_int64(42)));
+        assert_eq!(entity, EntityRef::Vertex(VertexId::try_from_int64(42).expect("test vertex id")));
     }
 
     #[test]
@@ -290,7 +293,7 @@ mod tests {
         let entity = vertex_entity_ref(&v).expect("should resolve");
         assert_eq!(
             entity,
-            EntityRef::Vertex(VertexId::from_string("uuid-abc".to_string()))
+            EntityRef::Vertex(VertexId::try_from_string("uuid-abc".to_string()).expect("test vertex id"))
         );
     }
 
@@ -314,8 +317,8 @@ mod tests {
         else {
             panic!("expected Edge entity ref");
         };
-        assert_eq!(s, VertexId::from_int64(1));
-        assert_eq!(d, VertexId::from_int64(2));
+        assert_eq!(s, VertexId::try_from_int64(1).expect("test vertex id"));
+        assert_eq!(d, VertexId::try_from_int64(2).expect("test vertex id"));
         assert_eq!(edge_type, stable_hash(b"KNOWS") as u32);
         assert_eq!(ranking, 0);
     }

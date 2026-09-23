@@ -655,7 +655,6 @@ impl PartitioningPlanner {
                 | PlanNodeEnum::InsertEdges(_)
                 | PlanNodeEnum::DeleteVertices(_)
                 | PlanNodeEnum::DeleteEdges(_)
-                | PlanNodeEnum::DeleteTags(_)
                 | PlanNodeEnum::DeleteIndex(_)
                 | PlanNodeEnum::PipeDeleteVertices(_)
                 | PlanNodeEnum::PipeDeleteEdges(_)

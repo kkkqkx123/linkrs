@@ -403,11 +403,15 @@ fn test_savepoint_with_operations() {
     let sp1 = ctx.create_savepoint(Some("sp1".to_string()), 0);
 
     ctx.record_mutation(crate::types::MutationResult::new(
-        crate::types::MutationEntityKey::Vertex(crate::VertexId::from_int64(1)),
+        crate::types::MutationEntityKey::Vertex(
+            crate::VertexId::try_from_int64(1).expect("test vertex id"),
+        ),
     ))
     .expect("record mutation should succeed");
     ctx.record_mutation(crate::types::MutationResult::new(
-        crate::types::MutationEntityKey::Vertex(crate::VertexId::from_int64(2)),
+        crate::types::MutationEntityKey::Vertex(
+            crate::VertexId::try_from_int64(2).expect("test vertex id"),
+        ),
     ))
     .expect("record mutation should succeed");
 
@@ -432,7 +436,7 @@ fn test_savepoint_rollback_preserves_prefix_state() {
 
     ctx.add_undo_log(UndoLogEntry::InsertVertex(InsertVertexUndo {
         v_label: 1,
-        vid: crate::VertexId::from_int64(1),
+        vid: crate::VertexId::try_from_int64(1).expect("test vertex id"),
     }))
     .expect("Failed to append undo log");
 
@@ -440,7 +444,7 @@ fn test_savepoint_rollback_preserves_prefix_state() {
 
     ctx.add_undo_log(UndoLogEntry::InsertVertex(InsertVertexUndo {
         v_label: 1,
-        vid: crate::VertexId::from_int64(2),
+        vid: crate::VertexId::try_from_int64(2).expect("test vertex id"),
     }))
     .expect("Failed to append undo log");
 
@@ -464,12 +468,14 @@ fn test_savepoint_rollback_rebuilds_derived_redo_view() {
     );
 
     let redo = |payload: &[u8]| {
-        crate::types::MutationResult::new(MutationEntityKey::Vertex(crate::VertexId::from_int64(1)))
-            .with_redo(TransactionWalEntry::new(
-                WalOpType::InsertVertex,
-                1,
-                payload.to_vec(),
-            ))
+        crate::types::MutationResult::new(MutationEntityKey::Vertex(
+            crate::VertexId::try_from_int64(1).expect("test vertex id"),
+        ))
+        .with_redo(TransactionWalEntry::new(
+            WalOpType::InsertVertex,
+            1,
+            payload.to_vec(),
+        ))
     };
 
     ctx.record_mutation(redo(b"a"))
@@ -546,7 +552,9 @@ fn test_clear() {
     let ctx = TransactionContext::new(txn_id, 1, config);
 
     ctx.record_mutation(crate::types::MutationResult::new(
-        crate::types::MutationEntityKey::Vertex(crate::VertexId::from_int64(1)),
+        crate::types::MutationEntityKey::Vertex(
+            crate::VertexId::try_from_int64(1).expect("test vertex id"),
+        ),
     ))
     .expect("record mutation should succeed");
     ctx.record_table_modification("vertices");

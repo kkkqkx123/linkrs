@@ -142,7 +142,7 @@ fn test_batch_projected_read() {
         .insert("v3", &[("name".to_string(), Value::string("Carol"))], 100)
         .unwrap();
 
-    let ids = table.live_ids();
+    let ids = table.live_ids(100);
     assert_eq!(ids, vec![0, 1, 2]);
 
     // Full read, aligned with input order.
@@ -222,6 +222,26 @@ fn test_iterator() {
 
     let count = table.scan(100).count();
     assert_eq!(count, 3);
+}
+
+#[test]
+fn test_live_ids_at_excludes_timestamp_deleted_rows() {
+    let schema = create_test_schema();
+    let mut table = new_table(0, "person", schema);
+
+    table
+        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
+        .unwrap();
+    table
+        .insert("v2", &[("name".to_string(), Value::string("Bob"))], 100)
+        .unwrap();
+
+    table.delete("v1", 200).unwrap();
+
+    // Snapshot enumeration hides the row deleted at 200.
+    assert_eq!(table.live_ids(150), vec![0, 1]);
+    assert_eq!(table.live_ids(200), vec![1]);
+    assert_eq!(table.scan(200).count(), 1);
 }
 
 #[test]

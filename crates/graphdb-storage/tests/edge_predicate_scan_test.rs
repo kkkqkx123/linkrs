@@ -52,8 +52,8 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
     let vertices: Vec<Vertex> = (0..VERTEX_COUNT)
         .map(|i| {
             Vertex::new(
-                VertexId::from_int64(i),
-                vec![Tag::new(TAG.to_string(), Default::default())],
+                VertexId::try_from_int64(i).expect("test vertex id"),
+                Tag::new(TAG.to_string(), Default::default()),
             )
         })
         .collect();
@@ -64,15 +64,15 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
     let mut edges = Vec::with_capacity((VERTEX_COUNT * 2) as usize);
     for src in 0..VERTEX_COUNT {
         edges.push(Edge {
-            src: VertexId::from_int64(src),
-            dst: VertexId::from_int64((src + 1) % VERTEX_COUNT),
+            src: VertexId::try_from_int64(src).expect("test vertex id"),
+            dst: VertexId::try_from_int64((src + 1) % VERTEX_COUNT).expect("test vertex id"),
             edge_type: EDGE.to_string(),
             ranking: 0,
             props: Default::default(),
         });
         edges.push(Edge {
-            src: VertexId::from_int64(src),
-            dst: VertexId::from_int64((src + 2) % VERTEX_COUNT),
+            src: VertexId::try_from_int64(src).expect("test vertex id"),
+            dst: VertexId::try_from_int64((src + 2) % VERTEX_COUNT).expect("test vertex id"),
             edge_type: EDGE.to_string(),
             ranking: 1,
             props: [("weight".to_string(), Value::BigInt(src * 10))]

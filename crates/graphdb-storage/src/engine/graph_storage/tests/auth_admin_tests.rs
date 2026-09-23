@@ -66,8 +66,8 @@ fn test_get_storage_stats_with_data() {
     insert_test_vertex(&mut storage, 2, "Bob");
 
     let edge = Edge::new(
-        VertexId::from_int64(1),
-        VertexId::from_int64(2),
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
         0,
         std::collections::HashMap::new(),
@@ -92,7 +92,7 @@ fn test_get_db_path() {
 #[test]
 fn test_get_nonexistent_vertex() {
     let storage = create_test_storage();
-    let result = storage.get_vertex("nonexistent", &VertexId::from_int64(999));
+    let result = storage.get_vertex("nonexistent", "Person", &VertexId::try_from_int64(999).expect("test vertex id"));
     assert!(result.is_err());
 }
 
@@ -101,8 +101,8 @@ fn test_get_nonexistent_edge() {
     let storage = create_test_storage();
     let result = storage.get_edge(
         "nonexistent",
-        &VertexId::from_int64(1),
-        &VertexId::from_int64(2),
+        &VertexId::try_from_int64(1).expect("test vertex id"),
+        &VertexId::try_from_int64(2).expect("test vertex id"),
         "UNKNOWN",
         0,
     );
@@ -112,6 +112,6 @@ fn test_get_nonexistent_edge() {
 #[test]
 fn test_delete_nonexistent_vertex() {
     let mut storage = create_test_storage();
-    let result = storage.delete_vertex("nonexistent", &VertexId::from_int64(999));
+    let result = storage.delete_vertex("nonexistent", "Person", &VertexId::try_from_int64(999).expect("test vertex id"));
     assert!(result.is_err());
 }

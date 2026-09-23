@@ -578,18 +578,13 @@ impl TemplateExtractor {
         let mut parts = Vec::new();
 
         match &stmt.target {
-            crate::parser::ast::InsertTarget::Vertices { tags, values } => {
+            crate::parser::ast::InsertTarget::Vertices { tag, values } => {
                 parts.push("INSERT VERTEX".to_string());
 
-                // Tag list
-                let tag_names: Vec<String> = tags.iter().map(|t| t.tag_name.clone()).collect();
-                parts.push(tag_names.join(", "));
+                parts.push(tag.tag_name.clone());
 
-                // Attribute name
-                for tag in tags {
-                    if !tag.prop_names.is_empty() {
-                        parts.push(format!("({})", tag.prop_names.join(", ")));
-                    }
+                if !tag.prop_names.is_empty() {
+                    parts.push(format!("({})", tag.prop_names.join(", ")));
                 }
 
                 // VALUES
@@ -600,19 +595,18 @@ impl TemplateExtractor {
                     let vid_result = transformer.parameterize(&row.vid);
                     let vid_template = Self::expr_to_template_string(&vid_result.expression);
 
-                    let tag_values_templates: Vec<String> = row
-                        .tag_values
+                    let value_templates: Vec<String> = row
+                        .values
                         .iter()
-                        .map(|values| {
-                            let value_templates: Vec<String> = values
-                                .iter()
-                                .map(|v| {
-                                    let result = transformer.parameterize(v);
-                                    Self::expr_to_template_string(&result.expression)
-                                })
-                                .collect();
-                            format!("({})", value_templates.join(", "))
+                        .map(|v| {
+                            let result = transformer.parameterize(v);
+                            Self::expr_to_template_string(&result.expression)
                         })
+                        .collect();
+                    let tag_values_templates = vec![format!(
+                        "({})",
+                        value_templates.join(", ")
+                    )];
                         .collect();
 
                     parts.push(format!(
@@ -725,26 +719,6 @@ impl TemplateExtractor {
 
                     parts.push(edge_str);
                 }
-            }
-            crate::parser::ast::DeleteTarget::Tags {
-                tag_names,
-                vertex_ids,
-                is_all_tags,
-            } => {
-                if *is_all_tags {
-                    parts.push("DELETE TAG *".to_string());
-                } else {
-                    parts.push(format!("DELETE TAG {}", tag_names.join(", ")));
-                }
-
-                let id_templates: Vec<String> = vertex_ids
-                    .iter()
-                    .map(|expr| {
-                        let result = transformer.parameterize(expr);
-                        Self::expr_to_template_string(&result.expression)
-                    })
-                    .collect();
-                parts.push(id_templates.join(", "));
             }
             crate::parser::ast::DeleteTarget::Index(name) => {
                 parts.push(format!("DELETE INDEX {}", name));

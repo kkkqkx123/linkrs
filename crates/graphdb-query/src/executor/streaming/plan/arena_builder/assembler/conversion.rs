@@ -627,7 +627,6 @@ impl ArenaPlanAssembler {
             | PlanNodeEnum::InsertEdges(_)
             | PlanNodeEnum::DeleteVertices(_)
             | PlanNodeEnum::DeleteEdges(_)
-            | PlanNodeEnum::DeleteTags(_)
             | PlanNodeEnum::PipeDeleteVertices(_)
             | PlanNodeEnum::PipeDeleteEdges(_)
             | PlanNodeEnum::Update(_)

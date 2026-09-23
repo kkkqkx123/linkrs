@@ -98,7 +98,7 @@ impl TransactionOps {
             ));
         };
 
-        Ok(VertexId::from_int64(internal_id as i64))
+        Ok(VertexId::from_u32(internal_id))
     }
 
     pub fn add_edge(
@@ -118,14 +118,14 @@ impl TransactionOps {
         let _src_external =
             src_table
                 .get_external_id(params.src_vid, ts)
-                .ok_or(UndoLogError::VertexNotFound(VertexId::from_int64(
-                    params.src_vid as i64,
+                .ok_or(UndoLogError::VertexNotFound(VertexId::from_u32(
+                    params.src_vid,
                 )))?;
         let _dst_external =
             dst_table
                 .get_external_id(params.dst_vid, ts)
-                .ok_or(UndoLogError::VertexNotFound(VertexId::from_int64(
-                    params.dst_vid as i64,
+                .ok_or(UndoLogError::VertexNotFound(VertexId::from_u32(
+                    params.dst_vid,
                 )))?;
 
         let key = EdgeTableKey::new(params.src_label, params.dst_label, params.edge_label);

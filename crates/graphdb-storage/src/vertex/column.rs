@@ -4,8 +4,13 @@
 //! Each column stores values of a single property type.
 //!
 //! The storage is split into two variants:
-//! - `FixedWidthColumn`: For fixed-length types (Bool, SmallInt, Int, BigInt, Float, Double, Date, Time, Uuid)
-//! - `VariableWidthColumn`: For variable-length types (String)
+//! - `FixedWidthColumn`: For fixed-length scalar types (Bool, SmallInt, Int,
+//!   BigInt, Float, Double, Date, Time, DateTime, Uuid)
+//! - `VariableWidthColumn`: For everything else (String, FixedString, Blob,
+//!   Geography, Vector family, Json/JsonB, Interval, Decimal family, Union,
+//!   containers, nested composites and graph values), stored as
+//!   length-prefixed payloads; complex values use an opaque postcard encoding
+//!   with no per-type compression or statistics pruning.
 //! - `Column`: Public wrapper that selects the appropriate variant at construction time
 
 pub mod chunk;
@@ -33,30 +38,24 @@ pub use zone_map::{compare_values, ZONE_MAP_CHUNK_ROWS};
 use graphdb_core::DataType;
 
 /// Returns true if the data type is variable-length.
+///
+/// Only the ten fixed-width scalar types return false. Every other type,
+/// including FixedString, the Decimal family, Union and any future type,
+/// returns true so no column can ever be built as a zero-step
+/// FixedWidthColumn (element_size 0 would corrupt offsets).
 pub fn is_variable_length_type(data_type: &DataType) -> bool {
-    matches!(
+    !matches!(
         data_type,
-        DataType::String
-            | DataType::Blob
-            | DataType::Geography
-            | DataType::List(_)
-            | DataType::Map(_)
-            | DataType::Set(_)
-            | DataType::Vertex
-            | DataType::Edge
-            | DataType::Path
-            | DataType::Vector
-            | DataType::VectorDense(_)
-            | DataType::VectorSparse(_)
-            | DataType::DataSet
-            | DataType::Json
-            | DataType::JsonB
-            | DataType::Interval
-            | DataType::Null
-            // Composite types have no fixed element size; they must never fall
-            // into FixedWidthColumn (element_size = 0 would corrupt offsets).
-            | DataType::Struct(_)
-            | DataType::Array(_)
+        DataType::Bool
+            | DataType::SmallInt
+            | DataType::Int
+            | DataType::BigInt
+            | DataType::Float
+            | DataType::Double
+            | DataType::Date
+            | DataType::Time
+            | DataType::DateTime
+            | DataType::Uuid
     )
 }
 

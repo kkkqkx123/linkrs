@@ -46,8 +46,8 @@ pub enum SinkOperatorKind {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         vertex_properties: Vec<(String, Expression)>,
-        tags: Vec<String>,
-        tag_property_names: Vec<Vec<String>>,
+        tag: String,
+        tag_property_names: Vec<String>,
         if_not_exists: bool,
         rows_inserted: u64,
         summary_returned: bool,
@@ -116,14 +116,6 @@ pub enum SinkOperatorKind {
         src_col: String,
         dst_col: String,
         edge_type: String,
-        rows_deleted: u64,
-        summary_returned: bool,
-    },
-    DeleteTags {
-        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        space_name: String,
-        tag_names: Vec<String>,
-        vertex_ids: Option<Vec<Value>>,
         rows_deleted: u64,
         summary_returned: bool,
     },
@@ -260,14 +252,14 @@ impl SinkOperator {
             super::spec::SinkSpec::InsertVertices {
                 space_name,
                 vertex_properties,
-                tags,
+                tag,
                 tag_property_names,
                 if_not_exists,
             } => SinkOperatorKind::InsertVertices {
                 storage,
                 space_name: space_name.clone(),
                 vertex_properties: vertex_properties.clone(),
-                tags: tags.clone(),
+                tag: tag.clone(),
                 tag_property_names: tag_property_names.clone(),
                 if_not_exists: *if_not_exists,
                 rows_inserted: 0,
@@ -379,18 +371,6 @@ impl SinkOperator {
                 rows_deleted: 0,
                 summary_returned: false,
             },
-            super::spec::SinkSpec::DeleteTags {
-                space_name,
-                tag_names,
-                vertex_ids,
-            } => SinkOperatorKind::DeleteTags {
-                storage,
-                space_name: space_name.clone(),
-                tag_names: tag_names.clone(),
-                vertex_ids: vertex_ids.clone(),
-                rows_deleted: 0,
-                summary_returned: false,
-            },
         };
         Self::new(kind, output_layout)
     }
@@ -452,8 +432,7 @@ impl SinkOperator {
             | SinkOperatorKind::DeleteVertices { .. }
             | SinkOperatorKind::DeleteEdges { .. }
             | SinkOperatorKind::PipeDeleteVertices { .. }
-            | SinkOperatorKind::PipeDeleteEdges { .. }
-            | SinkOperatorKind::DeleteTags { .. } => {
+            | SinkOperatorKind::PipeDeleteEdges { .. } => {
                 input.open()?;
                 Ok(())
             }
@@ -484,7 +463,7 @@ impl SinkOperator {
                 storage,
                 space_name,
                 vertex_properties,
-                tags,
+                tag,
                 tag_property_names,
                 if_not_exists,
                 rows_inserted,
@@ -522,32 +501,25 @@ impl SinkOperator {
 
                             if *if_not_exists
                                 && writer
-                                    .get_vertex(space_name, &vid)
+                                    .get_vertex(space_name, tag, &vid)
                                     .map_err(|e| QueryError::execution(e.to_string()))?
                                     .is_some()
                             {
                                 continue;
                             }
 
-                            let tag_list: Vec<Tag> = tags
-                                .iter()
-                                .zip(tag_property_names.iter())
-                                .map(|(tag_name, prop_names)| {
-                                    let mut props = HashMap::new();
-                                    for name in prop_names {
-                                        if let Some((_n, expr)) =
-                                            vertex_properties.iter().find(|(n, _)| n == name)
-                                        {
-                                            if let Ok(val) = eval_expr(expr, &mut context) {
-                                                props.insert(name.clone(), val);
-                                            }
-                                        }
+                            let mut props = HashMap::new();
+                            for name in tag_property_names.iter() {
+                                if let Some((_n, expr)) =
+                                    vertex_properties.iter().find(|(n, _)| n == name)
+                                {
+                                    if let Ok(val) = eval_expr(expr, &mut context) {
+                                        props.insert(name.clone(), val);
                                     }
-                                    Tag::new(tag_name.clone(), props)
-                                })
-                                .collect();
+                                }
+                            }
 
-                            let vertex = Vertex::new_with_properties(vid, tag_list, HashMap::new());
+                            let vertex = Vertex::new(vid, Tag::new(tag.clone(), props));
                             StorageWriter::insert_vertex(&mut *writer, space_name, vertex)
                                 .map_err(|e| QueryError::execution(e.to_string()))?;
                             *rows_inserted += 1;
@@ -681,8 +653,13 @@ impl SinkOperator {
                             let vid = VertexId::try_from(&vid_val).map_err(|e| {
                                 QueryError::execution(format!("Invalid vertex id: {}", e))
                             })?;
+                            if tag_name.is_empty() {
+                                return Err(QueryError::execution(
+                                    "UPDATE vertex requires a tag qualifier".to_string(),
+                                ));
+                            }
                             let existing = writer
-                                .get_vertex(space_name, &vid)
+                                .get_vertex(space_name, tag_name, &vid)
                                 .map_err(|e| QueryError::execution(e.to_string()))?;
                             let existing = match existing {
                                 Some(ev) => ev,
@@ -693,8 +670,10 @@ impl SinkOperator {
                                             let val = eval_expr(expr, &mut context)?;
                                             props.insert(prop_name.clone(), val);
                                         }
-                                        let tags = vec![Tag::new(tag_name.clone(), props.clone())];
-                                        let vertex = Vertex::new(vid, tags);
+                                        let vertex = Vertex::new(
+                                            vid,
+                                            Tag::new(tag_name.clone(), props),
+                                        );
                                         StorageWriter::insert_vertex(
                                             &mut *writer,
                                             space_name,
@@ -714,10 +693,8 @@ impl SinkOperator {
                             // Load existing properties into context so expressions
                             // like `SET stock = stock - 1` and conditions like
                             // `WHEN age > 100` can resolve existing columns.
-                            for tag in &existing.tags {
-                                for (k, v) in &tag.properties {
-                                    context.set_variable(k.clone(), v.clone());
-                                }
+                            for (k, v) in &existing.tag.properties {
+                                context.set_variable(k.clone(), v.clone());
                             }
                             if let Some(cond) = condition {
                                 let keep = eval_expr(cond, &mut context)?;
@@ -730,22 +707,16 @@ impl SinkOperator {
                                 let val = eval_expr(expr, &mut context)?;
                                 props.insert(prop_name.clone(), val);
                             }
-                            let tags: Vec<Tag> = if tag_name.is_empty() {
-                                existing
-                                    .tags
-                                    .iter()
-                                    .map(|t| {
-                                        let mut merged = t.properties.clone();
-                                        for (k, v) in &props {
-                                            merged.insert(k.clone(), v.clone());
-                                        }
-                                        Tag::new(t.name.clone(), merged)
-                                    })
-                                    .collect()
+                            let tag = if *tag_name == existing.tag.name {
+                                let mut merged = existing.tag.properties.clone();
+                                for (k, v) in &props {
+                                    merged.insert(k.clone(), v.clone());
+                                }
+                                Tag::new(existing.tag.name.clone(), merged)
                             } else {
-                                vec![Tag::new(tag_name.clone(), props)]
+                                Tag::new(tag_name.clone(), props)
                             };
-                            let vertex = Vertex::new_with_properties(vid, tags, HashMap::new());
+                            let vertex = Vertex::new(vid, tag);
                             StorageWriter::update_vertex(&mut *writer, space_name, vertex)
                                 .map_err(|e| QueryError::execution(e.to_string()))?;
                             *rows_updated += 1;
@@ -1135,53 +1106,6 @@ impl SinkOperator {
                 )))
             }
 
-            SinkOperatorKind::DeleteTags {
-                storage,
-                space_name,
-                tag_names,
-                vertex_ids,
-                rows_deleted,
-                summary_returned,
-                ..
-            } => {
-                if *summary_returned {
-                    return Ok(None);
-                }
-
-                if let Some(rt) = self.runtime.as_ref() {
-                    rt.ensure_not_cancelled()?;
-                }
-                if let Some(storage_lock) = storage {
-                    if let Some(ref ids) = vertex_ids {
-                        let mut writer = storage_lock.write();
-                        for vertex_id_val in ids {
-                            if let Ok(vertex_id) = VertexId::try_from(vertex_id_val) {
-                                let count = StorageWriter::delete_tags(
-                                    &mut *writer,
-                                    space_name,
-                                    &vertex_id,
-                                    tag_names,
-                                )
-                                .map_err(|e| QueryError::execution(e.to_string()))?;
-                                *rows_deleted += count as u64;
-                            }
-                        }
-                    }
-                } else {
-                    let count = vertex_ids
-                        .as_ref()
-                        .map_or(0, |ids| ids.len() * tag_names.len())
-                        as u64;
-                    *rows_deleted += count;
-                }
-
-                *summary_returned = true;
-                Ok(Some(make_modify_result(
-                    Arc::clone(&self.output_layout),
-                    "delete_tags",
-                    *rows_deleted,
-                )))
-            }
             SinkOperatorKind::CopyFrom {
                 storage,
                 space_name,

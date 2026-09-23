@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn test_write_set_record_vertex() {
         let mut ws = WriteSet::new();
-        let vid = VertexId::from_int64(1);
+        let vid = VertexId::try_from_int64(1).expect("test vertex id");
 
         ws.record_vertex(vid);
         assert!(!ws.is_empty());
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn test_write_set_conflict_same_vertex() {
-        let vid = VertexId::from_int64(1);
+        let vid = VertexId::try_from_int64(1).expect("test vertex id");
 
         let mut ws1 = WriteSet::new();
         ws1.record_vertex(vid);
@@ -360,8 +360,8 @@ mod tests {
 
     #[test]
     fn test_write_set_no_conflict_different_vertices() {
-        let vid1 = VertexId::from_int64(1);
-        let vid2 = VertexId::from_int64(2);
+        let vid1 = VertexId::try_from_int64(1).expect("test vertex id");
+        let vid2 = VertexId::try_from_int64(2).expect("test vertex id");
 
         let mut ws1 = WriteSet::new();
         ws1.record_vertex(vid1);

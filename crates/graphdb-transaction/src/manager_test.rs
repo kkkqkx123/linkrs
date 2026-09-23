@@ -529,8 +529,8 @@ fn test_check_write_set_conflict_no_conflict() {
     let ctx1 = manager.get_context(txn1).expect("Failed to get context 1");
     let ctx2 = manager.get_context(txn2).expect("Failed to get context 2");
 
-    let vid1 = VertexId::from_int64(1);
-    let vid2 = VertexId::from_int64(2);
+    let vid1 = VertexId::try_from_int64(1).expect("test vertex id");
+    let vid2 = VertexId::try_from_int64(2).expect("test vertex id");
 
     ctx1.record_vertex_write(vid1);
     ctx2.record_vertex_write(vid2);
@@ -569,7 +569,7 @@ fn test_check_write_set_conflict_with_conflict() {
     let ctx1 = manager.get_context(txn1).expect("Failed to get context 1");
     let ctx2 = manager.get_context(txn2).expect("Failed to get context 2");
 
-    let vid = VertexId::from_int64(1);
+    let vid = VertexId::try_from_int64(1).expect("test vertex id");
 
     ctx1.record_vertex_write(vid);
     ctx2.record_vertex_write(vid);
@@ -1225,8 +1225,8 @@ fn test_concurrent_final_review_no_false_abort() {
             ),
         );
 
-        let vid1 = VertexId::from_int64(iteration as i64 * 2);
-        let vid2 = VertexId::from_int64(iteration as i64 * 2 + 1);
+        let vid1 = VertexId::try_from_int64(iteration as i64 * 2).expect("test vertex id");
+        let vid2 = VertexId::try_from_int64(iteration as i64 * 2 + 1).expect("test vertex id");
 
         let txn1 = manager
             .begin_insert_transaction(TransactionOptions::default())
@@ -1369,7 +1369,7 @@ fn test_abort_without_sink_executes_undo_against_target() {
     context
         .add_undo_log(UndoLogEntry::InsertVertex(InsertVertexUndo {
             v_label: 1,
-            vid: VertexId::from_int64(9),
+            vid: VertexId::try_from_int64(9).expect("test vertex id"),
         }))
         .expect("undo log append should succeed");
 

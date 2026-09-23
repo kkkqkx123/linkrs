@@ -35,7 +35,7 @@ fn test_recovery_partial_vertex_write() {
 
         // Original data should be intact
         let v1 = storage
-            .get_vertex("test_space", &VertexId::from_int64(1))
+            .get_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
             .unwrap();
         assert!(v1.is_some(), "Original data should be recovered");
 
@@ -48,7 +48,7 @@ fn test_recovery_partial_vertex_write() {
 
         // All vertices should have proper structure
         for v in all_vertices {
-            assert!(!v.tags.is_empty(), "Recovered vertex should have tags");
+            assert!(v.has_properties(), "Recovered vertex should have properties");
         }
     }
 }
@@ -87,7 +87,7 @@ fn test_recovery_after_concurrent_crash() {
 
         // Verify no corruption in recovered data
         for v in &vertices {
-            assert!(!v.tags.is_empty(), "Recovered vertex should have tags");
+            assert!(v.has_properties(), "Recovered vertex should have properties");
         }
 
         println!(
@@ -161,7 +161,7 @@ fn test_recovery_deleted_vertex_integrity() {
 
         // Delete vertex and insert new one without flush
         storage
-            .delete_vertex("test_space", &VertexId::from_int64(1))
+            .delete_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
             .unwrap();
 
         let v = common::create_person_vertex(100, "NewPerson", 30);
@@ -181,10 +181,10 @@ fn test_recovery_deleted_vertex_integrity() {
         // or neither (checkpoint-based recovery), but not partial state
         let has_v1 = all_vertices
             .iter()
-            .any(|v| v.vid == VertexId::from_int64(1));
+            .any(|v| v.vid == VertexId::try_from_int64(1).expect("test vertex id"));
         let has_new = all_vertices
             .iter()
-            .any(|v| v.vid == VertexId::from_int64(100));
+            .any(|v| v.vid == VertexId::try_from_int64(100).expect("test vertex id"));
 
         println!(
             "Recovery state: v1_exists={}, new_exists={}, total_count={}",

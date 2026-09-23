@@ -816,11 +816,12 @@ impl GraphStorage {
     pub fn batch_delete_vertices_with_edges(
         &self,
         space: &str,
+        tag: &str,
         ids: &[VertexId],
     ) -> graphdb_core::StorageResult<usize> {
         self.ctx.check_write_admission()?;
         crate::engine::graph_storage::writer::batch_delete_vertices_with_edges(
-            &self.ctx, space, ids,
+            &self.ctx, space, tag, ids,
         )
     }
 }

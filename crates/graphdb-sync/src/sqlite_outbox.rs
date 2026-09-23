@@ -2032,7 +2032,9 @@ mod tests {
                 target: target.clone(),
                 index_id: 1,
                 index_generation: IndexGeneration::new(1),
-                entity_ref: EntityRef::Vertex(VertexId::from_int64(entity)),
+                entity_ref: EntityRef::Vertex(
+                    VertexId::try_from_int64(entity).expect("test vertex id"),
+                ),
                 operation: IndexOperation::Upsert,
                 document_or_vector: vec![entity as u8],
                 idempotency_key: IdempotencyKey::new(format!("event-{sequence}"))

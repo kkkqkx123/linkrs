@@ -117,19 +117,17 @@ impl ScanSeek {
             let has_all_labels = pattern
                 .labels
                 .iter()
-                .all(|label| vertex.tags.iter().any(|tag| tag.name == *label));
+                .all(|label| vertex.tag.name == *label);
             if !has_all_labels {
                 return false;
             }
-        } else if !any_label && vertex.tags.is_empty() {
-            return false;
         }
 
         for (prop_name, prop_value) in &pattern.properties {
             let found = vertex
-                .get_all_properties()
+                .properties()
                 .iter()
-                .any(|(name, value)| name == prop_name && **value == *prop_value);
+                .any(|(name, value)| name == prop_name && value == prop_value);
             if !found {
                 return false;
             }

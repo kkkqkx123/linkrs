@@ -432,16 +432,21 @@ pub mod utils {
 mod tests {
     use super::*;
     use crate::types::VertexId;
+    use crate::vertex_edge_path::Tag;
+    use std::collections::HashMap;
 
     fn create_test_vertex(id: i64) -> Arc<Vertex> {
-        Arc::new(Vertex::new(VertexId::from_int64(id), vec![]))
+        Arc::new(Vertex::new(
+        VertexId::try_from_int64(id).expect("test vertex id"),
+        Tag::new(String::new(), HashMap::new()),
+    ))
     }
 
     fn create_test_edge(src_id: i64, dst_id: i64, edge_type: &str) -> Arc<Edge> {
         use std::collections::HashMap;
         Arc::new(Edge::new(
-            VertexId::from_int64(src_id),
-            VertexId::from_int64(dst_id),
+            VertexId::try_from_int64(src_id).expect("test vertex id"),
+            VertexId::try_from_int64(dst_id).expect("test vertex id"),
             edge_type.to_string(),
             0,
             HashMap::new(),
@@ -455,7 +460,7 @@ mod tests {
 
         assert_eq!(path.len(), 0);
         assert!(path.is_empty());
-        assert_eq!(path.vertex().vid, VertexId::from_int64(1));
+        assert_eq!(path.vertex().vid, VertexId::try_from_int64(1).expect("test vertex id"));
         assert!(path.parent().is_none());
         assert!(path.edge().is_none());
     }
@@ -471,7 +476,7 @@ mod tests {
 
         assert_eq!(extended.len(), 1);
         assert!(!extended.is_empty());
-        assert_eq!(extended.vertex().vid, VertexId::from_int64(2));
+        assert_eq!(extended.vertex().vid, VertexId::try_from_int64(2).expect("test vertex id"));
         assert!(extended.parent().is_some());
         assert!(extended.edge().is_some());
     }
@@ -491,7 +496,7 @@ mod tests {
         let path = p3.to_path();
 
         assert_eq!(path.len(), 2);
-        assert_eq!(path.src.vid, VertexId::from_int64(1));
+        assert_eq!(path.src.vid, VertexId::try_from_int64(1).expect("test vertex id"));
     }
 
     #[test]
@@ -506,10 +511,10 @@ mod tests {
         let p2 = Arc::new(NPath::extend(start, e1, v2));
         let p3 = Arc::new(NPath::extend(p2, e2, v3));
 
-        assert!(p3.contains_vertex(&VertexId::from_int64(1)));
-        assert!(p3.contains_vertex(&VertexId::from_int64(2)));
-        assert!(p3.contains_vertex(&VertexId::from_int64(3)));
-        assert!(!p3.contains_vertex(&VertexId::from_int64(4)));
+        assert!(p3.contains_vertex(&VertexId::try_from_int64(1).expect("test vertex id")));
+        assert!(p3.contains_vertex(&VertexId::try_from_int64(2).expect("test vertex id")));
+        assert!(p3.contains_vertex(&VertexId::try_from_int64(3).expect("test vertex id")));
+        assert!(!p3.contains_vertex(&VertexId::try_from_int64(4).expect("test vertex id")));
     }
 
     #[test]

@@ -119,7 +119,6 @@ pub fn operator_name(exec: &StreamingExecutor) -> &'static str {
             SinkOperatorKind::DeleteEdges { .. } => "DeleteEdges",
             SinkOperatorKind::PipeDeleteVertices { .. } => "PipeDeleteVertices",
             SinkOperatorKind::PipeDeleteEdges { .. } => "PipeDeleteEdges",
-            SinkOperatorKind::DeleteTags { .. } => "DeleteTags",
         },
         Ddl(_, _, op) => match &op.kind {
             DdlOperatorKind::SpaceManage { .. } => "SpaceManage",

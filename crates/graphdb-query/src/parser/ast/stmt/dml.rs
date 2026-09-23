@@ -46,11 +46,6 @@ pub enum DeleteTarget {
             Option<ContextualExpression>,
         )>,
     },
-    Tags {
-        tag_names: Vec<String>,
-        vertex_ids: Vec<ContextualExpression>,
-        is_all_tags: bool,
-    },
     Index(String),
 }
 
@@ -104,7 +99,7 @@ pub struct InsertStmt {
 #[derive(Debug, Clone, PartialEq)]
 pub enum InsertTarget {
     Vertices {
-        tags: Vec<TagInsertSpec>,
+        tag: TagInsertSpec,
         values: Vec<VertexRow>,
     },
     Edge {
@@ -129,7 +124,7 @@ pub struct TagInsertSpec {
 #[derive(Debug, Clone, PartialEq)]
 pub struct VertexRow {
     pub vid: ContextualExpression,
-    pub tag_values: Vec<Vec<ContextualExpression>>,
+    pub values: Vec<ContextualExpression>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
