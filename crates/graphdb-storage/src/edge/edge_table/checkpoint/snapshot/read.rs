@@ -141,7 +141,7 @@ impl MappedFrozen {
     /// First timestamp-visible entry matching an endpoint key: key-range
     /// bisection plus in-range timestamp filter, same rule as the heap form.
     pub fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
-        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
+        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst)?;
         let (start, end) = self.row_window(src_vid)?;
         let (lo, hi) = self.key_range(start, end, decoded_endpoint, decoded_rank);
         (lo..hi).find_map(|idx| {
@@ -152,7 +152,7 @@ impl MappedFrozen {
 
     /// First live entry matching an endpoint key without consulting snapshots.
     pub fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
-        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
+        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst)?;
         let (start, end) = self.row_window(src_vid)?;
         let (lo, hi) = self.key_range(start, end, decoded_endpoint, decoded_rank);
         (lo..hi).find_map(|idx| {

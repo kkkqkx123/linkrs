@@ -138,7 +138,7 @@ impl MutableCsr {
     /// Narrow rows without an index fall through to the linear walk.
     pub fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
         use super::super::INVALID_EDGE_ID;
-        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
+        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst)?;
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
             return None;
@@ -572,7 +572,7 @@ impl MutableCsr {
     /// timestamp falls through to the row walk so historically visible
     /// tombstoned versions are still found.
     pub fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
-        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
+        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst)?;
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
             return None;

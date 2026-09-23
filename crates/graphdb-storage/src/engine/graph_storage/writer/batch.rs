@@ -7,7 +7,7 @@ use crate::index::types::EdgeIdentity;
 use graphdb_core::types::{EdgeIdentifier, Index, LabelId, TagInfo, Timestamp, VertexId};
 use graphdb_core::wal::redo::{DeleteEdgeRedo, InsertEdgeRedo};
 use graphdb_core::wal::types::WalOpType;
-use graphdb_core::{Edge, EdgeDeleteKey, StorageError, StorageResult, Value};
+use graphdb_core::{DataType, Edge, EdgeDeleteKey, StorageError, StorageResult, Value};
 
 use super::super::context::GraphStorageContext;
 use super::super::ops::endpoint_label_id;
@@ -19,12 +19,12 @@ pub(super) struct PrecheckedBatchContext<'a> {
     pub(super) tag_map: &'a HashMap<&'a str, &'a TagInfo>,
     pub(super) tag_indexes: &'a [Index],
     pub(super) serial_state: &'a mut SerialBatchState,
+    pub(super) vid_type: &'a DataType,
 }
 
 #[derive(Debug)]
 pub(super) struct InsertedVertexTag {
     pub(super) label_id: LabelId,
-    pub(super) id: String,
     pub(super) vid: VertexId,
     pub(super) vertex_id: Value,
     pub(super) tag_name: String,

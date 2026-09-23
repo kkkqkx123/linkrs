@@ -16,6 +16,46 @@ use super::writer;
 
 // ── Type Conversion Utilities ──
 
+/// External id routed to its table operation by [`VertexId`] kind.
+///
+/// Integer kinds map to the i64 key path, text kinds to the string key path.
+/// Empty and edge-endpoint ids are rejected: they can never address a vertex
+/// row, so every dispatch site fails closed instead of rendering them into a
+/// garbage key.
+pub(crate) enum RoutedVertexId {
+    Int(i64),
+    Text(String),
+}
+
+pub(crate) fn route_vertex_id(vid: &VertexId) -> StorageResult<RoutedVertexId> {
+    use graphdb_core::types::VertexIdKind;
+    match vid.kind() {
+        VertexIdKind::Int => Ok(RoutedVertexId::Int(
+            vid.as_int64().expect("Int kind always decodes"),
+        )),
+        VertexIdKind::Uint => {
+            let value = vid.as_u64().expect("Uint kind always decodes");
+            i64::try_from(value)
+                .map(RoutedVertexId::Int)
+                .map_err(|_| {
+                    StorageError::invalid_input(format!(
+                        "Vertex id {} overflows the i64 key path",
+                        value
+                    ))
+                })
+        }
+        VertexIdKind::Text => vid
+            .as_str()
+            .map(|text| RoutedVertexId::Text(text.to_string()))
+            .ok_or_else(|| {
+                StorageError::invalid_input("Non-UTF8 vertex id cannot address a vertex".to_string())
+            }),
+        VertexIdKind::Empty | VertexIdKind::EdgeEndpoint => Err(StorageError::invalid_input(
+            format!("Vertex id {} cannot address a vertex row", vid),
+        )),
+    }
+}
+
 pub(crate) fn vertex_type_storage_name(space_id: u64, tag_name: &str) -> String {
     format!("space_{space_id}:tag:{tag_name}")
 }
@@ -79,9 +119,9 @@ pub(crate) fn vertex_record_to_vertex(record: &VertexRecord, tag_name: &str) -> 
         id: record.internal_id as i64,
         tags: vec![Tag {
             name: tag_name.to_string(),
-            properties: properties.clone(),
+            properties,
         }],
-        properties,
+        properties: HashMap::new(),
     }
 }
 
@@ -275,48 +315,32 @@ pub(crate) fn find_dangling_edges(
         let Some(edge_type_name) = edge_type_names.get(&edge_label_id) else {
             continue;
         };
-        let src_exists = ctx
-            .get_vertex_by_internal_id(
-                src_label_id,
-                record.src_vid.as_int64().unwrap_or(0) as u32,
-                ts,
-            )
+        let src_internal = record.src_vid.as_internal_u32();
+        let dst_internal = record.dst_vid.as_internal_u32();
+        let src_exists = src_internal
+            .and_then(|internal| ctx.get_vertex_by_internal_id(src_label_id, internal, ts))
             .is_some();
-        let dst_exists = ctx
-            .get_vertex_by_internal_id(
-                dst_label_id,
-                record.dst_vid.as_int64().unwrap_or(0) as u32,
-                ts,
-            )
+        let dst_exists = dst_internal
+            .and_then(|internal| ctx.get_vertex_by_internal_id(dst_label_id, internal, ts))
             .is_some();
 
         if !src_exists || !dst_exists {
-            let src_external = ctx
-                .get_vertex_by_internal_id(
-                    src_label_id,
-                    record.src_vid.as_int64().unwrap_or(0) as u32,
-                    ts,
-                )
-                .map(|vr| vr.vid)
-                .or_else(|| {
-                    ctx.get_external_id_by_internal_id(
-                        src_label_id,
-                        record.src_vid.as_int64().unwrap_or(0) as u32,
-                    )
+            let src_external = src_internal
+                .and_then(|internal| {
+                    ctx.get_vertex_by_internal_id(src_label_id, internal, ts)
+                        .map(|vr| vr.vid)
+                        .or_else(|| {
+                            ctx.get_external_id_by_internal_id(src_label_id, internal)
+                        })
                 })
                 .unwrap_or(record.src_vid);
-            let dst_external = ctx
-                .get_vertex_by_internal_id(
-                    dst_label_id,
-                    record.dst_vid.as_int64().unwrap_or(0) as u32,
-                    ts,
-                )
-                .map(|vr| vr.vid)
-                .or_else(|| {
-                    ctx.get_external_id_by_internal_id(
-                        dst_label_id,
-                        record.dst_vid.as_int64().unwrap_or(0) as u32,
-                    )
+            let dst_external = dst_internal
+                .and_then(|internal| {
+                    ctx.get_vertex_by_internal_id(dst_label_id, internal, ts)
+                        .map(|vr| vr.vid)
+                        .or_else(|| {
+                            ctx.get_external_id_by_internal_id(dst_label_id, internal)
+                        })
                 })
                 .unwrap_or(record.dst_vid);
             let edge = edge_record_to_edge(

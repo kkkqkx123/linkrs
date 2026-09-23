@@ -1,4 +1,4 @@
-use graphdb_core::types::{LabelId, Timestamp};
+use graphdb_core::types::{LabelId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult, Value};
 use std::sync::atomic::Ordering;
 
@@ -42,12 +42,9 @@ impl GraphStorageContext {
         properties: &[(String, Value)],
         ts: Timestamp,
     ) -> StorageResult<u32> {
-        if external_id < 0 {
-            return Err(StorageError::invalid_input(format!(
-                "Vertex id cannot be negative: {}",
-                external_id
-            )));
-        }
+        // Single rejection point for negative ids lives in
+        // VertexId::try_from_int64; the table layer re-checks as backstop.
+        VertexId::try_from_int64(external_id)?;
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
         }

@@ -60,7 +60,7 @@ impl ImmutableCsr {
     /// filters inside the range by timestamp. The row sort makes edge-id
     /// order the total version order within each key.
     pub fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
-        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
+        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst)?;
         let (start, end) = self.row_window(src_vid)?;
         let hot = &self.hot_entries[start..end];
         let cold = &self.cold_entries[start..end];
@@ -79,7 +79,7 @@ impl ImmutableCsr {
     /// Same key-range bisection as [`Self::get_edge`]; liveness is the raw
     /// open-deletion-stamp check instead of a timestamp filter.
     pub fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
-        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
+        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst)?;
         let (start, end) = self.row_window(src_vid)?;
         let hot = &self.hot_entries[start..end];
         let cold = &self.cold_entries[start..end];

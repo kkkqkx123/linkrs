@@ -315,7 +315,9 @@ impl<'a> Iterator for EdgeTableScanIterator<'a> {
 
         for (row_vid, nbr) in self.inner.by_ref() {
             self.rows_scanned += 1;
-            let row = row_vid.as_int64().unwrap_or(0) as u32;
+            let Some(row) = row_vid.as_internal_u32() else {
+                continue;
+            };
             // Row-granular prune verdict: entries arrive row by row, so a
             // pruned row skips every remaining entry without another group
             // lookup, and the limit below stops the walk as soon as enough

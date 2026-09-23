@@ -5,11 +5,11 @@ use super::super::MutableCsr;
 fn test_iterator() {
     let mut csr = MutableCsr::with_capacity(10, 100);
 
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
-    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(2, 0), EdgeId(101), 1)
         .unwrap();
-    csr.insert_edge(1u32, VertexId::from_int64(3), EdgeId(102), 1)
+    csr.insert_edge(1u32, VertexId::edge_endpoint_key(3, 0), EdgeId(102), 1)
         .unwrap();
 
     let edges: Vec<_> = csr.iter(1).collect();
@@ -21,7 +21,7 @@ fn test_overflow_iterator() {
     let mut csr = MutableCsr::with_capacity(10, 100);
 
     for i in 1..=6 {
-        let dst = VertexId::from_int64(i as i64);
+        let dst = VertexId::edge_endpoint_key(i as u32, 0);
         csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
     }
 
@@ -34,15 +34,15 @@ fn test_vertex_edges_iter_no_allocation() {
     let mut csr = MutableCsr::with_capacity(10, 100);
 
     // Insert multiple edges for vertex 0
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
-    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(2, 0), EdgeId(101), 1)
         .unwrap();
-    csr.insert_edge(0u32, VertexId::from_int64(3), EdgeId(102), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(3, 0), EdgeId(102), 1)
         .unwrap();
-    csr.insert_edge(0u32, VertexId::from_int64(4), EdgeId(103), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(4, 0), EdgeId(103), 1)
         .unwrap();
-    csr.insert_edge(0u32, VertexId::from_int64(5), EdgeId(104), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(5, 0), EdgeId(104), 1)
         .unwrap();
 
     // Test iter_edges_of yields same neighbors as edges_of without allocation
@@ -64,11 +64,11 @@ fn test_vertex_edges_iter_no_allocation() {
 fn test_vertex_edges_iter_respects_timestamp() {
     let mut csr = MutableCsr::with_capacity(10, 100);
 
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
-    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 2)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(2, 0), EdgeId(101), 2)
         .unwrap();
-    csr.insert_edge(0u32, VertexId::from_int64(3), EdgeId(102), 3)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(3, 0), EdgeId(102), 3)
         .unwrap();
 
     // Delete the second edge at ts=2

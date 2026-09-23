@@ -246,9 +246,9 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
 
 fn value_to_vertex_id(value: &Value) -> Option<VertexId> {
     match value {
-        Value::Int(i) => Some(VertexId::from_int64(*i as i64)),
-        Value::BigInt(i) => Some(VertexId::from_int64(*i)),
-        Value::String(s) => Some(VertexId::from_string(s.as_str())),
+        Value::Int(i) => VertexId::try_from_int64(*i as i64).ok(),
+        Value::BigInt(i) => VertexId::try_from_int64(*i).ok(),
+        Value::String(s) => VertexId::try_from_string(s.as_str()).ok(),
         _ => None,
     }
 }

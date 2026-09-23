@@ -6,7 +6,7 @@ fn test_compact_with_ts_merges_overflow() {
     let mut csr = MutableCsr::with_capacity(10, 100);
 
     for i in 1..=6 {
-        let dst = VertexId::from_int64(i as i64);
+        let dst = VertexId::edge_endpoint_key(i as u32, 0);
         csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
     }
 
@@ -29,7 +29,7 @@ fn test_compact_with_ts_keeps_deleted_entries_without_cutoff() {
     let mut csr = MutableCsr::with_capacity(10, 100);
 
     for i in 1..=3 {
-        let dst = VertexId::from_int64(i as i64);
+        let dst = VertexId::edge_endpoint_key(i as u32, 0);
         csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
     }
     csr.delete_edge(0u32, EdgeId(2), 5).unwrap();
@@ -53,7 +53,7 @@ fn test_compact_with_ts_reporting_reports_removed_edges() {
     let mut csr = MutableCsr::with_capacity(10, 100);
 
     for i in 1..=3 {
-        let dst = VertexId::from_int64(i as i64);
+        let dst = VertexId::edge_endpoint_key(i as u32, 0);
         csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
     }
     csr.delete_edge(0u32, EdgeId(2), 5).unwrap();
@@ -73,10 +73,10 @@ fn test_compact_with_ts_guards_reserve_ratio_ge_one() {
     // allocation (OOM on ~800k+ edge partitions under background freeze).
     let mut csr = MutableCsr::with_capacity(4, 100);
     for i in 1..=6i64 {
-        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(i as u64), 1)
             .unwrap();
     }
-    csr.insert_edge(1u32, VertexId::from_int64(1), EdgeId(7), 1)
+    csr.insert_edge(1u32, VertexId::edge_endpoint_key(1, 0), EdgeId(7), 1)
         .unwrap();
 
     let removed = csr.compact_with_ts_reporting(3, 1.0, &mut |_, _| {});
@@ -96,7 +96,7 @@ fn test_compact_with_ts_guards_reserve_ratio_ge_one() {
 fn test_compact_with_ts_zero_ratio_keeps_exact_degree() {
     let mut csr = MutableCsr::with_capacity(4, 100);
     for i in 1..=3i64 {
-        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(i as u64), 1)
             .unwrap();
     }
     let removed = csr.compact_with_ts_reporting(3, 0.0, &mut |_, _| {});
@@ -110,7 +110,7 @@ fn test_overflow_cleared_after_compact() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
     for vid in 0..20u32 {
         for i in 0..8 {
-            let dst = VertexId::from_int64((vid as i64 + 1) * 100 + i as i64);
+            let dst = VertexId::edge_endpoint_key((vid as u32 + 1) * 100 + i as u32, 0);
             csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1)
                 .unwrap();
         }
@@ -124,11 +124,11 @@ fn test_overflow_cleared_after_compact() {
 #[test]
 fn test_compact_vertex_is_row_scoped() {
     let mut csr = MutableCsr::with_capacity(10, 100);
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
-    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(2, 0), EdgeId(101), 1)
         .unwrap();
-    csr.insert_edge(5u32, VertexId::from_int64(6), EdgeId(102), 1)
+    csr.insert_edge(5u32, VertexId::edge_endpoint_key(6, 0), EdgeId(102), 1)
         .unwrap();
     assert!(csr.delete_edge(0u32, EdgeId(100), 2).unwrap());
 
@@ -153,7 +153,7 @@ fn test_compact_vertex_is_row_scoped() {
 #[test]
 fn test_compact_vertex_keeps_pinned_tombstones() {
     let mut csr = MutableCsr::with_capacity(10, 100);
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
     assert!(csr.delete_edge(0u32, EdgeId(100), 10).unwrap());
 
@@ -171,7 +171,7 @@ fn test_compact_vertex_keeps_pinned_tombstones() {
 fn test_compact_vertex_repacks_overflow() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
     for i in 0..6u64 {
-        let dst = VertexId::from_int64(100 + i as i64);
+        let dst = VertexId::edge_endpoint_key(100 + i as u32, 0);
         csr.insert_edge(0u32, dst, EdgeId(i), 1).unwrap();
     }
     // 4 primary + 2 overflow.
@@ -190,7 +190,7 @@ fn test_compact_reduces_fragmentation() {
     let mut csr = MutableCsr::with_capacity(10, 100);
 
     for i in 1..=6 {
-        let dst = VertexId::from_int64(i as i64);
+        let dst = VertexId::edge_endpoint_key(i as u32, 0);
         csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
     }
     for i in 1..=3 {

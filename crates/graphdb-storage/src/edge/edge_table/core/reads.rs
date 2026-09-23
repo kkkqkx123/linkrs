@@ -183,7 +183,7 @@ impl EdgeStore {
     ) -> Option<Nbr> {
         // Compare the packed key halves directly: building a `VertexId`
         // per slot just to compare it is pure overhead on this scan.
-        let (endpoint, rank) = decode_endpoint_pair(dst);
+        let (endpoint, rank) = decode_endpoint_pair(dst)?;
         let mut found = None;
         csr.visit_physical(src, |nbr| {
             if nbr.endpoint == endpoint && nbr.rank == rank && self.is_visible(nbr.edge_id, ts) {
@@ -206,7 +206,7 @@ impl EdgeStore {
         ts: Timestamp,
         gate: &crate::mvcc_visibility::PendingGate<'_>,
     ) -> Option<Nbr> {
-        let (endpoint, rank) = decode_endpoint_pair(dst);
+        let (endpoint, rank) = decode_endpoint_pair(dst)?;
         let mut found = None;
         csr.visit_physical(src, |nbr| {
             if nbr.endpoint == endpoint
@@ -586,7 +586,10 @@ impl EdgeStore {
             if let Some(variant) = self.out_csr.group_variant(gid) {
                 for (local_vid, nbr) in variant.iter_all() {
                     if nbr.edge_id == edge_id {
-                        hit = Some(base + local_vid.as_int64().unwrap_or(0) as u32);
+                        let Some(local) = local_vid.as_internal_u32() else {
+                            continue;
+                        };
+                        hit = Some(base + local);
                         break;
                     }
                 }
@@ -703,7 +706,10 @@ impl EdgeStore {
             if let Some(variant) = self.out_csr.group_variant(gid) {
                 for (local_vid, nbr) in variant.iter_all() {
                     if nbr.edge_id == edge_id {
-                        hit = Some(base + local_vid.as_int64().unwrap_or(0) as u32);
+                        let Some(local) = local_vid.as_internal_u32() else {
+                            continue;
+                        };
+                        hit = Some(base + local);
                         break;
                     }
                 }
@@ -786,9 +792,9 @@ impl EdgeStore {
         } = query;
         let properties = if self.is_bundled() {
             let row = if outgoing {
-                src_vid.as_int64().unwrap_or(0) as u32
+                src_vid.as_internal_u32().unwrap_or(u32::MAX)
             } else {
-                dst_vid.as_int64().unwrap_or(0) as u32
+                dst_vid.as_internal_u32().unwrap_or(u32::MAX)
             };
             self.bundled_properties_at_assume_visible(outgoing, row, edge_id, query_ts, projection)
         } else {
@@ -1270,10 +1276,13 @@ impl EdgeStore {
                 if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
                     continue;
                 }
+                let Some(src) = src_vid.as_internal_u32() else {
+                    continue;
+                };
                 // Gate verdict reused: the checking assembly would
                 // otherwise re-decide without the gate.
                 records.push(self.edge_record_from_nbr_projected_assume_visible(
-                    src_vid.as_int64().unwrap_or(0) as u32,
+                    src,
                     nbr,
                     ts,
                     None,
@@ -1286,8 +1295,11 @@ impl EdgeStore {
             if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
                 continue;
             }
+            let Some(dst) = dst_vid.as_internal_u32() else {
+                continue;
+            };
             records.push(self.edge_record_from_in_nbr_assume_visible(
-                dst_vid.as_int64().unwrap_or(0) as u32,
+                dst,
                 nbr,
                 ts,
                 None,
@@ -1311,10 +1323,13 @@ impl EdgeStore {
                 if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
                     continue;
                 }
+                let Some(src) = src_vid.as_internal_u32() else {
+                    continue;
+                };
                 // Gate verdict reused: the checking assembly would
                 // otherwise re-decide without the gate.
                 records.push(self.edge_record_from_nbr_projected_assume_visible(
-                    src_vid.as_int64().unwrap_or(0) as u32,
+                    src,
                     nbr,
                     ts,
                     projection,
@@ -1327,8 +1342,11 @@ impl EdgeStore {
             if !self.is_visible_with_gate(nbr.edge_id, ts, gate) {
                 continue;
             }
+            let Some(dst) = dst_vid.as_internal_u32() else {
+                continue;
+            };
             records.push(self.edge_record_from_in_nbr_assume_visible(
-                dst_vid.as_int64().unwrap_or(0) as u32,
+                dst,
                 nbr,
                 ts,
                 projection,

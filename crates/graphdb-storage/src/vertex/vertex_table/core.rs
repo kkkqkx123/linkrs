@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use super::super::{
-    ColumnStore, IdIndexer, IdKey, LabelId, Timestamp, VertexId, VertexRecord, VertexSchema,
-    VertexTimestamp,
+    primary_key_mirror_value, ColumnStore, IdIndexer, IdKey, LabelId, Timestamp, VertexId,
+    VertexRecord, VertexSchema, VertexTimestamp,
 };
 use crate::encoding::EncodingSelector;
 use crate::schema::{LabelVersionHistory, SchemaObjectType};
@@ -154,6 +154,25 @@ impl VertexTable {
             return Err(StorageError::storage_not_open());
         }
 
+        match &key {
+            IdKey::Int(id) if *id < 0 => {
+                return Err(StorageError::invalid_input(format!(
+                    "Vertex id cannot be negative: {}",
+                    id
+                )));
+            }
+            IdKey::Text(id)
+                if id.as_bytes().len() > graphdb_core::types::VERTEX_ID_MAX_SIZE =>
+            {
+                return Err(StorageError::invalid_input(format!(
+                    "Vertex id exceeds max length of {} bytes: got {} bytes",
+                    graphdb_core::types::VERTEX_ID_MAX_SIZE,
+                    id.as_bytes().len()
+                )));
+            }
+            _ => {}
+        }
+
         let mut converted: Vec<(String, Value)> = Vec::with_capacity(properties.len());
         for (name, value) in properties {
             // Use cached index lookup instead of O(n) schema search
@@ -170,6 +189,7 @@ impl VertexTable {
                 converted.push((name.clone(), value.clone()));
             }
         }
+        let converted = self.apply_primary_key_mirror(&key, converted)?;
 
         if self.id_indexer.contains(&key) {
             let internal_id = self
@@ -197,6 +217,77 @@ impl VertexTable {
             .set_versioned(internal_id as usize, &converted, ts)?;
 
         Ok(internal_id)
+    }
+
+    /// Enforce the primary key mirror invariant on one write.
+    ///
+    /// The primary key column materializes the external id in the column's
+    /// own type. A missing key property is filled in; a provided one must
+    /// equal the derived mirror or the write is rejected.
+    fn apply_primary_key_mirror(
+        &self,
+        key: &IdKey,
+        mut properties: Vec<(String, Value)>,
+    ) -> StorageResult<Vec<(String, Value)>> {
+        let Some(pk_def) = self.schema.properties.get(self.schema.primary_key_index) else {
+            return Ok(properties);
+        };
+        let mirror = primary_key_mirror_value(&pk_def.data_type, key)?;
+        let mirror = mirror.try_cast_to(&pk_def.data_type)?;
+        match properties.iter().find(|(name, _)| name == &pk_def.name) {
+            Some((_, provided)) => {
+                let provided = provided.try_cast_to(&pk_def.data_type)?;
+                if provided != mirror {
+                    return Err(StorageError::invalid_input(format!(
+                        "Primary key column '{}' must mirror the vertex id: got {:?}, expected {:?}",
+                        pk_def.name, provided, mirror
+                    )));
+                }
+            }
+            None => properties.push((pk_def.name.clone(), mirror)),
+        }
+        Ok(properties)
+    }
+
+    /// Rebuild divergent primary key cells from the external id index.
+    ///
+    /// Load-time upgrade fixup: the external id is authoritative, so every
+    /// stored primary key cell must equal its derived mirror. Divergent cells
+    /// are overwritten in place (no new MVCC version; history keeps showing
+    /// the pre-upgrade value) and the repaired row count is reported.
+    pub fn repair_primary_key_mirrors(&mut self) -> StorageResult<usize> {
+        let Some(pk_def) = self.schema.properties.get(self.schema.primary_key_index).cloned()
+        else {
+            return Ok(0);
+        };
+        let mut repaired = 0usize;
+        for (key, internal_id) in self.id_indexer.iter() {
+            let mirror = primary_key_mirror_value(&pk_def.data_type, &key)?;
+            let mirror = mirror.try_cast_to(&pk_def.data_type)?;
+            let current = self
+                .columns
+                .get_projected_at_ts(
+                    internal_id as usize,
+                    &[pk_def.name.clone()],
+                    graphdb_core::types::MAX_TIMESTAMP,
+                )
+                .into_iter()
+                .next()
+                .and_then(|(_, value)| value);
+            if current.as_ref() != Some(&mirror) {
+                self.columns
+                    .set(internal_id as usize, &[(pk_def.name.clone(), mirror)])?;
+                repaired += 1;
+            }
+        }
+        if repaired > 0 {
+            log::info!(
+                "Repaired {} primary key mirror values in vertex table '{}'",
+                repaired,
+                self.label_name
+            );
+        }
+        Ok(repaired)
     }
 
     pub fn get_by_internal_id(&self, internal_id: u32, ts: Timestamp) -> Option<VertexRecord> {
@@ -385,6 +476,18 @@ impl VertexTable {
             return Err(StorageError::vertex_not_found());
         }
 
+        if self
+            .schema
+            .properties
+            .get(self.schema.primary_key_index)
+            .is_some_and(|pk| pk.name == col_name)
+        {
+            return Err(StorageError::invalid_operation(format!(
+                "Primary key column '{}' mirrors the vertex id and cannot be updated; delete and re-insert the vertex instead",
+                col_name
+            )));
+        }
+
         // Use cached index lookup
         let prop_idx = self
             .property_index_cache
@@ -420,6 +523,20 @@ impl VertexTable {
 
         if !self.timestamps.is_valid(internal_id, ts) {
             return Err(StorageError::vertex_not_found());
+        }
+
+        if let Some(col) = self.columns.get_column_by_id(col_id) {
+            if self
+                .schema
+                .properties
+                .get(self.schema.primary_key_index)
+                .is_some_and(|pk| pk.name == col.name)
+            {
+                return Err(StorageError::invalid_operation(format!(
+                    "Primary key column '{}' mirrors the vertex id and cannot be updated; delete and re-insert the vertex instead",
+                    col.name
+                )));
+            }
         }
 
         let col = self

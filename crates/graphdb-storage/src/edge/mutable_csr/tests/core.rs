@@ -5,15 +5,15 @@ use super::super::MutableCsr;
 fn test_basic_insert_and_query() {
     let mut csr = MutableCsr::with_capacity(10, 100);
 
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
-    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(2, 0), EdgeId(101), 1)
         .unwrap();
-    csr.insert_edge(1u32, VertexId::from_int64(3), EdgeId(102), 1)
+    csr.insert_edge(1u32, VertexId::edge_endpoint_key(3, 0), EdgeId(102), 1)
         .unwrap();
 
     assert!(csr
-        .insert_edge(0u32, VertexId::from_int64(1), EdgeId(103), 1)
+        .insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(103), 1)
         .is_err());
 
     assert_eq!(csr.edge_count(), 3);
@@ -23,9 +23,9 @@ fn test_basic_insert_and_query() {
 fn test_resize() {
     let mut csr = MutableCsr::with_capacity(2, 10);
 
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
-    csr.insert_edge(100u32, VertexId::from_int64(1), EdgeId(101), 1)
+    csr.insert_edge(100u32, VertexId::edge_endpoint_key(1, 0), EdgeId(101), 1)
         .unwrap();
 
     assert!(csr.vertex_capacity() >= 101);
@@ -37,12 +37,12 @@ fn test_zero_degree_rows_hold_no_slots() {
     assert_eq!(csr.total_edge_capacity, 0);
 
     // A single edge allocates exactly one primary block
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
     assert_eq!(csr.total_edge_capacity, 4);
 
     // Sparse high vertex ids allocate blocks only for themselves
-    csr.insert_edge(10_000u32, VertexId::from_int64(2), EdgeId(101), 1)
+    csr.insert_edge(10_000u32, VertexId::edge_endpoint_key(2, 0), EdgeId(101), 1)
         .unwrap();
     assert_eq!(csr.vertex_capacity(), 12_502);
     assert_eq!(csr.total_edge_capacity, 8);

@@ -211,8 +211,10 @@ impl CsrShardSet {
                 CsrVariant::Multiple(csr) => {
                     let mut cont = true;
                     for (local, nbr) in csr.iter_all() {
-                        let global =
-                            local.as_int64().unwrap_or(0).saturating_add(base as i64) as u32;
+                        let Some(local) = local.as_internal_u32() else {
+                            continue;
+                        };
+                        let global = local.saturating_add(base);
                         if !f(global, nbr) {
                             cont = false;
                             break;
@@ -223,8 +225,10 @@ impl CsrShardSet {
                 CsrVariant::Single(csr) => {
                     let mut cont = true;
                     for (local, nbr) in csr.iter_all() {
-                        let global =
-                            local.as_int64().unwrap_or(0).saturating_add(base as i64) as u32;
+                        let Some(local) = local.as_internal_u32() else {
+                            continue;
+                        };
+                        let global = local.saturating_add(base);
                         if !f(global, nbr) {
                             cont = false;
                             break;
@@ -235,8 +239,10 @@ impl CsrShardSet {
                 CsrVariant::Pure(csr) => {
                     let mut cont = true;
                     for (local, nbr) in csr.iter_all() {
-                        let global =
-                            local.as_int64().unwrap_or(0).saturating_add(base as i64) as u32;
+                        let Some(local) = local.as_internal_u32() else {
+                            continue;
+                        };
+                        let global = local.saturating_add(base);
                         if !f(global, nbr) {
                             cont = false;
                             break;
@@ -247,8 +253,10 @@ impl CsrShardSet {
                 CsrVariant::Bundled(csr) => {
                     let mut cont = true;
                     for (local, nbr) in csr.iter_all() {
-                        let global =
-                            local.as_int64().unwrap_or(0).saturating_add(base as i64) as u32;
+                        let Some(local) = local.as_internal_u32() else {
+                            continue;
+                        };
+                        let global = local.saturating_add(base);
                         if !f(global, nbr) {
                             cont = false;
                             break;
@@ -259,8 +267,10 @@ impl CsrShardSet {
                 CsrVariant::Frozen(csr) => {
                     let mut cont = true;
                     for (local, nbr) in csr.iter_all() {
-                        let global =
-                            local.as_int64().unwrap_or(0).saturating_add(base as i64) as u32;
+                        let Some(local) = local.as_internal_u32() else {
+                            continue;
+                        };
+                        let global = local.saturating_add(base);
                         if !f(global, nbr) {
                             cont = false;
                             break;
@@ -271,8 +281,10 @@ impl CsrShardSet {
                 CsrVariant::Mapped(csr) => {
                     let mut cont = true;
                     for (local, nbr) in csr.iter_all() {
-                        let global =
-                            local.as_int64().unwrap_or(0).saturating_add(base as i64) as u32;
+                        let Some(local) = local.as_internal_u32() else {
+                            continue;
+                        };
+                        let global = local.saturating_add(base);
                         if !f(global, nbr) {
                             cont = false;
                             break;

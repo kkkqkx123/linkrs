@@ -95,6 +95,15 @@ impl VertexTable {
         let timestamps_path = path.join("timestamps.bin");
         self.load_timestamps(&timestamps_path)?;
 
+        let repaired = self.repair_primary_key_mirrors()?;
+        if repaired > 0 {
+            log::info!(
+                "Vertex table '{}' repaired {} primary key mirror values on open",
+                self.label_name,
+                repaired
+            );
+        }
+
         self.is_open = true;
         Ok(())
     }

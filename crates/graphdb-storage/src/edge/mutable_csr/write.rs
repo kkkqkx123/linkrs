@@ -92,7 +92,9 @@ impl MutableCsr {
         edge_id: EdgeId,
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
+        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst).ok_or_else(|| {
+            StorageError::invalid_input(format!("Malformed edge endpoint key: {}", dst))
+        })?;
 
         let src_idx = src_vid as usize;
 
@@ -347,7 +349,9 @@ impl MutableCsr {
         ts: Timestamp,
         on_deleted: &mut dyn FnMut(EdgeId, EdgePosition),
     ) -> usize {
-        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
+        let Some((decoded_endpoint, decoded_rank)) = decode_endpoint_pair(dst) else {
+            return 0;
+        };
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
             return 0;

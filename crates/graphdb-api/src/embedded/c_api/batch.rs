@@ -513,9 +513,9 @@ pub unsafe extern "C" fn graphdb_batch_buffered_edges(batch: *mut graphdb_batch_
 fn value_to_vertex_id(value: &graphdb_core::Value) -> Option<VertexId> {
     use graphdb_core::Value;
     match value {
-        Value::Int(i) => Some(VertexId::from_int64(*i as i64)),
-        Value::BigInt(i) => Some(VertexId::from_int64(*i)),
-        Value::String(s) => Some(VertexId::from_string(s.to_string())),
+        Value::Int(i) => VertexId::try_from_int64(*i as i64).ok(),
+        Value::BigInt(i) => VertexId::try_from_int64(*i).ok(),
+        Value::String(s) => VertexId::try_from_string(s.as_str()).ok(),
         _ => None,
     }
 }

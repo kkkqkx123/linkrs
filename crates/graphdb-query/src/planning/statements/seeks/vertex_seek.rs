@@ -111,6 +111,12 @@ impl VertexSeek {
 
     fn vertex_matches_pattern(&self, vertex: &Vertex, pattern: &NodePattern) -> bool {
         if !pattern.labels.is_empty() {
+            // Single-label vertices carry exactly one tag, so a conjunction
+            // over distinct labels can never match.
+            let distinct = pattern.labels.iter().collect::<std::collections::HashSet<_>>();
+            if distinct.len() > 1 {
+                return false;
+            }
             let has_all_labels = pattern
                 .labels
                 .iter()

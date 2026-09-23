@@ -1,7 +1,32 @@
 //! Binary serialization helpers for `EntityRef` values.
 
-use graphdb_core::types::storage_ids::VertexId;
+use graphdb_core::types::storage_ids::{VertexId, VertexIdKind};
 use graphdb_core::wal::EntityRef;
+
+fn write_vertex_id<W: std::io::Write>(writer: &mut W, vid: &VertexId) -> std::io::Result<()> {
+    let bytes = vid.as_bytes();
+    let len = bytes.len().min(u8::MAX as usize) as u8;
+    writer.write_all(&[vid.kind().as_u8()])?;
+    writer.write_all(&[len])?;
+    writer.write_all(&bytes[..len as usize])
+}
+
+fn read_vertex_id<R: std::io::Read>(reader: &mut R) -> std::io::Result<VertexId> {
+    let mut kind = [0u8; 1];
+    reader.read_exact(&mut kind)?;
+    let kind = VertexIdKind::from_u8(kind[0]).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Unknown VertexId kind in EntityRef",
+        )
+    })?;
+    let mut len = [0u8; 1];
+    reader.read_exact(&mut len)?;
+    let mut bytes = vec![0u8; len[0] as usize];
+    reader.read_exact(&mut bytes)?;
+    VertexId::from_typed_bytes(kind, &bytes)
+        .map_err(|detail| std::io::Error::new(std::io::ErrorKind::InvalidData, detail))
+}
 
 pub(crate) fn write_entity_ref<W: std::io::Write>(
     writer: &mut W,
@@ -11,10 +36,7 @@ pub(crate) fn write_entity_ref<W: std::io::Write>(
         None => writer.write_all(&[0u8]),
         Some(EntityRef::Vertex(vid)) => {
             writer.write_all(&[1u8])?;
-            let bytes = vid.as_bytes();
-            let len = bytes.len().min(u8::MAX as usize) as u8;
-            writer.write_all(&[len])?;
-            writer.write_all(&bytes[..len as usize])
+            write_vertex_id(writer, vid)
         }
         Some(EntityRef::Edge {
             src,
@@ -23,14 +45,8 @@ pub(crate) fn write_entity_ref<W: std::io::Write>(
             ranking,
         }) => {
             writer.write_all(&[2u8])?;
-            let src_bytes = src.as_bytes();
-            let src_len = src_bytes.len().min(u8::MAX as usize) as u8;
-            writer.write_all(&[src_len])?;
-            writer.write_all(&src_bytes[..src_len as usize])?;
-            let dst_bytes = dst.as_bytes();
-            let dst_len = dst_bytes.len().min(u8::MAX as usize) as u8;
-            writer.write_all(&[dst_len])?;
-            writer.write_all(&dst_bytes[..dst_len as usize])?;
+            write_vertex_id(writer, src)?;
+            write_vertex_id(writer, dst)?;
             writer.write_all(&edge_type.to_le_bytes())?;
             writer.write_all(&ranking.to_le_bytes())
         }
@@ -46,24 +62,13 @@ impl EntityRefReader {
         match tag[0] {
             0 => Ok(None),
             1 => {
-                let mut len = [0u8; 1];
-                reader.read_exact(&mut len)?;
-                let mut bytes = vec![0u8; len[0] as usize];
-                reader.read_exact(&mut bytes)?;
-                let vid = VertexId::from_bytes(bytes);
+                let vid = read_vertex_id(reader)?;
                 Ok(Some(EntityRef::Vertex(vid)))
             }
             2 => {
-                let mut len = [0u8; 1];
-                reader.read_exact(&mut len)?;
-                let mut src_bytes = vec![0u8; len[0] as usize];
-                reader.read_exact(&mut src_bytes)?;
-                let src = VertexId::from_bytes(src_bytes);
+                let src = read_vertex_id(reader)?;
 
-                reader.read_exact(&mut len)?;
-                let mut dst_bytes = vec![0u8; len[0] as usize];
-                reader.read_exact(&mut dst_bytes)?;
-                let dst = VertexId::from_bytes(dst_bytes);
+                let dst = read_vertex_id(reader)?;
 
                 let mut edge_type_bytes = [0u8; 4];
                 reader.read_exact(&mut edge_type_bytes)?;

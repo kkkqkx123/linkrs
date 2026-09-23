@@ -9,7 +9,7 @@ fn test_multiple_csr_variant() {
     let mut csr =
         CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 10, 100, 4096).unwrap();
 
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
     assert_eq!(csr.edge_count(), 1);
 }
@@ -19,7 +19,7 @@ fn test_single_csr_variant() {
     let mut csr =
         CsrVariant::from_strategy_with_overflow(EdgeStrategy::Single, 10, 100, 4096).unwrap();
 
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
     assert_eq!(csr.edge_count(), 1);
 }
@@ -28,7 +28,7 @@ fn test_single_csr_variant() {
 fn test_frozen_variant_dump_load_roundtrip() {
     let mut inner = MutableCsr::with_capacity(8, 64);
     inner
-        .insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
     let frozen = CsrVariant::Frozen(Box::new(super::super::ImmutableCsr::pack_from_mutable(
         &inner,
@@ -43,7 +43,7 @@ fn test_frozen_variant_dump_load_roundtrip() {
     assert_eq!(loaded.edge_count(), 1);
     assert_eq!(loaded.edges_of(0, 1), frozen.edges_of(0, 1));
     assert!(loaded
-        .insert_edge(1u32, VertexId::from_int64(2), EdgeId(101), 1)
+        .insert_edge(1u32, VertexId::edge_endpoint_key(2, 0), EdgeId(101), 1)
         .is_err());
 }
 
@@ -70,17 +70,17 @@ fn test_none_csr_variant() {
 
     // None variant should reject all insertions
     assert!(csr
-        .insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .is_err());
     assert_eq!(csr.edge_count(), 0);
 
     // None variant should reject all deletions
     assert!(csr.delete_edge(0, EdgeId(100), 1).is_err());
-    assert_eq!(csr.delete_edge_by_dst(0, VertexId::from_int64(1), 1), 0);
+    assert_eq!(csr.delete_edge_by_dst(0, VertexId::edge_endpoint_key(1, 0), 1), 0);
     assert!(!csr.revert_delete_by_offset(0, 0, 1));
 
     // None variant should return None for get_edge
-    assert!(csr.get_edge(0, VertexId::from_int64(1), 1).is_none());
+    assert!(csr.get_edge(0, VertexId::edge_endpoint_key(1, 0), 1).is_none());
 
     // Clear should be a no-op
     csr.clear();
@@ -112,7 +112,7 @@ fn test_none_csr_dump_load() {
     // After loading, should be None variant
     assert_eq!(csr2.edge_count(), 0);
     assert!(csr2
-        .insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
+        .insert_edge(0, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .is_err());
 }
 
@@ -120,7 +120,7 @@ fn test_none_csr_dump_load() {
 fn test_clone() {
     let mut csr1 =
         CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 10, 100, 4096).unwrap();
-    csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr1.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
 
     let csr2 = csr1.clone();
@@ -134,7 +134,7 @@ fn test_clone_none() {
 
     assert_eq!(csr2.edge_count(), 0);
     assert!(csr2
-        .insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
+        .insert_edge(0, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .is_err());
 }
 
@@ -145,7 +145,7 @@ fn pure_row_iter_matches_allocating_read() {
         inner
             .insert_edge(
                 0,
-                VertexId::edge_endpoint_key(dst, 0),
+                VertexId::edge_endpoint_key((dst) as u32, 0),
                 EdgeId(dst as u64),
                 0,
             )
@@ -164,7 +164,7 @@ fn bundled_row_iter_matches_allocating_read() {
         inner
             .insert_edge(
                 0,
-                VertexId::edge_endpoint_key(dst, 0),
+                VertexId::edge_endpoint_key((dst) as u32, 0),
                 EdgeId(dst as u64),
                 0,
             )
@@ -183,7 +183,7 @@ fn pure_variant_reports_fragmentation_and_holes() {
         inner
             .insert_edge(
                 0,
-                VertexId::edge_endpoint_key(dst, 0),
+                VertexId::edge_endpoint_key((dst) as u32, 0),
                 EdgeId(dst as u64),
                 0,
             )
@@ -208,7 +208,7 @@ fn bundled_variant_reports_fragmentation() {
         inner
             .insert_edge(
                 0,
-                VertexId::edge_endpoint_key(dst, 0),
+                VertexId::edge_endpoint_key((dst) as u32, 0),
                 EdgeId(dst as u64),
                 0,
             )
@@ -223,7 +223,7 @@ fn bundled_variant_reports_fragmentation() {
 fn single_variant_supports_positional_writes() {
     let mut csr =
         CsrVariant::from_strategy_with_overflow(EdgeStrategy::Single, 10, 100, 4096).unwrap();
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
     let (position, nbr) = csr.locate_edge(0, EdgeId(100)).unwrap();
     assert_eq!(nbr.edge_id, EdgeId(100));
@@ -251,10 +251,10 @@ fn none_variant_offset_delete_fails_closed() {
 fn frozen_variant_probe_reports_dead_entries() {
     let mut inner = MutableCsr::with_capacity(8, 64);
     inner
-        .insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
     inner
-        .insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+        .insert_edge(0u32, VertexId::edge_endpoint_key(2, 0), EdgeId(101), 1)
         .unwrap();
     inner.delete_edge(0, EdgeId(100), 5).unwrap();
     let variant = CsrVariant::Frozen(Box::new(ImmutableCsr::pack_from_mutable(&inner)));
@@ -269,7 +269,7 @@ fn mapped_dump_shares_tag_and_loads_as_heap() {
     use crate::edge::edge_table::checkpoint::snapshot::{write_snapshot_file, MappedFrozen};
     let mut inner = MutableCsr::with_capacity(8, 64);
     inner
-        .insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
     let frozen_heap = ImmutableCsr::pack_from_mutable(&inner);
     let mut path = std::env::temp_dir();
@@ -304,7 +304,7 @@ fn mapped_clear_falls_back_to_placeholder() {
     use crate::edge::edge_table::checkpoint::snapshot::{write_snapshot_file, MappedFrozen};
     let mut inner = MutableCsr::with_capacity(8, 64);
     inner
-        .insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+        .insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
     let frozen_heap = ImmutableCsr::pack_from_mutable(&inner);
     let capacity = frozen_heap.vertex_capacity();
@@ -325,7 +325,7 @@ fn mapped_clear_falls_back_to_placeholder() {
     assert_eq!(variant.edge_count(), 0);
     assert!(variant.physical_edges_of(0).is_empty());
     assert!(variant
-        .insert_edge(0, VertexId::from_int64(1), EdgeId(100), 1)
+        .insert_edge(0, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .is_err());
     let _ = std::fs::remove_file(&path);
 }
@@ -336,7 +336,7 @@ fn pure_and_bundled_direct_pack_match_topology() {
     for dst in [3u32, 1, 2] {
         pure.insert_edge(
             0,
-            VertexId::edge_endpoint_key(dst, 0),
+            VertexId::edge_endpoint_key((dst) as u32, 0),
             EdgeId(dst as u64),
             0,
         )
@@ -357,7 +357,7 @@ fn pure_and_bundled_direct_pack_match_topology() {
         bundled
             .insert_edge(
                 0,
-                VertexId::edge_endpoint_key(dst, 0),
+                VertexId::edge_endpoint_key((dst) as u32, 0),
                 EdgeId(dst as u64),
                 0,
             )
@@ -403,7 +403,7 @@ fn pure_threshold_ignores_rank_half_explicitly() {
         inner
             .insert_edge(
                 0,
-                VertexId::edge_endpoint_key(dst, 0),
+                VertexId::edge_endpoint_key((dst) as u32, 0),
                 EdgeId(dst as u64),
                 0,
             )

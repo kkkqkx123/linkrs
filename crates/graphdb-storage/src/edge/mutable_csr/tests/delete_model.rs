@@ -33,9 +33,9 @@ fn assert_delete_model_invariants(csr: &MutableCsr, vertex_range: std::ops::Rang
 #[test]
 fn test_remove_after_delete_does_not_double_count() {
     let mut csr = MutableCsr::with_capacity(10, 100);
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
-    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(2, 0), EdgeId(101), 1)
         .unwrap();
     assert!(csr.delete_edge(0u32, EdgeId(100), 2).unwrap());
     assert_eq!(csr.edge_count(), 1);
@@ -49,7 +49,7 @@ fn test_remove_after_delete_does_not_double_count() {
 fn test_remove_after_delete_overflow_does_not_double_count() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
     for i in 0..6u64 {
-        csr.insert_edge(0u32, VertexId::from_int64(100 + i as i64), EdgeId(i), 1)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(100 + i as u32, 0), EdgeId(i), 1)
             .unwrap();
     }
     assert_eq!(csr.edge_count(), 6);
@@ -65,7 +65,7 @@ fn test_delete_model_invariants_under_mixed_workload() {
     for i in 0..3u64 {
         csr.insert_edge(
             0u32,
-            VertexId::from_int64(10 + i as i64),
+            VertexId::edge_endpoint_key(10 + i as u32, 0),
             EdgeId(100 + i),
             1,
         )
@@ -74,7 +74,7 @@ fn test_delete_model_invariants_under_mixed_workload() {
     for i in 0..20u64 {
         csr.insert_edge(
             1u32,
-            VertexId::from_int64(100 + i as i64),
+            VertexId::edge_endpoint_key(100 + i as u32, 0),
             EdgeId(200 + i),
             1,
         )
@@ -83,7 +83,7 @@ fn test_delete_model_invariants_under_mixed_workload() {
     for i in 0..6u64 {
         csr.insert_edge(
             2u32,
-            VertexId::from_int64(200 + i as i64),
+            VertexId::edge_endpoint_key(200 + i as u32, 0),
             EdgeId(300 + i),
             1,
         )
@@ -94,7 +94,7 @@ fn test_delete_model_invariants_under_mixed_workload() {
     // Tombstone deletes across primary and overflow rows.
     assert!(csr.delete_edge(1u32, EdgeId(205), 5).unwrap());
     assert_eq!(
-        csr.delete_edge_by_dst(2u32, VertexId::from_int64(202), 5),
+        csr.delete_edge_by_dst(2u32, VertexId::edge_endpoint_key(202, 0), 5),
         1
     );
     assert!(csr.delete_edge_by_offset(0u32, 0, 5).unwrap());

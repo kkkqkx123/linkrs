@@ -410,8 +410,8 @@ impl EdgeStore {
         let space_id = self.label as u64;
         let stats_manager = self.stats_manager.clone();
         for edge in iter {
-            let src_u32 = edge.src_vid.as_int64().unwrap_or(0) as u32;
-            let dst_u32 = edge.dst_vid.as_int64().unwrap_or(0) as u32;
+            let src_u32 = edge.src_vid.as_internal_u32().unwrap_or(u32::MAX);
+            let dst_u32 = edge.dst_vid.as_internal_u32().unwrap_or(u32::MAX);
             for (prop_name, prop_value) in &edge.properties {
                 let started = std::time::Instant::now();
                 let result = index.insert(

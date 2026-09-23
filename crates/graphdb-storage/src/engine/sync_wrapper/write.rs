@@ -72,7 +72,7 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
             .ok_or_else(|| StorageError::node_not_found(*id))?;
 
         StorageWriter::delete_vertex(&mut self.inner, space, id)?;
-        if let Err(error) = self.sync_delete_vertex(space, id, &vertex) {
+        if let Err(error) = self.sync_delete_vertex(space, &vertex.vid, &vertex) {
             return Err(self.reject_staged_write(error));
         }
         self.commit_auto_transaction()?;
@@ -267,15 +267,21 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
     }
 
     fn delete_vertex_data(&mut self, space: &str, vertex_id: &str) -> Result<bool, StorageError> {
-        let parsed_id = vertex_id
+        let vid_type = self
+            .inner
+            .get_space(space)?
+            .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?
+            .vid_type;
+        let raw = vertex_id
             .parse::<i64>()
             .map(VertexId::from_int64)
             .unwrap_or_else(|_| VertexId::from_string(vertex_id));
+        let parsed_id = VertexId::normalize_for_vid_type(&vid_type, raw)?;
         let previous = self.inner.get_vertex(space, &parsed_id)?;
         let result = self.inner.delete_vertex_data(space, vertex_id)?;
         if result {
             if let Some(vertex) = previous {
-                if let Err(error) = self.sync_delete_vertex(space, &parsed_id, &vertex) {
+                if let Err(error) = self.sync_delete_vertex(space, &vertex.vid, &vertex) {
                     return Err(self.reject_staged_write(error));
                 }
             }
@@ -315,14 +321,23 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
         dst: &str,
         rank: i64,
     ) -> Result<bool, StorageError> {
-        let source = src
-            .parse::<i64>()
-            .map(VertexId::from_int64)
-            .unwrap_or_else(|_| VertexId::from_string(src));
-        let destination = dst
-            .parse::<i64>()
-            .map(VertexId::from_int64)
-            .unwrap_or_else(|_| VertexId::from_string(dst));
+        let vid_type = self
+            .inner
+            .get_space(space)?
+            .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?
+            .vid_type;
+        let source = VertexId::normalize_for_vid_type(
+            &vid_type,
+            src.parse::<i64>()
+                .map(VertexId::from_int64)
+                .unwrap_or_else(|_| VertexId::from_string(src)),
+        )?;
+        let destination = VertexId::normalize_for_vid_type(
+            &vid_type,
+            dst.parse::<i64>()
+                .map(VertexId::from_int64)
+                .unwrap_or_else(|_| VertexId::from_string(dst)),
+        )?;
         let previous = self
             .inner
             .scan_all_edges(space)?

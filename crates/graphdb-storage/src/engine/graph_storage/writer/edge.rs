@@ -76,6 +76,10 @@ pub(crate) fn insert_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
+    let src = VertexId::normalize_for_vid_type(&space_info.vid_type, edge.src)?;
+    let dst = VertexId::normalize_for_vid_type(&space_info.vid_type, edge.dst)?;
+    let edge = Edge::new(src, dst, edge.edge_type.clone(), edge.ranking(), edge.props.clone());
+
     let ts = ctx.get_write_timestamp()?;
     let mut rollback = Vec::new();
     let result = insert_edge_at_timestamp(ctx, space, space_info.space_id, edge, ts, &mut rollback);
@@ -296,9 +300,15 @@ pub(crate) fn delete_edge(
     edge_type: &str,
     rank: i64,
 ) -> StorageResult<()> {
-    let previous = reader::get_edge(ctx, space, src, dst, edge_type, rank)?;
+    let space_info = ctx
+        .schema_manager()
+        .get_space(space)?
+        .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
+    let src = VertexId::normalize_for_vid_type(&space_info.vid_type, *src)?;
+    let dst = VertexId::normalize_for_vid_type(&space_info.vid_type, *dst)?;
+    let previous = reader::get_edge(ctx, space, &src, &dst, edge_type, rank)?;
     let ts = ctx.get_write_timestamp()?;
-    let result = delete_edge_at_timestamp(ctx, space, src, dst, edge_type, rank, ts);
+    let result = delete_edge_at_timestamp(ctx, space, &src, &dst, edge_type, rank, ts);
     if result.is_ok() {
         if let Some(previous) = previous {
             let edge_info = resolve_edge_type(ctx, space, edge_type)?;
@@ -310,9 +320,9 @@ pub(crate) fn delete_edge(
                 ctx,
                 EdgeIdentifier::new(
                     src_label,
-                    *src,
+                    src,
                     dst_label,
-                    *dst,
+                    dst,
                     edge_info.edge_type_id,
                     rank,
                 ),
@@ -339,10 +349,11 @@ pub(crate) fn update_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
     // Save edge identity for rollback
-    let src = edge.src;
-    let dst = edge.dst;
+    let src = VertexId::normalize_for_vid_type(&space_info.vid_type, edge.src)?;
+    let dst = VertexId::normalize_for_vid_type(&space_info.vid_type, edge.dst)?;
     let edge_type = edge.edge_type.clone();
     let ranking = edge.ranking;
+    let edge = Edge::new(src, dst, edge_type.clone(), ranking, edge.props.clone());
 
     // Read current properties for rollback
     let current_props =

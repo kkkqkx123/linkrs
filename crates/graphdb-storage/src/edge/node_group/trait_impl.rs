@@ -72,7 +72,9 @@ impl MutableCsrTrait for CsrShardSet {
             })?
             .variant
             .insert_edge(local, dst, edge_id, ts)?;
-        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst);
+        let (decoded_endpoint, decoded_rank) = decode_endpoint_pair(dst).ok_or_else(|| {
+            StorageError::invalid_input(format!("Malformed edge endpoint key: {}", dst))
+        })?;
         let nbr = Nbr::with_create_ts(decoded_endpoint, decoded_rank, edge_id, ts);
         self.mark_region_insert(gid, local);
         self.record_append_insert(gid, local, nbr);

@@ -317,7 +317,9 @@ impl SingleMutableCsr {
         }
 
         let was_empty = existing_hot.edge_id == INVALID_EDGE_ID || !existing_cold.is_live();
-        let (decoded_endpoint, rank) = decode_endpoint_pair(dst);
+        let (decoded_endpoint, rank) = decode_endpoint_pair(dst).ok_or_else(|| {
+            StorageError::invalid_input(format!("Malformed edge endpoint key: {}", dst))
+        })?;
         let segment = self.slot_mut_or_alloc(src_idx);
         let (_, off) = Self::locate(src_idx);
         segment.hot[off] = HotNbr {
@@ -387,7 +389,10 @@ impl SingleMutableCsr {
             return 0;
         }
 
-        let (dst_ep, dst_rank) = decode_endpoint_pair(dst);
+        let (dst_ep, dst_rank) = match decode_endpoint_pair(dst) {
+            Some(pair) => pair,
+            None => return 0,
+        };
         let probe = match self.slot_at(src_idx) {
             Some(probe) => probe,
             None => return 0,
@@ -422,7 +427,7 @@ impl SingleMutableCsr {
             return None;
         }
 
-        let (dst_ep, dst_rank) = decode_endpoint_pair(dst);
+        let (dst_ep, dst_rank) = decode_endpoint_pair(dst)?;
         let probe = self.slot_at(src_idx)?;
 
         if !probe.is_alive_at(ts) {
@@ -572,7 +577,10 @@ impl SingleMutableCsr {
         if src_idx >= self.vertex_capacity() {
             return 0;
         }
-        let (dst_ep, dst_rank) = decode_endpoint_pair(dst);
+        let (dst_ep, dst_rank) = match decode_endpoint_pair(dst) {
+            Some(pair) => pair,
+            None => return 0,
+        };
         let probe = match self.slot_at(src_idx) {
             Some(probe) => probe,
             None => return 0,
@@ -602,7 +610,7 @@ impl SingleMutableCsr {
         if probe.edge_id == INVALID_EDGE_ID || probe.delete_ts != Timestamp::MAX {
             return None;
         }
-        let (dst_ep, dst_rank) = decode_endpoint_pair(dst);
+        let (dst_ep, dst_rank) = decode_endpoint_pair(dst)?;
         if probe.endpoint == dst_ep && probe.rank == dst_rank {
             Some(probe)
         } else {
@@ -1267,13 +1275,13 @@ mod tests {
     fn test_basic_operations() {
         let mut csr = SingleMutableCsr::with_capacity(10);
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 100)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 100)
             .unwrap();
         assert!(csr
-            .insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 99)
+            .insert_edge(0u32, VertexId::edge_endpoint_key(2, 0), EdgeId(101), 99)
             .is_err());
         assert!(csr
-            .insert_edge(0u32, VertexId::from_int64(2), EdgeId(102), 101)
+            .insert_edge(0u32, VertexId::edge_endpoint_key(2, 0), EdgeId(102), 101)
             .is_err());
 
         assert_eq!(csr.edge_count(), 1);
@@ -1282,15 +1290,15 @@ mod tests {
     #[test]
     fn test_second_live_edge_rejected_at_csr_layer() {
         let mut csr = SingleMutableCsr::with_capacity(4);
-        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
         let err = csr
-            .insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 200)
+            .insert_edge(0u32, VertexId::edge_endpoint_key(11, 0), EdgeId(101), 200)
             .expect_err("second live edge must be rejected");
         assert!(err.to_string().contains("conflict"));
         assert_eq!(csr.edge_count(), 1);
         assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
-        csr.insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 151)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(11, 0), EdgeId(101), 151)
             .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
@@ -1298,17 +1306,17 @@ mod tests {
     #[test]
     fn test_physical_lookup_skips_tombstone() {
         let mut csr = SingleMutableCsr::with_capacity(4);
-        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
         assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
-        assert!(csr.get_edge_physical(0, VertexId::from_int64(10)).is_none());
+        assert!(csr.get_edge_physical(0, VertexId::edge_endpoint_key(10, 0)).is_none());
         assert_eq!(csr.physical_edges_of(0).len(), 1);
     }
 
     #[test]
     fn test_exact_edge_id_required_for_delete() {
         let mut csr = SingleMutableCsr::with_capacity(4);
-        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
         assert!(!csr.delete_edge(0, EdgeId(999), 150).unwrap());
         assert!(!csr
@@ -1320,7 +1328,7 @@ mod tests {
     #[test]
     fn test_delete_missing_id_on_tombstone_returns_not_found() {
         let mut csr = SingleMutableCsr::with_capacity(4);
-        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
         assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
         assert!(!csr.delete_edge(0, EdgeId(999), 160).unwrap());
@@ -1331,11 +1339,11 @@ mod tests {
     #[test]
     fn test_delete_by_dst_reports_count() {
         let mut csr = SingleMutableCsr::with_capacity(4);
-        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
-        assert_eq!(csr.delete_edge_by_dst(0, VertexId::from_int64(11), 150), 0);
-        assert_eq!(csr.delete_edge_by_dst(0, VertexId::from_int64(10), 150), 1);
-        assert_eq!(csr.delete_edge_by_dst(0, VertexId::from_int64(10), 150), 0);
+        assert_eq!(csr.delete_edge_by_dst(0, VertexId::edge_endpoint_key(11, 0), 150), 0);
+        assert_eq!(csr.delete_edge_by_dst(0, VertexId::edge_endpoint_key(10, 0), 150), 1);
+        assert_eq!(csr.delete_edge_by_dst(0, VertexId::edge_endpoint_key(10, 0), 150), 0);
     }
 
     #[test]
@@ -1343,11 +1351,11 @@ mod tests {
         let mut csr1 = SingleMutableCsr::with_capacity(10);
 
         // Use insert_edge to populate data
-        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr1.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
-        csr1.insert_edge(1u32, VertexId::from_int64(20), EdgeId(101), 100)
+        csr1.insert_edge(1u32, VertexId::edge_endpoint_key(20, 0), EdgeId(101), 100)
             .unwrap();
-        csr1.insert_edge(2u32, VertexId::from_int64(30), EdgeId(102), 100)
+        csr1.insert_edge(2u32, VertexId::edge_endpoint_key(30, 0), EdgeId(102), 100)
             .unwrap();
 
         let data = csr1.dump();
@@ -1362,9 +1370,9 @@ mod tests {
     #[test]
     fn test_load_rejects_tampered_edge_count() {
         let mut csr1 = SingleMutableCsr::with_capacity(10);
-        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr1.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
-        csr1.insert_edge(1u32, VertexId::from_int64(20), EdgeId(101), 100)
+        csr1.insert_edge(1u32, VertexId::edge_endpoint_key(20, 0), EdgeId(101), 100)
             .unwrap();
         let data = csr1.dump();
         let mut ok = SingleMutableCsr::new();
@@ -1390,15 +1398,15 @@ mod tests {
     #[test]
     fn test_dump_and_load_roundtrip() {
         let mut csr1 = SingleMutableCsr::with_capacity(10);
-        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr1.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
 
         let data = csr1.dump();
         let mut csr2 = SingleMutableCsr::new();
         csr2.load(&data).unwrap();
 
-        assert!(csr2.get_edge(0, VertexId::from_int64(10), 99).is_some());
-        assert!(csr2.get_edge(0, VertexId::from_int64(10), 100).is_some());
+        assert!(csr2.get_edge(0, VertexId::edge_endpoint_key(10, 0), 99).is_some());
+        assert!(csr2.get_edge(0, VertexId::edge_endpoint_key(10, 0), 100).is_some());
         assert_eq!(csr2.edges_of(0, 99).len(), 1);
         assert_eq!(csr2.edges_of(0, 100).len(), 1);
     }
@@ -1406,7 +1414,7 @@ mod tests {
     #[test]
     fn test_load_rejects_truncated_and_trailing_data() {
         let mut csr1 = SingleMutableCsr::with_capacity(4);
-        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr1.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
         let data = csr1.dump();
 
@@ -1423,7 +1431,7 @@ mod tests {
     #[test]
     fn test_offset_delete_propagates_conflict() {
         let mut csr = SingleMutableCsr::with_capacity(4);
-        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
         assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
         assert!(!csr.delete_edge(0, EdgeId(100), 150).unwrap());
@@ -1436,10 +1444,10 @@ mod tests {
     #[test]
     fn test_resurrect_allows_any_timestamp() {
         let mut csr = SingleMutableCsr::with_capacity(4);
-        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
         assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
-        csr.insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 140)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(11, 0), EdgeId(101), 140)
             .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
@@ -1447,10 +1455,10 @@ mod tests {
     #[test]
     fn test_resurrect_with_equal_timestamp() {
         let mut csr = SingleMutableCsr::with_capacity(4);
-        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
         assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
-        csr.insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 150)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(11, 0), EdgeId(101), 150)
             .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
@@ -1458,7 +1466,7 @@ mod tests {
     #[test]
     fn test_single_reclaim_reports_and_clears_slot() {
         let mut csr = SingleMutableCsr::with_capacity(4);
-        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
         assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
         assert_eq!(csr.reclaimable_count(0, 100), 0);
@@ -1472,7 +1480,7 @@ mod tests {
         assert_eq!(reported, vec![(EdgeId(100), 150)]);
         assert_eq!(csr.vertex_census(0), (0, 0, 0));
         assert!(!csr.has_physical_entries(0));
-        csr.insert_edge(0u32, VertexId::from_int64(11), EdgeId(101), 160)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(11, 0), EdgeId(101), 160)
             .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
@@ -1480,12 +1488,12 @@ mod tests {
     #[test]
     fn test_single_remove_and_revert_by_id() {
         let mut csr = SingleMutableCsr::with_capacity(4);
-        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
         assert!(csr.rollback_insert(0, EdgeId(100)));
         assert_eq!(csr.edge_count(), 0);
         assert!(!csr.has_physical_entries(0));
-        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(101), 110)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(101), 110)
             .unwrap();
         assert!(csr.delete_edge(0, EdgeId(101), 120).unwrap());
         assert!(csr.revert_delete_by_edge_id(0, EdgeId(101), 130));
@@ -1495,9 +1503,9 @@ mod tests {
     #[test]
     fn test_single_topology_encoding_roundtrip() {
         let mut csr = SingleMutableCsr::with_capacity(8);
-        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
-        csr.insert_edge(3u32, VertexId::from_int64(11), EdgeId(101), 100)
+        csr.insert_edge(3u32, VertexId::edge_endpoint_key(11, 0), EdgeId(101), 100)
             .unwrap();
         let payload = csr.dump();
         let mut loaded = SingleMutableCsr::new();
@@ -1520,14 +1528,14 @@ mod tests {
     #[test]
     fn test_single_sparse_slots_stay_lazy_behind_present_bitmap() {
         let mut csr = SingleMutableCsr::with_capacity(8192);
-        csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
-        csr.insert_edge(7000u32, VertexId::from_int64(11), EdgeId(101), 100)
+        csr.insert_edge(7000u32, VertexId::edge_endpoint_key(11, 0), EdgeId(101), 100)
             .unwrap();
         assert_eq!(csr.edge_count(), 2);
         assert_eq!(csr.allocated_segments(), 2);
         assert!(csr.sparse_memory_bytes() < 8192 * 32);
-        assert!(csr.get_edge(1, VertexId::from_int64(10), 200).is_none());
+        assert!(csr.get_edge(1, VertexId::edge_endpoint_key(10, 0), 200).is_none());
         assert_eq!(csr.edges_of(1, 200).len(), 0);
         assert!(!csr.has_physical_entries(1));
     }

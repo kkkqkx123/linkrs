@@ -62,10 +62,13 @@ fn remap_endpoint_key_counted(
     mapping: Option<&HashMap<u32, u32>>,
     misses: &mut usize,
 ) -> VertexId {
-    let (endpoint, rank) = EdgeStore::decode_edge_endpoint(key);
-    match endpoint.as_int64() {
-        Some(id) if id >= 0 => match mapping {
-            Some(m) => match m.get(&(id as u32)).copied() {
+    let Some((endpoint, rank)) = EdgeStore::try_decode_edge_endpoint(key) else {
+        *misses += 1;
+        return key;
+    };
+    match endpoint.as_internal_u32() {
+        Some(id) => match mapping {
+            Some(m) => match m.get(&id).copied() {
                 Some(new_id) => EdgeStore::edge_endpoint_key(new_id, rank),
                 None => {
                     *misses += 1;
@@ -74,7 +77,10 @@ fn remap_endpoint_key_counted(
             },
             None => key,
         },
-        Some(_) | None => key,
+        None => {
+            *misses += 1;
+            key
+        }
     }
 }
 
@@ -120,8 +126,8 @@ fn remap_direction(
                     .iter_all()
                     .map(|(src, nbr)| {
                         let base = crate::edge::node_group::group_base(gid, old.group_bits());
-                        let global = src.as_int64().unwrap_or(0) + base as i64;
-                        (global as u32, nbr)
+                        let global = src.as_internal_u32().unwrap_or(0).saturating_add(base);
+                        (global, nbr)
                     })
                     .collect()
             })
@@ -132,15 +138,24 @@ fn remap_direction(
             let new_src = remapped_row_counted(src, row_mapping, &mut row_miss);
             let new_neighbor =
                 remap_endpoint_key_counted(nbr.to_vertex_id(), neighbor_mapping, &mut nbr_miss);
+            let new_nbr = match new_neighbor
+                .try_decode_edge_endpoint()
+                .and_then(|(ep_vid, ep_rank)| {
+                    ep_vid.as_internal_u32().map(|endpoint| (endpoint, ep_rank))
+                }) {
+                Some((endpoint, rank)) => Nbr {
+                    endpoint,
+                    rank,
+                    ..nbr
+                },
+                None => {
+                    nbr_miss += 1;
+                    nbr
+                }
+            };
             stats.row_misses += row_miss;
             stats.neighbor_misses += nbr_miss;
             stats.entries += 1;
-            let (ep_vid, ep_rank) = new_neighbor.decode_edge_endpoint();
-            let new_nbr = Nbr {
-                endpoint: ep_vid.as_int64().unwrap_or(0) as u32,
-                rank: ep_rank,
-                ..nbr
-            };
             // Bundled values ride along keyed by edge id; other forms carry
             // no inline state.
             let inline_value = if form == RecordForm::Bundled {

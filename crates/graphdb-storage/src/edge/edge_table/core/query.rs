@@ -88,7 +88,9 @@ impl EdgeStore {
                 if !self.is_visible(nbr.edge_id, query_ts) {
                     continue;
                 }
-                let row = src_vid.as_int64().unwrap_or(0) as u32;
+                let Some(row) = src_vid.as_internal_u32() else {
+                    continue;
+                };
                 let props = self.bundled_properties_at_assume_visible(
                     true,
                     row,

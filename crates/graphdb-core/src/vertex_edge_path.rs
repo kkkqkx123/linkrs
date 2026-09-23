@@ -150,25 +150,20 @@ impl Vertex {
         self.properties.get(prop_name)
     }
 
-    /// Look up a property with property-access evaluation semantics:
-    /// vertex properties first, then tag properties, then a tag whose name
-    /// equals the property (yielding the tag's full property map).
+    /// Look up a property with single-label evaluation semantics: tag
+    /// properties first, then the vertex-level map.
     ///
-    /// Shared by the per-row expression evaluator and the scan-side flat
-    /// column extraction so both paths cannot silently diverge.
+    /// Tag properties are canonical: storage fills only the single tag, so
+    /// both maps agree wherever both are populated. Shared by the per-row
+    /// expression evaluator and the scan-side flat column extraction so both
+    /// paths cannot silently diverge.
     pub fn property_value(&self, property: &str) -> Option<Value> {
-        if let Some(val) = self.properties.get(property) {
-            return Some(val.clone());
-        }
         for tag in &self.tags {
             if let Some(val) = tag.properties.get(property) {
                 return Some(val.clone());
             }
-            if tag.name == property {
-                return Some(Value::string_map(tag.properties.clone()));
-            }
         }
-        None
+        self.properties.get(property).cloned()
     }
 
     pub fn get_all_properties(&self) -> HashMap<String, &Value> {

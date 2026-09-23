@@ -791,22 +791,25 @@ impl Default for OrderedCodec {
 
 // ── VertexId I/O ────────────────────────────────────────────────────────────
 
-/// Write a VertexId as fixed-size 33 bytes for order-preserving comparison.
-/// Format: [data:32] [len:1]. The zero padding keeps byte ordering identical
-/// to the raw VertexId bytes, including prefix relationships.
+/// Write a VertexId as fixed-size 34 bytes for order-preserving comparison.
+/// Format: [data:32] [len:1] [kind:1]. The zero padding keeps byte ordering
+/// identical to the raw VertexId bytes within one kind, including prefix
+/// relationships; the trailing kind byte disambiguates equal payloads.
 fn write_vertex_id(vid: &VertexId, buf: &mut Vec<u8>) {
     let bytes = vid.as_bytes();
     buf.extend_from_slice(bytes);
     let pad = 32usize.saturating_sub(bytes.len());
     buf.extend(std::iter::repeat_n(0u8, pad));
     buf.push(bytes.len() as u8);
+    buf.push(vid.kind().as_u8());
 }
 
-/// Read a VertexId from 33 fixed-size bytes.
+/// Read a VertexId from 34 fixed-size bytes.
 fn read_vertex_id(bytes: &[u8]) -> Result<(VertexId, usize), StorageError> {
-    if bytes.len() < 33 {
+    use crate::types::storage_ids::VertexIdKind;
+    if bytes.len() < 34 {
         return Err(StorageError::deserialize_error(
-            "truncated vertex id (need 33)",
+            "truncated vertex id (need 34)",
         ));
     }
     let len = bytes[32] as usize;
@@ -818,8 +821,12 @@ fn read_vertex_id(bytes: &[u8]) -> Result<(VertexId, usize), StorageError> {
             "non-zero vertex id padding",
         ));
     }
+    let kind = VertexIdKind::from_u8(bytes[33])
+        .ok_or_else(|| StorageError::deserialize_error("unknown vertex id kind"))?;
     let data = &bytes[..len];
-    Ok((VertexId::from_bytes(data.to_vec()), 33))
+    VertexId::from_typed_bytes(kind, data)
+        .map(|vid| (vid, 34))
+        .map_err(StorageError::deserialize_error)
 }
 
 // ── IEEE 754 total-order encoding ───────────────────────────────────────────

@@ -5,12 +5,12 @@ use crate::index::types::EdgeIdentity;
 use graphdb_core::types::{
     EdgeIdentifier, InsertEdgeInfo, InsertVertexInfo, UpdateInfo, UpdateOp, UpdateTarget, VertexId,
 };
-use graphdb_core::wal::redo::{DeleteEdgeRedo, DeleteVertexRedo, InsertEdgeRedo, InsertVertexRedo};
+use graphdb_core::wal::redo::{DeleteEdgeRedo, InsertEdgeRedo, InsertVertexRedo};
 use graphdb_core::wal::types::WalOpType;
 use graphdb_core::{StorageError, StorageResult, Value};
 
 use super::super::context::GraphStorageContext;
-use super::super::ops::{endpoint_label_id, tag_label_id};
+use super::super::ops::{endpoint_label_id, route_vertex_id, tag_label_id, RoutedVertexId};
 use super::super::reader;
 
 pub(crate) fn insert_vertex_data(
@@ -37,6 +37,7 @@ pub(crate) fn insert_vertex_data(
     let label_id = tag.tag_id;
     let vid = VertexId::try_from(&info.vertex_id)
         .map_err(|e| StorageError::invalid_input(e.to_string()))?;
+    let vid = VertexId::normalize_for_vid_type(&space_info.vid_type, vid)?;
 
     let props =
         super::constraints::apply_tag_constraints(ctx, space, &info.tag_name, info.props.clone())?;
@@ -46,13 +47,9 @@ pub(crate) fn insert_vertex_data(
         properties: props.clone(),
     };
     let redo_entry = ctx.append_wal_redo(WalOpType::InsertVertex, ts, &redo)?;
-    let result = if let Some(id_int) = vid.as_int64() {
-        ctx.insert_vertex_by_i64(label_id, id_int, &props, ts)
-    } else if let Some(id_str) = vid.as_str() {
-        ctx.insert_vertex(label_id, id_str, &props, ts)
-    } else {
-        let id_str = vid.to_string();
-        ctx.insert_vertex(label_id, &id_str, &props, ts)
+    let result = match route_vertex_id(&vid)? {
+        RoutedVertexId::Int(id_int) => ctx.insert_vertex_by_i64(label_id, id_int, &props, ts),
+        RoutedVertexId::Text(id_str) => ctx.insert_vertex(label_id, &id_str, &props, ts),
     };
     let final_result = match result {
         Ok(_) => {
@@ -109,8 +106,10 @@ pub(crate) fn insert_edge_data(
     let edge_label_id = edge_type.edge_type_id;
     let src_vid = VertexId::try_from(&info.src_vertex_id)
         .map_err(|e| StorageError::invalid_input(e.to_string()))?;
+    let src_vid = VertexId::normalize_for_vid_type(&space_info.vid_type, src_vid)?;
     let dst_vid = VertexId::try_from(&info.dst_vertex_id)
         .map_err(|e| StorageError::invalid_input(e.to_string()))?;
+    let dst_vid = VertexId::normalize_for_vid_type(&space_info.vid_type, dst_vid)?;
     let src_label_id =
         endpoint_label_id(ctx, space, &edge_type.src_tag_name)?.ok_or_else(|| {
             StorageError::not_found(format!("Source tag {} not found", edge_type.src_tag_name))
@@ -217,38 +216,14 @@ pub(crate) fn delete_vertex_data(
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
-    let tags = ctx.schema_manager().list_tags(space)?;
-    let ts = ctx.get_write_timestamp()?;
-    let mut deleted = false;
-    let vid = vertex_id
+    let raw = vertex_id
         .parse::<i64>()
         .map(VertexId::from_int64)
         .unwrap_or_else(|_| VertexId::from_string(vertex_id));
+    let vid = VertexId::normalize_for_vid_type(&space_info.vid_type, raw)?;
 
-    for tag in tags {
-        let label_id = tag.tag_id;
-        if ctx.delete_vertex(label_id, vertex_id, ts).is_ok() {
-            let redo = DeleteVertexRedo {
-                label: label_id,
-                vid,
-            };
-            let redo_entry = ctx.append_wal_redo(WalOpType::DeleteVertex, ts, &redo)?;
-            super::vertex::record_vertex_remove(ctx, label_id, vid, Some(redo_entry))?;
-            super::index_maintenance::delete_vertex_indexes(
-                ctx,
-                ctx.index_metadata_manager(),
-                space_info.space_id,
-                &Value::string(vertex_id),
-                &tag.tag_name,
-                ts,
-            )?;
-            deleted = true;
-        }
-    }
-
-    ctx.commit_write_timestamp_ordered(ts)?;
-
-    Ok(deleted)
+    super::vertex::delete_vertex(ctx, space, &vid)?;
+    Ok(true)
 }
 
 pub(crate) fn delete_edge_data(
@@ -258,7 +233,11 @@ pub(crate) fn delete_edge_data(
     dst: &str,
     rank: i64,
 ) -> StorageResult<bool> {
-    let space_id = ctx.schema_manager().get_space_id(space)?;
+    let space_info = ctx
+        .schema_manager()
+        .get_space(space)?
+        .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
+    let space_id = space_info.space_id;
     let edge_types = ctx.schema_manager().list_edge_types(space)?;
     let ts = ctx.get_write_timestamp()?;
     let mut deleted = false;
@@ -277,10 +256,12 @@ pub(crate) fn delete_edge_data(
             .parse::<i64>()
             .map(VertexId::from_int64)
             .unwrap_or_else(|_| VertexId::from_string(src));
+        let src_vid = VertexId::normalize_for_vid_type(&space_info.vid_type, src_vid)?;
         let dst_vid = dst
             .parse::<i64>()
             .map(VertexId::from_int64)
             .unwrap_or_else(|_| VertexId::from_string(dst));
+        let dst_vid = VertexId::normalize_for_vid_type(&space_info.vid_type, dst_vid)?;
         let previous = reader::get_edge(ctx, space, &src_vid, &dst_vid, &et.edge_type_name, rank)?;
         let redo_entry = previous
             .as_ref()
@@ -371,11 +352,15 @@ pub(crate) fn update_data(
 
     if let Some(label_id) = tag_label_id(ctx, space, label)? {
         let vid = VertexId::try_from(id).map_err(|e| StorageError::invalid_input(e.to_string()))?;
-        let id_str = vid.to_string();
-        let current_record = if let Some(id_int) = vid.as_int64() {
-            ctx.get_vertex_by_i64(label_id, id_int, ts)
-        } else {
-            ctx.get_vertex(label_id, &id_str, ts)
+        let vid = VertexId::normalize_for_vid_type(&space_info.vid_type, vid)?;
+        let routed = super::super::ops::route_vertex_id(&vid)?;
+        let current_record = match &routed {
+            super::super::ops::RoutedVertexId::Int(id_int) => {
+                ctx.get_vertex_by_i64(label_id, *id_int, ts)
+            }
+            super::super::ops::RoutedVertexId::Text(id_str) => {
+                ctx.get_vertex(label_id, id_str, ts)
+            }
         };
         let value = match &info.update_op {
             UpdateOp::Set => info.value.clone(),
@@ -418,7 +403,14 @@ pub(crate) fn update_data(
             _ => info.value.clone(),
         };
 
-        ctx.update_vertex_property(label_id, &id_str, prop, &value, ts)?;
+        match &routed {
+            super::super::ops::RoutedVertexId::Int(id_int) => {
+                ctx.update_vertex_property_by_i64(label_id, *id_int, prop, &value, ts)?;
+            }
+            super::super::ops::RoutedVertexId::Text(id_str) => {
+                ctx.update_vertex_property(label_id, id_str, prop, &value, ts)?;
+            }
+        }
         let old_value = current_record.as_ref().and_then(|record| {
             record
                 .properties

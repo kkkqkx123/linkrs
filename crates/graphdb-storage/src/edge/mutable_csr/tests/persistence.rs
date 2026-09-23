@@ -6,11 +6,11 @@ use crate::edge::Nbr;
 fn test_dump_and_load() {
     let mut csr1 = MutableCsr::with_capacity(10, 100);
 
-    csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr1.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
-    csr1.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+    csr1.insert_edge(0u32, VertexId::edge_endpoint_key(2, 0), EdgeId(101), 1)
         .unwrap();
-    csr1.insert_edge(1u32, VertexId::from_int64(3), EdgeId(102), 1)
+    csr1.insert_edge(1u32, VertexId::edge_endpoint_key(3, 0), EdgeId(102), 1)
         .unwrap();
 
     let data = csr1.dump();
@@ -25,9 +25,9 @@ fn test_dump_and_load() {
 #[test]
 fn test_load_rejects_tampered_edge_count() {
     let mut csr1 = MutableCsr::with_capacity(10, 100);
-    csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr1.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
-    csr1.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+    csr1.insert_edge(0u32, VertexId::edge_endpoint_key(2, 0), EdgeId(101), 1)
         .unwrap();
     let data = csr1.dump();
     let mut ok = MutableCsr::new();
@@ -55,7 +55,7 @@ fn test_overflow_dump_and_load() {
     let mut csr1 = MutableCsr::with_capacity(10, 100);
 
     for i in 1..=6 {
-        let dst = VertexId::from_int64(i as i64);
+        let dst = VertexId::edge_endpoint_key(i as u32, 0);
         csr1.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
     }
 
@@ -80,7 +80,7 @@ fn test_topology_encoding_roundtrip_keeps_snapshot_reads() {
     for i in 0..20u64 {
         csr.insert_edge(
             (i % 4) as u32,
-            VertexId::from_int64(100 + i as i64),
+            VertexId::edge_endpoint_key(100 + i as u32, 0),
             EdgeId(i),
             10,
         )
@@ -122,13 +122,13 @@ fn test_topology_encoding_rejects_garbage_marker() {
 fn single_marker_dump_load_roundtrip() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(2, 16, 8);
     for i in 0..30i64 {
-        csr.insert_edge(0u32, VertexId::from_int64(i + 1), EdgeId(i as u64 + 1), 1)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i + 1) as u32, 0), EdgeId(i as u64 + 1), 1)
             .unwrap();
     }
     for i in 1..10i64 {
         csr.insert_edge(
             1u32,
-            VertexId::from_int64(i + 100),
+            VertexId::edge_endpoint_key((i + 100) as u32, 0),
             EdgeId(1000 + i as u64),
             2,
         )
@@ -163,7 +163,7 @@ fn single_marker_dump_load_roundtrip() {
 #[test]
 fn retired_raw_marker_is_rejected() {
     let mut csr = MutableCsr::with_capacity(4, 16);
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(7), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(7), 1)
         .unwrap();
 
     // The retired direct-dump marker (9) is damage now, not an alternate

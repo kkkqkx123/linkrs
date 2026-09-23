@@ -226,14 +226,15 @@ impl EdgeStore {
         )
     }
 
-    pub(crate) fn decode_edge_endpoint(key: VertexId) -> (VertexId, i64) {
-        let bytes = key.as_bytes();
-        if bytes.len() != 16 {
+    pub(crate) fn try_decode_edge_endpoint(key: VertexId) -> Option<(VertexId, i64)> {
+        let decoded = key.try_decode_edge_endpoint();
+        if decoded.is_none() {
             log::warn!(
-                "decode_edge_endpoint: unexpected key length {}, expected 16",
-                bytes.len()
+                "try_decode_edge_endpoint: unexpected key kind {:?} length {}, expected a 16-byte edge endpoint key",
+                key.kind(),
+                key.len(),
             );
         }
-        key.decode_edge_endpoint()
+        decoded
     }
 }

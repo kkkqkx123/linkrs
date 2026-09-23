@@ -311,6 +311,26 @@ pub(crate) fn create_tag(
 
     validate_serial_columns(&tag.properties)?;
 
+    let primary_key = tag
+        .properties
+        .first()
+        .map(|p| p.name.as_str())
+        .unwrap_or("id");
+
+    // The primary key column mirrors the external vertex id, so a SERIAL
+    // column (whose values are allocated independently of the vertex id) can
+    // never serve as the primary key.
+    if tag
+        .properties
+        .first()
+        .is_some_and(|pk| pk.serial && pk.name == primary_key)
+    {
+        return Err(StorageError::invalid_operation(format!(
+            "SERIAL column '{}' cannot be the primary key: the primary key mirrors the vertex id",
+            primary_key
+        )));
+    }
+
     // Prepare WAL data before executing storage changes
     let wal_redo = CreateVertexTypeRedo {
         space_name: space.to_string(),
@@ -324,12 +344,6 @@ pub(crate) fn create_tag(
         .iter()
         .map(StoragePropertyDef::from_core)
         .collect();
-
-    let primary_key = tag
-        .properties
-        .first()
-        .map(|p| p.name.as_str())
-        .unwrap_or("id");
 
     // IMPORTANT: Transaction order (fixed from previous implementation):
     // 1. Create in schema_manager first (metadata update)

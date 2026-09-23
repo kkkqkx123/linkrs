@@ -2037,11 +2037,11 @@ fn ensure_scalar_property(col: &str, value: &Value) -> CoreResult<()> {
 fn vid_from_value(value: &Value) -> Option<graphdb_core::types::storage_ids::VertexId> {
     use graphdb_core::types::storage_ids::VertexId;
     match value {
-        Value::SmallInt(i) => Some(VertexId::from_int64(i64::from(*i))),
-        Value::Int(i) => Some(VertexId::from_int64(i64::from(*i))),
-        Value::BigInt(i) => Some(VertexId::from_int64(*i)),
-        Value::String(s) => Some(VertexId::from_string(s.to_string())),
-        Value::FixedString(s) => Some(VertexId::from_string(s.clone())),
+        Value::SmallInt(i) => VertexId::try_from_int64(i64::from(*i)).ok(),
+        Value::Int(i) => VertexId::try_from_int64(i64::from(*i)).ok(),
+        Value::BigInt(i) => VertexId::try_from_int64(*i).ok(),
+        Value::String(s) => VertexId::try_from_string(s.as_str()).ok(),
+        Value::FixedString(s) => VertexId::try_from_string(s.as_str()).ok(),
         Value::Vertex(v) => Some(*v.vid()),
         Value::VertexId(id) => Some(*id),
         _ => None,

@@ -18,12 +18,12 @@ pub(crate) fn grown_vertex_capacity(min_capacity: usize) -> usize {
 }
 
 /// Decode a full-match endpoint key into the packed `(endpoint, rank)` pair
-/// stored in `Nbr` rows. `decode_edge_endpoint` always yields an
-/// int64-encoded vertex id, so `as_int64` is the canonical projection; the
-/// low 32 bits match the former `as_u64` call sites bit for bit.
-pub(crate) fn decode_endpoint_pair(dst: VertexId) -> (u32, i64) {
-    let (vid, rank) = dst.decode_edge_endpoint();
-    (vid.as_int64().unwrap_or(0) as u32, rank)
+/// stored in `Nbr` rows. Returns `None` for malformed keys instead of
+/// zero-padding them into a bogus endpoint.
+pub(crate) fn decode_endpoint_pair(dst: VertexId) -> Option<(u32, i64)> {
+    let (vid, rank) = dst.try_decode_edge_endpoint()?;
+    let endpoint = vid.as_internal_u32()?;
+    Some((endpoint, rank))
 }
 
 /// Outcome of running the shared per-slot delete state machine on an

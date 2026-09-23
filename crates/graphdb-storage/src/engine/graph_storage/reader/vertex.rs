@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::engine::graph_storage::context::GraphStorageContext;
 use crate::engine::graph_storage::ops::{
-    serialize_properties, value_to_string, vertex_record_to_vertex,
+    route_vertex_id, serialize_properties, vertex_record_to_vertex, RoutedVertexId,
 };
 use graphdb_core::types::{TagInfo, VertexId};
 use graphdb_core::vertex_edge_path::Tag;
@@ -35,10 +35,12 @@ fn get_vertex_impl(
 ) -> StorageResult<Option<Vertex>> {
     record_vertex_read(ctx, *id);
     record_schema_read(ctx, space);
-    let _space_info = ctx
+    let space_info = ctx
         .schema_manager()
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
+    let id = VertexId::normalize_for_vid_type(&space_info.vid_type, *id)?;
+    let routed = route_vertex_id(&id)?;
 
     let tags = ctx.schema_manager().list_tags(space)?;
     if tags.is_empty() {
@@ -46,47 +48,48 @@ fn get_vertex_impl(
     }
 
     let ts = ctx.get_read_timestamp();
-    let mut all_tags: Vec<Tag> = Vec::new();
-    let mut merged_properties: HashMap<String, Value> = HashMap::new();
-    let mut internal_id = 0u32;
+    let mut hits: Vec<(&str, crate::vertex::VertexRecord)> = Vec::new();
 
     for tag in &tags {
         let label_id = tag.tag_id;
-        let record = if let Some(id_int) = id.as_int64() {
-            match projection {
-                Some(proj) => ctx.get_vertex_by_i64_projected(label_id, id_int, proj, ts),
-                None => ctx.get_vertex_by_i64(label_id, id_int, ts),
-            }
-        } else if let Some(id_str) = id.as_str() {
-            match projection {
+        let record = match &routed {
+            RoutedVertexId::Int(id_int) => match projection {
+                Some(proj) => ctx.get_vertex_by_i64_projected(label_id, *id_int, proj, ts),
+                None => ctx.get_vertex_by_i64(label_id, *id_int, ts),
+            },
+            RoutedVertexId::Text(id_str) => match projection {
                 Some(proj) => ctx.get_vertex_projected(label_id, id_str, proj, ts),
                 None => ctx.get_vertex(label_id, id_str, ts),
-            }
-        } else {
-            let id_str = id.to_string();
-            match projection {
-                Some(proj) => ctx.get_vertex_projected(label_id, &id_str, proj, ts),
-                None => ctx.get_vertex(label_id, &id_str, ts),
-            }
+            },
         };
 
         if let Some(record) = record {
-            internal_id = record.internal_id;
-            let props: HashMap<String, Value> = record.properties.iter().cloned().collect();
-            all_tags.push(Tag::new(tag.tag_name.clone(), props.clone()));
-            merged_properties.extend(props);
+            hits.push((tag.tag_name.as_str(), record));
         }
     }
 
-    if all_tags.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(Vertex {
-            vid: *id,
-            id: internal_id as i64,
-            tags: all_tags,
-            properties: merged_properties,
-        }))
+    // Single-label point lookup: one hit yields a single-tag vertex, zero
+    // hits yield None, and multiple hits violate the single-label invariant
+    // and are rejected instead of being merged.
+    match hits.as_slice() {
+        [] => Ok(None),
+        [(tag_name, record)] => {
+            let props: HashMap<String, Value> = record.properties.iter().cloned().collect();
+            Ok(Some(Vertex {
+                vid: id,
+                id: record.internal_id as i64,
+                tags: vec![Tag::new(tag_name.to_string(), props)],
+                properties: HashMap::new(),
+            }))
+        }
+        _ => {
+            let names: Vec<&str> = hits.iter().map(|(name, _)| *name).collect();
+            Err(StorageError::invalid_input(format!(
+                "Vertex id {} matches multiple labels [{}]: label-scoped lookup required",
+                id,
+                names.join(", ")
+            )))
+        }
     }
 }
 
@@ -95,17 +98,10 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
     let tags = ctx.schema_manager().list_tags(space)?;
     let ts = ctx.get_read_timestamp();
 
-    // Read per-tag in batches directly from vertex tables, merging by vertex ID.
-    // This avoids the intermediate Vec<VertexRecord> allocation per tag that
-    // ctx.scan_vertices() produces via table.scan(ts).collect().
-    struct MergedVertex {
-        vid: VertexId,
-        internal_id: u32,
-        tags: Vec<Tag>,
-        properties: HashMap<String, Value>,
-    }
-
-    let mut merged: HashMap<VertexId, MergedVertex> = HashMap::new();
+    // Single-label scan: every table row yields its own single-tag vertex.
+    // The same id string stored under two labels denotes two independent
+    // vertices and is never merged. Per-row visibility handling is unchanged.
+    let mut out = Vec::new();
 
     const BATCH_SIZE: usize = 256;
 
@@ -141,32 +137,21 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
                             record.clone()
                         };
                         record_vertex_read(ctx, record.vid);
-                        let entry = merged.entry(record.vid).or_insert_with(|| MergedVertex {
-                            vid: record.vid,
-                            internal_id: record.internal_id,
-                            tags: Vec::new(),
-                            properties: HashMap::new(),
-                        });
-                        entry.internal_id = record.internal_id;
                         let props: HashMap<String, Value> =
                             record.properties.iter().cloned().collect();
-                        entry.tags.push(Tag::new(tag_name.clone(), props.clone()));
-                        entry.properties.extend(props);
+                        out.push(Vertex {
+                            vid: record.vid,
+                            id: record.internal_id as i64,
+                            tags: vec![Tag::new(tag_name.clone(), props)],
+                            properties: HashMap::new(),
+                        });
                     }
                 }
             }
         });
     }
 
-    Ok(merged
-        .into_values()
-        .map(|mv| Vertex {
-            vid: mv.vid,
-            id: mv.internal_id as i64,
-            tags: mv.tags,
-            properties: mv.properties,
-        })
-        .collect())
+    Ok(out)
 }
 
 pub(crate) fn scan_vertices_by_tag(
@@ -254,12 +239,22 @@ pub(crate) fn get_vertex_with_schema(
     let tag_info = ctx.schema_manager().get_tag(space, tag)?.ok_or_else(|| {
         StorageError::not_found(format!("Tag {} not found in space {}", tag, space))
     })?;
+    let space_info = ctx
+        .schema_manager()
+        .get_space(space)?
+        .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
     let ts = ctx.get_read_timestamp();
-    let id_str = value_to_string(id);
+    let vid = VertexId::try_from(id)
+        .map_err(|error| StorageError::invalid_input(error.to_string()))?;
+    let vid = VertexId::normalize_for_vid_type(&space_info.vid_type, vid)?;
 
     let label_id = tag_info.tag_id;
-    if let Some(record) = ctx.get_vertex(label_id, &id_str, ts) {
+    let record = match route_vertex_id(&vid)? {
+        RoutedVertexId::Int(id_int) => ctx.get_vertex_by_i64(label_id, id_int, ts),
+        RoutedVertexId::Text(id_str) => ctx.get_vertex(label_id, &id_str, ts),
+    };
+    if let Some(record) = record {
         let data = serialize_properties(&record.properties);
         return Ok(Some((tag_info, data)));
     }

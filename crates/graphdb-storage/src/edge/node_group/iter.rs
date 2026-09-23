@@ -60,8 +60,11 @@ impl<'a> Iterator for ShardCsrIterator<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if let Some((local, nbr)) = self.inner.next() {
-                let global = local.as_int64().unwrap_or(0) + self.base as i64;
-                return Some((VertexId::from_int64(global), nbr));
+                let Some(local) = local.as_internal_u32() else {
+                    continue;
+                };
+                let global = local.saturating_add(self.base);
+                return Some((VertexId::from_int64(global as i64), nbr));
             }
             if !self.advance_group() {
                 return None;

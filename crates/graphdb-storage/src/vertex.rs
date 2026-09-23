@@ -27,7 +27,7 @@ pub use vertex_table::ShardedVertexTable;
 pub use vertex_timestamp::VertexTimestamp;
 
 use graphdb_core::vertex_edge_path::Tag;
-use graphdb_core::Value;
+use graphdb_core::{DataType, StorageError, StorageResult, Value};
 
 pub use graphdb_core::types::{LabelId, Timestamp, VertexId, INVALID_TIMESTAMP, MAX_TIMESTAMP};
 
@@ -48,9 +48,9 @@ impl From<&VertexRecord> for graphdb_core::Vertex {
             id: record.internal_id as i64,
             tags: vec![Tag {
                 name: String::new(),
-                properties: properties.clone(),
+                properties,
             }],
-            properties,
+            properties: std::collections::HashMap::new(),
         }
     }
 }
@@ -65,9 +65,9 @@ impl VertexRecord {
             id: self.internal_id as i64,
             tags: vec![Tag {
                 name: tag_name.to_string(),
-                properties: properties.clone(),
+                properties,
             }],
-            properties,
+            properties: std::collections::HashMap::new(),
         }
     }
 }
@@ -160,44 +160,32 @@ impl VertexSchema {
         Ok(())
     }
 
-    /// Validate that a data type is suitable for use as a primary key
-    /// Primary keys must be:
-    /// - Comparable (support <, >, ==)
-    /// - Hashable
-    /// - Not composite types
+    /// Validate that a data type is suitable for use as a primary key.
+    ///
+    /// The primary key column is a materialized mirror of the external vertex
+    /// id, so only the id-compatible families are allowed: the integer family
+    /// and strings. Everything else is rejected at schema creation time.
     fn validate_key_type(
         data_type: &graphdb_core::DataType,
         prop_name: &str,
     ) -> Result<(), String> {
         use graphdb_core::DataType;
 
-        // Composite and structural types cannot be used as keys. The vertex id
-        // itself is the actual storage key, so extended scalar types (Geography,
-        // VectorDense, Timestamp, ...) remain valid key candidates.
-        let invalid_key_types = [
-            DataType::Empty,
-            DataType::Null,
-            DataType::List(Box::new(DataType::Empty)),
-            DataType::Map(Box::new(DataType::Empty)),
-            DataType::Set(Box::new(DataType::Empty)),
-            DataType::DataSet,
-            DataType::Json,
-            DataType::JsonB,
-            DataType::Vertex,
-            DataType::Edge,
-            DataType::Path,
-            DataType::Vector,
-        ];
-
-        for invalid_type in &invalid_key_types {
-            if std::mem::discriminant(data_type) == std::mem::discriminant(invalid_type) {
-                return Err(format!(
-                    "Primary key '{}' has invalid type '{:?}'. \
-                     Allowed types: Bool, SmallInt, Int, BigInt, Float, Double, Decimal128, \
-                     String, Date, Time, DateTime, Timestamp, VID, Uuid",
-                    prop_name, data_type
-                ));
-            }
+        let allowed = matches!(
+            data_type,
+            DataType::SmallInt
+                | DataType::Int
+                | DataType::BigInt
+                | DataType::String
+                | DataType::FixedString(_)
+        );
+        if !allowed {
+            return Err(format!(
+                "Primary key '{}' has invalid type '{:?}'. \
+                 The primary key column mirrors the vertex id, so only \
+                 SmallInt, Int, BigInt, String and FixedString are allowed",
+                prop_name, data_type
+            ));
         }
 
         Ok(())
@@ -222,5 +210,53 @@ impl VertexSchema {
             )),
             _ => Ok(()),
         }
+    }
+}
+
+/// Derive the primary key mirror value for an external id.
+///
+/// The primary key column is not an independent identity: it materializes the
+/// external vertex id in the column's own type. Integer keys widen or render
+/// into the column type; text keys are kept for string columns and must parse
+/// for integer columns. Anything that cannot round-trip is an error.
+pub(crate) fn primary_key_mirror_value(
+    data_type: &DataType,
+    key: &IdKey,
+) -> StorageResult<Value> {
+    let out_of_range = |detail: String| StorageError::invalid_input(detail);
+    let int_mirror = |id: i64| -> StorageResult<Value> {
+        match data_type {
+            DataType::SmallInt => i16::try_from(id).map(Value::SmallInt).map_err(|_| {
+                out_of_range(format!("Vertex id {} overflows SmallInt primary key", id))
+            }),
+            DataType::Int => i32::try_from(id).map(Value::Int).map_err(|_| {
+                out_of_range(format!("Vertex id {} overflows Int primary key", id))
+            }),
+            DataType::BigInt => Ok(Value::BigInt(id)),
+            DataType::String | DataType::FixedString(_) => Ok(Value::string(id.to_string())),
+            _ => Err(out_of_range(format!(
+                "Primary key type {:?} cannot mirror a vertex id",
+                data_type
+            ))),
+        }
+    };
+    match key {
+        IdKey::Int(id) => int_mirror(*id),
+        IdKey::Text(text) => match data_type {
+            DataType::String | DataType::FixedString(_) => Ok(Value::string(text.clone())),
+            DataType::SmallInt | DataType::Int | DataType::BigInt => text
+                .parse::<i64>()
+                .map_err(|_| {
+                    out_of_range(format!(
+                        "Text vertex id {:?} cannot mirror integer primary key",
+                        text
+                    ))
+                })
+                .and_then(int_mirror),
+            _ => Err(out_of_range(format!(
+                "Primary key type {:?} cannot mirror a vertex id",
+                data_type
+            ))),
+        },
     }
 }

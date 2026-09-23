@@ -327,9 +327,12 @@ fn scan_mutable(args: ScanArgs) {
             if !args.store.is_visible_with_gate(nbr.edge_id, args.ts, &gate) {
                 continue;
             }
-            let src_vid = VertexId::from_int64(local_vid.as_int64().unwrap_or(0) + base as i64);
+            let Some(local) = local_vid.as_internal_u32() else {
+                continue;
+            };
+            let src_vid = VertexId::from_int64(local as i64 + base as i64);
             if let Some(ref r) = *args.src_id_range {
-                let src_internal = src_vid.as_int64().unwrap_or(0) as u32;
+                let src_internal = src_vid.as_internal_u32().unwrap_or(u32::MAX);
                 let src_ext =
                     resolve_vertex_id(args.ctx, src_internal, args.td.tbl_src, &src_vid, args.ts);
                 let src_int = src_ext.parse::<i64>().unwrap_or(i64::MIN);
@@ -422,7 +425,7 @@ struct EdgeCandidate {
 }
 
 fn build_edge_candidate(args: EdgeBuildArgs<'_>) -> EdgeCandidate {
-    let src_internal = args.src_vid.as_int64().unwrap_or(0) as u32;
+    let src_internal = args.src_vid.as_internal_u32().unwrap_or(u32::MAX);
     let rank = args.nbr.rank;
     let dst_vid = VertexId::from_int64(args.nbr.endpoint as i64);
 
@@ -440,8 +443,8 @@ fn build_edge_candidate(args: EdgeBuildArgs<'_>) -> EdgeCandidate {
 }
 
 fn materialize_edge(ctx: &GraphStorageContext, candidate: EdgeCandidate, ts: Timestamp) -> Edge {
-    let src_internal = candidate.src_vid.as_int64().unwrap_or(0) as u32;
-    let dst_internal = candidate.dst_vid.as_int64().unwrap_or(0) as u32;
+    let src_internal = candidate.src_vid.as_internal_u32().unwrap_or(u32::MAX);
+    let dst_internal = candidate.dst_vid.as_internal_u32().unwrap_or(u32::MAX);
     let src_external = resolve_vertex_id(
         ctx,
         src_internal,

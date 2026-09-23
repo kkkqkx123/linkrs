@@ -32,8 +32,12 @@ impl PureTopologyCsr {
         dst: VertexId,
         edge_id: EdgeId,
     ) -> StorageResult<EdgePosition> {
-        let (decoded_endpoint, decoded_rank) = dst.decode_edge_endpoint();
-        let endpoint = decoded_endpoint.as_int64().unwrap_or(0) as u32;
+        let (decoded_endpoint, decoded_rank) = dst.try_decode_edge_endpoint().ok_or_else(|| {
+            StorageError::invalid_input(format!("Malformed edge endpoint key: {}", dst))
+        })?;
+        let endpoint = decoded_endpoint.as_internal_u32().ok_or_else(|| {
+            StorageError::invalid_input(format!("Edge endpoint out of range: {}", dst))
+        })?;
 
         if decoded_rank != 0 {
             return Err(StorageError::conflict(format!(

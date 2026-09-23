@@ -439,7 +439,10 @@ impl EdgeStore {
                         crate::edge::BUNDLED_RANK_REQUIRES_COLUMNAR_MSG
                     )));
                 }
-                let row = base + local_vid.as_int64().unwrap_or(0) as u32;
+                let Some(local) = local_vid.as_internal_u32() else {
+                    continue;
+                };
+                let row = base + local;
                 let props = self.extract_edge_props(shards, row, nbr.edge_id, current, target)?;
                 live.push(LiveEdge {
                     row,

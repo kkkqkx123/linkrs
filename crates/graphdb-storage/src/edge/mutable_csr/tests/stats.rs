@@ -11,7 +11,7 @@ fn test_fragmentation_ratio() {
 
     // Insert edges to trigger overflow
     for i in 1..=6 {
-        let dst = VertexId::from_int64(i as i64);
+        let dst = VertexId::edge_endpoint_key(i as u32, 0);
         csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
     }
 
@@ -30,7 +30,7 @@ fn test_wasted_bytes_estimate() {
     let mut csr = MutableCsr::with_capacity(10, 100);
 
     for i in 1..=6 {
-        let dst = VertexId::from_int64(i as i64);
+        let dst = VertexId::edge_endpoint_key(i as u32, 0);
         csr.insert_edge(0u32, dst, EdgeId(i as u64), 1).unwrap();
     }
 
@@ -47,7 +47,7 @@ fn test_wasted_bytes_estimate() {
 fn test_fragmentation_stats_report_dead_entries() {
     let mut csr = MutableCsr::with_capacity(10, 100);
     for i in 0..3u64 {
-        let dst = VertexId::from_int64(10 + i as i64);
+        let dst = VertexId::edge_endpoint_key(10 + i as u32, 0);
         csr.insert_edge(0u32, dst, EdgeId(i), 1).unwrap();
     }
     assert!(csr.delete_edge(0u32, EdgeId(0), 2).unwrap());

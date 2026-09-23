@@ -79,8 +79,12 @@ impl MutableCsrTrait for PureTopologyCsr {
         _ts: Timestamp,
         on_deleted: &mut dyn FnMut(EdgeId),
     ) -> usize {
-        let (decoded_endpoint, _decoded_rank) = dst.decode_edge_endpoint();
-        let target_endpoint = decoded_endpoint.as_int64().unwrap_or(0) as u32;
+        let Some((decoded_endpoint, _decoded_rank)) = dst.try_decode_edge_endpoint() else {
+            return 0;
+        };
+        let Some(target_endpoint) = decoded_endpoint.as_internal_u32() else {
+            return 0;
+        };
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
             return 0;
@@ -133,8 +137,12 @@ impl MutableCsrTrait for PureTopologyCsr {
         _ts: Timestamp,
         on_deleted: &mut dyn FnMut(EdgeId, Option<EdgePosition>),
     ) -> usize {
-        let (decoded_endpoint, _decoded_rank) = dst.decode_edge_endpoint();
-        let target_endpoint = decoded_endpoint.as_int64().unwrap_or(0) as u32;
+        let Some((decoded_endpoint, _decoded_rank)) = dst.try_decode_edge_endpoint() else {
+            return 0;
+        };
+        let Some(target_endpoint) = decoded_endpoint.as_internal_u32() else {
+            return 0;
+        };
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
             return 0;
@@ -364,8 +372,8 @@ impl MutableCsrTrait for PureTopologyCsr {
     /// addresses its slot directly, an absent key returns without scanning.
     /// Narrow rows without an index fall through to the linear walk.
     fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
-        let (decoded_endpoint, _decoded_rank) = dst.decode_edge_endpoint();
-        let target_endpoint = decoded_endpoint.as_int64().unwrap_or(0) as u32;
+        let (decoded_endpoint, _decoded_rank) = dst.try_decode_edge_endpoint()?;
+        let target_endpoint = decoded_endpoint.as_internal_u32()?;
 
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {

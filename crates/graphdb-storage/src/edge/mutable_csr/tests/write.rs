@@ -4,9 +4,9 @@ use super::super::{EdgePosition, MutableCsr};
 #[test]
 fn stale_position_is_refused_not_misapplied() {
     let mut csr = MutableCsr::with_capacity(10, 100);
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
-    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(2, 0), EdgeId(101), 1)
         .unwrap();
 
     // Capture the position of the second edge.
@@ -40,9 +40,9 @@ fn stale_position_is_refused_not_misapplied() {
 fn test_delete_edge() {
     let mut csr = MutableCsr::with_capacity(10, 100);
 
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
-    csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(2, 0), EdgeId(101), 1)
         .unwrap();
 
     assert!(csr.delete_edge(0u32, EdgeId(100), 2).unwrap());
@@ -53,7 +53,7 @@ fn test_delete_edge() {
 #[test]
 fn test_double_delete_conflict() {
     let mut csr = MutableCsr::with_capacity(10, 100);
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 10)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 10)
         .unwrap();
 
     // First delete succeeds.
@@ -76,9 +76,9 @@ fn test_double_delete_conflict() {
 #[test]
 fn test_offset_delete_rejects_out_of_degree() {
     let mut csr = MutableCsr::with_capacity(10, 100);
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 1)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
         .unwrap();
-    csr.insert_edge(1u32, VertexId::from_int64(2), EdgeId(101), 1)
+    csr.insert_edge(1u32, VertexId::edge_endpoint_key(2, 0), EdgeId(101), 1)
         .unwrap();
     // Row 0 holds one live entry; offset 1 addresses reserved capacity.
     assert!(!csr.delete_edge_by_offset(0u32, 1, 2).unwrap());
@@ -95,7 +95,7 @@ fn test_offset_delete_rejects_out_of_degree() {
 #[test]
 fn test_offset_delete_propagates_conflict() {
     let mut csr = MutableCsr::with_capacity(10, 100);
-    csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
         .unwrap();
     assert!(csr.delete_edge(0u32, EdgeId(100), 150).unwrap());
     assert!(!csr.delete_edge(0u32, EdgeId(100), 150).unwrap());
@@ -109,14 +109,14 @@ fn test_offset_delete_propagates_conflict() {
 fn test_single_generic_delete_consistency_on_missing_id() {
     let mut multi = MutableCsr::with_capacity(10, 100);
     multi
-        .insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        .insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
         .unwrap();
     assert!(multi.delete_edge(0u32, EdgeId(100), 150).unwrap());
     assert!(!multi.delete_edge(0u32, EdgeId(999), 160).unwrap());
 
     let mut single = crate::edge::SingleMutableCsr::with_capacity(4);
     single
-        .insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 100)
+        .insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
         .unwrap();
     assert!(single.delete_edge(0, EdgeId(100), 150).unwrap());
     assert!(!single.delete_edge(0, EdgeId(999), 160).unwrap());
@@ -125,7 +125,7 @@ fn test_single_generic_delete_consistency_on_missing_id() {
 #[test]
 fn test_offset_delete_shares_conflict_semantics() {
     let mut csr = MutableCsr::with_capacity(10, 100);
-    csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 10)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 10)
         .unwrap();
     assert!(csr.delete_edge_by_offset(0u32, 0, 20).unwrap());
     assert!(!csr.delete_edge_by_offset(0u32, 0, 20).unwrap());
@@ -137,19 +137,19 @@ fn test_offset_delete_shares_conflict_semantics() {
 fn insert_reuses_gc_eligible_primary_tombstone() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(4, 16, 8);
     for i in 0..4i64 {
-        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(100 + i as u64), 1)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(100 + i as u64), 1)
             .unwrap();
     }
     assert!(csr.delete_edge(0u32, EdgeId(100), 10).unwrap());
     assert!(csr.delete_edge(0u32, EdgeId(101), 10).unwrap());
     assert_eq!(csr.edge_count(), 2);
     csr.set_tombstone_reuse_cutoff(10);
-    csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(200), 11)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(200), 11)
         .unwrap();
     assert_eq!(csr.edge_count(), 3);
     assert!(csr.get_overflow_chunks(0).is_none());
     let found = csr
-        .get_edge_physical(0u32, VertexId::from_int64(10))
+        .get_edge_physical(0u32, VertexId::edge_endpoint_key(10, 0))
         .expect("reused slot holds the new edge");
     assert_eq!(found.edge_id, EdgeId(200));
 }
@@ -158,12 +158,12 @@ fn insert_reuses_gc_eligible_primary_tombstone() {
 fn insert_without_reuse_cutoff_spills_to_overflow() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(4, 16, 8);
     for i in 0..4i64 {
-        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(100 + i as u64), 1)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(100 + i as u64), 1)
             .unwrap();
     }
     assert!(csr.delete_edge(0u32, EdgeId(100), 10).unwrap());
     assert!(csr.delete_edge(0u32, EdgeId(101), 10).unwrap());
-    csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(200), 11)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(200), 11)
         .unwrap();
     assert_eq!(csr.edge_count(), 3);
     let spilled: usize = csr
@@ -177,12 +177,12 @@ fn insert_without_reuse_cutoff_spills_to_overflow() {
 fn insert_keeps_pinned_tombstone_when_cutoff_below_delete_ts() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(4, 16, 8);
     for i in 0..4i64 {
-        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(100 + i as u64), 1)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(100 + i as u64), 1)
             .unwrap();
     }
     assert!(csr.delete_edge(0u32, EdgeId(100), 10).unwrap());
     csr.set_tombstone_reuse_cutoff(9);
-    csr.insert_edge(0u32, VertexId::from_int64(10), EdgeId(200), 11)
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(200), 11)
         .unwrap();
     let spilled: usize = csr
         .get_overflow_chunks(0)
@@ -201,7 +201,7 @@ fn insert_keeps_pinned_tombstone_when_cutoff_below_delete_ts() {
 fn dense_slots_reused_after_remove_and_reinsert() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(4, 64, 8);
     for i in 0..10i64 {
-        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(i as u64), 1)
             .unwrap();
     }
     assert!(csr.get_overflow_chunks(0).is_some());
@@ -214,7 +214,7 @@ fn dense_slots_reused_after_remove_and_reinsert() {
     for i in 0..6i64 {
         csr.insert_edge(
             0u32,
-            VertexId::from_int64(100 + i),
+            VertexId::edge_endpoint_key((100 + i) as u32, 0),
             EdgeId(100 + i as u64),
             1,
         )
@@ -247,7 +247,7 @@ fn bulk_insert_matches_sequential_inserts() {
         for k in 0..20u64 {
             let edge_id = EdgeId(src as u64 * 100 + k);
             sequential
-                .insert_edge(src, VertexId::from_int64(k as i64), edge_id, 1)
+                .insert_edge(src, VertexId::edge_endpoint_key(k as u32, 0), edge_id, 1)
                 .unwrap();
             batch.push((k as u32, 0, edge_id, 1));
         }
@@ -269,7 +269,7 @@ fn bulk_insert_matches_sequential_inserts() {
 fn positional_delete_and_revert_roundtrip() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(4, 64, 8);
     for i in 0..10i64 {
-        csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 1)
+        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(i as u64), 1)
             .unwrap();
     }
     let (position, nbr) = csr.locate_edge(0u32, EdgeId(7)).expect("edge present");
