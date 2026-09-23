@@ -49,8 +49,13 @@ fn test_remove_after_delete_does_not_double_count() {
 fn test_remove_after_delete_overflow_does_not_double_count() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
     for i in 0..6u64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key(100 + i as u32, 0), EdgeId(i), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key(100 + i as u32, 0),
+            EdgeId(i),
+            1,
+        )
+        .unwrap();
     }
     assert_eq!(csr.edge_count(), 6);
     assert!(csr.delete_edge(0u32, EdgeId(5), 2).unwrap());

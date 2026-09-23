@@ -18,7 +18,7 @@ mod lexer_edge_cases {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_unicode")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .assert_success()
             .query("INSERT VERTEX person(name) VALUES 1:('中文测试')")
             .assert_success();
@@ -29,7 +29,7 @@ mod lexer_edge_cases {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_escaped")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .assert_success()
             .query("INSERT VERTEX person(name) VALUES 1:('test\\'s value')")
             .assert_success();
@@ -41,7 +41,7 @@ mod lexer_edge_cases {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_long_id")
-            .exec_ddl(&format!("CREATE TAG {}(name STRING)", long_name))
+            .exec_ddl(&format!("CREATE TAG {}(id INT, name STRING)", long_name))
             .assert_success();
     }
 
@@ -50,7 +50,7 @@ mod lexer_edge_cases {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_numeric")
-            .exec_ddl("CREATE TAG numbers(int_val INT, float_val DOUBLE)")
+            .exec_ddl("CREATE TAG numbers(id INT, int_val INT, float_val DOUBLE)")
             .assert_success()
             .query("MATCH (n:numbers) WHERE n.int_val = 123 AND n.float_val = 456.789 RETURN n")
             .assert_success();
@@ -61,7 +61,7 @@ mod lexer_edge_cases {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_negative")
-            .exec_ddl("CREATE TAG numbers(val INT)")
+            .exec_ddl("CREATE TAG numbers(id INT, val INT)")
             .assert_success()
             .query("MATCH (n:numbers) WHERE n.val < 0 RETURN n")
             .assert_success();
@@ -72,7 +72,7 @@ mod lexer_edge_cases {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_special_id")
-            .exec_ddl("CREATE TAG `user-table`(name STRING)")
+            .exec_ddl("CREATE TAG `user-table`(id INT, name STRING)")
             .assert_success();
     }
 }
@@ -87,7 +87,7 @@ mod parser_errors {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_syntax_error")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .assert_success()
             .query("MATCH (n:person WHERE n.name = 'test' RETURN n")
             .assert_error();
@@ -98,7 +98,7 @@ mod parser_errors {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_unexpected_token")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .assert_success()
             .query("MATCH (n:person) RETURN n ORDER ORDER BY n.name")
             .assert_error();
@@ -109,7 +109,7 @@ mod parser_errors {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_missing_keyword")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .assert_success()
             .query("MATCH (n:person) WHERE RETURN n")
             .assert_error();
@@ -120,7 +120,7 @@ mod parser_errors {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_unbalanced")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .assert_success()
             .query("MATCH (n:person) WHERE (n.name = 'test' RETURN n")
             .assert_error();
@@ -131,7 +131,7 @@ mod parser_errors {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_invalid_type")
-            .query("CREATE TAG person(name INVALID_TYPE)")
+            .query("CREATE TAG person(id INT, name INVALID_TYPE)")
             .assert_error();
     }
 }
@@ -146,7 +146,7 @@ mod ast_validation {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_match_ast")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .assert_success()
             .query("MATCH (n:person) RETURN n.name")
             .assert_success();
@@ -157,7 +157,7 @@ mod ast_validation {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_insert_ast")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .assert_success()
             .query("INSERT VERTEX person(name) VALUES 1:('Alice')")
             .assert_success();
@@ -168,7 +168,7 @@ mod ast_validation {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_update_ast")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .exec_dml("INSERT VERTEX person(name) VALUES 1:('Alice')")
             .assert_success()
             .query("UPDATE VERTEX 1 SET person.name = 'Bob'")
@@ -180,7 +180,7 @@ mod ast_validation {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_delete_ast")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .exec_dml("INSERT VERTEX person(name) VALUES 1:('Alice')")
             .assert_success()
             .query("DELETE VERTEX 1")
@@ -192,7 +192,7 @@ mod ast_validation {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_create_tag_ast")
-            .exec_ddl("CREATE TAG person(name STRING, age INT)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING, age INT)")
             .assert_success();
     }
 
@@ -210,7 +210,7 @@ mod ast_validation {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_create_idx_ast")
-            .exec_ddl("CREATE TAG person(age INT)")
+            .exec_ddl("CREATE TAG person(id INT, age INT)")
             .exec_ddl("CREATE TAG INDEX idx_age ON person(age)")
             .assert_success();
     }
@@ -244,7 +244,7 @@ mod statement_parsing {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_show_tags")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .assert_success()
             .query("SHOW TAGS")
             .assert_success();
@@ -266,7 +266,7 @@ mod statement_parsing {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_desc_tag")
-            .exec_ddl("CREATE TAG person(name STRING, age INT)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING, age INT)")
             .assert_success()
             .query("DESCRIBE TAG person")
             .assert_success();
@@ -288,7 +288,7 @@ mod statement_parsing {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_drop_tag")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .exec_ddl("DROP TAG person")
             .assert_success();
     }
@@ -308,7 +308,7 @@ mod statement_parsing {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_alter_tag")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .exec_ddl("ALTER TAG person ADD (age INT)")
             .assert_success();
     }
@@ -334,7 +334,7 @@ mod complex_statements {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_multi_hop")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .exec_ddl("CREATE EDGE follows()")
             .assert_success()
             .query("MATCH (a:person)-[:follows]->(b:person)-[:follows]->(c:person) RETURN a, c")
@@ -346,7 +346,7 @@ mod complex_statements {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_with")
-            .exec_ddl("CREATE TAG person(name STRING, age INT)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING, age INT)")
             .assert_success()
             .query("MATCH (n:person) WITH n.name AS name, n.age AS age RETURN name, age")
             .assert_success();
@@ -357,7 +357,7 @@ mod complex_statements {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_unwind")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .assert_success()
             .query("UNWIND [1, 2, 3] AS x RETURN x")
             .assert_success();
@@ -368,7 +368,7 @@ mod complex_statements {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_list_expr")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .assert_success()
             .query("MATCH (n:person) RETURN [1, 2, 3] AS nums")
             .assert_success();
@@ -379,7 +379,7 @@ mod complex_statements {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_map_expr")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .assert_success()
             .query("MATCH (n:person) RETURN {name: n.name, id: 1} AS info")
             .assert_success();
@@ -390,7 +390,7 @@ mod complex_statements {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_agg_func")
-            .exec_ddl("CREATE TAG person(age INT)")
+            .exec_ddl("CREATE TAG person(id INT, age INT)")
             .exec_dml("INSERT VERTEX person(age) VALUES 1:(20), 2:(30), 3:(40)")
             .assert_success()
             .query(
@@ -404,7 +404,7 @@ mod complex_statements {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_string_func")
-            .exec_ddl("CREATE TAG person(name STRING)")
+            .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .exec_dml("INSERT VERTEX person(name) VALUES 1:('Alice')")
             .assert_success()
             .query("MATCH (n:person) RETURN upper(n.name), lower(n.name), length(n.name)")
@@ -416,7 +416,7 @@ mod complex_statements {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_math_func")
-            .exec_ddl("CREATE TAG numbers(val DOUBLE)")
+            .exec_ddl("CREATE TAG numbers(id INT, val DOUBLE)")
             .exec_dml("INSERT VERTEX numbers(val) VALUES 1:(3.14)")
             .assert_success()
             .query("MATCH (n:numbers) RETURN abs(n.val), round(n.val)")

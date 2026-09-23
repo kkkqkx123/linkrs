@@ -69,10 +69,13 @@ fn new_table(label: LabelId, label_name: &str, schema: VertexSchema) -> VertexTa
 }
 
 fn create_test_schema() -> VertexSchema {
+    // The first property is the primary key, which mirrors the external
+    // id: inserts below omit it and let the table auto-fill the mirror.
     VertexSchema {
         label_id: 0,
         label_name: "person".to_string(),
         properties: vec![
+            StoragePropertyDef::new("id".to_string(), DataType::String),
             StoragePropertyDef::new("name".to_string(), DataType::String),
             StoragePropertyDef {
                 name: "age".to_string(),
@@ -106,7 +109,8 @@ fn test_insert_and_get() {
 
     let lookup_id = table.get_internal_id("v1", 100).unwrap();
     let record = table.get_by_internal_id(lookup_id, 100).unwrap();
-    assert_eq!(record.properties.len(), 2);
+    // `id` is auto-filled from the external key on top of the two payloads.
+    assert_eq!(record.properties.len(), 3);
 }
 
 #[test]
@@ -272,7 +276,7 @@ fn test_rename_and_remove_property() {
             .iter()
             .map(|prop| prop.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["name", "years"]
+        vec!["id", "name", "years"]
     );
 }
 

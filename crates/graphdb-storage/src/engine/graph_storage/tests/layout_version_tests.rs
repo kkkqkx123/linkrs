@@ -37,24 +37,28 @@ fn layout_version_is_monotonic_and_domain_evidence_tracks_numeric_ids() {
     assert_eq!(domain.start, 1);
     assert_eq!(domain.end, 101);
 
-    // Inserting a vertex with a string id invalidates the domain evidence.
-    storage
-        .insert_vertex(
-            "test_space",
-            Vertex::new(
-                VertexId::from_string("alice"),
-                vec![Tag::new(
-                    "Person".to_string(),
-                    [("name".to_string(), Value::string("Alice"))]
-                        .into_iter()
-                        .collect(),
-                )],
-            ),
-        )
-        .expect("insert string vertex");
+    // A non-numeric string id is fail-closed in an integer space: the
+    // space's vid_type is the only normalization authority, and "alice"
+    // cannot become an integer.
+    let rejected = storage.insert_vertex(
+        "test_space",
+        Vertex::new(
+            VertexId::from_string("alice"),
+            vec![Tag::new(
+                "Person".to_string(),
+                [("name".to_string(), Value::string("Alice"))]
+                    .into_iter()
+                    .collect(),
+            )],
+        ),
+    );
     assert!(
-        storage.vertex_id_domain("test_space").is_none(),
-        "a string vertex id must invalidate the numeric domain evidence"
+        rejected.is_err(),
+        "a string vertex id must be rejected in an integer space"
+    );
+    assert!(
+        storage.vertex_id_domain("test_space").is_some(),
+        "the rejected write must not disturb the numeric domain evidence"
     );
 }
 

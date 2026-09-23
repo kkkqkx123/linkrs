@@ -153,8 +153,10 @@ impl VertexCursor for GraphVertexCursor {
             Vertex {
                 vid,
                 id: internal_id,
-                tags: vec![Tag::new(tag_name, props_map.clone())],
-                properties: props_map,
+                // Single-label read construction fills only the tag; the
+                // vertex-level map is no longer duplicated.
+                tags: vec![Tag::new(tag_name, props_map)],
+                properties: HashMap::new(),
             }
         })
     }

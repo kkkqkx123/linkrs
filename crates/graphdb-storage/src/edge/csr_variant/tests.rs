@@ -76,11 +76,16 @@ fn test_none_csr_variant() {
 
     // None variant should reject all deletions
     assert!(csr.delete_edge(0, EdgeId(100), 1).is_err());
-    assert_eq!(csr.delete_edge_by_dst(0, VertexId::edge_endpoint_key(1, 0), 1), 0);
+    assert_eq!(
+        csr.delete_edge_by_dst(0, VertexId::edge_endpoint_key(1, 0), 1),
+        0
+    );
     assert!(!csr.revert_delete_by_offset(0, 0, 1));
 
     // None variant should return None for get_edge
-    assert!(csr.get_edge(0, VertexId::edge_endpoint_key(1, 0), 1).is_none());
+    assert!(csr
+        .get_edge(0, VertexId::edge_endpoint_key(1, 0), 1)
+        .is_none());
 
     // Clear should be a no-op
     csr.clear();

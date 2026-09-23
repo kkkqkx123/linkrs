@@ -439,10 +439,7 @@ impl CsrShardSet {
                 for (src, dst, edge_id) in &group_edges {
                     let local = local_vid(*src, group_bits);
                     let (endpoint, rank) = decode_endpoint_pair(*dst).ok_or_else(|| {
-                        StorageError::invalid_input(format!(
-                            "Malformed edge endpoint key: {}",
-                            dst
-                        ))
+                        StorageError::invalid_input(format!("Malformed edge endpoint key: {}", dst))
                     })?;
                     let nbr = Nbr::with_create_ts(endpoint, rank, *edge_id, ts);
                     self.mark_region_insert(gid, local);
@@ -461,10 +458,7 @@ impl CsrShardSet {
                         shard.variant.insert_edge(local, dst, edge_id, ts)?;
                     }
                     let (endpoint, rank) = decode_endpoint_pair(dst).ok_or_else(|| {
-                        StorageError::invalid_input(format!(
-                            "Malformed edge endpoint key: {}",
-                            dst
-                        ))
+                        StorageError::invalid_input(format!("Malformed edge endpoint key: {}", dst))
                     })?;
                     let nbr = Nbr::with_create_ts(endpoint, rank, edge_id, ts);
                     self.mark_region_insert(gid, local);
@@ -546,10 +540,7 @@ impl CsrShardSet {
                 for (src, dst, edge_id, ts) in &group_edges {
                     let local = local_vid(*src, group_bits);
                     let (endpoint, rank) = decode_endpoint_pair(*dst).ok_or_else(|| {
-                        StorageError::invalid_input(format!(
-                            "Malformed edge endpoint key: {}",
-                            dst
-                        ))
+                        StorageError::invalid_input(format!("Malformed edge endpoint key: {}", dst))
                     })?;
                     let nbr = Nbr::with_create_ts(endpoint, rank, *edge_id, *ts);
                     self.mark_region_insert(gid, local);
@@ -568,10 +559,7 @@ impl CsrShardSet {
                         shard.variant.insert_edge(local, dst, edge_id, ts)?;
                     }
                     let (endpoint, rank) = decode_endpoint_pair(dst).ok_or_else(|| {
-                        StorageError::invalid_input(format!(
-                            "Malformed edge endpoint key: {}",
-                            dst
-                        ))
+                        StorageError::invalid_input(format!("Malformed edge endpoint key: {}", dst))
                     })?;
                     let nbr = Nbr::with_create_ts(endpoint, rank, edge_id, ts);
                     self.mark_region_insert(gid, local);

@@ -161,9 +161,7 @@ impl VertexTable {
                     id
                 )));
             }
-            IdKey::Text(id)
-                if id.as_bytes().len() > graphdb_core::types::VERTEX_ID_MAX_SIZE =>
-            {
+            IdKey::Text(id) if id.as_bytes().len() > graphdb_core::types::VERTEX_ID_MAX_SIZE => {
                 return Err(StorageError::invalid_input(format!(
                     "Vertex id exceeds max length of {} bytes: got {} bytes",
                     graphdb_core::types::VERTEX_ID_MAX_SIZE,
@@ -256,7 +254,11 @@ impl VertexTable {
     /// are overwritten in place (no new MVCC version; history keeps showing
     /// the pre-upgrade value) and the repaired row count is reported.
     pub fn repair_primary_key_mirrors(&mut self) -> StorageResult<usize> {
-        let Some(pk_def) = self.schema.properties.get(self.schema.primary_key_index).cloned()
+        let Some(pk_def) = self
+            .schema
+            .properties
+            .get(self.schema.primary_key_index)
+            .cloned()
         else {
             return Ok(0);
         };

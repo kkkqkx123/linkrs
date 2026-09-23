@@ -25,7 +25,7 @@ fn test_batch_insert_vertices() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
         .exec_dml(
             r#"
             INSERT VERTEX Person(name, age) VALUES 
@@ -45,7 +45,7 @@ fn test_batch_insert_edges() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name STRING)")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
         .exec_ddl("CREATE EDGE KNOWS(since DATE)")
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('A'), 2:('B'), 3:('C'), 4:('D')")
         .exec_dml(
@@ -69,7 +69,7 @@ fn test_batch_delete_vertices() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name STRING)")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('A'), 2:('B'), 3:('C'), 4:('D'), 5:('E')")
         .assert_success()
         .assert_vertex_count("Person", 5)
@@ -83,7 +83,7 @@ fn test_batch_delete_edges() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name STRING)")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
         .exec_ddl("CREATE EDGE KNOWS(since DATE)")
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('A'), 2:('B'), 3:('C')")
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01'), 1 -> 3:('2024-01-02'), 2 -> 3:('2024-01-03')")
@@ -101,13 +101,13 @@ fn test_dml_workflow_complete() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
         .exec_ddl("CREATE EDGE KNOWS(since DATE)")
         .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25)")
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01')")
         .assert_success()
-        .exec_dml("UPDATE 1 SET age = 31")
+        .exec_dml("UPSERT VERTEX ON Person SET age = 31 WHERE id(vid) == 1")
         .assert_success()
         .exec_dml("DELETE EDGE 1 -> 2 OF KNOWS")
         .assert_success()
@@ -152,7 +152,7 @@ fn test_complete_crud_flow() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Product(name STRING, price DOUBLE, stock INT)")
+        .exec_ddl("CREATE TAG Product(id INT, name STRING, price DOUBLE, stock INT)")
         .assert_success()
         .exec_dml("INSERT VERTEX Product(name, price, stock) VALUES 101:('Laptop', 999.99, 10)")
         .assert_success()
@@ -165,7 +165,7 @@ fn test_complete_crud_flow() {
         .query("FETCH PROP ON Product 101")
         .assert_result_count(1)
         .assert_vertex_or_edge_has_property("name", graphdb_core::Value::string("Laptop"))
-        .exec_dml("UPDATE 101 SET stock = 9")
+        .exec_dml("UPSERT VERTEX ON Product SET stock = 9 WHERE id(vid) == 101")
         .assert_success()
         .assert_vertex_props(101, "Product", {
             let mut map = std::collections::HashMap::new();
@@ -182,7 +182,7 @@ fn test_social_network_data_flow() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("social_network")
-        .exec_ddl("CREATE TAG Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
         .assert_success()
         .exec_ddl("CREATE EDGE KNOWS(since DATE, strength DOUBLE)")
         .assert_success()
@@ -210,7 +210,7 @@ fn test_large_batch_insert() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name STRING)")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
         .exec_dml(
             r#"
             INSERT VERTEX Person(name) VALUES 
@@ -242,7 +242,10 @@ fn test_dml_shape_template_ast_cache() {
     .with_schema_manager(schema_manager);
 
     pipeline
-        .execute_query_with_space("CREATE SPACE IF NOT EXISTS cache_space", None)
+        .execute_query_with_space(
+            "CREATE SPACE IF NOT EXISTS cache_space (vid_type=STRING)",
+            None,
+        )
         .expect("create space");
     let space = storage
         .read()
@@ -251,7 +254,7 @@ fn test_dml_shape_template_ast_cache() {
         .expect("space exists");
     pipeline
         .execute_query_with_space(
-            "CREATE TAG person(name STRING, age INT)",
+            "CREATE TAG person(id STRING, name STRING, age INT)",
             Some(space.clone()),
         )
         .expect("create tag");
@@ -307,25 +310,25 @@ fn test_dml_shape_template_ast_cache() {
     };
     let p1 = read("p1");
     assert_eq!(
-        p1.properties.get("name"),
+        p1.tags.iter().find_map(|t| t.properties.get("name")),
         Some(&graphdb_core::Value::string("A"))
     );
     assert_eq!(
-        p1.properties.get("age"),
+        p1.tags.iter().find_map(|t| t.properties.get("age")),
         Some(&graphdb_core::Value::BigInt(1))
     );
     let p2 = read("p2");
     assert_eq!(
-        p2.properties.get("name"),
+        p2.tags.iter().find_map(|t| t.properties.get("name")),
         Some(&graphdb_core::Value::string("B"))
     );
     assert_eq!(
-        p2.properties.get("age"),
+        p2.tags.iter().find_map(|t| t.properties.get("age")),
         Some(&graphdb_core::Value::BigInt(2))
     );
     let p3 = read("p3");
     assert_eq!(
-        p3.properties.get("name"),
+        p3.tags.iter().find_map(|t| t.properties.get("name")),
         Some(&graphdb_core::Value::string("C"))
     );
 }

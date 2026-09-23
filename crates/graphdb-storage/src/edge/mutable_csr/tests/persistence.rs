@@ -122,8 +122,13 @@ fn test_topology_encoding_rejects_garbage_marker() {
 fn single_marker_dump_load_roundtrip() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(2, 16, 8);
     for i in 0..30i64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i + 1) as u32, 0), EdgeId(i as u64 + 1), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key((i + 1) as u32, 0),
+            EdgeId(i as u64 + 1),
+            1,
+        )
+        .unwrap();
     }
     for i in 1..10i64 {
         csr.insert_edge(

@@ -48,7 +48,7 @@ fn test_optimizer_result_equivalence_with_content() {
                 .with_schema_manager(schema_manager.clone());
         pipeline
             .execute_query_with_space(
-                "CREATE TAG Item(name STRING, price DOUBLE, category STRING)",
+                "CREATE TAG Item(id INT, name STRING, price DOUBLE, category STRING)",
                 Some(space_info.clone()),
             )
             .expect("CREATE TAG");

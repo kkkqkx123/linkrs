@@ -196,14 +196,13 @@ pub(crate) fn get_node_edges_projected(
                 for record in records {
                     let dst_internal = record.dst_vid.as_internal_u32();
                     let dst_external = match dst_internal {
-                        Some(internal) if dst_label_id != 0 => {
-                            ctx.get_external_id(dst_label_id, internal, ts)
-                                .or_else(|| {
-                                    ctx.get_external_id_by_internal_id(dst_label_id, internal)
-                                        .map(|v| vid_to_string(&v))
-                                })
-                                .unwrap_or_else(|| vid_to_string(&record.dst_vid))
-                        }
+                        Some(internal) if dst_label_id != 0 => ctx
+                            .get_external_id(dst_label_id, internal, ts)
+                            .or_else(|| {
+                                ctx.get_external_id_by_internal_id(dst_label_id, internal)
+                                    .map(|v| vid_to_string(&v))
+                            })
+                            .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
                         Some(internal) => ctx
                             .get_external_id_any(internal, ts)
                             .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
@@ -238,14 +237,13 @@ pub(crate) fn get_node_edges_projected(
                 for record in records {
                     let src_internal = record.src_vid.as_internal_u32();
                     let src_external = match src_internal {
-                        Some(internal) if src_label_id != 0 => {
-                            ctx.get_external_id(src_label_id, internal, ts)
-                                .or_else(|| {
-                                    ctx.get_external_id_by_internal_id(src_label_id, internal)
-                                        .map(|v| vid_to_string(&v))
-                                })
-                                .unwrap_or_else(|| vid_to_string(&record.src_vid))
-                        }
+                        Some(internal) if src_label_id != 0 => ctx
+                            .get_external_id(src_label_id, internal, ts)
+                            .or_else(|| {
+                                ctx.get_external_id_by_internal_id(src_label_id, internal)
+                                    .map(|v| vid_to_string(&v))
+                            })
+                            .unwrap_or_else(|| vid_to_string(&record.src_vid)),
                         Some(internal) => ctx
                             .get_external_id_any(internal, ts)
                             .unwrap_or_else(|| vid_to_string(&record.src_vid)),
@@ -280,14 +278,13 @@ pub(crate) fn get_node_edges_projected(
                 for record in out_records {
                     let dst_internal = record.dst_vid.as_internal_u32();
                     let dst_external = match dst_internal {
-                        Some(internal) if dst_label_id != 0 => {
-                            ctx.get_external_id(dst_label_id, internal, ts)
-                                .or_else(|| {
-                                    ctx.get_external_id_by_internal_id(dst_label_id, internal)
-                                        .map(|v| vid_to_string(&v))
-                                })
-                                .unwrap_or_else(|| vid_to_string(&record.dst_vid))
-                        }
+                        Some(internal) if dst_label_id != 0 => ctx
+                            .get_external_id(dst_label_id, internal, ts)
+                            .or_else(|| {
+                                ctx.get_external_id_by_internal_id(dst_label_id, internal)
+                                    .map(|v| vid_to_string(&v))
+                            })
+                            .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
                         Some(internal) => ctx
                             .get_external_id_any(internal, ts)
                             .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
@@ -324,14 +321,13 @@ pub(crate) fn get_node_edges_projected(
                 for record in in_records {
                     let src_internal = record.src_vid.as_internal_u32();
                     let src_external = match src_internal {
-                        Some(internal) if src_label_id != 0 => {
-                            ctx.get_external_id(src_label_id, internal, ts)
-                                .or_else(|| {
-                                    ctx.get_external_id_by_internal_id(src_label_id, internal)
-                                        .map(|v| vid_to_string(&v))
-                                })
-                                .unwrap_or_else(|| vid_to_string(&record.src_vid))
-                        }
+                        Some(internal) if src_label_id != 0 => ctx
+                            .get_external_id(src_label_id, internal, ts)
+                            .or_else(|| {
+                                ctx.get_external_id_by_internal_id(src_label_id, internal)
+                                    .map(|v| vid_to_string(&v))
+                            })
+                            .unwrap_or_else(|| vid_to_string(&record.src_vid)),
                         Some(internal) => ctx
                             .get_external_id_any(internal, ts)
                             .unwrap_or_else(|| vid_to_string(&record.src_vid)),
@@ -734,14 +730,13 @@ pub(crate) fn scan_edges_by_type(
                         let tbl_dst = guard.dst_label();
 
                         let src_external = match src_internal {
-                            Some(internal) if tbl_src != 0 => {
-                                ctx.get_external_id(tbl_src, internal, ts)
-                                    .or_else(|| {
-                                        ctx.get_external_id_by_internal_id(tbl_src, internal)
-                                            .map(|v| vid_to_string(&v))
-                                    })
-                                    .unwrap_or_else(|| format!("{}", record.src_vid))
-                            }
+                            Some(internal) if tbl_src != 0 => ctx
+                                .get_external_id(tbl_src, internal, ts)
+                                .or_else(|| {
+                                    ctx.get_external_id_by_internal_id(tbl_src, internal)
+                                        .map(|v| vid_to_string(&v))
+                                })
+                                .unwrap_or_else(|| format!("{}", record.src_vid)),
                             Some(internal) => ctx
                                 .get_external_id_any(internal, ts)
                                 .unwrap_or_else(|| format!("{}", record.src_vid)),
@@ -749,14 +744,13 @@ pub(crate) fn scan_edges_by_type(
                         };
 
                         let dst_external = match dst_internal {
-                            Some(internal) if tbl_dst != 0 => {
-                                ctx.get_external_id(tbl_dst, internal, ts)
-                                    .or_else(|| {
-                                        ctx.get_external_id_by_internal_id(tbl_dst, internal)
-                                            .map(|v| vid_to_string(&v))
-                                    })
-                                    .unwrap_or_else(|| format!("{}", record.dst_vid))
-                            }
+                            Some(internal) if tbl_dst != 0 => ctx
+                                .get_external_id(tbl_dst, internal, ts)
+                                .or_else(|| {
+                                    ctx.get_external_id_by_internal_id(tbl_dst, internal)
+                                        .map(|v| vid_to_string(&v))
+                                })
+                                .unwrap_or_else(|| format!("{}", record.dst_vid)),
                             Some(internal) => ctx
                                 .get_external_id_any(internal, ts)
                                 .unwrap_or_else(|| format!("{}", record.dst_vid)),

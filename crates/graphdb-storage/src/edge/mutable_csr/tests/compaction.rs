@@ -73,8 +73,13 @@ fn test_compact_with_ts_guards_reserve_ratio_ge_one() {
     // allocation (OOM on ~800k+ edge partitions under background freeze).
     let mut csr = MutableCsr::with_capacity(4, 100);
     for i in 1..=6i64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(i as u64), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key((i) as u32, 0),
+            EdgeId(i as u64),
+            1,
+        )
+        .unwrap();
     }
     csr.insert_edge(1u32, VertexId::edge_endpoint_key(1, 0), EdgeId(7), 1)
         .unwrap();
@@ -96,8 +101,13 @@ fn test_compact_with_ts_guards_reserve_ratio_ge_one() {
 fn test_compact_with_ts_zero_ratio_keeps_exact_degree() {
     let mut csr = MutableCsr::with_capacity(4, 100);
     for i in 1..=3i64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(i as u64), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key((i) as u32, 0),
+            EdgeId(i as u64),
+            1,
+        )
+        .unwrap();
     }
     let removed = csr.compact_with_ts_reporting(3, 0.0, &mut |_, _| {});
     assert_eq!(removed, 0);

@@ -257,10 +257,13 @@ mod tests {
     use graphdb_core::{DataType, Value};
 
     fn create_test_schema() -> VertexSchema {
+        // The first property is the primary key, which mirrors the external
+        // id: inserts below omit it and let the table auto-fill the mirror.
         VertexSchema {
             label_id: 0,
             label_name: "test".to_string(),
             properties: vec![
+                StoragePropertyDef::new("id".to_string(), DataType::String),
                 StoragePropertyDef::new("name".to_string(), DataType::String),
                 StoragePropertyDef {
                     name: "age".to_string(),

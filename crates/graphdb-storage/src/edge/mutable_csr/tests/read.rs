@@ -44,8 +44,13 @@ fn test_physical_lookup_returns_rebuilt_live_edge() {
 fn consolidated_row_reads_single_block() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(2, 16, 8);
     for i in 0..30i64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i + 1) as u32, 0), EdgeId(i as u64 + 1), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key((i + 1) as u32, 0),
+            EdgeId(i as u64 + 1),
+            1,
+        )
+        .unwrap();
     }
     csr.rebalance_row(0u32);
     if let Some(chunks) = csr.overflow_chunks.get(0) {

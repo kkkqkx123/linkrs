@@ -1,15 +1,13 @@
 use std::collections::HashMap;
 
 use graphdb_core::metadata::IndexMetadataManager;
-use graphdb_core::types::{
-    ColumnId, EdgeIdentifier, LabelId, TagInfo, Timestamp, VertexId,
-};
+use graphdb_core::types::{ColumnId, EdgeIdentifier, LabelId, TagInfo, Timestamp, VertexId};
+use graphdb_core::vertex_edge_path::Tag;
 use graphdb_core::wal::redo::{
     DeleteEdgeRedo, DeleteVertexRedo, InsertVertexRedo, UpdateVertexPropRedo,
 };
 use graphdb_core::wal::types::WalOpType;
-use graphdb_core::vertex_edge_path::Tag;
-use graphdb_core::{StorageError, StorageResult, Value, Vertex};
+use graphdb_core::{DataType, StorageError, StorageResult, Value, Vertex};
 use graphdb_transaction::undo_log::{
     InsertVertexUndo, RemoveVertexUndo, UndoLogEntry, UpdateVertexPropUndo,
 };
@@ -23,6 +21,7 @@ use super::super::serial::scan_vertex_serial_column;
 use super::batch::{InsertedVertexTag, PrecheckedBatchContext, SerialBatchState};
 use crate::engine::data_store::EdgeTableKey;
 use crate::index::types::EdgeIdentity;
+use crate::vertex::{primary_key_mirror_value, IdKey};
 
 pub(super) fn record_vertex_insert(
     ctx: &GraphStorageContext,
@@ -142,14 +141,8 @@ pub(crate) fn insert_vertex(
 
     let ts = ctx.get_write_timestamp()?;
     let mut rollback = Vec::new();
-    let result = insert_vertex_at_timestamp(
-        ctx,
-        space,
-        space_info.space_id,
-        vertex,
-        ts,
-        &mut rollback,
-    );
+    let result =
+        insert_vertex_at_timestamp(ctx, space, space_info.space_id, vertex, ts, &mut rollback);
 
     if result.is_err() {
         rollback_vertex_tags(ctx, space_info.space_id, &rollback, ts);
@@ -353,9 +346,27 @@ pub(crate) fn update_vertex(
     let vid = VertexId::normalize_for_vid_type(&space_info.vid_type, vertex.vid)?;
 
     let ts = ctx.get_write_timestamp()?;
-    let label_id = tag_label_id(ctx, space, &tag.name)?.ok_or_else(|| {
-        StorageError::not_found(format!("Tag {} not found", tag.name))
-    })?;
+    let label_id = tag_label_id(ctx, space, &tag.name)?
+        .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag.name)))?;
+
+    // Untagged updates merge the full existing row, including the primary
+    // key mirror, into the write set. Restating the mirror changes nothing
+    // and is skipped; a divergent key still falls through to the
+    // table-layer rejection below.
+    let pk_mirror: Option<(String, DataType, Value)> =
+        ctx.data_store().with_vertex_tables(|tables| {
+            tables.get(&label_id).and_then(|table| {
+                let schema = table.schema();
+                let pk = schema.properties.get(schema.primary_key_index)?;
+                let key = match route_vertex_id(&vid).ok()? {
+                    RoutedVertexId::Int(id) => IdKey::Int(id),
+                    RoutedVertexId::Text(id) => IdKey::Text(id),
+                };
+                primary_key_mirror_value(&pk.data_type, &key)
+                    .ok()
+                    .map(|mirror| (pk.name.clone(), pk.data_type.clone(), mirror))
+            })
+        });
 
     {
         let current_record = match route_vertex_id(&vid)? {
@@ -363,60 +374,69 @@ pub(crate) fn update_vertex(
             RoutedVertexId::Text(id_str) => ctx.get_vertex(label_id, &id_str, ts),
         };
 
-            let mut merged_props: HashMap<String, Value> = current_record
-                .as_ref()
-                .map(|record| record.properties.iter().cloned().collect())
-                .unwrap_or_default();
-            for (prop_name, value) in &tag.properties {
-                merged_props.insert(prop_name.clone(), value.clone());
-            }
+        let mut merged_props: HashMap<String, Value> = current_record
+            .as_ref()
+            .map(|record| record.properties.iter().cloned().collect())
+            .unwrap_or_default();
+        for (prop_name, value) in &tag.properties {
+            merged_props.insert(prop_name.clone(), value.clone());
+        }
 
-            for (prop_name, value) in &tag.properties {
-                let old_value = current_record.as_ref().and_then(|record| {
-                    record
-                        .properties
-                        .iter()
-                        .find(|(name, _)| name == prop_name)
-                        .map(|(_, value)| value)
-                });
-                let redo = UpdateVertexPropRedo {
-                    label: label_id,
-                    vid,
-                    prop_name: prop_name.clone(),
-                    value: value.clone(),
-                };
-                let redo_entry = ctx.append_wal_redo(WalOpType::UpdateVertexProp, ts, &redo)?;
-
-                // The table layer rejects primary key columns and missing rows.
-                match route_vertex_id(&vid)? {
-                    RoutedVertexId::Int(id_int) => {
-                        ctx.update_vertex_property_by_i64(label_id, id_int, prop_name, value, ts)?;
-                    }
-                    RoutedVertexId::Text(id_str) => {
-                        ctx.update_vertex_property(label_id, &id_str, prop_name, value, ts)?;
-                    }
+        for (prop_name, value) in &tag.properties {
+            let restates_mirror = match pk_mirror.as_ref() {
+                Some((pk_name, pk_type, mirror)) if prop_name == pk_name => {
+                    value == mirror || value.try_cast_to(pk_type).is_ok_and(|cast| &cast == mirror)
                 }
-                record_vertex_property_update(
-                    ctx,
-                    label_id,
-                    vid,
-                    prop_name,
-                    old_value,
-                    Some(redo_entry),
-                )?;
+                _ => false,
+            };
+            if restates_mirror {
+                continue;
             }
+            let old_value = current_record.as_ref().and_then(|record| {
+                record
+                    .properties
+                    .iter()
+                    .find(|(name, _)| name == prop_name)
+                    .map(|(_, value)| value)
+            });
+            let redo = UpdateVertexPropRedo {
+                label: label_id,
+                vid,
+                prop_name: prop_name.clone(),
+                value: value.clone(),
+            };
+            let redo_entry = ctx.append_wal_redo(WalOpType::UpdateVertexProp, ts, &redo)?;
 
-            let props: Vec<(String, Value)> = merged_props.into_iter().collect();
-            let vid_value = Value::from(vid);
-            super::index_maintenance::refresh_vertex_indexes(
+            // The table layer rejects primary key columns and missing rows.
+            match route_vertex_id(&vid)? {
+                RoutedVertexId::Int(id_int) => {
+                    ctx.update_vertex_property_by_i64(label_id, id_int, prop_name, value, ts)?;
+                }
+                RoutedVertexId::Text(id_str) => {
+                    ctx.update_vertex_property(label_id, &id_str, prop_name, value, ts)?;
+                }
+            }
+            record_vertex_property_update(
                 ctx,
-                ctx.index_metadata_manager(),
-                space_info.space_id,
-                &vid_value,
-                &tag.name,
-                &props,
-                ts,
+                label_id,
+                vid,
+                prop_name,
+                old_value,
+                Some(redo_entry),
             )?;
+        }
+
+        let props: Vec<(String, Value)> = merged_props.into_iter().collect();
+        let vid_value = Value::from(vid);
+        super::index_maintenance::refresh_vertex_indexes(
+            ctx,
+            ctx.index_metadata_manager(),
+            space_info.space_id,
+            &vid_value,
+            &tag.name,
+            &props,
+            ts,
+        )?;
     }
 
     ctx.commit_write_timestamp_ordered(ts)?;
@@ -450,9 +470,7 @@ pub(crate) fn delete_vertex(
                 RoutedVertexId::Int(vid_int) => {
                     table.get_internal_id_by_i64(*vid_int, ts).is_some()
                 }
-                RoutedVertexId::Text(id_str) => {
-                    table.get_internal_id(id_str, ts).is_some()
-                }
+                RoutedVertexId::Text(id_str) => table.get_internal_id(id_str, ts).is_some(),
             })
         });
         if hit {
@@ -477,7 +495,10 @@ pub(crate) fn delete_vertex(
         }
     };
 
-    let redo = DeleteVertexRedo { label: label_id, vid };
+    let redo = DeleteVertexRedo {
+        label: label_id,
+        vid,
+    };
     let redo_entry = ctx.append_wal_redo(WalOpType::DeleteVertex, ts, &redo)?;
 
     match &routed {
@@ -573,7 +594,8 @@ pub(crate) fn batch_delete_vertices_with_edges(
 
     // Phase 1: Cascade-delete edges for all vertices across all edge types.
     for edge_info in &edge_types {
-        if let Err(error) = batch_delete_incident_edges_of_type(ctx, space_id, &ids, edge_info, ts) {
+        if let Err(error) = batch_delete_incident_edges_of_type(ctx, space_id, &ids, edge_info, ts)
+        {
             ctx.abort_write_timestamp(ts);
             return Err(error);
         }
@@ -918,9 +940,7 @@ pub(crate) fn delete_tags(
             let redo_entry = ctx.append_wal_redo(WalOpType::DeleteVertex, ts, &redo)?;
 
             let result = match &routed {
-                RoutedVertexId::Int(vid_int) => {
-                    ctx.delete_vertex_by_i64(label_id, *vid_int, ts)
-                }
+                RoutedVertexId::Int(vid_int) => ctx.delete_vertex_by_i64(label_id, *vid_int, ts),
                 RoutedVertexId::Text(id_str) => ctx.delete_vertex(label_id, id_str, ts),
             };
 

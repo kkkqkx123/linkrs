@@ -26,7 +26,7 @@ fn test_insert_and_get_vertex() {
         .unwrap();
     assert!(retrieved.is_some());
     let v = retrieved.unwrap();
-    assert_eq!(v.properties.get("name"), Some(&Value::string("Alice")));
+    assert_eq!(v.get_property_any("name"), Some(&Value::string("Alice")));
 }
 
 #[test]
@@ -91,10 +91,10 @@ fn test_update_vertex() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        v.properties.get("name"),
+        v.get_property_any("name"),
         Some(&Value::string("AliceUpdated"))
     );
-    assert_eq!(v.properties.get("age"), Some(&Value::BigInt(31)));
+    assert_eq!(v.get_property_any("age"), Some(&Value::BigInt(31)));
 
     let old_lookup = storage
         .lookup_index("test_space", "person_name_idx", &Value::string("Alice"))
@@ -155,8 +155,8 @@ fn test_auto_commit_update_rolls_back_before_image_on_abort() {
         .get_vertex("test_space", &VertexId::from_int64(101))
         .unwrap()
         .unwrap();
-    assert_eq!(v.properties.get("age"), Some(&Value::BigInt(30)));
-    assert_eq!(v.properties.get("name"), Some(&Value::string("Alice")));
+    assert_eq!(v.get_property_any("age"), Some(&Value::BigInt(30)));
+    assert_eq!(v.get_property_any("name"), Some(&Value::string("Alice")));
 }
 
 #[test]
@@ -328,26 +328,31 @@ fn test_get_vertex_projected() {
         .get_vertex("test_space", &VertexId::from_int64(1))
         .unwrap()
         .expect("vertex exists");
-    assert_eq!(full.properties.len(), 2);
+    // The primary-key mirror column is auto-filled on top of the two
+    // payloads, so the single tag carries three properties.
+    assert_eq!(full.tags[0].properties.len(), 3);
 
     let projected = storage
         .get_vertex_projected("test_space", &VertexId::from_int64(1), &["age".to_string()])
         .unwrap()
         .expect("vertex exists");
-    assert_eq!(projected.properties.len(), 1);
-    assert_eq!(projected.properties.get("age"), Some(&Value::BigInt(30)));
-    assert!(!projected.properties.contains_key("name"));
+    assert_eq!(projected.tags[0].properties.len(), 1);
+    assert_eq!(
+        projected.tags[0].properties.get("age"),
+        Some(&Value::BigInt(30))
+    );
+    assert!(!projected.tags[0].properties.contains_key("name"));
 
     // Full read must not be poisoned by the projected read (cache bypass).
     let full_again = storage
         .get_vertex("test_space", &VertexId::from_int64(1))
         .unwrap()
         .expect("vertex exists");
-    assert_eq!(full_again.properties.len(), 2);
+    assert_eq!(full_again.tags[0].properties.len(), 3);
 }
 
 #[test]
-fn test_vertex_idempotent_delete() {
+fn test_vertex_delete_missing_is_not_found() {
     let mut storage = create_test_storage();
     setup_space(&mut storage);
     setup_person_tag(&mut storage);
@@ -366,11 +371,21 @@ fn test_vertex_idempotent_delete() {
     let result1 = storage.delete_vertex("test_space", &VertexId::from_int64(1));
     assert!(result1.is_ok(), "First delete should succeed");
 
+    // Single-label delete is fail-closed: a missing row reports not-found
+    // instead of silently succeeding.
     let result2 = storage.delete_vertex("test_space", &VertexId::from_int64(1));
-    assert!(result2.is_ok(), "Second delete should succeed (idempotent)");
+    assert!(
+        result2.is_err(),
+        "Second delete must report not-found, got {:?}",
+        result2
+    );
 
     let result3 = storage.delete_vertex("test_space", &VertexId::from_int64(99999));
-    assert!(result3.is_ok(), "Delete non-existent should be idempotent");
+    assert!(
+        result3.is_err(),
+        "Delete of a never-existing vertex must report not-found, got {:?}",
+        result3
+    );
 }
 
 #[test]
@@ -397,9 +412,9 @@ fn test_vertex_with_boundary_properties() {
         .unwrap()
         .unwrap();
 
-    assert_eq!(retrieved.properties.get("name"), Some(&Value::string("")));
+    assert_eq!(retrieved.get_property_any("name"), Some(&Value::string("")));
     assert_eq!(
-        retrieved.properties.get("age"),
+        retrieved.get_property_any("age"),
         Some(&Value::BigInt(i64::MAX))
     );
 }

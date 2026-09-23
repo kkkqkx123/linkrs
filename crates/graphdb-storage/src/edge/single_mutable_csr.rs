@@ -1309,7 +1309,9 @@ mod tests {
         csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
         assert!(csr.delete_edge(0, EdgeId(100), 150).unwrap());
-        assert!(csr.get_edge_physical(0, VertexId::edge_endpoint_key(10, 0)).is_none());
+        assert!(csr
+            .get_edge_physical(0, VertexId::edge_endpoint_key(10, 0))
+            .is_none());
         assert_eq!(csr.physical_edges_of(0).len(), 1);
     }
 
@@ -1341,9 +1343,18 @@ mod tests {
         let mut csr = SingleMutableCsr::with_capacity(4);
         csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
-        assert_eq!(csr.delete_edge_by_dst(0, VertexId::edge_endpoint_key(11, 0), 150), 0);
-        assert_eq!(csr.delete_edge_by_dst(0, VertexId::edge_endpoint_key(10, 0), 150), 1);
-        assert_eq!(csr.delete_edge_by_dst(0, VertexId::edge_endpoint_key(10, 0), 150), 0);
+        assert_eq!(
+            csr.delete_edge_by_dst(0, VertexId::edge_endpoint_key(11, 0), 150),
+            0
+        );
+        assert_eq!(
+            csr.delete_edge_by_dst(0, VertexId::edge_endpoint_key(10, 0), 150),
+            1
+        );
+        assert_eq!(
+            csr.delete_edge_by_dst(0, VertexId::edge_endpoint_key(10, 0), 150),
+            0
+        );
     }
 
     #[test]
@@ -1405,8 +1416,12 @@ mod tests {
         let mut csr2 = SingleMutableCsr::new();
         csr2.load(&data).unwrap();
 
-        assert!(csr2.get_edge(0, VertexId::edge_endpoint_key(10, 0), 99).is_some());
-        assert!(csr2.get_edge(0, VertexId::edge_endpoint_key(10, 0), 100).is_some());
+        assert!(csr2
+            .get_edge(0, VertexId::edge_endpoint_key(10, 0), 99)
+            .is_some());
+        assert!(csr2
+            .get_edge(0, VertexId::edge_endpoint_key(10, 0), 100)
+            .is_some());
         assert_eq!(csr2.edges_of(0, 99).len(), 1);
         assert_eq!(csr2.edges_of(0, 100).len(), 1);
     }
@@ -1530,12 +1545,19 @@ mod tests {
         let mut csr = SingleMutableCsr::with_capacity(8192);
         csr.insert_edge(0u32, VertexId::edge_endpoint_key(10, 0), EdgeId(100), 100)
             .unwrap();
-        csr.insert_edge(7000u32, VertexId::edge_endpoint_key(11, 0), EdgeId(101), 100)
-            .unwrap();
+        csr.insert_edge(
+            7000u32,
+            VertexId::edge_endpoint_key(11, 0),
+            EdgeId(101),
+            100,
+        )
+        .unwrap();
         assert_eq!(csr.edge_count(), 2);
         assert_eq!(csr.allocated_segments(), 2);
         assert!(csr.sparse_memory_bytes() < 8192 * 32);
-        assert!(csr.get_edge(1, VertexId::edge_endpoint_key(10, 0), 200).is_none());
+        assert!(csr
+            .get_edge(1, VertexId::edge_endpoint_key(10, 0), 200)
+            .is_none());
         assert_eq!(csr.edges_of(1, 200).len(), 0);
         assert!(!csr.has_physical_entries(1));
     }

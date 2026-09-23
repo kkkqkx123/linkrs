@@ -158,8 +158,8 @@ fn cursor_applies_property_projection_during_scan() {
         .expect("cursor should open");
     let rows = cursor.next_batch(8).expect("cursor batch");
     assert_eq!(rows.len(), 1);
-    assert!(rows[0].properties.contains_key("name"));
-    assert!(!rows[0].properties.contains_key("age"));
+    assert!(rows[0].tags[0].properties.contains_key("name"));
+    assert!(!rows[0].tags[0].properties.contains_key("age"));
 }
 
 #[test]
@@ -200,7 +200,7 @@ fn test_read_operation_context_pins_and_releases_statement_snapshot() {
         .unwrap()
         .expect("vertex should resolve");
     assert_eq!(
-        vertex.properties.get("name").unwrap(),
+        vertex.get_property_any("name").unwrap(),
         &Value::string("Alice")
     );
 

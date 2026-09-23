@@ -358,9 +358,7 @@ pub(crate) fn update_data(
             super::super::ops::RoutedVertexId::Int(id_int) => {
                 ctx.get_vertex_by_i64(label_id, *id_int, ts)
             }
-            super::super::ops::RoutedVertexId::Text(id_str) => {
-                ctx.get_vertex(label_id, id_str, ts)
-            }
+            super::super::ops::RoutedVertexId::Text(id_str) => ctx.get_vertex(label_id, id_str, ts),
         };
         let value = match &info.update_op {
             UpdateOp::Set => info.value.clone(),

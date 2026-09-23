@@ -37,7 +37,7 @@ fn test_auto_commit_batch_window_reuses_snapshots() {
             .get_vertex("test_space", &VertexId::from_int64(1000 + i))
             .unwrap()
             .unwrap();
-        assert_eq!(v.properties.get("age"), Some(&Value::BigInt(i)));
+        assert_eq!(v.get_property_any("age"), Some(&Value::BigInt(i)));
     }
 
     // After the window is finalized the write gate is released: a new
@@ -145,7 +145,7 @@ fn test_auto_commit_batch_window_failed_statement_rolls_back_itself() {
         .get_vertex("test_space", &VertexId::from_int64(3001))
         .unwrap()
         .unwrap();
-    assert_eq!(v.properties.get("age"), Some(&Value::BigInt(1)));
+    assert_eq!(v.get_property_any("age"), Some(&Value::BigInt(1)));
 }
 
 #[test]
@@ -288,6 +288,6 @@ fn test_auto_commit_batch_window_via_sync_wrapper() {
             .get_vertex("test_space", &VertexId::from_int64(5000 + i))
             .unwrap()
             .unwrap();
-        assert_eq!(v.properties.get("age"), Some(&Value::BigInt(i)));
+        assert_eq!(v.get_property_any("age"), Some(&Value::BigInt(i)));
     }
 }

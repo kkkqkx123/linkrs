@@ -160,28 +160,26 @@ pub(crate) fn lookup_edges_by_property_range(
         let src_internal = record.src_vid.as_internal_u32();
         let dst_internal = record.dst_vid.as_internal_u32();
         let src_external = match src_internal {
-            Some(internal) if src_label != 0 => {
-                ctx.get_external_id(src_label, internal, ts)
-                    .or_else(|| {
-                        ctx.get_external_id_by_internal_id(src_label, internal)
-                            .map(|v| vid_to_string(&v))
-                    })
-                    .unwrap_or_else(|| format!("{}", record.src_vid))
-            }
+            Some(internal) if src_label != 0 => ctx
+                .get_external_id(src_label, internal, ts)
+                .or_else(|| {
+                    ctx.get_external_id_by_internal_id(src_label, internal)
+                        .map(|v| vid_to_string(&v))
+                })
+                .unwrap_or_else(|| format!("{}", record.src_vid)),
             Some(internal) => ctx
                 .get_external_id_any(internal, ts)
                 .unwrap_or_else(|| format!("{}", record.src_vid)),
             None => format!("{}", record.src_vid),
         };
         let dst_external = match dst_internal {
-            Some(internal) if dst_label != 0 => {
-                ctx.get_external_id(dst_label, internal, ts)
-                    .or_else(|| {
-                        ctx.get_external_id_by_internal_id(dst_label, internal)
-                            .map(|v| vid_to_string(&v))
-                    })
-                    .unwrap_or_else(|| format!("{}", record.dst_vid))
-            }
+            Some(internal) if dst_label != 0 => ctx
+                .get_external_id(dst_label, internal, ts)
+                .or_else(|| {
+                    ctx.get_external_id_by_internal_id(dst_label, internal)
+                        .map(|v| vid_to_string(&v))
+                })
+                .unwrap_or_else(|| format!("{}", record.dst_vid)),
             Some(internal) => ctx
                 .get_external_id_any(internal, ts)
                 .unwrap_or_else(|| format!("{}", record.dst_vid)),

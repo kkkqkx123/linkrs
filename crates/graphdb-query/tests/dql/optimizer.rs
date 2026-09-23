@@ -24,7 +24,7 @@ fn test_idx_001_index_scan_for_equality() {
     let mut scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("optimizer_test_idx")
-        .exec_ddl("CREATE TAG person(name STRING, age INT, city STRING, salary INT)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING, age INT, city STRING, salary INT)")
         .assert_success()
         .exec_ddl("CREATE TAG INDEX idx_person_name ON person(name)")
         .assert_success()
@@ -55,7 +55,7 @@ fn test_idx_002_index_scan_for_range() {
     let mut scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("optimizer_test_idx_range")
-        .exec_ddl("CREATE TAG person(name STRING, age INT, city STRING, salary INT)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING, age INT, city STRING, salary INT)")
         .assert_success()
         .exec_ddl("CREATE TAG INDEX idx_person_age ON person(age)")
         .assert_success();
@@ -82,7 +82,7 @@ fn test_idx_003_no_index_full_scan() {
     let mut scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("optimizer_test_full_scan")
-        .exec_ddl("CREATE TAG person(name STRING, age INT, salary INT)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING, age INT, salary INT)")
         .assert_success();
 
     for i in 0..100 {
@@ -109,9 +109,9 @@ fn test_join_001_join_algorithm_selection() {
     let mut scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("optimizer_test_join")
-        .exec_ddl("CREATE TAG company(name STRING, industry STRING)")
+        .exec_ddl("CREATE TAG company(id INT, name STRING, industry STRING)")
         .assert_success()
-        .exec_ddl("CREATE TAG employee(name STRING, salary INT)")
+        .exec_ddl("CREATE TAG employee(id INT, name STRING, salary INT)")
         .assert_success()
         .exec_ddl("CREATE EDGE works_at(position STRING)")
         .assert_success();
@@ -164,7 +164,7 @@ fn test_agg_001_hash_aggregate() {
     let mut scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("optimizer_test_agg")
-        .exec_ddl("CREATE TAG sales(product STRING, amount INT, category STRING)")
+        .exec_ddl("CREATE TAG sales(id INT, product STRING, amount INT, category STRING)")
         .assert_success();
 
     for i in 0..100 {
@@ -173,7 +173,7 @@ fn test_agg_001_hash_aggregate() {
         let category = ["A", "B", "C"][i % 3];
 
         scenario = scenario.exec_dml(&format!(
-            "INSERT VERTEX sales(product, amount, category) VALUES \"s{:04}\":(\"{}\", {}, \"{}\")",
+            "INSERT VERTEX sales(product, amount, category) VALUES {}:(\"{}\", {}, \"{}\")",
             i, product, amount, category
         ));
     }
@@ -194,7 +194,7 @@ fn test_topn_001_order_by_limit() {
     let mut scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("optimizer_test_topn")
-        .exec_ddl("CREATE TAG product(name STRING, price INT, sales INT)")
+        .exec_ddl("CREATE TAG product(id INT, name STRING, price INT, sales INT)")
         .assert_success();
 
     for i in 0..100 {
@@ -202,7 +202,7 @@ fn test_topn_001_order_by_limit() {
         let sales = i % 1000;
 
         scenario = scenario.exec_dml(&format!(
-            "INSERT VERTEX product(name, price, sales) VALUES \"p{:03}\":(\"Product_{:03}\", {}, {})",
+            "INSERT VERTEX product(name, price, sales) VALUES {}:(\"Product_{:03}\", {}, {})",
             i, i, price, sales
         ));
     }
@@ -221,7 +221,7 @@ fn test_explain_001_text_format() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("optimizer_test_explain")
-        .exec_ddl("CREATE TAG person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING, age INT)")
         .assert_success()
         .query("EXPLAIN MATCH (p:person) RETURN p.name")
         .assert_success();
@@ -232,7 +232,7 @@ fn test_explain_002_dot_format() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("optimizer_test_explain_dot")
-        .exec_ddl("CREATE TAG person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING, age INT)")
         .assert_success()
         .query("EXPLAIN FORMAT = DOT MATCH (p:person) RETURN p.name")
         .assert_success()
@@ -246,12 +246,12 @@ fn test_profile_001_basic_profile() {
     let mut scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("optimizer_test_profile")
-        .exec_ddl("CREATE TAG person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING, age INT)")
         .assert_success();
 
     for i in 0..50 {
         scenario = scenario.exec_dml(&format!(
-            "INSERT VERTEX person(name, age) VALUES \"p{:03}\":(\"Person_{:03}\", {})",
+            "INSERT VERTEX person(name, age) VALUES {}:(\"Person_{:03}\", {})",
             i,
             i,
             20 + i
@@ -271,9 +271,9 @@ fn test_optimizer_empty_result() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("optimizer_test_empty")
-        .exec_ddl("CREATE TAG person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING, age INT)")
         .assert_success()
-        .exec_dml("INSERT VERTEX person(name, age) VALUES \"p001\":(\"Alice\", 30)")
+        .exec_dml("INSERT VERTEX person(name, age) VALUES 1:(\"Alice\", 30)")
         .assert_success()
         .query("EXPLAIN MATCH (p:person) WHERE p.age > 100 RETURN p")
         .assert_success();
@@ -284,7 +284,7 @@ fn test_optimizer_multiple_indexes() {
     let mut scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("optimizer_test_multi_idx")
-        .exec_ddl("CREATE TAG person(name STRING, age INT, city STRING)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING, age INT, city STRING)")
         .assert_success()
         .exec_ddl("CREATE TAG INDEX idx_person_name ON person(name)")
         .assert_success()
@@ -299,7 +299,7 @@ fn test_optimizer_multiple_indexes() {
         let city = ["Beijing", "Shanghai", "Shenzhen"][i % 3];
 
         scenario = scenario.exec_dml(&format!(
-            "INSERT VERTEX person(name, age, city) VALUES \"p{:03}\":(\"{}\", {}, \"{}\")",
+            "INSERT VERTEX person(name, age, city) VALUES {}:(\"{}\", {}, \"{}\")",
             i, name, age, city
         ));
     }
@@ -316,11 +316,11 @@ fn test_optimizer_complex_join() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("optimizer_test_complex_join")
-        .exec_ddl("CREATE TAG person(name STRING)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING)")
         .assert_success()
-        .exec_ddl("CREATE TAG company(name STRING)")
+        .exec_ddl("CREATE TAG company(id INT, name STRING)")
         .assert_success()
-        .exec_ddl("CREATE TAG department(name STRING)")
+        .exec_ddl("CREATE TAG department(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE works_at(position STRING)")
         .assert_success()
@@ -379,7 +379,7 @@ fn test_optimizer_result_equivalence() {
                 .with_schema_manager(schema_manager.clone());
         pipeline
             .execute_query_with_space(
-                "CREATE TAG Item(name STRING, price DOUBLE)",
+                "CREATE TAG Item(id INT, name STRING, price DOUBLE)",
                 Some(space_info.clone()),
             )
             .expect("CREATE TAG");

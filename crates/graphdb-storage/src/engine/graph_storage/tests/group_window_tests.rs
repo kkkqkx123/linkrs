@@ -47,7 +47,7 @@ fn test_group_window_single_ts() {
             .get_vertex("test_space", &VertexId::from_int64(6000 + i))
             .unwrap()
             .unwrap();
-        assert_eq!(v.properties.get("age"), Some(&Value::BigInt(i)));
+        assert_eq!(v.get_property_any("age"), Some(&Value::BigInt(i)));
     }
 }
 
@@ -94,7 +94,7 @@ fn test_group_commit_visibility() {
         .get_vertex("test_space", &VertexId::from_int64(7001))
         .unwrap()
         .unwrap();
-    assert_eq!(v.properties.get("name"), Some(&Value::string("visible")));
+    assert_eq!(v.get_property_any("name"), Some(&Value::string("visible")));
 }
 
 #[test]
@@ -166,14 +166,17 @@ fn test_group_failed_statement_rolls_back_own_writes() {
         .get_vertex("test_space", &VertexId::from_int64(8001))
         .unwrap()
         .unwrap();
-    assert_eq!(v.properties.get("name"), Some(&Value::string("keep")));
-    assert_eq!(v.properties.get("age"), Some(&Value::BigInt(1)));
+    assert_eq!(v.get_property_any("name"), Some(&Value::string("keep")));
+    assert_eq!(v.get_property_any("age"), Some(&Value::BigInt(1)));
     // Vertex 8002 exists (statement 3 committed).
     let v2 = storage
         .get_vertex("test_space", &VertexId::from_int64(8002))
         .unwrap()
         .unwrap();
-    assert_eq!(v2.properties.get("name"), Some(&Value::string("also_keep")));
+    assert_eq!(
+        v2.get_property_any("name"),
+        Some(&Value::string("also_keep"))
+    );
 }
 
 #[test]
@@ -207,7 +210,7 @@ fn test_group_window_without_wal_manager() {
         .get_vertex("test_space", &VertexId::from_int64(9001))
         .unwrap()
         .unwrap();
-    assert_eq!(v.properties.get("name"), Some(&Value::string("mem")));
+    assert_eq!(v.get_property_any("name"), Some(&Value::string("mem")));
 }
 
 #[test]

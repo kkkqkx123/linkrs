@@ -556,18 +556,13 @@ mod tests {
     fn test_primary_key_type_validation_valid_types() {
         let ctx = GraphStorageContext::new();
 
-        // Test valid key types
+        // The primary key column mirrors the vertex id, so only the
+        // id-compatible families are accepted.
         let valid_types = vec![
-            ("Bool", DataType::Bool),
             ("SmallInt", DataType::SmallInt),
             ("Int", DataType::Int),
             ("BigInt", DataType::BigInt),
-            ("Float", DataType::Float),
-            ("Double", DataType::Double),
             ("String", DataType::String),
-            ("Uuid", DataType::Uuid),
-            ("Date", DataType::Date),
-            ("DateTime", DataType::DateTime),
         ];
 
         for (idx, (type_name, data_type)) in valid_types.into_iter().enumerate() {
@@ -586,8 +581,15 @@ mod tests {
     fn test_primary_key_type_validation_invalid_types() {
         let ctx = GraphStorageContext::new();
 
-        // Test invalid key types - composite/complex types
+        // Test invalid key types - composite/complex types plus every
+        // scalar family that cannot mirror a vertex id.
         let invalid_types = vec![
+            ("Bool", DataType::Bool),
+            ("Float", DataType::Float),
+            ("Double", DataType::Double),
+            ("Uuid", DataType::Uuid),
+            ("Date", DataType::Date),
+            ("DateTime", DataType::DateTime),
             ("List", DataType::List(Box::new(DataType::Empty))),
             ("Map", DataType::Map(Box::new(DataType::Empty))),
             ("Set", DataType::Set(Box::new(DataType::Empty))),

@@ -101,7 +101,7 @@ fn test_create_tag_execution_basic() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name: STRING, age: INT)")
+        .exec_ddl("CREATE TAG Person(id: INT, name: STRING, age: INT)")
         .assert_success()
         .assert_tag_exists("Person");
 }
@@ -111,10 +111,10 @@ fn test_create_tag_execution_with_if_not_exists() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name: STRING, age: INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id: INT, name: STRING, age: INT)")
         .assert_success()
         .assert_tag_exists("Person")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name: STRING, age: INT)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id: INT, name: STRING, age: INT)")
         .assert_success()
         .assert_tag_exists("Person");
 }
@@ -124,7 +124,7 @@ fn test_create_tag_execution_with_data() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name: STRING, age: INT)")
+        .exec_ddl("CREATE TAG Person(id: INT, name: STRING, age: INT)")
         .assert_success()
         .assert_tag_exists("Person")
         .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
@@ -210,7 +210,7 @@ fn test_drop_tag_execution_basic() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name: STRING)")
+        .exec_ddl("CREATE TAG Person(id: INT, name: STRING)")
         .assert_success()
         .assert_tag_exists("Person")
         .exec_ddl("DROP TAG Person")
@@ -225,7 +225,7 @@ fn test_drop_tag_execution_with_if_exists() {
         .setup_space("test_space")
         .exec_ddl("DROP TAG IF EXISTS NonExistentTag")
         .assert_success()
-        .exec_ddl("CREATE TAG Person(name: STRING)")
+        .exec_ddl("CREATE TAG Person(id: INT, name: STRING)")
         .assert_success()
         .exec_ddl("DROP TAG IF EXISTS Person")
         .assert_success()
@@ -271,11 +271,11 @@ fn test_desc_execution_tag() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name: STRING, age: INT)")
+        .exec_ddl("CREATE TAG Person(id: INT, name: STRING, age: INT)")
         .assert_success()
         .query("DESCRIBE TAG Person")
         .assert_success()
-        .assert_result_count(2)
+        .assert_result_count(3)
         .assert_result_contains(vec![Value::string("name"), Value::string("STRING")])
         .assert_result_contains(vec![Value::string("age"), Value::string("INT")]);
 }
@@ -285,11 +285,11 @@ fn test_desc_execution_tag_with_constraints() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name: STRING NOT NULL, age: INT DEFAULT 0)")
+        .exec_ddl("CREATE TAG Person(id: INT, name: STRING NOT NULL, age: INT DEFAULT 0)")
         .assert_success()
         .query("DESCRIBE TAG Person")
         .assert_success()
-        .assert_result_count(2);
+        .assert_result_count(3);
 }
 
 // ==================== Tag Lifecycle Tests ====================
@@ -299,7 +299,7 @@ fn test_ddl_tag_lifecycle() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG TestTag(name: STRING, age: INT)")
+        .exec_ddl("CREATE TAG TestTag(id: INT, name: STRING, age: INT)")
         .assert_success()
         .assert_tag_exists("TestTag")
         .query("DESCRIBE TAG TestTag")
@@ -325,10 +325,10 @@ fn test_ddl_if_not_exists_if_exists() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name: STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id: INT, name: STRING)")
         .assert_success()
         .assert_tag_exists("Person")
-        .exec_ddl("CREATE TAG IF NOT EXISTS Person(name: STRING)")
+        .exec_ddl("CREATE TAG IF NOT EXISTS Person(id: INT, name: STRING)")
         .assert_success()
         .exec_ddl("DROP TAG IF EXISTS Person")
         .assert_success()
@@ -379,7 +379,7 @@ fn test_create_tag_execution_geography() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Location(name: STRING, coord: GEOGRAPHY)")
+        .exec_ddl("CREATE TAG Location(id: INT, name: STRING, coord: GEOGRAPHY)")
         .assert_success()
         .assert_tag_exists("Location");
 }
@@ -390,7 +390,7 @@ fn test_create_tag_geography_with_data() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG City(name: STRING, center: GEOGRAPHY)")
+        .exec_ddl("CREATE TAG City(id: INT, name: STRING, center: GEOGRAPHY)")
         .assert_success()
         .assert_tag_exists("City")
         .exec_dml("INSERT VERTEX City(name) VALUES 1:('Beijing')")
@@ -458,7 +458,7 @@ fn test_create_tag_execution_vector() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Document(id: STRING, embedding: VECTOR(128))")
+        .exec_ddl("CREATE TAG Document(vid: INT, id: STRING, embedding: VECTOR(128))")
         .assert_success()
         .assert_tag_exists("Document");
 }
@@ -488,7 +488,7 @@ fn test_create_tag_execution_mixed_extended_types() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Article(id: STRING, content: STRING, location: GEOGRAPHY, embedding: VECTOR(128))")
+        .exec_ddl("CREATE TAG Article(vid: INT, id: STRING, content: STRING, location: GEOGRAPHY, embedding: VECTOR(128))")
         .assert_success()
         .assert_tag_exists("Article");
 }

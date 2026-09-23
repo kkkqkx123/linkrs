@@ -18,7 +18,7 @@ fn test_schema_evolution_complete_flow() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG UserProfile(username STRING, created_at TIMESTAMP)")
+        .exec_ddl("CREATE TAG UserProfile(id INT, username STRING, created_at TIMESTAMP)")
         .assert_success()
         .exec_ddl("CREATE EDGE FOLLOWS(since DATE) FROM UserProfile TO UserProfile")
         .assert_success()
@@ -32,7 +32,7 @@ fn test_schema_evolution_complete_flow() {
         .assert_edge_count("FOLLOWS", 1)
         .exec_ddl("ALTER TAG UserProfile ADD (email STRING, bio STRING)")
         .assert_success()
-        .exec_dml("UPDATE 1 SET email = 'alice@example.com', bio = 'Hello world'")
+        .exec_dml("UPSERT VERTEX ON UserProfile SET email = 'alice@example.com', bio = 'Hello world' WHERE id(vid) == 1")
         .assert_success()
         .query("FETCH PROP ON UserProfile 1")
         .assert_result_count(1)
@@ -50,9 +50,9 @@ fn test_ddl_multiple_operations() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name: STRING, age: INT)")
+        .exec_ddl("CREATE TAG Person(id: INT, name: STRING, age: INT)")
         .assert_success()
-        .exec_ddl("CREATE TAG Company(name: STRING, founded: INT)")
+        .exec_ddl("CREATE TAG Company(id: INT, name: STRING, founded: INT)")
         .assert_success()
         .exec_ddl("CREATE EDGE WORKS_AT(since: DATE) FROM Person TO Company")
         .assert_success()
@@ -71,6 +71,7 @@ fn test_complex_schema_with_multiple_tags_and_edges() {
         .setup_space("social_network")
         .exec_ddl(r#"
             CREATE TAG Person(
+                id INT,
                 name STRING,
                 age INT,
                 email STRING,
@@ -80,6 +81,7 @@ fn test_complex_schema_with_multiple_tags_and_edges() {
         .assert_success()
         .exec_ddl(r#"
             CREATE TAG Company(
+                id INT,
                 name STRING,
                 founded_year INT,
                 industry STRING
@@ -121,12 +123,12 @@ fn test_alter_tag_change_field() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(old_name STRING)")
+        .exec_ddl("CREATE TAG Person(id INT, old_name STRING)")
         .assert_success()
         .exec_ddl("ALTER TAG Person CHANGE (old_name name: STRING)")
         .assert_success()
         .query("DESC TAG Person")
-        .assert_result_count(1)
+        .assert_result_count(2)
         .assert_result_contains(vec![
             Value::string("name"),
             Value::string("STRING"),
@@ -143,7 +145,7 @@ fn test_create_tag_duplicate_field() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name STRING, name INT)")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, name INT)")
         .assert_error();
 }
 
@@ -152,7 +154,7 @@ fn test_alter_tag_nonexistent_field() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name STRING)")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("ALTER TAG Person DROP (nonexistent_field)")
         .assert_error();
@@ -163,7 +165,7 @@ fn test_drop_tag_with_data() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name STRING)")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
         .assert_success()
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
         .assert_success()

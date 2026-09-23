@@ -24,7 +24,7 @@ fn test_type_alias_basic_builtin() {
         .assert_success()
         .exec_ddl("CREATE TYPE my_float AS FLOAT")
         .assert_success()
-        .exec_ddl("CREATE TAG Person(name STRING, age my_int, score my_float)")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age my_int, score my_float)")
         .assert_success()
         // The schema stores the resolved builtin type; aliases resolve at
         // bind time, so DESC reports the underlying (INT/FLOAT).
@@ -45,7 +45,7 @@ fn test_type_alias_chain_resolution() {
         .assert_success()
         .exec_ddl("CREATE TYPE c AS b")
         .assert_success()
-        .exec_ddl("CREATE TAG Data(val c)")
+        .exec_ddl("CREATE TAG Data(id INT, val c)")
         .assert_success()
         .query("DESC TAG Data")
         .assert_result_contains(vec![Value::string("val"), Value::string("INT")]);
@@ -232,7 +232,7 @@ fn test_type_alias_insert_select_works() {
         .assert_success()
         .exec_ddl("CREATE TYPE score AS FLOAT")
         .assert_success()
-        .exec_ddl("CREATE TAG User(name STRING, age user_age, score score)")
+        .exec_ddl("CREATE TAG User(id INT, name STRING, age user_age, score score)")
         .assert_success()
         .exec_dml("INSERT VERTEX User(name, age, score) VALUES 1:('Alice', 30, 95.5)")
         .assert_success()

@@ -22,6 +22,7 @@ fn setup() -> Arc<RwLock<dyn graphdb_query::storage::QueryStorage>> {
         raw.create_tag(
             "col_stats_e2e",
             &TagInfo::new("Person".to_string()).with_properties(vec![
+                PropertyDef::new("id".to_string(), graphdb_core::DataType::BigInt),
                 PropertyDef::new("name".to_string(), graphdb_core::DataType::String),
                 PropertyDef::new("age".to_string(), graphdb_core::DataType::BigInt),
             ]),
@@ -47,6 +48,7 @@ fn setup() -> Arc<RwLock<dyn graphdb_query::storage::QueryStorage>> {
                         vec![Tag::new(
                             "Person".to_string(),
                             [
+                                ("id".to_string(), Value::BigInt(i)),
                                 ("name".to_string(), Value::string(format!("P{i}"))),
                                 ("age".to_string(), Value::BigInt(i)),
                             ]

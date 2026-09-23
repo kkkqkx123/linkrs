@@ -70,9 +70,43 @@ fn restore_full_state_from_disk(ctx: &GraphStorageContext) -> StorageResult<()> 
             ctx.index_data_manager().write().load(&index_path)?;
         }
         ctx.register_loaded_native_indexes()?;
+
+        // The flush snapshot carries no checkpoint timestamp, so the fresh
+        // version manager would restart at 1 and hide every row written
+        // before the save. Re-anchor the frontier from the persisted
+        // high-water mark; without it, post-reload reads and deletes lose
+        // pre-save rows.
+        let restored = read_version_high_water(&paths.data_dir()).unwrap_or(1);
+        ctx.version_manager().init_ts(restored.max(1));
     }
 
     Ok(())
+}
+
+/// Name of the flush-sidecar file carrying the timestamp high-water mark.
+const VERSION_META_FILE: &str = "version.meta";
+
+fn write_version_high_water(data_dir: &Path, write_ts: u64) -> StorageResult<()> {
+    let content = format!("write_ts={}\n", write_ts);
+    std::fs::write(data_dir.join(VERSION_META_FILE), content)
+        .map_err(|e| StorageError::io_error(format!("Failed to write version.meta: {e}")))?;
+    Ok(())
+}
+
+fn read_version_high_water(data_dir: &Path) -> StorageResult<u64> {
+    let content = std::fs::read_to_string(data_dir.join(VERSION_META_FILE))
+        .map_err(|e| StorageError::io_error(format!("Failed to read version.meta: {e}")))?;
+    for line in content.lines() {
+        if let Some(value) = line.strip_prefix("write_ts=") {
+            return value
+                .trim()
+                .parse::<u64>()
+                .map_err(|e| StorageError::parse_error(format!("Invalid version.meta: {e}")));
+        }
+    }
+    Err(StorageError::parse_error(
+        "version.meta has no write_ts entry".to_string(),
+    ))
 }
 
 pub(crate) fn bootstrap_from_disk(ctx: &GraphStorageContext) -> StorageResult<()> {
@@ -160,6 +194,11 @@ pub(crate) fn save_data_to_dir(ctx: &GraphStorageContext, dir: &Path) -> Storage
 
     ctx.flush_tables_to_dir(&data_dir)?;
     ctx.user_storage().save_to_dir(&data_dir)?;
+
+    // Anchor the timestamp frontier for a future checkpoint-less restore:
+    // without it the reloaded version manager restarts at 1 and every
+    // pre-save row becomes invisible to new reads and deletes.
+    write_version_high_water(&data_dir, ctx.version_manager().write_timestamp())?;
 
     if let Some(persistence) = ctx.persistence().as_ref() {
         let wal_lsn = {
@@ -1042,11 +1081,11 @@ mod tests {
             "space_1:tag:person",
             "person",
             1,
-            vec![StoragePropertyDef::new(
-                "name".to_string(),
-                DataType::String,
-            )],
-            "name",
+            vec![
+                StoragePropertyDef::new("id".to_string(), DataType::BigInt),
+                StoragePropertyDef::new("name".to_string(), DataType::String),
+            ],
+            "id",
         )
         .expect("Failed to create vertex type");
 

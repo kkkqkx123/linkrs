@@ -113,7 +113,10 @@ impl VertexSeek {
         if !pattern.labels.is_empty() {
             // Single-label vertices carry exactly one tag, so a conjunction
             // over distinct labels can never match.
-            let distinct = pattern.labels.iter().collect::<std::collections::HashSet<_>>();
+            let distinct = pattern
+                .labels
+                .iter()
+                .collect::<std::collections::HashSet<_>>();
             if distinct.len() > 1 {
                 return false;
             }

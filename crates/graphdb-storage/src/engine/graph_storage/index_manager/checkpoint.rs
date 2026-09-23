@@ -168,19 +168,19 @@ pub(crate) fn build_vertex_index_data(
     let mut reverse = BTreeMap::new();
 
     for vertex in vertices {
+        // Single-label reads fill only the tag: index fields resolve
+        // through the tag-first accessor, never the legacy vertex map.
         let indexed_values: Vec<Value> = index
             .fields
             .iter()
-            .filter_map(|field| vertex.properties.get(&field.name).cloned())
+            .filter_map(|field| vertex.property_value(&field.name))
             .collect();
         let included_columns = index
             .properties
             .iter()
             .filter_map(|name| {
                 vertex
-                    .properties
-                    .get(name)
-                    .cloned()
+                    .property_value(name)
                     .map(|value| (name.clone(), value))
             })
             .collect::<Vec<_>>();

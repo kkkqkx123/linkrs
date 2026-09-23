@@ -30,7 +30,7 @@ fn test_txn_begin_through_sql_reports_api_ownership() {
     let scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("gaps_txn_commit")
-        .exec_ddl("CREATE TAG person(name STRING)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING)")
         .assert_success()
         .query("BEGIN TRANSACTION");
     let err = scenario
@@ -47,7 +47,7 @@ fn test_txn_rollback_without_begin_reports_error() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("gaps_txn_rollback")
-        .exec_ddl("CREATE TAG person(name STRING)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING)")
         .assert_success()
         .query("ROLLBACK")
         .assert_error();
@@ -60,7 +60,7 @@ fn test_error_undefined_variable() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("gaps_err_var")
-        .exec_ddl("CREATE TAG person(name STRING)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING)")
         .assert_success()
         .query("MATCH (n:person) RETURN undefined_var")
         .assert_error();
@@ -110,7 +110,7 @@ fn test_with_passthrough_row_count() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("gaps_with")
-        .exec_ddl("CREATE TAG person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING, age INT)")
         .exec_dml("INSERT VERTEX person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25)")
         .assert_success()
         .query("MATCH (n:person) WITH n.name AS name RETURN name")
@@ -125,7 +125,7 @@ fn test_analyze_vertex_count() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("gaps_analyze")
-        .exec_ddl("CREATE TAG person(name STRING)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING)")
         .exec_dml("INSERT VERTEX person(name) VALUES 1:('Alice'), 2:('Bob')")
         .assert_success()
         .analyze()
@@ -140,7 +140,7 @@ fn test_plan_cache_literal_change_same_shape() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("gaps_plan_cache")
-        .exec_ddl("CREATE TAG person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING, age INT)")
         .exec_dml("INSERT VERTEX person(name, age) VALUES 1:('Alice', 20), 2:('Bob', 30)")
         .assert_success()
         .query("MATCH (n:person) WHERE n.age = 20 RETURN n")
@@ -158,7 +158,7 @@ fn test_multi_space_isolation() {
     let scenario = TestScenario::new().expect("Failed to create test scenario");
     scenario
         .setup_space("gaps_space_a")
-        .exec_ddl("CREATE TAG person(name STRING)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING)")
         .exec_dml("INSERT VERTEX person(name) VALUES 1:('Alice')")
         .assert_success()
         .assert_vertex_count("person", 1)

@@ -137,8 +137,13 @@ fn test_offset_delete_shares_conflict_semantics() {
 fn insert_reuses_gc_eligible_primary_tombstone() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(4, 16, 8);
     for i in 0..4i64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(100 + i as u64), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key((i) as u32, 0),
+            EdgeId(100 + i as u64),
+            1,
+        )
+        .unwrap();
     }
     assert!(csr.delete_edge(0u32, EdgeId(100), 10).unwrap());
     assert!(csr.delete_edge(0u32, EdgeId(101), 10).unwrap());
@@ -158,8 +163,13 @@ fn insert_reuses_gc_eligible_primary_tombstone() {
 fn insert_without_reuse_cutoff_spills_to_overflow() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(4, 16, 8);
     for i in 0..4i64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(100 + i as u64), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key((i) as u32, 0),
+            EdgeId(100 + i as u64),
+            1,
+        )
+        .unwrap();
     }
     assert!(csr.delete_edge(0u32, EdgeId(100), 10).unwrap());
     assert!(csr.delete_edge(0u32, EdgeId(101), 10).unwrap());
@@ -177,8 +187,13 @@ fn insert_without_reuse_cutoff_spills_to_overflow() {
 fn insert_keeps_pinned_tombstone_when_cutoff_below_delete_ts() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(4, 16, 8);
     for i in 0..4i64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(100 + i as u64), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key((i) as u32, 0),
+            EdgeId(100 + i as u64),
+            1,
+        )
+        .unwrap();
     }
     assert!(csr.delete_edge(0u32, EdgeId(100), 10).unwrap());
     csr.set_tombstone_reuse_cutoff(9);
@@ -201,8 +216,13 @@ fn insert_keeps_pinned_tombstone_when_cutoff_below_delete_ts() {
 fn dense_slots_reused_after_remove_and_reinsert() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(4, 64, 8);
     for i in 0..10i64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(i as u64), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key((i) as u32, 0),
+            EdgeId(i as u64),
+            1,
+        )
+        .unwrap();
     }
     assert!(csr.get_overflow_chunks(0).is_some());
     for i in 0..10u64 {
@@ -269,8 +289,13 @@ fn bulk_insert_matches_sequential_inserts() {
 fn positional_delete_and_revert_roundtrip() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(4, 64, 8);
     for i in 0..10i64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(i as u64), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key((i) as u32, 0),
+            EdgeId(i as u64),
+            1,
+        )
+        .unwrap();
     }
     let (position, nbr) = csr.locate_edge(0u32, EdgeId(7)).expect("edge present");
     assert!(matches!(position, EdgePosition::Overflow { .. }));

@@ -116,7 +116,10 @@ impl StorageReader for MockStorage {
             return Ok(vertex);
         }
         Ok(vertex.map(|mut v| {
-            v.properties.retain(|k, _| projection.contains(k));
+            for tag in &mut v.tags {
+                tag.properties.retain(|k, _| projection.contains(k));
+            }
+            v.properties.clear();
             v
         }))
     }

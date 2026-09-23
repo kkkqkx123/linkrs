@@ -688,8 +688,7 @@ impl SinkOperator {
                                             }
                                             let tags =
                                                 vec![Tag::new(tag_name.clone(), props.clone())];
-                                            let vertex =
-                                                Vertex::new(vid, tags);
+                                            let vertex = Vertex::new(vid, tags);
                                             StorageWriter::insert_vertex(
                                                 &mut *writer,
                                                 space_name,

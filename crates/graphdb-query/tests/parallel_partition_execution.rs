@@ -42,6 +42,7 @@ fn insert_vertices(storage: &Arc<RwLock<GraphStorage>>) {
                     vec![Tag::new(
                         TAG.to_string(),
                         vec![
+                            ("id".to_string(), Value::BigInt(i)),
                             ("value".to_string(), Value::BigInt(i)),
                             ("group_id".to_string(), Value::BigInt(i % 20)),
                         ]
@@ -92,6 +93,7 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
             .create_tag(
                 SPACE,
                 &TagInfo::new(TAG.to_string()).with_properties(vec![
+                    PropertyDef::new("id".to_string(), DataType::BigInt),
                     PropertyDef::new("value".to_string(), DataType::BigInt),
                     PropertyDef::new("group_id".to_string(), DataType::BigInt),
                 ]),
@@ -100,10 +102,10 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
         guard
             .create_tag(
                 SPACE,
-                &TagInfo::new(TAG2.to_string()).with_properties(vec![PropertyDef::new(
-                    "value".to_string(),
-                    DataType::BigInt,
-                )]),
+                &TagInfo::new(TAG2.to_string()).with_properties(vec![
+                    PropertyDef::new("id".to_string(), DataType::BigInt),
+                    PropertyDef::new("value".to_string(), DataType::BigInt),
+                ]),
             )
             .expect("create tag 2");
         guard
@@ -117,19 +119,27 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
     }
     insert_vertices(&storage);
     {
-        // Second tag shares the same vertex-id domain.
+        // Second tag lives in a disjoint vertex-id domain starting at
+        // VERTEX_COUNT. Sharing vids across tags would create multi-label
+        // vids, which unscoped point lookups during traversal reject.
+        // Values keep the original distribution (vid - 1000, i.e. 1000..2999)
+        // so join and union expectations are unchanged.
         let mut start = 0i64;
         while start < VERTEX_COUNT {
             let end = (start + 500).min(VERTEX_COUNT);
             let vertices: Vec<Vertex> = (start..end)
                 .map(|i| {
+                    let vid = i + VERTEX_COUNT;
                     Vertex::new(
-                        VertexId::from_int64(i),
+                        VertexId::from_int64(vid),
                         vec![Tag::new(
                             TAG2.to_string(),
-                            vec![("value".to_string(), Value::BigInt(i + 1000))]
-                                .into_iter()
-                                .collect(),
+                            vec![
+                                ("id".to_string(), Value::BigInt(vid)),
+                                ("value".to_string(), Value::BigInt(i + 1000)),
+                            ]
+                            .into_iter()
+                            .collect(),
                         )],
                     )
                 })
@@ -155,7 +165,7 @@ fn build_pipeline(
             enabled: true,
             min_rows_per_partition: 400,
             max_partitions: workers * 2,
-            vertex_id_range: Some(0i64..VERTEX_COUNT),
+            vertex_id_range: Some(0i64..2 * VERTEX_COUNT),
             max_workers: workers,
             max_buffered_chunks: 10,
         });
@@ -862,7 +872,7 @@ fn partitioned_equality_join_matches_serial_results() {
     let mut parallel = build_pipeline(&storage, 2);
 
     // Node.value == Other.value holds for exactly the 1000 vertices where
-    // Other.vid is in [0, 1000) (Other.value = vid + 1000).
+    // Other.value is in [1000, 2000) (Other.value = vid - 1000).
     let q = "MATCH (a:Node),(b:Other) WHERE a.value = b.value RETURN count(*)";
     let serial_rows = query_rows(&mut serial, q);
     let parallel_rows = query_rows(&mut parallel, q);

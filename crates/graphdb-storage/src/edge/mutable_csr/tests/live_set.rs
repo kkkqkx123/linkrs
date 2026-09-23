@@ -6,8 +6,13 @@ use super::super::MutableCsr;
 fn test_single_live_set_rejects_duplicates_across_tiers() {
     let mut csr = MutableCsr::with_capacity(10, 100);
     for i in 1..=6i64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(i as u64), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key((i) as u32, 0),
+            EdgeId(i as u64),
+            1,
+        )
+        .unwrap();
     }
     // Primary-tier duplicate rejected without any scan fallback.
     assert!(csr
@@ -42,7 +47,9 @@ fn live_set_installed_only_past_bound() {
         .unwrap();
     assert!(csr.live_sets.get(&1).is_none());
     assert_eq!(csr.live_key_count(1), 1);
-    assert!(csr.get_edge(1, VertexId::edge_endpoint_key(1, 0), 1).is_some());
+    assert!(csr
+        .get_edge(1, VertexId::edge_endpoint_key(1, 0), 1)
+        .is_some());
     assert!(csr
         .insert_edge(1u32, VertexId::edge_endpoint_key(1, 0), EdgeId(2), 1)
         .is_err());
@@ -52,8 +59,13 @@ fn live_set_installed_only_past_bound() {
 fn wide_row_point_lookup_uses_location_index() {
     let mut csr = MutableCsr::with_capacity(4, 64);
     for i in 0..20i64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i + 1) as u32, 0), EdgeId(i as u64 + 1), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key((i + 1) as u32, 0),
+            EdgeId(i as u64 + 1),
+            1,
+        )
+        .unwrap();
     }
     assert!(csr.live_sets.get(&0).is_some());
 
@@ -149,8 +161,12 @@ fn threshold_oscillation_rebuilds_exactly_and_frees_index_memory() {
     assert_eq!(csr.live_sets.heap_bytes_total(), 0);
     assert_eq!(csr.live_key_count(0), LIVE_SET_WIDTH_BOUND);
     // The narrowed row still answers through scans at a post-delete time.
-    assert!(csr.get_edge(0u32, VertexId::edge_endpoint_key(1001, 0), 3).is_some());
-    assert!(csr.get_edge(0u32, VertexId::edge_endpoint_key(1000, 0), 3).is_none());
+    assert!(csr
+        .get_edge(0u32, VertexId::edge_endpoint_key(1001, 0), 3)
+        .is_some());
+    assert!(csr
+        .get_edge(0u32, VertexId::edge_endpoint_key(1000, 0), 3)
+        .is_none());
 }
 
 #[test]
@@ -160,8 +176,13 @@ fn wide_row_index_memory_stays_proportional_to_width() {
     // reservation.
     let mut csr = MutableCsr::with_overflow_chunk_edges(4, 512, 64);
     for i in 0..200i64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i + 1) as u32, 0), EdgeId(i as u64 + 1), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key((i + 1) as u32, 0),
+            EdgeId(i as u64 + 1),
+            1,
+        )
+        .unwrap();
     }
     assert!(csr.live_sets.get(&0).is_some());
     let entry = std::mem::size_of::<((u32, i64), super::super::write::EdgePosition)>() + 8;
@@ -177,8 +198,13 @@ fn huge_degree_index_agrees_with_scan_and_stays_proportional() {
     // rebuild while heap memory returns to zero.
     let mut csr = MutableCsr::with_overflow_chunk_edges(4, 4096, 64);
     for i in 0..2000i64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i + 1) as u32, 0), EdgeId(i as u64 + 1), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key((i + 1) as u32, 0),
+            EdgeId(i as u64 + 1),
+            1,
+        )
+        .unwrap();
     }
     assert!(csr.live_sets.get(&0).is_some());
     assert_eq!(csr.live_key_count(0), 2000);

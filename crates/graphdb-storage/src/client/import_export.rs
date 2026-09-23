@@ -311,14 +311,13 @@ pub(crate) fn import_vertex_csv_from_path<W: StorageWriter + ?Sized>(
             }
         }
 
+        // Single-label input: properties travel in the tag; the writer
+        // ignores the vertex-level map.
         let vertex = graphdb_core::Vertex {
             vid: graphdb_core::types::VertexId::from_int64(id),
             id,
-            tags: vec![graphdb_core::Tag::new(
-                tag_name.to_string(),
-                std::collections::HashMap::new(),
-            )],
-            properties,
+            tags: vec![graphdb_core::Tag::new(tag_name.to_string(), properties)],
+            properties: std::collections::HashMap::new(),
         };
         vertices.push(vertex);
 

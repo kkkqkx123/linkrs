@@ -494,9 +494,9 @@ impl VertexId {
         let invalid = |detail: String| crate::StorageError::invalid_input(detail);
         match vid_type {
             DataType::SmallInt | DataType::Int | DataType::BigInt => match vid.kind() {
-                VertexIdKind::Int => VertexId::try_from_int64(
-                    vid.as_int64().expect("Int kind always decodes"),
-                ),
+                VertexIdKind::Int => {
+                    VertexId::try_from_int64(vid.as_int64().expect("Int kind always decodes"))
+                }
                 VertexIdKind::Uint => {
                     let value = vid.as_u64().expect("Uint kind always decodes");
                     i64::try_from(value)
@@ -520,9 +520,16 @@ impl VertexId {
             },
             DataType::String | DataType::FixedString(_) => {
                 let text = match vid.kind() {
-                    VertexIdKind::Text => vid.as_str().expect("Text kind with invalid UTF-8").to_string(),
-                    VertexIdKind::Int => vid.as_int64().expect("Int kind always decodes").to_string(),
-                    VertexIdKind::Uint => vid.as_u64().expect("Uint kind always decodes").to_string(),
+                    VertexIdKind::Text => vid
+                        .as_str()
+                        .expect("Text kind with invalid UTF-8")
+                        .to_string(),
+                    VertexIdKind::Int => {
+                        vid.as_int64().expect("Int kind always decodes").to_string()
+                    }
+                    VertexIdKind::Uint => {
+                        vid.as_u64().expect("Uint kind always decodes").to_string()
+                    }
                     VertexIdKind::Empty | VertexIdKind::EdgeEndpoint => {
                         return Err(invalid(
                             "Empty vertex id is not valid for STRING space".to_string(),
@@ -609,16 +616,8 @@ impl VertexId {
 impl fmt::Display for VertexId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind() {
-            VertexIdKind::Int => write!(
-                f,
-                "{}",
-                self.as_int64().expect("Int kind always decodes")
-            ),
-            VertexIdKind::Uint => write!(
-                f,
-                "{}",
-                self.as_u64().expect("Uint kind always decodes")
-            ),
+            VertexIdKind::Int => write!(f, "{}", self.as_int64().expect("Int kind always decodes")),
+            VertexIdKind::Uint => write!(f, "{}", self.as_u64().expect("Uint kind always decodes")),
             VertexIdKind::Text => match self.as_str() {
                 Some(s) => write!(f, "\"{}\"", s),
                 None => write!(f, "{:?}", self.as_bytes()),
@@ -693,8 +692,9 @@ impl TryFrom<&Value> for VertexId {
             // Numeric text stays text here. Coercion to integer happens only
             // through normalize_for_vid_type at storage write/read entries,
             // where the owning space's vid_type authorizes it.
-            Value::String(s) => Self::try_from_string(s.as_str())
-                .map_err(crate::StorageError::invalid_input),
+            Value::String(s) => {
+                Self::try_from_string(s.as_str()).map_err(crate::StorageError::invalid_input)
+            }
             Value::FixedString(s) => {
                 Self::try_from_string(s).map_err(crate::StorageError::invalid_input)
             }
@@ -1002,16 +1002,16 @@ mod tests {
     #[test]
     fn vid_type_normalization_is_explicit_and_idempotent() {
         let int_space = DataType::BigInt;
-        let normalized =
-            VertexId::normalize_for_vid_type(&int_space, VertexId::from_string("101"))
-                .expect("numeric text normalizes in INT space");
+        let normalized = VertexId::normalize_for_vid_type(&int_space, VertexId::from_string("101"))
+            .expect("numeric text normalizes in INT space");
         assert_eq!(normalized, VertexId::from_int64(101));
-        assert!(VertexId::normalize_for_vid_type(&int_space, VertexId::from_string("abc")).is_err());
+        assert!(
+            VertexId::normalize_for_vid_type(&int_space, VertexId::from_string("abc")).is_err()
+        );
 
         let str_space = DataType::String;
-        let text =
-            VertexId::normalize_for_vid_type(&str_space, VertexId::from_int64(7))
-                .expect("int normalizes in STRING space");
+        let text = VertexId::normalize_for_vid_type(&str_space, VertexId::from_int64(7))
+            .expect("int normalizes in STRING space");
         assert_eq!(text, VertexId::from_string("7"));
 
         let again = VertexId::normalize_for_vid_type(&int_space, normalized).expect("idempotent");
@@ -1026,7 +1026,9 @@ mod tests {
         assert_eq!(endpoint, VertexId::from_int64(9));
         assert_eq!(rank, 3);
         assert!(VertexId::from_int64(9).try_decode_edge_endpoint().is_none());
-        assert!(VertexId::from_string("short").try_decode_edge_endpoint().is_none());
+        assert!(VertexId::from_string("short")
+            .try_decode_edge_endpoint()
+            .is_none());
         // Endpoint keys never project as vertex ids.
         assert_eq!(key.as_int64(), None);
         assert_eq!(key.as_str(), None);

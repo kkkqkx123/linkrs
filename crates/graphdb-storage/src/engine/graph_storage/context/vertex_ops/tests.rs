@@ -7,13 +7,15 @@ mod revalidation_tests {
 
     fn setup_ctx() -> (GraphStorageContext, LabelId) {
         let ctx = GraphStorageContext::new();
+        // `name` is the primary key and mirrors the external id; `value`
+        // carries the mutable payload these tests read and update.
         let label = ctx
             .create_vertex_type(
                 "Person",
-                vec![StoragePropertyDef::new(
-                    "name".to_string(),
-                    DataType::String,
-                )],
+                vec![
+                    StoragePropertyDef::new("name".to_string(), DataType::String),
+                    StoragePropertyDef::new("value".to_string(), DataType::String),
+                ],
                 "name",
             )
             .expect("create vertex type");
@@ -30,7 +32,10 @@ mod revalidation_tests {
         ctx.insert_vertex(
             label,
             name,
-            &[("name".to_string(), Value::string(value))],
+            &[
+                ("name".to_string(), Value::string(name)),
+                ("value".to_string(), Value::string(value)),
+            ],
             ts,
         )
         .expect("insert vertex");
@@ -62,9 +67,9 @@ mod revalidation_tests {
             .expect("vertex must be visible")
             .properties
             .iter()
-            .find(|(k, _)| k == "name")
+            .find(|(k, _)| k == "value")
             .map(|(_, v)| v.clone())
-            .expect("name property must be present")
+            .expect("value property must be present")
     }
 
     fn internal_id_of(ctx: &GraphStorageContext, label: LabelId, name: &str, ts: Timestamp) -> u32 {
@@ -125,7 +130,7 @@ mod revalidation_tests {
 
         // Concurrent commit lands after the seed (write path invalidates).
         let second = write_ts(&ctx);
-        ctx.update_vertex_property(label, "alice", "name", &Value::string("B"), second)
+        ctx.update_vertex_property(label, "alice", "value", &Value::string("B"), second)
             .expect("update");
         commit_ts(&ctx, second);
 
@@ -157,7 +162,7 @@ mod revalidation_tests {
         commit_ts(&ctx, first);
         assert_eq!(read_name(&ctx, label, "alice", first), Value::string("A"));
         let second = write_ts(&ctx);
-        ctx.update_vertex_property(label, "alice", "name", &Value::string("B"), second)
+        ctx.update_vertex_property(label, "alice", "value", &Value::string("B"), second)
             .expect("update");
         commit_ts(&ctx, second);
 
@@ -202,7 +207,7 @@ mod revalidation_tests {
                     .update_vertex_property(
                         label,
                         "key",
-                        "name",
+                        "value",
                         &Value::string(format!("v{i}")),
                         ts,
                     )
@@ -230,9 +235,9 @@ mod revalidation_tests {
                     let name = record
                         .properties
                         .iter()
-                        .find(|(k, _)| k == "name")
+                        .find(|(k, _)| k == "value")
                         .map(|(_, v)| v.clone())
-                        .expect("name property must be present");
+                        .expect("value property must be present");
                     let stale = (0..=50u64).all(|i| name != Value::string(format!("v{i}")));
                     assert!(!stale, "no torn values under concurrency");
                     iterations += 1;
@@ -265,13 +270,15 @@ mod pending_visibility_tests {
 
     fn setup_ctx() -> (GraphStorageContext, LabelId) {
         let ctx = GraphStorageContext::new();
+        // `name` is the primary key and mirrors the external id; `value`
+        // carries the payload these tests write and read.
         let label = ctx
             .create_vertex_type(
                 "Person",
-                vec![StoragePropertyDef::new(
-                    "name".to_string(),
-                    DataType::String,
-                )],
+                vec![
+                    StoragePropertyDef::new("name".to_string(), DataType::String),
+                    StoragePropertyDef::new("value".to_string(), DataType::String),
+                ],
                 "name",
             )
             .expect("create vertex type");
@@ -302,7 +309,10 @@ mod pending_visibility_tests {
         ctx.insert_vertex(
             label,
             "alice",
-            &[("name".to_string(), Value::string("A"))],
+            &[
+                ("name".to_string(), Value::string("alice")),
+                ("value".to_string(), Value::string("A")),
+            ],
             start,
         )
         .expect("insert own write");
@@ -315,18 +325,18 @@ mod pending_visibility_tests {
             record
                 .properties
                 .iter()
-                .find(|(k, _)| k == "name")
+                .find(|(k, _)| k == "value")
                 .map(|(_, v)| v),
             Some(&Value::string("A"))
         );
         let projected = bound
-            .get_vertex_projected(label, "alice", &["name".to_string()], start)
+            .get_vertex_projected(label, "alice", &["value".to_string()], start)
             .expect("own write visible to projection");
         assert_eq!(
             projected
                 .properties
                 .iter()
-                .find(|(k, _)| k == "name")
+                .find(|(k, _)| k == "value")
                 .map(|(_, v)| v),
             Some(&Value::string("A"))
         );
@@ -341,7 +351,10 @@ mod pending_visibility_tests {
         ctx.insert_vertex(
             label,
             "alice",
-            &[("name".to_string(), Value::string("A"))],
+            &[
+                ("name".to_string(), Value::string("alice")),
+                ("value".to_string(), Value::string("A")),
+            ],
             first,
         )
         .expect("first txn writes");
@@ -386,20 +399,20 @@ mod pending_visibility_tests {
         let src_label = ctx
             .create_vertex_type(
                 "Person",
-                vec![StoragePropertyDef::new(
-                    "name".to_string(),
-                    DataType::String,
-                )],
+                vec![
+                    StoragePropertyDef::new("name".to_string(), DataType::String),
+                    StoragePropertyDef::new("value".to_string(), DataType::String),
+                ],
                 "name",
             )
             .expect("src label");
         let dst_label = ctx
             .create_vertex_type(
                 "City",
-                vec![StoragePropertyDef::new(
-                    "name".to_string(),
-                    DataType::String,
-                )],
+                vec![
+                    StoragePropertyDef::new("name".to_string(), DataType::String),
+                    StoragePropertyDef::new("value".to_string(), DataType::String),
+                ],
                 "name",
             )
             .expect("dst label");
@@ -419,14 +432,20 @@ mod pending_visibility_tests {
         ctx.insert_vertex_by_i64(
             src_label,
             1,
-            &[("name".to_string(), Value::string("A"))],
+            &[
+                ("name".to_string(), Value::string("1")),
+                ("value".to_string(), Value::string("A")),
+            ],
             start,
         )
         .expect("src vertex");
         ctx.insert_vertex_by_i64(
             dst_label,
             2,
-            &[("name".to_string(), Value::string("B"))],
+            &[
+                ("name".to_string(), Value::string("2")),
+                ("value".to_string(), Value::string("B")),
+            ],
             start,
         )
         .expect("dst vertex");
@@ -479,7 +498,10 @@ mod pending_visibility_tests {
         ctx.insert_vertex(
             label,
             "alice",
-            &[("name".to_string(), Value::string("A"))],
+            &[
+                ("name".to_string(), Value::string("alice")),
+                ("value".to_string(), Value::string("A")),
+            ],
             first,
         )
         .expect("first txn writes");
@@ -488,7 +510,7 @@ mod pending_visibility_tests {
         let bound_second = bound_writer(&ctx, 2, second, second);
         assert!(
             bound_second
-                .get_vertex_projected(label, "alice", &["name".to_string()], second)
+                .get_vertex_projected(label, "alice", &["value".to_string()], second)
                 .is_none(),
             "projection must not observe the foreign uncommitted row"
         );
@@ -503,7 +525,7 @@ mod pending_visibility_tests {
         vm.commit_ordered(first).expect("ordered commit");
         assert!(
             bound_second
-                .get_vertex_projected(label, "alice", &["name".to_string()], second)
+                .get_vertex_projected(label, "alice", &["value".to_string()], second)
                 .is_some(),
             "projection observes the row after commit"
         );

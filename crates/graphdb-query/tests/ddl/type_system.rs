@@ -19,7 +19,7 @@ fn test_create_tag_timestamp_normalizes_to_datetime() {
     let scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Event(name STRING, created_at TIMESTAMP)")
+        .exec_ddl("CREATE TAG Event(id INT, name STRING, created_at TIMESTAMP)")
         .assert_success()
         .query("DESC TAG Event")
         .assert_result_contains(vec![Value::string("DATETIME")]);
@@ -41,7 +41,7 @@ fn test_create_tag_timestamp_with_default() {
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl(
-            r#"CREATE TAG Event(name STRING, created_at TIMESTAMP DEFAULT "2024-01-01 00:00:00")"#,
+            r#"CREATE TAG Event(id INT, name STRING, created_at TIMESTAMP DEFAULT "2024-01-01 00:00:00")"#,
         )
         .assert_success()
         .exec_dml("INSERT VERTEX Event(name) VALUES 1:('alice')")
@@ -124,7 +124,7 @@ fn test_create_tag_new_scalar_types() {
         .setup_space("test_space")
         .exec_ddl(
             r#"CREATE TAG Types(
-                a SMALLINT, b BIGINT, c TIME, d UUID,
+                id INT, a SMALLINT, b BIGINT, c TIME, d UUID,
                 e JSON, f JSONB, g BLOB, h INTERVAL, i DATASET)"#,
         )
         .assert_success()
@@ -147,7 +147,7 @@ fn test_create_tag_int8_maps_to_bigint() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG IntAlias(v INT8)")
+        .exec_ddl("CREATE TAG IntAlias(id INT, v INT8)")
         .assert_success()
         .query("DESC TAG IntAlias")
         .assert_result_contains(vec![Value::string("BIGINT")]);
@@ -160,7 +160,7 @@ fn test_create_tag_int_width_aliases() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl(r#"CREATE TAG IntWidth(a INT16, b INT32, c INT64, d INT2, e INT4)"#)
+        .exec_ddl(r#"CREATE TAG IntWidth(id INT, a INT16, b INT32, c INT64, d INT2, e INT4)"#)
         .assert_success()
         .query("DESC TAG IntWidth")
         .assert_result_contains(vec![Value::string("SMALLINT")])
@@ -175,7 +175,7 @@ fn test_timestamp_keyword_still_normalizes_to_datetime() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Ts(v TIMESTAMP)")
+        .exec_ddl("CREATE TAG Ts(id INT, v TIMESTAMP)")
         .assert_success()
         .query("DESC TAG Ts")
         .assert_result_contains(vec![Value::string("DATETIME")]);

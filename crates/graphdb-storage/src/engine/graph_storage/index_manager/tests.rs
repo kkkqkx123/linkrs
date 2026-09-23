@@ -152,6 +152,7 @@ fn concurrent_rebuild_and_writes_preserve_new_index_entries() {
         .create_space(&mut space)
         .expect("space should be created");
     let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+        graphdb_core::types::PropertyDef::new("id".to_string(), graphdb_core::DataType::BigInt),
         graphdb_core::types::PropertyDef::new("name".to_string(), graphdb_core::DataType::String),
     ]);
     storage
@@ -272,6 +273,7 @@ fn rebuild_restarts_after_incremental_replay_failure() {
             .create_space(&mut space)
             .expect("space should be created");
         let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+            graphdb_core::types::PropertyDef::new("id".to_string(), graphdb_core::DataType::BigInt),
             graphdb_core::types::PropertyDef::new(
                 "name".to_string(),
                 graphdb_core::DataType::String,

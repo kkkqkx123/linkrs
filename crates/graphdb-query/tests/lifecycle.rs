@@ -511,17 +511,22 @@ fn lifecycle_read_statement_binds_and_finalizes_read_operation_context() {
         let mut store = storage.write();
         let mut space = SpaceInfo::new("t2".to_string()).with_vid_type(DataType::BigInt);
         store.create_space(&mut space).unwrap();
-        let tag = TagInfo::new("Person".to_string())
-            .with_properties(vec![PropertyDef::new("name".to_string(), DataType::String)]);
+        let tag = TagInfo::new("Person".to_string()).with_properties(vec![
+            PropertyDef::new("id".to_string(), DataType::BigInt),
+            PropertyDef::new("name".to_string(), DataType::String),
+        ]);
         store.create_tag("t2", &tag).unwrap();
         for i in 0..8i64 {
             let vertex = Vertex::new(
                 VertexId::from_int64(i),
                 vec![Tag::new(
                     "Person".to_string(),
-                    vec![("name".to_string(), Value::string(format!("p{}", i)))]
-                        .into_iter()
-                        .collect::<HashMap<_, _>>(),
+                    vec![
+                        ("id".to_string(), Value::BigInt(i)),
+                        ("name".to_string(), Value::string(format!("p{}", i))),
+                    ]
+                    .into_iter()
+                    .collect::<HashMap<_, _>>(),
                 )],
             );
             store.insert_vertex("t2", vertex).unwrap();

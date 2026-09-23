@@ -78,7 +78,13 @@ pub(crate) fn insert_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
 
     let src = VertexId::normalize_for_vid_type(&space_info.vid_type, edge.src)?;
     let dst = VertexId::normalize_for_vid_type(&space_info.vid_type, edge.dst)?;
-    let edge = Edge::new(src, dst, edge.edge_type.clone(), edge.ranking(), edge.props.clone());
+    let edge = Edge::new(
+        src,
+        dst,
+        edge.edge_type.clone(),
+        edge.ranking(),
+        edge.props.clone(),
+    );
 
     let ts = ctx.get_write_timestamp()?;
     let mut rollback = Vec::new();
@@ -318,14 +324,7 @@ pub(crate) fn delete_edge(
                 .ok_or_else(|| StorageError::not_found("Destination tag not found"))?;
             record_edge_remove(
                 ctx,
-                EdgeIdentifier::new(
-                    src_label,
-                    src,
-                    dst_label,
-                    dst,
-                    edge_info.edge_type_id,
-                    rank,
-                ),
+                EdgeIdentifier::new(src_label, src, dst_label, dst, edge_info.edge_type_id, rank),
                 previous.props.into_iter().collect(),
                 result.as_ref().ok().and_then(Clone::clone),
             )?;

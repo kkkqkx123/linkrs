@@ -29,7 +29,7 @@ fn test_copy_vertex_parallel() {
     TestScenario::new()
         .unwrap()
         .setup_space("test")
-        .exec_ddl("CREATE TAG person(name: STRING, age: INT)")
+        .exec_ddl("CREATE TAG person(id: INT, name: STRING, age: INT)")
         .assert_success()
         .query(&sql)
         .assert_success()
@@ -57,7 +57,7 @@ fn test_copy_edge_parallel() {
     TestScenario::new()
         .unwrap()
         .setup_space("test")
-        .exec_ddl("CREATE TAG person(name: STRING)")
+        .exec_ddl("CREATE TAG person(id: INT, name: STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE knows(since: INT)")
         .assert_success()
@@ -83,7 +83,7 @@ fn test_copy_explain() {
     TestScenario::new()
         .unwrap()
         .setup_space("test")
-        .exec_ddl("CREATE TAG person(name: STRING)")
+        .exec_ddl("CREATE TAG person(id: INT, name: STRING)")
         .assert_success()
         .query(&format!(
             "EXPLAIN COPY VERTEX person FROM '{}' WITH HEADER",
@@ -98,13 +98,13 @@ fn test_copy_explain() {
 fn test_copy_no_header() {
     let mut tmp = tempfile::NamedTempFile::new().unwrap();
     // No header, columns: vid,name,age order matches tag properties order
-    writeln!(tmp, "10,Frank,40").unwrap();
-    writeln!(tmp, "11,Grace,31").unwrap();
+    writeln!(tmp, "10,10,Frank,40").unwrap();
+    writeln!(tmp, "11,11,Grace,31").unwrap();
     let path = tmp.path().to_str().unwrap().to_string();
     TestScenario::new()
         .unwrap()
         .setup_space("test")
-        .exec_ddl("CREATE TAG person(name: STRING, age: INT)")
+        .exec_ddl("CREATE TAG person(id: INT, name: STRING, age: INT)")
         .assert_success()
         .query(&format!(
             "COPY VERTEX person FROM '{}' WITH NO HEADER BATCH_SIZE 1",
@@ -126,7 +126,7 @@ fn test_copy_delimiter_semicolon() {
     TestScenario::new()
         .unwrap()
         .setup_space("test")
-        .exec_ddl("CREATE TAG person(name: STRING, age: INT)")
+        .exec_ddl("CREATE TAG person(id: INT, name: STRING, age: INT)")
         .assert_success()
         .query(&format!(
             "COPY VERTEX person FROM '{}' WITH HEADER DELIMITER ';'",
@@ -148,7 +148,7 @@ fn test_copy_edge_missing_dst_column_errors() {
     TestScenario::new()
         .unwrap()
         .setup_space("test")
-        .exec_ddl("CREATE TAG person(name: STRING)")
+        .exec_ddl("CREATE TAG person(id: INT, name: STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE knows(since: INT)")
         .assert_success()
@@ -175,7 +175,7 @@ fn test_copy_to_export_roundtrip() {
     TestScenario::new()
         .unwrap()
         .setup_space("test")
-        .exec_ddl("CREATE TAG person(name: STRING, age: INT)")
+        .exec_ddl("CREATE TAG person(id: INT, name: STRING, age: INT)")
         .assert_success()
         .query(&format!("COPY VERTEX person FROM '{in_path}' WITH HEADER"))
         .assert_success();
@@ -184,7 +184,7 @@ fn test_copy_to_export_roundtrip() {
     TestScenario::new()
         .unwrap()
         .setup_space("test")
-        .exec_ddl("CREATE TAG person(name: STRING, age: INT)")
+        .exec_ddl("CREATE TAG person(id: INT, name: STRING, age: INT)")
         .assert_success()
         .query(&format!("COPY VERTEX person FROM '{in_path}' WITH HEADER"))
         .assert_success()
@@ -197,11 +197,14 @@ fn test_copy_to_export_roundtrip() {
     let exported = std::fs::read_to_string(&out_path).expect("exported csv");
     let lines: Vec<String> = exported.lines().map(|l| l.to_string()).collect();
     assert!(
-        lines.contains(&"vid,name,age".to_string()),
+        lines.contains(&"vid,id,name,age".to_string()),
         "header missing: {lines:?}"
     );
-    assert!(lines.contains(&"1,Alice,30".to_string()), "got: {lines:?}");
-    assert!(lines.contains(&"2,Bob,25".to_string()), "got: {lines:?}");
+    assert!(
+        lines.contains(&"1,1,Alice,30".to_string()),
+        "got: {lines:?}"
+    );
+    assert!(lines.contains(&"2,2,Bob,25".to_string()), "got: {lines:?}");
     // Quoted cell survives the round trip.
     assert!(
         lines.iter().any(|l| l.contains("\"Car,ol\"")),

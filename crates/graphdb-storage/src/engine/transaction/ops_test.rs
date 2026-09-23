@@ -18,10 +18,14 @@ mod tests {
     };
 
     fn create_vertex_table(label: LabelId, name: &str) -> Arc<ShardedVertexTable> {
+        // The first property is the primary key, which mirrors the external
+        // id: inserts below omit it and let the table auto-fill the mirror.
+        // A String mirror covers both integer keys (rendered) and text keys.
         let schema = VertexSchema {
             label_id: label,
             label_name: name.to_string(),
             properties: vec![
+                StoragePropertyDef::new("id".to_string(), graphdb_core::DataType::String),
                 StoragePropertyDef::new("name".to_string(), graphdb_core::DataType::String),
                 StoragePropertyDef::new("age".to_string(), graphdb_core::DataType::BigInt),
             ],

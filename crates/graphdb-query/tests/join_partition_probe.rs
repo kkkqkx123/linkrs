@@ -37,6 +37,7 @@ fn insert_vertices(storage: &Arc<RwLock<GraphStorage>>) {
                     vec![Tag::new(
                         TAG.to_string(),
                         vec![
+                            ("id".to_string(), Value::BigInt(i)),
                             ("value".to_string(), Value::BigInt(i)),
                             ("group_id".to_string(), Value::BigInt(i % 20)),
                         ]
@@ -64,6 +65,7 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
             .create_tag(
                 SPACE,
                 &TagInfo::new(TAG.to_string()).with_properties(vec![
+                    PropertyDef::new("id".to_string(), DataType::BigInt),
                     PropertyDef::new("value".to_string(), DataType::BigInt),
                     PropertyDef::new("group_id".to_string(), DataType::BigInt),
                 ]),
@@ -72,10 +74,10 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
         guard
             .create_tag(
                 SPACE,
-                &TagInfo::new(TAG2.to_string()).with_properties(vec![PropertyDef::new(
-                    "value".to_string(),
-                    DataType::BigInt,
-                )]),
+                &TagInfo::new(TAG2.to_string()).with_properties(vec![
+                    PropertyDef::new("id".to_string(), DataType::BigInt),
+                    PropertyDef::new("value".to_string(), DataType::BigInt),
+                ]),
             )
             .expect("create tag 2");
         guard
@@ -89,18 +91,26 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
     }
     insert_vertices(&storage);
     {
+        // Second tag lives in a disjoint vertex-id domain starting at
+        // VERTEX_COUNT. Sharing vids across tags would create multi-label
+        // vids, which unscoped point lookups reject. Values keep the original
+        // distribution (vid - 1000, i.e. 1000..2999).
         let mut start = 0i64;
         while start < VERTEX_COUNT {
             let end = (start + 500).min(VERTEX_COUNT);
             let vertices: Vec<Vertex> = (start..end)
                 .map(|i| {
+                    let vid = i + VERTEX_COUNT;
                     Vertex::new(
-                        VertexId::from_int64(i),
+                        VertexId::from_int64(vid),
                         vec![Tag::new(
                             TAG2.to_string(),
-                            vec![("value".to_string(), Value::BigInt(i + 1000))]
-                                .into_iter()
-                                .collect(),
+                            vec![
+                                ("id".to_string(), Value::BigInt(vid)),
+                                ("value".to_string(), Value::BigInt(i + 1000)),
+                            ]
+                            .into_iter()
+                            .collect(),
                         )],
                     )
                 })

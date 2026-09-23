@@ -17,7 +17,7 @@ fn test_basic_crud_flow() {
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         // Create
-        .exec_ddl("CREATE TAG User(username STRING, email STRING, active BOOL)")
+        .exec_ddl("CREATE TAG User(id INT, username STRING, email STRING, active BOOL)")
         .assert_success()
         .assert_tag_exists("User")
         // Read (empty)
@@ -62,7 +62,7 @@ fn test_schema_evolution_flow() {
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         // Initial schema
-        .exec_ddl("CREATE TAG Product(name STRING, price DOUBLE)")
+        .exec_ddl("CREATE TAG Product(id INT, name STRING, price DOUBLE)")
         .assert_success()
         // Insert data
         .exec_dml("INSERT VERTEX Product(name, price) VALUES 1:('Laptop', 999.99)")
@@ -103,7 +103,7 @@ fn test_relationship_crud_flow() {
         .expect("Failed to create test scenario")
         .setup_space("social_network")
         // Setup
-        .exec_ddl("CREATE TAG Person(name STRING)")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE FOLLOWS(since DATE) FROM Person TO Person")
         .assert_success()
@@ -158,11 +158,11 @@ fn test_ecommerce_order_flow() {
         .expect("Failed to create test scenario")
         .setup_space("ecommerce")
         // Schema
-        .exec_ddl("CREATE TAG Customer(name STRING, email STRING)")
+        .exec_ddl("CREATE TAG Customer(id INT, name STRING, email STRING)")
         .assert_success()
-        .exec_ddl("CREATE TAG Product(name STRING, price DOUBLE, stock INT)")
+        .exec_ddl("CREATE TAG Product(id INT, name STRING, price DOUBLE, stock INT)")
         .assert_success()
-        .exec_ddl("CREATE TAG Order(order_date DATE, total DOUBLE)")
+        .exec_ddl("CREATE TAG Order(id INT, order_date DATE, total DOUBLE)")
         .assert_success()
         .exec_ddl("CREATE EDGE PURCHASED(quantity INT) FROM Customer TO Order")
         .assert_success()
@@ -242,6 +242,7 @@ fn test_social_network_complete_flow() {
         .exec_ddl(
             r#"
             CREATE TAG Person(
+                id INT,
                 name STRING,
                 age INT,
                 city STRING,
@@ -283,7 +284,7 @@ fn test_social_network_complete_flow() {
         .query("GO FROM 1 OVER KNOWS YIELD $$.Person.name AS friend_name")
         .assert_result_count(2)
         // Query: Find friends of friends of Alice
-        .query("GO 2 FROM 1 OVER KNOWS YIELD $$.Person.name AS fof_name")
+        .query("GO 2 FROM 1 OVER KNOWS YIELD $$.name AS fof_name")
         .assert_result_count(1)
         .assert_result_contains(vec![Value::string("David")])
         // Query: Find shortest path from Alice to David
@@ -310,7 +311,7 @@ fn test_index_query_flow() {
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         // Schema without index
-        .exec_ddl("CREATE TAG User(username STRING, age INT)")
+        .exec_ddl("CREATE TAG User(id INT, username STRING, age INT)")
         .assert_success()
         // Insert data
         .exec_dml(
@@ -355,7 +356,7 @@ fn test_batch_operations_flow() {
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         // Schema
-        .exec_ddl("CREATE TAG Item(name STRING, category STRING, price DOUBLE)")
+        .exec_ddl("CREATE TAG Item(id INT, name STRING, category STRING, price DOUBLE)")
         .assert_success()
         // Batch insert
         .exec_dml(
@@ -404,7 +405,7 @@ fn test_aggregation_flow() {
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         // Schema
-        .exec_ddl("CREATE TAG Order(order_id STRING, amount DOUBLE, status STRING)")
+        .exec_ddl("CREATE TAG Order(id INT, order_id STRING, amount DOUBLE, status STRING)")
         .assert_success()
         // Insert orders
         .exec_dml(

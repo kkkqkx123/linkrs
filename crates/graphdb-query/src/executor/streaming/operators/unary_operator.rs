@@ -1049,8 +1049,11 @@ mod tests {
         .expect("insert vertex");
         let storage: Arc<RwLock<dyn crate::storage::QueryStorage>> = Arc::new(RwLock::new(mock));
 
-        // Input row: [vid]
-        let input = scan_source(vec![vec![Value::string("1")]], vec!["vid".to_string()]);
+        // Input row: [vid]. The id is typed: a numeric string stays text
+        // under the typed VertexId contract, so the integer form is used
+        // for an integer vertex (the mock has no space vid_type to
+        // normalize through; real storage normalizes at assembly).
+        let input = scan_source(vec![vec![Value::Int(1)]], vec!["vid".to_string()]);
         let mut append = StreamingExecutor::Unary(
             OperatorBase::new(0),
             input,
@@ -1073,7 +1076,7 @@ mod tests {
         assert_eq!(chunk.len(), 1);
         let row = &chunk.rows[0];
         assert_eq!(row.len(), 3, "vid + name + age");
-        assert_eq!(row[0], Value::string("1"));
+        assert_eq!(row[0], Value::Int(1));
         assert_eq!(row[1], Value::string("Alice"));
         assert_eq!(row[2], Value::Int(30));
         assert!(append.advance().expect("advance").is_none());

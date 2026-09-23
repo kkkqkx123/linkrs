@@ -245,8 +245,8 @@ pub(crate) fn get_vertex_with_schema(
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
     let ts = ctx.get_read_timestamp();
-    let vid = VertexId::try_from(id)
-        .map_err(|error| StorageError::invalid_input(error.to_string()))?;
+    let vid =
+        VertexId::try_from(id).map_err(|error| StorageError::invalid_input(error.to_string()))?;
     let vid = VertexId::normalize_for_vid_type(&space_info.vid_type, vid)?;
 
     let label_id = tag_info.tag_id;

@@ -341,7 +341,13 @@ pub trait VertexCursor: Send + std::fmt::Debug {
                 vid: v.vid,
                 internal_id: v.id,
                 tag_name: v.tags.first().map(|t| t.name.clone()).unwrap_or_default(),
-                props: v.properties.into_iter().collect(),
+                // Single-label reads fill only the tag: the flat row comes
+                // from the first tag, never the legacy vertex map.
+                props: v
+                    .tags
+                    .first()
+                    .map(|t| t.properties.clone().into_iter().collect())
+                    .unwrap_or_default(),
             })
             .collect())
     }

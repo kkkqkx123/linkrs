@@ -208,9 +208,10 @@ mod tests {
         // Tag property fallback mirrors eval_property_access semantics.
         let row = make_flat_vertex_row(vertex.clone(), &["city".to_string()]);
         assert_eq!(row[1], Value::string("NYC"));
-        // A tag whose name equals the property yields the tag's property map.
+        // The tag-name-yields-map implicit behavior is cancelled: a property
+        // name that only equals the tag resolves to Null.
         let row = make_flat_vertex_row(vertex, &["person".to_string()]);
-        assert!(matches!(&row[1], Value::Map(_)));
+        assert!(matches!(&row[1], Value::Null(_)));
     }
 
     #[test]
@@ -268,9 +269,9 @@ mod tests {
     }
 
     #[test]
-    fn flat_vertex_record_row_tag_name_equals_property_yields_tag_map() {
-        // Mirrors Vertex::property_value semantics: a tag whose name equals
-        // the property yields the tag's property map.
+    fn flat_vertex_record_row_tag_name_equals_property_is_null() {
+        // The tag-name-yields-map implicit behavior is cancelled: a property
+        // name that only equals the tag resolves to Null.
         let record = FlatVertexRecord {
             vid: VertexId::from_int64(42),
             internal_id: 7,
@@ -278,6 +279,6 @@ mod tests {
             props: vec![("age".to_string(), Value::BigInt(30))],
         };
         let row = make_flat_vertex_record_row(record, &["person".to_string()]);
-        assert!(matches!(&row[1], Value::Map(_)));
+        assert!(matches!(&row[1], Value::Null(_)));
     }
 }

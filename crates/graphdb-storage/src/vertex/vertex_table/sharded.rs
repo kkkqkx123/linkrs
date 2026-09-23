@@ -204,7 +204,7 @@ mod tests {
         let ts = TEST_TS;
         let id = table
             .insert(
-                "alice",
+                "Alice",
                 &[
                     ("name".to_string(), Value::from("Alice")),
                     ("age".to_string(), Value::from(30i64)),

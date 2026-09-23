@@ -70,8 +70,13 @@ fn test_overflow_get_chunks_transparent() {
 fn test_supernode_overflow_consolidates_repack_into_single_block() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(1, 4, 32);
     for i in 0..4_096u64 {
-        csr.insert_edge(0, VertexId::edge_endpoint_key(i as u32 + 1, 0), EdgeId(i + 1), 1)
-            .unwrap();
+        csr.insert_edge(
+            0,
+            VertexId::edge_endpoint_key(i as u32 + 1, 0),
+            EdgeId(i + 1),
+            1,
+        )
+        .unwrap();
     }
 
     let chunks = csr.overflow_chunks.get(0).expect("vertex 0 has overflow");
@@ -108,8 +113,13 @@ fn test_graded_overflow_tiers_bound_small_row_chunks() {
     // fixed 4096-edge reservation per chunk.
     let mut csr = MutableCsr::with_capacity(10, 100);
     for i in 1..=300i64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(i as u64), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key((i) as u32, 0),
+            EdgeId(i as u64),
+            1,
+        )
+        .unwrap();
     }
     let chunks = csr.get_overflow_chunks(0).expect("vertex 0 has overflow");
     assert_eq!(chunks[0].capacity(), OVERFLOW_CHUNK_MIN);
@@ -132,8 +142,13 @@ fn test_graded_overflow_tiers_bound_small_row_chunks() {
 fn test_overflow_repack_preserves_unexpired_tombstones() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
     for i in 0..8u64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key(100 + i as u32, 0), EdgeId(i), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key(100 + i as u32, 0),
+            EdgeId(i),
+            1,
+        )
+        .unwrap();
     }
     assert!(csr.delete_edge(0u32, EdgeId(6), 10).unwrap());
     assert!(csr.delete_edge(0u32, EdgeId(7), 10).unwrap());
@@ -166,8 +181,13 @@ fn test_overflow_repack_preserves_unexpired_tombstones() {
 fn test_overflow_repack_consolidates_to_single_chunk() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
     for i in 0..24u64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key(100 + i as u32, 0), EdgeId(i), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key(100 + i as u32, 0),
+            EdgeId(i),
+            1,
+        )
+        .unwrap();
     }
     let before = csr.physical_edges_of(0);
     assert_eq!(before.len(), 24);

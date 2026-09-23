@@ -14,9 +14,9 @@ fn test_analyze_collects_vertex_and_edge_counts() {
     let scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("analyze_space")
-        .exec_ddl("CREATE TAG person(name STRING)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING)")
         .assert_success()
-        .exec_ddl("CREATE TAG company(name STRING)")
+        .exec_ddl("CREATE TAG company(id INT, name STRING)")
         .assert_success()
         .exec_ddl("CREATE EDGE follow(follow_rank INT)")
         .assert_success()
@@ -42,7 +42,7 @@ fn test_analyze_idempotent_and_refreshes_after_data_change() {
     let scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("analyze_idem_space")
-        .exec_ddl("CREATE TAG person(name STRING)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING)")
         .assert_success()
         .exec_dml("INSERT VERTEX person(name) VALUES 1:(\"Alice\"), 2:(\"Bob\")")
         .assert_success()
@@ -70,7 +70,7 @@ fn test_analyze_after_ddl_invalidates_stale_statistics() {
     let scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("analyze_ddl_space")
-        .exec_ddl("CREATE TAG person(name STRING)")
+        .exec_ddl("CREATE TAG person(id INT, name STRING)")
         .assert_success()
         .exec_dml("INSERT VERTEX person(name) VALUES 1:(\"Alice\")")
         .assert_success()
@@ -85,7 +85,7 @@ fn test_analyze_after_ddl_invalidates_stale_statistics() {
 
     // DDL invalidates statistics: the recorded version is dropped.
     let scenario = scenario
-        .exec_ddl("CREATE TAG company(name STRING)")
+        .exec_ddl("CREATE TAG company(id INT, name STRING)")
         .assert_success()
         .analyze()
         .assert_success()

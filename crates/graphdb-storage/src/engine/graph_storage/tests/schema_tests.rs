@@ -40,7 +40,8 @@ fn test_create_and_get_tag() {
     let tag = storage.get_tag("test_space", "Person").unwrap();
     assert!(tag.is_some());
     assert_eq!(tag.as_ref().unwrap().tag_name, "Person");
-    assert_eq!(tag.as_ref().unwrap().properties.len(), 2);
+    // id (primary-key mirror) + name + age.
+    assert_eq!(tag.as_ref().unwrap().properties.len(), 3);
 
     let tags = storage.list_tags("test_space").unwrap();
     assert_eq!(tags.len(), 1);
@@ -81,8 +82,10 @@ fn test_same_schema_names_are_isolated_by_space() {
     storage.create_space(&mut alpha).unwrap();
     storage.create_space(&mut beta).unwrap();
 
-    let tag = graphdb_core::types::TagInfo::new("Person".to_string())
-        .with_properties(vec![PropertyDef::new("name".to_string(), DataType::String)]);
+    let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+        PropertyDef::new("id".to_string(), DataType::BigInt),
+        PropertyDef::new("name".to_string(), DataType::String),
+    ]);
     let alpha_tag_id = storage.create_tag("alpha", &tag).unwrap();
     let beta_tag_id = storage.create_tag("beta", &tag).unwrap();
     assert_ne!(alpha_tag_id, beta_tag_id);
@@ -185,11 +188,11 @@ fn test_same_schema_names_are_isolated_by_space() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        alpha_vertex.properties.get("name"),
+        alpha_vertex.get_property_any("name"),
         Some(&Value::string("Alice"))
     );
     assert_eq!(
-        beta_vertex.properties.get("name"),
+        beta_vertex.get_property_any("name"),
         Some(&Value::string("Bob"))
     );
 

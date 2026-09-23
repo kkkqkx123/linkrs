@@ -219,19 +219,16 @@ impl VertexSchema {
 /// external vertex id in the column's own type. Integer keys widen or render
 /// into the column type; text keys are kept for string columns and must parse
 /// for integer columns. Anything that cannot round-trip is an error.
-pub(crate) fn primary_key_mirror_value(
-    data_type: &DataType,
-    key: &IdKey,
-) -> StorageResult<Value> {
+pub(crate) fn primary_key_mirror_value(data_type: &DataType, key: &IdKey) -> StorageResult<Value> {
     let out_of_range = |detail: String| StorageError::invalid_input(detail);
     let int_mirror = |id: i64| -> StorageResult<Value> {
         match data_type {
             DataType::SmallInt => i16::try_from(id).map(Value::SmallInt).map_err(|_| {
                 out_of_range(format!("Vertex id {} overflows SmallInt primary key", id))
             }),
-            DataType::Int => i32::try_from(id).map(Value::Int).map_err(|_| {
-                out_of_range(format!("Vertex id {} overflows Int primary key", id))
-            }),
+            DataType::Int => i32::try_from(id)
+                .map(Value::Int)
+                .map_err(|_| out_of_range(format!("Vertex id {} overflows Int primary key", id))),
             DataType::BigInt => Ok(Value::BigInt(id)),
             DataType::String | DataType::FixedString(_) => Ok(Value::string(id.to_string())),
             _ => Err(out_of_range(format!(

@@ -1281,12 +1281,8 @@ impl EdgeStore {
                 };
                 // Gate verdict reused: the checking assembly would
                 // otherwise re-decide without the gate.
-                records.push(self.edge_record_from_nbr_projected_assume_visible(
-                    src,
-                    nbr,
-                    ts,
-                    None,
-                ));
+                records
+                    .push(self.edge_record_from_nbr_projected_assume_visible(src, nbr, ts, None));
             }
             return records;
         }
@@ -1298,12 +1294,7 @@ impl EdgeStore {
             let Some(dst) = dst_vid.as_internal_u32() else {
                 continue;
             };
-            records.push(self.edge_record_from_in_nbr_assume_visible(
-                dst,
-                nbr,
-                ts,
-                None,
-            ));
+            records.push(self.edge_record_from_in_nbr_assume_visible(dst, nbr, ts, None));
         }
         records
     }
@@ -1328,12 +1319,9 @@ impl EdgeStore {
                 };
                 // Gate verdict reused: the checking assembly would
                 // otherwise re-decide without the gate.
-                records.push(self.edge_record_from_nbr_projected_assume_visible(
-                    src,
-                    nbr,
-                    ts,
-                    projection,
-                ));
+                records.push(
+                    self.edge_record_from_nbr_projected_assume_visible(src, nbr, ts, projection),
+                );
             }
             return records;
         }
@@ -1345,12 +1333,7 @@ impl EdgeStore {
             let Some(dst) = dst_vid.as_internal_u32() else {
                 continue;
             };
-            records.push(self.edge_record_from_in_nbr_assume_visible(
-                dst,
-                nbr,
-                ts,
-                projection,
-            ));
+            records.push(self.edge_record_from_in_nbr_assume_visible(dst, nbr, ts, projection));
         }
         records
     }

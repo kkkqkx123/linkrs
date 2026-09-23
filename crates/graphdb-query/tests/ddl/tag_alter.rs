@@ -101,7 +101,7 @@ fn test_alter_tag_execution_add() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name: STRING)")
+        .exec_ddl("CREATE TAG Person(id: INT, name: STRING)")
         .assert_success()
         .exec_ddl("ALTER TAG Person ADD (email: STRING)")
         .assert_success();
@@ -112,7 +112,7 @@ fn test_alter_tag_execution_drop() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name: STRING, temp_field: STRING)")
+        .exec_ddl("CREATE TAG Person(id: INT, name: STRING, temp_field: STRING)")
         .assert_success()
         .exec_ddl("ALTER TAG Person DROP (temp_field)")
         .assert_success();
@@ -123,13 +123,13 @@ fn test_alter_tag_execution_add_multiple() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name: STRING)")
+        .exec_ddl("CREATE TAG Person(id: INT, name: STRING)")
         .assert_success()
         .exec_ddl("ALTER TAG Person ADD (email: STRING, phone: STRING, address: STRING)")
         .assert_success()
         .query("DESCRIBE TAG Person")
         .assert_success()
-        .assert_result_count(4);
+        .assert_result_count(5);
 }
 
 #[test]
@@ -137,13 +137,15 @@ fn test_alter_tag_execution_drop_multiple() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name: STRING, temp1: STRING, temp2: STRING, temp3: STRING)")
+        .exec_ddl(
+            "CREATE TAG Person(id: INT, name: STRING, temp1: STRING, temp2: STRING, temp3: STRING)",
+        )
         .assert_success()
         .exec_ddl("ALTER TAG Person DROP (temp1, temp2)")
         .assert_success()
         .query("DESCRIBE TAG Person")
         .assert_success()
-        .assert_result_count(2);
+        .assert_result_count(3);
 }
 
 #[test]
@@ -160,7 +162,7 @@ fn test_alter_tag_drop_nonexistent_field() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(name: STRING)")
+        .exec_ddl("CREATE TAG Person(id: INT, name: STRING)")
         .assert_success()
         .exec_ddl("ALTER TAG Person DROP (nonexistent_field)")
         .assert_error();
@@ -173,7 +175,7 @@ fn test_alter_tag_change_with_data() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl("CREATE TAG Person(old_name: STRING, age: INT)")
+        .exec_ddl("CREATE TAG Person(id: INT, old_name: STRING, age: INT)")
         .assert_success()
         .exec_dml("INSERT VERTEX Person(old_name, age) VALUES 1:('Alice', 30)")
         .assert_success()
@@ -182,7 +184,7 @@ fn test_alter_tag_change_with_data() {
         .query("DESC TAG Person")
         .assert_success()
         .assert_result_contains(vec![Value::string("name"), Value::string("STRING")])
-        .exec_dml("UPDATE 1 SET name = 'Updated Alice'")
+        .exec_dml("UPSERT VERTEX ON Person SET name = 'Updated Alice' WHERE id(vid) == 1")
         .assert_success()
         .assert_vertex_props(
             1,

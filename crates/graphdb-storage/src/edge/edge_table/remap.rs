@@ -138,21 +138,22 @@ fn remap_direction(
             let new_src = remapped_row_counted(src, row_mapping, &mut row_miss);
             let new_neighbor =
                 remap_endpoint_key_counted(nbr.to_vertex_id(), neighbor_mapping, &mut nbr_miss);
-            let new_nbr = match new_neighbor
-                .try_decode_edge_endpoint()
-                .and_then(|(ep_vid, ep_rank)| {
-                    ep_vid.as_internal_u32().map(|endpoint| (endpoint, ep_rank))
-                }) {
-                Some((endpoint, rank)) => Nbr {
-                    endpoint,
-                    rank,
-                    ..nbr
-                },
-                None => {
-                    nbr_miss += 1;
-                    nbr
-                }
-            };
+            let new_nbr =
+                match new_neighbor
+                    .try_decode_edge_endpoint()
+                    .and_then(|(ep_vid, ep_rank)| {
+                        ep_vid.as_internal_u32().map(|endpoint| (endpoint, ep_rank))
+                    }) {
+                    Some((endpoint, rank)) => Nbr {
+                        endpoint,
+                        rank,
+                        ..nbr
+                    },
+                    None => {
+                        nbr_miss += 1;
+                        nbr
+                    }
+                };
             stats.row_misses += row_miss;
             stats.neighbor_misses += nbr_miss;
             stats.entries += 1;

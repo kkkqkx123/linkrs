@@ -35,20 +35,20 @@ pub(crate) fn route_vertex_id(vid: &VertexId) -> StorageResult<RoutedVertexId> {
         )),
         VertexIdKind::Uint => {
             let value = vid.as_u64().expect("Uint kind always decodes");
-            i64::try_from(value)
-                .map(RoutedVertexId::Int)
-                .map_err(|_| {
-                    StorageError::invalid_input(format!(
-                        "Vertex id {} overflows the i64 key path",
-                        value
-                    ))
-                })
+            i64::try_from(value).map(RoutedVertexId::Int).map_err(|_| {
+                StorageError::invalid_input(format!(
+                    "Vertex id {} overflows the i64 key path",
+                    value
+                ))
+            })
         }
         VertexIdKind::Text => vid
             .as_str()
             .map(|text| RoutedVertexId::Text(text.to_string()))
             .ok_or_else(|| {
-                StorageError::invalid_input("Non-UTF8 vertex id cannot address a vertex".to_string())
+                StorageError::invalid_input(
+                    "Non-UTF8 vertex id cannot address a vertex".to_string(),
+                )
             }),
         VertexIdKind::Empty | VertexIdKind::EdgeEndpoint => Err(StorageError::invalid_input(
             format!("Vertex id {} cannot address a vertex row", vid),
@@ -329,18 +329,14 @@ pub(crate) fn find_dangling_edges(
                 .and_then(|internal| {
                     ctx.get_vertex_by_internal_id(src_label_id, internal, ts)
                         .map(|vr| vr.vid)
-                        .or_else(|| {
-                            ctx.get_external_id_by_internal_id(src_label_id, internal)
-                        })
+                        .or_else(|| ctx.get_external_id_by_internal_id(src_label_id, internal))
                 })
                 .unwrap_or(record.src_vid);
             let dst_external = dst_internal
                 .and_then(|internal| {
                     ctx.get_vertex_by_internal_id(dst_label_id, internal, ts)
                         .map(|vr| vr.vid)
-                        .or_else(|| {
-                            ctx.get_external_id_by_internal_id(dst_label_id, internal)
-                        })
+                        .or_else(|| ctx.get_external_id_by_internal_id(dst_label_id, internal))
                 })
                 .unwrap_or(record.dst_vid);
             let edge = edge_record_to_edge(
@@ -441,8 +437,16 @@ mod tests {
         assert_eq!(vertex.id, 5);
         assert_eq!(vertex.tags.len(), 1);
         assert_eq!(vertex.tags[0].name, "Person");
-        assert_eq!(vertex.properties.get("name"), Some(&Value::string("Alice")));
-        assert_eq!(vertex.properties.get("age"), Some(&Value::BigInt(30)));
+        // Single-label read construction fills only the tag.
+        assert!(vertex.properties.is_empty());
+        assert_eq!(
+            vertex.tags[0].properties.get("name"),
+            Some(&Value::string("Alice"))
+        );
+        assert_eq!(
+            vertex.tags[0].properties.get("age"),
+            Some(&Value::BigInt(30))
+        );
     }
 
     #[test]

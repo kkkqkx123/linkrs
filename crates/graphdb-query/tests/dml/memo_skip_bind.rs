@@ -36,7 +36,10 @@ impl Fixture {
 
     fn create_space_with_person_tag(&mut self, space_name: &str) -> graphdb_core::types::SpaceInfo {
         self.pipeline
-            .execute_query_with_space(&format!("CREATE SPACE IF NOT EXISTS {space_name}"), None)
+            .execute_query_with_space(
+                &format!("CREATE SPACE IF NOT EXISTS {space_name} (vid_type=STRING)"),
+                None,
+            )
             .expect("create space");
         let space = self
             .storage
@@ -46,7 +49,7 @@ impl Fixture {
             .expect("space exists");
         self.pipeline
             .execute_query_with_space(
-                "CREATE TAG person(name STRING, age INT)",
+                "CREATE TAG person(id STRING, name STRING, age INT)",
                 Some(space.clone()),
             )
             .expect("create tag");
@@ -64,7 +67,11 @@ impl Fixture {
             .read()
             .get_vertex(space, &VertexId::from_string(vid))
             .expect("vertex read")
-            .and_then(|v| v.properties.get("name").cloned())
+            .and_then(|v| {
+                v.tags
+                    .iter()
+                    .find_map(|t| t.properties.get("name").cloned())
+            })
     }
 }
 
@@ -261,7 +268,7 @@ fn test_param_type_change_restores_bind_path() {
         .expect("read")
         .expect("exists");
     assert_eq!(
-        p3.properties.get("age"),
+        p3.tags.iter().find_map(|t| t.properties.get("age")),
         Some(&graphdb_core::Value::Double(3.0))
     );
 }

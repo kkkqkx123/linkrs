@@ -6,8 +6,13 @@ use super::super::MutableCsr;
 fn test_steady_state_gap_fill_before_overflow() {
     let mut csr = MutableCsr::with_capacity(10, 100);
     for i in 1..=5i64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key((i) as u32, 0), EdgeId(i as u64), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key((i) as u32, 0),
+            EdgeId(i as u64),
+            1,
+        )
+        .unwrap();
     }
     // 4 primary slots plus one overflow entry.
     assert!(csr.get_overflow_chunks(0).is_some());
@@ -42,8 +47,13 @@ fn test_steady_state_gap_fill_before_overflow() {
 fn test_rebalance_row_drains_overflow_into_gaps() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
     for i in 0..6u64 {
-        csr.insert_edge(0u32, VertexId::edge_endpoint_key(100 + i as u32, 0), EdgeId(i), 1)
-            .unwrap();
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key(100 + i as u32, 0),
+            EdgeId(i),
+            1,
+        )
+        .unwrap();
     }
     assert!(csr.get_overflow_chunks(0).is_some());
     // Reclaim primary tombstones so gaps open, then rebalance pulls the

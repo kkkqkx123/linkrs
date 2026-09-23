@@ -68,7 +68,12 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
             return Ok(vertex);
         }
         Ok(vertex.map(|mut v| {
-            v.properties.retain(|k, _| projection.contains(k));
+            // Single-label vertices carry properties in their tag: project
+            // each tag instead of the legacy vertex-level map.
+            for tag in &mut v.tags {
+                tag.properties.retain(|k, _| projection.contains(k));
+            }
+            v.properties.clear();
             v
         }))
     }
