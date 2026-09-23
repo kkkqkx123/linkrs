@@ -81,6 +81,7 @@ pub enum UpdateTargetType {
 #[derive(Debug, Clone)]
 pub struct VertexDeleteInfo {
     pub space_name: String,
+    pub tag: Option<String>,
     pub vertex_ids: Vec<ContextualExpression>,
     pub with_edge: bool,
     pub cascade: bool,

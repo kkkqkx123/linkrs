@@ -59,6 +59,7 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
     let SourceOperatorKind::GetNeighbors {
         storage,
         space_name,
+        tag,
         direction,
         projected_properties,
         state,
@@ -68,9 +69,15 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
     };
     let storage = &*storage;
     let space_name = &*space_name;
+    let tag = &*tag;
     let direction = &*direction;
     let projected_properties = &*projected_properties;
     let state = &mut *state;
+    if tag.is_empty() {
+        return Err(QueryError::execution(
+            "GetNeighbors requires a tag qualifier".to_string(),
+        ));
+    }
     let storage_ref = storage
         .as_ref()
         .ok_or_else(|| QueryError::execution("GetNeighbors requires storage".to_string()))?;
@@ -83,9 +90,11 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
             NeighborScanState::Init => {
                 let dir: EdgeDirection = direction.as_str().into();
                 let guard = storage_ref.read();
-                let vertices = guard.scan_vertices(space_name).map_err(|error| {
-                    storage_error("GetNeighbors", "scan vertices", space_name, error)
-                })?;
+                let vertices = guard
+                    .scan_vertices_by_tag(space_name, tag)
+                    .map_err(|error| {
+                        storage_error("GetNeighbors", "scan vertices", space_name, error)
+                    })?;
                 let ids: Vec<VertexId> = vertices.into_iter().map(|v| v.vid).collect();
                 drop(guard);
 
@@ -160,7 +169,7 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
                 if projected_properties.is_empty() {
                     for neighbor_id in &neighbor_ids[*position..end] {
                         if let Some(vertex) =
-                            guard.get_vertex(space_name, neighbor_id).map_err(|error| {
+                            guard.get_vertex(space_name, tag, neighbor_id).map_err(|error| {
                                 storage_error(
                                     "GetNeighbors",
                                     "get neighbor vertex",
@@ -175,7 +184,7 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
                 } else {
                     for neighbor_id in &neighbor_ids[*position..end] {
                         if let Some(vertex) = guard
-                            .get_vertex_projected(space_name, neighbor_id, projected_properties)
+                            .get_vertex_projected(space_name, tag, neighbor_id, projected_properties)
                             .map_err(|error| {
                                 storage_error(
                                     "GetNeighbors",

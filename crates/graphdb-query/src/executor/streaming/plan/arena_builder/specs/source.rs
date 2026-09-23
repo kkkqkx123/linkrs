@@ -86,6 +86,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_source_spec(
                 });
             Ok(SourceSpec::GetVertices {
                 space_name: get_node.space_name().to_string(),
+                tag: get_node.tag().unwrap_or_default().to_string(),
                 vertex_ids,
                 projected_properties: get_node.projected_properties().to_vec(),
                 col_names: get_node.col_names().to_vec(),
@@ -101,6 +102,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_source_spec(
         }),
         PlanNodeEnum::GetNeighbors(get_node) => Ok(SourceSpec::GetNeighbors {
             space_name: exec_ctx.space_name.clone().unwrap_or_default(),
+            tag: get_node.tag().unwrap_or_default().to_string(),
             direction: get_node.direction().to_string(),
             projected_properties: get_node.projected_properties().to_vec(),
         }),

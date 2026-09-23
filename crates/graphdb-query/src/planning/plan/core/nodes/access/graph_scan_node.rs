@@ -39,6 +39,7 @@ define_plan_node! {
     pub struct GetVerticesNode {
         space_id: u64,
         space_name: String,
+        tag: Option<String>,
         src_ref: ContextualExpression,
         src_vids: String,
         tag_props: Vec<TagProp>,
@@ -69,6 +70,7 @@ impl GetVerticesNode {
             deps: Vec::new(),
             space_id,
             space_name: space_name.to_string(),
+            tag: None,
             src_ref: src_ctx_expr,
             src_vids: src_vids.to_string(),
             tag_props: Vec::new(),
@@ -80,6 +82,14 @@ impl GetVerticesNode {
             col_names: Vec::new(),
             column_types: vec![],
         }
+    }
+
+    pub fn tag(&self) -> Option<&str> {
+        self.tag.as_deref()
+    }
+
+    pub fn set_tag(&mut self, tag: String) {
+        self.tag = Some(tag);
     }
 
     pub fn projected_properties(&self) -> &[String] {
@@ -307,6 +317,7 @@ define_plan_node! {
     /// execution; they serve optimizer/EXPLAIN traversal only.
     pub struct GetNeighborsNode {
         space_id: u64,
+        tag: Option<String>,
         src_vids: String,
         edge_types: Vec<String>,
         direction: String,
@@ -327,6 +338,7 @@ impl GetNeighborsNode {
             id: next_node_id(),
             deps: Vec::new(),
             space_id,
+            tag: None,
             src_vids: src_vids.to_string(),
             edge_types: Vec::new(),
             direction: "BOTH".to_string(),
@@ -340,6 +352,14 @@ impl GetNeighborsNode {
             col_names: Vec::new(),
             column_types: vec![],
         }
+    }
+
+    pub fn tag(&self) -> Option<&str> {
+        self.tag.as_deref()
+    }
+
+    pub fn set_tag(&mut self, tag: String) {
+        self.tag = Some(tag);
     }
 
     pub fn projected_properties(&self) -> &[String] {

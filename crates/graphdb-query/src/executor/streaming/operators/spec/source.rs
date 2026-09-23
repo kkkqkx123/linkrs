@@ -104,6 +104,7 @@ pub enum SourceSpec {
     },
     GetVertices {
         space_name: String,
+        tag: String,
         vertex_ids: Option<Vec<Value>>,
         projected_properties: Vec<String>,
         /// Entity variable name for the fetched vertex (e.g. the tag name).
@@ -120,6 +121,7 @@ pub enum SourceSpec {
     },
     GetNeighbors {
         space_name: String,
+        tag: String,
         direction: String,
         projected_properties: Vec<String>,
     },

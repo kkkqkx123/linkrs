@@ -7,7 +7,6 @@ use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::traversal::config::TraversalConfig;
 use crate::parser::ast::pattern::PathSemantic;
 use graphdb_core::error::QueryError;
-use graphdb_core::types::storage_ids::VertexId;
 use graphdb_core::{EdgeDirection, Value};
 
 use super::super::visited_set::VisitedSet;
@@ -21,6 +20,7 @@ pub(super) fn handle_traverse(
     let GraphOperatorKind::Traverse {
         storage,
         space_name,
+        dst_tag,
         edge_types,
         direction,
         min_depth,
@@ -34,6 +34,7 @@ pub(super) fn handle_traverse(
     };
     let storage = &*storage;
     let space_name = &*space_name;
+    let dst_tag = &*dst_tag;
     let edge_types = &*edge_types;
     let direction = *direction;
     let min_depth = *min_depth;
@@ -60,6 +61,7 @@ pub(super) fn handle_traverse(
                 max_depth,
                 edge_types.to_vec(),
             );
+            tc.vertex_tag = dst_tag.to_string();
             tc.path_semantic = path_semantic.clone();
             if let Some(output) = common::traverse_on_chunk_with_semantic(
                 chunk,
@@ -128,6 +130,7 @@ pub(super) fn handle_bi_expand(
     let GraphOperatorKind::BiExpand {
         storage,
         space_name,
+        dst_tag,
         edge_types,
         ..
     } = &mut op.kind
@@ -136,6 +139,7 @@ pub(super) fn handle_bi_expand(
     };
     let storage = &*storage;
     let space_name = &*space_name;
+    let dst_tag = &*dst_tag;
     let edge_types = &*edge_types;
     while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
@@ -153,7 +157,16 @@ pub(super) fn handle_bi_expand(
                     .get_variable("vid")
                     .or_else(|| row.first().cloned())
                     .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                if let Ok(vid) = VertexId::try_from(&vid_val) {
+                let vid = match &vid_val {
+                    Value::Vertex(vertex) => vertex.vid,
+                    _ => {
+                        return Err(QueryError::execution(
+                            "Traversal seed requires a vertex value with tag; bare id is illegal"
+                                .to_string(),
+                        ));
+                    }
+                };
+                {
                     if let Ok(edges) = reader.get_node_edges(space_name, &vid, dir) {
                         for e in &edges {
                             let edge_type_matches = edge_types.is_empty()
@@ -163,7 +176,14 @@ pub(super) fn handle_bi_expand(
                                 continue;
                             }
                             let neighbor_id = if e.src() == &vid { *e.dst() } else { *e.src() };
-                            if let Ok(Some(vertex)) = reader.get_vertex(space_name, &neighbor_id) {
+                            if dst_tag.is_empty() {
+                                return Err(QueryError::execution(
+                                    "Traversal requires exactly one neighbor label".to_string(),
+                                ));
+                            }
+                            if let Ok(Some(vertex)) =
+                                reader.get_vertex(space_name, dst_tag, &neighbor_id)
+                            {
                                 let mut out_row = row.clone();
                                 out_row.push(Value::Vertex(Box::new(vertex)));
                                 out_row.push(Value::string(e.edge_type.clone()));
@@ -218,6 +238,7 @@ pub(super) fn handle_bi_traverse(
     let GraphOperatorKind::BiTraverse {
         storage,
         space_name,
+        dst_tag,
         edge_types,
         min_depth,
         max_depth,
@@ -229,6 +250,7 @@ pub(super) fn handle_bi_traverse(
     };
     let storage = &*storage;
     let space_name = &*space_name;
+    let dst_tag = &*dst_tag;
     let edge_types = &*edge_types;
     let min_depth = *min_depth;
     let max_depth = *max_depth;
@@ -249,7 +271,16 @@ pub(super) fn handle_bi_traverse(
                     .get_variable("vid")
                     .or_else(|| row.first().cloned())
                     .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                if let Ok(vid) = VertexId::try_from(&vid_val) {
+                let vid = match &vid_val {
+                    Value::Vertex(vertex) => vertex.vid,
+                    _ => {
+                        return Err(QueryError::execution(
+                            "Traversal seed requires a vertex value with tag; bare id is illegal"
+                                .to_string(),
+                        ));
+                    }
+                };
+                {
                     let mut frontier = vec![(vid, 0u32)];
                     let mut local_visited = VisitedSet::new();
                     local_visited.insert(vid);
@@ -280,7 +311,15 @@ pub(super) fn handle_bi_traverse(
                                 local_visited.insert(nid);
 
                                 if depth + 1 >= min_depth {
-                                    if let Ok(Some(vertex)) = reader.get_vertex(space_name, &nid) {
+                                    if dst_tag.is_empty() {
+                                        return Err(QueryError::execution(
+                                            "Traversal requires exactly one neighbor label"
+                                                .to_string(),
+                                        ));
+                                    }
+                                    if let Ok(Some(vertex)) =
+                                        reader.get_vertex(space_name, dst_tag, &nid)
+                                    {
                                         let mut out_row = row.clone();
                                         out_row.push(Value::Vertex(Box::new(vertex)));
                                         out_row.push(Value::string(edge_types.join("/")));

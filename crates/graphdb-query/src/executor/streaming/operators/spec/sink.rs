@@ -1,7 +1,6 @@
 //! Immutable configuration for sink (data modification) operators.
 
 use graphdb_core::types::expr::Expression;
-use graphdb_core::Value;
 
 /// Copy target type for COPY FROM
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +46,7 @@ pub enum SinkSpec {
     },
     DeleteVertices {
         space_name: String,
+        tag: String,
         vertex_id_col: String,
         cascade: bool,
     },

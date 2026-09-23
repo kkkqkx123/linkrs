@@ -13,6 +13,7 @@ pub enum GraphSpec {
         direction: EdgeDirection,
         filter_expr: Option<Expression>,
         col_names: Vec<String>,
+        dst_tag: String,
     },
     ExpandAll {
         edge_types: Vec<String>,
@@ -35,6 +36,7 @@ pub enum GraphSpec {
         /// the full `Value::Vertex(Box)` carried in from upstream.
         lightweight_source: bool,
         path_semantic: Option<PathSemantic>,
+        dst_tag: String,
     },
     Traverse {
         edge_types: Vec<String>,
@@ -43,15 +45,18 @@ pub enum GraphSpec {
         max_depth: u32,
         filter_expr: Option<Expression>,
         path_semantic: Option<PathSemantic>,
+        dst_tag: String,
     },
     BiExpand {
         edge_types: Vec<String>,
         direction: EdgeDirection,
+        dst_tag: String,
     },
     BiTraverse {
         edge_types: Vec<String>,
         direction: EdgeDirection,
         min_depth: u32,
         max_depth: u32,
+        dst_tag: String,
     },
 }

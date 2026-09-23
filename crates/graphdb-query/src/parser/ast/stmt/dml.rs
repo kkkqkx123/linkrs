@@ -37,7 +37,7 @@ impl DeleteStmt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DeleteTarget {
-    Vertices(Vec<ContextualExpression>),
+    Vertices { tag: String, vids: Vec<ContextualExpression> },
     Edges {
         edge_type: Option<String>,
         edges: Vec<(

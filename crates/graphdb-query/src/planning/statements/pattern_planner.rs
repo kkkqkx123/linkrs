@@ -89,6 +89,7 @@ fn logical_expand_all(
     input_var: Option<String>,
     col_names: Vec<String>,
     path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
+    dst_tag: Option<String>,
 ) -> LogicalNodeEnum {
     LogicalNodeEnum::ExpandAll(LogicalExpandAllNode {
         id: next_node_id(),
@@ -108,10 +109,20 @@ fn logical_expand_all(
         include_empty_paths: false,
         input_var,
         path_semantic,
+        dst_tag,
         output_var: None,
         col_names,
         column_types: vec![],
     })
+}
+
+fn require_single_neighbor_tag(labels: &[String]) -> Result<String, PlannerError> {
+    if labels.len() != 1 {
+        return Err(PlannerError::PlanGenerationFailed(
+            "Traversal requires exactly one neighbor label".to_string(),
+        ));
+    }
+    Ok(labels[0].clone())
 }
 
 fn logical_argument(var_name: &str) -> LogicalNodeEnum {
@@ -189,14 +200,17 @@ pub fn plan_path_pattern(
 
                         let input_alias = prev_node_alias.as_deref().unwrap();
 
-                        let dst_var = if i + 1 < elements.len() {
+                        let (dst_var, dst_labels) = if i + 1 < elements.len() {
                             if let PathElement::Node(next_node) = elements[i + 1] {
-                                next_node.variable.as_deref()
+                                (
+                                    next_node.variable.as_deref(),
+                                    next_node.labels.clone(),
+                                )
                             } else {
-                                None
+                                (None, Vec::new())
                             }
                         } else {
-                            None
+                            (None, Vec::new())
                         };
 
                         let edge_plan = plan_pattern_edge_with_input(
@@ -204,6 +218,7 @@ pub fn plan_path_pattern(
                             ctx.space_id,
                             input_alias,
                             dst_var,
+                            &dst_labels,
                             ctx.expr_context,
                         )?;
 
@@ -489,6 +504,7 @@ pub fn plan_pattern_edge(
         None,
         vec![edge_var.clone()],
         edge.path_semantic.clone(),
+        None,
     );
     let mut plan = SubPlan {
         root: Some(expand_root.clone()),
@@ -551,6 +567,7 @@ pub fn plan_pattern_edge_with_input(
     space_id: u64,
     input_var: &str,
     dst_var: Option<&str>,
+    dst_labels: &[String],
     expr_context: &Option<Arc<ExpressionAnalysisContext>>,
 ) -> Result<SubPlan, PlannerError> {
     if let Some(rc) = edge.recursive_comprehension.as_ref() {
@@ -582,6 +599,8 @@ pub fn plan_pattern_edge_with_input(
 
     expand_node.set_step_limit(1);
     expand_node.set_path_semantic(edge.path_semantic.clone());
+    let dst_tag = require_single_neighbor_tag(dst_labels)?;
+    expand_node.set_dst_tag(dst_tag.clone());
 
     expand_node.set_input_var(input_var.to_string());
 
@@ -605,6 +624,7 @@ pub fn plan_pattern_edge_with_input(
         Some(input_var.to_string()),
         vec![src_col_name, edge_col_name, dst_col_name],
         edge.path_semantic.clone(),
+        Some(dst_tag),
     );
     let mut plan = SubPlan {
         root: Some(expand_root.clone()),
@@ -688,6 +708,7 @@ pub fn plan_match_delete(
         crate::parser::ast::stmt::MatchDeleteTarget::Vertices(vertex_exprs) => {
             let info = VertexDeleteInfo {
                 space_name: space_name.to_string(),
+                tag: None,
                 vertex_ids: vertex_exprs.clone(),
                 with_edge: delete_clause.with_edge,
                 cascade: delete_clause.with_edge,

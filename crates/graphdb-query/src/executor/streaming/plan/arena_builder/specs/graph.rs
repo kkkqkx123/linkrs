@@ -58,6 +58,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_append_vertices
         .collect();
     Ok(UnarySpec::AppendVertices {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
+        tag: node.vertex_tag().to_string(),
         entity_var,
         entity_expr,
         prop_names,
@@ -379,6 +380,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_expand_spec(
         direction: node.direction(),
         filter_expr: node.filter().map(contextual_to_expression).transpose()?,
         col_names: node.col_names().to_vec(),
+        dst_tag: node.dst_tag().unwrap_or_default().to_string(),
     })
 }
 
@@ -409,6 +411,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_expand_all_spec
         emit_raw_ids: node.id_only() || node.count_only(),
         lightweight_source: node.lightweight_source(),
         path_semantic: node.path_semantic(),
+        dst_tag: node.dst_tag().unwrap_or_default().to_string(),
     })
 }
 
@@ -427,6 +430,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_traverse_spec(
             .map(contextual_to_expression)
             .transpose()?,
         path_semantic: node.path_semantic(),
+        dst_tag: node.dst_tag().unwrap_or_default().to_string(),
     })
 }
 
@@ -437,6 +441,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_bi_expand_spec(
     Ok(GraphSpec::BiExpand {
         edge_types: node.edge_types().to_vec(),
         direction: node.left_direction(),
+        dst_tag: node.dst_tag().unwrap_or_default().to_string(),
     })
 }
 
@@ -449,6 +454,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_bi_traverse_spe
         direction: node.left_direction(),
         min_depth: node.min_hops() as u32,
         max_depth: node.max_hops() as u32,
+        dst_tag: node.dst_tag().unwrap_or_default().to_string(),
     })
 }
 

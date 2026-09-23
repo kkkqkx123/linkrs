@@ -43,6 +43,10 @@ impl DeleteVerticesNode {
         &self.info.space_name
     }
 
+    pub fn tag(&self) -> Option<&str> {
+        self.info.tag.as_deref()
+    }
+
     pub fn vertex_ids(&self) -> &[ContextualExpression] {
         &self.info.vertex_ids
     }
@@ -185,6 +189,10 @@ impl PipeDeleteVerticesNode {
 
     pub fn space_name(&self) -> &str {
         &self.info.space_name
+    }
+
+    pub fn tag(&self) -> Option<&str> {
+        self.info.tag.as_deref()
     }
 
     pub fn vertex_ids(&self) -> &[ContextualExpression] {

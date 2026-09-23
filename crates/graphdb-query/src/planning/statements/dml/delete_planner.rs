@@ -72,8 +72,8 @@ impl Planner for DeletePlanner {
         );
 
         let final_node = match &delete.target {
-            crate::binder::bound::BoundDeleteTarget::Vertices(vertex_ids) => {
-                let converted_ids: Vec<graphdb_core::types::ContextualExpression> = vertex_ids
+            crate::binder::bound::BoundDeleteTarget::Vertices { tag, ids } => {
+                let converted_ids: Vec<graphdb_core::types::ContextualExpression> = ids
                     .iter()
                     .map(|id| {
                         crate::binder::expr_converter::bound_expr_to_contextual(id, &expr_ctx)
@@ -92,6 +92,7 @@ impl Planner for DeletePlanner {
 
                 let info = VertexDeleteInfo {
                     space_name,
+                    tag: Some(tag.clone()),
                     vertex_ids: converted_ids,
                     with_edge: delete.with_edge,
                     cascade: delete.with_edge || delete.detach,
@@ -238,10 +239,11 @@ impl DeletePlanner {
         let upstream_logical = input_plan.as_ref().and_then(|p| p.logical_root().cloned());
 
         let final_node = match &delete_stmt.target {
-            DeleteTarget::Vertices(vertex_ids) => {
+            DeleteTarget::Vertices { tag, vids } => {
                 let info = VertexDeleteInfo {
                     space_name,
-                    vertex_ids: vertex_ids.clone(),
+                    tag: Some(tag.clone()),
+                    vertex_ids: vids.clone(),
                     with_edge: delete_stmt.with_edge,
                     cascade: delete_stmt.with_edge || delete_stmt.detach,
                     condition: delete_stmt.where_clause.clone(),

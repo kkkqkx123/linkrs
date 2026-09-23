@@ -65,6 +65,7 @@ define_logical_plan_node! {
     pub struct LogicalGetVerticesNode {
         space_id: u64,
         space_name: String,
+        tag: Option<String>,
         src_ref: ContextualExpression,
         src_vids: String,
         tag_props: Vec<TagProp>,
@@ -97,6 +98,7 @@ define_logical_plan_node! {
 define_logical_plan_node! {
     pub struct LogicalGetNeighborsNode {
         space_id: u64,
+        tag: Option<String>,
         src_vids: String,
         edge_types: Vec<String>,
         direction: String,

@@ -363,8 +363,8 @@ impl StmtUtils {
             },
             Stmt::Delete(s) => {
                 match &s.target {
-                    DeleteTarget::Vertices(vertices) => {
-                        for vertex in vertices {
+                    DeleteTarget::Vertices { vids, .. } => {
+                        for vertex in vids {
                             variables.extend(collect_variables_from_contextual(vertex));
                         }
                     }

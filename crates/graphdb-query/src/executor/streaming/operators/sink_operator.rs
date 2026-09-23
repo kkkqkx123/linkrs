@@ -88,6 +88,7 @@ pub enum SinkOperatorKind {
     DeleteVertices {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
+        tag: String,
         vertex_id_col: String,
         cascade: bool,
         rows_deleted: u64,
@@ -321,11 +322,13 @@ impl SinkOperator {
             },
             super::spec::SinkSpec::DeleteVertices {
                 space_name,
+                tag,
                 vertex_id_col,
                 cascade,
             } => SinkOperatorKind::DeleteVertices {
                 storage,
                 space_name: space_name.clone(),
+                tag: tag.clone(),
                 vertex_id_col: vertex_id_col.clone(),
                 cascade: *cascade,
                 rows_deleted: 0,
@@ -852,6 +855,7 @@ impl SinkOperator {
             SinkOperatorKind::DeleteVertices {
                 storage,
                 space_name,
+                tag,
                 vertex_id_col,
                 cascade,
                 rows_deleted,
@@ -882,6 +886,7 @@ impl SinkOperator {
                                         StorageWriter::delete_vertex_with_edges(
                                             &mut *writer,
                                             space_name,
+                                            tag,
                                             &vid,
                                         )
                                         .map_err(|e| QueryError::execution(e.to_string()))?;
@@ -889,6 +894,7 @@ impl SinkOperator {
                                         StorageWriter::delete_vertex(
                                             &mut *writer,
                                             space_name,
+                                            tag,
                                             &vid,
                                         )
                                         .map_err(|e| QueryError::execution(e.to_string()))?;
@@ -1070,14 +1076,22 @@ impl SinkOperator {
                                 if matches!(vid_val, Value::Null(_)) {
                                     continue;
                                 }
-                                let vid = VertexId::try_from(&vid_val).map_err(|e| {
-                                    QueryError::execution(format!("Invalid vertex id: {}", e))
-                                })?;
+                                let (tag, vid) = match &vid_val {
+                                    Value::Vertex(vertex) => {
+                                        (vertex.tag.name.clone(), vertex.vid)
+                                    }
+                                    _ => {
+                                        return Err(QueryError::execution(
+                                            "Pipe DELETE VERTEX requires a vertex value with tag; bare id is illegal".to_string(),
+                                        ));
+                                    }
+                                };
                                 {
                                     if *cascade {
                                         StorageWriter::delete_vertex_with_edges(
                                             &mut *writer,
                                             space_name,
+                                            &tag,
                                             &vid,
                                         )
                                         .map_err(|e| QueryError::execution(e.to_string()))?;
@@ -1085,6 +1099,7 @@ impl SinkOperator {
                                         StorageWriter::delete_vertex(
                                             &mut *writer,
                                             space_name,
+                                            &tag,
                                             &vid,
                                         )
                                         .map_err(|e| QueryError::execution(e.to_string()))?;

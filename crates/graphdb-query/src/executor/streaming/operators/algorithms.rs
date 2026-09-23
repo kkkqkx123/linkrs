@@ -14,6 +14,7 @@ use graphdb_core::{Edge, EdgeDirection, NPath, Path, Value};
 
 pub(crate) struct BidirBfsConfig<'a> {
     pub(crate) space_name: &'a str,
+    pub(crate) vertex_tag: &'a str,
     pub(crate) edge_type_filter: Option<&'a [String]>,
     pub(crate) max_depth: usize,
     pub(crate) single_shortest: bool,
@@ -81,12 +82,12 @@ pub(crate) fn bidir_bfs_shortest_path(
     let mut left_queue: VecDeque<(VertexId, Arc<NPath>)> = VecDeque::new();
     let mut right_queue: VecDeque<(VertexId, Arc<NPath>)> = VecDeque::new();
 
-    if let Ok(Some(start_vertex)) = storage.get_vertex(cfg.space_name, start_id) {
+    if let Ok(Some(start_vertex)) = storage.get_vertex(cfg.space_name, cfg.vertex_tag, start_id) {
         let np = Arc::new(NPath::new(Arc::new(start_vertex)));
         left_queue.push_back((*start_id, np.clone()));
         left_visited.insert(*start_id, np);
     }
-    if let Ok(Some(end_vertex)) = storage.get_vertex(cfg.space_name, end_id) {
+    if let Ok(Some(end_vertex)) = storage.get_vertex(cfg.space_name, cfg.vertex_tag, end_id) {
         let np = Arc::new(NPath::new(Arc::new(end_vertex)));
         right_queue.push_back((*end_id, np.clone()));
         right_visited.insert(*end_id, np);
@@ -151,7 +152,7 @@ pub(crate) fn bidir_bfs_shortest_path(
                             continue;
                         }
                         if let Ok(Some(neighbor_vertex)) =
-                            storage.get_vertex(cfg.space_name, neighbor_id)
+                            storage.get_vertex(cfg.space_name, cfg.vertex_tag, neighbor_id)
                         {
                             let new_npath = Arc::new(NPath::extend(
                                 current_npath.clone(),
@@ -232,7 +233,7 @@ pub(crate) fn bidir_bfs_shortest_path(
                             continue;
                         }
                         if let Ok(Some(neighbor_vertex)) =
-                            storage.get_vertex(cfg.space_name, neighbor_id)
+                            storage.get_vertex(cfg.space_name, cfg.vertex_tag, neighbor_id)
                         {
                             let new_npath = Arc::new(NPath::extend(
                                 current_npath.clone(),
@@ -307,6 +308,7 @@ fn push_shortest_path(
 
 pub(crate) struct AllPathsConfig<'a> {
     pub(crate) space_name: &'a str,
+    pub(crate) vertex_tag: &'a str,
     pub(crate) edge_types: &'a [String],
     pub(crate) direction: EdgeDirection,
     pub(crate) min_depth: usize,
@@ -323,7 +325,7 @@ pub(crate) fn enumerate_all_paths(
     cancel_token: Option<&CancelToken>,
 ) -> Result<Vec<Path>, QueryError> {
     let Some(start_vertex) = storage
-        .get_vertex(cfg.space_name, start_id)
+        .get_vertex(cfg.space_name, cfg.vertex_tag, start_id)
         .map_err(|error| QueryError::execution(format!("Failed to read start vertex: {error}")))?
     else {
         return Ok(Vec::new());
@@ -377,7 +379,7 @@ pub(crate) fn enumerate_all_paths(
                 continue;
             }
             let Some(vertex) = storage
-                .get_vertex(cfg.space_name, &next_id)
+                .get_vertex(cfg.space_name, cfg.vertex_tag, &next_id)
                 .map_err(|error| {
                     QueryError::execution(format!("Failed to read path vertex: {error}"))
                 })?

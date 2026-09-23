@@ -223,6 +223,9 @@ fn convert_get_vertices(
         );
     node.set_deps(deps);
     node.set_tag_props(n.tag_props);
+    if let Some(tag) = n.tag {
+        node.set_tag(tag);
+    }
     if let Some(expr) = n.expression {
         node.set_filter(expr);
     }
@@ -279,6 +282,9 @@ fn convert_get_neighbors(
     node.set_deps(deps);
     node.set_edge_types(n.edge_types);
     node.set_direction(&n.direction);
+    if let Some(tag) = n.tag {
+        node.set_tag(tag);
+    }
     if let Some(expr) = n.expression {
         node.set_filter(expr);
     }
@@ -683,6 +689,9 @@ fn convert_expand(
     if let Some(expr) = n.filter {
         node.set_filter(expr);
     }
+    if let Some(tag) = n.dst_tag {
+        node.set_dst_tag(tag);
+    }
     for dep in deps {
         node.add_input(dep);
     }
@@ -730,6 +739,9 @@ fn convert_expand_all(
     if let Some(var) = n.input_var {
         node.set_input_var(var);
     }
+    if let Some(tag) = n.dst_tag {
+        node.set_dst_tag(tag);
+    }
     for dep in deps {
         node.add_input(dep);
     }
@@ -764,6 +776,9 @@ fn convert_traverse(
     }
     if let Some(expr) = n.first_step_filter {
         node.set_first_step_filter(expr);
+    }
+    if let Some(tag) = n.dst_tag {
+        node.set_dst_tag(tag);
     }
     node.set_input(input);
     if let Some(var) = n.output_var {
@@ -825,6 +840,9 @@ fn convert_bi_expand(
     if let Some(var) = n.meeting_point_var {
         node.set_meeting_point_var(var);
     }
+    if let Some(tag) = n.dst_tag {
+        node.set_dst_tag(tag);
+    }
     if let Some(var) = n.output_var {
         node.set_output_var(var);
     }
@@ -859,6 +877,9 @@ fn convert_bi_traverse(
     }
     if let Some(alias) = n.vertex_alias {
         node.set_vertex_alias(alias);
+    }
+    if let Some(tag) = n.dst_tag {
+        node.set_dst_tag(tag);
     }
     if let Some(var) = n.output_var {
         node.set_output_var(var);

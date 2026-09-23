@@ -47,6 +47,8 @@ pub enum UnarySpec {
     AppendVertices {
         /// Space the vertex is read from.
         space_name: String,
+        /// Single tag for forced single-label fetch.
+        tag: String,
         /// Binding variable of the appended vertex (flat-column prefix).
         entity_var: String,
         /// Expression resolved per row to the vertex id.

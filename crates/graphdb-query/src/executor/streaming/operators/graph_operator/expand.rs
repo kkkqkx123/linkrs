@@ -25,6 +25,7 @@ pub(super) fn handle(
     let GraphOperatorKind::Expand {
         storage,
         space_name,
+        dst_tag,
         edge_types,
         direction,
         filter_expr,
@@ -34,6 +35,7 @@ pub(super) fn handle(
     };
     let storage = &*storage;
     let space_name = &*space_name;
+    let dst_tag = &*dst_tag;
     let edge_types = &*edge_types;
     let direction = *direction;
     let filter_expr = &*filter_expr;
@@ -49,6 +51,7 @@ pub(super) fn handle(
                 1,
                 &mut ExpandCtx {
                     space_name,
+                    dst_tag,
                     edge_types,
                     direction,
                     filter_expr,
@@ -109,6 +112,7 @@ pub(super) fn handle_all(
     let GraphOperatorKind::ExpandAll {
         storage,
         space_name,
+        dst_tag,
         edge_types,
         direction,
         filter_expr,
@@ -125,6 +129,7 @@ pub(super) fn handle_all(
     };
     let storage = &*storage;
     let space_name = &*space_name;
+    let dst_tag = &*dst_tag;
     let edge_types = &*edge_types;
     let direction = *direction;
     let filter_expr = &*filter_expr;
@@ -156,6 +161,7 @@ pub(super) fn handle_all(
                     src_vids.clone(),
                     &mut ExpandCtx {
                         space_name,
+                        dst_tag,
                         edge_types,
                         direction,
                         filter_expr,
@@ -184,6 +190,7 @@ pub(super) fn handle_all(
                     lightweight_source,
                     &mut ExpandCtx {
                         space_name,
+                        dst_tag,
                         edge_types,
                         direction,
                         filter_expr,
@@ -201,6 +208,7 @@ pub(super) fn handle_all(
                     step_limit,
                     &mut ExpandCtx {
                         space_name,
+                        dst_tag,
                         edge_types,
                         direction,
                         filter_expr,

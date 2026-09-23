@@ -431,7 +431,9 @@ impl DmlParser {
 
             // Check whether there are any keywords such as VERTEX, EDGE, or TAG.
             let target = if ctx.match_token(TokenKind::Vertex) {
-                // DELETE VERTEX vid [, vid ...]
+                // DELETE VERTEX <tag> FROM vid [, vid ...]
+                let tag = ctx.expect_identifier()?;
+                ctx.expect_token(TokenKind::From)?;
                 let mut vids = vec![];
                 loop {
                     vids.push(self.parse_expression(ctx)?);
@@ -439,7 +441,7 @@ impl DmlParser {
                         break;
                     }
                 }
-                DeleteTarget::Vertices(vids)
+                DeleteTarget::Vertices { tag, vids }
             } else if ctx.match_token(TokenKind::Edge) {
                 // Two syntaxes:
                 // 1) DELETE EDGE <edge_type> <src> -> <dst> [@rank] [, ...]
@@ -498,15 +500,11 @@ impl DmlParser {
 
                 DeleteTarget::Edges { edge_type, edges }
             } else {
-                // The default interpretation is the deletion of vertices.
-                let mut vids = vec![];
-                loop {
-                    vids.push(self.parse_expression(ctx)?);
-                    if !ctx.match_token(TokenKind::Comma) {
-                        break;
-                    }
-                }
-                DeleteTarget::Vertices(vids)
+                return Err(ParseError::new(
+                    crate::parser::core::error::ParseErrorKind::UnexpectedToken,
+                    "DELETE VERTEX requires a tag qualifier: DELETE VERTEX <tag> FROM <vid>, ...".to_string(),
+                    ctx.current_position(),
+                ));
             };
 
             let with_edge = if ctx.match_token(TokenKind::With) {

@@ -120,6 +120,7 @@ pub enum SourceOperatorKind {
     GetVertices {
         storage: Option<Arc<RwLock<dyn crate::storage::QueryStorage>>>,
         space_name: String,
+        tag: String,
         vertex_ids: Option<Vec<Value>>,
         cached_ids: Vec<VertexId>,
         projected_properties: Vec<String>,
@@ -139,6 +140,7 @@ pub enum SourceOperatorKind {
     GetNeighbors {
         storage: Option<Arc<RwLock<dyn crate::storage::QueryStorage>>>,
         space_name: String,
+        tag: String,
         direction: String,
         projected_properties: Vec<String>,
         state: NeighborScanState,
@@ -270,12 +272,14 @@ impl SourceOperator {
             },
             super::spec::SourceSpec::GetVertices {
                 space_name,
+                tag,
                 vertex_ids,
                 projected_properties,
                 col_names: _,
             } => SourceOperatorKind::GetVertices {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
+                tag: tag.clone(),
                 vertex_ids: vertex_ids.clone(),
                 cached_ids: Vec::new(),
                 projected_properties: projected_properties.clone(),
@@ -299,11 +303,13 @@ impl SourceOperator {
             },
             super::spec::SourceSpec::GetNeighbors {
                 space_name,
+                tag,
                 direction,
                 projected_properties,
             } => SourceOperatorKind::GetNeighbors {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
+                tag: tag.clone(),
                 direction: direction.clone(),
                 projected_properties: projected_properties.clone(),
                 state: NeighborScanState::Init,

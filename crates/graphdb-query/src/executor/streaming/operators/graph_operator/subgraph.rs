@@ -18,6 +18,7 @@ pub(super) fn handle(
     let GraphOperatorKind::Subgraph {
         storage,
         space_name,
+        dst_tag,
         steps,
         direction,
         edge_types,
@@ -27,6 +28,7 @@ pub(super) fn handle(
     };
     let storage = &*storage;
     let space_name = &*space_name;
+    let dst_tag = &*dst_tag;
     let steps = *steps;
     let direction = *direction;
     let edge_types = &*edge_types;
@@ -47,7 +49,8 @@ pub(super) fn handle(
                     .or_else(|| row.first().cloned())
                     .unwrap_or(Value::Null(graphdb_core::NullType::Null));
 
-                if let Ok(seed_vid) = VertexId::try_from(&vid_val) {
+                if let Value::Vertex(seed_vertex) = &vid_val {
+                    let seed_vid = seed_vertex.vid;
                     let mut visited: HashSet<VertexId> = HashSet::new();
                     let mut history_edges: Vec<(Edge, u32)> = Vec::new();
                     let mut frontier = vec![(seed_vid, 0u32)];
@@ -86,21 +89,22 @@ pub(super) fn handle(
                     }
 
                     for (edge, _step) in &history_edges {
+                        if dst_tag.is_empty() {
+                            return Err(QueryError::execution(
+                                "Traversal requires exactly one neighbor label".to_string(),
+                            ));
+                        }
                         let mut out_row = row.clone();
-                        let src_vertex = reader
-                            .get_vertex(space_name, &edge.src)
-                            .ok()
-                            .flatten()
-                            .unwrap_or_else(|| {
-                                graphdb_core::vertex_edge_path::Vertex::with_vid(edge.src)
-                            });
-                        let dst_vertex = reader
-                            .get_vertex(space_name, &edge.dst)
-                            .ok()
-                            .flatten()
-                            .unwrap_or_else(|| {
-                                graphdb_core::vertex_edge_path::Vertex::with_vid(edge.dst)
-                            });
+                        let Some(src_vertex) =
+                            reader.get_vertex(space_name, dst_tag, &edge.src).ok().flatten()
+                        else {
+                            continue;
+                        };
+                        let Some(dst_vertex) =
+                            reader.get_vertex(space_name, dst_tag, &edge.dst).ok().flatten()
+                        else {
+                            continue;
+                        };
                         out_row.push(Value::Vertex(Box::new(src_vertex)));
                         out_row.push(Value::Vertex(Box::new(dst_vertex)));
                         out_row.push(Value::string(edge.edge_type.clone()));

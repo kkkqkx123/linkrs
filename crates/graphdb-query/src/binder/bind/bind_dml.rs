@@ -223,12 +223,15 @@ impl Binder {
         stmt: &crate::parser::ast::DeleteStmt,
     ) -> DBResult<BoundStatement> {
         let target = match &stmt.target {
-            DeleteTarget::Vertices(exprs) => {
-                let vals = exprs
+            DeleteTarget::Vertices { tag, vids } => {
+                let vals = vids
                     .iter()
                     .map(|e| self.bind_expr(e))
                     .collect::<DBResult<Vec<_>>>()?;
-                BoundDeleteTarget::Vertices(vals)
+                BoundDeleteTarget::Vertices {
+                    tag: tag.clone(),
+                    ids: vals,
+                }
             }
             DeleteTarget::Edges { edge_type, edges } => {
                 let mut bound = Vec::with_capacity(edges.len());

@@ -22,6 +22,7 @@ define_plan_node! {
         step_limit: Option<u32>,
         filter: Option<ContextualExpression>,
         filter_serializable: Option<Box<SerializableExpression>>,
+        dst_tag: Option<String>,
     }
     enum: Expand
     input: MultipleInputNode
@@ -38,10 +39,19 @@ impl ExpandNode {
             step_limit: None,
             filter: None,
             filter_serializable: None,
+            dst_tag: None,
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
         }
+    }
+
+    pub fn dst_tag(&self) -> Option<&str> {
+        self.dst_tag.as_deref()
+    }
+
+    pub fn set_dst_tag(&mut self, tag: String) {
+        self.dst_tag = Some(tag);
     }
 
     pub fn direction(&self) -> EdgeDirection {
@@ -229,6 +239,7 @@ pub struct ExpandAllNode {
     /// `*SHORTEST`, `*ALL SHORTEST`); `None` means plain walk. Threaded
     /// from `EdgePattern::path_semantic` through the logical node.
     path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
+    dst_tag: Option<String>,
 }
 
 impl ExpandAllNode {
@@ -257,7 +268,16 @@ impl ExpandAllNode {
             count_only: false,
             lightweight_source: false,
             path_semantic: None,
+            dst_tag: None,
         }
+    }
+
+    pub fn dst_tag(&self) -> Option<&str> {
+        self.dst_tag.as_deref()
+    }
+
+    pub fn set_dst_tag(&mut self, tag: String) {
+        self.dst_tag = Some(tag);
     }
 
     pub fn set_src_vids(&mut self, src_vids: Vec<graphdb_core::Value>) {
@@ -516,6 +536,7 @@ define_plan_node_with_deps! {
         first_step_filter: Option<ContextualExpression>,
         first_step_filter_serializable: Option<Box<SerializableExpression>>,
         path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
+        dst_tag: Option<String>,
     }
     enum: Traverse
     input: SingleInputNode
@@ -542,10 +563,19 @@ impl TraverseNode {
             first_step_filter: None,
             first_step_filter_serializable: None,
             path_semantic: None,
+            dst_tag: None,
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
         }
+    }
+
+    pub fn dst_tag(&self) -> Option<&str> {
+        self.dst_tag.as_deref()
+    }
+
+    pub fn set_dst_tag(&mut self, tag: String) {
+        self.dst_tag = Some(tag);
     }
 
     pub fn set_end_vids(&mut self, end_vids: &str) {
@@ -891,6 +921,7 @@ define_binary_input_node! {
         edge_types: Vec<String>,
         max_hops: usize,
         meeting_point_var: Option<String>,
+        dst_tag: Option<String>,
     }
     enum: BiExpand
     input: BinaryInputNode
@@ -916,10 +947,19 @@ impl BiExpandNode {
             edge_types,
             max_hops,
             meeting_point_var: None,
+            dst_tag: None,
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
         }
+    }
+
+    pub fn dst_tag(&self) -> Option<&str> {
+        self.dst_tag.as_deref()
+    }
+
+    pub fn set_dst_tag(&mut self, tag: String) {
+        self.dst_tag = Some(tag);
     }
 
     pub fn space_id(&self) -> u64 {
@@ -964,6 +1004,7 @@ define_binary_input_node! {
         path_var: String,
         edge_alias: Option<String>,
         vertex_alias: Option<String>,
+        dst_tag: Option<String>,
     }
     enum: BiTraverse
     input: BinaryInputNode
@@ -1001,10 +1042,19 @@ impl BiTraverseNode {
             path_var: params.path_var.clone(),
             edge_alias: None,
             vertex_alias: None,
+            dst_tag: None,
             output_var: Some(params.path_var),
             col_names: vec![],
             column_types: vec![],
         }
+    }
+
+    pub fn dst_tag(&self) -> Option<&str> {
+        self.dst_tag.as_deref()
+    }
+
+    pub fn set_dst_tag(&mut self, tag: String) {
+        self.dst_tag = Some(tag);
     }
 
     pub fn space_id(&self) -> u64 {

@@ -242,9 +242,14 @@ pub(super) fn expand_single_step(
                 }
             };
 
-            let dst_vertex = reader
-                .get_vertex(space_name, &dst_vid)?
-                .unwrap_or_else(|| graphdb_core::Vertex::with_vid(dst_vid));
+            if ctx.dst_tag.is_empty() {
+                return Err(QueryError::execution(
+                    "Traversal requires exactly one neighbor label".to_string(),
+                ));
+            }
+            let Some(dst_vertex) = reader.get_vertex(space_name, ctx.dst_tag, &dst_vid)? else {
+                continue;
+            };
             buf.push_row(
                 seed_row,
                 Value::Edge(Box::new(edge.clone())),
@@ -319,8 +324,11 @@ pub(super) fn expand_on_chunk(
     let seed_slot = seed_slot(&chunk.get_layout(), &ctx.col_names_template);
 
     // Build the list of seed vertex IDs: from the chunk rows, or from explicit src_vids.
+    // Seeds prefer full vertex values (preserving tags); bare ids without
+    // tags are illegal under single-label semantics.
     let mut seed_vids: Vec<VertexId> = Vec::new();
     let mut seed_rows: Vec<Vec<Value>> = Vec::new();
+    let mut seed_vertices: Vec<Option<graphdb_core::Vertex>> = Vec::new();
 
     for (_, row) in visible_rows(&chunk) {
         let vid_val = row
@@ -329,33 +337,46 @@ pub(super) fn expand_on_chunk(
             .cloned()
             .unwrap_or(Value::Null(graphdb_core::NullType::Null));
 
-        if let Ok(vid) = VertexId::try_from(&vid_val) {
+        if let Value::Vertex(vertex) = &vid_val {
+            seed_vids.push(vertex.vid);
+            seed_rows.push(row.clone());
+            seed_vertices.push(Some((**vertex).clone()));
+        } else if let Ok(vid) = VertexId::try_from(&vid_val) {
             seed_vids.push(vid);
             seed_rows.push(row.clone());
+            seed_vertices.push(None);
         }
     }
 
     // If no valid vids came from the input chunk but src_vids are provided, use those.
     if seed_vids.is_empty() && !src_vids.is_empty() {
         for vid_val in &src_vids {
-            if let Ok(vid) = VertexId::try_from(vid_val) {
+            if let Value::Vertex(vertex) = vid_val {
+                seed_vids.push(vertex.vid);
+                seed_rows.push(Vec::new());
+                seed_vertices.push(Some((**vertex).clone()));
+            } else if let Ok(vid) = VertexId::try_from(vid_val) {
                 seed_vids.push(vid);
                 seed_rows.push(Vec::new());
+                seed_vertices.push(None);
             }
         }
     }
 
     let mut out_rows = Vec::new();
-    for (vid, row) in seed_vids.iter().zip(seed_rows.iter()) {
-        let config = if step_limit > 1 {
-            TraversalConfig {
-                min_depth: step_limit,
-                max_depth: step_limit,
-                ..TraversalConfig::expand(space_name.to_string(), direction, edge_types.to_vec())
-            }
-        } else {
-            TraversalConfig::expand(space_name.to_string(), direction, edge_types.to_vec())
-        };
+    for ((vid, row), seed_vertex) in seed_vids
+        .iter()
+        .zip(seed_rows.iter())
+        .zip(seed_vertices.iter())
+    {
+        let _ = vid;
+        let mut config =
+            TraversalConfig::expand(space_name.to_string(), direction, edge_types.to_vec());
+        if step_limit > 1 {
+            config.min_depth = step_limit;
+            config.max_depth = step_limit;
+        }
+        config.vertex_tag = ctx.dst_tag.to_string();
         let mut config = config;
         config.path_semantic = ctx.path_semantic.clone();
         match config.path_semantic {
@@ -388,10 +409,12 @@ pub(super) fn expand_on_chunk(
             runtime.set_cancel_token(token);
         }
 
-        if let Ok(Some(vertex)) = reader.get_vertex(space_name, vid) {
+        if let Some(vertex) = seed_vertex.clone() {
             runtime.seed_from_vertex(vertex);
         } else {
-            continue;
+            return Err(QueryError::execution(
+                "Traversal seed requires a vertex value with tag; bare id is illegal".to_string(),
+            ));
         }
 
         while let Some(event) = runtime.next_event() {
@@ -461,7 +484,16 @@ pub(super) fn traverse_on_chunk_with_semantic(
             .get_variable("vid")
             .or_else(|| row.first().cloned())
             .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-        if let Ok(vid) = VertexId::try_from(&vid_val) {
+        let seed_vertex = match &vid_val {
+            Value::Vertex(vertex) => Some((**vertex).clone()),
+            _ => None,
+        };
+        let Some(seed) = seed_vertex else {
+            return Err(QueryError::execution(
+                "Traversal seed requires a vertex value with tag; bare id is illegal".to_string(),
+            ));
+        };
+        {
             let runtime_reader = TraversalGraphReader::new(reader);
             let mut runtime_config = config.clone();
             // Keep the declared semantic for the runtime: Trail/Acyclic
@@ -493,11 +525,7 @@ pub(super) fn traverse_on_chunk_with_semantic(
                 runtime.set_cancel_token(token);
             }
 
-            if let Ok(Some(vertex)) = reader.get_vertex(&config.space_name, &vid) {
-                runtime.seed_from_vertex(vertex);
-            } else {
-                continue;
-            }
+            runtime.seed_from_vertex(seed);
 
             while let Some(event) = runtime.next_event() {
                 let nid = event.vertex.vid();

@@ -222,9 +222,9 @@ fn next_index_chunk(
                     IndexRow::RowId(entity_ref) => match &entity_ref {
                         EntityRef::Vertex(vid) => {
                             let result = if vertex_projection.is_empty() {
-                                guard.get_vertex(space_name, vid)
+                                guard.get_vertex(space_name, tag, vid)
                             } else {
-                                guard.get_vertex_projected(space_name, vid, vertex_projection)
+                                guard.get_vertex_projected(space_name, tag, vid, vertex_projection)
                             };
                             match result {
                                 Ok(Some(vertex)) => output_rows

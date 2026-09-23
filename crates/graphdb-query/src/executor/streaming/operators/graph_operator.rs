@@ -24,6 +24,7 @@ mod traverse;
 
 pub(super) struct ExpandCtx<'a> {
     pub(super) space_name: &'a str,
+    pub(super) dst_tag: &'a str,
     pub(super) edge_types: &'a [String],
     pub(super) direction: EdgeDirection,
     pub(super) filter_expr: &'a Option<Expression>,
@@ -37,6 +38,7 @@ pub enum GraphOperatorKind {
     Expand {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
+        dst_tag: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
         filter_expr: Option<Expression>,
@@ -44,6 +46,7 @@ pub enum GraphOperatorKind {
     ExpandAll {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
+        dst_tag: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
         filter_expr: Option<Expression>,
@@ -58,6 +61,7 @@ pub enum GraphOperatorKind {
     Traverse {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
+        dst_tag: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
         min_depth: u32,
@@ -69,6 +73,7 @@ pub enum GraphOperatorKind {
     TraverseAll {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
+        dst_tag: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
         min_depth: u32,
@@ -80,12 +85,14 @@ pub enum GraphOperatorKind {
     BiExpand {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
+        dst_tag: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
     },
     BiTraverse {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
+        dst_tag: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
         min_depth: u32,
@@ -95,6 +102,7 @@ pub enum GraphOperatorKind {
     Subgraph {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
+        dst_tag: String,
         steps: u32,
         direction: EdgeDirection,
         edge_types: Vec<String>,
@@ -172,10 +180,12 @@ impl GraphOperator {
                 edge_types,
                 direction,
                 filter_expr,
+                dst_tag,
                 ..
             } => GraphOperatorKind::Expand {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
+                dst_tag: dst_tag.clone(),
                 edge_types: edge_types.clone(),
                 direction: *direction,
                 filter_expr: filter_expr.clone(),
@@ -191,9 +201,11 @@ impl GraphOperator {
                 emit_raw_ids,
                 lightweight_source,
                 path_semantic,
+                dst_tag,
             } => GraphOperatorKind::ExpandAll {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
+                dst_tag: dst_tag.clone(),
                 edge_types: edge_types.clone(),
                 direction: *direction,
                 filter_expr: filter_expr.clone(),
@@ -212,9 +224,11 @@ impl GraphOperator {
                 max_depth,
                 filter_expr,
                 path_semantic,
+                dst_tag,
             } => GraphOperatorKind::Traverse {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
+                dst_tag: dst_tag.clone(),
                 edge_types: edge_types.clone(),
                 direction: *direction,
                 min_depth: *min_depth,
@@ -226,9 +240,11 @@ impl GraphOperator {
             GraphSpec::BiExpand {
                 edge_types,
                 direction,
+                dst_tag,
             } => GraphOperatorKind::BiExpand {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
+                dst_tag: dst_tag.clone(),
                 edge_types: edge_types.clone(),
                 direction: *direction,
             },
@@ -237,9 +253,11 @@ impl GraphOperator {
                 direction,
                 min_depth,
                 max_depth,
+                dst_tag,
             } => GraphOperatorKind::BiTraverse {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
+                dst_tag: dst_tag.clone(),
                 edge_types: edge_types.clone(),
                 direction: *direction,
                 min_depth: *min_depth,

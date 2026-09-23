@@ -105,6 +105,12 @@ impl Planner for FetchVerticesPlanner {
         get_vertices_node.add_dependency(arg_node_enum.clone());
         get_vertices_node.set_output_var("fetched_vertices".to_string());
         get_vertices_node.set_col_names(vec![entity_var.clone()]);
+        let fetch_tag = tag_name.clone().ok_or_else(|| {
+            PlannerError::InvalidOperation(
+                "FETCH VERTICES requires a tag qualifier".to_string(),
+            )
+        })?;
+        get_vertices_node.set_tag(fetch_tag);
 
         // Set the tag attributes (obtained from the properties field)
         let tag_props = if let Some(props) = properties {
@@ -216,6 +222,12 @@ impl Planner for FetchVerticesPlanner {
         get_vertices_node.add_dependency(arg_node_enum.clone());
         get_vertices_node.set_output_var("fetched_vertices".to_string());
         get_vertices_node.set_col_names(vec![entity_var.clone()]);
+        let fetch_tag = fetch.tag_name.clone().ok_or_else(|| {
+            PlannerError::InvalidOperation(
+                "FETCH VERTICES requires a tag qualifier".to_string(),
+            )
+        })?;
+        get_vertices_node.set_tag(fetch_tag);
 
         let tag_props = if let Some(ref props) = fetch.properties {
             vec![TagProp::new("default", props.clone())]
@@ -267,6 +279,7 @@ fn get_vertices_mirror(
         deps: vec![arg_logical],
         space_id: get_vertices_node.space_id(),
         space_name: get_vertices_node.space_name().to_string(),
+        tag: get_vertices_node.tag().map(|s| s.to_string()),
         src_ref: get_vertices_node.src_ref().clone(),
         src_vids: get_vertices_node.src_vids().to_string(),
         tag_props: get_vertices_node.tag_props().to_vec(),

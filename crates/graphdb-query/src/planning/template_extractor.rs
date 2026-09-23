@@ -607,7 +607,6 @@ impl TemplateExtractor {
                         "({})",
                         value_templates.join(", ")
                     )];
-                        .collect();
 
                     parts.push(format!(
                         "{}: {}",
@@ -680,10 +679,10 @@ impl TemplateExtractor {
         let mut parts = Vec::new();
 
         match &stmt.target {
-            crate::parser::ast::DeleteTarget::Vertices(exprs) => {
-                parts.push("DELETE VERTEX".to_string());
+            crate::parser::ast::DeleteTarget::Vertices { tag, vids } => {
+                parts.push(format!("DELETE VERTEX {} FROM", tag));
 
-                let id_templates: Vec<String> = exprs
+                let id_templates: Vec<String> = vids
                     .iter()
                     .map(|expr| {
                         let result = transformer.parameterize(expr);

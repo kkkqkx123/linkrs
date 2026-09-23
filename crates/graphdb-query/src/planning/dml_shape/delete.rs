@@ -18,8 +18,10 @@ pub(crate) fn render_delete(delete: &DeleteStmt, values: &mut Vec<Value>) -> Opt
         String::from("DELETE ")
     };
     match &delete.target {
-        DeleteTarget::Vertices(vids) => {
+        DeleteTarget::Vertices { tag, vids } => {
             out.push_str("VERTEX ");
+            out.push_str(tag);
+            out.push_str(" FROM ");
             render_expr_list(&mut out, values, vids)?;
         }
         DeleteTarget::Edges { edge_type, edges } => {

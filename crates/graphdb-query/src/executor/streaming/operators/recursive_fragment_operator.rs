@@ -276,6 +276,7 @@ impl RecursiveFragmentOperator {
                                 &dst_vid,
                                 BidirBfsConfig {
                                     space_name,
+                                    vertex_tag: "",
                                     edge_type_filter: et_ref,
                                     max_depth: *max_depth,
                                     single_shortest: false,
@@ -374,6 +375,7 @@ impl RecursiveFragmentOperator {
                             &dst_vid,
                             BidirBfsConfig {
                                 space_name,
+                                vertex_tag: "",
                                 edge_type_filter: et_ref,
                                 max_depth: *max_depth,
                                 single_shortest: *single_shortest,
@@ -464,6 +466,7 @@ impl RecursiveFragmentOperator {
                             &end_vid,
                             BidirBfsConfig {
                                 space_name,
+                                vertex_tag: "",
                                 edge_type_filter: et_ref,
                                 max_depth: *max_depth,
                                 single_shortest: !*allow_loops,
@@ -552,6 +555,7 @@ impl RecursiveFragmentOperator {
                                 &dst_vid,
                                 AllPathsConfig {
                                     space_name,
+                                    vertex_tag: "",
                                     edge_types,
                                     direction: *direction,
                                     min_depth: *min_depth,

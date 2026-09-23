@@ -638,7 +638,10 @@ mod tests {
             (
                 Stmt::Delete(DeleteStmt {
                     span,
-                    target: DeleteTarget::Vertices(vec![]),
+                    target: DeleteTarget::Vertices {
+                        tag: String::new(),
+                        vids: vec![],
+                    },
                     where_clause: None,
                     with_edge: false,
                     detach: false,

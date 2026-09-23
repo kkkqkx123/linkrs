@@ -111,6 +111,7 @@ fn next_get_vertices(op: &mut SourceOperator) -> Result<Option<DataChunk>, Query
     let SourceOperatorKind::GetVertices {
         storage,
         space_name,
+        tag,
         vertex_ids,
         cached_ids,
         projected_properties,
@@ -120,9 +121,15 @@ fn next_get_vertices(op: &mut SourceOperator) -> Result<Option<DataChunk>, Query
     };
     let storage = &*storage;
     let space_name = &*space_name;
+    let tag = &*tag;
     let vertex_ids = &*vertex_ids;
     let cached_ids = &*cached_ids;
     let projected_properties = &*projected_properties;
+    if tag.is_empty() {
+        return Err(QueryError::execution(
+            "GetVertices requires a tag qualifier".to_string(),
+        ));
+    }
     // Fast path: single-ID lookup without batch/position machinery.
     if let Some(ids) = vertex_ids.as_ref() {
         if ids.len() == 1 {
@@ -151,15 +158,17 @@ fn next_get_vertices(op: &mut SourceOperator) -> Result<Option<DataChunk>, Query
             let guard = storage_ref.read();
             let vid = match cached_ids.first() {
                 Some(vid) => *vid,
-                None => VertexId::try_from(&ids[0]).unwrap_or_default(),
+                None => VertexId::try_from(&ids[0]).map_err(|e| {
+                    QueryError::execution(format!("Invalid vertex id: {}", e))
+                })?,
             };
             let vertex_opt = if projected_properties.is_empty() {
-                guard.get_vertex(space_name, &vid).map_err(|error| {
+                guard.get_vertex(space_name, tag, &vid).map_err(|error| {
                     storage_error("GetVertices", "get vertex", space_name, error)
                 })?
             } else {
                 guard
-                    .get_vertex_projected(space_name, &vid, projected_properties)
+                    .get_vertex_projected(space_name, tag, &vid, projected_properties)
                     .map_err(|error| {
                         storage_error("GetVertices", "get vertex", space_name, error)
                     })?
@@ -240,7 +249,7 @@ fn next_get_vertices(op: &mut SourceOperator) -> Result<Option<DataChunk>, Query
         let mut rows = Vec::with_capacity(position - start);
         if projected_properties.is_empty() {
             for vid in &cached_ids[start..position] {
-                if let Some(vertex) = guard.get_vertex(space_name, vid).map_err(|error| {
+                if let Some(vertex) = guard.get_vertex(space_name, tag, vid).map_err(|error| {
                     storage_error("GetVertices", "get vertex", space_name, error)
                 })? {
                     rows.push(make_flat_vertex_row(vertex, projected_properties));
@@ -249,7 +258,7 @@ fn next_get_vertices(op: &mut SourceOperator) -> Result<Option<DataChunk>, Query
         } else {
             for vid in &cached_ids[start..position] {
                 if let Some(vertex) = guard
-                    .get_vertex_projected(space_name, vid, projected_properties)
+                    .get_vertex_projected(space_name, tag, vid, projected_properties)
                     .map_err(|error| {
                         storage_error("GetVertices", "get vertex", space_name, error)
                     })?

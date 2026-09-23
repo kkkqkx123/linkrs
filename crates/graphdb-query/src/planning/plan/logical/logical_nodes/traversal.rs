@@ -15,6 +15,7 @@ define_logical_plan_node! {
         direction: EdgeDirection,
         step_limit: Option<u32>,
         filter: Option<ContextualExpression>,
+        dst_tag: Option<String>,
     }
     enum: Expand
     input: MultipleInputNode
@@ -37,6 +38,7 @@ define_logical_plan_node! {
         include_empty_paths: bool,
         input_var: Option<String>,
         path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
+        dst_tag: Option<String>,
     }
     enum: ExpandAll
     input: MultipleInputNode
@@ -57,6 +59,7 @@ define_logical_plan_node_with_deps! {
         v_filter: Option<ContextualExpression>,
         first_step_filter: Option<ContextualExpression>,
         path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
+        dst_tag: Option<String>,
     }
     enum: Traverse
     input: SingleInputNode
@@ -89,6 +92,7 @@ define_logical_binary_input_node! {
         edge_types: Vec<String>,
         max_hops: usize,
         meeting_point_var: Option<String>,
+        dst_tag: Option<String>,
     }
     enum: BiExpand
     input: BinaryInputNode
@@ -107,6 +111,7 @@ define_logical_binary_input_node! {
         path_var: String,
         edge_alias: Option<String>,
         vertex_alias: Option<String>,
+        dst_tag: Option<String>,
     }
     enum: BiTraverse
     input: BinaryInputNode

@@ -30,10 +30,10 @@ impl GraphStorageRef {
         Ok(neighbors)
     }
 
-    pub fn get_vertex(&self, id: &VertexId) -> Result<Option<Vertex>, String> {
+    pub fn get_vertex(&self, tag: &str, id: &VertexId) -> Result<Option<Vertex>, String> {
         let reader = self.storage.read();
         reader
-            .get_vertex(&self.space, id)
+            .get_vertex(&self.space, tag, id)
             .map_err(|e| format!("Storage error: {}", e))
     }
 }

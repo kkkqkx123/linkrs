@@ -11,8 +11,16 @@ impl<'a> TraversalGraphReader<'a> {
         Self { storage }
     }
 
-    pub fn get_vertex(&self, space_name: &str, vertex_id: &VertexId) -> Option<Vertex> {
-        self.storage.get_vertex(space_name, vertex_id).ok()?
+    pub fn get_vertex(
+        &self,
+        space_name: &str,
+        tag: &str,
+        vertex_id: &VertexId,
+    ) -> Option<Vertex> {
+        if tag.is_empty() {
+            return None;
+        }
+        self.storage.get_vertex(space_name, tag, vertex_id).ok()?
     }
 
     pub fn get_edges(
@@ -59,6 +67,7 @@ impl<'a> TraversalGraphReader<'a> {
     pub fn read_neighbors(
         &self,
         space_name: &str,
+        tag: &str,
         vertex_id: &VertexId,
         direction: EdgeDirection,
         edge_types: &[String],
@@ -68,7 +77,7 @@ impl<'a> TraversalGraphReader<'a> {
         let mut result = Vec::with_capacity(filtered.len());
         for edge in filtered {
             let neighbor_id = self.get_neighbor_id(edge, vertex_id, direction);
-            if let Ok(Some(vertex)) = self.storage.get_vertex(space_name, &neighbor_id) {
+            if let Ok(Some(vertex)) = self.storage.get_vertex(space_name, tag, &neighbor_id) {
                 result.push((vertex, edge.clone()));
             }
         }

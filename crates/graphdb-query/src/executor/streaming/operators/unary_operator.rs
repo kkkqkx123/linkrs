@@ -67,6 +67,7 @@ pub enum UnaryOperatorKind {
         entity_var: String,
         entity_expr: Expression,
         prop_names: Vec<String>,
+        tag: String,
         storage: Option<Arc<parking_lot::RwLock<dyn crate::storage::QueryStorage>>>,
         space_name: String,
         state: UnaryOperatorState,
@@ -179,6 +180,7 @@ impl UnaryOperator {
             },
             super::spec::UnarySpec::AppendVertices {
                 space_name,
+                tag,
                 entity_var,
                 entity_expr,
                 prop_names,
@@ -186,6 +188,7 @@ impl UnaryOperator {
                 entity_var: entity_var.clone(),
                 entity_expr: entity_expr.clone(),
                 prop_names: prop_names.clone(),
+                tag: tag.clone(),
                 storage: None,
                 space_name: space_name.clone(),
                 state,
@@ -757,6 +760,7 @@ impl UnaryOperator {
                 entity_var: _,
                 entity_expr,
                 prop_names,
+                tag,
                 storage,
                 space_name,
                 state,
@@ -796,7 +800,12 @@ impl UnaryOperator {
                                     continue;
                                 }
                             };
-                        match guard.get_vertex_projected(space_name, &vid, prop_names) {
+                        if tag.is_empty() {
+                            return Err(QueryError::execution(
+                                "AppendVertices requires a tag qualifier".to_string(),
+                            ));
+                        }
+                        match guard.get_vertex_projected(space_name, tag, &vid, prop_names) {
                             Ok(Some(vertex)) => {
                                 if flat {
                                     for prop in prop_names.iter() {

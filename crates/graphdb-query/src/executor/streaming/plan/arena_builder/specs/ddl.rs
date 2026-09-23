@@ -58,8 +58,17 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_delete_vertices
     node: &crate::planning::plan::core::nodes::data_modification::delete_nodes::DeleteVerticesNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<SinkSpec, PlanBuildError> {
+    let tag = node.tag().ok_or_else(|| {
+        PlanBuildError::missing_value(
+            "DeleteVertices",
+            node.id(),
+            "tag",
+            "DELETE VERTEX requires a tag qualifier",
+        )
+    })?;
     Ok(SinkSpec::DeleteVertices {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
+        tag: tag.to_string(),
         vertex_id_col: "vid".to_string(),
         cascade: node.cascade(),
     })
