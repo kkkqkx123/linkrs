@@ -28,16 +28,19 @@ pub(crate) fn make_flat_vertex_record_row(
     flatten: &[String],
 ) -> Vec<Value> {
     let properties: HashMap<String, Value> = record.props.into_iter().collect();
-    let tags = if record.tag_name.is_empty() {
-        Vec::new()
+    let (tags, vertex_properties) = if record.tag_name.is_empty() {
+        (Vec::new(), properties)
     } else {
-        vec![graphdb_core::Tag::new(record.tag_name, properties.clone())]
+        (
+            vec![graphdb_core::Tag::new(record.tag_name, properties)],
+            HashMap::new(),
+        )
     };
     let vertex = Vertex {
         vid: record.vid,
         id: record.internal_id,
         tags,
-        properties,
+        properties: vertex_properties,
     };
     make_flat_vertex_row(vertex, flatten)
 }
@@ -123,10 +126,12 @@ pub(crate) fn storage_error(
 }
 
 pub(crate) fn parse_vertex_id(value: &str) -> VertexId {
-    value
-        .parse::<i64>()
-        .map(VertexId::from_int64)
-        .unwrap_or_else(|_| VertexId::from_string(value.to_string()))
+    if let Ok(parsed) = value.parse::<i64>() {
+        if let Ok(vid) = VertexId::try_from_int64(parsed) {
+            return vid;
+        }
+    }
+    VertexId::try_from_string(value).unwrap_or_default()
 }
 
 pub(crate) fn reserve_memory(
@@ -250,7 +255,7 @@ mod tests {
         assert_eq!(vertex.id, 7);
         assert_eq!(vertex.tags.len(), 1);
         assert_eq!(vertex.tags[0].name, "person");
-        assert_eq!(vertex.get_property_any("age"), Some(&Value::BigInt(30)));
+        assert_eq!(vertex.property_value("age"), Some(Value::BigInt(30)));
         assert_eq!(row[1], Value::string("Alice"));
         assert_eq!(row[2], Value::BigInt(30));
     }

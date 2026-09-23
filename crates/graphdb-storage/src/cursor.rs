@@ -460,6 +460,11 @@ pub trait EdgeCursor: Send + std::fmt::Debug {
         }
         Ok(batch)
     }
+
+    /// Number of malformed/unparseable entries skipped so far.
+    fn malformed_skipped(&self) -> u64 {
+        0
+    }
 }
 
 /// A cursor that yields index entries (row IDs or covering rows) in batches.

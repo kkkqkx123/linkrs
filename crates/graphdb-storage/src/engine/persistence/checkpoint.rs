@@ -49,7 +49,10 @@ pub struct CheckpointStats {
 
 #[derive(Debug, Clone)]
 pub struct CheckpointData {
+    /// Allocated vertex slots including deleted-but-unreclaimed entries:
+    /// storage scale, not a live count.
     pub vertex_count: u64,
+    /// Live edge count on the stored leg.
     pub edge_count: u64,
     pub data_size: u64,
 }

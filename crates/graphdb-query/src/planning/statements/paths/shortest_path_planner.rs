@@ -34,6 +34,15 @@ impl ShortestPathPlanner {
         edge_pattern: &EdgePattern,
         space_id: u64,
     ) -> Result<ShortestPathPlan, PlannerError> {
+        // Fail fast on explicit endpoint ids: an invalid start or end is a
+        // planning error, while a valid but unreachable pair still yields an
+        // empty path set from `find_shortest_path`.
+        if let Some(vid) = &start.vid {
+            VertexId::try_from(vid)?;
+        }
+        if let Some(vid) = &end.vid {
+            VertexId::try_from(vid)?;
+        }
         let bfs_config = BfsConfig {
             max_iterations: 10000,
             max_path_length: 100,
@@ -220,6 +229,13 @@ impl ShortestPathPlanner {
 
     fn vertex_matches_pattern(&self, vertex: &Vertex, pattern: &NodePattern) -> bool {
         if !pattern.labels.is_empty() {
+            let distinct = pattern
+                .labels
+                .iter()
+                .collect::<std::collections::HashSet<_>>();
+            if distinct.len() > 1 {
+                return false;
+            }
             let has_all_labels = pattern
                 .labels
                 .iter()

@@ -272,10 +272,13 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
             .get_space(space)?
             .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?
             .vid_type;
-        let raw = vertex_id
-            .parse::<i64>()
-            .map(VertexId::from_int64)
-            .unwrap_or_else(|_| VertexId::from_string(vertex_id));
+        let raw = if let Ok(parsed) = vertex_id.parse::<i64>() {
+            VertexId::try_from_int64(parsed)
+                .or_else(|_| VertexId::try_from_string(vertex_id))
+                .map_err(StorageError::invalid_input)?
+        } else {
+            VertexId::try_from_string(vertex_id).map_err(StorageError::invalid_input)?
+        };
         let parsed_id = VertexId::normalize_for_vid_type(&vid_type, raw)?;
         let previous = self.inner.get_vertex(space, &parsed_id)?;
         let result = self.inner.delete_vertex_data(space, vertex_id)?;
@@ -328,15 +331,23 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
             .vid_type;
         let source = VertexId::normalize_for_vid_type(
             &vid_type,
-            src.parse::<i64>()
-                .map(VertexId::from_int64)
-                .unwrap_or_else(|_| VertexId::from_string(src)),
+            if let Ok(parsed) = src.parse::<i64>() {
+                VertexId::try_from_int64(parsed)
+                    .or_else(|_| VertexId::try_from_string(src))
+                    .map_err(StorageError::invalid_input)?
+            } else {
+                VertexId::try_from_string(src).map_err(StorageError::invalid_input)?
+            },
         )?;
         let destination = VertexId::normalize_for_vid_type(
             &vid_type,
-            dst.parse::<i64>()
-                .map(VertexId::from_int64)
-                .unwrap_or_else(|_| VertexId::from_string(dst)),
+            if let Ok(parsed) = dst.parse::<i64>() {
+                VertexId::try_from_int64(parsed)
+                    .or_else(|_| VertexId::try_from_string(dst))
+                    .map_err(StorageError::invalid_input)?
+            } else {
+                VertexId::try_from_string(dst).map_err(StorageError::invalid_input)?
+            },
         )?;
         let previous = self
             .inner

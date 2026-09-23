@@ -62,6 +62,13 @@ impl SeekStrategy for IndexSeek {
 impl IndexSeek {
     fn vertex_matches_pattern(&self, vertex: &Vertex, pattern: &NodePattern) -> bool {
         if !pattern.labels.is_empty() {
+            let distinct = pattern
+                .labels
+                .iter()
+                .collect::<std::collections::HashSet<_>>();
+            if distinct.len() > 1 {
+                return false;
+            }
             let has_all_labels = pattern
                 .labels
                 .iter()

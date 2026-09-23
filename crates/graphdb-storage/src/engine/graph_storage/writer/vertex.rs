@@ -444,6 +444,48 @@ pub(crate) fn update_vertex(
     Ok(())
 }
 
+/// Locate the single label table owning an external id.
+///
+/// Transition helper for label-less deletes: probes every label table in
+/// order, so the cost grows linearly with the tag count. Callers that know
+/// the label should route directly to that table instead. Zero hits report
+/// not found, multiple hits reject the ambiguous delete instead of fanning
+/// out across distinct vertices sharing one id string.
+fn find_single_label_owner(
+    ctx: &GraphStorageContext,
+    tags: &[TagInfo],
+    routed: &RoutedVertexId,
+    vid: &VertexId,
+    ts: Timestamp,
+) -> StorageResult<(LabelId, String)> {
+    let mut owners: Vec<(LabelId, String)> = Vec::new();
+    for tag in tags {
+        let hit = ctx.data_store().with_vertex_tables(|tables| {
+            tables.get(&tag.tag_id).is_some_and(|table| match routed {
+                RoutedVertexId::Int(vid_int) => {
+                    table.get_internal_id_by_i64(*vid_int, ts).is_some()
+                }
+                RoutedVertexId::Text(id_str) => table.get_internal_id(id_str, ts).is_some(),
+            })
+        });
+        if hit {
+            owners.push((tag.tag_id, tag.tag_name.clone()));
+        }
+    }
+    match owners.as_slice() {
+        [(label_id, tag_name)] => Ok((*label_id, tag_name.clone())),
+        [] => Err(StorageError::vertex_not_found()),
+        _ => {
+            let names: Vec<&str> = owners.iter().map(|(_, name)| name.as_str()).collect();
+            Err(StorageError::invalid_input(format!(
+                "Vertex id {} matches multiple labels [{}]: label-scoped delete required",
+                vid,
+                names.join(", ")
+            )))
+        }
+    }
+}
+
 pub(crate) fn delete_vertex(
     ctx: &GraphStorageContext,
     space: &str,
@@ -459,39 +501,11 @@ pub(crate) fn delete_vertex(
     let routed = route_vertex_id(&vid)?;
     let ts = ctx.get_write_timestamp()?;
 
-    // Single-label delete: probe every label table for the id. Zero hits is
-    // an explicit not-found; multiple hits violate the single-label
-    // invariant and are rejected instead of fanning out across distinct
-    // vertices that happen to share an id string.
-    let mut owners: Vec<(LabelId, String)> = Vec::new();
-    for tag in &tags {
-        let hit = ctx.data_store().with_vertex_tables(|tables| {
-            tables.get(&tag.tag_id).is_some_and(|table| match &routed {
-                RoutedVertexId::Int(vid_int) => {
-                    table.get_internal_id_by_i64(*vid_int, ts).is_some()
-                }
-                RoutedVertexId::Text(id_str) => table.get_internal_id(id_str, ts).is_some(),
-            })
-        });
-        if hit {
-            owners.push((tag.tag_id, tag.tag_name.clone()));
-        }
-    }
-
-    let (label_id, tag_name) = match owners.as_slice() {
-        [(label_id, tag_name)] => (*label_id, tag_name.clone()),
-        [] => {
+    let (label_id, tag_name) = match find_single_label_owner(ctx, &tags, &routed, &vid, ts) {
+        Ok(owner) => owner,
+        Err(error) => {
             ctx.abort_write_timestamp(ts);
-            return Err(StorageError::vertex_not_found());
-        }
-        _ => {
-            ctx.abort_write_timestamp(ts);
-            let names: Vec<&str> = owners.iter().map(|(_, name)| name.as_str()).collect();
-            return Err(StorageError::invalid_input(format!(
-                "Vertex id {} matches multiple labels [{}]: label-scoped delete required",
-                vid,
-                names.join(", ")
-            )));
+            return Err(error);
         }
     };
 

@@ -141,15 +141,6 @@ impl Vertex {
         None
     }
 
-    pub fn get_property_any(&self, prop_name: &str) -> Option<&Value> {
-        for tag in &self.tags {
-            if let Some(value) = tag.properties.get(prop_name) {
-                return Some(value);
-            }
-        }
-        self.properties.get(prop_name)
-    }
-
     /// Look up a property with single-label evaluation semantics: tag
     /// properties first, then the vertex-level map.
     ///

@@ -397,8 +397,8 @@ fn test_auto_vertex_compaction_reclaims_id_holes() {
             .unwrap()
             .unwrap_or_else(|| panic!("vertex v{id} lost after vertex compaction remap"));
         assert_eq!(
-            vertex.get_property_any("name"),
-            Some(&Value::string(format!("v{id}"))),
+            vertex.property_value("name"),
+            Some(Value::string(format!("v{id}"))),
             "vertex v{id} property corrupted by remap"
         );
     }

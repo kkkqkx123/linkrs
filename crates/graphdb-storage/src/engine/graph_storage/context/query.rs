@@ -51,6 +51,9 @@ impl GraphStorageContext {
             })
     }
 
+    /// Allocated vertex slots across all tables, including deleted but not
+    /// yet reclaimed entries. Storage scale for stats and checkpoints, not
+    /// a live count; exact live counts come from `id_hole_stats`.
     pub fn total_vertex_count(&self) -> usize {
         self.persistent
             .data_store
@@ -58,6 +61,8 @@ impl GraphStorageContext {
             .with_vertex_tables(|tables| tables.values().map(|table| table.total_count()).sum())
     }
 
+    /// Live edge count on the stored leg. Unlike `total_vertex_count`,
+    /// tombstoned edges are not included.
     pub fn total_edge_count(&self) -> usize {
         self.persistent
             .data_store

@@ -200,8 +200,8 @@ fn test_read_operation_context_pins_and_releases_statement_snapshot() {
         .unwrap()
         .expect("vertex should resolve");
     assert_eq!(
-        vertex.get_property_any("name").unwrap(),
-        &Value::string("Alice")
+        vertex.property_value("name").unwrap(),
+        Value::string("Alice")
     );
 
     // Finalize keeps the table pin-free.
@@ -279,6 +279,46 @@ fn vertex_column_stats_snapshot_matches_inserted_range() {
         .expect("name snapshot should be available");
     assert_eq!(name_snap.min_value, Some(Value::string("P1")));
     assert_eq!(name_snap.max_value, Some(Value::string("P99")));
+}
+
+#[test]
+fn vertex_column_stats_snapshot_row_count_excludes_deleted_rows() {
+    use crate::stats_reader::ColumnStatsReader;
+
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+
+    for i in 1..=10i64 {
+        storage
+            .insert_vertex(
+                "test_space",
+                Vertex::new(
+                    VertexId::from_int64(i),
+                    vec![Tag::new(
+                        "Person".to_string(),
+                        [("age".to_string(), Value::BigInt(i))]
+                            .into_iter()
+                            .collect(),
+                    )],
+                ),
+            )
+            .expect("insert should succeed");
+    }
+
+    for i in 1..=4i64 {
+        storage
+            .delete_vertex("test_space", &VertexId::from_int64(i))
+            .expect("delete should succeed");
+    }
+
+    let snap = storage
+        .vertex_column_stats("test_space", "Person", "age")
+        .expect("snapshot should be available");
+    assert_eq!(
+        snap.row_count, 6,
+        "snapshot row count must be live rows, not allocated slots"
+    );
 }
 
 #[test]

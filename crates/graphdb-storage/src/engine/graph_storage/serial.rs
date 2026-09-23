@@ -73,7 +73,9 @@ pub(crate) fn scan_vertex_serial_column(
         if !ids.is_empty() {
             let projection = [prop_name.to_string()];
             for record in table.get_projected_batch(&ids, ts, Some(&projection)) {
-                let record = record?;
+                let Some(record) = record else {
+                    continue;
+                };
                 if let Some((_, value)) =
                     record.properties.iter().find(|(name, _)| name == prop_name)
                 {

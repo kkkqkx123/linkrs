@@ -58,9 +58,14 @@ impl ShardedVertexTable {
     /// comparison used by pushed predicates; null/distinct counts come from
     /// the persisted column stats meta when available. Returns `None` when
     /// the column is unknown or no shard has any recorded information.
-    pub fn column_stats_snapshot(
+    ///
+    /// `row_count` is the live row estimate at `ts`, not the allocated
+    /// slot total: deleted-but-unreclaimed rows must not inflate the
+    /// optimizer's cardinality.
+    pub fn column_stats_snapshot_at(
         &self,
         column: &str,
+        ts: Timestamp,
     ) -> Option<crate::stats_reader::ColumnStatsSnapshot> {
         use crate::stats_reader::ColumnStatsSnapshot;
 
@@ -107,7 +112,7 @@ impl ShardedVertexTable {
             _ => (None, None),
         };
         Some(ColumnStatsSnapshot {
-            row_count: self.total_count() as u64,
+            row_count: self.id_hole_stats(ts).0 as u64,
             null_count,
             distinct_count,
             hll,
@@ -151,12 +156,13 @@ impl ShardedVertexTable {
         Some(self.encode_id(idx, local_id))
     }
 
-    /// Total allocated vertex slots across all shards.
+    /// Total allocated vertex slots across all shards, including deleted but
+    /// not yet reclaimed entries.
     ///
-    /// This is an approximate live count: shards are read without a global
-    /// lock, so concurrent inserts/deletes may be observed inconsistently
-    /// across shards. Use it for sizing and statistics, not for exact
-    /// accounting.
+    /// Shards are read without a global lock, so concurrent inserts and
+    /// deletes may be observed inconsistently across shards. Use it for sizing
+    /// and statistics, not for exact live accounting. Exact live counts come
+    /// from `id_hole_stats`.
     pub fn total_count(&self) -> usize {
         let mut total = 0;
         for shard in &self.shards {

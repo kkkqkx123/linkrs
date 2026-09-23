@@ -352,6 +352,8 @@ pub fn plan_pattern_node(
         }
     }
 
+    // Single label execution scans the first label only; the full label
+    // filter below guarantees distinct multi label patterns match nothing.
     let mut scan_node = ScanVerticesNode::new(space_id, space_name);
     scan_node.set_col_names(vec![var_name.clone()]);
     scan_node.set_output_var(var_name.clone());

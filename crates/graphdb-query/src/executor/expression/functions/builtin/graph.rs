@@ -209,6 +209,11 @@ fn execute_properties(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Vertex(v) => {
             let mut props = std::collections::HashMap::new();
+            props.extend(
+                v.properties
+                    .iter()
+                    .map(|(k, v)| (Value::string(k.clone()), v.clone())),
+            );
             for tag in &v.tags {
                 props.extend(
                     tag.properties
@@ -216,11 +221,6 @@ fn execute_properties(args: &[Value]) -> Result<Value, ExpressionError> {
                         .map(|(k, v)| (Value::string(k.clone()), v.clone())),
                 );
             }
-            props.extend(
-                v.properties
-                    .iter()
-                    .map(|(k, v)| (Value::string(k.clone()), v.clone())),
-            );
             Ok(Value::map(props))
         }
         Value::Edge(e) => Ok(Value::string_map(e.props.clone())),
@@ -301,8 +301,11 @@ fn execute_endnode(args: &[Value]) -> Result<Value, ExpressionError> {
 fn extract_vertex_id(value: &Value) -> Result<VertexId, ExpressionError> {
     match value {
         Value::Vertex(v) => Ok(v.vid),
-        Value::BigInt(id) => Ok(VertexId::from_int64(*id)),
-        Value::Int(id) => Ok(VertexId::from_int64(*id as i64)),
+        Value::BigInt(id) => {
+            VertexId::try_from_int64(*id).map_err(|e| ExpressionError::type_error(e.to_string()))
+        }
+        Value::Int(id) => VertexId::try_from_int64(*id as i64)
+            .map_err(|e| ExpressionError::type_error(e.to_string())),
         Value::Null(_) => Err(ExpressionError::type_error(
             "Expected a vertex or vertex ID, got null",
         )),
@@ -326,9 +329,9 @@ fn execute_degree(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Vertex(v) => {
             let degree = v
-                .properties
-                .iter()
-                .filter(|(k, _)| k.starts_with("neighbor_"))
+                .get_all_properties()
+                .keys()
+                .filter(|k| k.starts_with("neighbor_"))
                 .count();
             Ok(Value::BigInt(degree as i64))
         }
@@ -343,10 +346,10 @@ fn execute_out_edges(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Vertex(v) => {
             let edges: Vec<Value> = v
-                .properties
-                .iter()
+                .get_all_properties()
+                .into_iter()
                 .filter(|(k, _)| k.starts_with("out_"))
-                .map(|(_, v)| v.clone())
+                .map(|(_, v)| (*v).clone())
                 .collect();
             Ok(Value::list(List { values: edges }))
         }
@@ -361,10 +364,10 @@ fn execute_in_edges(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Vertex(v) => {
             let edges: Vec<Value> = v
-                .properties
-                .iter()
+                .get_all_properties()
+                .into_iter()
                 .filter(|(k, _)| k.starts_with("in_"))
-                .map(|(_, v)| v.clone())
+                .map(|(_, v)| (*v).clone())
                 .collect();
             Ok(Value::list(List { values: edges }))
         }
@@ -394,6 +397,11 @@ fn execute_shortest_path(args: &[Value]) -> Result<Value, ExpressionError> {
             ))
         }
     };
+    if start_vid < 0 || end_vid < 0 {
+        return Err(ExpressionError::type_error(
+            "shortest_path requires non-negative integer vertex IDs",
+        ));
+    }
     if start_vid == end_vid {
         return Ok(Value::BigInt(0));
     }

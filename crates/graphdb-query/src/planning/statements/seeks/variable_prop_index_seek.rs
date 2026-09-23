@@ -247,6 +247,27 @@ impl VariablePropIndexSeek {
     }
 }
 
+fn has_distinct_multi_labels(labels: &[String]) -> bool {
+    labels
+        .iter()
+        .collect::<std::collections::HashSet<_>>()
+        .len()
+        > 1
+}
+
+fn vertex_matches_single_label(
+    vertex: &graphdb_core::Vertex,
+    pattern: &super::seek_strategy_base::NodePattern,
+) -> bool {
+    if pattern.labels.is_empty() {
+        return true;
+    }
+    pattern
+        .labels
+        .iter()
+        .all(|label| vertex.tags.iter().any(|tag| tag.name == *label))
+}
+
 impl SeekStrategy for VariablePropIndexSeek {
     fn execute<S: StorageReader>(
         &self,
@@ -263,6 +284,14 @@ impl SeekStrategy for VariablePropIndexSeek {
         let mut vertex_ids = Vec::new();
         let mut rows_scanned = 0;
 
+        if has_distinct_multi_labels(&context.node_pattern.labels) {
+            return Ok(SeekResult {
+                vertex_ids,
+                strategy_used: SeekStrategyType::VariablePropIndexSeek,
+                rows_scanned,
+            });
+        }
+
         // Find the best index.
         if let Some((index_info, primary_pred)) = self.find_best_index(context) {
             // Retrieve the vertices corresponding to the tags.
@@ -272,11 +301,14 @@ impl SeekStrategy for VariablePropIndexSeek {
 
             // Filter the vertices that satisfy all predicates.
             for vertex in vertices {
+                if !vertex_matches_single_label(&vertex, &context.node_pattern) {
+                    continue;
+                }
                 let mut matches_all = true;
 
                 // Check the subject and verb.
-                if let Some(prop_value) = vertex.get_property_any(&primary_pred.property) {
-                    if !self.value_matches(prop_value, primary_pred) {
+                if let Some(prop_value) = vertex.property_value(&primary_pred.property) {
+                    if !self.value_matches(&prop_value, primary_pred) {
                         matches_all = false;
                     }
                 } else {
@@ -287,8 +319,8 @@ impl SeekStrategy for VariablePropIndexSeek {
                 if matches_all {
                     for pred in &self.predicates {
                         if pred.property != primary_pred.property {
-                            if let Some(prop_value) = vertex.get_property_any(&pred.property) {
-                                if !self.value_matches(prop_value, pred) {
+                            if let Some(prop_value) = vertex.property_value(&pred.property) {
+                                if !self.value_matches(&prop_value, pred) {
                                     matches_all = false;
                                     break;
                                 }

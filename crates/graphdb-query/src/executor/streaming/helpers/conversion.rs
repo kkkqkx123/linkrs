@@ -5,11 +5,36 @@
 use graphdb_core::Value;
 use graphdb_core::{Edge, Vertex};
 
+/// Render a vertex id as its raw external string without display quoting.
+fn vid_raw_string(vid: &Vertex) -> String {
+    if let Some(s) = vid.vid.as_str() {
+        s.to_string()
+    } else if let Some(i) = vid.vid.as_int64() {
+        i.to_string()
+    } else if let Some(u) = vid.vid.as_u64() {
+        u.to_string()
+    } else {
+        format!("{:?}", vid.vid.as_bytes())
+    }
+}
+
+fn edge_raw_string(vid: &graphdb_core::types::storage_ids::VertexId) -> String {
+    if let Some(s) = vid.as_str() {
+        s.to_string()
+    } else if let Some(i) = vid.as_int64() {
+        i.to_string()
+    } else if let Some(u) = vid.as_u64() {
+        u.to_string()
+    } else {
+        format!("{:?}", vid.as_bytes())
+    }
+}
+
 /// Convert a Vertex to row representation
 pub fn vertex_to_row(vertex: &Vertex) -> Vec<Value> {
     let mut row = vec![
         Value::BigInt(vertex.id),
-        Value::string(vertex.vid.to_string()),
+        Value::string(vid_raw_string(vertex)),
     ];
 
     // Add tags
@@ -17,9 +42,10 @@ pub fn vertex_to_row(vertex: &Vertex) -> Vec<Value> {
         row.push(Value::string(tag.name.clone()));
     }
 
-    // Add first 3 properties (simplified)
-    for value in vertex.properties.values().take(3) {
-        row.push(value.clone());
+    // Add first 3 properties from the unified tag-first view so tag-only
+    // rows are not silently dropped.
+    for value in vertex.get_all_properties().into_values().take(3) {
+        row.push((*value).clone());
     }
 
     row
@@ -28,8 +54,8 @@ pub fn vertex_to_row(vertex: &Vertex) -> Vec<Value> {
 /// Convert an Edge to row representation
 pub fn edge_to_row(edge: &Edge) -> Vec<Value> {
     let mut row = vec![
-        Value::string(edge.src.to_string()),
-        Value::string(edge.dst.to_string()),
+        Value::string(edge_raw_string(&edge.src)),
+        Value::string(edge_raw_string(&edge.dst)),
         Value::string(edge.edge_type.clone()),
         Value::BigInt(edge.ranking),
     ];
@@ -63,8 +89,7 @@ pub fn edges_to_rows(edges: Vec<Edge>, partition_range: &std::ops::Range<i64>) -
     edges
         .into_iter()
         .filter(|e| {
-            e.src
-                .to_string()
+            edge_raw_string(&e.src)
                 .parse::<i64>()
                 .is_ok_and(|id| id >= partition_range.start && id < partition_range.end)
         })

@@ -8,18 +8,26 @@ pub(crate) fn vid_to_string(vid: &VertexId) -> String {
         s.to_string()
     } else if let Some(i) = vid.as_int64() {
         i.to_string()
+    } else if let Some(u) = vid.as_u64() {
+        u.to_string()
     } else {
         format!("{:?}", vid.as_bytes())
     }
 }
 
 /// Parse an external ID string back into a VertexId.
+///
+/// Strict user-visible behavior without silent truncation: numeric strings
+/// become integer ids through the rejecting constructor, negative integers
+/// fall back to text, and overlong text yields an empty id that later stages
+/// reject instead of a truncated key.
 pub(crate) fn vid_from_str(id: &str) -> VertexId {
     if let Ok(parsed) = id.parse::<i64>() {
-        VertexId::from_int64(parsed)
-    } else {
-        VertexId::from_string(id)
+        if let Ok(vid) = VertexId::try_from_int64(parsed) {
+            return vid;
+        }
     }
+    VertexId::try_from_string(id).unwrap_or_default()
 }
 
 /// Resolve a vertex table internal index to its external ID string.

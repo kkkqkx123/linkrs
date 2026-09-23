@@ -51,8 +51,10 @@ impl InsertPlanner {
         }
     }
 
-    /// Constructing vertex insertion information
-    /// Supports the insertion of multiple tags.
+    /// Constructing vertex insertion information.
+    ///
+    /// The parser still carries every requested tag, but storage enforces a
+    /// single tag per vertex and rejects multi tag writes up front.
     fn build_vertex_insert_info(
         &self,
         space_name: String,
@@ -338,10 +340,12 @@ impl Planner for InsertPlanner {
         let (insert_node, _inserted_count) = match &insert_stmt.target {
             InsertTarget::Vertices { tags, values } => {
                 let count = values.len();
-                // Supports the insertion of multiple tags.
-                if tags.is_empty() {
+                // Storage accepts exactly one tag per vertex; reject early so
+                // multi tag writes fail at plan time with the same meaning as
+                // the storage write gate.
+                if tags.len() != 1 {
                     return Err(PlannerError::PlanGenerationFailed(
-                        "INSERT VERTEX must specify at least one tag".to_string(),
+                        "INSERT VERTEX must specify exactly one tag".to_string(),
                     ));
                 }
                 let info = self.build_vertex_insert_info(

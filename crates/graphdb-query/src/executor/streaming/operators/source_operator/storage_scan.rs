@@ -345,21 +345,23 @@ fn build_column_chunk(
                 properties.insert(column.name.clone(), value.clone());
             }
         }
-        let tags = if tag_name.is_empty() {
-            Vec::new()
+        let (tags, vertex_properties) = if tag_name.is_empty() {
+            (Vec::new(), properties)
         } else {
-            vec![graphdb_core::Tag::new(tag_name.clone(), properties.clone())]
+            (
+                vec![graphdb_core::Tag::new(tag_name.clone(), properties)],
+                std::collections::HashMap::new(),
+            )
         };
         let vertex = graphdb_core::Vertex {
             vid: batch.vids[row],
             id: batch.internal_ids[row],
             tags,
-            properties,
+            properties: vertex_properties,
         };
         let mut row_vec = Vec::with_capacity(flatten.len() + 1);
-        // Replicates Vertex::property_value semantics: vertex property first,
-        // then a tag whose name equals the property yields the tag's property
-        // map, otherwise null.
+        // Single label semantics shared with the row evaluator: tag
+        // properties first, then the vertex level map.
         let flat_values: Vec<Value> = flatten
             .iter()
             .map(|prop| {

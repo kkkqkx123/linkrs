@@ -736,11 +736,11 @@ pub(crate) fn scan_edges_by_type(
                                     ctx.get_external_id_by_internal_id(tbl_src, internal)
                                         .map(|v| vid_to_string(&v))
                                 })
-                                .unwrap_or_else(|| format!("{}", record.src_vid)),
+                                .unwrap_or_else(|| vid_to_string(&record.src_vid)),
                             Some(internal) => ctx
                                 .get_external_id_any(internal, ts)
-                                .unwrap_or_else(|| format!("{}", record.src_vid)),
-                            None => format!("{}", record.src_vid),
+                                .unwrap_or_else(|| vid_to_string(&record.src_vid)),
+                            None => vid_to_string(&record.src_vid),
                         };
 
                         let dst_external = match dst_internal {
@@ -750,11 +750,11 @@ pub(crate) fn scan_edges_by_type(
                                     ctx.get_external_id_by_internal_id(tbl_dst, internal)
                                         .map(|v| vid_to_string(&v))
                                 })
-                                .unwrap_or_else(|| format!("{}", record.dst_vid)),
+                                .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
                             Some(internal) => ctx
                                 .get_external_id_any(internal, ts)
-                                .unwrap_or_else(|| format!("{}", record.dst_vid)),
-                            None => format!("{}", record.dst_vid),
+                                .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
+                            None => vid_to_string(&record.dst_vid),
                         };
 
                         let edge =
@@ -805,7 +805,7 @@ pub(crate) fn scan_edges_by_type(
                                         .map(|v| vid_to_string(&v))
                                 })
                             })
-                            .unwrap_or_else(|| format!("{}", record.src_vid));
+                            .unwrap_or_else(|| vid_to_string(&record.src_vid));
 
                         let dst_external = dst_internal
                             .and_then(|internal| {
@@ -814,7 +814,7 @@ pub(crate) fn scan_edges_by_type(
                                         .map(|v| vid_to_string(&v))
                                 })
                             })
-                            .unwrap_or_else(|| format!("{}", record.dst_vid));
+                            .unwrap_or_else(|| vid_to_string(&record.dst_vid));
 
                         let edge =
                             edge_record_to_edge(&record, edge_type, &src_external, &dst_external);

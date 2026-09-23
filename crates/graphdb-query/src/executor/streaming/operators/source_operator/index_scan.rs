@@ -590,10 +590,7 @@ mod tests {
             panic!("covering row should contain a vertex");
         };
         assert_eq!(vertex.vid.as_int64(), Some(7));
-        assert_eq!(
-            vertex.get_property_any("name"),
-            Some(&Value::string("Alice"))
-        );
+        assert_eq!(vertex.property_value("name"), Some(Value::string("Alice")));
     }
 
     #[test]

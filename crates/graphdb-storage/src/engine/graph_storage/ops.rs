@@ -14,6 +14,36 @@ use graphdb_core::{Edge, RoleType, StorageError, StorageResult, Value, Vertex};
 use super::context::GraphStorageContext;
 use super::writer;
 
+/// Render a vertex id as its raw external string without display quoting.
+///
+/// Text ids round-trip through storage as raw strings, while display adds
+/// quotes. Read paths must use this form so text ids never gain quotes.
+fn raw_external_str(vid: &VertexId) -> String {
+    if let Some(s) = vid.as_str() {
+        s.to_string()
+    } else if let Some(i) = vid.as_int64() {
+        i.to_string()
+    } else if let Some(u) = vid.as_u64() {
+        u.to_string()
+    } else {
+        format!("{:?}", vid.as_bytes())
+    }
+}
+
+/// Decode a raw external id string, falling back to the stored record.
+///
+/// Callers pass strings produced from already validated storage values, so a
+/// decode failure means local corruption. Returning the typed record keeps
+/// the edge materialization fail-closed without inventing an empty endpoint.
+fn decode_external_str_or_record(id: &str, fallback: &VertexId) -> VertexId {
+    if let Ok(parsed) = id.parse::<i64>() {
+        if let Ok(vid) = VertexId::try_from_int64(parsed) {
+            return vid;
+        }
+    }
+    VertexId::try_from_string(id).unwrap_or(*fallback)
+}
+
 // ── Type Conversion Utilities ──
 
 /// External id routed to its table operation by [`VertexId`] kind.
@@ -168,17 +198,8 @@ fn edge_record_to_edge_with_props(
     dst_id: &str,
     props: HashMap<String, Value>,
 ) -> Edge {
-    let src_vid = if let Ok(id) = src_id.parse::<i64>() {
-        VertexId::from_int64(id)
-    } else {
-        VertexId::from_string(src_id)
-    };
-
-    let dst_vid = if let Ok(id) = dst_id.parse::<i64>() {
-        VertexId::from_int64(id)
-    } else {
-        VertexId::from_string(dst_id)
-    };
+    let src_vid = decode_external_str_or_record(src_id, &record.src_vid);
+    let dst_vid = decode_external_str_or_record(dst_id, &record.dst_vid);
 
     Edge {
         src: src_vid,
@@ -342,8 +363,8 @@ pub(crate) fn find_dangling_edges(
             let edge = edge_record_to_edge(
                 &record,
                 edge_type_name,
-                &format!("{}", src_external),
-                &format!("{}", dst_external),
+                &raw_external_str(&src_external),
+                &raw_external_str(&dst_external),
             );
             dangling_edges.push(edge);
         }

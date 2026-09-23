@@ -27,7 +27,7 @@ pub(crate) fn vertex_column_stats(
     let snapshot = ctx.data_store().with_vertex_tables(|tables| {
         tables
             .get(&label)
-            .and_then(|table| table.column_stats_snapshot(column))
+            .and_then(|table| table.column_stats_snapshot_at(column, ctx.get_read_timestamp()))
     })?;
     Some(Arc::new(snapshot))
 }

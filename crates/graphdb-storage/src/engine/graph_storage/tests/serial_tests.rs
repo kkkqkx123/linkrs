@@ -13,12 +13,12 @@ fn test_serial_auto_allocates_when_column_missing() {
         .get_vertex("test_space", &VertexId::from_int64(101))
         .unwrap()
         .unwrap();
-    assert_eq!(alice.get_property_any("id"), Some(&Value::BigInt(1)));
+    assert_eq!(alice.property_value("id"), Some(Value::BigInt(1)));
     let bob = storage
         .get_vertex("test_space", &VertexId::from_int64(102))
         .unwrap()
         .unwrap();
-    assert_eq!(bob.get_property_any("id"), Some(&Value::BigInt(2)));
+    assert_eq!(bob.property_value("id"), Some(Value::BigInt(2)));
 }
 
 #[test]
@@ -48,7 +48,7 @@ fn test_serial_explicit_value_advances_counter() {
         .get_vertex("test_space", &VertexId::from_int64(102))
         .unwrap()
         .unwrap();
-    assert_eq!(bob.get_property_any("id"), Some(&Value::BigInt(6)));
+    assert_eq!(bob.property_value("id"), Some(Value::BigInt(6)));
 }
 
 #[test]
@@ -138,17 +138,17 @@ fn test_serial_allocates_per_tag_and_per_space() {
         .get_vertex("test_space", &VertexId::from_int64(101))
         .unwrap()
         .unwrap();
-    assert_eq!(alice.get_property_any("id"), Some(&Value::BigInt(1)));
+    assert_eq!(alice.property_value("id"), Some(Value::BigInt(1)));
     let bob = storage
         .get_vertex("second_space", &VertexId::from_int64(101))
         .unwrap()
         .unwrap();
-    assert_eq!(bob.get_property_any("id"), Some(&Value::BigInt(1)));
+    assert_eq!(bob.property_value("id"), Some(Value::BigInt(1)));
     let paris = storage
         .get_vertex("test_space", &VertexId::from_int64(201))
         .unwrap()
         .unwrap();
-    assert_eq!(paris.get_property_any("id"), Some(&Value::BigInt(1)));
+    assert_eq!(paris.property_value("id"), Some(Value::BigInt(1)));
 }
 
 #[test]
@@ -246,7 +246,7 @@ fn test_serial_survives_save_load_round_trip() {
         .get_vertex("test_space", &VertexId::from_int64(103))
         .unwrap()
         .unwrap();
-    assert_eq!(carol.get_property_any("id"), Some(&Value::BigInt(3)));
+    assert_eq!(carol.property_value("id"), Some(Value::BigInt(3)));
 
     // Deleted rows must not bring the counter back down after reload.
     reloaded
@@ -264,8 +264,8 @@ fn test_serial_survives_save_load_round_trip() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        dave.get_property_any("id"),
-        Some(&Value::BigInt(4)),
+        dave.property_value("id"),
+        Some(Value::BigInt(4)),
         "counter must not fall back after row deletion"
     );
 }

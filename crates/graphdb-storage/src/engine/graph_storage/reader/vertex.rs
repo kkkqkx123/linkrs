@@ -221,10 +221,11 @@ pub(crate) fn count_vertices_by_tag(
         StorageError::not_found(format!("Tag {} not found in space {}", tag, space))
     })?;
 
+    let ts = ctx.get_read_timestamp();
     let count = ctx.data_store().with_vertex_tables(|vertex_tables| {
         vertex_tables
             .get(&tag_info.tag_id)
-            .map(|t| t.total_count() as u64)
+            .map(|t| t.id_hole_stats(ts).0 as u64)
             .unwrap_or(0)
     });
     Ok(count)

@@ -67,6 +67,9 @@ pub(crate) struct GraphEdgeCursor {
     /// absent from the projection so predicates can be evaluated.
     predicate_columns: Vec<String>,
     exhausted: bool,
+    /// Malformed/unparseable entries skipped so far, exposed through
+    /// `EdgeCursor::malformed_skipped` for diagnostics.
+    malformed_skipped: u64,
     ts: Timestamp,
     targets: Vec<TargetDef>,
     target_idx: usize,
@@ -83,6 +86,7 @@ impl std::fmt::Debug for GraphEdgeCursor {
             .field("limit", &self.limit)
             .field("offset_remaining", &self.offset_remaining)
             .field("emitted", &self.emitted)
+            .field("malformed_skipped", &self.malformed_skipped)
             .field("exhausted", &self.exhausted)
             .finish()
     }
@@ -126,6 +130,7 @@ impl GraphEdgeCursor {
             predicate,
             predicate_columns,
             exhausted: targets.is_empty(),
+            malformed_skipped: 0,
             ts,
             targets,
             target_idx: 0,
@@ -136,6 +141,10 @@ impl GraphEdgeCursor {
 }
 
 impl EdgeCursor for GraphEdgeCursor {
+    fn malformed_skipped(&self) -> u64 {
+        self.malformed_skipped
+    }
+
     fn next_batch(&mut self, batch_size: usize) -> Result<Vec<Edge>, StorageError> {
         if self.exhausted {
             return Ok(Vec::new());
@@ -158,6 +167,7 @@ impl EdgeCursor for GraphEdgeCursor {
         let emitted = &mut self.emitted;
         let offset_remaining = &mut self.offset_remaining;
         let exhausted = &mut self.exhausted;
+        let malformed = &mut self.malformed_skipped;
 
         let data_store = ctx.data_store().clone();
         data_store.with_edge_tables(|edge_tables| {
@@ -206,6 +216,7 @@ impl EdgeCursor for GraphEdgeCursor {
                             state: table_state,
                             batch: &mut candidates,
                             batch_size,
+                            malformed,
                         });
                     }
                     TablePhase::Done => {
@@ -244,6 +255,7 @@ struct ScanArgs<'a> {
     state: &'a mut TableScanState,
     batch: &'a mut Vec<EdgeCandidate>,
     batch_size: usize,
+    malformed: &'a mut u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +315,9 @@ fn scan_mutable(args: ScanArgs) {
             continue;
         }
         let Some(variant) = args.store.out_csr.group_variant(gid) else {
+            // Listed as existing but unreadable: metadata inconsistency,
+            // counted instead of silently dropped.
+            *args.malformed += 1;
             args.state.resume_group = gid + 1;
             args.state.skip_in_group = 0;
             continue;
@@ -328,6 +343,9 @@ fn scan_mutable(args: ScanArgs) {
                 continue;
             }
             let Some(local) = local_vid.as_internal_u32() else {
+                // A stored group row that is not an internal id indicates
+                // corruption; count it instead of silently dropping it.
+                *args.malformed += 1;
                 continue;
             };
             let src_vid = VertexId::from_int64(local as i64 + base as i64);
@@ -335,7 +353,13 @@ fn scan_mutable(args: ScanArgs) {
                 let src_internal = src_vid.as_internal_u32().unwrap_or(u32::MAX);
                 let src_ext =
                     resolve_vertex_id(args.ctx, src_internal, args.td.tbl_src, &src_vid, args.ts);
-                let src_int = src_ext.parse::<i64>().unwrap_or(i64::MIN);
+                // An unparseable external id cannot satisfy a numeric range;
+                // count and skip instead of mapping it to a sentinel that
+                // silently mis-filters the row.
+                let Ok(src_int) = src_ext.parse::<i64>() else {
+                    *args.malformed += 1;
+                    continue;
+                };
                 if src_int < r.start || src_int >= r.end {
                     continue;
                 }

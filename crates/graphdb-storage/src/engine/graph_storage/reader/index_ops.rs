@@ -166,11 +166,11 @@ pub(crate) fn lookup_edges_by_property_range(
                     ctx.get_external_id_by_internal_id(src_label, internal)
                         .map(|v| vid_to_string(&v))
                 })
-                .unwrap_or_else(|| format!("{}", record.src_vid)),
+                .unwrap_or_else(|| vid_to_string(&record.src_vid)),
             Some(internal) => ctx
                 .get_external_id_any(internal, ts)
-                .unwrap_or_else(|| format!("{}", record.src_vid)),
-            None => format!("{}", record.src_vid),
+                .unwrap_or_else(|| vid_to_string(&record.src_vid)),
+            None => vid_to_string(&record.src_vid),
         };
         let dst_external = match dst_internal {
             Some(internal) if dst_label != 0 => ctx
@@ -179,11 +179,11 @@ pub(crate) fn lookup_edges_by_property_range(
                     ctx.get_external_id_by_internal_id(dst_label, internal)
                         .map(|v| vid_to_string(&v))
                 })
-                .unwrap_or_else(|| format!("{}", record.dst_vid)),
+                .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
             Some(internal) => ctx
                 .get_external_id_any(internal, ts)
-                .unwrap_or_else(|| format!("{}", record.dst_vid)),
-            None => format!("{}", record.dst_vid),
+                .unwrap_or_else(|| vid_to_string(&record.dst_vid)),
+            None => vid_to_string(&record.dst_vid),
         };
         edges.push(edge_record_to_edge(
             record,

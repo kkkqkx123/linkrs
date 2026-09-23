@@ -26,7 +26,7 @@ fn test_insert_and_get_vertex() {
         .unwrap();
     assert!(retrieved.is_some());
     let v = retrieved.unwrap();
-    assert_eq!(v.get_property_any("name"), Some(&Value::string("Alice")));
+    assert_eq!(v.property_value("name"), Some(Value::string("Alice")));
 }
 
 #[test]
@@ -91,10 +91,10 @@ fn test_update_vertex() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        v.get_property_any("name"),
-        Some(&Value::string("AliceUpdated"))
+        v.property_value("name"),
+        Some(Value::string("AliceUpdated"))
     );
-    assert_eq!(v.get_property_any("age"), Some(&Value::BigInt(31)));
+    assert_eq!(v.property_value("age"), Some(Value::BigInt(31)));
 
     let old_lookup = storage
         .lookup_index("test_space", "person_name_idx", &Value::string("Alice"))
@@ -155,8 +155,8 @@ fn test_auto_commit_update_rolls_back_before_image_on_abort() {
         .get_vertex("test_space", &VertexId::from_int64(101))
         .unwrap()
         .unwrap();
-    assert_eq!(v.get_property_any("age"), Some(&Value::BigInt(30)));
-    assert_eq!(v.get_property_any("name"), Some(&Value::string("Alice")));
+    assert_eq!(v.property_value("age"), Some(Value::BigInt(30)));
+    assert_eq!(v.property_value("name"), Some(Value::string("Alice")));
 }
 
 #[test]
@@ -412,9 +412,9 @@ fn test_vertex_with_boundary_properties() {
         .unwrap()
         .unwrap();
 
-    assert_eq!(retrieved.get_property_any("name"), Some(&Value::string("")));
+    assert_eq!(retrieved.property_value("name"), Some(Value::string("")));
     assert_eq!(
-        retrieved.get_property_any("age"),
-        Some(&Value::BigInt(i64::MAX))
+        retrieved.property_value("age"),
+        Some(Value::BigInt(i64::MAX))
     );
 }

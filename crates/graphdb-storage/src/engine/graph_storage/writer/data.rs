@@ -13,6 +13,21 @@ use super::super::context::GraphStorageContext;
 use super::super::ops::{endpoint_label_id, route_vertex_id, tag_label_id, RoutedVertexId};
 use super::super::reader;
 
+/// Parse a user supplied external id without silent normalization.
+///
+/// Numeric strings become integer ids through the rejecting constructor so
+/// negatives fail here. Negative numeric strings fall back to text and are
+/// resolved by space normalization. Overlong text fails instead of
+/// truncating.
+fn parse_user_vertex_id(id: &str) -> StorageResult<VertexId> {
+    if let Ok(parsed) = id.parse::<i64>() {
+        if let Ok(vid) = VertexId::try_from_int64(parsed) {
+            return Ok(vid);
+        }
+    }
+    VertexId::try_from_string(id).map_err(StorageError::invalid_input)
+}
+
 pub(crate) fn insert_vertex_data(
     ctx: &GraphStorageContext,
     space: &str,
@@ -216,10 +231,7 @@ pub(crate) fn delete_vertex_data(
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
-    let raw = vertex_id
-        .parse::<i64>()
-        .map(VertexId::from_int64)
-        .unwrap_or_else(|_| VertexId::from_string(vertex_id));
+    let raw = parse_user_vertex_id(vertex_id)?;
     let vid = VertexId::normalize_for_vid_type(&space_info.vid_type, raw)?;
 
     super::vertex::delete_vertex(ctx, space, &vid)?;
@@ -252,15 +264,9 @@ pub(crate) fn delete_edge_data(
             Some(id) => id,
             None => continue,
         };
-        let src_vid = src
-            .parse::<i64>()
-            .map(VertexId::from_int64)
-            .unwrap_or_else(|_| VertexId::from_string(src));
+        let src_vid = parse_user_vertex_id(src)?;
         let src_vid = VertexId::normalize_for_vid_type(&space_info.vid_type, src_vid)?;
-        let dst_vid = dst
-            .parse::<i64>()
-            .map(VertexId::from_int64)
-            .unwrap_or_else(|_| VertexId::from_string(dst));
+        let dst_vid = parse_user_vertex_id(dst)?;
         let dst_vid = VertexId::normalize_for_vid_type(&space_info.vid_type, dst_vid)?;
         let previous = reader::get_edge(ctx, space, &src_vid, &dst_vid, &et.edge_type_name, rank)?;
         let redo_entry = previous
@@ -428,7 +434,7 @@ pub(crate) fn update_data(
             ctx,
             ctx.index_metadata_manager(),
             space_info.space_id,
-            id,
+            &Value::from(vid),
             label,
             &merged_props.into_iter().collect::<Vec<_>>(),
             ts,

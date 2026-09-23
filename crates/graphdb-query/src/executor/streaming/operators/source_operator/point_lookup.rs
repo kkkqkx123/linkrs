@@ -25,9 +25,9 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
                 cached_ids.clear();
                 cached_ids.reserve(ids.len());
                 for id_val in ids {
-                    if let Ok(vid) = VertexId::try_from(id_val) {
-                        cached_ids.push(vid);
-                    }
+                    let vid = VertexId::try_from(id_val)
+                        .map_err(|e| QueryError::execution(format!("Invalid vertex id: {}", e)))?;
+                    cached_ids.push(vid);
                 }
             }
             GlobalState::Source(SourceState::GetVertices { position: 0 })

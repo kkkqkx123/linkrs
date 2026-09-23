@@ -601,32 +601,34 @@ impl SinkOperator {
                                 .get_variable(dst_col)
                                 .unwrap_or(Value::Null(graphdb_core::NullType::Null));
 
-                            if let (Ok(src), Ok(dst)) =
-                                (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
+                            let src = VertexId::try_from(&src_val).map_err(|e| {
+                                QueryError::execution(format!("Invalid edge source id: {}", e))
+                            })?;
+                            let dst = VertexId::try_from(&dst_val).map_err(|e| {
+                                QueryError::execution(format!("Invalid edge destination id: {}", e))
+                            })?;
+                            // Multi-edge semantics: the storage layer
+                            // assigns an increasing rank when a
+                            // (src, dst, edge_type) pair already exists,
+                            // so plain INSERT always succeeds. The
+                            // if-not-exists guard only skips duplicates.
+                            if *if_not_exists
+                                && writer
+                                    .get_edge(space_name, &src, &dst, edge_type, 0)
+                                    .map_err(|e| QueryError::execution(e.to_string()))?
+                                    .is_some()
                             {
-                                // Multi-edge semantics: the storage layer
-                                // assigns an increasing rank when a
-                                // (src, dst, edge_type) pair already exists,
-                                // so plain INSERT always succeeds. The
-                                // if-not-exists guard only skips duplicates.
-                                if *if_not_exists
-                                    && writer
-                                        .get_edge(space_name, &src, &dst, edge_type, 0)
-                                        .map_err(|e| QueryError::execution(e.to_string()))?
-                                        .is_some()
-                                {
-                                    continue;
-                                }
-                                let mut props = HashMap::new();
-                                for (prop_name, expr) in edge_properties.iter() {
-                                    let val = eval_expr(expr, &mut context)?;
-                                    props.insert(prop_name.clone(), val);
-                                }
-                                let edge = Edge::new(src, dst, edge_type.clone(), 0, props);
-                                StorageWriter::insert_edge(&mut *writer, space_name, edge)
-                                    .map_err(|e| QueryError::execution(e.to_string()))?;
-                                *rows_inserted += 1;
+                                continue;
                             }
+                            let mut props = HashMap::new();
+                            for (prop_name, expr) in edge_properties.iter() {
+                                let val = eval_expr(expr, &mut context)?;
+                                props.insert(prop_name.clone(), val);
+                            }
+                            let edge = Edge::new(src, dst, edge_type.clone(), 0, props);
+                            StorageWriter::insert_edge(&mut *writer, space_name, edge)
+                                .map_err(|e| QueryError::execution(e.to_string()))?;
+                            *rows_inserted += 1;
                         }
                     } else {
                         *rows_inserted += chunk.rows.len() as u64;
@@ -673,77 +675,80 @@ impl SinkOperator {
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())
                                 .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                            if let Ok(vid) = VertexId::try_from(&vid_val) {
-                                let existing = writer
-                                    .get_vertex(space_name, &vid)
-                                    .map_err(|e| QueryError::execution(e.to_string()))?;
-                                let existing = match existing {
-                                    Some(ev) => ev,
-                                    None => {
-                                        if *is_upsert {
-                                            let mut props = HashMap::new();
-                                            for (prop_name, expr) in updates.iter() {
-                                                let val = eval_expr(expr, &mut context)?;
-                                                props.insert(prop_name.clone(), val);
-                                            }
-                                            let tags =
-                                                vec![Tag::new(tag_name.clone(), props.clone())];
-                                            let vertex = Vertex::new(vid, tags);
-                                            StorageWriter::insert_vertex(
-                                                &mut *writer,
-                                                space_name,
-                                                vertex,
-                                            )
-                                            .map_err(|e| QueryError::execution(e.to_string()))?;
-                                            *rows_updated += 1;
-                                        } else {
-                                            return Err(QueryError::execution(format!(
-                                                "Vertex not found: {}",
-                                                vid
-                                            )));
-                                        }
-                                        continue;
-                                    }
-                                };
-                                // Load existing properties into context so expressions
-                                // like `SET stock = stock - 1` and conditions like
-                                // `WHEN age > 100` can resolve existing columns.
-                                for tag in &existing.tags {
-                                    for (k, v) in &tag.properties {
-                                        context.set_variable(k.clone(), v.clone());
-                                    }
-                                }
-                                if let Some(cond) = condition {
-                                    let keep = eval_expr(cond, &mut context)?;
-                                    if !condition_matches(&keep) {
-                                        continue;
-                                    }
-                                }
-                                let mut props = HashMap::new();
-                                for (prop_name, expr) in updates.iter() {
-                                    let val = eval_expr(expr, &mut context)?;
-                                    props.insert(prop_name.clone(), val);
-                                }
-                                let tags: Vec<Tag> = if tag_name.is_empty() {
-                                    existing
-                                        .tags
-                                        .iter()
-                                        .map(|t| {
-                                            let mut merged = t.properties.clone();
-                                            for (k, v) in &props {
-                                                merged.insert(k.clone(), v.clone());
-                                            }
-                                            Tag::new(t.name.clone(), merged)
-                                        })
-                                        .collect()
-                                } else {
-                                    vec![Tag::new(tag_name.clone(), props)]
-                                };
-                                let vertex = Vertex::new_with_properties(vid, tags, HashMap::new());
-                                StorageWriter::update_vertex(&mut *writer, space_name, vertex)
-                                    .map_err(|e| QueryError::execution(e.to_string()))?;
-                                *rows_updated += 1;
+                            if matches!(vid_val, Value::Null(_)) {
+                                continue;
                             }
+                            let vid = VertexId::try_from(&vid_val).map_err(|e| {
+                                QueryError::execution(format!("Invalid vertex id: {}", e))
+                            })?;
+                            let existing = writer
+                                .get_vertex(space_name, &vid)
+                                .map_err(|e| QueryError::execution(e.to_string()))?;
+                            let existing = match existing {
+                                Some(ev) => ev,
+                                None => {
+                                    if *is_upsert {
+                                        let mut props = HashMap::new();
+                                        for (prop_name, expr) in updates.iter() {
+                                            let val = eval_expr(expr, &mut context)?;
+                                            props.insert(prop_name.clone(), val);
+                                        }
+                                        let tags = vec![Tag::new(tag_name.clone(), props.clone())];
+                                        let vertex = Vertex::new(vid, tags);
+                                        StorageWriter::insert_vertex(
+                                            &mut *writer,
+                                            space_name,
+                                            vertex,
+                                        )
+                                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                                        *rows_updated += 1;
+                                    } else {
+                                        return Err(QueryError::execution(format!(
+                                            "Vertex not found: {}",
+                                            vid
+                                        )));
+                                    }
+                                    continue;
+                                }
+                            };
+                            // Load existing properties into context so expressions
+                            // like `SET stock = stock - 1` and conditions like
+                            // `WHEN age > 100` can resolve existing columns.
+                            for tag in &existing.tags {
+                                for (k, v) in &tag.properties {
+                                    context.set_variable(k.clone(), v.clone());
+                                }
+                            }
+                            if let Some(cond) = condition {
+                                let keep = eval_expr(cond, &mut context)?;
+                                if !condition_matches(&keep) {
+                                    continue;
+                                }
+                            }
+                            let mut props = HashMap::new();
+                            for (prop_name, expr) in updates.iter() {
+                                let val = eval_expr(expr, &mut context)?;
+                                props.insert(prop_name.clone(), val);
+                            }
+                            let tags: Vec<Tag> = if tag_name.is_empty() {
+                                existing
+                                    .tags
+                                    .iter()
+                                    .map(|t| {
+                                        let mut merged = t.properties.clone();
+                                        for (k, v) in &props {
+                                            merged.insert(k.clone(), v.clone());
+                                        }
+                                        Tag::new(t.name.clone(), merged)
+                                    })
+                                    .collect()
+                            } else {
+                                vec![Tag::new(tag_name.clone(), props)]
+                            };
+                            let vertex = Vertex::new_with_properties(vid, tags, HashMap::new());
+                            StorageWriter::update_vertex(&mut *writer, space_name, vertex)
+                                .map_err(|e| QueryError::execution(e.to_string()))?;
+                            *rows_updated += 1;
                         }
                     } else {
                         *rows_updated += chunk.rows.len() as u64;
@@ -797,8 +802,17 @@ impl SinkOperator {
                                 .or_else(|| row.get(1).cloned())
                                 .unwrap_or(Value::Null(graphdb_core::NullType::Null));
 
-                            if let (Ok(src), Ok(dst)) =
-                                (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
+                            if matches!(src_val, Value::Null(_))
+                                || matches!(dst_val, Value::Null(_))
+                            {
+                                continue;
+                            }
+                            let src = VertexId::try_from(&src_val).map_err(|e| {
+                                QueryError::execution(format!("Invalid edge source id: {}", e))
+                            })?;
+                            let dst = VertexId::try_from(&dst_val).map_err(|e| {
+                                QueryError::execution(format!("Invalid edge destination id: {}", e))
+                            })?;
                             {
                                 let existing = writer
                                     .get_edge(space_name, &src, &dst, edge_type, 0)
@@ -886,7 +900,13 @@ impl SinkOperator {
                         for row in &chunk.rows {
                             let context = ValueRowContext::new(row.clone(), layout.clone());
                             if let Some(vid_val) = context.get_variable(vertex_id_col) {
-                                if let Ok(vid) = VertexId::try_from(&vid_val) {
+                                if matches!(vid_val, Value::Null(_)) {
+                                    continue;
+                                }
+                                let vid = VertexId::try_from(&vid_val).map_err(|e| {
+                                    QueryError::execution(format!("Invalid vertex id: {}", e))
+                                })?;
+                                {
                                     if *cascade {
                                         StorageWriter::delete_vertex_with_edges(
                                             &mut *writer,
@@ -950,7 +970,16 @@ impl SinkOperator {
                             let dst_val = context
                                 .get_variable(dst_col)
                                 .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                            if let Some((src, dst)) = resolve_edge_endpoints(&src_val, &dst_val) {
+                            if matches!(src_val, Value::Null(_))
+                                || matches!(dst_val, Value::Null(_))
+                            {
+                                continue;
+                            }
+                            let (src, dst) = resolve_edge_endpoints(&src_val, &dst_val)
+                                .ok_or_else(|| {
+                                    QueryError::execution("Invalid edge endpoint id".to_string())
+                                })?;
+                            {
                                 StorageWriter::delete_edge(
                                     &mut *writer,
                                     space_name,
@@ -1007,7 +1036,16 @@ impl SinkOperator {
                             let dst_val = context
                                 .get_variable(dst_col)
                                 .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                            if let Some((src, dst)) = resolve_edge_endpoints(&src_val, &dst_val) {
+                            if matches!(src_val, Value::Null(_))
+                                || matches!(dst_val, Value::Null(_))
+                            {
+                                continue;
+                            }
+                            let (src, dst) = resolve_edge_endpoints(&src_val, &dst_val)
+                                .ok_or_else(|| {
+                                    QueryError::execution("Invalid edge endpoint id".to_string())
+                                })?;
+                            {
                                 StorageWriter::delete_edge(
                                     &mut *writer,
                                     space_name,
@@ -1058,7 +1096,13 @@ impl SinkOperator {
                         for row in &chunk.rows {
                             let context = ValueRowContext::new(row.clone(), layout.clone());
                             if let Some(vid_val) = context.get_variable(vertex_id_col) {
-                                if let Ok(vid) = VertexId::try_from(&vid_val) {
+                                if matches!(vid_val, Value::Null(_)) {
+                                    continue;
+                                }
+                                let vid = VertexId::try_from(&vid_val).map_err(|e| {
+                                    QueryError::execution(format!("Invalid vertex id: {}", e))
+                                })?;
+                                {
                                     if *cascade {
                                         StorageWriter::delete_vertex_with_edges(
                                             &mut *writer,

@@ -188,12 +188,12 @@ fn test_same_schema_names_are_isolated_by_space() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        alpha_vertex.get_property_any("name"),
-        Some(&Value::string("Alice"))
+        alpha_vertex.property_value("name"),
+        Some(Value::string("Alice"))
     );
     assert_eq!(
-        beta_vertex.get_property_any("name"),
-        Some(&Value::string("Bob"))
+        beta_vertex.property_value("name"),
+        Some(Value::string("Bob"))
     );
 
     assert_eq!(
