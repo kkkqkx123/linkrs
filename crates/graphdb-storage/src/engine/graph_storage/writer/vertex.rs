@@ -782,15 +782,17 @@ pub(crate) fn batch_insert_vertices(
         }
     }
 
-    // Pre-count vertices per tag and reserve capacity to avoid rehashing during inserts.
+    // Pre-count vertices per label and reserve capacity to avoid rehashing
+    // during inserts. Each vertex carries exactly one label; the map only
+    // batches capacity reservations, it is not multi-label bookkeeping.
     {
-        let mut tag_counts: HashMap<LabelId, usize> = HashMap::new();
+        let mut per_label_reserve_counts: HashMap<LabelId, usize> = HashMap::new();
         for vertex in &vertices {
             if let Some(info) = tag_map.get(vertex.tag.name.as_str()) {
-                *tag_counts.entry(info.tag_id).or_insert(0) += 1;
+                *per_label_reserve_counts.entry(info.tag_id).or_insert(0) += 1;
             }
         }
-        for (label_id, count) in &tag_counts {
+        for (label_id, count) in &per_label_reserve_counts {
             ctx.reserve_vertex_capacity(*label_id, *count);
         }
     }

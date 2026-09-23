@@ -470,45 +470,51 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_shortest_path_s
             "Weighted shortest path is not supported by the streaming executor",
         ));
     }
-    // Single-label enforcement: the plan node carries no vertex label, and
-    // path materialization requires exactly one. Reject here instead of
-    // running the search against a placeholder empty tag.
-    Err(PlanBuildError::missing_value(
-        "ShortestPath",
-        node.id(),
-        "vertex_tag",
-        "Shortest path search requires exactly one vertex label, but the plan carries none",
-    ))
+    // The plan carries no vertex label; the executor derives endpoint
+    // labels from the edge type schema (or uses tagged vertex values) and
+    // skips pairs it cannot resolve instead of fabricating empty tags.
+    Ok(RecursiveFragmentSpec::ShortestPath {
+        edge_types: node.edge_types().to_vec(),
+        direction: graphdb_core::EdgeDirection::Both,
+        max_depth: node.max_step(),
+        start_vertices: node.start_vertex_ids().to_vec(),
+        target_vertices: node.end_vertex_ids().to_vec(),
+        vertex_tag: String::new(),
+    })
 }
 
 pub(in crate::executor::streaming::plan::arena_builder) fn build_multi_shortest_path_spec(
     node: &crate::planning::plan::core::nodes::traversal::path_algorithms::MultiShortestPathNode,
     _exec_ctx: &ExecutionContext,
 ) -> Result<RecursiveFragmentSpec, PlanBuildError> {
-    // Single-label enforcement: the plan node carries no vertex label, and
-    // path materialization requires exactly one. Reject here instead of
-    // running the search against a placeholder empty tag.
-    Err(PlanBuildError::missing_value(
-        "MultiShortestPath",
-        node.id(),
-        "vertex_tag",
-        "Multi-source shortest path search requires exactly one vertex label, but the plan carries none",
-    ))
+    // The plan carries no vertex label; the executor derives endpoint
+    // labels from the edge type schema (or uses tagged vertex values) and
+    // skips pairs it cannot resolve instead of fabricating empty tags.
+    Ok(RecursiveFragmentSpec::MultiShortestPath {
+        edge_types: node.edge_types().to_vec(),
+        direction: node.direction(),
+        max_depth: node.steps(),
+        left_vertex_column: node.left_vid_var().to_string(),
+        right_vertex_column: node.right_vid_var().to_string(),
+        single_shortest: node.single_shortest(),
+        vertex_tag: String::new(),
+    })
 }
 
 pub(in crate::executor::streaming::plan::arena_builder) fn build_bfs_shortest_spec(
     node: &crate::planning::plan::core::nodes::traversal::path_algorithms::BFSShortestNode,
     _exec_ctx: &ExecutionContext,
 ) -> Result<RecursiveFragmentSpec, PlanBuildError> {
-    // Single-label enforcement: the plan node carries no vertex label, and
-    // path materialization requires exactly one. Reject here instead of
-    // running the search against a placeholder empty tag.
-    Err(PlanBuildError::missing_value(
-        "BFSShortest",
-        node.id(),
-        "vertex_tag",
-        "BFS shortest path search requires exactly one vertex label, but the plan carries none",
-    ))
+    // The plan carries no vertex label; the executor derives endpoint
+    // labels from the edge type schema (or uses tagged vertex values) and
+    // skips pairs it cannot resolve instead of fabricating empty tags.
+    Ok(RecursiveFragmentSpec::BFSShortest {
+        edge_types: node.edge_types().to_vec(),
+        direction: graphdb_core::EdgeDirection::Both,
+        max_depth: node.steps(),
+        allow_loops: node.with_loop(),
+        vertex_tag: String::new(),
+    })
 }
 
 pub(in crate::executor::streaming::plan::arena_builder) fn build_all_paths_spec(
@@ -543,14 +549,27 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_all_paths_spec(
             )
         })?)
     };
-    // Single-label enforcement: the plan node carries no vertex label, and
-    // path materialization requires exactly one. Reject here instead of
-    // running the search against a placeholder empty tag.
-    let _ = (offset, limit);
-    Err(PlanBuildError::missing_value(
-        "AllPaths",
-        node.id(),
-        "vertex_tag",
-        "All-paths search requires exactly one vertex label, but the plan carries none",
-    ))
+    // The plan carries no vertex label; the executor derives endpoint
+    // labels from the edge type schema (or uses tagged vertex values) and
+    // skips pairs it cannot resolve instead of fabricating empty tags.
+    Ok(RecursiveFragmentSpec::AllPaths {
+        edge_types: node.edge_types().to_vec(),
+        direction: node.direction(),
+        min_depth: node.min_hop(),
+        max_depth: node.max_hop(),
+        acyclic: node.is_acyclic(),
+        limit,
+        offset,
+        start_vertices: node
+            .start_vertex_ids()
+            .iter()
+            .map(|vid| graphdb_core::Value::from(*vid))
+            .collect(),
+        target_vertices: node
+            .end_vertex_ids()
+            .iter()
+            .map(|vid| graphdb_core::Value::from(*vid))
+            .collect(),
+        vertex_tag: String::new(),
+    })
 }

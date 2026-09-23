@@ -10,7 +10,62 @@ use crate::storage::QueryStorage;
 use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::storage_ids::VertexId;
-use graphdb_core::{Edge, EdgeDirection, NPath, Path, Value};
+use graphdb_core::{Edge, EdgeDirection, NPath, Path, Value, Vertex};
+
+/// Materialize one path endpoint into a tagged vertex.
+///
+/// Tagged values pass through untouched. Bare ids need a label: the plan
+/// override wins, otherwise a homogeneous single-edge-type search derives it
+/// from the edge schema. Returns `None` when the endpoint cannot be resolved;
+/// callers skip that pair instead of fabricating a vertex.
+pub(crate) fn materialize_path_endpoint(
+    storage: &dyn QueryStorage,
+    space_name: &str,
+    value: &Value,
+    override_tag: &str,
+    homogeneous_tag: Option<&str>,
+) -> Option<Vertex> {
+    if let Value::Vertex(vertex) = value {
+        return Some((**vertex).clone());
+    }
+    let Ok(vid) = VertexId::try_from(value) else {
+        return None;
+    };
+    let tag = if !override_tag.is_empty() {
+        override_tag
+    } else {
+        homogeneous_tag?
+    };
+    storage.get_vertex(space_name, tag, &vid).ok()?
+}
+
+/// Derive the endpoint label for a label-less path search.
+///
+/// A plan-provided label wins. Otherwise a single edge type whose schema
+/// declares equal source and destination labels determines the label: every
+/// vertex on such paths carries it. Anything else yields `None` rather than
+/// a guessed label.
+pub(crate) fn homogeneous_path_tag(
+    storage: &dyn QueryStorage,
+    space_name: &str,
+    edge_types: &[String],
+    override_tag: &str,
+) -> Option<String> {
+    if !override_tag.is_empty() {
+        return Some(override_tag.to_string());
+    }
+    let [edge_type] = edge_types else {
+        return None;
+    };
+    let (src_tag, dst_tag) = crate::executor::traversal::graph_reader::resolve_edge_endpoint_tags(
+        storage, space_name, edge_type,
+    )?;
+    if src_tag == dst_tag {
+        Some(src_tag)
+    } else {
+        None
+    }
+}
 
 pub(crate) struct BidirBfsConfig<'a> {
     pub(crate) space_name: &'a str,
@@ -66,8 +121,8 @@ pub(crate) fn path_endpoint_pairs(
 
 pub(crate) fn bidir_bfs_shortest_path(
     storage: &dyn QueryStorage,
-    start_id: &VertexId,
-    end_id: &VertexId,
+    start_vertex: &Vertex,
+    end_vertex: &Vertex,
     cfg: BidirBfsConfig,
     cancel_token: Option<&CancelToken>,
 ) -> Result<Vec<Path>, QueryError> {
@@ -82,16 +137,14 @@ pub(crate) fn bidir_bfs_shortest_path(
     let mut left_queue: VecDeque<(VertexId, Arc<NPath>)> = VecDeque::new();
     let mut right_queue: VecDeque<(VertexId, Arc<NPath>)> = VecDeque::new();
 
-    if let Ok(Some(start_vertex)) = storage.get_vertex(cfg.space_name, cfg.vertex_tag, start_id) {
-        let np = Arc::new(NPath::new(Arc::new(start_vertex)));
-        left_queue.push_back((*start_id, np.clone()));
-        left_visited.insert(*start_id, np);
-    }
-    if let Ok(Some(end_vertex)) = storage.get_vertex(cfg.space_name, cfg.vertex_tag, end_id) {
-        let np = Arc::new(NPath::new(Arc::new(end_vertex)));
-        right_queue.push_back((*end_id, np.clone()));
-        right_visited.insert(*end_id, np);
-    }
+    let start_id = start_vertex.vid;
+    let end_id = end_vertex.vid;
+    let np = Arc::new(NPath::new(Arc::new(start_vertex.clone())));
+    left_queue.push_back((start_id, np.clone()));
+    left_visited.insert(start_id, np);
+    let np = Arc::new(NPath::new(Arc::new(end_vertex.clone())));
+    right_queue.push_back((end_id, np.clone()));
+    right_visited.insert(end_id, np);
 
     let dir_out = EdgeDirection::Out;
     let dir_in = EdgeDirection::In;
@@ -151,8 +204,19 @@ pub(crate) fn bidir_bfs_shortest_path(
                         if left_visited.contains_key(neighbor_id) {
                             continue;
                         }
+                        let Some(neighbor_tag) =
+                            crate::executor::traversal::graph_reader::resolve_neighbor_tag(
+                                storage,
+                                cfg.space_name,
+                                edge,
+                                neighbor_id,
+                                cfg.vertex_tag,
+                            )
+                        else {
+                            continue;
+                        };
                         if let Ok(Some(neighbor_vertex)) =
-                            storage.get_vertex(cfg.space_name, cfg.vertex_tag, neighbor_id)
+                            storage.get_vertex(cfg.space_name, &neighbor_tag, neighbor_id)
                         {
                             let new_npath = Arc::new(NPath::extend(
                                 current_npath.clone(),
@@ -232,8 +296,19 @@ pub(crate) fn bidir_bfs_shortest_path(
                         if right_visited.contains_key(neighbor_id) {
                             continue;
                         }
+                        let Some(neighbor_tag) =
+                            crate::executor::traversal::graph_reader::resolve_neighbor_tag(
+                                storage,
+                                cfg.space_name,
+                                edge,
+                                neighbor_id,
+                                cfg.vertex_tag,
+                            )
+                        else {
+                            continue;
+                        };
                         if let Ok(Some(neighbor_vertex)) =
-                            storage.get_vertex(cfg.space_name, cfg.vertex_tag, neighbor_id)
+                            storage.get_vertex(cfg.space_name, &neighbor_tag, neighbor_id)
                         {
                             let new_npath = Arc::new(NPath::extend(
                                 current_npath.clone(),
@@ -319,22 +394,18 @@ pub(crate) struct AllPathsConfig<'a> {
 
 pub(crate) fn enumerate_all_paths(
     storage: &dyn QueryStorage,
-    start_id: &VertexId,
-    end_id: &VertexId,
+    start_vertex: &Vertex,
+    end_vertex: &Vertex,
     cfg: AllPathsConfig<'_>,
     cancel_token: Option<&CancelToken>,
 ) -> Result<Vec<Path>, QueryError> {
-    let Some(start_vertex) = storage
-        .get_vertex(cfg.space_name, cfg.vertex_tag, start_id)
-        .map_err(|error| QueryError::execution(format!("Failed to read start vertex: {error}")))?
-    else {
-        return Ok(Vec::new());
-    };
+    let start_id = start_vertex.vid;
+    let end_id = end_vertex.vid;
     let mut initial_visited = HashSet::new();
-    initial_visited.insert(*start_id);
+    initial_visited.insert(start_id);
     let mut stack = vec![(
-        *start_id,
-        Arc::new(NPath::new(Arc::new(start_vertex))),
+        start_id,
+        Arc::new(NPath::new(Arc::new(start_vertex.clone()))),
         initial_visited,
     )];
     let mut paths = Vec::new();
@@ -346,13 +417,13 @@ pub(crate) fn enumerate_all_paths(
             }
         }
         let depth = current_path.len();
-        if current_id == *end_id && depth >= cfg.min_depth {
+        if current_id == end_id && depth >= cfg.min_depth {
             paths.push(current_path.to_path());
             if paths.len() >= cfg.result_cap {
                 break;
             }
         }
-        if depth >= cfg.max_depth || current_id == *end_id {
+        if depth >= cfg.max_depth || current_id == end_id {
             continue;
         }
         let edges = storage
@@ -378,8 +449,17 @@ pub(crate) fn enumerate_all_paths(
             if cfg.acyclic && visited.contains(&next_id) {
                 continue;
             }
+            let Some(neighbor_tag) = crate::executor::traversal::graph_reader::resolve_neighbor_tag(
+                storage,
+                cfg.space_name,
+                &edge,
+                &next_id,
+                cfg.vertex_tag,
+            ) else {
+                continue;
+            };
             let Some(vertex) = storage
-                .get_vertex(cfg.space_name, cfg.vertex_tag, &next_id)
+                .get_vertex(cfg.space_name, &neighbor_tag, &next_id)
                 .map_err(|error| {
                     QueryError::execution(format!("Failed to read path vertex: {error}"))
                 })?

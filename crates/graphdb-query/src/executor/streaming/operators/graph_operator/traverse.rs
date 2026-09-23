@@ -30,7 +30,9 @@ pub(super) fn handle_traverse(
         ..
     } = &mut op.kind
     else {
-        unreachable!("traverse::handle_traverse called for a non-traverse graph source")
+        return Err(QueryError::execution(
+            "traverse::handle_traverse called for a non-traverse graph source".to_string(),
+        ));
     };
     let storage = &*storage;
     let space_name = &*space_name;
@@ -135,7 +137,9 @@ pub(super) fn handle_bi_expand(
         ..
     } = &mut op.kind
     else {
-        unreachable!("traverse::handle_bi_expand called for a non-bi-expand graph source")
+        return Err(QueryError::execution(
+            "traverse::handle_bi_expand called for a non-bi-expand graph source".to_string(),
+        ));
     };
     let storage = &*storage;
     let space_name = &*space_name;
@@ -176,13 +180,19 @@ pub(super) fn handle_bi_expand(
                                 continue;
                             }
                             let neighbor_id = if e.src() == &vid { *e.dst() } else { *e.src() };
-                            if dst_tag.is_empty() {
-                                return Err(QueryError::execution(
-                                    "Traversal requires exactly one neighbor label".to_string(),
-                                ));
-                            }
+                            let Some(neighbor_tag) =
+                                crate::executor::traversal::graph_reader::resolve_neighbor_tag(
+                                    &*reader,
+                                    space_name,
+                                    e,
+                                    &neighbor_id,
+                                    dst_tag,
+                                )
+                            else {
+                                continue;
+                            };
                             if let Ok(Some(vertex)) =
-                                reader.get_vertex(space_name, dst_tag, &neighbor_id)
+                                reader.get_vertex(space_name, &neighbor_tag, &neighbor_id)
                             {
                                 let mut out_row = row.clone();
                                 out_row.push(Value::Vertex(Box::new(vertex)));
@@ -246,7 +256,9 @@ pub(super) fn handle_bi_traverse(
         ..
     } = &mut op.kind
     else {
-        unreachable!("traverse::handle_bi_traverse called for a non-bi-traverse graph source")
+        return Err(QueryError::execution(
+            "traverse::handle_bi_traverse called for a non-bi-traverse graph source".to_string(),
+        ));
     };
     let storage = &*storage;
     let space_name = &*space_name;
@@ -311,14 +323,19 @@ pub(super) fn handle_bi_traverse(
                                 local_visited.insert(nid);
 
                                 if depth + 1 >= min_depth {
-                                    if dst_tag.is_empty() {
-                                        return Err(QueryError::execution(
-                                            "Traversal requires exactly one neighbor label"
-                                                .to_string(),
-                                        ));
-                                    }
+                                    let Some(neighbor_tag) =
+                                        crate::executor::traversal::graph_reader::resolve_neighbor_tag(
+                                            &*reader,
+                                            space_name,
+                                            e,
+                                            &nid,
+                                            dst_tag,
+                                        )
+                                    else {
+                                        continue;
+                                    };
                                     if let Ok(Some(vertex)) =
-                                        reader.get_vertex(space_name, dst_tag, &nid)
+                                        reader.get_vertex(space_name, &neighbor_tag, &nid)
                                     {
                                         let mut out_row = row.clone();
                                         out_row.push(Value::Vertex(Box::new(vertex)));

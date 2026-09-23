@@ -8,7 +8,6 @@ use crate::executor::expression::ExpressionError;
 use graphdb_core::types::VertexId;
 use graphdb_core::value::list::List;
 use graphdb_core::value::NullType;
-use graphdb_core::vertex_edge_path::{Tag, Vertex};
 use graphdb_core::Value;
 
 /// Graph function enumeration
@@ -162,6 +161,8 @@ impl GraphFunction {
             ));
         }
         match self {
+            Self::StartNode => execute_startnode_with_storage(args, storage),
+            Self::EndNode => execute_endnode_with_storage(args, storage),
             Self::Neighbors => execute_neighbors_with_storage(args, storage),
             Self::Degree => execute_degree_with_storage(args, storage),
             Self::OutEdges => execute_out_edges_with_storage(args, storage),
@@ -263,13 +264,9 @@ fn execute_rank(args: &[Value]) -> Result<Value, ExpressionError> {
 
 fn execute_startnode(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
-        Value::Edge(e) => {
-            let vertex = Vertex::new(
-                e.src,
-                Tag::new(String::new(), std::collections::HashMap::new()),
-            );
-            Ok(Value::Vertex(Box::new(vertex)))
-        }
+        Value::Edge(_) => Err(ExpressionError::function_error(
+            "startnode() requires graph storage access to resolve the endpoint label; use within a query context",
+        )),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "The startnode function requires the edge type",
@@ -279,13 +276,71 @@ fn execute_startnode(args: &[Value]) -> Result<Value, ExpressionError> {
 
 fn execute_endnode(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
-        Value::Edge(e) => {
-            let vertex = Vertex::new(
-                e.dst,
-                Tag::new(String::new(), std::collections::HashMap::new()),
-            );
-            Ok(Value::Vertex(Box::new(vertex)))
-        }
+        Value::Edge(_) => Err(ExpressionError::function_error(
+            "endnode() requires graph storage access to resolve the endpoint label; use within a query context",
+        )),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "The endnode function requires an edge type",
+        )),
+    }
+}
+
+/// Resolve one edge endpoint to a tagged vertex through the edge type
+/// schema. Returns Null when the endpoint vertex no longer exists; errors
+/// when the edge type or its endpoint labels are unknown.
+fn endpoint_vertex_with_storage(
+    edge: &graphdb_core::vertex_edge_path::Edge,
+    endpoint_src: bool,
+    storage: &GraphStorageRef,
+) -> Result<Value, ExpressionError> {
+    let reader = storage.storage.read();
+    let info = reader
+        .get_edge_type(&storage.space, &edge.edge_type)
+        .map_err(|e| ExpressionError::function_error(format!("Storage error: {}", e)))?
+        .ok_or_else(|| {
+            ExpressionError::function_error(format!("Edge type '{}' not found", edge.edge_type))
+        })?;
+    let tag = if endpoint_src {
+        &info.src_tag_name
+    } else {
+        &info.dst_tag_name
+    };
+    if tag.is_empty() {
+        return Err(ExpressionError::function_error(format!(
+            "Edge type '{}' declares no endpoint label",
+            edge.edge_type
+        )));
+    }
+    let vid = if endpoint_src { edge.src } else { edge.dst };
+    let vertex = reader
+        .get_vertex(&storage.space, tag, &vid)
+        .map_err(|e| ExpressionError::function_error(format!("Storage error: {}", e)))?;
+    match vertex {
+        Some(vertex) => Ok(Value::Vertex(Box::new(vertex))),
+        None => Ok(Value::Null(NullType::Null)),
+    }
+}
+
+fn execute_startnode_with_storage(
+    args: &[Value],
+    storage: &GraphStorageRef,
+) -> Result<Value, ExpressionError> {
+    match &args[0] {
+        Value::Edge(e) => endpoint_vertex_with_storage(e, true, storage),
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "The startnode function requires the edge type",
+        )),
+    }
+}
+
+fn execute_endnode_with_storage(
+    args: &[Value],
+    storage: &GraphStorageRef,
+) -> Result<Value, ExpressionError> {
+    match &args[0] {
+        Value::Edge(e) => endpoint_vertex_with_storage(e, false, storage),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "The endnode function requires an edge type",
@@ -856,7 +911,7 @@ fn execute_pagerank_with_storage(
 mod tests {
     use super::*;
     use graphdb_core::types::VertexId;
-    use graphdb_core::vertex_edge_path::{Edge, Tag};
+    use graphdb_core::vertex_edge_path::{Edge, Tag, Vertex};
     use std::collections::HashMap;
 
     fn create_test_vertex() -> Vertex {

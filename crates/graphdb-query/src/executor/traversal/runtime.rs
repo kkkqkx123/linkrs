@@ -197,10 +197,11 @@ impl<'a> TraversalRuntime<'a> {
                     self.visited.insert(neighbor_id);
                 }
 
-                if let Some(vertex) = self.reader.get_vertex(
+                if let Some(vertex) = self.reader.get_neighbor_vertex(
                     &self.config.space_name,
-                    &self.config.vertex_tag,
+                    edge,
                     &neighbor_id,
+                    &self.config.vertex_tag,
                 ) {
                     self.stats.record_vertex_visit();
                     let new_depth = item.depth + 1;
@@ -336,10 +337,11 @@ impl<'a> TraversalRuntime<'a> {
                         continue;
                     }
                     dist.insert(neighbor_id, next_cost);
-                    if let Some(vertex) = self.reader.get_vertex(
+                    if let Some(vertex) = self.reader.get_neighbor_vertex(
                         &self.config.space_name,
-                        &self.config.vertex_tag,
+                        edge,
                         &neighbor_id,
+                        &self.config.vertex_tag,
                     ) {
                         self.stats.record_vertex_visit();
                         let new_depth = top.depth + 1;

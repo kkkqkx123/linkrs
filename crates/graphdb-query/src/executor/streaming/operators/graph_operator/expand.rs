@@ -31,7 +31,9 @@ pub(super) fn handle(
         filter_expr,
     } = &mut op.kind
     else {
-        unreachable!("expand::handle called for a non-expand graph source")
+        return Err(QueryError::execution(
+            "expand::handle called for a non-expand graph source".to_string(),
+        ));
     };
     let storage = &*storage;
     let space_name = &*space_name;
@@ -86,7 +88,7 @@ pub(super) fn handle(
                 .collect::<Vec<_>>();
             for row in rows.iter_mut() {
                 row.push(Value::Null(graphdb_core::NullType::Null));
-                row.push(Value::Vertex(Box::default()));
+                row.push(Value::Null(graphdb_core::NullType::Null));
             }
             let out_col_names = schema
                 .columns
@@ -125,7 +127,9 @@ pub(super) fn handle_all(
         path_semantic,
     } = &mut op.kind
     else {
-        unreachable!("expand::handle_all called for a non-expand-all graph source")
+        return Err(QueryError::execution(
+            "expand::handle_all called for a non-expand-all graph source".to_string(),
+        ));
     };
     let storage = &*storage;
     let space_name = &*space_name;
@@ -245,7 +249,7 @@ pub(super) fn handle_all(
                 .collect::<Vec<_>>();
             for row in rows.iter_mut() {
                 row.push(Value::Null(graphdb_core::NullType::Null));
-                row.push(Value::Vertex(Box::default()));
+                row.push(Value::Null(graphdb_core::NullType::Null));
             }
             if !rows.is_empty() {
                 return Ok(Some(DataChunk::new_with_layout(

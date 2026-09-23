@@ -322,7 +322,7 @@ fn test_explain_execution_match() {
 }
 
 #[test]
-fn test_explain_execution_go_rejected() {
+fn test_explain_execution_go() {
     let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
@@ -336,11 +336,11 @@ fn test_explain_execution_go_rejected() {
     let query = "EXPLAIN GO FROM 1 OVER KNOWS";
     let result = pipeline_manager.execute_query(query);
 
-    // Single-label: GO carries no vertex label, so planning rejects it.
+    // GO plans without a vertex label; endpoint labels resolve at execution.
     assert!(
-        result.is_err(),
-        "Execution should return Err result: {:?}",
-        result.ok()
+        result.is_ok(),
+        "Execution should return Ok result: {:?}",
+        result.err()
     );
 }
 
@@ -1163,7 +1163,7 @@ fn test_explain_execution_format_table() {
 }
 
 #[test]
-fn test_explain_execution_format_dot_rejected() {
+fn test_explain_execution_format_dot_go() {
     let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
@@ -1177,11 +1177,11 @@ fn test_explain_execution_format_dot_rejected() {
     let query = "EXPLAIN FORMAT = DOT GO FROM 1 OVER KNOWS";
     let result = pipeline_manager.execute_query(query);
 
-    // Single-label: GO carries no vertex label, so planning rejects it.
+    // GO plans without a vertex label; endpoint labels resolve at execution.
     assert!(
-        result.is_err(),
-        "Execution should return Err result: {:?}",
-        result.ok()
+        result.is_ok(),
+        "Execution should return Ok result: {:?}",
+        result.err()
     );
 }
 
@@ -1248,18 +1248,18 @@ fn test_management_explain_operations() {
         );
     }
 
-    // Single-label: GO carries no vertex label, so planning rejects it.
-    let rejected_queries = [
+    // GO plans without a vertex label; endpoint labels resolve at execution.
+    let go_queries = [
         "EXPLAIN GO FROM 1 OVER KNOWS",
         "EXPLAIN FORMAT = DOT GO FROM 1 OVER KNOWS",
     ];
 
-    for query in &rejected_queries {
+    for query in &go_queries {
         let result = pipeline_manager.execute_query(query);
         assert!(
-            result.is_err(),
-            "Execution should return Err result: {:?}",
-            result.ok()
+            result.is_ok(),
+            "Execution should return Ok result: {:?}",
+            result.err()
         );
     }
 }

@@ -242,12 +242,16 @@ pub(super) fn expand_single_step(
                 }
             };
 
-            if ctx.dst_tag.is_empty() {
-                return Err(QueryError::execution(
-                    "Traversal requires exactly one neighbor label".to_string(),
-                ));
-            }
-            let Some(dst_vertex) = reader.get_vertex(space_name, ctx.dst_tag, &dst_vid)? else {
+            let Some(neighbor_tag) = crate::executor::traversal::graph_reader::resolve_neighbor_tag(
+                reader,
+                space_name,
+                edge,
+                &dst_vid,
+                ctx.dst_tag,
+            ) else {
+                continue;
+            };
+            let Some(dst_vertex) = reader.get_vertex(space_name, &neighbor_tag, &dst_vid)? else {
                 continue;
             };
             buf.push_row(
@@ -348,17 +352,36 @@ pub(super) fn expand_on_chunk(
         }
     }
 
-    // If no valid vids came from the input chunk but src_vids are provided, use those.
+    // Literal seeds carry no label: resolve them in the seed domain
+    // determined by the edge schemas. Seeds missing from that domain walk
+    // nothing; ambiguous domains error instead of guessing a label.
     if seed_vids.is_empty() && !src_vids.is_empty() {
+        let scope_tag = if src_vids.iter().any(|v| !matches!(v, Value::Vertex(_))) {
+            Some(crate::executor::traversal::graph_reader::resolve_seed_tag(
+                reader,
+                space_name,
+                edge_types,
+                direction,
+                ctx.dst_tag,
+            )?)
+        } else {
+            None
+        };
         for vid_val in &src_vids {
             if let Value::Vertex(vertex) = vid_val {
                 seed_vids.push(vertex.vid);
                 seed_rows.push(Vec::new());
                 seed_vertices.push(Some((**vertex).clone()));
             } else if let Ok(vid) = VertexId::try_from(vid_val) {
+                let Some(scope) = scope_tag.as_deref() else {
+                    continue;
+                };
+                let Some(vertex) = reader.get_vertex(space_name, scope, &vid)? else {
+                    continue;
+                };
                 seed_vids.push(vid);
                 seed_rows.push(Vec::new());
-                seed_vertices.push(None);
+                seed_vertices.push(Some(vertex));
             }
         }
     }

@@ -54,12 +54,9 @@ impl Planner for GoPlanner {
             }
         };
 
-        // Single-label enforcement: GO syntax carries no vertex label, but
-        // vertex materialization requires exactly one neighbor label.
-        // Reject label-less GO here instead of guessing a label or
-        // fabricating an empty vertex at execution.
-        let _dst_tag = require_single_neighbor_tag(&[])?;
-
+        // GO syntax carries no vertex label: neighbor vertices are
+        // materialized at execution from the edge type schema, so the plan
+        // leaves the neighbor label empty instead of guessing one.
         // Use the verification information to optimize the planning process.
         let validation_info = &validated.validation_info;
 
@@ -246,12 +243,9 @@ impl Planner for GoPlanner {
             }
         };
 
-        // Single-label enforcement: GO syntax carries no vertex label, but
-        // vertex materialization requires exactly one neighbor label.
-        // Reject label-less GO here instead of guessing a label or
-        // fabricating an empty vertex at execution.
-        let _dst_tag = require_single_neighbor_tag(&[])?;
-
+        // GO syntax carries no vertex label: neighbor vertices are
+        // materialized at execution from the edge type schema, so the plan
+        // leaves the neighbor label empty instead of guessing one.
         let space_id = qctx.space_id().unwrap_or(1);
 
         // Handle FROM clause - extract source vertex IDs from bound expressions
@@ -505,18 +499,4 @@ impl Default for GoPlanner {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Require exactly one neighbor label for GO traversal materialization.
-///
-/// GO syntax carries no vertex label, so the label list is always empty and
-/// this always fails today. The helper keeps the single-label rule explicit
-/// at the planner boundary instead of guessing a label downstream.
-fn require_single_neighbor_tag(labels: &[String]) -> Result<String, PlannerError> {
-    if labels.len() != 1 {
-        return Err(PlannerError::PlanGenerationFailed(
-            "GO traversal requires exactly one neighbor label, but the GO statement carries no vertex label".to_string(),
-        ));
-    }
-    Ok(labels[0].clone())
 }

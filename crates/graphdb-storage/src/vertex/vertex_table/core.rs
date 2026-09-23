@@ -550,6 +550,10 @@ impl VertexTable {
             .get_index(key)
             .ok_or(StorageError::vertex_not_found())?;
 
+        if !self.timestamps.is_valid(internal_id, ts) {
+            return Err(StorageError::vertex_not_found());
+        }
+
         self.timestamps.remove(internal_id, ts);
         self.mark_row_dirty(internal_id as usize);
         Ok(())

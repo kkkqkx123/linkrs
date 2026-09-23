@@ -91,21 +91,30 @@ pub(super) fn handle(
                     }
 
                     for (edge, _step) in &history_edges {
-                        if dst_tag.is_empty() {
-                            return Err(QueryError::execution(
-                                "Traversal requires exactly one neighbor label".to_string(),
-                            ));
-                        }
+                        let (src_tag, neighbor_tag) = if dst_tag.is_empty() {
+                            let Some(tags) =
+                                crate::executor::traversal::graph_reader::resolve_edge_endpoint_tags(
+                                    &*reader,
+                                    space_name,
+                                    &edge.edge_type,
+                                )
+                            else {
+                                continue;
+                            };
+                            tags
+                        } else {
+                            (dst_tag.clone(), dst_tag.clone())
+                        };
                         let mut out_row = row.clone();
                         let Some(src_vertex) = reader
-                            .get_vertex(space_name, dst_tag, &edge.src)
+                            .get_vertex(space_name, &src_tag, &edge.src)
                             .ok()
                             .flatten()
                         else {
                             continue;
                         };
                         let Some(dst_vertex) = reader
-                            .get_vertex(space_name, dst_tag, &edge.dst)
+                            .get_vertex(space_name, &neighbor_tag, &edge.dst)
                             .ok()
                             .flatten()
                         else {

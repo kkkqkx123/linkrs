@@ -63,12 +63,10 @@ impl Planner for PathPlanner {
             )
         })?;
 
-        // Single-label enforcement: FIND PATH syntax carries no vertex
-        // label, but path materialization requires exactly one vertex label.
-        // Reject label-less path search here instead of guessing a label or
-        // fabricating an empty vertex at execution.
-        let _vertex_tag = require_single_vertex_tag(&[])?;
-
+        // FIND PATH syntax carries no vertex label: path vertices are
+        // materialized at execution from the edge type schema (or from tagged
+        // vertex values), so the plan leaves the vertex label empty instead
+        // of guessing one.
         let start_node = StartNode::new();
         let start_node_enum = PlanNodeEnum::Start(start_node);
 
@@ -151,12 +149,10 @@ impl Planner for PathPlanner {
             )
         })?;
 
-        // Single-label enforcement: FIND PATH syntax carries no vertex
-        // label, but path materialization requires exactly one vertex label.
-        // Reject label-less path search here instead of guessing a label or
-        // fabricating an empty vertex at execution.
-        let _vertex_tag = require_single_vertex_tag(&[])?;
-
+        // FIND PATH syntax carries no vertex label: path vertices are
+        // materialized at execution from the edge type schema (or from tagged
+        // vertex values), so the plan leaves the vertex label empty instead
+        // of guessing one.
         let start_node = StartNode::new();
         let start_node_enum = PlanNodeEnum::Start(start_node);
 
@@ -462,21 +458,6 @@ impl Default for PathPlanner {
     }
 }
 
-/// Require exactly one vertex label for path search materialization.
-///
-/// FIND PATH syntax carries no vertex label, so the label list is always
-/// empty and this always fails today. The helper keeps the single-label
-/// rule explicit at the planner boundary instead of guessing a label
-/// downstream.
-fn require_single_vertex_tag(labels: &[String]) -> Result<String, PlannerError> {
-    if labels.len() != 1 {
-        return Err(PlannerError::PlanGenerationFailed(
-            "FIND PATH requires exactly one vertex label, but the statement carries no vertex label".to_string(),
-        ));
-    }
-    Ok(labels[0].clone())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,36 +519,36 @@ mod tests {
     #[test]
     fn shortest_path_plan_carries_native_logical() {
         let stmt = Stmt::FindPath(find_path_stmt(true));
-        let err = PathPlanner::new()
+        let plan = PathPlanner::new()
             .transform(&validated(stmt), test_query_context())
-            .expect_err("label-less FIND PATH must be rejected at plan time");
+            .expect("label-less FIND PATH plans without a vertex label");
         assert!(
-            err.to_string().contains("exactly one vertex label"),
-            "unexpected error: {err}"
+            plan.logical_root.is_some(),
+            "shortest path plan must carry its native logical root"
         );
     }
 
     #[test]
     fn all_paths_plan_carries_native_logical_with_direction() {
         let stmt = Stmt::FindPath(find_path_stmt(false));
-        let err = PathPlanner::new()
+        let plan = PathPlanner::new()
             .transform(&validated(stmt), test_query_context())
-            .expect_err("label-less FIND PATH must be rejected at plan time");
+            .expect("label-less FIND PATH plans without a vertex label");
         assert!(
-            err.to_string().contains("exactly one vertex label"),
-            "unexpected error: {err}"
+            plan.logical_root.is_some(),
+            "all-paths plan must carry its native logical root"
         );
     }
 
     #[test]
     fn native_logical_converts_back_to_same_physical_shape() {
         let stmt = Stmt::FindPath(find_path_stmt(false));
-        let err = PathPlanner::new()
+        let plan = PathPlanner::new()
             .transform(&validated(stmt), test_query_context())
-            .expect_err("label-less FIND PATH must be rejected at plan time");
+            .expect("label-less FIND PATH plans without a vertex label");
         assert!(
-            err.to_string().contains("exactly one vertex label"),
-            "unexpected error: {err}"
+            plan.root.is_some() && plan.logical_root.is_some(),
+            "plan must carry both physical and logical shapes"
         );
     }
 }

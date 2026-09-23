@@ -119,13 +119,15 @@ pub(crate) fn storage_error(
     ))
 }
 
-pub(crate) fn parse_vertex_id(value: &str) -> VertexId {
+pub(crate) fn parse_vertex_id(value: &str) -> Result<VertexId, QueryError> {
     if let Ok(parsed) = value.parse::<i64>() {
-        if let Ok(vid) = VertexId::try_from_int64(parsed) {
-            return vid;
-        }
+        // Numeric input is an integer id: a negative value is rejected,
+        // never reinterpreted as a text id.
+        return VertexId::try_from_int64(parsed)
+            .map_err(|e| QueryError::execution(format!("Invalid vertex id '{value}': {e}")));
     }
-    VertexId::try_from_string(value).unwrap_or_default()
+    VertexId::try_from_string(value)
+        .map_err(|e| QueryError::execution(format!("Invalid vertex id '{value}': {e}")))
 }
 
 pub(crate) fn reserve_memory(

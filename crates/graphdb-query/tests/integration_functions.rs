@@ -775,12 +775,17 @@ fn test_startnode_function() {
     let registry = FunctionRegistry::new();
     let edge = create_test_edge(100, 200, "KNOWS", 0, HashMap::new());
 
+    // Without storage the endpoint label cannot be resolved, so the pure
+    // path errors instead of fabricating an empty-tag vertex.
     let result = registry.execute("startnode", &[Value::Edge(Box::new(edge))]);
-    assert!(result.is_ok());
-    assert!(matches!(
-        result.expect("startnodeshould succeed"),
-        Value::Vertex(_)
-    ));
+    assert!(result.is_err());
+
+    let null = Value::Null(NullType::Null);
+    let result = registry.execute("startnode", &[null]);
+    assert_eq!(
+        result.expect("startnode should pass null through"),
+        Value::Null(NullType::Null)
+    );
 }
 
 #[test]
@@ -788,12 +793,17 @@ fn test_endnode_function() {
     let registry = FunctionRegistry::new();
     let edge = create_test_edge(100, 200, "KNOWS", 0, HashMap::new());
 
+    // Without storage the endpoint label cannot be resolved, so the pure
+    // path errors instead of fabricating an empty-tag vertex.
     let result = registry.execute("endnode", &[Value::Edge(Box::new(edge))]);
-    assert!(result.is_ok());
-    assert!(matches!(
-        result.expect("endnodeshould succeed"),
-        Value::Vertex(_)
-    ));
+    assert!(result.is_err());
+
+    let null = Value::Null(NullType::Null);
+    let result = registry.execute("endnode", &[null]);
+    assert_eq!(
+        result.expect("endnode should pass null through"),
+        Value::Null(NullType::Null)
+    );
 }
 
 // ==================== Added tests for new mathematical functions ====================

@@ -387,13 +387,11 @@ impl EdgePropertyIndex {
     ) -> StorageResult<()> {
         let key = Self::encode_edge_property_key(prop_value, src, dst, rank)?;
         let pool_capacity = self.pool_capacity;
-        let has_index = self.indexes.contains_key(prop_name);
-        if !has_index {
-            return Ok(());
-        }
         let prefix = prop_name.as_bytes().to_vec();
         let mut map = {
-            let index = self.indexes.get(prop_name).unwrap();
+            let Some(index) = self.indexes.get(prop_name) else {
+                return Ok(());
+            };
             index.snapshot()
         };
         if let Some(record) = map.get_mut(&key) {

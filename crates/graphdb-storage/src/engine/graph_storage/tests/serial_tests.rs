@@ -167,7 +167,7 @@ fn test_serial_allocates_per_tag_and_per_space() {
     let paris = storage
         .get_vertex(
             "test_space",
-            "Person",
+            "City",
             &VertexId::try_from_int64(201).expect("test vertex id"),
         )
         .unwrap()

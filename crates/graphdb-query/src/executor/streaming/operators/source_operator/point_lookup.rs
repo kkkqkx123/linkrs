@@ -49,8 +49,8 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
             let edges = if let (Some(src), Some(dst), Some(edge_type)) =
                 (src.as_deref(), dst.as_deref(), edge_type.as_deref())
             {
-                let src = parse_vertex_id(src);
-                let dst = parse_vertex_id(dst);
+                let src = parse_vertex_id(src)?;
+                let dst = parse_vertex_id(dst)?;
                 if projected_properties.is_empty() {
                     guard
                         .get_edge(space_name, &src, &dst, edge_type, *rank)

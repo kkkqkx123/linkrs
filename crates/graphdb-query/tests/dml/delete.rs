@@ -280,8 +280,8 @@ fn test_pipe_delete_vertex_execution_rejected() {
         .assert_success()
         .assert_vertex_exists(2, "Person")
         .assert_vertex_exists(3, "Person")
-        // Single-label: the GO stage carries no vertex label, so planning
-        // rejects the whole pipe before any delete runs.
+        // The edge type declares no endpoint labels, so the GO stage cannot
+        // determine the seed label and the whole pipe errors.
         .exec_dml(r#"GO FROM 1 OVER KNOWS YIELD dst(edge) AS id | DELETE VERTEX $-.id"#)
         .assert_error();
 }
@@ -319,8 +319,8 @@ fn test_pipe_delete_edge_execution_rejected() {
         .assert_success()
         .assert_edge_exists(1, 2, "KNOWS")
         .assert_edge_exists(1, 3, "KNOWS")
-        // Single-label: the GO stage carries no vertex label, so planning
-        // rejects the whole pipe before any delete runs.
+        // The edge type declares no endpoint labels, so the GO stage cannot
+        // determine the seed label and the whole pipe errors.
         .exec_dml(r#"GO FROM 1 OVER KNOWS YIELD src(edge) AS s, dst(edge) AS d | DELETE EDGE KNOWS $-.s -> $-.d"#)
         .assert_error();
 }

@@ -882,7 +882,10 @@ impl Column {
                 "overflow sidecar too small".to_string(),
             ));
         }
-        let stored_crc = u32::from_le_bytes(bytes[bytes.len() - 4..].try_into().unwrap());
+        let crc_tail: [u8; 4] = bytes[bytes.len() - 4..].try_into().map_err(|_| {
+            StorageError::deserialize_error("overflow sidecar CRC tail malformed".to_string())
+        })?;
+        let stored_crc = u32::from_le_bytes(crc_tail);
         let computed = crc32fast::hash(&bytes[..bytes.len() - 4]);
         if stored_crc != computed {
             return Err(StorageError::deserialize_error(format!(
