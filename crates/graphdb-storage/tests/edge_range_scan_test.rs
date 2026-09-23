@@ -48,7 +48,7 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
             .map(|i| {
                 Vertex::new(
                     VertexId::try_from_int64(i).expect("test vertex id"),
-                   Tag::new(TAG.to_string(), Default::default()),
+                    Tag::new(TAG.to_string(), Default::default()),
                 )
             })
             .collect();

@@ -5,10 +5,7 @@ use graphdb_core::{StorageError, Value, Vertex};
 use graphdb_sync::types::ChangeType;
 
 impl<S: StorageClient + 'static> SyncWrapper<S> {
-    fn detect_changed_properties(
-        old_vertex: &Vertex,
-        new_vertex: &Vertex,
-    ) -> Vec<(String, Value)> {
+    fn detect_changed_properties(old_vertex: &Vertex, new_vertex: &Vertex) -> Vec<(String, Value)> {
         let mut changed_props = Vec::new();
 
         for (prop_name, new_value) in &new_vertex.tag.properties {

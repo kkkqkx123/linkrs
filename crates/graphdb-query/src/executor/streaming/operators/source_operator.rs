@@ -786,6 +786,7 @@ mod tests {
         let mut source = source(SourceOperatorKind::GetVertices {
             storage: None,
             space_name: "test".to_string(),
+            tag: "person".to_string(),
             vertex_ids: None,
             cached_ids: Vec::new(),
             projected_properties: Vec::new(),
@@ -805,6 +806,7 @@ mod tests {
         let mut source = source(SourceOperatorKind::GetVertices {
             storage: Some(storage),
             space_name: "test".to_string(),
+            tag: "person".to_string(),
             vertex_ids: Some(vec![Value::string("1")]),
             cached_ids: Vec::new(),
             projected_properties: Vec::new(),
@@ -837,8 +839,10 @@ mod tests {
     fn get_edges_projected_filters_edge_properties() {
         use graphdb_core::Edge;
         let mock = crate::storage::MockStorage::new().expect("MockStorage should be created");
-        let src = graphdb_core::types::storage_ids::VertexId::from_int64(1);
-        let dst = graphdb_core::types::storage_ids::VertexId::from_int64(2);
+        let src =
+            graphdb_core::types::storage_ids::VertexId::try_from_int64(1).expect("valid vertex id");
+        let dst =
+            graphdb_core::types::storage_ids::VertexId::try_from_int64(2).expect("valid vertex id");
         mock.set_edges(vec![Edge {
             src,
             dst,
@@ -979,8 +983,8 @@ mod tests {
 
         let mock = MockStorage::new().expect("MockStorage should be created");
         mock.set_edges(vec![Edge {
-            src: VertexId::from_int64(1),
-            dst: VertexId::from_int64(2),
+            src: VertexId::try_from_int64(1).expect("valid vertex id"),
+            dst: VertexId::try_from_int64(2).expect("valid vertex id"),
             edge_type: "friend".to_string(),
             ranking: 0,
             props: Default::default(),

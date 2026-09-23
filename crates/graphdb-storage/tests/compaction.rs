@@ -47,19 +47,31 @@ fn test_compact_reclaims_deleted_vertex_space() {
     let dir = temp_dir.path();
 
     let storage = compact_and_reopen(dir, |s| {
-        s.delete_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
-            .unwrap();
+        s.delete_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+        )
+        .unwrap();
     });
 
     // Alice (vid=1) should be gone after delete+compact
     assert!(storage
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(1).expect("test vertex id")
+        )
         .unwrap()
         .is_none());
 
     // Bob (vid=2) remains
     assert!(storage
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(2).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(2).expect("test vertex id")
+        )
         .unwrap()
         .is_some());
 }
@@ -79,8 +91,12 @@ fn test_compact_after_multiple_operations() {
 
         // Delete odd-numbered vertices
         for i in (1..=10).step_by(2) {
-            s.delete_vertex("test_space", "Person", &VertexId::try_from_int64(i).expect("test vertex id"))
-                .unwrap();
+            s.delete_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(i).expect("test vertex id"),
+            )
+            .unwrap();
         }
     });
 
@@ -88,7 +104,11 @@ fn test_compact_after_multiple_operations() {
     for i in (2..=10).step_by(2) {
         assert!(
             storage
-                .get_vertex("test_space", "Person", &VertexId::try_from_int64(i).expect("test vertex id"))
+                .get_vertex(
+                    "test_space",
+                    "Person",
+                    &VertexId::try_from_int64(i).expect("test vertex id")
+                )
                 .unwrap()
                 .is_some(),
             "Vertex {} should survive",
@@ -100,7 +120,11 @@ fn test_compact_after_multiple_operations() {
     for i in (1..=10).step_by(2) {
         assert!(
             storage
-                .get_vertex("test_space", "Person", &VertexId::try_from_int64(i).expect("test vertex id"))
+                .get_vertex(
+                    "test_space",
+                    "Person",
+                    &VertexId::try_from_int64(i).expect("test vertex id")
+                )
                 .unwrap()
                 .is_none(),
             "Vertex {} should be gone",
@@ -130,19 +154,31 @@ fn test_compact_persistent_roundtrip() {
 
     let storage = compact_and_reopen(dir, |s| {
         // Delete Bob
-        s.delete_vertex("test_space", "Person", &VertexId::try_from_int64(2).expect("test vertex id"))
-            .unwrap();
+        s.delete_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(2).expect("test vertex id"),
+        )
+        .unwrap();
     });
 
     // Alice still exists
     assert!(storage
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(1).expect("test vertex id")
+        )
         .unwrap()
         .is_some());
 
     // Bob still gone
     assert!(storage
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(2).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(2).expect("test vertex id")
+        )
         .unwrap()
         .is_none());
 

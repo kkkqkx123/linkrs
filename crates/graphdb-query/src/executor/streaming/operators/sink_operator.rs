@@ -673,10 +673,8 @@ impl SinkOperator {
                                             let val = eval_expr(expr, &mut context)?;
                                             props.insert(prop_name.clone(), val);
                                         }
-                                        let vertex = Vertex::new(
-                                            vid,
-                                            Tag::new(tag_name.clone(), props),
-                                        );
+                                        let vertex =
+                                            Vertex::new(vid, Tag::new(tag_name.clone(), props));
                                         StorageWriter::insert_vertex(
                                             &mut *writer,
                                             space_name,
@@ -1077,9 +1075,7 @@ impl SinkOperator {
                                     continue;
                                 }
                                 let (tag, vid) = match &vid_val {
-                                    Value::Vertex(vertex) => {
-                                        (vertex.tag.name.clone(), vertex.vid)
-                                    }
+                                    Value::Vertex(vertex) => (vertex.tag.name.clone(), vertex.vid),
                                     _ => {
                                         return Err(QueryError::execution(
                                             "Pipe DELETE VERTEX requires a vertex value with tag; bare id is illegal".to_string(),

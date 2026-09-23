@@ -403,10 +403,13 @@ mod tests {
 
     #[test]
     fn normalizes_delete_vertex_list() {
-        let query = "DELETE VERTEX \"v1\", \"v2\"";
+        let query = "DELETE VERTEX person FROM \"v1\", \"v2\"";
         let stmt = parse(query);
         let shape = normalize_shape(&stmt).expect("shape should normalize");
-        assert_eq!(shape.normalized_text, "DELETE VERTEX @__dml_0, @__dml_1");
+        assert_eq!(
+            shape.normalized_text,
+            "DELETE VERTEX person FROM @__dml_0, @__dml_1"
+        );
     }
 
     #[test]
@@ -422,12 +425,12 @@ mod tests {
 
     #[test]
     fn normalizes_delete_tag_with_edge() {
-        let query = "DELETE TAG * FROM \"v1\" WITH EDGE";
+        let query = "DELETE VERTEX person FROM \"v1\" WITH EDGE";
         let stmt = parse(query);
         let shape = normalize_shape(&stmt).expect("shape should normalize");
         assert_eq!(
             shape.normalized_text,
-            "DELETE TAG * FROM @__dml_0 WITH EDGE"
+            "DELETE VERTEX person FROM @__dml_0 WITH EDGE"
         );
     }
 

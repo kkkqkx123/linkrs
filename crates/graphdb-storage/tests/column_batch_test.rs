@@ -189,7 +189,10 @@ fn column_batch_selective_predicate_does_not_end_scan_early() {
     }]);
     let columns = drain_columns(&storage, &opts);
     assert_eq!(columns.len(), 1);
-    assert_eq!(columns[0][0], Value::from(VertexId::try_from_int64(7).expect("test vertex id")));
+    assert_eq!(
+        columns[0][0],
+        Value::from(VertexId::try_from_int64(7).expect("test vertex id"))
+    );
 }
 
 #[test]

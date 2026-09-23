@@ -33,8 +33,8 @@ fn insert_vertices(storage: &Arc<RwLock<GraphStorage>>) {
         let vertices: Vec<Vertex> = (start..end)
             .map(|i| {
                 Vertex::new(
-                    VertexId::from_int64(i),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(i).expect("test vertex id"),
+                    Tag::new(
                         TAG.to_string(),
                         vec![
                             ("id".to_string(), Value::BigInt(i)),
@@ -43,7 +43,7 @@ fn insert_vertices(storage: &Arc<RwLock<GraphStorage>>) {
                         ]
                         .into_iter()
                         .collect(),
-                    )],
+                    ),
                 )
             })
             .collect();
@@ -102,8 +102,8 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
                 .map(|i| {
                     let vid = i + VERTEX_COUNT;
                     Vertex::new(
-                        VertexId::from_int64(vid),
-                        vec![Tag::new(
+                        VertexId::try_from_int64(vid).expect("test vertex id"),
+                        Tag::new(
                             TAG2.to_string(),
                             vec![
                                 ("id".to_string(), Value::BigInt(vid)),
@@ -111,7 +111,7 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
                             ]
                             .into_iter()
                             .collect(),
-                        )],
+                        ),
                     )
                 })
                 .collect();

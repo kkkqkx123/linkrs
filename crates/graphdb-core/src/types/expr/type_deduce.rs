@@ -507,7 +507,10 @@ mod tests {
                 Value::Interval(IntervalValue::new(1, 2, 3)),
                 DataType::Interval,
             ),
-            (Value::VertexId(VertexId::try_from_int64(1).expect("test vertex id")), DataType::Vertex),
+            (
+                Value::VertexId(VertexId::try_from_int64(1).expect("test vertex id")),
+                DataType::Vertex,
+            ),
             (Value::EdgeId(EdgeId::new(1)), DataType::Edge),
             (
                 Value::struct_(vec![("city".to_string(), Value::string("x"))]),

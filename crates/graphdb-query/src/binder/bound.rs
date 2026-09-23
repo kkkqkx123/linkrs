@@ -589,7 +589,10 @@ pub struct BoundDelete {
 
 #[derive(Debug, Clone)]
 pub enum BoundDeleteTarget {
-    Vertices { tag: String, ids: Vec<BoundExpression> },
+    Vertices {
+        tag: String,
+        ids: Vec<BoundExpression>,
+    },
     Edges {
         edge_type: Option<String>,
         edges: Vec<(BoundExpression, BoundExpression, Option<BoundExpression>)>,

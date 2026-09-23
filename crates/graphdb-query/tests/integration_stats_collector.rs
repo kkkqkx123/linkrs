@@ -44,8 +44,8 @@ fn setup() -> Arc<RwLock<dyn graphdb_query::storage::QueryStorage>> {
                 .insert_vertex(
                     "col_stats_e2e",
                     Vertex::new(
-                        VertexId::from_int64(i),
-                        vec![Tag::new(
+                        VertexId::try_from_int64(i).expect("test vertex id"),
+                        Tag::new(
                             "Person".to_string(),
                             [
                                 ("id".to_string(), Value::BigInt(i)),
@@ -54,7 +54,7 @@ fn setup() -> Arc<RwLock<dyn graphdb_query::storage::QueryStorage>> {
                             ]
                             .into_iter()
                             .collect(),
-                        )],
+                        ),
                     ),
                 )
                 .expect("insert vertex");

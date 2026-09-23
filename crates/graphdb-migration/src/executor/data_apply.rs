@@ -85,8 +85,7 @@ pub(super) fn apply_step_to_vertex(
                 return Ok(None);
             }
             if let Some(default) = default_value {
-                if tag.properties.contains_key(name) {
-                    let current = tag.properties.get(name).unwrap();
+                if let Some(current) = tag.properties.get(name) {
                     if current == default {
                         return Ok(None);
                     }

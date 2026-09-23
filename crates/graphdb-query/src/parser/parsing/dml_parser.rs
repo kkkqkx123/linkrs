@@ -110,7 +110,20 @@ impl DmlParser {
                     is_upsert,
                 }));
             }
-            self.parse_update_vertex(ctx)?
+            match self.parse_update_vertex(ctx)? {
+                UpdateTarget::Vertex(vid) if ctx.match_token(TokenKind::On) => {
+                    let tag_name = ctx.expect_identifier()?;
+                    UpdateTarget::TagOnVertex {
+                        vid: Box::new(vid),
+                        tag_name,
+                    }
+                }
+                other => other,
+            }
+        } else if ctx.match_token(TokenKind::Tag) {
+            // UPDATE TAG <tag> SET ... WHERE ... (bulk update scoped to one tag).
+            let tag_name = ctx.expect_identifier()?;
+            UpdateTarget::Tag(tag_name)
         } else if ctx.match_token(TokenKind::Edge) {
             if is_upsert && ctx.check_token(TokenKind::On) {
                 // UPSERT EDGE ON <edge_type> SET ... WHERE id(src) == <n> AND id(dst) == <m>
@@ -227,6 +240,12 @@ impl DmlParser {
                 if ctx.check_token(TokenKind::Arrow) {
                     // This is edge update syntax: src -> dst [@rank] OF edge_type
                     self.parse_update_edge_short(ctx, expr)?
+                } else if ctx.match_token(TokenKind::On) {
+                    let tag_name = ctx.expect_identifier()?;
+                    UpdateTarget::TagOnVertex {
+                        vid: Box::new(expr),
+                        tag_name,
+                    }
                 } else {
                     // Regular vertex update
                     UpdateTarget::Vertex(expr)
@@ -502,7 +521,8 @@ impl DmlParser {
             } else {
                 return Err(ParseError::new(
                     crate::parser::core::error::ParseErrorKind::UnexpectedToken,
-                    "DELETE VERTEX requires a tag qualifier: DELETE VERTEX <tag> FROM <vid>, ...".to_string(),
+                    "DELETE VERTEX requires a tag qualifier: DELETE VERTEX <tag> FROM <vid>, ..."
+                        .to_string(),
                     ctx.current_position(),
                 ));
             };

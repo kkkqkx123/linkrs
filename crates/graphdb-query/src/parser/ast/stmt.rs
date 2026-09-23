@@ -605,7 +605,11 @@ mod tests {
                 Stmt::Insert(InsertStmt {
                     span,
                     target: InsertTarget::Vertices {
-                        tags: vec![],
+                        tag: TagInsertSpec {
+                            tag_name: String::new(),
+                            prop_names: vec![],
+                            is_default_props: false,
+                        },
                         values: vec![],
                     },
                     if_not_exists: false,

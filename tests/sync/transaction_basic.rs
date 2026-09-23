@@ -417,8 +417,8 @@ fn test_transaction_edge_insert_sync() {
         .expect("Failed to begin transaction");
 
     let edge = graphdb::core::Edge::new(
-        VertexId::from_int64(1),
-        VertexId::from_int64(2),
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
         0,
         HashMap::new(),
@@ -437,8 +437,8 @@ fn test_transaction_edge_insert_sync() {
         .storage
         .get_edge(
             "test_space",
-            &VertexId::from_int64(1),
-            &VertexId::from_int64(2),
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            &VertexId::try_from_int64(2).expect("test vertex id"),
             "KNOWS",
             0,
         )
@@ -503,8 +503,8 @@ fn test_transaction_edge_with_properties_sync() {
     edge_props.insert("since".to_string(), Value::Int(2020));
 
     let edge = graphdb::core::Edge::new(
-        VertexId::from_int64(1),
-        VertexId::from_int64(100),
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        VertexId::try_from_int64(100).expect("test vertex id"),
         "WORKS_AT".to_string(),
         0,
         edge_props,
@@ -523,8 +523,8 @@ fn test_transaction_edge_with_properties_sync() {
         .storage
         .get_edge(
             "test_space",
-            &VertexId::from_int64(1),
-            &VertexId::from_int64(100),
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            &VertexId::try_from_int64(100).expect("test vertex id"),
             "WORKS_AT",
             0,
         )

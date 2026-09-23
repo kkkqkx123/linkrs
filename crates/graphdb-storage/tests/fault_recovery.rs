@@ -35,7 +35,11 @@ fn test_recovery_partial_vertex_write() {
 
         // Original data should be intact
         let v1 = storage
-            .get_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
+            .get_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(1).expect("test vertex id"),
+            )
             .unwrap();
         assert!(v1.is_some(), "Original data should be recovered");
 
@@ -48,7 +52,10 @@ fn test_recovery_partial_vertex_write() {
 
         // All vertices should have proper structure
         for v in all_vertices {
-            assert!(v.has_properties(), "Recovered vertex should have properties");
+            assert!(
+                v.has_properties(),
+                "Recovered vertex should have properties"
+            );
         }
     }
 }
@@ -87,7 +94,10 @@ fn test_recovery_after_concurrent_crash() {
 
         // Verify no corruption in recovered data
         for v in &vertices {
-            assert!(v.has_properties(), "Recovered vertex should have properties");
+            assert!(
+                v.has_properties(),
+                "Recovered vertex should have properties"
+            );
         }
 
         println!(
@@ -161,7 +171,11 @@ fn test_recovery_deleted_vertex_integrity() {
 
         // Delete vertex and insert new one without flush
         storage
-            .delete_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
+            .delete_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(1).expect("test vertex id"),
+            )
             .unwrap();
 
         let v = common::create_person_vertex(100, "NewPerson", 30);

@@ -144,6 +144,7 @@ mod tests {
         let neighbors = LogicalNodeEnum::GetNeighbors(LogicalGetNeighborsNode {
             id: 2,
             space_id: 1,
+            tag: None,
             src_vids: "v".to_string(),
             edge_types: vec![],
             direction: "BOTH".to_string(),

@@ -10,10 +10,7 @@ pub fn create_simple_vertex(vid: i64, _tag_name: &str, name: &str, age: i64) -> 
     props.insert("name".to_string(), Value::string(name));
     props.insert("age".to_string(), Value::Int(age as i32));
     let tag = Tag::new("Person".to_string(), props);
-    create_vertex(
-        VertexId::try_from_int64(vid).expect("test vertex id"),
-        tag,
-    )
+    create_vertex(VertexId::try_from_int64(vid).expect("test vertex id"), tag)
 }
 
 pub fn create_vertex(vid: VertexId, tag: Tag) -> Vertex {

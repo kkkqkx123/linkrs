@@ -30,6 +30,7 @@ pub enum RecursiveFragmentOperatorKind {
         max_depth: usize,
         start_vertices: Vec<Value>,
         target_vertices: Vec<Value>,
+        vertex_tag: String,
     },
     MultiShortestPath {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -40,6 +41,7 @@ pub enum RecursiveFragmentOperatorKind {
         left_vertex_column: String,
         right_vertex_column: String,
         single_shortest: bool,
+        vertex_tag: String,
     },
     BFSShortest {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -48,6 +50,7 @@ pub enum RecursiveFragmentOperatorKind {
         direction: EdgeDirection,
         max_depth: usize,
         allow_loops: bool,
+        vertex_tag: String,
     },
     AllPaths {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -61,6 +64,7 @@ pub enum RecursiveFragmentOperatorKind {
         offset: usize,
         start_vertices: Vec<Value>,
         target_vertices: Vec<Value>,
+        vertex_tag: String,
     },
     Fixpoint {
         /// Mangled CTE tag identifying the working table on the runtime.
@@ -116,6 +120,7 @@ impl RecursiveFragmentOperator {
                 max_depth,
                 start_vertices,
                 target_vertices,
+                vertex_tag,
             } => RecursiveFragmentOperatorKind::ShortestPath {
                 storage,
                 space_name,
@@ -124,6 +129,7 @@ impl RecursiveFragmentOperator {
                 max_depth: *max_depth,
                 start_vertices: start_vertices.clone(),
                 target_vertices: target_vertices.clone(),
+                vertex_tag: vertex_tag.clone(),
             },
             RecursiveFragmentSpec::MultiShortestPath {
                 edge_types,
@@ -132,6 +138,7 @@ impl RecursiveFragmentOperator {
                 left_vertex_column,
                 right_vertex_column,
                 single_shortest,
+                vertex_tag,
             } => RecursiveFragmentOperatorKind::MultiShortestPath {
                 storage,
                 space_name,
@@ -141,12 +148,14 @@ impl RecursiveFragmentOperator {
                 left_vertex_column: left_vertex_column.clone(),
                 right_vertex_column: right_vertex_column.clone(),
                 single_shortest: *single_shortest,
+                vertex_tag: vertex_tag.clone(),
             },
             RecursiveFragmentSpec::BFSShortest {
                 edge_types,
                 direction,
                 max_depth,
                 allow_loops,
+                vertex_tag,
             } => RecursiveFragmentOperatorKind::BFSShortest {
                 storage,
                 space_name,
@@ -154,6 +163,7 @@ impl RecursiveFragmentOperator {
                 direction: *direction,
                 max_depth: *max_depth,
                 allow_loops: *allow_loops,
+                vertex_tag: vertex_tag.clone(),
             },
             RecursiveFragmentSpec::AllPaths {
                 edge_types,
@@ -165,6 +175,7 @@ impl RecursiveFragmentOperator {
                 offset,
                 start_vertices,
                 target_vertices,
+                vertex_tag,
             } => RecursiveFragmentOperatorKind::AllPaths {
                 storage,
                 space_name,
@@ -177,6 +188,7 @@ impl RecursiveFragmentOperator {
                 offset: *offset,
                 start_vertices: start_vertices.clone(),
                 target_vertices: target_vertices.clone(),
+                vertex_tag: vertex_tag.clone(),
             },
             RecursiveFragmentSpec::Fixpoint {
                 cte_name,
@@ -233,38 +245,158 @@ impl RecursiveFragmentOperator {
                 max_depth,
                 start_vertices,
                 target_vertices,
-            } => loop {
-                let Some(mut chunk) = input.advance()? else {
-                    return Ok(None);
-                };
-                chunk.normalize_for_opaque("RecursiveFragment");
-                if let Some(storage_lock) = storage {
-                    let reader = storage_lock.read();
-                    let col_names = chunk.col_names();
-                    let layout = chunk.get_layout();
-                    let mut out_rows = Vec::new();
-                    for row in &chunk.rows {
-                        if let Some(rt) = self.runtime.as_ref() {
-                            rt.ensure_not_cancelled()?;
+                vertex_tag,
+            } => {
+                // Single-label enforcement: path materialization requires
+                // exactly one vertex label threaded from the plan.
+                if vertex_tag.is_empty() {
+                    return Err(QueryError::execution(
+                        "Shortest path search requires exactly one vertex label".to_string(),
+                    ));
+                }
+                loop {
+                    let Some(mut chunk) = input.advance()? else {
+                        return Ok(None);
+                    };
+                    chunk.normalize_for_opaque("RecursiveFragment");
+                    if let Some(storage_lock) = storage {
+                        let reader = storage_lock.read();
+                        let col_names = chunk.col_names();
+                        let layout = chunk.get_layout();
+                        let mut out_rows = Vec::new();
+                        for row in &chunk.rows {
+                            if let Some(rt) = self.runtime.as_ref() {
+                                rt.ensure_not_cancelled()?;
+                            }
+                            let pairs = path_endpoint_pairs(
+                                row,
+                                layout.clone(),
+                                start_vertices,
+                                target_vertices,
+                                None,
+                            )?;
+                            let et_ref: Option<&[String]> = if edge_types.is_empty() {
+                                None
+                            } else {
+                                Some(edge_types.as_slice())
+                            };
+                            for (src_val, dst_val) in pairs {
+                                let Ok(src_vid) = VertexId::try_from(&src_val) else {
+                                    continue;
+                                };
+                                let Ok(dst_vid) = VertexId::try_from(&dst_val) else {
+                                    continue;
+                                };
+                                if let Some(rt) = self.runtime.as_ref() {
+                                    rt.ensure_not_cancelled()?;
+                                }
+                                let cancel_token =
+                                    self.runtime.as_ref().map(|rt| rt.cancel_token());
+                                let paths = bidir_bfs_shortest_path(
+                                    &*reader,
+                                    &src_vid,
+                                    &dst_vid,
+                                    BidirBfsConfig {
+                                        space_name,
+                                        vertex_tag,
+                                        edge_type_filter: et_ref,
+                                        max_depth: *max_depth,
+                                        single_shortest: false,
+                                        limit: 1000,
+                                        direction: *direction,
+                                    },
+                                    cancel_token.as_ref(),
+                                )?;
+                                for path in &paths {
+                                    if let Some(rt) = self.runtime.as_ref() {
+                                        rt.ensure_not_cancelled()?;
+                                    }
+                                    let mut out_row = row.clone();
+                                    out_row.push(Value::Path(Box::new(path.clone())));
+                                    out_rows.push(out_row);
+                                }
+                            }
                         }
-                        let pairs = path_endpoint_pairs(
-                            row,
-                            layout.clone(),
-                            start_vertices,
-                            target_vertices,
-                            None,
-                        )?;
-                        let et_ref: Option<&[String]> = if edge_types.is_empty() {
-                            None
-                        } else {
-                            Some(edge_types.as_slice())
-                        };
-                        for (src_val, dst_val) in pairs {
-                            let Ok(src_vid) = VertexId::try_from(&src_val) else {
+                        if out_rows.is_empty() {
+                            continue;
+                        }
+                        let mut new_cols: Vec<ColumnInfo> = col_names
+                            .iter()
+                            .map(|n| ColumnInfo {
+                                name: n.clone(),
+                                data_type: "string".to_string(),
+                            })
+                            .collect();
+                        new_cols.push(ColumnInfo {
+                            name: "path".to_string(),
+                            data_type: "path".to_string(),
+                        });
+                        let _schema = Arc::new(Schema::new(new_cols));
+                        return Ok(Some(DataChunk::new_with_layout(
+                            out_rows,
+                            Arc::clone(&self.output_layout),
+                        )));
+                    } else {
+                        return Ok(Some(chunk));
+                    }
+                }
+            }
+
+            RecursiveFragmentOperatorKind::MultiShortestPath {
+                storage,
+                space_name,
+                edge_types,
+                direction,
+                max_depth,
+                left_vertex_column,
+                right_vertex_column,
+                single_shortest,
+                vertex_tag,
+                ..
+            } => {
+                // Single-label enforcement: path materialization requires
+                // exactly one vertex label threaded from the plan.
+                if vertex_tag.is_empty() {
+                    return Err(QueryError::execution(
+                        "Multi-source shortest path search requires exactly one vertex label"
+                            .to_string(),
+                    ));
+                }
+                loop {
+                    let Some(mut chunk) = input.advance()? else {
+                        return Ok(None);
+                    };
+                    chunk.normalize_for_opaque("RecursiveFragment");
+                    if let Some(storage_lock) = storage {
+                        let reader = storage_lock.read();
+                        let col_names = chunk.col_names();
+                        let layout = chunk.get_layout();
+                        let mut out_rows = Vec::new();
+                        for row in &chunk.rows {
+                            if let Some(rt) = self.runtime.as_ref() {
+                                rt.ensure_not_cancelled()?;
+                            }
+                            let ctx = ValueRowContext::new(row.clone(), layout.clone());
+                            let left_val = ctx
+                                .get_variable(left_vertex_column)
+                                .or_else(|| ctx.get_variable("vid"))
+                                .or_else(|| row.first().cloned())
+                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
+                            let right_val = ctx
+                                .get_variable(right_vertex_column)
+                                .or_else(|| ctx.get_variable("dst_vid"))
+                                .or_else(|| row.get(1).cloned())
+                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
+                            let Ok(src_vid) = VertexId::try_from(&left_val) else {
                                 continue;
                             };
-                            let Ok(dst_vid) = VertexId::try_from(&dst_val) else {
+                            let Ok(dst_vid) = VertexId::try_from(&right_val) else {
                                 continue;
+                            };
+                            let et_ref: Option<&[String]> = if edge_types.is_empty() {
+                                None
+                            } else {
+                                Some(edge_types.as_slice())
                             };
                             if let Some(rt) = self.runtime.as_ref() {
                                 rt.ensure_not_cancelled()?;
@@ -276,11 +408,11 @@ impl RecursiveFragmentOperator {
                                 &dst_vid,
                                 BidirBfsConfig {
                                     space_name,
-                                    vertex_tag: "",
+                                    vertex_tag,
                                     edge_type_filter: et_ref,
                                     max_depth: *max_depth,
-                                    single_shortest: false,
-                                    limit: 1000,
+                                    single_shortest: *single_shortest,
+                                    limit: if *single_shortest { 1 } else { 10 },
                                     direction: *direction,
                                 },
                                 cancel_token.as_ref(),
@@ -294,128 +426,30 @@ impl RecursiveFragmentOperator {
                                 out_rows.push(out_row);
                             }
                         }
-                    }
-                    if out_rows.is_empty() {
-                        continue;
-                    }
-                    let mut new_cols: Vec<ColumnInfo> = col_names
-                        .iter()
-                        .map(|n| ColumnInfo {
-                            name: n.clone(),
-                            data_type: "string".to_string(),
-                        })
-                        .collect();
-                    new_cols.push(ColumnInfo {
-                        name: "path".to_string(),
-                        data_type: "path".to_string(),
-                    });
-                    let _schema = Arc::new(Schema::new(new_cols));
-                    return Ok(Some(DataChunk::new_with_layout(
-                        out_rows,
-                        Arc::clone(&self.output_layout),
-                    )));
-                } else {
-                    return Ok(Some(chunk));
-                }
-            },
-
-            RecursiveFragmentOperatorKind::MultiShortestPath {
-                storage,
-                space_name,
-                edge_types,
-                direction,
-                max_depth,
-                left_vertex_column,
-                right_vertex_column,
-                single_shortest,
-                ..
-            } => loop {
-                let Some(mut chunk) = input.advance()? else {
-                    return Ok(None);
-                };
-                chunk.normalize_for_opaque("RecursiveFragment");
-                if let Some(storage_lock) = storage {
-                    let reader = storage_lock.read();
-                    let col_names = chunk.col_names();
-                    let layout = chunk.get_layout();
-                    let mut out_rows = Vec::new();
-                    for row in &chunk.rows {
-                        if let Some(rt) = self.runtime.as_ref() {
-                            rt.ensure_not_cancelled()?;
-                        }
-                        let ctx = ValueRowContext::new(row.clone(), layout.clone());
-                        let left_val = ctx
-                            .get_variable(left_vertex_column)
-                            .or_else(|| ctx.get_variable("vid"))
-                            .or_else(|| row.first().cloned())
-                            .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                        let right_val = ctx
-                            .get_variable(right_vertex_column)
-                            .or_else(|| ctx.get_variable("dst_vid"))
-                            .or_else(|| row.get(1).cloned())
-                            .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                        let Ok(src_vid) = VertexId::try_from(&left_val) else {
+                        if out_rows.is_empty() {
                             continue;
-                        };
-                        let Ok(dst_vid) = VertexId::try_from(&right_val) else {
-                            continue;
-                        };
-                        let et_ref: Option<&[String]> = if edge_types.is_empty() {
-                            None
-                        } else {
-                            Some(edge_types.as_slice())
-                        };
-                        if let Some(rt) = self.runtime.as_ref() {
-                            rt.ensure_not_cancelled()?;
                         }
-                        let cancel_token = self.runtime.as_ref().map(|rt| rt.cancel_token());
-                        let paths = bidir_bfs_shortest_path(
-                            &*reader,
-                            &src_vid,
-                            &dst_vid,
-                            BidirBfsConfig {
-                                space_name,
-                                vertex_tag: "",
-                                edge_type_filter: et_ref,
-                                max_depth: *max_depth,
-                                single_shortest: *single_shortest,
-                                limit: if *single_shortest { 1 } else { 10 },
-                                direction: *direction,
-                            },
-                            cancel_token.as_ref(),
-                        )?;
-                        for path in &paths {
-                            if let Some(rt) = self.runtime.as_ref() {
-                                rt.ensure_not_cancelled()?;
-                            }
-                            let mut out_row = row.clone();
-                            out_row.push(Value::Path(Box::new(path.clone())));
-                            out_rows.push(out_row);
-                        }
+                        let mut new_cols: Vec<ColumnInfo> = col_names
+                            .iter()
+                            .map(|n| ColumnInfo {
+                                name: n.clone(),
+                                data_type: "string".to_string(),
+                            })
+                            .collect();
+                        new_cols.push(ColumnInfo {
+                            name: "_multi_shortest_path".to_string(),
+                            data_type: "path".to_string(),
+                        });
+                        let _schema = Arc::new(Schema::new(new_cols));
+                        return Ok(Some(DataChunk::new_with_layout(
+                            out_rows,
+                            Arc::clone(&self.output_layout),
+                        )));
+                    } else {
+                        return Ok(Some(chunk));
                     }
-                    if out_rows.is_empty() {
-                        continue;
-                    }
-                    let mut new_cols: Vec<ColumnInfo> = col_names
-                        .iter()
-                        .map(|n| ColumnInfo {
-                            name: n.clone(),
-                            data_type: "string".to_string(),
-                        })
-                        .collect();
-                    new_cols.push(ColumnInfo {
-                        name: "_multi_shortest_path".to_string(),
-                        data_type: "path".to_string(),
-                    });
-                    let _schema = Arc::new(Schema::new(new_cols));
-                    return Ok(Some(DataChunk::new_with_layout(
-                        out_rows,
-                        Arc::clone(&self.output_layout),
-                    )));
-                } else {
-                    return Ok(Some(chunk));
                 }
-            },
+            }
 
             RecursiveFragmentOperatorKind::BFSShortest {
                 storage,
@@ -424,89 +458,99 @@ impl RecursiveFragmentOperator {
                 direction,
                 max_depth,
                 allow_loops,
-            } => loop {
-                let Some(mut chunk) = input.advance()? else {
-                    return Ok(None);
-                };
-                chunk.normalize_for_opaque("RecursiveFragment");
-                if let Some(storage_lock) = storage {
-                    let reader = storage_lock.read();
-                    let col_names = chunk.col_names();
-                    let layout = chunk.get_layout();
-                    let mut out_rows = Vec::new();
-                    for row in &chunk.rows {
-                        if let Some(rt) = self.runtime.as_ref() {
-                            rt.ensure_not_cancelled()?;
-                        }
-                        let ctx = ValueRowContext::new(row.clone(), layout.clone());
-                        let vid_val = ctx
-                            .get_variable("vid")
-                            .or_else(|| row.first().cloned())
-                            .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                        let Ok(start_vid) = VertexId::try_from(&vid_val) else {
-                            continue;
-                        };
-                        let end_val = ctx
-                            .get_variable("dst_vid")
-                            .or_else(|| ctx.get_variable("target"))
-                            .or_else(|| row.get(1).cloned())
-                            .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                        let Ok(end_vid) = VertexId::try_from(&end_val) else {
-                            continue;
-                        };
-                        let et_ref: Option<&[String]> = if edge_types.is_empty() {
-                            None
-                        } else {
-                            Some(edge_types.as_slice())
-                        };
-                        let cancel_token = self.runtime.as_ref().map(|rt| rt.cancel_token());
-                        let paths = bidir_bfs_shortest_path(
-                            &*reader,
-                            &start_vid,
-                            &end_vid,
-                            BidirBfsConfig {
-                                space_name,
-                                vertex_tag: "",
-                                edge_type_filter: et_ref,
-                                max_depth: *max_depth,
-                                single_shortest: !*allow_loops,
-                                limit: if *allow_loops { 1000 } else { 1 },
-                                direction: *direction,
-                            },
-                            cancel_token.as_ref(),
-                        )?;
-                        for path in &paths {
+                vertex_tag,
+            } => {
+                // Single-label enforcement: path materialization requires
+                // exactly one vertex label threaded from the plan.
+                if vertex_tag.is_empty() {
+                    return Err(QueryError::execution(
+                        "BFS shortest path search requires exactly one vertex label".to_string(),
+                    ));
+                }
+                loop {
+                    let Some(mut chunk) = input.advance()? else {
+                        return Ok(None);
+                    };
+                    chunk.normalize_for_opaque("RecursiveFragment");
+                    if let Some(storage_lock) = storage {
+                        let reader = storage_lock.read();
+                        let col_names = chunk.col_names();
+                        let layout = chunk.get_layout();
+                        let mut out_rows = Vec::new();
+                        for row in &chunk.rows {
                             if let Some(rt) = self.runtime.as_ref() {
                                 rt.ensure_not_cancelled()?;
                             }
-                            let mut out_row = row.clone();
-                            out_row.push(Value::Path(Box::new(path.clone())));
-                            out_rows.push(out_row);
+                            let ctx = ValueRowContext::new(row.clone(), layout.clone());
+                            let vid_val = ctx
+                                .get_variable("vid")
+                                .or_else(|| row.first().cloned())
+                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
+                            let Ok(start_vid) = VertexId::try_from(&vid_val) else {
+                                continue;
+                            };
+                            let end_val = ctx
+                                .get_variable("dst_vid")
+                                .or_else(|| ctx.get_variable("target"))
+                                .or_else(|| row.get(1).cloned())
+                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
+                            let Ok(end_vid) = VertexId::try_from(&end_val) else {
+                                continue;
+                            };
+                            let et_ref: Option<&[String]> = if edge_types.is_empty() {
+                                None
+                            } else {
+                                Some(edge_types.as_slice())
+                            };
+                            let cancel_token = self.runtime.as_ref().map(|rt| rt.cancel_token());
+                            let paths = bidir_bfs_shortest_path(
+                                &*reader,
+                                &start_vid,
+                                &end_vid,
+                                BidirBfsConfig {
+                                    space_name,
+                                    vertex_tag,
+                                    edge_type_filter: et_ref,
+                                    max_depth: *max_depth,
+                                    single_shortest: !*allow_loops,
+                                    limit: if *allow_loops { 1000 } else { 1 },
+                                    direction: *direction,
+                                },
+                                cancel_token.as_ref(),
+                            )?;
+                            for path in &paths {
+                                if let Some(rt) = self.runtime.as_ref() {
+                                    rt.ensure_not_cancelled()?;
+                                }
+                                let mut out_row = row.clone();
+                                out_row.push(Value::Path(Box::new(path.clone())));
+                                out_rows.push(out_row);
+                            }
                         }
+                        if out_rows.is_empty() {
+                            continue;
+                        }
+                        let mut new_cols: Vec<ColumnInfo> = col_names
+                            .iter()
+                            .map(|n| ColumnInfo {
+                                name: n.clone(),
+                                data_type: "string".to_string(),
+                            })
+                            .collect();
+                        new_cols.push(ColumnInfo {
+                            name: "_bfs_path".to_string(),
+                            data_type: "path".to_string(),
+                        });
+                        let _schema = Arc::new(Schema::new(new_cols));
+                        return Ok(Some(DataChunk::new_with_layout(
+                            out_rows,
+                            Arc::clone(&self.output_layout),
+                        )));
+                    } else {
+                        return Ok(Some(chunk));
                     }
-                    if out_rows.is_empty() {
-                        continue;
-                    }
-                    let mut new_cols: Vec<ColumnInfo> = col_names
-                        .iter()
-                        .map(|n| ColumnInfo {
-                            name: n.clone(),
-                            data_type: "string".to_string(),
-                        })
-                        .collect();
-                    new_cols.push(ColumnInfo {
-                        name: "_bfs_path".to_string(),
-                        data_type: "path".to_string(),
-                    });
-                    let _schema = Arc::new(Schema::new(new_cols));
-                    return Ok(Some(DataChunk::new_with_layout(
-                        out_rows,
-                        Arc::clone(&self.output_layout),
-                    )));
-                } else {
-                    return Ok(Some(chunk));
                 }
-            },
+            }
 
             RecursiveFragmentOperatorKind::AllPaths {
                 storage,
@@ -520,84 +564,95 @@ impl RecursiveFragmentOperator {
                 offset,
                 start_vertices,
                 target_vertices,
-            } => loop {
-                let Some(mut chunk) = input.advance()? else {
-                    return Ok(None);
-                };
-                chunk.normalize_for_opaque("RecursiveFragment");
-                if let Some(storage_lock) = storage {
-                    let reader = storage_lock.read();
-                    let col_names = chunk.col_names();
-                    let layout = chunk.get_layout();
-                    let mut out_rows = Vec::new();
-                    for row in &chunk.rows {
-                        if let Some(rt) = self.runtime.as_ref() {
-                            rt.ensure_not_cancelled()?;
-                        }
-                        let pairs = path_endpoint_pairs(
-                            row,
-                            layout.clone(),
-                            start_vertices,
-                            target_vertices,
-                            None,
-                        )?;
-                        for (src_val, dst_val) in pairs {
-                            let Ok(src_vid) = VertexId::try_from(&src_val) else {
-                                continue;
-                            };
-                            let Ok(dst_vid) = VertexId::try_from(&dst_val) else {
-                                continue;
-                            };
-                            let cancel_token = self.runtime.as_ref().map(|rt| rt.cancel_token());
-                            let paths = enumerate_all_paths(
-                                &*reader,
-                                &src_vid,
-                                &dst_vid,
-                                AllPathsConfig {
-                                    space_name,
-                                    vertex_tag: "",
-                                    edge_types,
-                                    direction: *direction,
-                                    min_depth: *min_depth,
-                                    max_depth: *max_depth,
-                                    acyclic: *acyclic,
-                                    result_cap: limit.unwrap_or(usize::MAX),
-                                },
-                                cancel_token.as_ref(),
+                vertex_tag,
+            } => {
+                // Single-label enforcement: path materialization requires
+                // exactly one vertex label threaded from the plan.
+                if vertex_tag.is_empty() {
+                    return Err(QueryError::execution(
+                        "All-paths search requires exactly one vertex label".to_string(),
+                    ));
+                }
+                loop {
+                    let Some(mut chunk) = input.advance()? else {
+                        return Ok(None);
+                    };
+                    chunk.normalize_for_opaque("RecursiveFragment");
+                    if let Some(storage_lock) = storage {
+                        let reader = storage_lock.read();
+                        let col_names = chunk.col_names();
+                        let layout = chunk.get_layout();
+                        let mut out_rows = Vec::new();
+                        for row in &chunk.rows {
+                            if let Some(rt) = self.runtime.as_ref() {
+                                rt.ensure_not_cancelled()?;
+                            }
+                            let pairs = path_endpoint_pairs(
+                                row,
+                                layout.clone(),
+                                start_vertices,
+                                target_vertices,
+                                None,
                             )?;
-                            for path in paths.iter().skip(*offset) {
-                                if let Some(rt) = self.runtime.as_ref() {
-                                    rt.ensure_not_cancelled()?;
+                            for (src_val, dst_val) in pairs {
+                                let Ok(src_vid) = VertexId::try_from(&src_val) else {
+                                    continue;
+                                };
+                                let Ok(dst_vid) = VertexId::try_from(&dst_val) else {
+                                    continue;
+                                };
+                                let cancel_token =
+                                    self.runtime.as_ref().map(|rt| rt.cancel_token());
+                                let paths = enumerate_all_paths(
+                                    &*reader,
+                                    &src_vid,
+                                    &dst_vid,
+                                    AllPathsConfig {
+                                        space_name,
+                                        vertex_tag,
+                                        edge_types,
+                                        direction: *direction,
+                                        min_depth: *min_depth,
+                                        max_depth: *max_depth,
+                                        acyclic: *acyclic,
+                                        result_cap: limit.unwrap_or(usize::MAX),
+                                    },
+                                    cancel_token.as_ref(),
+                                )?;
+                                for path in paths.iter().skip(*offset) {
+                                    if let Some(rt) = self.runtime.as_ref() {
+                                        rt.ensure_not_cancelled()?;
+                                    }
+                                    let mut out_row = row.clone();
+                                    out_row.push(Value::Path(Box::new(path.clone())));
+                                    out_rows.push(out_row);
                                 }
-                                let mut out_row = row.clone();
-                                out_row.push(Value::Path(Box::new(path.clone())));
-                                out_rows.push(out_row);
                             }
                         }
+                        if out_rows.is_empty() {
+                            continue;
+                        }
+                        let mut new_cols: Vec<ColumnInfo> = col_names
+                            .iter()
+                            .map(|n| ColumnInfo {
+                                name: n.clone(),
+                                data_type: "string".to_string(),
+                            })
+                            .collect();
+                        new_cols.push(ColumnInfo {
+                            name: "path".to_string(),
+                            data_type: "path".to_string(),
+                        });
+                        let _schema = Arc::new(Schema::new(new_cols));
+                        return Ok(Some(DataChunk::new_with_layout(
+                            out_rows,
+                            Arc::clone(&self.output_layout),
+                        )));
+                    } else {
+                        return Ok(Some(chunk));
                     }
-                    if out_rows.is_empty() {
-                        continue;
-                    }
-                    let mut new_cols: Vec<ColumnInfo> = col_names
-                        .iter()
-                        .map(|n| ColumnInfo {
-                            name: n.clone(),
-                            data_type: "string".to_string(),
-                        })
-                        .collect();
-                    new_cols.push(ColumnInfo {
-                        name: "path".to_string(),
-                        data_type: "path".to_string(),
-                    });
-                    let _schema = Arc::new(Schema::new(new_cols));
-                    return Ok(Some(DataChunk::new_with_layout(
-                        out_rows,
-                        Arc::clone(&self.output_layout),
-                    )));
-                } else {
-                    return Ok(Some(chunk));
                 }
-            },
+            }
             RecursiveFragmentOperatorKind::Fixpoint { .. } => self.next_fixpoint(),
         }
     }
@@ -682,7 +737,9 @@ impl RecursiveFragmentOperator {
                 Self::run_fixpoint(&runtime, &cte_name, &anchor, step.as_ref(), max_iterations)?;
             state.output = Some(rows);
         }
-        let output = state.output.as_ref().expect("computed above");
+        let output = state.output.as_ref().ok_or_else(|| {
+            QueryError::execution("Fixpoint output missing after computation".to_string())
+        })?;
         if state.output_pos >= output.len() {
             return Ok(None);
         }

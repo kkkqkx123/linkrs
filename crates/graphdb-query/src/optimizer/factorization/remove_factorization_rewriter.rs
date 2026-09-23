@@ -539,6 +539,7 @@ mod tests {
                 path_var: "p".to_string(),
                 edge_alias: None,
                 vertex_alias: None,
+                dst_tag: None,
                 output_var: None,
                 col_names: vec![],
                 column_types: vec![],

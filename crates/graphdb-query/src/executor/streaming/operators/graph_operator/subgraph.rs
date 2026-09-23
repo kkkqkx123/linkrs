@@ -24,7 +24,9 @@ pub(super) fn handle(
         edge_types,
     } = &mut op.kind
     else {
-        unreachable!("subgraph::handle called for a non-subgraph graph source")
+        return Err(QueryError::execution(
+            "Subgraph operator invoked with mismatched operator kind".to_string(),
+        ));
     };
     let storage = &*storage;
     let space_name = &*space_name;
@@ -95,13 +97,17 @@ pub(super) fn handle(
                             ));
                         }
                         let mut out_row = row.clone();
-                        let Some(src_vertex) =
-                            reader.get_vertex(space_name, dst_tag, &edge.src).ok().flatten()
+                        let Some(src_vertex) = reader
+                            .get_vertex(space_name, dst_tag, &edge.src)
+                            .ok()
+                            .flatten()
                         else {
                             continue;
                         };
-                        let Some(dst_vertex) =
-                            reader.get_vertex(space_name, dst_tag, &edge.dst).ok().flatten()
+                        let Some(dst_vertex) = reader
+                            .get_vertex(space_name, dst_tag, &edge.dst)
+                            .ok()
+                            .flatten()
                         else {
                             continue;
                         };
@@ -110,6 +116,12 @@ pub(super) fn handle(
                         out_row.push(Value::string(edge.edge_type.clone()));
                         out_rows.push(out_row);
                     }
+                } else if !matches!(vid_val, Value::Null(_)) {
+                    // Single-label enforcement mirrors pipeline delete:
+                    // bare identifiers are rejected, not silently skipped.
+                    return Err(QueryError::execution(
+                        "Subgraph requires a vertex value with tag; bare id is illegal".to_string(),
+                    ));
                 }
             }
 

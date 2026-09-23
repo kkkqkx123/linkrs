@@ -985,7 +985,13 @@ mod tests {
 
         // Graph types
         use graphdb_core::vertex_edge_path::Vertex;
-        let vertex = Vertex::with_vid(graphdb_core::types::VertexId::from_int64(1));
+        let vertex = Vertex::new(
+            graphdb_core::types::VertexId::try_from_int64(1).expect("valid vertex id"),
+            graphdb_core::vertex_edge_path::Tag::new(
+                String::new(),
+                std::collections::HashMap::new(),
+            ),
+        );
         assert_eq!(
             calculator.get_type_cost_factor(&Value::Vertex(Box::new(vertex))),
             calculator.config.graph_type_cost_factor

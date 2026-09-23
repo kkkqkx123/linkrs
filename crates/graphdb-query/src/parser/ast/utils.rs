@@ -667,7 +667,10 @@ impl AstBuilder {
     /// Constructing a simple DELETE query
     pub fn build_delete_vertices(&self, tag: String, vertices: Vec<ContextualExpression>) -> Stmt {
         StmtFactory::delete(
-            DeleteTarget::Vertices { tag, vids: vertices },
+            DeleteTarget::Vertices {
+                tag,
+                vids: vertices,
+            },
             None,
             self.span,
         )

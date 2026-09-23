@@ -339,10 +339,7 @@ impl TestScenario {
 
             let found = rows.iter().any(|row| {
                 row.iter().any(|val| match val {
-                    Value::Vertex(v) => v
-                        .tags
-                        .iter()
-                        .any(|tag| tag.properties.get(prop_name) == Some(&expected_value)),
+                    Value::Vertex(v) => v.properties().get(prop_name) == Some(&expected_value),
                     Value::Edge(e) => e.props.get(prop_name) == Some(&expected_value),
                     _ => false,
                 })
@@ -494,8 +491,8 @@ impl TestScenario {
             .as_ref()
             .map(|s| s.space_name.clone())
             .unwrap_or_default();
-        let src_vid = VertexId::from_int64(src);
-        let dst_vid = VertexId::from_int64(dst);
+        let src_vid = VertexId::try_from_int64(src).expect("test vertex id");
+        let dst_vid = VertexId::try_from_int64(dst).expect("test vertex id");
         let found = {
             let storage_guard = self.storage.write();
             let edges = storage_guard
@@ -520,8 +517,8 @@ impl TestScenario {
             .as_ref()
             .map(|s| s.space_name.clone())
             .unwrap_or_default();
-        let src_vid = VertexId::from_int64(src);
-        let dst_vid = VertexId::from_int64(dst);
+        let src_vid = VertexId::try_from_int64(src).expect("test vertex id");
+        let dst_vid = VertexId::try_from_int64(dst).expect("test vertex id");
         let found = {
             let storage_guard = self.storage.write();
             let edges = storage_guard
@@ -631,12 +628,7 @@ impl TestScenario {
                 for (i, col_name) in ds.col_names.iter().enumerate() {
                     if let Some(value) = row.get(i) {
                         if let Value::Vertex(vertex) = value {
-                            for tag in vertex.tags() {
-                                for (prop_name, prop_value) in &tag.properties {
-                                    props.insert(prop_name.clone(), prop_value.clone());
-                                }
-                            }
-                            for (prop_name, prop_value) in &vertex.properties {
+                            for (prop_name, prop_value) in vertex.properties() {
                                 props.insert(prop_name.clone(), prop_value.clone());
                             }
                         } else if let Value::Edge(edge) = value {

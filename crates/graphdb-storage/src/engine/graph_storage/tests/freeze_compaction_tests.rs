@@ -205,7 +205,11 @@ fn test_compact_maintenance_propagates_vertex_remap_to_edge_tables() {
     // are interleaved with survivors, forcing a real ID remap.
     for i in (2..=80).step_by(2) {
         storage
-            .delete_vertex("test_space", "Person", &VertexId::try_from_int64(i).expect("test vertex id"))
+            .delete_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(i).expect("test vertex id"),
+            )
             .unwrap();
     }
 
@@ -239,7 +243,11 @@ fn test_compact_maintenance_propagates_vertex_remap_to_edge_tables() {
 
     // Deleted vertices no longer resolve.
     assert!(storage
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(2).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(2).expect("test vertex id")
+        )
         .unwrap()
         .is_none());
 
@@ -262,15 +270,29 @@ fn test_compact_maintenance_propagates_vertex_remap_to_edge_tables() {
 
     // Node-edge scans resolve through remapped out/in CSRs.
     let out_edges = storage
-        .get_node_edges("test_space", &VertexId::try_from_int64(1).expect("test vertex id"), EdgeDirection::Out)
+        .get_node_edges(
+            "test_space",
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            EdgeDirection::Out,
+        )
         .unwrap();
     assert_eq!(out_edges.len(), 1);
-    assert_eq!(out_edges[0].dst, VertexId::try_from_int64(3).expect("test vertex id"));
+    assert_eq!(
+        out_edges[0].dst,
+        VertexId::try_from_int64(3).expect("test vertex id")
+    );
     let in_edges = storage
-        .get_node_edges("test_space", &VertexId::try_from_int64(79).expect("test vertex id"), EdgeDirection::In)
+        .get_node_edges(
+            "test_space",
+            &VertexId::try_from_int64(79).expect("test vertex id"),
+            EdgeDirection::In,
+        )
         .unwrap();
     assert_eq!(in_edges.len(), 1);
-    assert_eq!(in_edges[0].src, VertexId::try_from_int64(77).expect("test vertex id"));
+    assert_eq!(
+        in_edges[0].src,
+        VertexId::try_from_int64(77).expect("test vertex id")
+    );
 }
 
 #[test]
@@ -311,7 +333,11 @@ fn test_auto_vertex_compaction_reclaims_id_holes() {
     // Delete 40 vertices; holes appear but nothing is reclaimed yet.
     for i in (2..=80).step_by(2) {
         storage
-            .delete_vertex("test_space", "Person", &VertexId::try_from_int64(i).expect("test vertex id"))
+            .delete_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(i).expect("test vertex id"),
+            )
             .unwrap();
     }
 
@@ -378,7 +404,11 @@ fn test_auto_vertex_compaction_reclaims_id_holes() {
     assert_eq!(survivors.len(), 60);
     for id in survivors {
         let vertex = storage
-            .get_vertex("test_space", "Person", &VertexId::try_from_int64(id).expect("test vertex id"))
+            .get_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(id).expect("test vertex id"),
+            )
             .unwrap()
             .unwrap_or_else(|| panic!("vertex v{id} lost after vertex compaction remap"));
         assert_eq!(
@@ -390,7 +420,11 @@ fn test_auto_vertex_compaction_reclaims_id_holes() {
     for id in [2i64, 40, 80] {
         assert!(
             storage
-                .get_vertex("test_space", "Person", &VertexId::try_from_int64(id).expect("test vertex id"))
+                .get_vertex(
+                    "test_space",
+                    "Person",
+                    &VertexId::try_from_int64(id).expect("test vertex id")
+                )
                 .unwrap()
                 .is_none(),
             "deleted vertex v{id} resurrected by remap"

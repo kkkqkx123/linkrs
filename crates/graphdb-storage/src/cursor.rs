@@ -342,11 +342,7 @@ pub trait VertexCursor: Send + std::fmt::Debug {
                 // No table row address exists behind this fallback path:
                 // integer vids project to their row key, anything else
                 // reports -1. Storage engines override this with real ids.
-                internal_id: v
-                    .vid
-                    .as_internal_u32()
-                    .map(|id| id as i64)
-                    .unwrap_or(-1),
+                internal_id: v.vid.as_internal_u32().map(|id| id as i64).unwrap_or(-1),
                 tag_name: v.tag.name.clone(),
                 props: v.tag.properties.clone().into_iter().collect(),
             })
@@ -587,7 +583,10 @@ mod tests {
             .expect("flat batch should succeed");
         assert_eq!(batch.len(), 1);
         let rec = &batch[0];
-        assert_eq!(rec.vid, VertexId::try_from_int64(1).expect("test vertex id"));
+        assert_eq!(
+            rec.vid,
+            VertexId::try_from_int64(1).expect("test vertex id")
+        );
         assert_eq!(rec.internal_id, 1);
         assert_eq!(rec.tag_name, "person");
         assert_eq!(rec.props, vec![("age".to_string(), Value::BigInt(30))]);

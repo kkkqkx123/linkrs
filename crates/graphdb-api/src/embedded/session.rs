@@ -413,7 +413,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             }
             vertices.push(graphdb_core::Vertex::new(
                 vid,
-                vec![graphdb_core::Tag::new(name.to_string(), props)],
+                graphdb_core::Tag::new(name.to_string(), props),
             ));
         }
         let count = self.batch_insert_vertices(vertices)?;

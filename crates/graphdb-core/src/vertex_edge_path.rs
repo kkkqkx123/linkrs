@@ -136,9 +136,7 @@ impl Ord for Vertex {
             self.tag
                 .name
                 .cmp(&other.tag.name)
-                .then_with(|| {
-                    Vertex::cmp_properties(&self.tag.properties, &other.tag.properties)
-                })
+                .then_with(|| Vertex::cmp_properties(&self.tag.properties, &other.tag.properties))
         })
     }
 }

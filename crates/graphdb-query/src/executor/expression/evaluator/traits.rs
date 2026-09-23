@@ -389,15 +389,15 @@ mod tests {
             HashMap::from([("name".to_string(), Value::string("Alice"))]),
         );
         Value::Vertex(Box::new(graphdb_core::vertex_edge_path::Vertex::new(
-            VertexId::from_int64(1),
-            vec![tag],
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            tag,
         )))
     }
 
     fn test_edge() -> Value {
         Value::Edge(Box::new(Edge::new(
-            VertexId::from_int64(1),
-            VertexId::from_int64(2),
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            VertexId::try_from_int64(2).expect("valid vertex id"),
             "knows".to_string(),
             0,
             HashMap::new(),
@@ -584,7 +584,10 @@ mod tests {
             panic!("expected a path value");
         };
         assert_eq!(path.len(), 1);
-        assert_eq!(path.src.vid, VertexId::from_int64(1));
+        assert_eq!(
+            path.src.vid,
+            VertexId::try_from_int64(1).expect("valid vertex id")
+        );
 
         // Non-vertex start is a path error.
         let bad = Expression::path_build(vec![Expression::Literal(Value::Int(1))]);

@@ -683,7 +683,10 @@ fn test_batch_inserter_add_vertex() {
     let session = db.session().expect("创建会话失败");
 
     let mut inserter = session.batch_inserter(100);
-    let vertex = Vertex::with_vid(VertexId::from_int64(1));
+    let vertex = Vertex::new(
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        graphdb::core::Tag::new("Person".to_string(), HashMap::new()),
+    );
     inserter.add_vertex(vertex);
 
     assert_eq!(inserter.buffered_vertices(), 1);
@@ -698,8 +701,8 @@ fn test_batch_inserter_add_edge() {
 
     let mut inserter = session.batch_inserter(100);
     let edge = Edge::new(
-        VertexId::from_int64(1),
-        VertexId::from_int64(2),
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        VertexId::try_from_int64(2).expect("test vertex id"),
         "follows".to_string(),
         0,
         HashMap::new(),
@@ -895,7 +898,10 @@ fn test_row_get_bool() {
 
 #[test]
 fn test_row_get_vertex() {
-    let vertex = Vertex::with_vid(VertexId::from_int64(1));
+    let vertex = Vertex::new(
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        graphdb::core::Tag::new("Person".to_string(), HashMap::new()),
+    );
     let row = Row::from_columns(&["v".to_string()], &[Value::Vertex(Box::new(vertex))]);
 
     let value = row.get_vertex("v");
@@ -905,8 +911,8 @@ fn test_row_get_vertex() {
 #[test]
 fn test_row_get_edge() {
     let edge = Edge::new(
-        VertexId::from_int64(1),
-        VertexId::from_int64(2),
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        VertexId::try_from_int64(2).expect("test vertex id"),
         "follows".to_string(),
         0,
         HashMap::new(),

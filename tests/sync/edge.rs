@@ -70,8 +70,8 @@ fn test_edge_insert_sync_via_manager() {
     let txn_id = TransactionId(harness.current_txn_id.unwrap());
 
     let edge = graphdb::core::Edge::new(
-        VertexId::from_int64(1),
-        VertexId::from_int64(2),
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
         0,
         HashMap::new(),
@@ -90,8 +90,8 @@ fn test_edge_insert_sync_via_manager() {
             txn_id,
             space_id,
             &graphdb::core::Edge::new(
-                VertexId::from_int64(1),
-                VertexId::from_int64(2),
+                VertexId::try_from_int64(1).expect("test vertex id"),
+                VertexId::try_from_int64(2).expect("test vertex id"),
                 "KNOWS".to_string(),
                 0,
                 HashMap::new(),
@@ -109,8 +109,8 @@ fn test_edge_insert_sync_via_manager() {
         .storage
         .get_edge(
             "test_space",
-            &VertexId::from_int64(1),
-            &VertexId::from_int64(2),
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            &VertexId::try_from_int64(2).expect("test vertex id"),
             "KNOWS",
             0,
         )
@@ -177,8 +177,8 @@ fn test_edge_with_fulltext_property_sync() {
         Value::string("Alice knows Bob since 2020"),
     );
     let edge = graphdb::core::Edge::new(
-        VertexId::from_int64(1),
-        VertexId::from_int64(2),
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
         0,
         props,
@@ -265,8 +265,8 @@ fn test_edge_delete_sync_via_manager() {
     let mut props = HashMap::new();
     props.insert("description".to_string(), Value::string("Alice knows Bob"));
     let edge = graphdb::core::Edge::new(
-        VertexId::from_int64(1),
-        VertexId::from_int64(2),
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
         0,
         props,
@@ -284,8 +284,8 @@ fn test_edge_delete_sync_via_manager() {
         .storage
         .delete_edge(
             "test_space",
-            &VertexId::from_int64(1),
-            &VertexId::from_int64(2),
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            &VertexId::try_from_int64(2).expect("test vertex id"),
             "KNOWS",
             0,
         )
@@ -304,8 +304,8 @@ fn test_edge_delete_sync_via_manager() {
         .storage
         .get_edge(
             "test_space",
-            &VertexId::from_int64(1),
-            &VertexId::from_int64(2),
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            &VertexId::try_from_int64(2).expect("test vertex id"),
             "KNOWS",
             0,
         )
@@ -370,8 +370,8 @@ fn test_edge_update_sync_via_manager() {
     let mut old_props = HashMap::new();
     old_props.insert("description".to_string(), Value::string("old description"));
     let old_edge = graphdb::core::Edge::new(
-        VertexId::from_int64(1),
-        VertexId::from_int64(2),
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
         0,
         old_props,
@@ -388,8 +388,8 @@ fn test_edge_update_sync_via_manager() {
     let mut new_props = HashMap::new();
     new_props.insert("description".to_string(), Value::string("new description"));
     let new_edge = graphdb::core::Edge::new(
-        VertexId::from_int64(1),
-        VertexId::from_int64(2),
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
         0,
         new_props.clone(),
@@ -400,8 +400,8 @@ fn test_edge_update_sync_via_manager() {
         .storage
         .delete_edge(
             "test_space",
-            &VertexId::from_int64(1),
-            &VertexId::from_int64(2),
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            &VertexId::try_from_int64(2).expect("test vertex id"),
             "KNOWS",
             0,
         )
@@ -432,8 +432,8 @@ fn test_edge_update_sync_via_manager() {
         .storage
         .get_edge(
             "test_space",
-            &VertexId::from_int64(1),
-            &VertexId::from_int64(2),
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            &VertexId::try_from_int64(2).expect("test vertex id"),
             "KNOWS",
             0,
         )
@@ -486,8 +486,8 @@ fn test_edge_delete_no_index_graceful() {
 
     // Insert edge
     let edge = graphdb::core::Edge::new(
-        VertexId::from_int64(1),
-        VertexId::from_int64(2),
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
         0,
         HashMap::new(),
@@ -505,8 +505,8 @@ fn test_edge_delete_no_index_graceful() {
         .storage
         .delete_edge(
             "test_space",
-            &VertexId::from_int64(1),
-            &VertexId::from_int64(2),
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            &VertexId::try_from_int64(2).expect("test vertex id"),
             "KNOWS",
             0,
         )

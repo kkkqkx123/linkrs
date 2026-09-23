@@ -22,9 +22,8 @@ use super::logical_nodes::control_flow::{
 };
 use super::logical_nodes::dml::{
     LogicalCopyFromNode, LogicalCopyToNode, LogicalDeleteEdgesNode, LogicalDeleteIndexNode,
-    LogicalDeleteVerticesNode, LogicalInsertEdgesNode,
-    LogicalInsertVerticesNode, LogicalPipeDeleteEdgesNode, LogicalPipeDeleteVerticesNode,
-    LogicalUpdateNode,
+    LogicalDeleteVerticesNode, LogicalInsertEdgesNode, LogicalInsertVerticesNode,
+    LogicalPipeDeleteEdgesNode, LogicalPipeDeleteVerticesNode, LogicalUpdateNode,
 };
 use super::logical_nodes::flatten::LogicalFlattenNode;
 use super::logical_nodes::graph_ops::{

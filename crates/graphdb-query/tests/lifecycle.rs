@@ -518,8 +518,8 @@ fn lifecycle_read_statement_binds_and_finalizes_read_operation_context() {
         store.create_tag("t2", &tag).unwrap();
         for i in 0..8i64 {
             let vertex = Vertex::new(
-                VertexId::from_int64(i),
-                vec![Tag::new(
+                VertexId::try_from_int64(i).expect("test vertex id"),
+                Tag::new(
                     "Person".to_string(),
                     vec![
                         ("id".to_string(), Value::BigInt(i)),
@@ -527,7 +527,7 @@ fn lifecycle_read_statement_binds_and_finalizes_read_operation_context() {
                     ]
                     .into_iter()
                     .collect::<HashMap<_, _>>(),
-                )],
+                ),
             );
             store.insert_vertex("t2", vertex).unwrap();
         }

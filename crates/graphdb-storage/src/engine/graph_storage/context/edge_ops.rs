@@ -15,6 +15,26 @@ use graphdb_core::{StorageError, StorageResult};
 use super::helpers;
 use super::GraphStorageContext;
 
+/// Project a stored internal endpoint id to its external `VertexId` using the
+/// edge table's owning label. Unresolved ids stay unchanged (dangling edge).
+fn endpoint_to_external(
+    ctx: &GraphStorageContext,
+    label: LabelId,
+    vid: VertexId,
+    ts: Timestamp,
+) -> VertexId {
+    if label == 0 {
+        return vid;
+    }
+    match vid.as_internal_u32() {
+        Some(internal) => ctx
+            .get_external_id_by_internal_id(label, internal)
+            .or_else(|| ctx.get_external_vertex_id(label, internal, ts))
+            .unwrap_or(vid),
+        None => vid,
+    }
+}
+
 struct EdgeLabelLookupCtx<'a> {
     vertex_tables: &'a HashMap<LabelId, Arc<ShardedVertexTable>>,
     src_id: &'a VertexId,
@@ -631,9 +651,10 @@ impl GraphStorageContext {
     ///
     /// Zero-copy fan-out entry point: resolves the internal id once, then
     /// streams every visible neighbor of every matching table into the
-    /// visitor as `(src_internal, nbr)` pairs. Returns the resolved internal
-    /// src id. Use this in per-vertex traversal loops to avoid per-vertex
-    /// allocation.
+    /// visitor as `(src_internal, far_label, nbr)` pairs — `far_label` is the
+    /// table's owning dst label so callers can project internal endpoints to
+    /// external ids even when the edge type's endpoint tags are unconstrained.
+    /// Returns the resolved internal src id.
     pub fn visit_out_nbrs<F>(
         &self,
         edge_label: LabelId,
@@ -644,7 +665,7 @@ impl GraphStorageContext {
         mut f: F,
     ) -> Option<u32>
     where
-        F: FnMut(u32, HotNbr),
+        F: FnMut(u32, LabelId, HotNbr),
     {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return None;
@@ -672,7 +693,10 @@ impl GraphStorageContext {
                 .map(|arc| arc.read())
                 .filter(|t| t.label() == edge_label && t.src_label() == actual_src)
             {
-                table.visit_out_with_gate(src_internal, ts, &gate, |nbr| f(src_internal, nbr));
+                let far_label = table.dst_label();
+                table.visit_out_with_gate(src_internal, ts, &gate, |nbr| {
+                    f(src_internal, far_label, nbr)
+                });
             }
         });
         Some(src_internal)
@@ -681,7 +705,8 @@ impl GraphStorageContext {
     /// Visit raw in-edge neighbors of `dst` without building a vector.
     ///
     /// In-direction counterpart of `visit_out_nbrs`, streaming
-    /// `(dst_internal, nbr)` pairs. Returns the resolved internal dst id.
+    /// `(dst_internal, far_label, nbr)` pairs where `far_label` is the
+    /// table's owning src label. Returns the resolved internal dst id.
     pub fn visit_in_nbrs<F>(
         &self,
         edge_label: LabelId,
@@ -692,7 +717,7 @@ impl GraphStorageContext {
         mut f: F,
     ) -> Option<u32>
     where
-        F: FnMut(u32, HotNbr),
+        F: FnMut(u32, LabelId, HotNbr),
     {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return None;
@@ -720,7 +745,10 @@ impl GraphStorageContext {
                 .map(|arc| arc.read())
                 .filter(|t| t.label() == edge_label && t.dst_label() == actual_dst)
             {
-                table.visit_in_with_gate(dst_internal, ts, &gate, |nbr| f(dst_internal, nbr));
+                let far_label = table.src_label();
+                table.visit_in_with_gate(dst_internal, ts, &gate, |nbr| {
+                    f(dst_internal, far_label, nbr)
+                });
             }
         });
         Some(dst_internal)
@@ -759,12 +787,13 @@ impl GraphStorageContext {
                 .map(|arc| arc.read())
                 .filter(|t| t.label() == edge_label && t.src_label() == actual_src)
             {
-                records.extend(table.out_edges_with_gate_projected(
-                    src_internal,
-                    ts,
-                    &gate,
-                    projection,
-                ));
+                let tbl_dst = table.dst_label();
+                for mut record in
+                    table.out_edges_with_gate_projected(src_internal, ts, &gate, projection)
+                {
+                    record.dst_vid = endpoint_to_external(self, tbl_dst, record.dst_vid, ts);
+                    records.push(record);
+                }
             }
             records
         });
@@ -804,12 +833,13 @@ impl GraphStorageContext {
                 .map(|arc| arc.read())
                 .filter(|t| t.label() == edge_label && t.dst_label() == actual_dst)
             {
-                records.extend(table.in_edges_with_gate_projected(
-                    dst_internal,
-                    ts,
-                    &gate,
-                    projection,
-                ));
+                let tbl_src = table.src_label();
+                for mut record in
+                    table.in_edges_with_gate_projected(dst_internal, ts, &gate, projection)
+                {
+                    record.src_vid = endpoint_to_external(self, tbl_src, record.src_vid, ts);
+                    records.push(record);
+                }
             }
             records
         });
@@ -854,13 +884,17 @@ impl GraphStorageContext {
                 if remaining == 0 {
                     break;
                 }
-                records.extend(table.out_edges_with_gate_projected_limit(
+                let tbl_dst = table.dst_label();
+                for mut record in table.out_edges_with_gate_projected_limit(
                     src_internal,
                     ts,
                     &gate,
                     projection,
                     remaining,
-                ));
+                ) {
+                    record.dst_vid = endpoint_to_external(self, tbl_dst, record.dst_vid, ts);
+                    records.push(record);
+                }
             }
             records
         });
@@ -905,13 +939,17 @@ impl GraphStorageContext {
                 if remaining == 0 {
                     break;
                 }
-                records.extend(table.in_edges_with_gate_projected_limit(
+                let tbl_src = table.src_label();
+                for mut record in table.in_edges_with_gate_projected_limit(
                     dst_internal,
                     ts,
                     &gate,
                     projection,
                     remaining,
-                ));
+                ) {
+                    record.src_vid = endpoint_to_external(self, tbl_src, record.src_vid, ts);
+                    records.push(record);
+                }
             }
             records
         });

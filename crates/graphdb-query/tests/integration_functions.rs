@@ -25,16 +25,15 @@ use graphdb_query::executor::expression::functions::FunctionRegistry;
 use std::collections::HashMap;
 
 /// Create vertices for testing purposes.
-fn create_test_vertex(vid: i64, tags: Vec<(&str, HashMap<&str, Value>)>) -> Vertex {
-    let tags: Vec<Tag> = tags
-        .into_iter()
-        .map(|(name, props)| {
-            let props: HashMap<String, Value> =
-                props.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
-            Tag::new(name.to_string(), props)
-        })
-        .collect();
-    Vertex::new(VertexId::from_int64(vid), tags)
+fn create_test_vertex(vid: i64, tag: (&str, HashMap<&str, Value>)) -> Vertex {
+    let (name, props) = tag;
+    let props: HashMap<String, Value> =
+        props.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+    let single = Tag::new(name.to_string(), props);
+    Vertex::new(
+        VertexId::try_from_int64(vid).expect("test vertex id"),
+        single,
+    )
 }
 
 /// Create edges for testing purposes.
@@ -48,8 +47,8 @@ fn create_test_edge(
     let props: HashMap<String, Value> =
         props.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
     Edge::new(
-        VertexId::from_int64(src),
-        VertexId::from_int64(dst),
+        VertexId::try_from_int64(src).expect("test vertex id"),
+        VertexId::try_from_int64(dst).expect("test vertex id"),
         edge_type.to_string(),
         rank,
         props,
@@ -60,30 +59,30 @@ fn create_test_edge(
 fn create_test_path() -> Path {
     let v1 = create_test_vertex(
         1,
-        vec![("Person", {
+        ("Person", {
             let mut m = HashMap::new();
             m.insert("name", Value::string("Alice"));
             m.insert("age", Value::Int(30));
             m
-        })],
+        }),
     );
     let v2 = create_test_vertex(
         2,
-        vec![("Person", {
+        ("Person", {
             let mut m = HashMap::new();
             m.insert("name", Value::string("Bob"));
             m.insert("age", Value::Int(25));
             m
-        })],
+        }),
     );
     let v3 = create_test_vertex(
         3,
-        vec![("Person", {
+        ("Person", {
             let mut m = HashMap::new();
             m.insert("name", Value::string("Charlie"));
             m.insert("age", Value::Int(35));
             m
-        })],
+        }),
     );
 
     let e1 = create_test_edge(1, 2, "KNOWS", 0, HashMap::new());
@@ -106,7 +105,7 @@ fn create_test_path() -> Path {
 #[test]
 fn test_id_function() {
     let registry = FunctionRegistry::new();
-    let vertex = create_test_vertex(100, vec![("Person", HashMap::new())]);
+    let vertex = create_test_vertex(100, ("Person", HashMap::new()));
 
     let result = registry.execute("id", &[Value::Vertex(Box::new(vertex))]);
     assert!(result.is_ok());
@@ -116,16 +115,13 @@ fn test_id_function() {
 #[test]
 fn test_tags_function() {
     let registry = FunctionRegistry::new();
-    let vertex = create_test_vertex(
-        1,
-        vec![("Person", HashMap::new()), ("Employee", HashMap::new())],
-    );
+    let vertex = create_test_vertex(1, ("Person", HashMap::new()));
 
     let result = registry.execute("tags", &[Value::Vertex(Box::new(vertex))]);
     assert!(result.is_ok());
 
     if let Value::List(list) = result.expect("tagsshould succeed") {
-        assert_eq!(list.values.len(), 2);
+        assert_eq!(list.values.len(), 1);
     } else {
         panic!("The expected return type is a list.");
     }
@@ -134,7 +130,7 @@ fn test_tags_function() {
 #[test]
 fn test_labels_function() {
     let registry = FunctionRegistry::new();
-    let vertex = create_test_vertex(1, vec![("Person", HashMap::new())]);
+    let vertex = create_test_vertex(1, ("Person", HashMap::new()));
 
     let result = registry.execute("labels", &[Value::Vertex(Box::new(vertex))]);
     assert!(result.is_ok());
@@ -152,12 +148,12 @@ fn test_properties_vertex_function() {
     let registry = FunctionRegistry::new();
     let vertex = create_test_vertex(
         1,
-        vec![("Person", {
+        ("Person", {
             let mut m = HashMap::new();
             m.insert("name", Value::string("Alice"));
             m.insert("age", Value::Int(30));
             m
-        })],
+        }),
     );
 
     let result = registry.execute("properties", &[Value::Vertex(Box::new(vertex))]);
@@ -649,7 +645,7 @@ fn test_empty_list_operations() {
 #[test]
 fn test_empty_path() {
     let registry = FunctionRegistry::new();
-    let v1 = create_test_vertex(1, vec![("Person", HashMap::new())]);
+    let v1 = create_test_vertex(1, ("Person", HashMap::new()));
     let empty_path = Path::new(v1);
 
     // nodes(path)

@@ -84,13 +84,17 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
 
         // Update status to running
         {
-            let mut task = self.tasks.get_mut(batch_id).expect("Task should exist");
+            let mut task = self.tasks.get_mut(batch_id).ok_or_else(|| {
+                CoreError::InvalidParameter(format!("Batch task does not exist: {}", batch_id))
+            })?;
             task.update_status(BatchStatus::Running);
         }
 
         // Get all buffered items
         let items = {
-            let mut task = self.tasks.get_mut(batch_id).expect("Task should exist");
+            let mut task = self.tasks.get_mut(batch_id).ok_or_else(|| {
+                CoreError::InvalidParameter(format!("Batch task does not exist: {}", batch_id))
+            })?;
             task.take_buffered_items()
         };
 
@@ -99,7 +103,9 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
 
         // Update task status and results
         {
-            let mut task = self.tasks.get_mut(batch_id).expect("Task should exist");
+            let mut task = self.tasks.get_mut(batch_id).ok_or_else(|| {
+                CoreError::InvalidParameter(format!("Batch task does not exist: {}", batch_id))
+            })?;
 
             match &result {
                 Ok(data) => {
@@ -211,13 +217,9 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
         let vid_value = json_to_value(data.vid)?;
         let vid = value_to_vertex_id(&vid_value)?;
 
-        let tags: Vec<graphdb_core::vertex_edge_path::Tag> = data
-            .tags
-            .into_iter()
-            .map(|name| {
-                graphdb_core::vertex_edge_path::Tag::new(name, std::collections::HashMap::new())
-            })
-            .collect();
+        if data.tag.is_empty() {
+            return None;
+        }
 
         let properties: std::collections::HashMap<String, Value> = data
             .properties
@@ -225,7 +227,10 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
             .filter_map(|(k, v)| json_to_value(v).map(|val| (k, val)))
             .collect();
 
-        Some(Vertex::new_with_properties(vid, tags, properties))
+        Some(Vertex::new(
+            vid,
+            graphdb_core::vertex_edge_path::Tag::new(data.tag, properties),
+        ))
     }
 
     fn convert_edge_data(&self, data: EdgeData) -> Option<Edge> {

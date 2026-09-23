@@ -241,9 +241,7 @@ impl GraphStorageContext {
                 .external_id
                 .parse::<i64>()
                 .ok()
-                .and_then(|parsed| {
-                    graphdb_core::types::VertexId::try_from_int64(parsed).ok()
-                })
+                .and_then(|parsed| graphdb_core::types::VertexId::try_from_int64(parsed).ok())
                 .or_else(|| {
                     graphdb_core::types::VertexId::try_from_string(&cached.external_id).ok()
                 })?,

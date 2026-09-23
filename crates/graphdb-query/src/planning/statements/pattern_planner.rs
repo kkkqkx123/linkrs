@@ -202,10 +202,7 @@ pub fn plan_path_pattern(
 
                         let (dst_var, dst_labels) = if i + 1 < elements.len() {
                             if let PathElement::Node(next_node) = elements[i + 1] {
-                                (
-                                    next_node.variable.as_deref(),
-                                    next_node.labels.clone(),
-                                )
+                                (next_node.variable.as_deref(), next_node.labels.clone())
                             } else {
                                 (None, Vec::new())
                             }
@@ -973,7 +970,7 @@ mod tests {
     fn node_pattern(var: &str) -> PathElement {
         PathElement::Node(NodePattern::new(
             Some(var.to_string()),
-            vec![],
+            vec!["Person".to_string()],
             None,
             vec![],
             Span::default(),
@@ -1018,7 +1015,19 @@ mod tests {
             LogicalNodeEnum::ExpandAll(expand) => {
                 assert_eq!(expand.input_var.as_deref(), Some("a"));
                 assert_eq!(expand.deps.len(), 1);
-                assert!(matches!(&expand.deps[0], LogicalNodeEnum::ScanVertices(_)));
+                match &expand.deps[0] {
+                    LogicalNodeEnum::Filter(filter) => {
+                        assert!(
+                            matches!(
+                                filter.input.as_deref(),
+                                Some(LogicalNodeEnum::ScanVertices(_))
+                            ),
+                            "labeled scan should be filtered: {:?}",
+                            filter.input
+                        );
+                    }
+                    other => panic!("expected label filter over scan, got: {:?}", other),
+                }
             }
             other => panic!("unexpected logical root: {:?}", other),
         }
@@ -1052,10 +1061,21 @@ mod tests {
                     LogicalNodeEnum::ExpandAll(first_expand) => {
                         assert_eq!(first_expand.input_var.as_deref(), Some("a"));
                         assert_eq!(first_expand.deps.len(), 1);
-                        assert!(matches!(
-                            &first_expand.deps[0],
-                            LogicalNodeEnum::ScanVertices(_)
-                        ));
+                        match &first_expand.deps[0] {
+                            LogicalNodeEnum::Filter(filter) => {
+                                assert!(
+                                    matches!(
+                                        filter.input.as_deref(),
+                                        Some(LogicalNodeEnum::ScanVertices(_))
+                                    ),
+                                    "labeled scan should be filtered: {:?}",
+                                    filter.input
+                                );
+                            }
+                            other => {
+                                panic!("expected label filter over scan, got: {:?}", other)
+                            }
+                        }
                     }
                     other => panic!("unexpected middle logical node: {:?}", other),
                 }

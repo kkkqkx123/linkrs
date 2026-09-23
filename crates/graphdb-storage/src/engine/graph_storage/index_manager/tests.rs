@@ -47,7 +47,9 @@ fn test_intent(transaction_id: TransactionId, index_id: u64, vertex_id: i64) -> 
             target: TargetId::new("native-index").expect("target should be valid"),
             index_id,
             index_generation: IndexGeneration::new(1),
-            entity_ref: EntityRef::Vertex(VertexId::try_from_int64(vertex_id).expect("test vertex id")),
+            entity_ref: EntityRef::Vertex(
+                VertexId::try_from_int64(vertex_id).expect("test vertex id"),
+            ),
             operation: IndexOperation::Upsert,
             document_or_vector: Vec::new(),
             idempotency_key: IdempotencyKey::new(format!("intent-{transaction_id}-{vertex_id}"))
@@ -189,10 +191,7 @@ fn concurrent_rebuild_and_writes_preserve_new_index_entries() {
                 "test_space",
                 graphdb_core::Vertex::new(
                     VertexId::try_from_int64(vertex_id).expect("test vertex id"),
-                    graphdb_core::vertex_edge_path::Tag::new(
-                        "Person".to_string(),
-                        properties,
-                    ),
+                    graphdb_core::vertex_edge_path::Tag::new("Person".to_string(), properties),
                 ),
             )
             .expect("initial vertex should be inserted");
@@ -219,10 +218,7 @@ fn concurrent_rebuild_and_writes_preserve_new_index_entries() {
                     "test_space",
                     graphdb_core::Vertex::new(
                         VertexId::try_from_int64(vertex_id).expect("test vertex id"),
-                        graphdb_core::vertex_edge_path::Tag::new(
-                            "Person".to_string(),
-                            properties,
-                        ),
+                        graphdb_core::vertex_edge_path::Tag::new("Person".to_string(), properties),
                     ),
                 )
                 .expect("concurrent vertex should be inserted");
@@ -240,7 +236,12 @@ fn concurrent_rebuild_and_writes_preserve_new_index_entries() {
                 &Value::string(format!("concurrent-{vertex_id}")),
             )
             .expect("index lookup should succeed");
-        assert_eq!(indexed, vec![Value::from(VertexId::try_from_int64(vertex_id).expect("test vertex id"))]);
+        assert_eq!(
+            indexed,
+            vec![Value::from(
+                VertexId::try_from_int64(vertex_id).expect("test vertex id")
+            )]
+        );
     }
 }
 
@@ -325,7 +326,12 @@ fn rebuild_restarts_after_incremental_replay_failure() {
     let indexed = storage
         .lookup_index("test_space", "person_name_idx", &Value::string("Alice"))
         .expect("rebuilt index should be readable");
-    assert_eq!(indexed, vec![Value::from(VertexId::try_from_int64(1).expect("test vertex id"))]);
+    assert_eq!(
+        indexed,
+        vec![Value::from(
+            VertexId::try_from_int64(1).expect("test vertex id")
+        )]
+    );
 }
 
 #[test]

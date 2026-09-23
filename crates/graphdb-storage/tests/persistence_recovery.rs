@@ -36,7 +36,7 @@ fn test_flush_after_vertex_update() {
         let mut storage = common::open_persistent_storage(dir);
         let updated = Vertex::new(
             VertexId::try_from_int64(1).expect("test vertex id"),
-           Tag::new(
+            Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string("Alice")),
@@ -54,7 +54,11 @@ fn test_flush_after_vertex_update() {
     {
         let storage = common::open_persistent_storage(dir);
         let alice = storage
-            .get_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
+            .get_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(1).expect("test vertex id"),
+            )
             .unwrap()
             .unwrap();
         assert_eq!(alice.properties().get("age"), Some(&Value::BigInt(31)));

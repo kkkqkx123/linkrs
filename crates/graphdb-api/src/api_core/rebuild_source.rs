@@ -66,19 +66,11 @@ impl<'a, S: StorageReader + ?Sized> StorageRebuildSource<'a, S> {
     }
 
     fn vertex_texts(&self, vertex: &Vertex) -> Vec<String> {
-        // Live writes carry per-tag properties; fall back to the aggregate
-        // top-level map for readers that flatten them.
-        let tagged = vertex
-            .tags
-            .iter()
-            .find(|tag| tag.name == self.tag_name)
-            .map(|tag| &tag.properties);
+        // Single-label vertices carry exactly one tag; only its properties
+        // are indexed.
         let mut texts = Vec::new();
-        if let Some(properties) = tagged {
-            Self::push_field_text(&mut texts, properties.get(&self.field_name));
-        }
-        if texts.is_empty() {
-            Self::push_field_text(&mut texts, vertex.properties.get(&self.field_name));
+        if vertex.tag.name == self.tag_name {
+            Self::push_field_text(&mut texts, vertex.tag.properties.get(&self.field_name));
         }
         texts
     }
@@ -249,19 +241,13 @@ impl<'a, S: StorageReader + ?Sized> StorageVectorSource<'a, S> {
     }
 
     fn vertex_properties(&self, vertex: &Vertex) -> Vec<(String, Value)> {
-        // Live writes carry per-tag properties; fall back to the aggregate
-        // top-level map for readers that flatten them.
-        if let Some(tagged) = vertex.tags.iter().find(|tag| tag.name == self.tag_name) {
-            let properties = tagged
-                .properties
-                .iter()
-                .map(|(name, value)| (name.clone(), value.clone()))
-                .collect::<Vec<_>>();
-            if properties.iter().any(|(name, _)| name == &self.field_name) {
-                return properties;
-            }
+        // Single-label vertices carry exactly one tag; only its properties
+        // are indexed.
+        if vertex.tag.name != self.tag_name {
+            return Vec::new();
         }
         vertex
+            .tag
             .properties
             .iter()
             .map(|(name, value)| (name.clone(), value.clone()))

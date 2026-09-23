@@ -106,9 +106,7 @@ impl Planner for FetchVerticesPlanner {
         get_vertices_node.set_output_var("fetched_vertices".to_string());
         get_vertices_node.set_col_names(vec![entity_var.clone()]);
         let fetch_tag = tag_name.clone().ok_or_else(|| {
-            PlannerError::InvalidOperation(
-                "FETCH VERTICES requires a tag qualifier".to_string(),
-            )
+            PlannerError::InvalidOperation("FETCH VERTICES requires a tag qualifier".to_string())
         })?;
         get_vertices_node.set_tag(fetch_tag);
 
@@ -223,9 +221,7 @@ impl Planner for FetchVerticesPlanner {
         get_vertices_node.set_output_var("fetched_vertices".to_string());
         get_vertices_node.set_col_names(vec![entity_var.clone()]);
         let fetch_tag = fetch.tag_name.clone().ok_or_else(|| {
-            PlannerError::InvalidOperation(
-                "FETCH VERTICES requires a tag qualifier".to_string(),
-            )
+            PlannerError::InvalidOperation("FETCH VERTICES requires a tag qualifier".to_string())
         })?;
         get_vertices_node.set_tag(fetch_tag);
 

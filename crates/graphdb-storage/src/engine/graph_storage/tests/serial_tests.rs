@@ -10,12 +10,20 @@ fn test_serial_auto_allocates_when_column_missing() {
     insert_serial_vertex(&mut storage, 102, "Bob");
 
     let alice = storage
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(101).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(101).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(alice.property_value("id"), Some(Value::BigInt(1)));
     let bob = storage
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(102).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(102).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(bob.property_value("id"), Some(Value::BigInt(2)));
@@ -30,7 +38,7 @@ fn test_serial_explicit_value_advances_counter() {
     // Explicit id=5 must be accepted and push the counter past 5.
     let explicit = Vertex::new(
         VertexId::try_from_int64(101).expect("test vertex id"),
-       Tag::new(
+        Tag::new(
             "Person".to_string(),
             vec![
                 ("id".to_string(), Value::BigInt(5)),
@@ -45,7 +53,11 @@ fn test_serial_explicit_value_advances_counter() {
     // The next auto allocation must be 6, not 1.
     insert_serial_vertex(&mut storage, 102, "Bob");
     let bob = storage
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(102).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(102).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(bob.property_value("id"), Some(Value::BigInt(6)));
@@ -62,7 +74,7 @@ fn test_serial_explicit_duplicate_is_rejected() {
     // Re-inserting the already-allocated value must fail.
     let duplicate = Vertex::new(
         VertexId::try_from_int64(102).expect("test vertex id"),
-       Tag::new(
+        Tag::new(
             "Person".to_string(),
             vec![
                 ("id".to_string(), Value::BigInt(1)),
@@ -114,7 +126,7 @@ fn test_serial_allocates_per_tag_and_per_space() {
     // Person in space 2 -> id 1 (counters are per space).
     let vertex = Vertex::new(
         VertexId::try_from_int64(101).expect("test vertex id"),
-       Tag::new(
+        Tag::new(
             "Person".to_string(),
             vec![("name".to_string(), Value::string("Bob"))]
                 .into_iter()
@@ -125,7 +137,7 @@ fn test_serial_allocates_per_tag_and_per_space() {
     // City in space 1 -> id 1 (counters are per table).
     let city_vertex = Vertex::new(
         VertexId::try_from_int64(201).expect("test vertex id"),
-       Tag::new(
+        Tag::new(
             "City".to_string(),
             vec![("name".to_string(), Value::string("Paris"))]
                 .into_iter()
@@ -135,17 +147,29 @@ fn test_serial_allocates_per_tag_and_per_space() {
     storage.insert_vertex("test_space", city_vertex).unwrap();
 
     let alice = storage
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(101).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(101).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(alice.property_value("id"), Some(Value::BigInt(1)));
     let bob = storage
-        .get_vertex("second_space", "Person", &VertexId::try_from_int64(101).expect("test vertex id"))
+        .get_vertex(
+            "second_space",
+            "Person",
+            &VertexId::try_from_int64(101).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(bob.property_value("id"), Some(Value::BigInt(1)));
     let paris = storage
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(201).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(201).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(paris.property_value("id"), Some(Value::BigInt(1)));
@@ -243,14 +267,22 @@ fn test_serial_survives_save_load_round_trip() {
     // The counter continues after the persisted high water mark.
     insert_serial_vertex(&mut reloaded, 103, "Carol");
     let carol = reloaded
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(103).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(103).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(carol.property_value("id"), Some(Value::BigInt(3)));
 
     // Deleted rows must not bring the counter back down after reload.
     reloaded
-        .delete_vertex("test_space", "Person", &VertexId::try_from_int64(102).expect("test vertex id"))
+        .delete_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(102).expect("test vertex id"),
+        )
         .expect("delete vertex");
     reloaded.save_to_disk().expect("save to disk");
     drop(reloaded);
@@ -260,7 +292,11 @@ fn test_serial_survives_save_load_round_trip() {
     reloaded2.load_from_disk().expect("load from disk");
     insert_serial_vertex(&mut reloaded2, 104, "Dave");
     let dave = reloaded2
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(104).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(104).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(

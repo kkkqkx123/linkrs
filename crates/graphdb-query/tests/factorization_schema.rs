@@ -149,6 +149,7 @@ fn e2e_match_return_no_flatten() {
         graphdb_query::planning::plan::logical::logical_nodes::access::LogicalGetNeighborsNode {
             id: next_node_id(),
             space_id: 1,
+            tag: None,
             src_vids: "1".to_string(),
             edge_types: vec!["knows".to_string()],
             direction: "OUT".to_string(),
@@ -414,6 +415,7 @@ fn get_neighbors_chain_keeps_one_unflat() {
             graphdb_query::planning::plan::logical::logical_nodes::access::LogicalGetNeighborsNode {
                 id: next_node_id(),
                 space_id: 1,
+                tag: None,
                 src_vids: "1".to_string(),
                 edge_types: vec!["knows".to_string()],
                 direction: "OUT".to_string(),
@@ -544,6 +546,7 @@ fn assign_over_expansion_keeps_factorization() {
     let nbr = LogicalNodeEnum::GetNeighbors(LogicalGetNeighborsNode {
         id: next_node_id(),
         space_id: 1,
+        tag: None,
         src_vids: "1".to_string(),
         edge_types: vec!["knows".to_string()],
         direction: "OUT".to_string(),
@@ -701,6 +704,7 @@ fn right_join_rewriter_flattens_build_keys() {
     let nbr = LogicalNodeEnum::GetNeighbors(LogicalGetNeighborsNode {
         id: next_node_id(),
         space_id: 1,
+        tag: None,
         src_vids: "1".to_string(),
         edge_types: vec!["knows".to_string()],
         direction: "OUT".to_string(),
@@ -747,6 +751,7 @@ fn rollup_apply_barrier_inserts_flatten_and_outputs_flat() {
     let nbr = LogicalNodeEnum::GetNeighbors(LogicalGetNeighborsNode {
         id: next_node_id(),
         space_id: 1,
+        tag: None,
         src_vids: "1".to_string(),
         edge_types: vec!["knows".to_string()],
         direction: "OUT".to_string(),

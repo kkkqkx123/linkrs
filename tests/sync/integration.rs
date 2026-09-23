@@ -99,7 +99,7 @@ fn create_test_vertex(vid: i64, tag_name: &str, content: &str) -> Vertex {
     let mut props = HashMap::new();
     props.insert("content".to_string(), Value::string(content));
     let tag = Tag::new(tag_name.to_string(), props);
-    Vertex::new(VertexId::from_int64(vid), vec![tag])
+    Vertex::new(VertexId::try_from_int64(vid).expect("test vertex id"), tag)
 }
 
 // ==================== Basic Sync Tests ====================
@@ -128,9 +128,9 @@ async fn test_sync_vertex_change() {
     let vid = Value::from(vertex.vid);
 
     // Extract properties
+    assert_eq!(vertex.tag.name, "Article");
     let props: Vec<(String, Value)> = vertex
-        .get_tag("Article")
-        .expect("Tag not found")
+        .tag
         .properties
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -187,9 +187,9 @@ async fn test_sync_batch_processing() {
         let vertex = create_test_vertex(i, "Article", &format!("Article {}", i));
         let vid = Value::from(vertex.vid);
 
+        assert_eq!(vertex.tag.name, "Article");
         let props: Vec<(String, Value)> = vertex
-            .get_tag("Article")
-            .expect("Tag not found")
+            .tag
             .properties
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
@@ -230,9 +230,9 @@ async fn test_sync_delete_operation() {
     let vertex = create_test_vertex(1, "Article", "Delete me");
     let vid = Value::from(vertex.vid);
 
+    assert_eq!(vertex.tag.name, "Article");
     let props: Vec<(String, Value)> = vertex
-        .get_tag("Article")
-        .expect("Tag not found")
+        .tag
         .properties
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -285,9 +285,9 @@ async fn test_concurrent_sync_operations() {
             let vertex = create_test_vertex(i, "Article", &format!("Concurrent {}", i));
             let vid = Value::from(vertex.vid);
 
+            assert_eq!(vertex.tag.name, "Article");
             let props: Vec<(String, Value)> = vertex
-                .get_tag("Article")
-                .expect("Tag not found")
+                .tag
                 .properties
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
@@ -335,9 +335,9 @@ async fn test_sync_nonexistent_index() {
     let vertex = create_test_vertex(1, "Article", "Test");
     let vid = Value::from(vertex.vid);
 
+    assert_eq!(vertex.tag.name, "Article");
     let props: Vec<(String, Value)> = vertex
-        .get_tag("Article")
-        .expect("Tag not found")
+        .tag
         .properties
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -406,9 +406,9 @@ async fn test_custom_batch_size() {
         let vertex = create_test_vertex(i, "Article", &format!("Batch {}", i));
         let vid = Value::from(vertex.vid);
 
+        assert_eq!(vertex.tag.name, "Article");
         let props: Vec<(String, Value)> = vertex
-            .get_tag("Article")
-            .expect("Tag not found")
+            .tag
             .properties
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))

@@ -196,14 +196,25 @@ pub fn insert_test_data(storage: &mut GraphStorage, space: &str) {
 #[allow(dead_code)]
 pub fn verify_test_data(storage: &GraphStorage, space: &str) {
     let alice = storage
-        .get_vertex(space, "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
+        .get_vertex(
+            space,
+            "Person",
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+        )
         .unwrap()
         .expect("Alice should exist");
-    assert_eq!(alice.properties().get("name"), Some(&Value::string("Alice")));
+    assert_eq!(
+        alice.properties().get("name"),
+        Some(&Value::string("Alice"))
+    );
     assert_eq!(alice.properties().get("age"), Some(&Value::BigInt(30)));
 
     let bob = storage
-        .get_vertex(space, "Person", &VertexId::try_from_int64(2).expect("test vertex id"))
+        .get_vertex(
+            space,
+            "Person",
+            &VertexId::try_from_int64(2).expect("test vertex id"),
+        )
         .unwrap()
         .expect("Bob should exist");
     assert_eq!(bob.properties().get("name"), Some(&Value::string("Bob")));
@@ -218,6 +229,12 @@ pub fn verify_test_data(storage: &GraphStorage, space: &str) {
         )
         .unwrap()
         .expect("Edge should exist");
-    assert_eq!(edge.src, VertexId::try_from_int64(1).expect("test vertex id"));
-    assert_eq!(edge.dst, VertexId::try_from_int64(2).expect("test vertex id"));
+    assert_eq!(
+        edge.src,
+        VertexId::try_from_int64(1).expect("test vertex id")
+    );
+    assert_eq!(
+        edge.dst,
+        VertexId::try_from_int64(2).expect("test vertex id")
+    );
 }

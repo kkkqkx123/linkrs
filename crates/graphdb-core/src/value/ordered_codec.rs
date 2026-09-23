@@ -1341,7 +1341,8 @@ mod tests {
 
     #[test]
     fn test_vertex_id_entity_roundtrip_supports_max_length() {
-        let vid = VertexId::try_from_string("12345678901234567890123456789012").expect("test vertex id");
+        let vid =
+            VertexId::try_from_string("12345678901234567890123456789012").expect("test vertex id");
         let entity = EntityRef::Vertex(vid);
         let mut encoded = Vec::new();
         codec().encode_entity(&entity, &mut encoded).unwrap();

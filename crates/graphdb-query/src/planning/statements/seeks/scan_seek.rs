@@ -114,10 +114,7 @@ impl ScanSeek {
             if distinct.len() > 1 {
                 return false;
             }
-            let has_all_labels = pattern
-                .labels
-                .iter()
-                .all(|label| vertex.tag.name == *label);
+            let has_all_labels = pattern.labels.iter().all(|label| vertex.tag.name == *label);
             if !has_all_labels {
                 return false;
             }

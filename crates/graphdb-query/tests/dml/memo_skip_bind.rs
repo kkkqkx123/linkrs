@@ -65,13 +65,13 @@ impl Fixture {
     fn name_of(&self, space: &str, vid: &str) -> Option<graphdb_core::Value> {
         self.storage
             .read()
-            .get_vertex(space, &VertexId::from_string(vid))
+            .get_vertex(
+                space,
+                "person",
+                &VertexId::try_from_string(vid).expect("test vertex id"),
+            )
             .expect("vertex read")
-            .and_then(|v| {
-                v.tags
-                    .iter()
-                    .find_map(|t| t.properties.get("name").cloned())
-            })
+            .and_then(|v| v.properties().get("name").cloned())
     }
 }
 
@@ -223,7 +223,11 @@ fn test_space_switch_restores_bind_path() {
     assert!(fx
         .storage
         .read()
-        .get_vertex("space_b", &VertexId::from_string("p1"))
+        .get_vertex(
+            "space_b",
+            "person",
+            &VertexId::try_from_string("p1").expect("test vertex id")
+        )
         .expect("read")
         .is_none());
 }
@@ -264,11 +268,15 @@ fn test_param_type_change_restores_bind_path() {
     let p3 = fx
         .storage
         .read()
-        .get_vertex("param_type_space", &VertexId::from_string("p3"))
+        .get_vertex(
+            "param_type_space",
+            "person",
+            &VertexId::try_from_string("p3").expect("test vertex id"),
+        )
         .expect("read")
         .expect("exists");
     assert_eq!(
-        p3.tags.iter().find_map(|t| t.properties.get("age")),
+        p3.properties().get("age"),
         Some(&graphdb_core::Value::Double(3.0))
     );
 }

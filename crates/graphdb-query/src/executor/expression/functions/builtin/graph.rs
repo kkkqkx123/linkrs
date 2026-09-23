@@ -860,24 +860,19 @@ mod tests {
     use std::collections::HashMap;
 
     fn create_test_vertex() -> Vertex {
-        let tag1 = Tag::new(
-            "person".to_string(),
-            HashMap::from([
-                ("name".to_string(), Value::string("Alice")),
-                ("age".to_string(), Value::Int(30)),
-            ]),
-        );
-        let tag2 = Tag::new(
-            "employee".to_string(),
-            HashMap::from([("dept".to_string(), Value::string("Engineering"))]),
-        );
-        Vertex::new(VertexId::from_int64(1), vec![tag1, tag2])
+        let mut props = HashMap::from([
+            ("name".to_string(), Value::string("Alice")),
+            ("age".to_string(), Value::Int(30)),
+        ]);
+        props.insert("dept".to_string(), Value::string("Engineering"));
+        let tag = Tag::new("person".to_string(), props);
+        Vertex::new(VertexId::try_from_int64(1).expect("valid vertex id"), tag)
     }
 
     fn create_test_edge() -> Edge {
         Edge::new(
-            VertexId::from_int64(1),
-            VertexId::from_int64(2),
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            VertexId::try_from_int64(2).expect("valid vertex id"),
             "knows".to_string(),
             0,
             HashMap::from([("since".to_string(), Value::Int(2020))]),
@@ -900,7 +895,7 @@ mod tests {
             .execute(&[Value::Vertex(Box::new(vertex))])
             .expect("The tags function should be executed successfully");
         if let Value::List(tags) = result {
-            assert_eq!(tags.values.len(), 2);
+            assert_eq!(tags.values.len(), 1);
         } else {
             panic!("The `tags` function should return a list.");
         }

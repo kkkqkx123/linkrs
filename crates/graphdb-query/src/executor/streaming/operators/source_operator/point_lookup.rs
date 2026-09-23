@@ -158,9 +158,8 @@ fn next_get_vertices(op: &mut SourceOperator) -> Result<Option<DataChunk>, Query
             let guard = storage_ref.read();
             let vid = match cached_ids.first() {
                 Some(vid) => *vid,
-                None => VertexId::try_from(&ids[0]).map_err(|e| {
-                    QueryError::execution(format!("Invalid vertex id: {}", e))
-                })?,
+                None => VertexId::try_from(&ids[0])
+                    .map_err(|e| QueryError::execution(format!("Invalid vertex id: {}", e)))?,
             };
             let vertex_opt = if projected_properties.is_empty() {
                 guard.get_vertex(space_name, tag, &vid).map_err(|error| {

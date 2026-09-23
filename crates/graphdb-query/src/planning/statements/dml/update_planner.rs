@@ -223,12 +223,21 @@ impl Planner for UpdatePlanner {
                     properties.insert(assignment.property.clone(), value);
                 }
 
+                let condition = update
+                    .where_clause
+                    .as_ref()
+                    .map(|wc| {
+                        crate::binder::expr_converter::bound_expr_to_contextual(wc, &expr_ctx)
+                            .map_err(PlannerError::PlanGenerationFailed)
+                    })
+                    .transpose()?;
+
                 let vertex_info = VertexUpdateInfo {
                     space_name,
                     vertex_id: vid_ctx,
                     tag_name: Some(tag_name.clone()),
                     properties,
-                    condition: None,
+                    condition,
                     is_upsert: update.is_upsert,
                 };
                 UpdateTargetType::Vertex(vertex_info)

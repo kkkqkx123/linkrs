@@ -29,7 +29,8 @@ fn test_concurrent_vertex_insertion() {
             barrier.wait(); // Synchronize start
 
             for op in 0..100 {
-                let vid = VertexId::try_from_int64((thread_id * 100 + op) as i64 + 1000).expect("test vertex id");
+                let vid = VertexId::try_from_int64((thread_id * 100 + op) as i64 + 1000)
+                    .expect("test vertex id");
                 let name = if let Some(id) = vid.as_int64() {
                     format!("Person_{}", id)
                 } else {
@@ -253,7 +254,10 @@ fn test_concurrent_vertex_updates_consistency() {
                     let st = storage.lock().unwrap();
                     if let Some(v) = st.get_vertex("test_space", "Person", &vid).unwrap() {
                         // Verify data is consistent
-                        assert!(!v.tag.properties.is_empty(), "Vertex should have properties");
+                        assert!(
+                            !v.tag.properties.is_empty(),
+                            "Vertex should have properties"
+                        );
                         assert!(
                             v.properties().contains_key("name"),
                             "Vertex should have name property"

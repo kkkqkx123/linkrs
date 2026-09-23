@@ -102,28 +102,28 @@ pub fn edges_to_rows(edges: Vec<Edge>, partition_range: &std::ops::Range<i64>) -
 mod tests {
     use super::*;
     use graphdb_core::types::storage_ids::VertexId;
+    use graphdb_core::vertex_edge_path::Tag;
+    use std::collections::HashMap;
 
     #[test]
     fn test_vertex_conversion() {
-        let vertex = Vertex {
-            id: 123,
-            vid: VertexId::from_string("vertex_123"),
-            tags: vec![],
-            properties: std::collections::HashMap::new(),
-        };
+        let vertex = Vertex::new(
+            VertexId::try_from_string("vertex_123").expect("valid vertex id"),
+            Tag::new("person".to_string(), HashMap::new()),
+        );
 
         let row = vertex_to_row(&vertex);
 
-        // Verify row structure: id and vid form the base layout.
-        assert_eq!(row.len(), 2);
-        assert_eq!(row[0], Value::BigInt(123));
+        // Verify row structure: vid, vid string and tag form the base layout.
+        assert_eq!(row.len(), 3);
+        assert_eq!(row[2], Value::string("person"));
     }
 
     #[test]
     fn test_edge_conversion() {
         let edge = Edge {
-            src: VertexId::from_string("src_1"),
-            dst: VertexId::from_string("dst_2"),
+            src: VertexId::try_from_string("src_1").expect("valid vertex id"),
+            dst: VertexId::try_from_string("dst_2").expect("valid vertex id"),
             edge_type: "follows".to_string(),
             ranking: 42,
             props: std::collections::HashMap::new(),
@@ -140,24 +140,18 @@ mod tests {
     #[test]
     fn test_partition_filtering() {
         let vertices = vec![
-            Vertex {
-                id: 10,
-                vid: VertexId::from_string("v10"),
-                tags: vec![],
-                properties: std::collections::HashMap::new(),
-            },
-            Vertex {
-                id: 20,
-                vid: VertexId::from_string("v20"),
-                tags: vec![],
-                properties: std::collections::HashMap::new(),
-            },
-            Vertex {
-                id: 30,
-                vid: VertexId::from_string("v30"),
-                tags: vec![],
-                properties: std::collections::HashMap::new(),
-            },
+            Vertex::new(
+                VertexId::try_from_int64(10).expect("valid vertex id"),
+                Tag::new(String::new(), HashMap::new()),
+            ),
+            Vertex::new(
+                VertexId::try_from_int64(20).expect("valid vertex id"),
+                Tag::new(String::new(), HashMap::new()),
+            ),
+            Vertex::new(
+                VertexId::try_from_int64(30).expect("valid vertex id"),
+                Tag::new(String::new(), HashMap::new()),
+            ),
         ];
 
         // Filter for partition range [15, 35)

@@ -31,8 +31,10 @@ fn test_complete_sync_and_verify() {
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("Complete Test"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex =
-        graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(1), vec![tag]);
+    let vertex = graphdb::core::Vertex::new(
+        graphdb::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
+        tag,
+    );
 
     harness
         .insert_vertex("test_space", vertex)
@@ -70,8 +72,10 @@ fn test_transaction_commit_and_verify() {
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("Transaction Test"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex =
-        graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(1), vec![tag]);
+    let vertex = graphdb::core::Vertex::new(
+        graphdb::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
+        tag,
+    );
 
     harness
         .insert_vertex_with_txn("test_space", vertex)
@@ -113,8 +117,10 @@ fn test_transaction_rollback_and_verify() {
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("Rollback Test"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex =
-        graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(1), vec![tag]);
+    let vertex = graphdb::core::Vertex::new(
+        graphdb::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
+        tag,
+    );
 
     harness
         .insert_vertex_with_txn("test_space", vertex)
@@ -190,8 +196,8 @@ fn test_multiple_sequential_transactions() {
             );
             let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
             let vertex = graphdb::core::Vertex::new(
-                graphdb::core::types::VertexId::from_int64(vid),
-                vec![tag],
+                graphdb::core::types::VertexId::try_from_int64(vid).expect("test vertex id"),
+                tag,
             );
 
             harness
@@ -237,8 +243,10 @@ fn test_interleaved_txn_non_txn() {
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("NonTxn1"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex =
-        graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(1), vec![tag]);
+    let vertex = graphdb::core::Vertex::new(
+        graphdb::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
+        tag,
+    );
     harness
         .insert_vertex("test_space", vertex)
         .expect("Failed to insert vertex");
@@ -252,8 +260,10 @@ fn test_interleaved_txn_non_txn() {
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("Txn1"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex =
-        graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(2), vec![tag]);
+    let vertex = graphdb::core::Vertex::new(
+        graphdb::core::types::VertexId::try_from_int64(2).expect("test vertex id"),
+        tag,
+    );
 
     harness
         .insert_vertex_with_txn("test_space", vertex)
@@ -268,8 +278,10 @@ fn test_interleaved_txn_non_txn() {
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("NonTxn2"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex =
-        graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(3), vec![tag]);
+    let vertex = graphdb::core::Vertex::new(
+        graphdb::core::types::VertexId::try_from_int64(3).expect("test vertex id"),
+        tag,
+    );
     harness
         .insert_vertex("test_space", vertex)
         .expect("Failed to insert vertex");
@@ -310,8 +322,8 @@ fn test_large_transaction() {
         properties.insert("title".to_string(), Value::string(format!("Large{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::from_int64(i + 1),
-            vec![tag],
+            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+            tag,
         );
 
         harness
@@ -364,8 +376,10 @@ fn test_rollback_does_not_corrupt_existing_data() {
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("Initial"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex =
-        graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(1), vec![tag]);
+    let vertex = graphdb::core::Vertex::new(
+        graphdb::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
+        tag,
+    );
     harness
         .insert_vertex("test_space", vertex)
         .expect("Failed to insert vertex");
@@ -383,8 +397,10 @@ fn test_rollback_does_not_corrupt_existing_data() {
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("Failed"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex =
-        graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(2), vec![tag]);
+    let vertex = graphdb::core::Vertex::new(
+        graphdb::core::types::VertexId::try_from_int64(2).expect("test vertex id"),
+        tag,
+    );
 
     harness
         .insert_vertex_with_txn("test_space", vertex)
@@ -424,8 +440,8 @@ fn test_storage_consistency_after_multi_insert() {
         properties.insert("title".to_string(), Value::string(format!("Doc{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::from_int64(i + 1),
-            vec![tag],
+            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+            tag,
         );
 
         harness
@@ -465,8 +481,8 @@ fn test_delete_and_verify_remaining() {
         properties.insert("title".to_string(), Value::string(format!("Initial{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::from_int64(i + 1),
-            vec![tag],
+            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+            tag,
         );
 
         harness
@@ -477,10 +493,11 @@ fn test_delete_and_verify_remaining() {
     harness.wait_for_async(300);
 
     for i in 0..2 {
-        let vertex_id = graphdb::core::types::VertexId::from_int64(i + 1);
+        let vertex_id =
+            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id");
         harness
             .storage
-            .delete_vertex("test_space", &vertex_id)
+            .delete_vertex("test_space", "Document", &vertex_id)
             .expect("Failed to delete vertex");
     }
 

@@ -139,13 +139,9 @@ fn test_insert_multiple_tags_parser() {
 
     let result = parser.parse();
     assert!(
-        result.is_ok(),
-        "INSERT multiple tags parsing should succeed: {:?}",
-        result.err()
+        result.is_err(),
+        "INSERT multiple tags must be rejected under single-label semantics",
     );
-
-    let stmt = result.expect("INSERT statement parsing should succeed");
-    assert_eq!(stmt.ast.stmt.kind(), "INSERT");
 }
 
 // ==================== Error Handling Tests ====================

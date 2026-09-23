@@ -298,7 +298,8 @@ impl<'de> serde::Deserialize<'de> for VertexId {
                 &"at most 32 payload bytes",
             ));
         }
-        Self::from_typed_bytes(kind, &raw.data[..raw.len as usize]).map_err(serde::de::Error::custom)
+        Self::from_typed_bytes(kind, &raw.data[..raw.len as usize])
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -532,19 +533,17 @@ impl VertexId {
                     .ok_or_else(|| invalid("Malformed integer vertex id".to_string()))
                     .and_then(VertexId::try_from_int64),
                 VertexIdKind::Uint => {
-                    let value = vid.uint_bits().ok_or_else(|| {
-                        invalid("Malformed unsigned vertex id".to_string())
-                    })?;
+                    let value = vid
+                        .uint_bits()
+                        .ok_or_else(|| invalid("Malformed unsigned vertex id".to_string()))?;
                     i64::try_from(value)
-                        .map_err(|_| {
-                            invalid(format!("Vertex id {} overflows INT64 space", value))
-                        })
+                        .map_err(|_| invalid(format!("Vertex id {} overflows INT64 space", value)))
                         .and_then(VertexId::try_from_int64)
                 }
                 VertexIdKind::Text => {
-                    let text = vid.as_str().ok_or_else(|| {
-                        invalid("Malformed text vertex id".to_string())
-                    })?;
+                    let text = vid
+                        .as_str()
+                        .ok_or_else(|| invalid("Malformed text vertex id".to_string()))?;
                     text.parse::<i64>()
                         .map_err(|_| {
                             invalid(format!(
@@ -564,16 +563,14 @@ impl VertexId {
                         .as_str()
                         .ok_or_else(|| invalid("Malformed text vertex id".to_string()))?
                         .to_string(),
-                    VertexIdKind::Int => {
-                        vid.int_bits()
-                            .ok_or_else(|| invalid("Malformed integer vertex id".to_string()))?
-                            .to_string()
-                    }
-                    VertexIdKind::Uint => {
-                        vid.uint_bits()
-                            .ok_or_else(|| invalid("Malformed unsigned vertex id".to_string()))?
-                            .to_string()
-                    }
+                    VertexIdKind::Int => vid
+                        .int_bits()
+                        .ok_or_else(|| invalid("Malformed integer vertex id".to_string()))?
+                        .to_string(),
+                    VertexIdKind::Uint => vid
+                        .uint_bits()
+                        .ok_or_else(|| invalid("Malformed unsigned vertex id".to_string()))?
+                        .to_string(),
                     VertexIdKind::Empty | VertexIdKind::EdgeEndpoint => {
                         return Err(invalid(
                             "Empty vertex id is not valid for STRING space".to_string(),
@@ -777,18 +774,14 @@ impl Ord for VertexId {
                     _ => self.as_bytes().cmp(other.as_bytes()),
                 }
             }
-            (VertexIdKind::Int, VertexIdKind::Uint) => {
-                match (self.int_bits(), other.uint_bits()) {
-                    (Some(left), Some(right)) => (left as i128).cmp(&(right as i128)),
-                    _ => self.as_bytes().cmp(other.as_bytes()),
-                }
-            }
-            (VertexIdKind::Uint, VertexIdKind::Int) => {
-                match (self.uint_bits(), other.int_bits()) {
-                    (Some(left), Some(right)) => (left as i128).cmp(&(right as i128)),
-                    _ => self.as_bytes().cmp(other.as_bytes()),
-                }
-            }
+            (VertexIdKind::Int, VertexIdKind::Uint) => match (self.int_bits(), other.uint_bits()) {
+                (Some(left), Some(right)) => (left as i128).cmp(&(right as i128)),
+                _ => self.as_bytes().cmp(other.as_bytes()),
+            },
+            (VertexIdKind::Uint, VertexIdKind::Int) => match (self.uint_bits(), other.int_bits()) {
+                (Some(left), Some(right)) => (left as i128).cmp(&(right as i128)),
+                _ => self.as_bytes().cmp(other.as_bytes()),
+            },
             (VertexIdKind::Text, VertexIdKind::Text) => self.as_bytes().cmp(other.as_bytes()),
             (VertexIdKind::EdgeEndpoint, VertexIdKind::EdgeEndpoint) => {
                 self.as_bytes().cmp(other.as_bytes())
@@ -983,8 +976,7 @@ mod tests {
     #[test]
     fn eight_byte_text_is_not_an_integer() {
         let text = VertexId::try_from_string("12345678").expect("valid test id");
-        let int_form =
-            VertexId::try_from_int64(0x3132333435363738).expect("valid test id");
+        let int_form = VertexId::try_from_int64(0x3132333435363738).expect("valid test id");
         assert_eq!(text.kind(), VertexIdKind::Text);
         assert_eq!(text.as_int64(), None);
         assert_eq!(text.as_str(), Some("12345678"));

@@ -62,8 +62,8 @@ fn column_block_matches_row_path_e2e() {
         let vertices: Vec<Vertex> = (0..100)
             .map(|i| {
                 Vertex::new(
-                    VertexId::from_int64(i),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(i).expect("test vertex id"),
+                    Tag::new(
                         "node".to_string(),
                         vec![
                             ("value".to_string(), Value::BigInt(i)),
@@ -72,7 +72,7 @@ fn column_block_matches_row_path_e2e() {
                         ]
                         .into_iter()
                         .collect(),
-                    )],
+                    ),
                 )
             })
             .collect();
@@ -148,8 +148,8 @@ fn enrich_scan_slots_rule_differential() {
         let vertices: Vec<Vertex> = (0..100)
             .map(|i| {
                 Vertex::new(
-                    VertexId::from_int64(i),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(i).expect("test vertex id"),
+                    Tag::new(
                         "node".to_string(),
                         vec![
                             ("value".to_string(), Value::BigInt(i)),
@@ -157,7 +157,7 @@ fn enrich_scan_slots_rule_differential() {
                         ]
                         .into_iter()
                         .collect(),
-                    )],
+                    ),
                 )
             })
             .collect();

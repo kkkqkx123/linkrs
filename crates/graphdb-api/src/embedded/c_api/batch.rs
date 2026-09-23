@@ -221,7 +221,7 @@ pub unsafe extern "C" fn graphdb_batch_free(batch: *mut graphdb_batch_t) -> c_in
 /// # Parameters
 /// - `batch`: batch operation handle
 /// - `vid`: vertex ID
-/// - `tags`: tag list (comma-separated string)
+/// - `tags`: single tag name (exactly one label is required)
 ///
 /// # Returns
 /// Success: GRAPHDB_OK
@@ -230,7 +230,8 @@ pub unsafe extern "C" fn graphdb_batch_free(batch: *mut graphdb_batch_t) -> c_in
 /// # Safety
 /// - `batch` must be a valid batch handle
 /// - `vid` must be a valid pointer to a graphdb_value_t
-/// - `tags` can be null
+/// - `tags` must be a non-null single tag name (null, empty, or
+///   multi-tag comma-separated values are rejected)
 #[no_mangle]
 pub unsafe extern "C" fn graphdb_batch_add_vertex(
     batch: *mut graphdb_batch_t,
@@ -255,23 +256,25 @@ pub unsafe extern "C" fn graphdb_batch_add_vertex(
         None => return graphdb_error_code_t::GRAPHDB_MISUSE as c_int,
     };
 
-    // Parse tags
-    let tag_list = if tags.is_null() {
-        Vec::new()
-    } else {
-        let tags_str = match unsafe { CStr::from_ptr(tags).to_str() } {
-            Ok(s) => s,
-            Err(_) => return graphdb_error_code_t::GRAPHDB_MISUSE as c_int,
-        };
-        tags_str
-            .split(',')
-            .map(|s| Tag::new(s.trim().to_string(), HashMap::new()))
-            .filter(|t: &Tag| !t.name.is_empty())
-            .collect()
+    // Parse the single tag: exactly one non-empty label is required.
+    if tags.is_null() {
+        return graphdb_error_code_t::GRAPHDB_MISUSE as c_int;
+    }
+    let tags_str = match unsafe { CStr::from_ptr(tags).to_str() } {
+        Ok(s) => s,
+        Err(_) => return graphdb_error_code_t::GRAPHDB_MISUSE as c_int,
+    };
+    let mut tag_names = tags_str
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let single_tag = match (tag_names.next(), tag_names.next()) {
+        (Some(name), None) => name.to_string(),
+        _ => return graphdb_error_code_t::GRAPHDB_MISUSE as c_int,
     };
 
     // Create vertex
-    let vertex = Vertex::new(vid_id, tag_list);
+    let vertex = Vertex::new(vid_id, Tag::new(single_tag, HashMap::new()));
     handle.buffer.push(BatchItem::Vertex(vertex));
 
     // Auto-flush if buffer is full

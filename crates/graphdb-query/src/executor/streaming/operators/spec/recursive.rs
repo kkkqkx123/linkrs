@@ -23,6 +23,8 @@ pub enum RecursiveFragmentSpec {
         max_depth: usize,
         start_vertices: Vec<Value>,
         target_vertices: Vec<Value>,
+        /// Single vertex label used to materialize path vertices.
+        vertex_tag: String,
     },
     /// Multi-source multi-target shortest path via bidirectional BFS.
     MultiShortestPath {
@@ -32,6 +34,8 @@ pub enum RecursiveFragmentSpec {
         left_vertex_column: String,
         right_vertex_column: String,
         single_shortest: bool,
+        /// Single vertex label used to materialize path vertices.
+        vertex_tag: String,
     },
     /// BFS traversal with configurable depth and cycle policies.
     BFSShortest {
@@ -39,6 +43,8 @@ pub enum RecursiveFragmentSpec {
         direction: EdgeDirection,
         max_depth: usize,
         allow_loops: bool,
+        /// Single vertex label used to materialize path vertices.
+        vertex_tag: String,
     },
     /// Enumerate all paths between start and target vertices.
     AllPaths {
@@ -51,6 +57,8 @@ pub enum RecursiveFragmentSpec {
         offset: usize,
         start_vertices: Vec<Value>,
         target_vertices: Vec<Value>,
+        /// Single vertex label used to materialize path vertices.
+        vertex_tag: String,
     },
     /// Recursive-CTE fixpoint (`WITH [RECURSIVE] name AS (anchor [UNION ALL step])`).
     ///

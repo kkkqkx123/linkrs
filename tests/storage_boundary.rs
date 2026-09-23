@@ -47,13 +47,13 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
         let vertices: Vec<Vertex> = (0..50)
             .map(|i| {
                 Vertex::new(
-                    VertexId::from_int64(i),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(i).expect("test vertex id"),
+                    Tag::new(
                         "node".to_string(),
                         vec![("value".to_string(), Value::BigInt(i))]
                             .into_iter()
                             .collect(),
-                    )],
+                    ),
                 )
             })
             .collect();

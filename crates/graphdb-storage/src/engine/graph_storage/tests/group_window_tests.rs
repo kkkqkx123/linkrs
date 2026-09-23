@@ -17,7 +17,7 @@ fn test_group_window_single_ts() {
         timestamps.push(ts);
         let vertex = Vertex::new(
             VertexId::try_from_int64(6000 + i).expect("test vertex id"),
-           Tag::new(
+            Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string(format!("gperson_{i}"))),
@@ -44,7 +44,11 @@ fn test_group_window_single_ts() {
     // After finalize, data is visible.
     for i in 0..5 {
         let v = storage
-            .get_vertex("test_space", "Person", &VertexId::try_from_int64(6000 + i).expect("test vertex id"))
+            .get_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(6000 + i).expect("test vertex id"),
+            )
             .unwrap()
             .unwrap();
         assert_eq!(v.property_value("age"), Some(Value::BigInt(i)));
@@ -63,7 +67,7 @@ fn test_group_commit_visibility() {
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let vertex = Vertex::new(
             VertexId::try_from_int64(7001).expect("test vertex id"),
-           Tag::new(
+            Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string("visible")),
@@ -80,7 +84,11 @@ fn test_group_commit_visibility() {
     {
         let bound = storage.bind_auto_commit_statement(&window).unwrap();
         let v = bound
-            .get_vertex("test_space", "Person", &VertexId::try_from_int64(7001).expect("test vertex id"))
+            .get_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(7001).expect("test vertex id"),
+            )
             .unwrap();
         assert!(
             v.is_some(),
@@ -91,7 +99,11 @@ fn test_group_commit_visibility() {
 
     // After finalize, external reader sees data.
     let v = storage
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(7001).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(7001).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(v.property_value("name"), Some(Value::string("visible")));
@@ -109,7 +121,7 @@ fn test_group_failed_statement_rolls_back_own_writes() {
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let vertex = Vertex::new(
             VertexId::try_from_int64(8001).expect("test vertex id"),
-           Tag::new(
+            Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string("keep")),
@@ -127,7 +139,7 @@ fn test_group_failed_statement_rolls_back_own_writes() {
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let updated = Vertex::new(
             VertexId::try_from_int64(8001).expect("test vertex id"),
-           Tag::new(
+            Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string("changed")),
@@ -145,7 +157,7 @@ fn test_group_failed_statement_rolls_back_own_writes() {
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let vertex = Vertex::new(
             VertexId::try_from_int64(8002).expect("test vertex id"),
-           Tag::new(
+            Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string("also_keep")),
@@ -163,14 +175,22 @@ fn test_group_failed_statement_rolls_back_own_writes() {
 
     // Vertex 8001 should have original values (statement 2 rolled back).
     let v = storage
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(8001).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(8001).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(v.property_value("name"), Some(Value::string("keep")));
     assert_eq!(v.property_value("age"), Some(Value::BigInt(1)));
     // Vertex 8002 exists (statement 3 committed).
     let v2 = storage
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(8002).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(8002).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(v2.property_value("name"), Some(Value::string("also_keep")));
@@ -188,7 +208,7 @@ fn test_group_window_without_wal_manager() {
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let vertex = Vertex::new(
             VertexId::try_from_int64(9001).expect("test vertex id"),
-           Tag::new(
+            Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string("mem")),
@@ -204,7 +224,11 @@ fn test_group_window_without_wal_manager() {
     window.finalize_group().unwrap();
 
     let v = storage
-        .get_vertex("test_space", "Person", &VertexId::try_from_int64(9001).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(9001).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(v.property_value("name"), Some(Value::string("mem")));
@@ -230,7 +254,7 @@ fn test_group_window_staged_wal_bounded() {
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let vertex = Vertex::new(
             VertexId::try_from_int64(10000 + i).expect("test vertex id"),
-           Tag::new(
+            Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string(format!("gbounded_{i}"))),
@@ -264,7 +288,7 @@ fn test_group_window_unregisters_lazily_registered_snapshots() {
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let vertex = Vertex::new(
             VertexId::try_from_int64(2000 + i).expect("test vertex id"),
-           Tag::new(
+            Tag::new(
                 "Person".to_string(),
                 vec![
                     ("name".to_string(), Value::string(format!("gleak_{i}"))),
@@ -300,7 +324,7 @@ fn test_group_finalize_publishes_write_set() {
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let vertex = Vertex::new(
             VertexId::try_from_int64(11001).expect("test vertex id"),
-           Tag::new(
+            Tag::new(
                 "Person".to_string(),
                 vec![("name".to_string(), Value::string("published"))]
                     .into_iter()

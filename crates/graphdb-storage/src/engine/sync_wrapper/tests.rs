@@ -94,12 +94,12 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
             "test_space",
             graphdb_core::Vertex::new(
                 VertexId::try_from_int64(1).expect("test vertex id"),
-                vec![Tag::new(
+                Tag::new(
                     "Person".to_string(),
                     [("name".to_string(), graphdb_core::Value::string("one"))]
                         .into_iter()
                         .collect(),
-                )],
+                ),
             ),
         )
         .expect("first vertex should be committed");
@@ -128,12 +128,12 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
             "test_space",
             graphdb_core::Vertex::new(
                 VertexId::try_from_int64(2).expect("test vertex id"),
-                vec![Tag::new(
+                Tag::new(
                     "Person".to_string(),
                     [("name".to_string(), graphdb_core::Value::string("two"))]
                         .into_iter()
                         .collect(),
-                )],
+                ),
             ),
         )
         .expect("second vertex should remain in WAL after checkpoint");
@@ -165,14 +165,22 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
     );
     assert_eq!(
         reopened
-            .get_vertex("test_space", &VertexId::try_from_int64(1).expect("test vertex id"))
+            .get_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(1).expect("test vertex id")
+            )
             .expect("first vertex should be readable")
             .expect("first vertex should exist")
             .vid,
         VertexId::try_from_int64(1).expect("test vertex id")
     );
     assert!(reopened
-        .get_vertex("test_space", &VertexId::try_from_int64(2).expect("test vertex id"))
+        .get_vertex(
+            "test_space",
+            "Person",
+            &VertexId::try_from_int64(2).expect("test vertex id")
+        )
         .expect("second vertex should be readable")
         .is_some());
 }

@@ -54,14 +54,23 @@ fn test_string_id_get_node_edges_in() {
     storage.insert_edge("str_space", edge2).unwrap();
 
     let in_edges = storage
-        .get_node_edges("str_space", &VertexId::try_from_string("a").expect("test vertex id"), EdgeDirection::In)
+        .get_node_edges(
+            "str_space",
+            &VertexId::try_from_string("a").expect("test vertex id"),
+            EdgeDirection::In,
+        )
         .unwrap();
     assert_eq!(in_edges.len(), 2, "Node 'a' should have 2 incoming edges");
 
     for edge in &in_edges {
-        assert_eq!(edge.dst, VertexId::try_from_string("a").expect("test vertex id"), "dst should be 'a'");
+        assert_eq!(
+            edge.dst,
+            VertexId::try_from_string("a").expect("test vertex id"),
+            "dst should be 'a'"
+        );
         assert!(
-            edge.src == VertexId::try_from_string("b").expect("test vertex id") || edge.src == VertexId::try_from_string("c").expect("test vertex id"),
+            edge.src == VertexId::try_from_string("b").expect("test vertex id")
+                || edge.src == VertexId::try_from_string("c").expect("test vertex id"),
             "src should be 'b' or 'c', got {:?}",
             edge.src
         );
@@ -104,11 +113,21 @@ fn test_string_id_get_node_edges_out() {
     storage.insert_edge("str_space", edge).unwrap();
 
     let out_edges = storage
-        .get_node_edges("str_space", &VertexId::try_from_string("a").expect("test vertex id"), EdgeDirection::Out)
+        .get_node_edges(
+            "str_space",
+            &VertexId::try_from_string("a").expect("test vertex id"),
+            EdgeDirection::Out,
+        )
         .unwrap();
     assert_eq!(out_edges.len(), 1, "Node 'a' should have 1 outgoing edge");
-    assert_eq!(out_edges[0].src, VertexId::try_from_string("a").expect("test vertex id"));
-    assert_eq!(out_edges[0].dst, VertexId::try_from_string("b").expect("test vertex id"));
+    assert_eq!(
+        out_edges[0].src,
+        VertexId::try_from_string("a").expect("test vertex id")
+    );
+    assert_eq!(
+        out_edges[0].dst,
+        VertexId::try_from_string("b").expect("test vertex id")
+    );
 }
 
 #[test]
@@ -148,6 +167,12 @@ fn test_string_id_scan_edges_by_type() {
 
     let edges = storage.scan_edges_by_type("str_space", "LINK").unwrap();
     assert_eq!(edges.len(), 1);
-    assert_eq!(edges[0].src, VertexId::try_from_string("x").expect("test vertex id"));
-    assert_eq!(edges[0].dst, VertexId::try_from_string("y").expect("test vertex id"));
+    assert_eq!(
+        edges[0].src,
+        VertexId::try_from_string("x").expect("test vertex id")
+    );
+    assert_eq!(
+        edges[0].dst,
+        VertexId::try_from_string("y").expect("test vertex id")
+    );
 }

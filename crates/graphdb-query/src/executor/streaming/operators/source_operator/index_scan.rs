@@ -364,8 +364,8 @@ mod tests {
 
     fn knows_edge_entity_ref(ranking: i64) -> EntityRef {
         EntityRef::Edge {
-            src: VertexId::from_int64(1),
-            dst: VertexId::from_int64(2),
+            src: VertexId::try_from_int64(1).expect("valid vertex id"),
+            dst: VertexId::try_from_int64(2).expect("valid vertex id"),
             edge_type: edge_type_hash("KNOWS"),
             ranking,
         }
@@ -431,8 +431,14 @@ mod tests {
         let Value::Edge(edge) = &row[0] else {
             panic!("covering row should contain an edge");
         };
-        assert_eq!(edge.src(), &VertexId::from_int64(1));
-        assert_eq!(edge.dst(), &VertexId::from_int64(2));
+        assert_eq!(
+            edge.src(),
+            &VertexId::try_from_int64(1).expect("valid vertex id")
+        );
+        assert_eq!(
+            edge.dst(),
+            &VertexId::try_from_int64(2).expect("valid vertex id")
+        );
         assert_eq!(edge.edge_type(), "KNOWS");
         assert_eq!(edge.ranking(), 7);
         assert_eq!(edge.get_property("since"), Some(&Value::Int(2024)));
@@ -447,8 +453,8 @@ mod tests {
             .write()
             .set_edge_types(vec![EdgeTypeInfo::new("KNOWS".to_string())]);
         storage.write().set_edges(vec![Edge::new(
-            VertexId::from_int64(1),
-            VertexId::from_int64(2),
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            VertexId::try_from_int64(2).expect("valid vertex id"),
             "KNOWS".to_string(),
             7,
             vec![("since".to_string(), Value::Int(2024))]
@@ -463,6 +469,7 @@ mod tests {
                 space_name: "test".to_string(),
                 index_name: "knows_idx".to_string(),
                 index_id: 1,
+                tag: String::new(),
                 predicate: BoundIndexPredicate::Equal {
                     column: "since".to_string(),
                     value: Value::Int(2024),
@@ -511,6 +518,7 @@ mod tests {
                 space_name: "test".to_string(),
                 index_name: "knows_idx".to_string(),
                 index_id: 1,
+                tag: String::new(),
                 predicate: BoundIndexPredicate::Equal {
                     column: "since".to_string(),
                     value: Value::Int(2024),
@@ -583,7 +591,8 @@ mod tests {
     #[test]
     fn covering_index_rows_do_not_require_a_table_fetch() {
         let row = make_flat_covering_vertex_row(
-            &EntityRef::Vertex(VertexId::from_int64(7)),
+            &EntityRef::Vertex(VertexId::try_from_int64(7).expect("valid vertex id")),
+            "",
             vec![("name".to_string(), Value::string("Alice"))],
             &[],
         )
@@ -611,6 +620,7 @@ mod tests {
                 space_name: "test".to_string(),
                 index_name: "person_idx".to_string(),
                 index_id: 1,
+                tag: "person".to_string(),
                 predicate: BoundIndexPredicate::Equal {
                     column: "name".to_string(),
                     value: Value::string("Alice"),
@@ -619,7 +629,9 @@ mod tests {
                 output_layout: output_layout.clone(),
                 partition_range: None,
                 cursor: Some(Box::new(FakeIndexCursor::new(vec![IndexRow::Covering {
-                    entity_ref: EntityRef::Vertex(VertexId::from_int64(7)),
+                    entity_ref: EntityRef::Vertex(
+                        VertexId::try_from_int64(7).expect("valid vertex id"),
+                    ),
                     columns: vec![
                         ("name".to_string(), Value::string("Alice")),
                         ("age".to_string(), Value::BigInt(30)),

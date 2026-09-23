@@ -90,7 +90,9 @@ impl ColumnStorage for VariableWidthColumn {
                 .ok()
                 .map(|jb| Value::JsonB(Box::new(jb)))
         } else if matches!(self.data_type, DataType::FixedString(_)) {
-            String::from_utf8(bytes.to_vec()).ok().map(Value::FixedString)
+            String::from_utf8(bytes.to_vec())
+                .ok()
+                .map(Value::FixedString)
         } else if matches!(
             self.data_type,
             DataType::Struct(_)

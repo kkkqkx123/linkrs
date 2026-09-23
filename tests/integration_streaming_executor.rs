@@ -758,11 +758,11 @@ mod storage_backed {
         .iter()
         .enumerate()
         {
-            let vid = VertexId::from_int64(i as i64 + 1);
+            let vid = VertexId::try_from_int64(i as i64 + 1).expect("test vertex id");
             let mut props = HashMap::new();
             props.insert("name".to_string(), Value::string(name));
             props.insert("age".to_string(), Value::BigInt(*age));
-            let vertex = Vertex::new(vid, vec![Tag::new("Person".to_string(), props)]);
+            let vertex = Vertex::new(vid, Tag::new("Person".to_string(), props));
             store.insert_vertex("test", vertex).unwrap();
         }
     }

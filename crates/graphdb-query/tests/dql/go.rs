@@ -110,9 +110,12 @@ fn test_go_parser_bidirect() {
 }
 
 // ==================== GO Execution Tests ====================
+//
+// Single-label note: GO syntax carries no vertex label, so the planner
+// rejects every GO statement at plan time. These tests pin that rejection.
 
 #[test]
-fn test_go_execution_basic() {
+fn test_go_execution_basic_rejected() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
@@ -122,12 +125,11 @@ fn test_go_execution_basic() {
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01'), 1 -> 3:('2024-01-02')")
         .assert_success()
         .query("GO FROM 1 OVER KNOWS")
-        .assert_success()
-        .assert_result_count(2);
+        .assert_error();
 }
 
 #[test]
-fn test_go_execution_with_yield() {
+fn test_go_execution_with_yield_rejected() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
@@ -137,12 +139,11 @@ fn test_go_execution_with_yield() {
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01')")
         .assert_success()
         .query("GO FROM 1 OVER KNOWS YIELD $$.Person.name AS name, $$.Person.age AS age")
-        .assert_success()
-        .assert_result_count(1);
+        .assert_error();
 }
 
 #[test]
-fn test_go_execution_multi_steps() {
+fn test_go_execution_multi_steps_rejected() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
@@ -152,13 +153,13 @@ fn test_go_execution_multi_steps() {
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01'), 2 -> 3:('2024-01-02'), 3 -> 4:('2024-01-03')")
         .assert_success()
         .query("GO 2 STEPS FROM 1 OVER KNOWS")
-        .assert_success();
+        .assert_error();
 }
 
 // ==================== GO REVERSELY and BIDIRECT Tests ====================
 
 #[test]
-fn test_go_execution_reversely() {
+fn test_go_execution_reversely_rejected() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
@@ -168,12 +169,11 @@ fn test_go_execution_reversely() {
         .exec_dml("INSERT EDGE FOLLOWS(since) VALUES 2 -> 1:('2020-01-01'), 3 -> 1:('2021-01-01')")
         .assert_success()
         .query("GO FROM 1 OVER FOLLOWS REVERSELY YIELD $^.Person.name AS follower")
-        .assert_success()
-        .assert_result_count(2);
+        .assert_error();
 }
 
 #[test]
-fn test_go_execution_bidirect() {
+fn test_go_execution_bidirect_rejected() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
@@ -183,14 +183,13 @@ fn test_go_execution_bidirect() {
         .exec_dml("INSERT EDGE FRIEND(since) VALUES 1 -> 2:('2020-01-01'), 3 -> 1:('2021-01-01')")
         .assert_success()
         .query("GO FROM 1 OVER FRIEND BIDIRECT YIELD $$.Person.name AS friend")
-        .assert_success()
-        .assert_result_count(2);
+        .assert_error();
 }
 
 // ==================== GO Multi-Step Traversal Tests ====================
 
 #[test]
-fn test_go_execution_basic_traversal() {
+fn test_go_execution_basic_traversal_rejected() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
@@ -200,25 +199,22 @@ fn test_go_execution_basic_traversal() {
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2020-01-01'), 1 -> 3:('2021-01-01'), 2 -> 4:('2022-01-01')")
         .assert_success()
         .query("GO FROM 1 OVER KNOWS YIELD $$.Person.name AS friend_name")
-        .assert_success()
-        .assert_result_count(2)
+        .assert_error()
         .query("GO 2 FROM 1 OVER KNOWS YIELD $$.Person.name AS friend_of_friend")
-        .assert_success()
-        .assert_result_count(1);
+        .assert_error();
 }
 
 // ==================== GO Error Handling Tests ====================
 
 #[test]
-fn test_go_nonexistent_source() {
+fn test_go_nonexistent_source_rejected() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl("CREATE TAG Person(id INT, name STRING)")
         .exec_ddl("CREATE EDGE KNOWS(since DATE)")
         .query("GO FROM 999 OVER KNOWS")
-        .assert_success()
-        .assert_result_count(0);
+        .assert_error();
 }
 
 #[test]

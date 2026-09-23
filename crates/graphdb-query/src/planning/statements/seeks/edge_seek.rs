@@ -217,8 +217,8 @@ mod tests {
 
         // Test edge type matching
         let edge = graphdb_core::Edge::new_empty(
-            VertexId::from_int64(1),
-            VertexId::from_int64(2),
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            VertexId::try_from_int64(2).expect("valid vertex id"),
             "KNOWS".to_string(),
             0,
         );
@@ -226,8 +226,8 @@ mod tests {
 
         // Test edge type mismatch
         let edge2 = graphdb_core::Edge::new_empty(
-            VertexId::from_int64(1),
-            VertexId::from_int64(2),
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            VertexId::try_from_int64(2).expect("valid vertex id"),
             "FOLLOWS".to_string(),
             0,
         );
@@ -245,16 +245,16 @@ mod tests {
         });
 
         let edge = graphdb_core::Edge::new_empty(
-            VertexId::from_int64(1),
-            VertexId::from_int64(2),
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            VertexId::try_from_int64(2).expect("valid vertex id"),
             "KNOWS".to_string(),
             0,
         );
         assert!(seek.edge_matches_pattern(&edge));
 
         let edge2 = graphdb_core::Edge::new_empty(
-            VertexId::from_int64(3),
-            VertexId::from_int64(2),
+            VertexId::try_from_int64(3).expect("valid vertex id"),
+            VertexId::try_from_int64(2).expect("valid vertex id"),
             "KNOWS".to_string(),
             0,
         );

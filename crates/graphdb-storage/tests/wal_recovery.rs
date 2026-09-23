@@ -101,7 +101,11 @@ fn test_crash_recovery_replays_edge_insert() {
         assert_eq!(edge.as_ref().unwrap().ranking, 0);
 
         let charlie = storage
-            .get_vertex("test_space", "Person", &VertexId::try_from_int64(3).expect("test vertex id"))
+            .get_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(3).expect("test vertex id"),
+            )
             .unwrap();
         assert!(charlie.is_some(), "Vertex should be recovered via WAL");
     }
@@ -121,7 +125,11 @@ fn test_crash_recovery_replays_vertex_delete() {
 
         // Delete Alice after save+checkpoint
         storage
-            .delete_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
+            .delete_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(1).expect("test vertex id"),
+            )
             .unwrap();
     }
 
@@ -129,7 +137,11 @@ fn test_crash_recovery_replays_vertex_delete() {
         let storage = common::open_persistent_storage(dir);
 
         let alice = storage
-            .get_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
+            .get_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(1).expect("test vertex id"),
+            )
             .unwrap();
         assert!(
             alice.is_none(),
@@ -137,7 +149,11 @@ fn test_crash_recovery_replays_vertex_delete() {
         );
 
         let bob = storage
-            .get_vertex("test_space", "Person", &VertexId::try_from_int64(2).expect("test vertex id"))
+            .get_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(2).expect("test vertex id"),
+            )
             .unwrap();
         assert!(bob.is_some(), "Bob should still exist");
     }
@@ -226,7 +242,11 @@ fn test_multiple_crash_recovery_cycles() {
     {
         let mut storage = common::open_persistent_storage(dir);
         assert!(storage
-            .get_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
+            .get_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(1).expect("test vertex id")
+            )
             .unwrap()
             .is_some());
 
@@ -240,11 +260,19 @@ fn test_multiple_crash_recovery_cycles() {
     {
         let storage = common::open_persistent_storage(dir);
         assert!(storage
-            .get_vertex("test_space", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
+            .get_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(1).expect("test vertex id")
+            )
             .unwrap()
             .is_some());
         assert!(storage
-            .get_vertex("test_space", "Person", &VertexId::try_from_int64(2).expect("test vertex id"))
+            .get_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(2).expect("test vertex id")
+            )
             .unwrap()
             .is_some());
     }

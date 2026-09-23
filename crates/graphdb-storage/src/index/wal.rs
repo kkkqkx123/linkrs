@@ -259,8 +259,9 @@ mod tests {
 
     #[test]
     fn serialize_insert_roundtrip() {
-        let record =
-            IndexRecord::new(100).with_entity_ref(EntityRef::Vertex(VertexId::try_from_int64(42).expect("test vertex id")));
+        let record = IndexRecord::new(100).with_entity_ref(EntityRef::Vertex(
+            VertexId::try_from_int64(42).expect("test vertex id"),
+        ));
         let entry = WalEntry::Insert {
             is_forward: true,
             key: vec![1, 2, 3, 4],

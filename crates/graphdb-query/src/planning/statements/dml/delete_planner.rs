@@ -14,8 +14,8 @@ use crate::planning::plan::core::nodes::{
     ArgumentNode, EdgeDeleteInfo, IndexDeleteInfo, VertexDeleteInfo,
 };
 use crate::planning::plan::logical::logical_nodes::dml::{
-    LogicalDeleteEdgesNode, LogicalDeleteIndexNode,
-    LogicalDeleteVerticesNode, LogicalPipeDeleteEdgesNode, LogicalPipeDeleteVerticesNode,
+    LogicalDeleteEdgesNode, LogicalDeleteIndexNode, LogicalDeleteVerticesNode,
+    LogicalPipeDeleteEdgesNode, LogicalPipeDeleteVerticesNode,
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};

@@ -431,7 +431,9 @@ mod tests {
 
     #[test]
     fn test_dberror_creation() {
-        let storage_err = StorageError::node_not_found(crate::types::VertexId::try_from_int64(42).expect("test vertex id"));
+        let storage_err = StorageError::node_not_found(
+            crate::types::VertexId::try_from_int64(42).expect("test vertex id"),
+        );
         let db_err: DBError = storage_err.into();
         assert_eq!(db_err.kind(), ErrorKind::Storage);
         assert!(!db_err.is_retryable());

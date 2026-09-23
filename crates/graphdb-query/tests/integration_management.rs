@@ -322,7 +322,7 @@ fn test_explain_execution_match() {
 }
 
 #[test]
-fn test_explain_execution_go() {
+fn test_explain_execution_go_rejected() {
     let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
@@ -336,10 +336,11 @@ fn test_explain_execution_go() {
     let query = "EXPLAIN GO FROM 1 OVER KNOWS";
     let result = pipeline_manager.execute_query(query);
 
+    // Single-label: GO carries no vertex label, so planning rejects it.
     assert!(
-        result.is_ok(),
-        "Execution should return Ok result: {:?}",
-        result.err()
+        result.is_err(),
+        "Execution should return Err result: {:?}",
+        result.ok()
     );
 }
 
@@ -684,7 +685,7 @@ fn test_pipe_parser_complex() {
 }
 
 #[test]
-fn test_pipe_execution_basic() {
+fn test_pipe_execution_basic_rejected() {
     let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
@@ -698,10 +699,12 @@ fn test_pipe_execution_basic() {
     let query = "GO FROM 1 OVER KNOWS | YIELD target.name";
     let result = pipeline_manager.execute_query(query);
 
+    // Single-label: the GO stage carries no vertex label, so planning
+    // rejects the whole pipe.
     assert!(
-        result.is_ok(),
-        "Execution should return Ok result: {:?}",
-        result.err()
+        result.is_err(),
+        "Execution should return Err result: {:?}",
+        result.ok()
     );
 }
 
@@ -769,7 +772,7 @@ fn test_profile_execution_match() {
 }
 
 #[test]
-fn test_profile_execution_go() {
+fn test_profile_execution_go_rejected() {
     use crate::common::test_scenario::TestScenario;
     TestScenario::new()
         .expect("Failed to create test scenario")
@@ -780,7 +783,7 @@ fn test_profile_execution_go() {
         .exec_dml("INSERT EDGE KNOWS() VALUES 1 -> 2")
         .assert_success()
         .query("PROFILE GO FROM 1 OVER KNOWS")
-        .assert_success();
+        .assert_error();
 }
 
 // ==================== GROUP BY Statement Tests ====================
@@ -1160,7 +1163,7 @@ fn test_explain_execution_format_table() {
 }
 
 #[test]
-fn test_explain_execution_format_dot() {
+fn test_explain_execution_format_dot_rejected() {
     let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
@@ -1174,10 +1177,11 @@ fn test_explain_execution_format_dot() {
     let query = "EXPLAIN FORMAT = DOT GO FROM 1 OVER KNOWS";
     let result = pipeline_manager.execute_query(query);
 
+    // Single-label: GO carries no vertex label, so planning rejects it.
     assert!(
-        result.is_ok(),
-        "Execution should return Ok result: {:?}",
-        result.err()
+        result.is_err(),
+        "Execution should return Err result: {:?}",
+        result.ok()
     );
 }
 
@@ -1230,11 +1234,9 @@ fn test_management_explain_operations() {
 
     let explain_queries = [
         "EXPLAIN MATCH (n:Person) RETURN n",
-        "EXPLAIN GO FROM 1 OVER KNOWS",
         "EXPLAIN LOOKUP ON Person WHERE Person.age > 25",
         "EXPLAIN FETCH PROP ON Person 1",
         "EXPLAIN FORMAT = TABLE MATCH (n:Person) RETURN n",
-        "EXPLAIN FORMAT = DOT GO FROM 1 OVER KNOWS",
     ];
 
     for query in &explain_queries {
@@ -1243,6 +1245,21 @@ fn test_management_explain_operations() {
             result.is_ok(),
             "Execution should return Ok result: {:?}",
             result.err()
+        );
+    }
+
+    // Single-label: GO carries no vertex label, so planning rejects it.
+    let rejected_queries = [
+        "EXPLAIN GO FROM 1 OVER KNOWS",
+        "EXPLAIN FORMAT = DOT GO FROM 1 OVER KNOWS",
+    ];
+
+    for query in &rejected_queries {
+        let result = pipeline_manager.execute_query(query);
+        assert!(
+            result.is_err(),
+            "Execution should return Err result: {:?}",
+            result.ok()
         );
     }
 }
@@ -1410,7 +1427,7 @@ fn test_auxiliary_unwind_operations() {
 }
 
 #[test]
-fn test_auxiliary_pipe_operations() {
+fn test_auxiliary_pipe_operations_rejected() {
     use crate::common::test_scenario::TestScenario;
     TestScenario::new()
         .expect("Failed to create test scenario")
@@ -1421,10 +1438,9 @@ fn test_auxiliary_pipe_operations() {
         .exec_dml("INSERT EDGE KNOWS() VALUES 1 -> 2")
         .assert_success()
         .query("GO FROM 1 OVER KNOWS | YIELD target.name")
-        .assert_success()
+        .assert_error()
         .query("GO FROM 1 OVER KNOWS | YIELD target.name AS name | RETURN name")
-        .assert_success()
-        .assert_result_count(1);
+        .assert_error();
 }
 
 #[test]

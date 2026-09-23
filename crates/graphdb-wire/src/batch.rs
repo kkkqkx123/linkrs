@@ -99,9 +99,8 @@ pub enum BatchItem {
 pub struct VertexData {
     /// Vertex ID
     pub vid: serde_json::Value,
-    /// Tag list
-    #[serde(default)]
-    pub tags: Vec<String>,
+    /// Single label tag name (single-label vertices carry exactly one tag)
+    pub tag: String,
     /// Properties
     #[serde(default)]
     pub properties: HashMap<String, serde_json::Value>,
@@ -244,7 +243,7 @@ mod tests {
     fn batch_item_vertex_roundtrip() {
         let item = BatchItem::Vertex(VertexData {
             vid: serde_json::json!("v1"),
-            tags: vec!["person".to_string()],
+            tag: "person".to_string(),
             properties: HashMap::from([("name".to_string(), serde_json::json!("Alice"))]),
         });
         let json = serde_json::to_string(&item).unwrap();
@@ -253,7 +252,7 @@ mod tests {
         match back {
             BatchItem::Vertex(v) => {
                 assert_eq!(v.vid, serde_json::json!("v1"));
-                assert_eq!(v.tags, vec!["person"]);
+                assert_eq!(v.tag, "person");
                 assert_eq!(v.properties.get("name"), Some(&serde_json::json!("Alice")));
             }
             other => panic!("expected vertex item, got {other:?}"),

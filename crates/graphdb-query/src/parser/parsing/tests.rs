@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_delete_vertex_basic() {
-        let query = "DELETE VERTEX 1";
+        let query = "DELETE VERTEX person FROM 1";
         let result = parse_statement(query);
         assert!(
             result.is_ok(),
@@ -238,6 +238,16 @@ mod tests {
 
         let stmt = result.expect("DELETE VERTEX parsing should succeed!");
         assert_eq!(stmt.kind(), "DELETE");
+        if let Stmt::Delete(delete_stmt) = stmt {
+            if let DeleteTarget::Vertices { tag, vids } = delete_stmt.target {
+                assert_eq!(tag, "person");
+                assert_eq!(vids.len(), 1);
+            } else {
+                panic!("Expected vertex delete target");
+            }
+        } else {
+            panic!("Expected DELETE statement");
+        }
     }
 
     #[test]

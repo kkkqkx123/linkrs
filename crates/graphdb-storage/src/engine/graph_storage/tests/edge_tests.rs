@@ -63,8 +63,14 @@ fn test_edge_property_index_range_lookup() {
         )
         .unwrap();
     assert_eq!(edges.len(), 1);
-    assert_eq!(edges[0].src, VertexId::try_from_int64(1).expect("test vertex id"));
-    assert_eq!(edges[0].dst, VertexId::try_from_int64(3).expect("test vertex id"));
+    assert_eq!(
+        edges[0].src,
+        VertexId::try_from_int64(1).expect("test vertex id")
+    );
+    assert_eq!(
+        edges[0].dst,
+        VertexId::try_from_int64(3).expect("test vertex id")
+    );
     assert_eq!(edges[0].props.get("weight"), Some(&Value::BigInt(25)));
 
     // 5 <= weight < 25
@@ -133,8 +139,14 @@ fn test_insert_and_get_edge() {
         )
         .unwrap();
     assert!(retrieved.is_some());
-    assert_eq!(retrieved.as_ref().unwrap().src, VertexId::try_from_int64(1).expect("test vertex id"));
-    assert_eq!(retrieved.as_ref().unwrap().dst, VertexId::try_from_int64(2).expect("test vertex id"));
+    assert_eq!(
+        retrieved.as_ref().unwrap().src,
+        VertexId::try_from_int64(1).expect("test vertex id")
+    );
+    assert_eq!(
+        retrieved.as_ref().unwrap().dst,
+        VertexId::try_from_int64(2).expect("test vertex id")
+    );
 }
 
 #[test]
@@ -201,12 +213,20 @@ fn test_get_node_edges() {
     }
 
     let out_edges = storage
-        .get_node_edges("test_space", &VertexId::try_from_int64(1).expect("test vertex id"), EdgeDirection::Out)
+        .get_node_edges(
+            "test_space",
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            EdgeDirection::Out,
+        )
         .unwrap();
     assert_eq!(out_edges.len(), 2);
 
     let in_edges = storage
-        .get_node_edges("test_space", &VertexId::try_from_int64(2).expect("test vertex id"), EdgeDirection::In)
+        .get_node_edges(
+            "test_space",
+            &VertexId::try_from_int64(2).expect("test vertex id"),
+            EdgeDirection::In,
+        )
         .unwrap();
     assert_eq!(in_edges.len(), 1);
 }
@@ -493,7 +513,7 @@ fn test_get_edge_projected() {
             "test_space",
             Vertex::new(
                 src,
-               Tag::new(
+                Tag::new(
                     "Person".to_string(),
                     vec![("name".to_string(), Value::string("Alice"))]
                         .into_iter()
@@ -507,7 +527,7 @@ fn test_get_edge_projected() {
             "test_space",
             Vertex::new(
                 dst,
-               Tag::new(
+                Tag::new(
                     "Person".to_string(),
                     vec![("name".to_string(), Value::string("Bob"))]
                         .into_iter()
@@ -604,7 +624,10 @@ fn test_batch_delete_edges_removes_many_keys_under_one_timestamp() {
     assert_eq!(deleted, 2);
     let remaining = storage.scan_edges_by_type("test_space", "KNOWS").unwrap();
     assert_eq!(remaining.len(), 1);
-    assert_eq!(remaining[0].src, VertexId::try_from_int64(3).expect("test vertex id"));
+    assert_eq!(
+        remaining[0].src,
+        VertexId::try_from_int64(3).expect("test vertex id")
+    );
     assert!(storage
         .get_edge(
             "test_space",

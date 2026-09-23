@@ -146,9 +146,7 @@ pub(crate) fn flush_split_generation(
 pub(crate) fn vertex_entity_ref(value: &Value) -> Option<EntityRef> {
     use graphdb_core::types::storage_ids::VertexId;
     match value {
-        Value::BigInt(id) => VertexId::try_from_int64(*id)
-            .ok()
-            .map(EntityRef::Vertex),
+        Value::BigInt(id) => VertexId::try_from_int64(*id).ok().map(EntityRef::Vertex),
         Value::Int(id) => VertexId::try_from_int64(*id as i64)
             .ok()
             .map(EntityRef::Vertex),
@@ -270,21 +268,30 @@ mod tests {
     fn vertex_entity_ref_int() {
         let v = Value::Int(42);
         let entity = vertex_entity_ref(&v).expect("should resolve");
-        assert_eq!(entity, EntityRef::Vertex(VertexId::try_from_int64(42).expect("test vertex id")));
+        assert_eq!(
+            entity,
+            EntityRef::Vertex(VertexId::try_from_int64(42).expect("test vertex id"))
+        );
     }
 
     #[test]
     fn vertex_entity_ref_bigint() {
         let v = Value::BigInt(100);
         let entity = vertex_entity_ref(&v).expect("should resolve");
-        assert_eq!(entity, EntityRef::Vertex(VertexId::try_from_int64(100).expect("test vertex id")));
+        assert_eq!(
+            entity,
+            EntityRef::Vertex(VertexId::try_from_int64(100).expect("test vertex id"))
+        );
     }
 
     #[test]
     fn vertex_entity_ref_string_numeric() {
         let v = Value::string("42");
         let entity = vertex_entity_ref(&v).expect("should resolve");
-        assert_eq!(entity, EntityRef::Vertex(VertexId::try_from_int64(42).expect("test vertex id")));
+        assert_eq!(
+            entity,
+            EntityRef::Vertex(VertexId::try_from_int64(42).expect("test vertex id"))
+        );
     }
 
     #[test]
@@ -293,7 +300,9 @@ mod tests {
         let entity = vertex_entity_ref(&v).expect("should resolve");
         assert_eq!(
             entity,
-            EntityRef::Vertex(VertexId::try_from_string("uuid-abc".to_string()).expect("test vertex id"))
+            EntityRef::Vertex(
+                VertexId::try_from_string("uuid-abc".to_string()).expect("test vertex id")
+            )
         );
     }
 

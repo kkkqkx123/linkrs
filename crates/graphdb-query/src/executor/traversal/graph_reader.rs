@@ -11,12 +11,7 @@ impl<'a> TraversalGraphReader<'a> {
         Self { storage }
     }
 
-    pub fn get_vertex(
-        &self,
-        space_name: &str,
-        tag: &str,
-        vertex_id: &VertexId,
-    ) -> Option<Vertex> {
+    pub fn get_vertex(&self, space_name: &str, tag: &str, vertex_id: &VertexId) -> Option<Vertex> {
         if tag.is_empty() {
             return None;
         }

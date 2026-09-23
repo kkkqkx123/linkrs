@@ -176,7 +176,6 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
 
         LogicalNodeEnum::DeleteEdges(n) => convert_delete_edges(n),
 
-
         LogicalNodeEnum::DeleteIndex(n) => convert_delete_index(n),
 
         LogicalNodeEnum::PipeDeleteVertices(n) => convert_pipe_delete_vertices(n),

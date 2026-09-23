@@ -444,11 +444,11 @@ fn test_update_vertex_indexes() {
 
     assert_ok(get_storage(&storage).create_tag_index("test_space", &index));
 
-    let vertex_id = VertexId::from_int64(1);
+    let vertex_id = VertexId::try_from_int64(1).expect("test vertex id");
     let mut props = std::collections::HashMap::new();
     props.insert("name".to_string(), Value::string("Alice"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
-    let vertex = Vertex::new(vertex_id, vec![tag]);
+    let vertex = Vertex::new(vertex_id, tag);
 
     get_storage(&storage)
         .insert_vertex("test_space", vertex)
@@ -466,7 +466,7 @@ fn test_update_vertex_indexes() {
     );
 
     // Clean up
-    assert_ok(get_storage(&storage).delete_vertex("test_space", &vertex_id));
+    assert_ok(get_storage(&storage).delete_vertex("test_space", "Person", &vertex_id));
 
     let retrieved = get_storage(&storage).lookup_index(
         "test_space",
@@ -515,14 +515,14 @@ fn test_delete_edge_indexes() {
     assert_ok(get_storage(&storage).create_tag_index("test_space", &index));
 
     // Create vertices first
-    let src = VertexId::from_int64(1);
-    let dst = VertexId::from_int64(2);
+    let src = VertexId::try_from_int64(1).expect("test vertex id");
+    let dst = VertexId::try_from_int64(2).expect("test vertex id");
     let tag = graphdb::core::vertex_edge_path::Tag::new(
         "Person".to_string(),
         std::collections::HashMap::new(),
     );
-    let vertex1 = Vertex::new(src, vec![tag.clone()]);
-    let vertex2 = Vertex::new(dst, vec![tag]);
+    let vertex1 = Vertex::new(src, tag.clone());
+    let vertex2 = Vertex::new(dst, tag);
     assert_ok(get_storage(&storage).insert_vertex("test_space", vertex1));
     assert_ok(get_storage(&storage).insert_vertex("test_space", vertex2));
 
@@ -580,16 +580,25 @@ fn test_index_exact_query() {
     assert_ok(get_storage(&storage).create_tag_index("test_space", &index));
 
     let vertices = vec![
-        (VertexId::from_int64(1), Value::string("Alice")),
-        (VertexId::from_int64(2), Value::string("Bob")),
-        (VertexId::from_int64(3), Value::string("Charlie")),
+        (
+            VertexId::try_from_int64(1).expect("test vertex id"),
+            Value::string("Alice"),
+        ),
+        (
+            VertexId::try_from_int64(2).expect("test vertex id"),
+            Value::string("Bob"),
+        ),
+        (
+            VertexId::try_from_int64(3).expect("test vertex id"),
+            Value::string("Charlie"),
+        ),
     ];
 
     for (vid, name) in &vertices {
         let mut props = std::collections::HashMap::new();
         props.insert("name".to_string(), name.clone());
         let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
-        let vertex = Vertex::new(*vid, vec![tag]);
+        let vertex = Vertex::new(*vid, tag);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
     }
 
@@ -634,16 +643,25 @@ fn test_index_query_multiple_matches() {
     assert_ok(get_storage(&storage).create_tag_index("test_space", &index));
 
     let vertices = vec![
-        (VertexId::from_int64(1), Value::Int(30)),
-        (VertexId::from_int64(2), Value::Int(30)),
-        (VertexId::from_int64(3), Value::Int(25)),
+        (
+            VertexId::try_from_int64(1).expect("test vertex id"),
+            Value::Int(30),
+        ),
+        (
+            VertexId::try_from_int64(2).expect("test vertex id"),
+            Value::Int(30),
+        ),
+        (
+            VertexId::try_from_int64(3).expect("test vertex id"),
+            Value::Int(25),
+        ),
     ];
 
     for (vid, age) in &vertices {
         let mut props = std::collections::HashMap::new();
         props.insert("age".to_string(), age.clone());
         let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
-        let vertex = Vertex::new(*vid, vec![tag]);
+        let vertex = Vertex::new(*vid, tag);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
     }
 
@@ -691,11 +709,11 @@ fn test_index_query_no_match() {
 
     assert_ok(get_storage(&storage).create_tag_index("test_space", &index));
 
-    let vertex_id = VertexId::from_int64(1);
+    let vertex_id = VertexId::try_from_int64(1).expect("test vertex id");
     let mut props = std::collections::HashMap::new();
     props.insert("name".to_string(), Value::string("Alice"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
-    let vertex = Vertex::new(vertex_id, vec![tag]);
+    let vertex = Vertex::new(vertex_id, tag);
 
     assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
 
@@ -821,17 +839,17 @@ fn test_composite_index() {
 
     let vertices = vec![
         (
-            VertexId::from_int64(1),
+            VertexId::try_from_int64(1).expect("test vertex id"),
             Value::string("Alice"),
             Value::Int(30),
         ),
         (
-            VertexId::from_int64(2),
+            VertexId::try_from_int64(2).expect("test vertex id"),
             Value::string("Alice"),
             Value::Int(25),
         ),
         (
-            VertexId::from_int64(3),
+            VertexId::try_from_int64(3).expect("test vertex id"),
             Value::string("Bob"),
             Value::Int(30),
         ),
@@ -842,7 +860,7 @@ fn test_composite_index() {
         props.insert("name".to_string(), name.clone());
         props.insert("age".to_string(), age.clone());
         let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
-        let vertex = Vertex::new(*vid, vec![tag]);
+        let vertex = Vertex::new(*vid, tag);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
     }
 
@@ -967,18 +985,33 @@ fn test_index_range_query_with_boundaries() {
 
     // Insert test data: Age 20, 25, 30, 35, 40
     let vertices = vec![
-        (VertexId::from_int64(1), Value::Int(20)),
-        (VertexId::from_int64(2), Value::Int(25)),
-        (VertexId::from_int64(3), Value::Int(30)),
-        (VertexId::from_int64(4), Value::Int(35)),
-        (VertexId::from_int64(5), Value::Int(40)),
+        (
+            VertexId::try_from_int64(1).expect("test vertex id"),
+            Value::Int(20),
+        ),
+        (
+            VertexId::try_from_int64(2).expect("test vertex id"),
+            Value::Int(25),
+        ),
+        (
+            VertexId::try_from_int64(3).expect("test vertex id"),
+            Value::Int(30),
+        ),
+        (
+            VertexId::try_from_int64(4).expect("test vertex id"),
+            Value::Int(35),
+        ),
+        (
+            VertexId::try_from_int64(5).expect("test vertex id"),
+            Value::Int(40),
+        ),
     ];
 
     for (vid, age) in &vertices {
         let mut props = std::collections::HashMap::new();
         props.insert("age".to_string(), age.clone());
         let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
-        let vertex = Vertex::new(*vid, vec![tag]);
+        let vertex = Vertex::new(*vid, tag);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
     }
 
@@ -1042,16 +1075,25 @@ fn test_scan_type_unique() {
 
     // insert data
     let vertices = vec![
-        (VertexId::from_int64(1), Value::string("Alice")),
-        (VertexId::from_int64(2), Value::string("Bob")),
-        (VertexId::from_int64(3), Value::string("Alice")), // Repeated Alice
+        (
+            VertexId::try_from_int64(1).expect("test vertex id"),
+            Value::string("Alice"),
+        ),
+        (
+            VertexId::try_from_int64(2).expect("test vertex id"),
+            Value::string("Bob"),
+        ),
+        (
+            VertexId::try_from_int64(3).expect("test vertex id"),
+            Value::string("Alice"),
+        ), // Repeated Alice
     ];
 
     for (vid, name) in &vertices {
         let mut props = std::collections::HashMap::new();
         props.insert("name".to_string(), name.clone());
         let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
-        let vertex = Vertex::new(*vid, vec![tag]);
+        let vertex = Vertex::new(*vid, tag);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
     }
 
@@ -1104,7 +1146,10 @@ fn test_scan_type_range() {
         let mut props = std::collections::HashMap::new();
         props.insert("age".to_string(), Value::Int(age));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
-        let vertex = Vertex::new(VertexId::from_int64(age as i64), vec![tag]);
+        let vertex = Vertex::new(
+            VertexId::try_from_int64(age as i64).expect("test vertex id"),
+            tag,
+        );
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
     }
 
@@ -1153,7 +1198,10 @@ fn test_scan_type_full() {
         let mut props = std::collections::HashMap::new();
         props.insert("name".to_string(), Value::string(format!("Person{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
-        let vertex = Vertex::new(VertexId::from_int64(i as i64), vec![tag]);
+        let vertex = Vertex::new(
+            VertexId::try_from_int64(i as i64).expect("test vertex id"),
+            tag,
+        );
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
     }
 

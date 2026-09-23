@@ -16,7 +16,7 @@ use graphdb_query::parser::Parser;
 
 #[test]
 fn test_delete_parser_vertex() {
-    let query = "DELETE VERTEX 1";
+    let query = "DELETE VERTEX Person FROM 1";
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
@@ -32,7 +32,7 @@ fn test_delete_parser_vertex() {
 
 #[test]
 fn test_delete_parser_multiple_vertices() {
-    let query = "DELETE VERTEX 1, 2, 3";
+    let query = "DELETE VERTEX Person FROM 1, 2, 3";
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
@@ -48,7 +48,7 @@ fn test_delete_parser_multiple_vertices() {
 
 #[test]
 fn test_delete_parser_vertex_with_edge() {
-    let query = "DELETE VERTEX 1 WITH EDGE";
+    let query = "DELETE VERTEX Person FROM 1 WITH EDGE";
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
@@ -73,7 +73,7 @@ fn test_delete_execution_vertex() {
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
         .assert_success()
         .assert_vertex_exists(1, "Person")
-        .exec_dml("DELETE VERTEX 1")
+        .exec_dml("DELETE VERTEX Person FROM 1")
         .assert_success()
         .assert_vertex_not_exists(1, "Person");
 }
@@ -86,7 +86,7 @@ fn test_delete_execution_multiple_vertices() {
         .exec_ddl("CREATE TAG Person(id INT, name STRING)")
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob'), 3:('Charlie')")
         .assert_success()
-        .exec_dml("DELETE VERTEX 1, 2")
+        .exec_dml("DELETE VERTEX Person FROM 1, 2")
         .assert_success()
         .assert_vertex_not_exists(1, "Person")
         .assert_vertex_not_exists(2, "Person")
@@ -104,7 +104,7 @@ fn test_delete_vertex_with_edge() {
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01')")
         .assert_success()
         .assert_edge_exists(1, 2, "KNOWS")
-        .exec_dml("DELETE VERTEX 1 WITH EDGE")
+        .exec_dml("DELETE VERTEX Person FROM 1 WITH EDGE")
         .assert_success()
         .assert_vertex_not_exists(1, "Person")
         .assert_edge_not_exists(1, 2, "KNOWS");
@@ -196,7 +196,7 @@ fn test_delete_multiple_vertices_and_verify() {
         )
         .assert_success()
         .assert_vertex_count("Person", 4)
-        .exec_dml("DELETE VERTEX 1, 2, 3")
+        .exec_dml("DELETE VERTEX Person FROM 1, 2, 3")
         .assert_success()
         .assert_vertex_count("Person", 1)
         .assert_vertex_exists(4, "Person");
@@ -210,7 +210,7 @@ fn test_delete_nonexistent_vertex() {
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl("CREATE TAG Person(id INT, name STRING)")
-        .exec_dml("DELETE VERTEX 999")
+        .exec_dml("DELETE VERTEX Person FROM 999")
         .assert_error();
 }
 
@@ -229,7 +229,7 @@ fn test_delete_nonexistent_edge() {
 
 #[test]
 fn test_pipe_delete_parser_vertex() {
-    let query = r#"GO FROM "1" OVER knows YIELD dst(edge) AS id | DELETE VERTEX $-.id"#;
+    let query = r#"GO FROM "1" OVER knows YIELD dst(edge) AS id | DELETE VERTEX Person FROM $-.id"#;
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
@@ -242,7 +242,7 @@ fn test_pipe_delete_parser_vertex() {
 
 #[test]
 fn test_pipe_delete_parser_vertex_with_edge() {
-    let query = r#"GO FROM "1" OVER knows YIELD dst(edge) AS id | DELETE VERTEX $-.id WITH EDGE"#;
+    let query = r#"GO FROM "1" OVER knows YIELD dst(edge) AS id | DELETE VERTEX Person FROM $-.id WITH EDGE"#;
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
@@ -269,7 +269,7 @@ fn test_pipe_delete_parser_edge() {
 // ==================== Pipe DELETE Execution Tests ====================
 
 #[test]
-fn test_pipe_delete_vertex_execution() {
+fn test_pipe_delete_vertex_execution_rejected() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
@@ -280,11 +280,10 @@ fn test_pipe_delete_vertex_execution() {
         .assert_success()
         .assert_vertex_exists(2, "Person")
         .assert_vertex_exists(3, "Person")
+        // Single-label: the GO stage carries no vertex label, so planning
+        // rejects the whole pipe before any delete runs.
         .exec_dml(r#"GO FROM 1 OVER KNOWS YIELD dst(edge) AS id | DELETE VERTEX $-.id"#)
-        .assert_success()
-        .assert_vertex_not_exists(2, "Person")
-        .assert_vertex_not_exists(3, "Person")
-        .assert_vertex_exists(1, "Person");
+        .assert_error();
 }
 
 #[test]
@@ -298,14 +297,18 @@ fn test_pipe_delete_vertex_with_edge_execution() {
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01')")
         .assert_success()
         .assert_edge_exists(1, 2, "KNOWS")
-        .exec_dml(r#"GO FROM 1 OVER KNOWS YIELD dst(edge) AS id | DELETE VERTEX $-.id WITH EDGE"#)
+        // Single-label: GO carries no vertex label, so the pipe source is a
+        // labeled MATCH whose rows carry vertex values for the delete.
+        .exec_dml(
+            r#"MATCH (v:Person) WHERE v.name == 'Bob' | DELETE VERTEX Person FROM v WITH EDGE"#,
+        )
         .assert_success()
         .assert_vertex_not_exists(2, "Person")
         .assert_edge_not_exists(1, 2, "KNOWS");
 }
 
 #[test]
-fn test_pipe_delete_edge_execution() {
+fn test_pipe_delete_edge_execution_rejected() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
@@ -316,13 +319,10 @@ fn test_pipe_delete_edge_execution() {
         .assert_success()
         .assert_edge_exists(1, 2, "KNOWS")
         .assert_edge_exists(1, 3, "KNOWS")
+        // Single-label: the GO stage carries no vertex label, so planning
+        // rejects the whole pipe before any delete runs.
         .exec_dml(r#"GO FROM 1 OVER KNOWS YIELD src(edge) AS s, dst(edge) AS d | DELETE EDGE KNOWS $-.s -> $-.d"#)
-        .assert_success()
-        .assert_edge_not_exists(1, 2, "KNOWS")
-        .assert_edge_not_exists(1, 3, "KNOWS")
-        .assert_vertex_exists(1, "Person")
-        .assert_vertex_exists(2, "Person")
-        .assert_vertex_exists(3, "Person");
+        .assert_error();
 }
 
 // ==================== MATCH...DELETE EDGE a -> b Tests ====================
@@ -515,7 +515,7 @@ fn test_match_delete_edge_execution() {
         .assert_success()
         .assert_edge_exists(1, 2, "KNOWS")
         .assert_edge_exists(1, 3, "KNOWS")
-        .exec_dml(r#"MATCH ()-[e:KNOWS]->() WHERE e.since < 2020 DELETE EDGE e"#)
+        .exec_dml(r#"MATCH (:Person)-[e:KNOWS]->(:Person) WHERE e.since < 2020 DELETE EDGE e"#)
         .assert_success()
         .assert_edge_not_exists(1, 2, "KNOWS")
         .assert_edge_exists(1, 3, "KNOWS")
@@ -552,7 +552,9 @@ fn test_pipe_delete_with_where_clause() {
         .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 25), 2:('Bob', 30), 3:('Charlie', 35)")
         .exec_dml("INSERT EDGE FRIEND(age) VALUES 1 -> 2:(30), 1 -> 3:(35)")
         .assert_success()
-        .exec_dml(r#"GO FROM 1 OVER FRIEND WHERE $^.Person.age < 28 YIELD dst(edge) AS id | DELETE VERTEX $-.id"#)
+        // Single-label: GO carries no vertex label, so the pipe source is a
+        // labeled MATCH whose rows carry vertex values for the delete.
+        .exec_dml(r#"MATCH (v:Person) WHERE v.age > 28 | DELETE VERTEX Person FROM v"#)
         .assert_success()
         .assert_vertex_exists(1, "Person")
         .assert_vertex_not_exists(2, "Person")
@@ -605,7 +607,7 @@ fn test_delete_vertex_with_edges_no_with_edge() {
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01')")
         .assert_success()
         .assert_edge_exists(1, 2, "KNOWS")
-        .exec_dml("DELETE VERTEX 1")
+        .exec_dml("DELETE VERTEX Person FROM 1")
         .assert_success()
         .assert_vertex_not_exists(1, "Person")
         .assert_edge_exists(1, 2, "KNOWS")
@@ -624,7 +626,7 @@ fn test_delete_multi_hop_cascade() {
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob'), 3:('Charlie')")
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01'), 2 -> 3:('2024-02-01')")
         .assert_success()
-        .exec_dml("DELETE VERTEX 1 WITH EDGE")
+        .exec_dml("DELETE VERTEX Person FROM 1 WITH EDGE")
         .assert_success()
         .assert_vertex_not_exists(1, "Person")
         .assert_edge_not_exists(1, 2, "KNOWS")

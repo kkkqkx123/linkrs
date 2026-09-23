@@ -262,10 +262,7 @@ fn vertex_matches_single_label(
     if pattern.labels.is_empty() {
         return true;
     }
-    pattern
-        .labels
-        .iter()
-        .all(|label| vertex.tag.name == *label)
+    pattern.labels.iter().all(|label| vertex.tag.name == *label)
 }
 
 impl SeekStrategy for VariablePropIndexSeek {

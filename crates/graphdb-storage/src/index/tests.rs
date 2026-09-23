@@ -700,11 +700,15 @@ fn wal_recovers_data_after_checkpoint() {
 
     forward.insert(
         vec![1, 2, 3],
-        IndexRecord::new(100).with_entity_ref(EntityRef::Vertex(VertexId::try_from_int64(42).expect("test vertex id"))),
+        IndexRecord::new(100).with_entity_ref(EntityRef::Vertex(
+            VertexId::try_from_int64(42).expect("test vertex id"),
+        )),
     );
     reverse.insert(
         vec![4, 5, 6],
-        IndexRecord::new(100).with_entity_ref(EntityRef::Vertex(VertexId::try_from_int64(42).expect("test vertex id"))),
+        IndexRecord::new(100).with_entity_ref(EntityRef::Vertex(
+            VertexId::try_from_int64(42).expect("test vertex id"),
+        )),
     );
 
     shard.replace(forward, reverse);

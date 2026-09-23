@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 #[test]
 fn test_update_parser_vertex() {
-    let query = "UPDATE 1 SET name = 'Bob', age = 35";
+    let query = "UPDATE 1 ON Person SET name = 'Bob', age = 35";
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
@@ -32,7 +32,7 @@ fn test_update_parser_vertex() {
 
 #[test]
 fn test_update_parser_vertex_with_when() {
-    let query = "UPDATE 1 SET age = 35 WHEN age < 30";
+    let query = "UPDATE 1 ON Person SET age = 35 WHEN age < 30";
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
@@ -48,7 +48,7 @@ fn test_update_parser_vertex_with_when() {
 
 #[test]
 fn test_update_parser_vertex_yield() {
-    let query = "UPDATE 1 SET name = 'Bob' YIELD name, age";
+    let query = "UPDATE 1 ON Person SET name = 'Bob' YIELD name, age";
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
@@ -72,7 +72,7 @@ fn test_update_execution_vertex() {
         .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
         .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
         .assert_success()
-        .exec_dml("UPDATE 1 SET name = 'Bob', age = 35")
+        .exec_dml("UPDATE 1 ON Person SET name = 'Bob', age = 35")
         .assert_success();
 }
 
@@ -84,7 +84,7 @@ fn test_update_execution_vertex_with_when() {
         .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
         .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
         .assert_success()
-        .exec_dml("UPDATE 1 SET age = 35 WHEN age < 40")
+        .exec_dml("UPDATE 1 ON Person SET age = 35 WHEN age < 40")
         .assert_success();
 }
 
@@ -137,14 +137,14 @@ fn test_update_vertex_and_verify() {
             map.insert("city", graphdb_core::Value::string("NYC"));
             map
         })
-        .exec_dml("UPDATE 1 SET age = 31")
+        .exec_dml("UPDATE 1 ON Person SET age = 31")
         .assert_success()
         .assert_vertex_props(1, "Person", {
             let mut map = std::collections::HashMap::new();
             map.insert("age", graphdb_core::Value::Int(31));
             map
         })
-        .exec_dml("UPDATE 1 SET age = 32, city = 'LA'")
+        .exec_dml("UPDATE 1 ON Person SET age = 32, city = 'LA'")
         .assert_success()
         .assert_vertex_props(1, "Person", {
             let mut map = std::collections::HashMap::new();
@@ -163,7 +163,7 @@ fn test_update_vertex_with_condition() {
         .assert_success()
         .exec_dml("INSERT VERTEX Person(name, age, state) VALUES 1:('Alice', 30, 'active'), 2:('Bob', 25, 'inactive'), 3:('Charlie', 35, 'active')")
         .assert_success()
-        .exec_dml("UPDATE 1 SET state = 'premium' WHEN state == 'active'")
+        .exec_dml("UPDATE 1 ON Person SET state = 'premium' WHEN state == 'active'")
         .assert_success()
         .assert_vertex_props(1, "Person", {
             let mut map = std::collections::HashMap::new();
@@ -200,7 +200,7 @@ fn test_update_nonexistent_vertex() {
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl("CREATE TAG Person(id INT, name STRING)")
-        .exec_dml("UPDATE 999 SET name = 'Nobody'")
+        .exec_dml("UPDATE 999 ON Person SET name = 'Nobody'")
         .assert_error();
 }
 
@@ -212,7 +212,7 @@ fn test_update_nonexistent_property() {
         .exec_ddl("CREATE TAG Person(id INT, name STRING)")
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
         .assert_success()
-        .exec_dml("UPDATE 1 SET nonexistent = 'value'")
+        .exec_dml("UPDATE 1 ON Person SET nonexistent = 'value'")
         .assert_error();
 }
 
@@ -226,7 +226,7 @@ fn test_update_arithmetic_add() {
         .exec_ddl("CREATE TAG Counter(id INT, val INT)")
         .exec_dml("INSERT VERTEX Counter(val) VALUES 1:(10)")
         .assert_success()
-        .exec_dml("UPDATE 1 SET val = val + 5")
+        .exec_dml("UPDATE 1 ON Counter SET val = val + 5")
         .assert_success()
         .assert_vertex_props(1, "Counter", HashMap::from([("val", Value::Int(15))]));
 }
@@ -239,7 +239,7 @@ fn test_update_arithmetic_subtract() {
         .exec_ddl("CREATE TAG Counter(id INT, val INT)")
         .exec_dml("INSERT VERTEX Counter(val) VALUES 1:(10)")
         .assert_success()
-        .exec_dml("UPDATE 1 SET val = val - 3")
+        .exec_dml("UPDATE 1 ON Counter SET val = val - 3")
         .assert_success()
         .assert_vertex_props(1, "Counter", HashMap::from([("val", Value::Int(7))]));
 }
@@ -252,7 +252,7 @@ fn test_update_arithmetic_multiply() {
         .exec_ddl("CREATE TAG Counter(id INT, val INT)")
         .exec_dml("INSERT VERTEX Counter(val) VALUES 1:(10)")
         .assert_success()
-        .exec_dml("UPDATE 1 SET val = val * 2")
+        .exec_dml("UPDATE 1 ON Counter SET val = val * 2")
         .assert_success()
         .assert_vertex_props(1, "Counter", HashMap::from([("val", Value::Int(20))]));
 }
@@ -265,7 +265,7 @@ fn test_update_arithmetic_divide() {
         .exec_ddl("CREATE TAG Counter(id INT, val DOUBLE)")
         .exec_dml("INSERT VERTEX Counter(val) VALUES 1:(10.0)")
         .assert_success()
-        .exec_dml("UPDATE 1 SET val = val / 3")
+        .exec_dml("UPDATE 1 ON Counter SET val = val / 3")
         .assert_success();
 }
 
@@ -277,10 +277,10 @@ fn test_update_double_decrement() {
         .exec_ddl("CREATE TAG Counter(id INT, val INT)")
         .exec_dml("INSERT VERTEX Counter(val) VALUES 1:(5)")
         .assert_success()
-        .exec_dml("UPDATE 1 SET val = val - 1")
+        .exec_dml("UPDATE 1 ON Counter SET val = val - 1")
         .assert_success()
         .assert_vertex_props(1, "Counter", HashMap::from([("val", Value::Int(4))]))
-        .exec_dml("UPDATE 1 SET val = val - 1")
+        .exec_dml("UPDATE 1 ON Counter SET val = val - 1")
         .assert_success()
         .assert_vertex_props(1, "Counter", HashMap::from([("val", Value::Int(3))]));
 }
@@ -293,7 +293,7 @@ fn test_update_arithmetic_multiple_fields() {
         .exec_ddl("CREATE TAG Counter(id INT, a INT, b INT, total INT)")
         .exec_dml("INSERT VERTEX Counter(a, b, total) VALUES 1:(3, 7, 0)")
         .assert_success()
-        .exec_dml("UPDATE 1 SET total = a + b")
+        .exec_dml("UPDATE 1 ON Counter SET total = a + b")
         .assert_success()
         .assert_vertex_props(
             1,
@@ -314,7 +314,7 @@ fn test_update_arithmetic_chain() {
         .exec_ddl("CREATE TAG Calc(id INT, val INT)")
         .exec_dml("INSERT VERTEX Calc(val) VALUES 1:(2)")
         .assert_success()
-        .exec_dml("UPDATE 1 SET val = val * 2 + 1")
+        .exec_dml("UPDATE 1 ON Calc SET val = val * 2 + 1")
         .assert_success()
         .assert_vertex_props(1, "Calc", HashMap::from([("val", Value::Int(5))]));
 }
@@ -329,7 +329,7 @@ fn test_update_property_to_null() {
         .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
         .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
         .assert_success()
-        .exec_dml("UPDATE 1 SET age = NULL")
+        .exec_dml("UPDATE 1 ON Person SET age = NULL")
         .assert_success();
 }
 
@@ -343,7 +343,7 @@ fn test_update_when_false_condition() {
         .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
         .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
         .assert_success()
-        .exec_dml("UPDATE 1 SET age = 99 WHEN age > 100")
+        .exec_dml("UPDATE 1 ON Person SET age = 99 WHEN age > 100")
         .assert_success()
         .assert_vertex_props(1, "Person", HashMap::from([("age", Value::Int(30))]));
 }
@@ -370,7 +370,7 @@ fn test_update_edge_ranked() {
 
 #[test]
 fn test_update_yield_parser() {
-    let query = "UPDATE 1 SET name = 'Bob' YIELD name, age";
+    let query = "UPDATE 1 ON Person SET name = 'Bob' YIELD name, age";
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
@@ -392,7 +392,7 @@ fn test_update_yield_execution() {
         .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
         .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
         .assert_success()
-        .exec_dml("UPDATE 1 SET name = 'Bob', age = 35 YIELD name, age")
+        .exec_dml("UPDATE 1 ON Person SET name = 'Bob', age = 35 YIELD name, age")
         .assert_success();
 }
 
@@ -525,7 +525,7 @@ fn test_update_divide_by_zero() {
         .execute_query_with_space(insert, Some(space_info.clone()))
         .expect("Failed to insert vertex");
 
-    let update = "UPDATE 1 SET val = val / 0";
+    let update = "UPDATE 1 ON Counter SET val = val / 0";
     let result = pipeline.execute_query_with_space(update, Some(space_info.clone()));
     assert!(
         result.is_err(),
@@ -544,6 +544,6 @@ fn test_update_null_arithmetic() {
         .exec_ddl("CREATE TAG Counter(id INT, val INT NULL)")
         .exec_dml("INSERT VERTEX Counter(val) VALUES 1:(NULL)")
         .assert_success()
-        .exec_dml("UPDATE 1 SET val = val + 1")
+        .exec_dml("UPDATE 1 ON Counter SET val = val + 1")
         .assert_error();
 }

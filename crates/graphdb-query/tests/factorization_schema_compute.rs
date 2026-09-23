@@ -41,6 +41,7 @@ fn get_neighbors() -> LogicalNodeEnum {
     LogicalNodeEnum::GetNeighbors(LogicalGetNeighborsNode {
         id: next_node_id(),
         space_id: 1,
+        tag: None,
         src_vids: "1".to_string(),
         edge_types: vec!["knows".to_string()],
         direction: "OUT".to_string(),

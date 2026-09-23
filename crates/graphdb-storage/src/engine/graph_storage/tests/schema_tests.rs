@@ -102,7 +102,7 @@ fn test_same_schema_names_are_isolated_by_space() {
             "alpha",
             Vertex::new(
                 VertexId::try_from_int64(1).expect("test vertex id"),
-               Tag::new(
+                Tag::new(
                     "Person".to_string(),
                     vec![("name".to_string(), Value::string("Alice"))]
                         .into_iter()
@@ -116,7 +116,7 @@ fn test_same_schema_names_are_isolated_by_space() {
             "beta",
             Vertex::new(
                 VertexId::try_from_int64(1).expect("test vertex id"),
-               Tag::new(
+                Tag::new(
                     "Person".to_string(),
                     vec![("name".to_string(), Value::string("Bob"))]
                         .into_iter()
@@ -130,7 +130,7 @@ fn test_same_schema_names_are_isolated_by_space() {
             "alpha",
             Vertex::new(
                 VertexId::try_from_int64(2).expect("test vertex id"),
-               Tag::new(
+                Tag::new(
                     "Person".to_string(),
                     vec![("name".to_string(), Value::string("Carol"))]
                         .into_iter()
@@ -144,7 +144,7 @@ fn test_same_schema_names_are_isolated_by_space() {
             "beta",
             Vertex::new(
                 VertexId::try_from_int64(2).expect("test vertex id"),
-               Tag::new(
+                Tag::new(
                     "Person".to_string(),
                     vec![("name".to_string(), Value::string("Dave"))]
                         .into_iter()
@@ -180,11 +180,19 @@ fn test_same_schema_names_are_isolated_by_space() {
         .unwrap();
 
     let alpha_vertex = storage
-        .get_vertex("alpha", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
+        .get_vertex(
+            "alpha",
+            "Person",
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     let beta_vertex = storage
-        .get_vertex("beta", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
+        .get_vertex(
+            "beta",
+            "Person",
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(

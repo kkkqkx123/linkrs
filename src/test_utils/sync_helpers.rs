@@ -231,25 +231,24 @@ impl SyncTestHarness {
 
         let space_id = self.storage.get_space_id(space_name)?;
         self.rt.block_on(async {
-            for tag in &vertex.tags {
-                let tag_name = &tag.name;
-                let properties: Vec<(String, Value)> = tag
-                    .properties
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-                if !properties.is_empty() {
-                    self.sync_manager
-                        .sync_coordinator()
-                        .on_vertex_change(
-                            space_id,
-                            tag_name,
-                            &Value::from(vertex.vid),
-                            &properties,
-                            ChangeType::Insert,
-                        )
-                        .await?;
-                }
+            let tag_name = vertex.tag.name.clone();
+            let properties: Vec<(String, Value)> = vertex
+                .tag
+                .properties
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            if !properties.is_empty() {
+                self.sync_manager
+                    .sync_coordinator()
+                    .on_vertex_change(
+                        space_id,
+                        &tag_name,
+                        &Value::from(vertex.vid),
+                        &properties,
+                        ChangeType::Insert,
+                    )
+                    .await?;
             }
             Ok::<_, Box<dyn std::error::Error>>(())
         })?;
@@ -268,56 +267,55 @@ impl SyncTestHarness {
         }
 
         let space_id = self.storage.get_space_id(space_name)?;
-        let txn_id = TransactionId(self.current_txn_id.unwrap());
+        let txn_id = self
+            .current_txn_id
+            .map(TransactionId)
+            .ok_or("No active transaction")?;
 
         let vertex_id = vertex.vid;
-        let exists = self.storage.get_vertex(space_name, &vertex_id)?.is_some();
+        let tag_name = vertex.tag.name.clone();
+        let exists = self
+            .storage
+            .get_vertex(space_name, &tag_name, &vertex_id)?
+            .is_some();
 
         if exists {
-            if let Some(old_vertex) = self.storage.get_vertex(space_name, &vertex_id)? {
-                for tag in &old_vertex.tags {
-                    let tag_name = &tag.name;
-                    for (field_name, value) in &tag.properties {
-                        self.sync_manager.on_vertex_change_with_txn(
-                            txn_id,
-                            space_id,
-                            tag_name,
-                            &Value::from(vertex_id),
-                            &[(field_name.clone(), value.clone())],
-                            crate::sync::coordinator::ChangeType::Delete,
-                        )?;
-                    }
-                }
-            }
-
-            for tag in &vertex.tags {
-                let tag_name = &tag.name;
-                for (field_name, value) in &tag.properties {
+            if let Some(old_vertex) = self.storage.get_vertex(space_name, &tag_name, &vertex_id)? {
+                let old_tag_name = old_vertex.tag.name.clone();
+                for (field_name, value) in &old_vertex.tag.properties {
                     self.sync_manager.on_vertex_change_with_txn(
                         txn_id,
                         space_id,
-                        tag_name,
+                        &old_tag_name,
                         &Value::from(vertex_id),
                         &[(field_name.clone(), value.clone())],
-                        crate::sync::coordinator::ChangeType::Insert,
+                        crate::sync::coordinator::ChangeType::Delete,
                     )?;
                 }
+            }
+
+            for (field_name, value) in &vertex.tag.properties {
+                self.sync_manager.on_vertex_change_with_txn(
+                    txn_id,
+                    space_id,
+                    &tag_name,
+                    &Value::from(vertex_id),
+                    &[(field_name.clone(), value.clone())],
+                    crate::sync::coordinator::ChangeType::Insert,
+                )?;
             }
 
             self.storage.update_vertex(space_name, vertex)?;
         } else {
-            for tag in &vertex.tags {
-                let tag_name = &tag.name;
-                for (field_name, value) in &tag.properties {
-                    self.sync_manager.on_vertex_change_with_txn(
-                        txn_id,
-                        space_id,
-                        tag_name,
-                        &Value::from(vertex_id),
-                        &[(field_name.clone(), value.clone())],
-                        crate::sync::coordinator::ChangeType::Insert,
-                    )?;
-                }
+            for (field_name, value) in &vertex.tag.properties {
+                self.sync_manager.on_vertex_change_with_txn(
+                    txn_id,
+                    space_id,
+                    &tag_name,
+                    &Value::from(vertex_id),
+                    &[(field_name.clone(), value.clone())],
+                    crate::sync::coordinator::ChangeType::Insert,
+                )?;
             }
 
             self.storage.insert_vertex(space_name, vertex)?;
@@ -337,28 +335,37 @@ impl SyncTestHarness {
         }
 
         let space_id = self.storage.get_space_id(space_name)?;
-        let txn_id = TransactionId(self.current_txn_id.unwrap());
-        let vertex_id = crate::core::types::VertexId::from_int64(vid);
+        let txn_id = self
+            .current_txn_id
+            .map(TransactionId)
+            .ok_or("No active transaction")?;
+        let vertex_id = crate::core::types::VertexId::try_from_int64(vid)
+            .map_err(|e| format!("invalid vertex id: {}", e))?;
         let vid_value = Value::Int(vid as i32);
 
-        // Get the vertex to extract tag and field info for index cleanup
-        if let Some(existing) = self.storage.get_vertex(space_name, &vertex_id)? {
-            for tag in &existing.tags {
-                let tag_name = &tag.name;
-                for (field_name, value) in &tag.properties {
-                    self.sync_manager.on_vertex_change_with_txn(
-                        txn_id,
-                        space_id,
-                        tag_name,
-                        &vid_value,
-                        &[(field_name.clone(), value.clone())],
-                        crate::sync::coordinator::ChangeType::Delete,
-                    )?;
-                }
+        // Get the vertex to extract tag and field info for index cleanup.
+        // Single-label storage: resolve the owning tag by scanning known tags.
+        if let Some(existing) = self
+            .storage
+            .scan_vertices(space_name)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|v| v.vid == vertex_id)
+        {
+            let tag_name = existing.tag.name.clone();
+            for (field_name, value) in &existing.tag.properties {
+                self.sync_manager.on_vertex_change_with_txn(
+                    txn_id,
+                    space_id,
+                    &tag_name,
+                    &vid_value,
+                    &[(field_name.clone(), value.clone())],
+                    crate::sync::coordinator::ChangeType::Delete,
+                )?;
             }
+            self.storage
+                .delete_vertex(space_name, &tag_name, &vertex_id)?;
         }
-
-        self.storage.delete_vertex(space_name, &vertex_id)?;
         Ok(())
     }
 
@@ -414,7 +421,12 @@ impl SyncTestHarness {
         vid: &Value,
     ) -> Result<Option<Vertex>, Box<dyn std::error::Error>> {
         let vertex_id = VertexId::try_from(vid)?;
-        Ok(self.storage.get_vertex(space_name, &vertex_id)?)
+        Ok(self
+            .storage
+            .scan_vertices(space_name)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|v| v.vid == vertex_id))
     }
 
     /// Assert vertex exists
@@ -440,12 +452,12 @@ impl SyncTestHarness {
             .get_vertex(space_name, vid)?
             .ok_or_else(|| format!("Vertex {:?} not found", vid))?;
 
-        let tag = vertex
-            .get_tag(tag_name)
-            .ok_or_else(|| format!("Tag {} not found", tag_name))?;
+        if vertex.tag.name != tag_name {
+            return Err(format!("Tag {} not found", tag_name).into());
+        }
 
         for (prop_name, expected_value) in expected_props {
-            let actual_value = tag.properties.get(prop_name);
+            let actual_value = vertex.tag.properties.get(prop_name);
             assert_eq!(
                 actual_value,
                 Some(expected_value).as_ref(),
@@ -486,7 +498,7 @@ pub fn create_test_vertex(vid: i64, tag_name: &str, props: Vec<(&str, Value)>) -
         properties.insert(k.to_string(), v);
     }
     let tag = Tag::new(tag_name.to_string(), properties);
-    Vertex::new(VertexId::from_int64(vid), vec![tag])
+    Vertex::new(VertexId::try_from_int64(vid).expect("test vertex id"), tag)
 }
 
 /// Helper function to create test vertex with vector
@@ -505,7 +517,7 @@ pub fn create_test_vertex_with_vector(
     properties.insert(vector_prop.0.to_string(), Value::Vector(vector_value));
 
     let tag = Tag::new(tag_name.to_string(), properties);
-    Vertex::new(VertexId::from_int64(vid), vec![tag])
+    Vertex::new(VertexId::try_from_int64(vid).expect("test vertex id"), tag)
 }
 
 /// Helper function to generate random vector

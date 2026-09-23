@@ -92,7 +92,11 @@ fn test_get_db_path() {
 #[test]
 fn test_get_nonexistent_vertex() {
     let storage = create_test_storage();
-    let result = storage.get_vertex("nonexistent", "Person", &VertexId::try_from_int64(999).expect("test vertex id"));
+    let result = storage.get_vertex(
+        "nonexistent",
+        "Person",
+        &VertexId::try_from_int64(999).expect("test vertex id"),
+    );
     assert!(result.is_err());
 }
 
@@ -112,6 +116,10 @@ fn test_get_nonexistent_edge() {
 #[test]
 fn test_delete_nonexistent_vertex() {
     let mut storage = create_test_storage();
-    let result = storage.delete_vertex("nonexistent", "Person", &VertexId::try_from_int64(999).expect("test vertex id"));
+    let result = storage.delete_vertex(
+        "nonexistent",
+        "Person",
+        &VertexId::try_from_int64(999).expect("test vertex id"),
+    );
     assert!(result.is_err());
 }

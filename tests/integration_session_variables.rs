@@ -118,7 +118,7 @@ async fn test_session_variable_let_and_reference() {
         .expect("FETCH should return the inserted vertex");
     match vertex {
         graphdb::core::Value::Vertex(v) => {
-            let props = &v.tags[0].properties;
+            let props = v.properties();
             assert_eq!(
                 props.get("name"),
                 Some(&graphdb::core::Value::string("Alice")),

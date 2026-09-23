@@ -129,7 +129,7 @@ mod traversal_direction {
     }
 
     #[test]
-    fn test_backward_traversal() {
+    fn test_backward_traversal_rejected() {
         TestScenario::new()
             .expect("Failed to create test scenario")
             .setup_space("test_backward")
@@ -137,7 +137,7 @@ mod traversal_direction {
             .exec_ddl("CREATE EDGE follows()")
             .assert_success()
             .query("GO FROM 1 OVER follows REVERSELY YIELD $$.person.name AS name")
-            .assert_success();
+            .assert_error();
     }
 
     #[test]

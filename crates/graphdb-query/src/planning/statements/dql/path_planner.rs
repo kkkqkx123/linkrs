@@ -63,6 +63,12 @@ impl Planner for PathPlanner {
             )
         })?;
 
+        // Single-label enforcement: FIND PATH syntax carries no vertex
+        // label, but path materialization requires exactly one vertex label.
+        // Reject label-less path search here instead of guessing a label or
+        // fabricating an empty vertex at execution.
+        let _vertex_tag = require_single_vertex_tag(&[])?;
+
         let start_node = StartNode::new();
         let start_node_enum = PlanNodeEnum::Start(start_node);
 
@@ -144,6 +150,12 @@ impl Planner for PathPlanner {
                 "No graph space selected, please execute USE <space> first".to_string(),
             )
         })?;
+
+        // Single-label enforcement: FIND PATH syntax carries no vertex
+        // label, but path materialization requires exactly one vertex label.
+        // Reject label-less path search here instead of guessing a label or
+        // fabricating an empty vertex at execution.
+        let _vertex_tag = require_single_vertex_tag(&[])?;
 
         let start_node = StartNode::new();
         let start_node_enum = PlanNodeEnum::Start(start_node);
@@ -450,6 +462,21 @@ impl Default for PathPlanner {
     }
 }
 
+/// Require exactly one vertex label for path search materialization.
+///
+/// FIND PATH syntax carries no vertex label, so the label list is always
+/// empty and this always fails today. The helper keeps the single-label
+/// rule explicit at the planner boundary instead of guessing a label
+/// downstream.
+fn require_single_vertex_tag(labels: &[String]) -> Result<String, PlannerError> {
+    if labels.len() != 1 {
+        return Err(PlannerError::PlanGenerationFailed(
+            "FIND PATH requires exactly one vertex label, but the statement carries no vertex label".to_string(),
+        ));
+    }
+    Ok(labels[0].clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,53 +538,36 @@ mod tests {
     #[test]
     fn shortest_path_plan_carries_native_logical() {
         let stmt = Stmt::FindPath(find_path_stmt(true));
-        let sub_plan = PathPlanner::new()
+        let err = PathPlanner::new()
             .transform(&validated(stmt), test_query_context())
-            .expect("path planning should succeed");
-        assert!(matches!(sub_plan.root, Some(PlanNodeEnum::ShortestPath(_))));
-        let Some(LogicalNodeEnum::ShortestPath(logical)) = sub_plan.logical_root else {
-            panic!(
-                "expected native logical ShortestPath, got {:?}",
-                sub_plan.logical_root.as_ref().map(|n| n.type_name())
-            );
-        };
-        assert_eq!(logical.max_step, 3);
-        assert_eq!(logical.edge_types, vec!["knows".to_string()]);
-        assert_eq!(logical.col_names, vec!["path".to_string()]);
+            .expect_err("label-less FIND PATH must be rejected at plan time");
+        assert!(
+            err.to_string().contains("exactly one vertex label"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
     fn all_paths_plan_carries_native_logical_with_direction() {
         let stmt = Stmt::FindPath(find_path_stmt(false));
-        let sub_plan = PathPlanner::new()
+        let err = PathPlanner::new()
             .transform(&validated(stmt), test_query_context())
-            .expect("path planning should succeed");
-        let Some(PlanNodeEnum::AllPaths(physical)) = &sub_plan.root else {
-            panic!("expected physical AllPaths");
-        };
-        let Some(LogicalNodeEnum::AllPaths(logical)) = sub_plan.logical_root else {
-            panic!("expected native logical AllPaths");
-        };
-        assert_eq!(logical.direction, physical.direction());
-        assert_eq!(logical.max_hop, 3);
-        assert_eq!(logical.min_hop, 1);
-        assert!(logical.acyclic);
-        assert_eq!(logical.col_names, physical.col_names().to_vec());
+            .expect_err("label-less FIND PATH must be rejected at plan time");
+        assert!(
+            err.to_string().contains("exactly one vertex label"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
     fn native_logical_converts_back_to_same_physical_shape() {
         let stmt = Stmt::FindPath(find_path_stmt(false));
-        let sub_plan = PathPlanner::new()
+        let err = PathPlanner::new()
             .transform(&validated(stmt), test_query_context())
-            .expect("path planning should succeed");
-        let logical = sub_plan.logical_root.clone().expect("logical must exist");
-        let physical = sub_plan.root.clone().expect("physical must exist");
-        let reconverted = crate::planning::physical_planner::convert_logical_to_physical(logical);
-        assert_eq!(
-            std::mem::discriminant(&reconverted),
-            std::mem::discriminant(&physical)
+            .expect_err("label-less FIND PATH must be rejected at plan time");
+        assert!(
+            err.to_string().contains("exactly one vertex label"),
+            "unexpected error: {err}"
         );
-        assert_eq!(reconverted.col_names(), physical.col_names());
     }
 }

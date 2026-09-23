@@ -30,9 +30,10 @@ pub(crate) enum RoutedVertexId {
 pub(crate) fn route_vertex_id(vid: &VertexId) -> StorageResult<RoutedVertexId> {
     use graphdb_core::types::VertexIdKind;
     match vid.kind() {
-        VertexIdKind::Int => vid.int_bits().map(RoutedVertexId::Int).ok_or_else(|| {
-            StorageError::invalid_input("Malformed integer vertex id".to_string())
-        }),
+        VertexIdKind::Int => vid
+            .int_bits()
+            .map(RoutedVertexId::Int)
+            .ok_or_else(|| StorageError::invalid_input("Malformed integer vertex id".to_string())),
         VertexIdKind::Uint => {
             let value = vid.uint_bits().ok_or_else(|| {
                 StorageError::invalid_input("Malformed unsigned vertex id".to_string())
@@ -326,12 +327,7 @@ pub(crate) fn find_dangling_edges(
                         .or_else(|| ctx.get_external_id_by_internal_id(dst_label_id, internal))
                 })
                 .unwrap_or(record.dst_vid);
-            let edge = edge_record_to_edge(
-                &record,
-                edge_type_name,
-                src_external,
-                dst_external,
-            );
+            let edge = edge_record_to_edge(&record, edge_type_name, src_external, dst_external);
             dangling_edges.push(edge);
         }
     }
@@ -427,10 +423,7 @@ mod tests {
             vertex.properties().get("name"),
             Some(&Value::string("Alice"))
         );
-        assert_eq!(
-            vertex.properties().get("age"),
-            Some(&Value::BigInt(30))
-        );
+        assert_eq!(vertex.properties().get("age"), Some(&Value::BigInt(30)));
     }
 
     #[test]

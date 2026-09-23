@@ -245,7 +245,7 @@ fn write_wal_entries(
     for &(ts, label, vid, name) in entries {
         let redo = InsertVertexRedo {
             label,
-            vid: VertexId::from_int64(vid),
+            vid: VertexId::try_from_int64(vid).expect("test vertex id"),
             properties: vec![("name".to_string(), Value::string(name))],
         };
         let payload = to_allocvec(&redo)?;
@@ -330,7 +330,7 @@ fn test_uncommitted_tail_discarded() {
     writer.open().unwrap();
     let redo = InsertVertexRedo {
         label: 1,
-        vid: VertexId::from_int64(1003),
+        vid: VertexId::try_from_int64(1003).expect("test vertex id"),
         properties: vec![("name".to_string(), Value::string("uncommitted"))],
     };
     writer
@@ -345,8 +345,14 @@ fn test_uncommitted_tail_discarded() {
         2,
         "only committed entries should be recovered"
     );
-    assert_eq!(replayed[0].1, VertexId::from_int64(1001));
-    assert_eq!(replayed[1].1, VertexId::from_int64(1002));
+    assert_eq!(
+        replayed[0].1,
+        VertexId::try_from_int64(1001).expect("test vertex id")
+    );
+    assert_eq!(
+        replayed[1].1,
+        VertexId::try_from_int64(1002).expect("test vertex id")
+    );
 }
 
 /// TC-CR03: Properties are preserved through recovery
@@ -364,7 +370,7 @@ fn test_vertex_properties_preserved_after_recovery() {
 
     let redo = InsertVertexRedo {
         label: 1,
-        vid: VertexId::from_int64(1001),
+        vid: VertexId::try_from_int64(1001).expect("test vertex id"),
         properties: vec![
             ("name".to_string(), Value::string("Alice")),
             ("age".to_string(), Value::Int(30)),
@@ -414,7 +420,7 @@ fn test_corrupted_trailing_bytes_recovery() {
     writer.open().unwrap();
     let redo = InsertVertexRedo {
         label: 1,
-        vid: VertexId::from_int64(1002),
+        vid: VertexId::try_from_int64(1002).expect("test vertex id"),
         properties: vec![("name".to_string(), Value::string("corrupted"))],
     };
     writer
@@ -445,7 +451,10 @@ fn test_corrupted_trailing_bytes_recovery() {
         !replayed.is_empty(),
         "committed entry should survive corruption"
     );
-    assert_eq!(replayed[0].1, VertexId::from_int64(1001));
+    assert_eq!(
+        replayed[0].1,
+        VertexId::try_from_int64(1001).expect("test vertex id")
+    );
 }
 
 /// TC-CR05: Multiple committed batches across timestamp ranges

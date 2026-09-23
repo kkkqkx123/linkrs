@@ -38,8 +38,8 @@ fn insert_vertices(storage: &Arc<RwLock<GraphStorage>>) {
         let vertices: Vec<Vertex> = (start..end)
             .map(|i| {
                 Vertex::new(
-                    VertexId::from_int64(i),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(i).expect("test vertex id"),
+                    Tag::new(
                         TAG.to_string(),
                         vec![
                             ("id".to_string(), Value::BigInt(i)),
@@ -48,7 +48,7 @@ fn insert_vertices(storage: &Arc<RwLock<GraphStorage>>) {
                         ]
                         .into_iter()
                         .collect(),
-                    )],
+                    ),
                 )
             })
             .collect();
@@ -67,8 +67,8 @@ fn insert_edges(storage: &Arc<RwLock<GraphStorage>>) {
         for k in 1..=2i64 {
             let dst = (src + k) % VERTEX_COUNT;
             edges.push(Edge {
-                src: VertexId::from_int64(src),
-                dst: VertexId::from_int64(dst),
+                src: VertexId::try_from_int64(src).expect("test vertex id"),
+                dst: VertexId::try_from_int64(dst).expect("test vertex id"),
                 edge_type: EDGE.to_string(),
                 ranking: 0,
                 props: Default::default(),
@@ -131,8 +131,8 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
                 .map(|i| {
                     let vid = i + VERTEX_COUNT;
                     Vertex::new(
-                        VertexId::from_int64(vid),
-                        vec![Tag::new(
+                        VertexId::try_from_int64(vid).expect("test vertex id"),
+                        Tag::new(
                             TAG2.to_string(),
                             vec![
                                 ("id".to_string(), Value::BigInt(vid)),
@@ -140,7 +140,7 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
                             ]
                             .into_iter()
                             .collect(),
-                        )],
+                        ),
                     )
                 })
                 .collect();

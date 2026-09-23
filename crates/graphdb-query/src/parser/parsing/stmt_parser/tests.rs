@@ -178,13 +178,24 @@ fn test_parse_insert_vertex_statement() {
 
 #[test]
 fn test_parse_delete_vertex_statement() {
-    let mut ctx = create_parser_context("DELETE VERTEX \"player100\"");
+    let mut ctx = create_parser_context("DELETE VERTEX person FROM \"player100\"");
     let result = StmtParser::parse_statement(&mut ctx);
     assert!(
         result.is_ok(),
         "DELETE VERTEX parse failure: {:?}",
         result.err()
     );
+    if let Ok(Stmt::Delete(delete_stmt)) = result {
+        if let crate::parser::ast::DeleteTarget::Vertices { tag, vids } = delete_stmt.target
+        {
+            assert_eq!(tag, "person");
+            assert_eq!(vids.len(), 1);
+        } else {
+            panic!("Expected vertex delete target");
+        }
+    } else {
+        panic!("Expected DELETE statement");
+    }
 }
 
 #[test]

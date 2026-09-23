@@ -1043,8 +1043,8 @@ mod tests {
         mock.insert_vertex(
             "test",
             Vertex::new(
-                VertexId::from_int64(1),
-                vec![Tag::new(
+                VertexId::try_from_int64(1).expect("valid vertex id"),
+                Tag::new(
                     "person".to_string(),
                     vec![
                         ("name".to_string(), Value::string("Alice")),
@@ -1052,7 +1052,7 @@ mod tests {
                     ]
                     .into_iter()
                     .collect(),
-                )],
+                ),
             ),
         )
         .expect("insert vertex");
@@ -1071,6 +1071,7 @@ mod tests {
                     entity_var: "v".to_string(),
                     entity_expr: Expression::Variable("vid".to_string()),
                     prop_names: vec!["name".to_string(), "age".to_string()],
+                    tag: "person".to_string(),
                     storage: None,
                     space_name: "test".to_string(),
                     state: UnaryOperatorState::default(),
@@ -1097,13 +1098,13 @@ mod tests {
         mock.insert_vertex(
             "test",
             Vertex::new(
-                VertexId::from_int64(7),
-                vec![Tag::new(
+                VertexId::try_from_int64(7).expect("valid vertex id"),
+                Tag::new(
                     "person".to_string(),
                     vec![("name".to_string(), Value::string("Bob"))]
                         .into_iter()
                         .collect(),
-                )],
+                ),
             ),
         )
         .expect("insert vertex");
@@ -1118,6 +1119,7 @@ mod tests {
                     entity_var: "v".to_string(),
                     entity_expr: Expression::Variable("vid".to_string()),
                     prop_names: vec![],
+                    tag: "person".to_string(),
                     storage: None,
                     space_name: "test".to_string(),
                     state: UnaryOperatorState::default(),
@@ -1132,7 +1134,10 @@ mod tests {
         assert_eq!(row.len(), 2, "vid + full vertex");
         match &row[1] {
             Value::Vertex(vertex) => {
-                assert_eq!(vertex.vid, VertexId::from_int64(7));
+                assert_eq!(
+                    vertex.vid,
+                    VertexId::try_from_int64(7).expect("valid vertex id")
+                );
                 assert_eq!(vertex.property_value("name"), Some(Value::string("Bob")));
             }
             other => panic!("expected full vertex, got {:?}", other),
@@ -1156,6 +1161,7 @@ mod tests {
                     entity_var: "v".to_string(),
                     entity_expr: Expression::Variable("vid".to_string()),
                     prop_names: vec!["name".to_string()],
+                    tag: "person".to_string(),
                     storage: None,
                     space_name: "test".to_string(),
                     state: UnaryOperatorState::default(),
@@ -1259,6 +1265,7 @@ mod tests {
                     entity_var: "v".to_string(),
                     entity_expr: Expression::Variable("vid".to_string()),
                     prop_names: vec!["name".to_string()],
+                    tag: "person".to_string(),
                     storage: None,
                     space_name: "test".to_string(),
                     state: UnaryOperatorState::default(),

@@ -493,10 +493,10 @@ fn materialize_edge(
 ) -> Option<Edge> {
     let src_internal = candidate.src_vid.as_internal_u32().unwrap_or(u32::MAX);
     let dst_internal = candidate.dst_vid.as_internal_u32().unwrap_or(u32::MAX);
-    let src_external = resolve_vertex_id(ctx, src_internal, candidate.src_label, ts)
-        .unwrap_or(candidate.src_vid);
-    let dst_external = resolve_vertex_id(ctx, dst_internal, candidate.dst_label, ts)
-        .unwrap_or(candidate.dst_vid);
+    let src_external =
+        resolve_vertex_id(ctx, src_internal, candidate.src_label, ts).unwrap_or(candidate.src_vid);
+    let dst_external =
+        resolve_vertex_id(ctx, dst_internal, candidate.dst_label, ts).unwrap_or(candidate.dst_vid);
     Some(Edge {
         src: src_external,
         dst: dst_external,

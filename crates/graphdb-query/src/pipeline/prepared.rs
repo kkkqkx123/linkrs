@@ -1002,7 +1002,7 @@ mod tests {
     fn all_direct_dml_forms_are_detected() {
         let cases = [
             "INSERT VERTEX person(name) VALUES \"p1\": (\"a\")",
-            "DELETE VERTEX \"v1\"",
+            "DELETE VERTEX person FROM \"v1\"",
             "UPDATE VERTEX \"v1\" SET name = \"x\"",
             "MERGE (n:person {name: \"a\"})",
             "SET name = \"x\"",

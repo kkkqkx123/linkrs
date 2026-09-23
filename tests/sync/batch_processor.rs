@@ -50,8 +50,10 @@ fn test_batch_flush_on_timeout() {
     let mut properties = std::collections::HashMap::new();
     properties.insert("name".to_string(), Value::string("Timeout Test"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex =
-        graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(1), vec![tag]);
+    let vertex = graphdb::core::Vertex::new(
+        graphdb::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
+        tag,
+    );
 
     harness
         .insert_vertex("test_space", vertex)
@@ -96,8 +98,8 @@ fn test_batch_flush_on_size_trigger() {
         properties.insert("name".to_string(), Value::string(format!("Doc{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::from_int64(i + 1),
-            vec![tag],
+            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+            tag,
         );
 
         harness
@@ -160,8 +162,8 @@ fn test_large_batch_processing() {
         );
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::from_int64(i + 1),
-            vec![tag],
+            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+            tag,
         );
 
         harness
@@ -221,8 +223,8 @@ fn test_mixed_operation_types_in_batch() {
         properties.insert("name".to_string(), Value::string(format!("Initial{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::from_int64(i + 1),
-            vec![tag],
+            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+            tag,
         );
 
         harness
@@ -237,8 +239,8 @@ fn test_mixed_operation_types_in_batch() {
         properties.insert("name".to_string(), Value::string(format!("Updated{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::from_int64(i + 1),
-            vec![tag],
+            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+            tag,
         );
 
         harness
@@ -281,8 +283,8 @@ fn test_rapid_successive_commits() {
         properties.insert("name".to_string(), Value::string(format!("Rapid{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::from_int64(i + 1),
-            vec![tag],
+            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+            tag,
         );
 
         harness

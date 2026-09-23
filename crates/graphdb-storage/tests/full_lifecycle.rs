@@ -69,12 +69,22 @@ fn test_index_created_after_data_insertion() {
     let alice = storage
         .lookup_index("test_space", "person_name_idx", &Value::string("Alice"))
         .unwrap();
-    assert_eq!(alice, vec![Value::from(VertexId::try_from_int64(1).expect("test vertex id"))]);
+    assert_eq!(
+        alice,
+        vec![Value::from(
+            VertexId::try_from_int64(1).expect("test vertex id")
+        )]
+    );
 
     let bob = storage
         .lookup_index("test_space", "person_name_idx", &Value::string("Bob"))
         .unwrap();
-    assert_eq!(bob, vec![Value::from(VertexId::try_from_int64(2).expect("test vertex id"))]);
+    assert_eq!(
+        bob,
+        vec![Value::from(
+            VertexId::try_from_int64(2).expect("test vertex id")
+        )]
+    );
 }
 
 // ── Scenario 8: Space Isolation ──
@@ -114,11 +124,19 @@ fn test_space_isolation() {
 
     // Verify isolation: same ID, different data
     let alpha_vertex = storage
-        .get_vertex("alpha", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
+        .get_vertex(
+            "alpha",
+            "Person",
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     let beta_vertex = storage
-        .get_vertex("beta", "Person", &VertexId::try_from_int64(1).expect("test vertex id"))
+        .get_vertex(
+            "beta",
+            "Person",
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(

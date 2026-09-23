@@ -166,12 +166,27 @@ mod tests {
     use super::*;
     use graphdb_core::types::storage_ids::VertexId;
     use graphdb_core::Tag;
+    use std::collections::HashMap;
+
+    fn test_vertex_with_props(props: Vec<(String, Value)>) -> Vertex {
+        Vertex::new(
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            Tag::new(String::new(), props.into_iter().collect()),
+        )
+    }
 
     #[test]
     fn flat_vertex_row_contains_projected_properties_in_order() {
-        let mut vertex = Vertex::with_vid(VertexId::from_int64(1));
-        vertex.set_vertex_property("age".to_string(), Value::BigInt(30));
-        vertex.set_vertex_property("name".to_string(), Value::string("Alice"));
+        let vertex = Vertex::new(
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            Tag::new(
+                String::new(),
+                HashMap::from([
+                    ("age".to_string(), Value::BigInt(30)),
+                    ("name".to_string(), Value::string("Alice")),
+                ]),
+            ),
+        );
         let row = make_flat_vertex_row(vertex, &["age".to_string(), "name".to_string()]);
         assert_eq!(row.len(), 3);
         assert!(matches!(&row[0], Value::Vertex(_)));
@@ -181,7 +196,7 @@ mod tests {
 
     #[test]
     fn flat_vertex_row_empty_flatten_keeps_single_entity_column() {
-        let vertex = Vertex::with_vid(VertexId::from_int64(1));
+        let vertex = test_vertex_with_props(vec![]);
         let row = make_flat_vertex_row(vertex, &[]);
         assert_eq!(row.len(), 1);
         assert!(matches!(&row[0], Value::Vertex(_)));
@@ -189,7 +204,7 @@ mod tests {
 
     #[test]
     fn flat_vertex_row_missing_property_is_null() {
-        let vertex = Vertex::with_vid(VertexId::from_int64(1));
+        let vertex = test_vertex_with_props(vec![]);
         let row = make_flat_vertex_row(vertex, &["missing".to_string()]);
         assert_eq!(row.len(), 2);
         assert!(matches!(&row[1], Value::Null(_)));
@@ -197,13 +212,15 @@ mod tests {
 
     #[test]
     fn flat_vertex_row_reads_tag_properties_and_tag_name() {
-        let mut vertex = Vertex::with_vid(VertexId::from_int64(1));
-        vertex.add_tag(Tag::new(
-            "person".to_string(),
-            [("city".to_string(), Value::string("NYC"))]
-                .into_iter()
-                .collect(),
-        ));
+        let vertex = Vertex::new(
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            Tag::new(
+                "person".to_string(),
+                [("city".to_string(), Value::string("NYC"))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
         // Tag property fallback mirrors eval_property_access semantics.
         let row = make_flat_vertex_row(vertex.clone(), &["city".to_string()]);
         assert_eq!(row[1], Value::string("NYC"));
@@ -216,8 +233,8 @@ mod tests {
     #[test]
     fn flat_edge_row_contains_projected_properties() {
         let mut edge = Edge::new_empty(
-            VertexId::from_int64(1),
-            VertexId::from_int64(2),
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            VertexId::try_from_int64(2).expect("valid vertex id"),
             "friend".to_string(),
             0,
         );
@@ -232,7 +249,7 @@ mod tests {
     #[test]
     fn flat_vertex_record_row_rebuilds_vertex_and_flat_columns() {
         let record = FlatVertexRecord {
-            vid: VertexId::from_int64(42),
+            vid: VertexId::try_from_int64(42).expect("valid vertex id"),
             internal_id: 7,
             tag_name: "person".to_string(),
             props: vec![
@@ -245,10 +262,12 @@ mod tests {
         let Value::Vertex(vertex) = &row[0] else {
             panic!("slot 0 must hold the rebuilt vertex");
         };
-        assert_eq!(vertex.vid, VertexId::from_int64(42));
-        assert_eq!(vertex.id, 7);
-        assert_eq!(vertex.tags.len(), 1);
-        assert_eq!(vertex.tags[0].name, "person");
+        assert_eq!(
+            vertex.vid,
+            VertexId::try_from_int64(42).expect("valid vertex id")
+        );
+        assert_eq!(vertex.tag.name, "person");
+        assert_eq!(vertex.tag_name(), "person");
         assert_eq!(vertex.property_value("age"), Some(Value::BigInt(30)));
         assert_eq!(row[1], Value::string("Alice"));
         assert_eq!(row[2], Value::BigInt(30));
@@ -257,7 +276,7 @@ mod tests {
     #[test]
     fn flat_vertex_record_row_missing_property_is_null() {
         let record = FlatVertexRecord {
-            vid: VertexId::from_int64(42),
+            vid: VertexId::try_from_int64(42).expect("valid vertex id"),
             internal_id: 7,
             tag_name: "person".to_string(),
             props: vec![("age".to_string(), Value::BigInt(30))],
@@ -272,7 +291,7 @@ mod tests {
         // The tag-name-yields-map implicit behavior is cancelled: a property
         // name that only equals the tag resolves to Null.
         let record = FlatVertexRecord {
-            vid: VertexId::from_int64(42),
+            vid: VertexId::try_from_int64(42).expect("valid vertex id"),
             internal_id: 7,
             tag_name: "person".to_string(),
             props: vec![("age".to_string(), Value::BigInt(30))],

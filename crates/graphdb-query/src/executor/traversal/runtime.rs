@@ -459,7 +459,7 @@ mod tests {
     use super::*;
 
     fn vid(n: i64) -> VertexId {
-        VertexId::from_int64(n)
+        VertexId::try_from_int64(n).expect("valid vertex id")
     }
 
     fn edge_key(src: i64, dst: i64) -> EdgeKey {

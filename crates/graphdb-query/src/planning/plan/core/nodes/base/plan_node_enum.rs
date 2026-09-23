@@ -995,12 +995,12 @@ mod tests {
         "VectorMatch",
     ];
 
-    /// Default build: 92 variants. With `vector`: 95 variants.
+    /// Default build: 91 variants. With `vector`: 94 variants.
     /// (`vector-qdrant` implies `vector`, so no separate count is needed.)
     #[cfg(not(feature = "vector"))]
-    const EXPECTED_VARIANT_COUNT: usize = 92;
+    const EXPECTED_VARIANT_COUNT: usize = 91;
     #[cfg(feature = "vector")]
-    const EXPECTED_VARIANT_COUNT: usize = 95;
+    const EXPECTED_VARIANT_COUNT: usize = 94;
 
     #[test]
     fn variant_count_matches_documented_number() {

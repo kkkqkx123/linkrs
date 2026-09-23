@@ -437,9 +437,9 @@ mod tests {
 
     fn create_test_vertex(id: i64) -> Arc<Vertex> {
         Arc::new(Vertex::new(
-        VertexId::try_from_int64(id).expect("test vertex id"),
-        Tag::new(String::new(), HashMap::new()),
-    ))
+            VertexId::try_from_int64(id).expect("test vertex id"),
+            Tag::new(String::new(), HashMap::new()),
+        ))
     }
 
     fn create_test_edge(src_id: i64, dst_id: i64, edge_type: &str) -> Arc<Edge> {
@@ -460,7 +460,10 @@ mod tests {
 
         assert_eq!(path.len(), 0);
         assert!(path.is_empty());
-        assert_eq!(path.vertex().vid, VertexId::try_from_int64(1).expect("test vertex id"));
+        assert_eq!(
+            path.vertex().vid,
+            VertexId::try_from_int64(1).expect("test vertex id")
+        );
         assert!(path.parent().is_none());
         assert!(path.edge().is_none());
     }
@@ -476,7 +479,10 @@ mod tests {
 
         assert_eq!(extended.len(), 1);
         assert!(!extended.is_empty());
-        assert_eq!(extended.vertex().vid, VertexId::try_from_int64(2).expect("test vertex id"));
+        assert_eq!(
+            extended.vertex().vid,
+            VertexId::try_from_int64(2).expect("test vertex id")
+        );
         assert!(extended.parent().is_some());
         assert!(extended.edge().is_some());
     }
@@ -496,7 +502,10 @@ mod tests {
         let path = p3.to_path();
 
         assert_eq!(path.len(), 2);
-        assert_eq!(path.src.vid, VertexId::try_from_int64(1).expect("test vertex id"));
+        assert_eq!(
+            path.src.vid,
+            VertexId::try_from_int64(1).expect("test vertex id")
+        );
     }
 
     #[test]

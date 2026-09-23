@@ -194,15 +194,22 @@ mod tests {
             )
             .unwrap();
 
-        let resolved_int = TransactionOps::resolve_vertex_id(&table, VertexId::try_from_int64(100).expect("test vertex id"), 1);
+        let resolved_int = TransactionOps::resolve_vertex_id(
+            &table,
+            VertexId::try_from_int64(100).expect("test vertex id"),
+            1,
+        );
         assert!(resolved_int.is_some());
         assert_eq!(
             table.get_external_id(resolved_int.unwrap(), 1),
             Some(IdKey::Int(100))
         );
 
-        let resolved_str =
-            TransactionOps::resolve_vertex_id(&table, VertexId::try_from_string("user-bob-ext").expect("test vertex id"), 1);
+        let resolved_str = TransactionOps::resolve_vertex_id(
+            &table,
+            VertexId::try_from_string("user-bob-ext").expect("test vertex id"),
+            1,
+        );
         assert!(resolved_str.is_some());
         assert_ne!(resolved_int, resolved_str);
         assert_eq!(
@@ -210,7 +217,11 @@ mod tests {
             Some(IdKey::Text("user-bob-ext".to_string()))
         );
 
-        let not_found = TransactionOps::resolve_vertex_id(&table, VertexId::try_from_int64(999).expect("test vertex id"), 1);
+        let not_found = TransactionOps::resolve_vertex_id(
+            &table,
+            VertexId::try_from_int64(999).expect("test vertex id"),
+            1,
+        );
         assert_eq!(not_found, None);
     }
 
@@ -219,9 +230,21 @@ mod tests {
         let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
 
-        TransactionOps::add_vertex(&vertex_tables, 0, VertexId::try_from_int64(1).expect("test vertex id"), &[], 1).unwrap();
+        TransactionOps::add_vertex(
+            &vertex_tables,
+            0,
+            VertexId::try_from_int64(1).expect("test vertex id"),
+            &[],
+            1,
+        )
+        .unwrap();
 
-        let result = TransactionOps::delete_vertex(&vertex_tables, 0, VertexId::try_from_int64(1).expect("test vertex id"), 2);
+        let result = TransactionOps::delete_vertex(
+            &vertex_tables,
+            0,
+            VertexId::try_from_int64(1).expect("test vertex id"),
+            2,
+        );
         assert!(result.is_ok());
 
         // After deletion, the vertex should not be visible at timestamp 2
@@ -352,11 +375,21 @@ mod tests {
         )
         .unwrap();
 
-        TransactionOps::delete_vertex(&vertex_tables, 0, VertexId::try_from_int64(1).expect("test vertex id"), 2).unwrap();
+        TransactionOps::delete_vertex(
+            &vertex_tables,
+            0,
+            VertexId::try_from_int64(1).expect("test vertex id"),
+            2,
+        )
+        .unwrap();
 
         // Revert at the same timestamp as deletion (or earlier)
-        let result =
-            TransactionOps::revert_delete_vertex(&vertex_tables, 0, VertexId::try_from_int64(1).expect("test vertex id"), 2);
+        let result = TransactionOps::revert_delete_vertex(
+            &vertex_tables,
+            0,
+            VertexId::try_from_int64(1).expect("test vertex id"),
+            2,
+        );
         assert!(result.is_ok(), "revert_delete_vertex failed: {:?}", result);
 
         let table = vertex_tables.get(&0).unwrap();
@@ -376,8 +409,22 @@ mod tests {
             Arc::new(RwLock::new(create_edge_table(0, 0, 0, "KNOWS"))),
         );
 
-        TransactionOps::add_vertex(&vertex_tables, 0, VertexId::try_from_int64(1).expect("test vertex id"), &[], 1).unwrap();
-        TransactionOps::add_vertex(&vertex_tables, 0, VertexId::try_from_int64(2).expect("test vertex id"), &[], 1).unwrap();
+        TransactionOps::add_vertex(
+            &vertex_tables,
+            0,
+            VertexId::try_from_int64(1).expect("test vertex id"),
+            &[],
+            1,
+        )
+        .unwrap();
+        TransactionOps::add_vertex(
+            &vertex_tables,
+            0,
+            VertexId::try_from_int64(2).expect("test vertex id"),
+            &[],
+            1,
+        )
+        .unwrap();
 
         let src_internal = vertex_tables
             .get(&0)

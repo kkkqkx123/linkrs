@@ -199,8 +199,8 @@ mod tests {
 
     fn create_test_vertex_with_id(id: i64) -> Vertex {
         Vertex::new(
-            VertexId::from_int64(id),
-            vec![Tag::new("person".to_string(), HashMap::new())],
+            VertexId::try_from_int64(id).expect("valid vertex id"),
+            Tag::new("person".to_string(), HashMap::new()),
         )
     }
 
@@ -210,15 +210,15 @@ mod tests {
         let v3 = create_test_vertex_with_id(3);
 
         let e1 = Edge::new(
-            VertexId::from_int64(1),
-            VertexId::from_int64(2),
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            VertexId::try_from_int64(2).expect("valid vertex id"),
             "knows".to_string(),
             0,
             HashMap::new(),
         );
         let e2 = Edge::new(
-            VertexId::from_int64(2),
-            VertexId::from_int64(3),
+            VertexId::try_from_int64(2).expect("valid vertex id"),
+            VertexId::try_from_int64(3).expect("valid vertex id"),
             "follows".to_string(),
             0,
             HashMap::new(),

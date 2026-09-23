@@ -7,8 +7,10 @@ use graphdb_core::types::storage_ids::VertexId;
 use graphdb_core::value::date_time::DateTimeValue;
 use graphdb_core::value::decimal128::Decimal128Value;
 use graphdb_core::value::DateValue;
+use graphdb_core::vertex_edge_path::Tag;
 use graphdb_core::Value;
 use graphdb_core::Vertex;
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -43,11 +45,17 @@ fn flat_property_column_hits_columnar_path() {
     ]));
     let rows = vec![
         vec![
-            Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(1)))),
+            Value::Vertex(Box::new(Vertex::new(
+                VertexId::try_from_int64(1).expect("valid vertex id"),
+                Tag::new(String::new(), HashMap::new()),
+            ))),
             Value::BigInt(30),
         ],
         vec![
-            Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(2)))),
+            Value::Vertex(Box::new(Vertex::new(
+                VertexId::try_from_int64(2).expect("valid vertex id"),
+                Tag::new(String::new(), HashMap::new()),
+            ))),
             Value::BigInt(20),
         ],
     ];
@@ -72,7 +80,10 @@ fn flat_column_promise_holds_for_flat_layout() {
         "p.name".to_string(),
     ]));
     let rows = vec![vec![
-        Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(1)))),
+        Value::Vertex(Box::new(Vertex::new(
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            Tag::new(String::new(), HashMap::new()),
+        ))),
         Value::BigInt(30),
         Value::string("Alice"),
     ]];
@@ -89,8 +100,9 @@ fn flat_column_promise_holds_for_flat_layout() {
 #[test]
 fn flat_column_promise_does_not_hold_without_compound_slot() {
     let layout = Arc::new(SlotLayout::from_names(&["p".to_string()]));
-    let rows = vec![vec![Value::Vertex(Box::new(Vertex::with_vid(
-        VertexId::from_int64(1),
+    let rows = vec![vec![Value::Vertex(Box::new(Vertex::new(
+        VertexId::try_from_int64(1).expect("valid vertex id"),
+        Tag::new(String::new(), HashMap::new()),
     )))]];
     let chunk = DataChunk::new_with_layout(rows, layout);
     let expr = Expression::property(Expression::variable("p"), "age");
@@ -105,7 +117,10 @@ fn flat_column_promise_excludes_unsupported_nodes() {
         "p.age".to_string(),
     ]));
     let rows = vec![vec![
-        Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(1)))),
+        Value::Vertex(Box::new(Vertex::new(
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            Tag::new(String::new(), HashMap::new()),
+        ))),
         Value::BigInt(30),
     ]];
     let chunk = DataChunk::new_with_layout(rows, layout);
@@ -124,7 +139,10 @@ fn columnar_stats_record_hits_and_misses() {
         "p.age".to_string(),
     ]));
     let rows = vec![vec![
-        Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(1)))),
+        Value::Vertex(Box::new(Vertex::new(
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            Tag::new(String::new(), HashMap::new()),
+        ))),
         Value::BigInt(30),
     ]];
     let mut chunk = DataChunk::new_with_layout(rows, layout).with_columnar_stats(stats.clone());
@@ -161,11 +179,17 @@ fn column_cache_is_lazy_and_deferred_after_take_indices() {
     ]));
     let rows = vec![
         vec![
-            Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(1)))),
+            Value::Vertex(Box::new(Vertex::new(
+                VertexId::try_from_int64(1).expect("valid vertex id"),
+                Tag::new(String::new(), HashMap::new()),
+            ))),
             Value::BigInt(30),
         ],
         vec![
-            Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(2)))),
+            Value::Vertex(Box::new(Vertex::new(
+                VertexId::try_from_int64(2).expect("valid vertex id"),
+                Tag::new(String::new(), HashMap::new()),
+            ))),
             Value::BigInt(20),
         ],
     ];
@@ -516,9 +540,10 @@ fn typed_eval_property_predicate_hits_typed_batch_path() {
     let rows: Vec<Vec<Value>> = (0..100)
         .map(|i| {
             vec![
-                Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(
-                    i as i64 + 1,
-                )))),
+                Value::Vertex(Box::new(Vertex::new(
+                    VertexId::try_from_int64(i as i64 + 1).expect("valid vertex id"),
+                    Tag::new(String::new(), HashMap::new()),
+                ))),
                 Value::BigInt((i as i64 % 50) + 1),
             ]
         })
@@ -1270,8 +1295,13 @@ fn columnar_and_row_paths_agree_fuzz() {
         let rows: Vec<Vec<Value>> = (0..n)
             .map(|_| {
                 vec![
-                    Value::Vertex(Box::new(graphdb_core::Vertex::with_vid(
-                        VertexId::from_int64(rand() as i64),
+                    Value::Vertex(Box::new(graphdb_core::Vertex::new(
+                        VertexId::try_from_int64((rand() % (i64::MAX as u64)) as i64)
+                            .expect("valid vertex id"),
+                        graphdb_core::vertex_edge_path::Tag::new(
+                            String::new(),
+                            std::collections::HashMap::new(),
+                        ),
                     ))),
                     Value::BigInt((rand() % 100) as i64),
                     Value::Double(((rand() % 1000) as f64) / 10.0),

@@ -103,16 +103,12 @@ impl StorageReader for MockStorage {
         tag: &str,
         id: &VertexId,
     ) -> Result<Option<Vertex>, StorageError> {
-        Ok(self
-            .vertices
-            .read()
-            .get(space)
-            .and_then(|vertices| {
-                vertices
-                    .iter()
-                    .find(|v| v.vid == *id && v.tag.name == tag)
-                    .cloned()
-            }))
+        Ok(self.vertices.read().get(space).and_then(|vertices| {
+            vertices
+                .iter()
+                .find(|v| v.vid == *id && v.tag.name == tag)
+                .cloned()
+        }))
     }
 
     fn get_vertex_projected(

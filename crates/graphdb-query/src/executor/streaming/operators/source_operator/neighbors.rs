@@ -168,8 +168,9 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
                 let mut rows = Vec::with_capacity(batch_size);
                 if projected_properties.is_empty() {
                     for neighbor_id in &neighbor_ids[*position..end] {
-                        if let Some(vertex) =
-                            guard.get_vertex(space_name, tag, neighbor_id).map_err(|error| {
+                        if let Some(vertex) = guard
+                            .get_vertex(space_name, tag, neighbor_id)
+                            .map_err(|error| {
                                 storage_error(
                                     "GetNeighbors",
                                     "get neighbor vertex",
@@ -184,7 +185,12 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
                 } else {
                     for neighbor_id in &neighbor_ids[*position..end] {
                         if let Some(vertex) = guard
-                            .get_vertex_projected(space_name, tag, neighbor_id, projected_properties)
+                            .get_vertex_projected(
+                                space_name,
+                                tag,
+                                neighbor_id,
+                                projected_properties,
+                            )
                             .map_err(|error| {
                                 storage_error(
                                     "GetNeighbors",
