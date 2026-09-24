@@ -10,7 +10,14 @@ impl ShardedVertexTable {
         self.shards[0].read().schema().clone()
     }
 
-    pub fn apply_schema(&self, schema: crate::vertex::VertexSchema) -> StorageResult<()> {
+    /// Replace the schema on every shard without staging.
+    ///
+    /// Recovery and undo compensation only: it replays an already-committed
+    /// schema (WAL redo, transaction rollback) rather than evolving live
+    /// state. All live schema evolution must go through the staged
+    /// prepare/fill/publish machine (`add_property`, `remove_property`,
+    /// `rename_property` and their staged fan-outs).
+    pub(crate) fn apply_schema(&self, schema: crate::vertex::VertexSchema) -> StorageResult<()> {
         for shard in &self.shards {
             shard.write().set_schema(schema.clone())?;
         }

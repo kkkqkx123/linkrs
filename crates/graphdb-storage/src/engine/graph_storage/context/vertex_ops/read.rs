@@ -5,22 +5,6 @@ use std::sync::atomic::Ordering;
 use super::super::GraphStorageContext;
 use super::resolve::ExternalRef;
 
-/// Render a vertex id as its raw external string without display quoting.
-///
-/// Text ids round-trip through storage as raw strings, while `Display` adds
-/// quotes. Read paths use this form so text ids never gain quotes.
-fn vid_to_raw_string(vid: &VertexId) -> String {
-    if let Some(s) = vid.as_str() {
-        s.to_string()
-    } else if let Some(i) = vid.as_int64() {
-        i.to_string()
-    } else if let Some(u) = vid.as_u64() {
-        u.to_string()
-    } else {
-        format!("{:?}", vid.as_bytes())
-    }
-}
-
 impl GraphStorageContext {
     /// Pre-allocate capacity for `additional` more vertices in the given label's table.
     /// Call before batch inserts to avoid repeated hash rehashing.
@@ -118,16 +102,6 @@ impl GraphStorageContext {
         }
 
         self.get_full_record_by_internal_id(label, internal_id, ts)
-    }
-
-    pub fn get_external_id(
-        &self,
-        label: LabelId,
-        internal_id: u32,
-        ts: Timestamp,
-    ) -> Option<String> {
-        self.get_external_vertex_id(label, internal_id, ts)
-            .map(|vid| vid_to_raw_string(&vid))
     }
 
     pub fn get_external_vertex_id(

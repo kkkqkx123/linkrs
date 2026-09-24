@@ -140,6 +140,10 @@ impl IndexDataManagerImpl {
     }
 
     /// Configure the delta-publish threshold (entries per generation).
+    ///
+    /// Test tooling: forces per-statement publication so each update below
+    /// creates a retired generation. Production keeps the default.
+    #[cfg(test)]
     pub fn set_delta_publish_threshold(&self, threshold: usize) {
         self.delta_publish_threshold
             .store(threshold.max(1), Ordering::Relaxed);

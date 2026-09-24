@@ -70,16 +70,6 @@ pub(crate) const HIGH_DEGREE_CHUNK_EDGES: usize = 16_384;
 pub(crate) const HIGH_DEGREE_SPARE_DIVISOR: usize = 4;
 
 impl MutableCsr {
-    /// Whether one row qualifies for the dedicated high-degree path.
-    pub fn is_high_degree_row(&self, vid: u32) -> bool {
-        self.live_key_count(vid) >= HIGH_DEGREE_LIVE_THRESHOLD
-    }
-
-    /// Overflow block count of one row, zero when the row holds no overflow.
-    pub fn overflow_chunk_count(&self, vid: u32) -> usize {
-        self.overflow_chunks.chunk_count(vid)
-    }
-
     /// Row capacity holding `live` entries at the packed density target.
     pub(crate) fn sized_row_capacity(live: usize) -> usize {
         if live == 0 {

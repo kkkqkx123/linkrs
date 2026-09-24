@@ -51,11 +51,6 @@ impl EdgeStore {
         total
     }
 
-    /// Get mutable CSR memory usage (out_csr + in_csr)
-    pub fn mutable_csr_memory_size(&self) -> usize {
-        self.out_csr.used_memory_size() + self.in_csr.used_memory_size()
-    }
-
     /// Estimate memory usage based on edge count and CSR strategy.
     ///
     /// Write-path fast path: counts plus per-shard sizes only, never a
@@ -177,6 +172,26 @@ impl EdgeStore {
                 log::warn!("authority reclaim refused on audit drift: {}", e);
             }
         }
+        // Opt-in record-form migration (background only, never the write
+        // path): narrow single-scalar tables move to the recommended inline
+        // form. Guard failures leave the table untouched; a successful switch
+        // arms the mandatory checkpoint, which the regular flush performs.
+        if self.config.auto_migrate_record_form {
+            match self.auto_migrate_record_form_if_beneficial() {
+                Ok(Some(stats)) => {
+                    log::info!(
+                        "automatic record-form migration on '{}': {} edges moved",
+                        self.label_name,
+                        stats.edges_moved
+                    );
+                    ran += 1;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    log::debug!("automatic record-form migration skipped: {}", e);
+                }
+            }
+        }
         ran
     }
 
@@ -194,37 +209,6 @@ impl EdgeStore {
         csr.group_stats(gid)
             .map(|stats| stats.density)
             .unwrap_or(1.0)
-    }
-
-    /// Groups below `threshold` density on either stored leg, for observability
-    /// and merge-scope selection. Clean groups report full density.
-    pub fn sparse_groups_below(&self, threshold: f32) -> Vec<(bool, usize, f32)> {
-        let mut sparse = Vec::new();
-        if self.schema.has_out() {
-            for gid in self.out_csr.existing_group_ids() {
-                let density = self.group_density(gid, true);
-                if density < threshold {
-                    sparse.push((true, gid, density));
-                }
-            }
-        }
-        if self.schema.has_in() {
-            for gid in self.in_csr.existing_group_ids() {
-                let density = self.group_density(gid, false);
-                if density < threshold {
-                    sparse.push((false, gid, density));
-                }
-            }
-        }
-        sparse
-    }
-
-    /// Whether a group should compact at the configured merge thresholds.
-    /// Multi-region spans use the group threshold, single-region spans use
-    /// the region threshold; the decision never changes the live set.
-    pub fn should_compact_group(&self, gid: usize, outgoing: bool) -> bool {
-        let threshold = self.config.group_merge_min_density;
-        self.group_density(gid, outgoing) < threshold
     }
 
     /// Partition insert keys by owner group so batch reservations and future
@@ -262,35 +246,5 @@ impl EdgeStore {
             groups.truncate(limit);
         }
         groups
-    }
-
-    /// Human-readable record-form guidance: locked choice plus evolution cost.
-    /// Pure fits topology-only read-heavy types; Bundled fits one stable
-    /// scalar; Columnar fits everything else. Breaking the preconditions
-    /// needs an explicit migration followed by a mandatory checkpoint.
-    pub fn record_form_guidance(&self) -> String {
-        let form = self.schema.record_form;
-        let properties = self.schema.properties.len();
-        match form {
-            crate::edge::RecordForm::Pure => format!(
-                "table '{}' uses Pure topology (no properties, rank pinned to zero). \
-                Adding properties or nonzero ranks needs migration to Bundled or Columnar \
-                followed by a checkpoint.",
-                self.label_name
-            ),
-            crate::edge::RecordForm::Bundled => format!(
-                "table '{}' uses Bundled inline scalar (one property). \
-                Adding a second property, using a non-encodable type, using nonzero ranks, \
-                needing MVCC history, changing schema online, bulk importing ranked batches into a non-empty table, or freezing with valid values \
-                needs migration to Columnar followed by a checkpoint.",
-                self.label_name
-            ),
-            crate::edge::RecordForm::Columnar => format!(
-                "table '{}' uses Columnar storage ({} properties). \
-                Tombstone reuse applies to the multi-edge topology only; other forms ignore \
-                the reuse cutoff. No migration needed for schema evolution.",
-                self.label_name, properties
-            ),
-        }
     }
 }

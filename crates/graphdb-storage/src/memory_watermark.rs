@@ -60,11 +60,6 @@ pub fn set_process_budget(bytes: u64) {
     watermark().budget_bytes.store(bytes, Ordering::Relaxed);
 }
 
-/// Currently configured process budget.
-pub fn process_budget() -> u64 {
-    watermark().budget_bytes.load(Ordering::Relaxed)
-}
-
 /// Bytes currently reserved through this coordinator.
 pub fn reserved() -> u64 {
     watermark().reserved_bytes.load(Ordering::Relaxed)

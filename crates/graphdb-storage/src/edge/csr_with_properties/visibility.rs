@@ -1,6 +1,5 @@
 use super::{CsrWithProperties, RowVisibility};
 use graphdb_core::types::{EdgeId, Timestamp};
-use graphdb_core::{StorageError, StorageResult};
 
 impl RowVisibility {
     pub(crate) fn new(create_ts: Timestamp) -> Self {
@@ -37,19 +36,6 @@ impl CsrWithProperties {
             }
         }
         false
-    }
-
-    pub fn mark_deleted_at_row(&mut self, row_idx: usize, ts: Timestamp) -> StorageResult<()> {
-        if row_idx >= self.visibility.len() {
-            return Ok(());
-        }
-        if self.visibility[row_idx].delete_ts.is_some() {
-            return Err(StorageError::invalid_operation(
-                "record already marked deleted",
-            ));
-        }
-        self.visibility[row_idx].mark_deleted(ts);
-        Ok(())
     }
 
     pub fn is_deleted_at_row(&self, row_idx: usize) -> bool {

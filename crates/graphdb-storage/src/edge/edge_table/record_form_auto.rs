@@ -8,11 +8,13 @@
 //! [`EdgeStore::auto_migrate_record_form_if_beneficial`] performs the online
 //! switch when the recommendation differs.
 //!
-//! Automatic invocation from background maintenance is deliberately absent:
-//! every switch fences pre-switch WAL redo and arms the mandatory checkpoint,
-//! fencing writes until the checkpoint lands. The caller runs the returned
-//! switch and then checkpoints; silent background switches would stall the
-//! write path.
+//! Automatic invocation from background maintenance is opt-in only
+//! (`EdgeTableConfig::auto_migrate_record_form`, default off): every switch
+//! fences pre-switch WAL redo and arms the mandatory checkpoint, fencing
+//! writes until the checkpoint lands. The background caller runs the returned
+//! switch and the regular flush then checkpoints; silent always-on switches
+//! would stall the write path, so operators enable this knowingly and manual
+//! migration remains the primary path.
 
 use super::core::EdgeStore;
 use super::record_form::MigrateStats;

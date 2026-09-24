@@ -61,7 +61,7 @@ pub enum ColumnInner {
 /// | `DataType` | Storage variant |
 /// |---|---|
 /// | Bool, SmallInt, Int, BigInt, Float, Double, Date, Time, DateTime, Uuid | `FixedWidthColumn` |
-/// | All other types (String, FixedString, Blob, Geography, Vector family, Json/JsonB, Interval, Decimal family, Union, containers, composites, graph values) | `VariableWidthColumn` (opaque payload; complex values use postcard encoding without per-type compression or stats pruning) |
+/// | All other types (String, FixedString, Blob, Geography, Vector family, Json/JsonB, Interval, Decimal family, Union, containers, composites, graph values) | `VariableWidthColumn` (length-prefixed base; per-chunk encodings such as dictionary/FSST plus zone maps and HLL stats apply on top) |
 ///
 /// # MVCC
 ///

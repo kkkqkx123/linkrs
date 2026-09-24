@@ -55,6 +55,31 @@ impl GraphStorageContext {
         let vertex_dir = data_dir.join("vertices");
         fs::create_dir_all(&vertex_dir)?;
 
+        // One watermark capture shared by the vertex fold below and the edge
+        // flush that follows. Checkpoints persist current values only, so
+        // folding here keeps chains from surviving the checkpoint even when
+        // no background compaction ran recently.
+        let gc = self.gc_coordinator();
+        let wm = gc.capture_watermarks();
+        let margin = self.persistent.config.gc_safety_margin;
+        let cleanup_ts = wm.safe_gc_timestamp_with_margin(margin);
+        let folded: usize = self
+            .persistent
+            .data_store
+            .with_vertex_tables(|tables| {
+                tables
+                    .values()
+                    .map(|table| table.fold_version_chains(cleanup_ts))
+                    .sum()
+            });
+        if folded > 0 {
+            log::debug!(
+                "Pre-flush vertex fold: {} version entries folded (cleanup_ts={})",
+                folded,
+                cleanup_ts
+            );
+        }
+
         // Vertex table flush. Scatter-gather: collect table references under a
         // brief catalog READ lock, then flush each table under its own shard
         // locks outside the catalog lock. Previously the whole flush (disk IO,
@@ -81,9 +106,8 @@ impl GraphStorageContext {
         fs::create_dir_all(&edge_dir)?;
 
         {
-            let gc = self.gc_coordinator();
-            let wm = gc.capture_watermarks();
-            let margin = self.persistent.config.gc_safety_margin;
+            // Reuses the shared watermark captured before the vertex fold so
+            // every table in this flush observes the same cutoff.
             let edge_tables: Vec<(
                 EdgeTableKey,
                 Arc<parking_lot::RwLock<crate::edge::EdgeStore>>,
@@ -167,6 +191,29 @@ impl GraphStorageContext {
         let compression = self.persistent.config.flush_config.compression;
         let vertex_dir = data_dir.join("vertices");
         fs::create_dir_all(&vertex_dir)?;
+
+        // Shared watermark for the vertex fold below and the edge flush that
+        // follows; checkpoints persist current values only.
+        let gc = self.gc_coordinator();
+        let wm = gc.capture_watermarks();
+        let margin = self.persistent.config.gc_safety_margin;
+        let cleanup_ts = wm.safe_gc_timestamp_with_margin(margin);
+        let folded: usize = self
+            .persistent
+            .data_store
+            .with_vertex_tables(|tables| {
+                tables
+                    .values()
+                    .map(|table| table.fold_version_chains(cleanup_ts))
+                    .sum()
+            });
+        if folded > 0 {
+            log::debug!(
+                "Pre-flush vertex fold: {} version entries folded (cleanup_ts={})",
+                folded,
+                cleanup_ts
+            );
+        }
 
         // Compute global dirty ratio to decide incremental vs full flush.
         let (global_dirty_ratio, global_total_dirty, global_total_pages) = {
@@ -289,9 +336,8 @@ impl GraphStorageContext {
         fs::create_dir_all(&edge_dir)?;
 
         {
-            let gc = self.gc_coordinator();
-            let wm = gc.capture_watermarks();
-            let margin = self.persistent.config.gc_safety_margin;
+            // Reuses the shared watermark captured before the vertex fold so
+            // every table in this checkpoint observes the same cutoff.
             let edge_tables: Vec<(
                 EdgeTableKey,
                 Arc<parking_lot::RwLock<crate::edge::EdgeStore>>,

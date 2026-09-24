@@ -10,7 +10,14 @@
 //!   Geography, Vector family, Json/JsonB, Interval, Decimal family, Union,
 //!   containers, nested composites and graph values), stored as
 //!   length-prefixed payloads; complex values use an opaque postcard encoding
-//!   with no per-type compression or statistics pruning.
+//!   for the raw base. Per-chunk encodings selected at flush time (dictionary
+//!   for low-cardinality strings including FixedString, FSST for long strings,
+//!   plus RLE/BitPacking/ALP/Constant where applicable), zone maps and HLL
+//!   statistics apply on top of the base layout. FixedString stays on the
+//!   variable-width base: the fixed length is a schema-level constraint, and
+//!   moving it to a padded fixed-width layout would change the persisted
+//!   format for little scan benefit once dictionary encoding covers the
+//!   low-cardinality cases.
 //! - `Column`: Public wrapper that selects the appropriate variant at construction time
 
 pub mod chunk;

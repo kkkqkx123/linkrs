@@ -211,20 +211,6 @@ impl ChangeLog {
     pub fn latest_version(&self) -> Option<u64> {
         self.changes.keys().max().copied()
     }
-
-    /// Get all breaking changes
-    pub fn get_breaking_changes(&self) -> Vec<PropertyChange> {
-        self.changes
-            .values()
-            .flat_map(|changes| {
-                changes
-                    .iter()
-                    .filter(|c| c.is_breaking())
-                    .cloned()
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    }
 }
 
 #[cfg(test)]

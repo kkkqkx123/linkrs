@@ -59,11 +59,6 @@ impl<S: StorageClient> SyncWrapper<S> {
         }
     }
 
-    /// Enable or disable synchronization.
-    pub fn enable_sync(&mut self, enabled: bool) {
-        self.enabled = enabled;
-    }
-
     /// Check if synchronization is enabled.
     pub fn is_enabled(&self) -> bool {
         self.enabled

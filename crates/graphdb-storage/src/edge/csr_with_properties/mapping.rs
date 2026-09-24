@@ -200,14 +200,6 @@ impl CsrWithProperties {
         self.free_list.push(row_idx as u32);
     }
 
-    /// Associate an existing row index with an edge id.
-    pub fn associate_edge(&mut self, edge_id: EdgeId, row_idx: usize) {
-        self.map_insert(edge_id, row_idx)
-            .expect("associated edge ids are table-allocated dense values");
-        self.ensure_row_aux_len(row_idx + 1);
-        self.row_to_edge[row_idx] = Some(edge_id);
-    }
-
     /// Get the row index for an edge.
     pub fn get_row_for_edge(&self, edge_id: EdgeId) -> Option<usize> {
         self.mapped_row(edge_id)

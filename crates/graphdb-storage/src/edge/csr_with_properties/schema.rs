@@ -91,11 +91,6 @@ impl CsrWithProperties {
         self.dirty_columns.clear();
     }
 
-    /// Whether any property column changed since the last checkpoint.
-    pub fn has_dirty_columns(&self) -> bool {
-        !self.dirty_columns.is_empty()
-    }
-
     pub fn property_schema(&self) -> &[PropertySchema] {
         &self.property_schema
     }

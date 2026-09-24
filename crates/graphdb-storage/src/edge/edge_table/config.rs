@@ -44,6 +44,12 @@ pub struct EdgeTableConfig {
     /// columnar); `Columnar` forces the standard multi/single/none strategy
     /// path; `Bundled` explicitly opts into the single-scalar inline form.
     pub record_form: RecordFormPreference,
+    /// Opt-in background record-form migration. When enabled, background
+    /// maintenance switches a table to its recommended form once (narrow
+    /// single-scalar columnar tables move inline); the switch fences
+    /// pre-switch WAL redo and requires the next checkpoint, so it stays off
+    /// by default and manual migration remains the primary path.
+    pub auto_migrate_record_form: bool,
     /// Adapt property column encodings during checkpoints from dirty-column
     /// values. Enabled by default; disable only to pin encodings manually.
     pub auto_encode_on_checkpoint: bool,
@@ -116,6 +122,7 @@ impl Default for EdgeTableConfig {
             group_merge_min_density: crate::edge::node_group::GROUP_MERGE_MIN_DENSITY,
             auto_maintenance: AutoMaintenanceConfig::default(),
             record_form: RecordFormPreference::default(),
+            auto_migrate_record_form: false,
             auto_encode_on_checkpoint: true,
             auto_encode_min_rows: 128,
             memory_intent: MemoryIntent::default(),

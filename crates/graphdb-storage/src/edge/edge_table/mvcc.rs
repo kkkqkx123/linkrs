@@ -492,26 +492,6 @@ impl MVCCManager {
         nbrs.truncate(write);
     }
 
-    /// Pending-aware form of [`Self::retain_visible`] with the same
-    /// authority-plus-gate semantics.
-    pub fn retain_visible_with_gate(
-        &self,
-        nbrs: &mut Vec<Nbr>,
-        ts: Timestamp,
-        gate: &crate::mvcc_visibility::PendingGate<'_>,
-    ) {
-        let mut write = 0usize;
-        for read in 0..nbrs.len() {
-            if self.is_edge_visible_with_gate(nbrs[read].edge_id, ts, gate) {
-                if write != read {
-                    nbrs.swap(write, read);
-                }
-                write += 1;
-            }
-        }
-        nbrs.truncate(write);
-    }
-
     /// Get the creation timestamp of an edge, if known.
     pub fn creation_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
         self.edge_timestamps.get(&edge_id).map(|ts| ts.create_ts)

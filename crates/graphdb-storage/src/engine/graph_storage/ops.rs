@@ -100,20 +100,6 @@ pub(crate) fn edge_label_id(
         .map(|edge_type| edge_type.edge_type_id))
 }
 
-#[allow(dead_code)]
-pub(crate) fn value_to_string(value: &Value) -> String {
-    match value {
-        Value::SmallInt(i) => i.to_string(),
-        Value::Int(i) => i.to_string(),
-        Value::BigInt(i) => i.to_string(),
-        Value::String(s) => s.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::Double(f) => f.to_string(),
-        Value::Bool(b) => b.to_string(),
-        _ => format!("{:?}", value),
-    }
-}
-
 pub(crate) fn vertex_record_to_vertex(record: &VertexRecord, tag_name: &str) -> Vertex {
     let properties: HashMap<String, Value> = record.properties.iter().cloned().collect();
 
@@ -369,22 +355,9 @@ mod tests {
     use graphdb_core::Value;
 
     use super::{
-        edge_record_to_edge, edge_type_storage_name, serialize_properties, value_to_string,
-        vertex_record_to_vertex, vertex_type_storage_name,
+        edge_record_to_edge, edge_type_storage_name, serialize_properties, vertex_record_to_vertex,
+        vertex_type_storage_name,
     };
-
-    #[test]
-    #[allow(clippy::approx_constant)]
-    fn test_value_to_string() {
-        assert_eq!(value_to_string(&Value::SmallInt(42)), "42");
-        assert_eq!(value_to_string(&Value::Int(100)), "100");
-        assert_eq!(value_to_string(&Value::BigInt(9999999999)), "9999999999");
-        assert_eq!(value_to_string(&Value::string("hello")), "hello");
-        assert_eq!(value_to_string(&Value::Float(3.14)), "3.14");
-        assert_eq!(value_to_string(&Value::Double(2.71828)), "2.71828");
-        assert_eq!(value_to_string(&Value::Bool(true)), "true");
-        assert_eq!(value_to_string(&Value::Bool(false)), "false");
-    }
 
     #[test]
     fn test_vertex_type_storage_name() {

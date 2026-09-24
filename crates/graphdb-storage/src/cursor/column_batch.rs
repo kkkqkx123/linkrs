@@ -2,10 +2,14 @@ use graphdb_core::types::DataType;
 
 /// Raw decoded values for one property column, in column-major order.
 ///
-/// Fixed-size scalar columns (Bool/SmallInt/Int/BigInt/Float/Double) are
-/// returned as dense typed vectors plus a validity bitmap (`valid[i] == 1`
-/// means the value is present, not null).  Everything else (strings, mixed,
-/// other types) falls back to per-row decoded `Option<Value>`.
+/// Fixed-size numeric and boolean columns (Bool/SmallInt/Int/BigInt/Float/Double)
+/// are returned as dense typed vectors plus a validity bitmap (`valid[i] == 1`
+/// means the value is present, not null). Date/Time/DateTime/Uuid columns and
+/// everything else (strings, mixed, other types) fall back to per-row decoded
+/// `Option<Value>`: extending the typed layout there would require matching
+/// executor support, while the fallback preserves mixed-type reads without
+/// changing results. A column whose rows do not share one numeric kind also
+/// degrades to the fallback so no value is silently dropped.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ColumnValues {
     I64 { values: Vec<i64>, valid: Vec<u8> },

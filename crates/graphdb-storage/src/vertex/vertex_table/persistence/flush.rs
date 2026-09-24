@@ -79,9 +79,13 @@ impl VertexTable {
                             .encoding_selector
                             .should_reencode_for(*encoding_type, family)
                         {
-                            log::info!(
+                            // Encoding selection already re-evaluates every
+                            // chunk on each flush; this feedback only reports
+                            // that the recent average ratio for this
+                            // encoding/family stays above threshold.
+                            log::debug!(
                                 "column={} encoding={:?} avg_ratio={:.2} exceeds threshold, \
-                                 consider re-encoding",
+                                 future flushes keep re-evaluating selection",
                                 name,
                                 encoding_type,
                                 self.encoding_selector.thresholds().reencode_threshold,

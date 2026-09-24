@@ -215,11 +215,6 @@ impl EdgeStore {
         self.schema.has_out()
     }
 
-    /// Whether the incoming leg is stored and served.
-    pub fn has_in_edges(&self) -> bool {
-        self.schema.has_in()
-    }
-
     /// Cardinality contract of the outgoing direction.
     pub fn out_multiplicity(&self) -> super::super::super::EdgeMultiplicity {
         self.schema.out_multiplicity()

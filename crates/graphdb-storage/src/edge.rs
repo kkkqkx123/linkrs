@@ -300,20 +300,6 @@ impl From<&EdgeRecord> for Edge {
     }
 }
 
-impl EdgeRecord {
-    pub fn into_edge_with_type(self, edge_type: &str) -> Edge {
-        let props: std::collections::HashMap<String, Value> = self.properties.into_iter().collect();
-
-        Edge {
-            src: self.src_vid,
-            dst: self.dst_vid,
-            edge_type: edge_type.to_string(),
-            ranking: self.rank,
-            props,
-        }
-    }
-}
-
 /// Storage direction of an edge table, derived from the CSR strategies.
 ///
 /// Both directions enabled pays double writes and double storage but serves
@@ -743,12 +729,6 @@ impl Nbr {
     #[inline]
     pub fn to_vertex_id(&self) -> VertexId {
         VertexId::edge_endpoint_key(self.endpoint, self.rank)
-    }
-
-    /// Decode the full `VertexId` from this entry and return `(vertex_id, rank)`.
-    #[inline]
-    pub fn decode_endpoint(&self) -> (VertexId, i64) {
-        (self.to_vertex_id(), self.rank)
     }
 }
 

@@ -86,44 +86,6 @@ impl MappedFrozen {
             })
     }
 
-    /// Fill a caller buffer with every hot half of one row.
-    ///
-    /// Hot-only counterpart of `fill_physical_into`: topology columns are
-    /// sliced once per row and decoded in tight chunk loops, so the stamp
-    /// columns stay out of cache on this walk.
-    pub fn fill_hot_into(&self, src_vid: u32, out: &mut Vec<HotNbr>) {
-        out.clear();
-        let Some((start, end)) = self.row_window(src_vid) else {
-            return;
-        };
-        if start == end {
-            return;
-        }
-        out.reserve(end - start);
-        out.extend(self.row_hot_slots(start, end));
-    }
-
-    /// Fill a caller buffer with every cold half of one row.
-    ///
-    /// Stamp-only counterpart of `fill_physical_into` for maintenance walks
-    /// that never need topology.
-    pub fn fill_cold_into(&self, src_vid: u32, out: &mut Vec<ColdStamps>) {
-        out.clear();
-        let Some((start, end)) = self.row_window(src_vid) else {
-            return;
-        };
-        if start == end {
-            return;
-        }
-        let deletes = self.row_column_bytes(self.columns.deletes, 8, start, end);
-        out.reserve(end - start);
-        for delete in deletes.as_chunks::<8>().0 {
-            out.push(ColdStamps {
-                delete_ts: u64::from_le_bytes(*delete),
-            });
-        }
-    }
-
     #[inline]
     pub(crate) fn endpoint_at(&self, idx: usize) -> u32 {
         read_u32_le_at(&self.map, self.columns.endpoints.start + idx * 4)

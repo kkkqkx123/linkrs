@@ -53,19 +53,6 @@ impl CsrWithProperties {
         self.set_property_at_row(pos, name, value, ts)
     }
 
-    /// Edge-aware bulk property update: lookup row via `edge_id` and update all properties.
-    pub fn update_properties_for_edge(
-        &mut self,
-        edge_id: EdgeId,
-        properties: &[(String, Value)],
-        ts: Timestamp,
-    ) -> StorageResult<()> {
-        let pos = self
-            .mapped_row(edge_id)
-            .ok_or_else(|| StorageError::invalid_offset(0))?;
-        self.update_at_row(pos, properties, ts)
-    }
-
     pub fn set_property_by_id_for_edge(
         &mut self,
         edge_id: EdgeId,
@@ -109,29 +96,6 @@ impl CsrWithProperties {
         let col = &mut self.property_columns[col_idx];
         col.set_versioned(row_idx, value.as_ref(), ts)?;
         self.mark_column_dirty_at(col_idx);
-        Ok(())
-    }
-
-    /// Bulk update properties at a given row index.
-    pub fn update_at_row(
-        &mut self,
-        row_idx: usize,
-        properties: &[(String, Value)],
-        ts: Timestamp,
-    ) -> StorageResult<()> {
-        if row_idx >= self.visibility.len() || self.visibility[row_idx].create_ts == 0 {
-            return Err(StorageError::invalid_offset(row_idx as u32));
-        }
-        for (name, value) in properties {
-            let col_idx = self
-                .column_index
-                .get(name.as_str())
-                .copied()
-                .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
-            let col = &mut self.property_columns[col_idx];
-            col.set_versioned(row_idx, Some(value), ts)?;
-            self.mark_column_dirty_at(col_idx);
-        }
         Ok(())
     }
 

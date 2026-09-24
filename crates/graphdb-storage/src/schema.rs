@@ -9,7 +9,7 @@
 //! ## Components
 //!
 //! - `change`: Schema change events (`PropertyChange`, `ChangeDetails`) and change logs
-//! - `version_history`: Version tracking for each label (`LabelVersionHistory`, `SchemaVersionHistory`)
+//! - `version_history`: Version tracking for each label (`LabelVersionHistory`)
 //!
 //! ## Current Capabilities
 //!

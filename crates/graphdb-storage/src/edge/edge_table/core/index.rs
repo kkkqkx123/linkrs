@@ -129,11 +129,6 @@ impl EdgeStore {
         self.index_consistency
     }
 
-    /// Set the index consistency contract.
-    pub fn set_index_consistency(&mut self, consistency: IndexConsistency) {
-        self.index_consistency = consistency;
-    }
-
     /// Reset the secondary index failure counter, typically after a rebuild.
     /// Also resets the lag baseline so the fresh index starts usable.
     pub fn reset_index_failures(&mut self) {

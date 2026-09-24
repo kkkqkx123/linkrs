@@ -298,7 +298,7 @@ impl VertexTable {
 mod tests {
     use super::*;
     use crate::vertex::vertex_table::core::VertexTableConfig;
-    use crate::vertex::{LabelId, VertexSchema};
+    use crate::vertex::VertexSchema;
     use graphdb_core::DataType;
 
     fn test_schema() -> VertexSchema {

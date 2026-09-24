@@ -82,24 +82,6 @@ pub struct BundledCsr {
     overflow_values: SegmentedTable<Vec<BundledOverflowValues>>,
 }
 
-impl BundledCsr {
-    /// Number of valid (non-NULL) inline values across primary and overflow.
-    pub fn valid_value_count(&self) -> usize {
-        let mut count = self.primary_valid.count_ones();
-        for (_, chunks) in self.overflow_values.iter() {
-            for chunk in chunks.iter() {
-                count += chunk.valid.count_ones();
-            }
-        }
-        count
-    }
-
-    /// Validity bitmap length in slots, for observability and tests.
-    pub fn validity_len(&self) -> usize {
-        self.primary_valid.len()
-    }
-}
-
 impl Default for BundledCsr {
     fn default() -> Self {
         Self::new()

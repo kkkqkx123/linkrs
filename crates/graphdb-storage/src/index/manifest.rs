@@ -294,18 +294,6 @@ impl IndexManifest {
         }
     }
 
-    pub fn scan_ranges(
-        &self,
-        selector: &PartitionSelector,
-        query_lower: &[u8],
-        query_upper: &[u8],
-    ) -> Vec<(Vec<u8>, Vec<u8>)> {
-        self.scan_ranges_with_shard(selector, query_lower, query_upper)
-            .into_iter()
-            .map(|(_, lower, upper)| (lower, upper))
-            .collect()
-    }
-
     pub fn scan_ranges_with_shard(
         &self,
         selector: &PartitionSelector,

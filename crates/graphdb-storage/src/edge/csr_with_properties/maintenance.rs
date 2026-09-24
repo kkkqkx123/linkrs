@@ -1,7 +1,6 @@
 use super::{CsrWithProperties, RowVisibility};
 use crate::edge::property_schema::PropertySchema;
 use graphdb_core::types::{EdgeId, Timestamp};
-use graphdb_core::DataType;
 use std::collections::HashSet;
 
 impl CsrWithProperties {
@@ -37,47 +36,6 @@ impl CsrWithProperties {
             .iter_mut()
             .map(|col| col.gc_versions(min_active_snapshot_ts))
             .sum()
-    }
-
-    /// Aggregate version-chain statistics across all property columns.
-    pub fn property_version_stats(&self) -> crate::vertex::column::mvcc::VersionChainStats {
-        let mut total_rows = 0usize;
-        let mut total_entries = 0usize;
-        let mut max_len = 0usize;
-        let mut memory_bytes = 0usize;
-        for col in &self.property_columns {
-            let stats = col.version_chain_stats();
-            total_rows = total_rows.max(stats.total_rows);
-            total_entries += stats.total_entries;
-            max_len = max_len.max(stats.max_len);
-            memory_bytes += stats.memory_bytes;
-        }
-        let avg_len = if total_rows > 0 {
-            total_entries as f64 / total_rows as f64
-        } else {
-            0.0
-        };
-        crate::vertex::column::mvcc::VersionChainStats {
-            total_rows,
-            total_entries,
-            max_len,
-            avg_len,
-            memory_bytes,
-        }
-    }
-
-    pub fn is_schema_fixed_size(&self) -> bool {
-        self.property_schema.iter().all(|s| {
-            matches!(
-                s.data_type,
-                DataType::Bool
-                    | DataType::SmallInt
-                    | DataType::Int
-                    | DataType::BigInt
-                    | DataType::Float
-                    | DataType::Double
-            )
-        })
     }
 
     pub fn used_memory_size(&self) -> usize {

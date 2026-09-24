@@ -1189,20 +1189,6 @@ impl EdgeStore {
             .collect()
     }
 
-    /// Raw in-edge neighbors of `dst` (MVCC-filtered, snapshot-consistent)
-    /// with no property decoding.
-    ///
-    /// Owned single-row convenience over [`Self::fill_visible_into`].
-    /// Record-building paths stream hot-only without this intermediate, and
-    /// high-frequency traversals use `visit_in_with_gate` or the batch
-    /// accessor instead.
-    pub fn merged_in_nbrs(&self, dst: u32, ts: Timestamp) -> Vec<Nbr> {
-        if !self.schema.has_in() {
-            return Vec::new();
-        }
-        self.merged_edges_of(&self.in_csr, dst, ts)
-    }
-
     /// Batch adjacency accessor bound to one snapshot.
     ///
     /// Traversal and batch queries use the accessor with a caller buffer so

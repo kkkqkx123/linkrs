@@ -54,19 +54,6 @@ impl EdgeStore {
         super::super::wal::discard_torn_tail_reported(path.as_ref())
     }
 
-    /// Read-only WAL diagnosis for this table's log directory.
-    ///
-    /// Fails when the table has no checkpoint directory yet, when redo has no
-    /// home and there is nothing to diagnose.
-    pub fn diagnose_wal(&self) -> StorageResult<super::super::wal::EdgeWalDiagnosis> {
-        let Some(dir) = self.wal_dir.clone() else {
-            return Err(graphdb_core::StorageError::invalid_operation(
-                "edge table has no WAL directory before the first checkpoint".to_string(),
-            ));
-        };
-        Self::diagnose_edge_wal_at(dir)
-    }
-
     /// Fail-closed cross-copy audit used by [`EdgeStore::load`].
     ///
     /// Damage detection only: returns `(orphan property mappings, orphan CSR

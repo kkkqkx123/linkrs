@@ -313,65 +313,6 @@ impl EdgeStore {
         true
     }
 
-    /// Sweep every frozen group holding delete history at group scope.
-    ///
-    /// Explicit frozen-GC entry: each frozen group with a reclaim hint merges
-    /// once through the group path instead of one trailing memmove per row.
-    /// Reports distinct reclaimed edge ids. Mutable groups are untouched;
-    /// their rows use the regular bounded reclaim pass.
-    pub fn compact_frozen_reclaimable_groups(&mut self, bound: Timestamp) -> usize {
-        if bound == Timestamp::MAX {
-            return 0;
-        }
-        let mut gids: Vec<usize> = self.out_csr.existing_group_ids();
-        for gid in self.in_csr.existing_group_ids() {
-            if !gids.contains(&gid) {
-                gids.push(gid);
-            }
-        }
-        gids.sort_unstable();
-        let mut removed_edges = std::collections::HashSet::new();
-        for gid in gids {
-            let out_frozen =
-                self.out_csr.is_frozen(gid) && self.out_csr.group_needs_reclaim_scan(gid);
-            let in_frozen = self.in_csr.is_frozen(gid) && self.in_csr.group_needs_reclaim_scan(gid);
-            if !out_frozen && !in_frozen {
-                continue;
-            }
-            if out_frozen {
-                self.out_csr.compact_group_with_reporting(
-                    gid,
-                    bound,
-                    0.0,
-                    &mut |edge_id, delete_ts| {
-                        removed_edges.insert(edge_id);
-                        self.mvcc.record_deletion(edge_id, delete_ts);
-                    },
-                );
-            }
-            if in_frozen {
-                self.in_csr.compact_group_with_reporting(
-                    gid,
-                    bound,
-                    0.0,
-                    &mut |edge_id, delete_ts| {
-                        removed_edges.insert(edge_id);
-                        self.mvcc.record_deletion(edge_id, delete_ts);
-                    },
-                );
-            }
-            if self.frozen_group_has_no_dead(gid, bound) {
-                if out_frozen {
-                    self.out_csr.clear_reclaim_hint(gid);
-                }
-                if in_frozen {
-                    self.in_csr.clear_reclaim_hint(gid);
-                }
-            }
-        }
-        removed_edges.len()
-    }
-
     /// Write-path incremental reclaim pass.
     ///
     /// Gated by tombstone count and watermark movement: below the count

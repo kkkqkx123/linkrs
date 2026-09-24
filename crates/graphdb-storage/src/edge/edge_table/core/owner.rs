@@ -213,19 +213,6 @@ impl EdgeStore {
         }
     }
 
-    /// Address-span row counts including holes, one per direction.
-    ///
-    /// True address upper bounds for preallocation and range validation.
-    /// Materialized capacity instead reports existing groups only and stays
-    /// memory-proportional. Callers must pick by purpose and never mix the
-    /// two calibers.
-    pub fn topology_address_span(&self) -> (usize, usize) {
-        (
-            self.out_csr.address_span_rows(),
-            self.in_csr.address_span_rows(),
-        )
-    }
-
     pub(crate) fn try_decode_edge_endpoint(key: VertexId) -> Option<(VertexId, i64)> {
         let decoded = key.try_decode_edge_endpoint();
         if decoded.is_none() {

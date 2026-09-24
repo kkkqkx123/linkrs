@@ -44,37 +44,12 @@ impl CsrShardSet {
         })
     }
 
-    pub fn all_group_stats(&self) -> Vec<NodeGroupStats> {
-        self.existing_group_ids()
-            .into_iter()
-            .filter_map(|gid| self.group_stats(gid))
-            .collect()
-    }
-
     /// Live edge count of one group for segment statistics.
     pub fn group_live_count(&self, gid: usize) -> u64 {
         self.shards
             .get(&gid)
             .map(|shard| shard.variant.edge_count())
             .unwrap_or(0)
-    }
-
-    /// Minimum and maximum neighbor endpoints stored in one group.
-    ///
-    /// Sort-column bounds for segment statistics: a single pass over the
-    /// group entries without materializing them. Missing groups report no
-    /// bounds.
-    pub fn group_endpoint_bounds(&self, gid: usize) -> (Option<u32>, Option<u32>) {
-        let Some(shard) = self.shards.get(&gid) else {
-            return (None, None);
-        };
-        let mut min: Option<u32> = None;
-        let mut max: Option<u32> = None;
-        for (_, nbr) in shard.variant.iter_all() {
-            min = Some(min.map_or(nbr.endpoint, |current: u32| current.min(nbr.endpoint)));
-            max = Some(max.map_or(nbr.endpoint, |current: u32| current.max(nbr.endpoint)));
-        }
-        (min, max)
     }
 
     /// Average bytes per edge based on actual memory usage.

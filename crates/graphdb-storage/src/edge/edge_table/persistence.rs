@@ -43,10 +43,9 @@
 
 use super::super::{CsrBase, CsrVariant};
 use super::mvcc::EdgeTimestamps;
-use crate::edge::property_schema::PropertySchema;
 use crate::edge::CsrWithProperties;
 use crate::edge::EdgeSchema;
-use crate::persistence::{read_header, section, write_header_to, HEADER_SIZE};
+use crate::persistence::{read_header, write_header_to, HEADER_SIZE};
 use graphdb_core::types::EdgeId;
 use graphdb_core::{StorageError, StorageResult};
 use std::fs::File;
@@ -248,18 +247,6 @@ pub fn serialize_csr_with_scratch(
     Ok(())
 }
 
-pub fn serialize_csr_properties(
-    properties: &CsrWithProperties,
-    buf: &mut Vec<u8>,
-) -> StorageResult<()> {
-    write_header_to(buf, section::EDGE_PROPERTIES)
-        .map_err(|e| StorageError::io_error(format!("Failed to write properties header: {}", e)))?;
-    let data = properties.dump();
-    buf.extend_from_slice(&(data.len() as u64).to_le_bytes());
-    buf.extend_from_slice(&data);
-    Ok(())
-}
-
 /// Load metadata from file cursor
 pub(crate) fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
     let mut label_bytes = [0u8; 4];
@@ -357,44 +344,6 @@ pub fn load_csr(path: &Path, csr: &mut CsrVariant, expected_section: u32) -> Sto
     }
 
     Ok(())
-}
-
-pub fn load_csr_properties(
-    path: &Path,
-    property_schema: Vec<PropertySchema>,
-) -> StorageResult<CsrWithProperties> {
-    let (raw_data, total_rows) = read_pages_from_file(path)?;
-    let mut cursor = &raw_data[..];
-    let mut header_buf = [0u8; HEADER_SIZE];
-    cursor.read_exact(&mut header_buf)?;
-    {
-        let mut slice = &header_buf[..];
-        let sid = read_header(&mut slice)?;
-        if sid != section::EDGE_PROPERTIES {
-            return Err(StorageError::deserialize_error(format!(
-                "unexpected section id in edge properties: expected {:#06x}, got {:#06x}",
-                section::EDGE_PROPERTIES,
-                sid
-            )));
-        }
-    }
-    let mut len_bytes = [0u8; 8];
-    cursor.read_exact(&mut len_bytes)?;
-    let len = u64::from_le_bytes(len_bytes) as usize;
-    let mut data = vec![0u8; len];
-    cursor.read_exact(&mut data)?;
-    // The live schema keys the payload columns by name, so values land in
-    // the right columns; unknown payload columns are skipped.
-    let mut properties = CsrWithProperties::new(property_schema);
-    properties.load(&data)?;
-    if total_rows > 0 && total_rows != properties.row_count() as u32 {
-        return Err(StorageError::deserialize_error(format!(
-            "csr properties total_rows mismatch: header={}, actual={}",
-            total_rows,
-            properties.row_count()
-        )));
-    }
-    Ok(properties)
 }
 
 /// Write payload to file using page-level compression with shadow file atomic writes

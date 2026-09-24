@@ -164,18 +164,6 @@ impl ScanOptions {
         self
     }
 
-    /// Builder: set vertex ID range filter.
-    pub fn with_vertex_id_range(mut self, range: std::ops::Range<i64>) -> Self {
-        self.vertex_id_range = Some(range);
-        self
-    }
-
-    /// Builder: set edge source ID range filter.
-    pub fn with_edge_src_id_range(mut self, range: std::ops::Range<i64>) -> Self {
-        self.edge_src_id_range = Some(range);
-        self
-    }
-
     /// Builder: set row limit.
     pub fn with_limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);
@@ -195,23 +183,6 @@ impl ScanOptions {
 
     pub fn with_projection(mut self, projection: Vec<RequiredProperty>) -> Self {
         self.projection = Some(projection);
-        self
-    }
-
-    pub fn with_read_timestamp(mut self, read_timestamp: Timestamp) -> Self {
-        self.read_timestamp = Some(read_timestamp);
-        self
-    }
-
-    /// Builder: set pushed scan predicates (conjunction semantics).
-    pub fn with_predicate(mut self, predicates: Vec<ScanPredicate>) -> Self {
-        self.predicate = Some(predicates);
-        self
-    }
-
-    /// Builder: enable column-block scan mode.
-    pub fn with_column_block_mode(mut self, enabled: bool) -> Self {
-        self.column_block_mode = enabled;
         self
     }
 

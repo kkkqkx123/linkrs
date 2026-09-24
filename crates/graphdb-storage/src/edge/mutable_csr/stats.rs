@@ -113,26 +113,4 @@ impl MutableCsr {
             wasted_capacity,
         )
     }
-
-    /// Fraction of overflow rows that hold exactly one chunk.
-    ///
-    /// Skewed rows that stay single-block after merge are the common
-    /// case; a ratio near 1.0 confirms the merge threshold is working.
-    /// Returns 0.0 when no vertex carries overflow.
-    pub fn single_block_overflow_ratio(&self) -> f32 {
-        let mut total_overflow_rows = 0usize;
-        let mut single_block_rows = 0usize;
-        for (_, chunks) in self.overflow_chunks.iter() {
-            if !chunks.is_empty() {
-                total_overflow_rows += 1;
-                if chunks.len() == 1 {
-                    single_block_rows += 1;
-                }
-            }
-        }
-        if total_overflow_rows == 0 {
-            return 0.0;
-        }
-        single_block_rows as f32 / total_overflow_rows as f32
-    }
 }

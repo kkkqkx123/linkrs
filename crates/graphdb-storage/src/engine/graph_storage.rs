@@ -38,8 +38,8 @@ use crate::index::types::IndexIdentity;
 use crate::index::IndexGcConfig;
 use crate::{
     StorageAdmin, StorageAuthOps, StorageGcOps, StorageOperationContext,
-    StorageOperationContextOps, StorageReader, StorageRecoveryOps, StorageSchemaContextOps,
-    StorageStats, StorageSyncContextOps,
+    StorageOperationContextOps, StorageRecoveryOps, StorageSchemaContextOps, StorageStats,
+    StorageSyncContextOps,
 };
 use graphdb_core::metadata::{IndexMetadataManager, SchemaManager};
 use graphdb_core::types::{
@@ -169,21 +169,6 @@ impl GraphStorage {
         })
     }
 
-    /// Create with development configuration (small thresholds, conservative freeze).
-    pub fn new_development() -> StorageResult<Self> {
-        Self::new_with_config(crate::engine::config::PropertyGraphConfig::development())
-    }
-
-    /// Create with production configuration for small systems.
-    pub fn new_production_small() -> StorageResult<Self> {
-        Self::new_with_config(crate::engine::config::PropertyGraphConfig::production_small())
-    }
-
-    /// Create with production configuration for large systems (LSM tiered freeze).
-    pub fn new_production_large() -> StorageResult<Self> {
-        Self::new_with_config(crate::engine::config::PropertyGraphConfig::production_large())
-    }
-
     pub fn new_with_path(path: PathBuf) -> StorageResult<Self> {
         GraphStorageContext::new_with_path(path).map(|ctx| Self { ctx: Arc::new(ctx) })
     }
@@ -239,17 +224,6 @@ impl GraphStorage {
         let new_ctx = Arc::new((*self.ctx).clone().with_index_gc(config));
         self.ctx = new_ctx;
         self
-    }
-
-    /// set the index delta-publish threshold (entries per generation).
-    ///
-    /// A threshold of `1` disables delta accumulation, restoring per-statement
-    /// generation publication (rollback path). The default is 512.
-    pub fn set_index_delta_publish_threshold(&self, threshold: usize) {
-        self.ctx
-            .index_data_manager()
-            .write()
-            .set_delta_publish_threshold(threshold);
     }
 
     /// number of staged-WAL entries held for in-flight transactions.
@@ -492,35 +466,6 @@ impl crate::AutoCommitGroupOps for GraphStorage {
         window: &context::AutoCommitBatchWindow,
     ) -> StorageResult<()> {
         window.rollback_group()
-    }
-}
-
-impl GraphStorage {
-    /// Aggregate all label version histories into a single `SchemaVersionHistory`.
-    pub fn aggregate_schema_version_history(
-        &self,
-        space: &str,
-    ) -> Result<crate::schema::version_history::SchemaVersionHistory, StorageError> {
-        use crate::schema::version_history::SchemaVersionHistory;
-        let mut schema_history = SchemaVersionHistory::new();
-
-        let tag_infos = self.ctx.schema_manager().list_tags(space)?;
-        for tag_info in tag_infos {
-            if let Some(history) = self.get_vertex_version_history(space, &tag_info.tag_name)? {
-                schema_history.add_vertex_history(history);
-            }
-        }
-
-        let edge_infos = self.ctx.schema_manager().list_edge_types(space)?;
-        for edge_info in edge_infos {
-            if let Some(history) =
-                self.get_edge_version_history(space, &edge_info.edge_type_name)?
-            {
-                schema_history.add_edge_history(history);
-            }
-        }
-
-        Ok(schema_history)
     }
 }
 
