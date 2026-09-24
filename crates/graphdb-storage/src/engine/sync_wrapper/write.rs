@@ -5,6 +5,9 @@ use graphdb_core::{Edge, EdgeDeleteKey, StorageError, Value, Vertex};
 use graphdb_sync::types::ChangeType;
 
 impl<S: StorageClient + 'static> SyncWrapper<S> {
+    /// Sync failure branch: the writer already discarded its write scope and
+    /// aborted the timestamp before returning the error; aborting the
+    /// transaction here runs the undo log over already applied rows.
     fn reject_staged_write(&self, error: StorageError) -> StorageError {
         if let Some(transaction_id) = self.get_current_txn_id() {
             let _ = self.abort_transaction_fact(transaction_id);

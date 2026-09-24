@@ -86,6 +86,16 @@ pub enum ColumnInner {
 /// concurrency. Within a shard, version chain operations are serialized by
 /// `&mut self`. For future optimization, version chains can be wrapped in
 /// `parking_lot::RwLock` to allow concurrent reads during metadata updates.
+///
+/// Background eviction quota: one eviction segment releases at most this many
+/// bytes before re-selecting victims, so over-quota background work proceeds
+/// in segments instead of one burst.
+pub const EVICTION_SEGMENT_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Background load quota: at most this many evicted chunks are promoted per
+/// batch-load call; over-quota scans continue with the remainder.
+pub const MAX_BACKGROUND_LOAD_CHUNKS: usize = 64;
+
 #[derive(Debug, Clone)]
 pub struct Column {
     pub name: String,
@@ -954,19 +964,20 @@ impl Column {
 
     /// Batch miss-load: promote every evicted chunk covering `rows` once
     /// before a grouped decode, avoiding per-row page faults. Returns the
-    /// number of chunks loaded.
+    /// number of chunks loaded. Background batch loads behind this entry are
+    /// charged against the task quota in [`super::MAX_BACKGROUND_LOAD_CHUNKS`]
+    /// segments.
     pub fn ensure_resident_range(&mut self, rows: &[usize]) -> StorageResult<usize> {
-        let mut idxs: Vec<usize> = rows
-            .iter()
-            .filter_map(|row| self.chunk_index_for_row(*row))
-            .collect();
-        idxs.sort_unstable();
-        idxs.dedup();
         let mut loaded = 0usize;
-        for idx in idxs {
-            if self.ensure_resident(idx)? {
-                loaded += 1;
+        let mut remaining = rows.to_vec();
+        while !remaining.is_empty() {
+            let (n, rest) = self
+                .ensure_resident_range_with_quota(&remaining, super::MAX_BACKGROUND_LOAD_CHUNKS)?;
+            if n == 0 {
+                break;
             }
+            loaded += n;
+            remaining = rest;
         }
         Ok(loaded)
     }
@@ -1032,32 +1043,107 @@ impl Column {
     /// failures are skipped with a warning so one corruptible chunk never
     /// blocks the watermark pass.
     pub fn evict_cold_chunks(&mut self, budget: u64) -> (usize, u64) {
+        let (evicted, freed, _) = self.evict_cold_chunks_with_quota(budget, u64::MAX);
+        (evicted, freed)
+    }
+
+    /// Quota-segmented eviction for background tasks.
+    ///
+    /// `budget` is the total release target; `task_quota` caps one segment so
+    /// over-quota background work proceeds in segments instead of one burst.
+    /// Returns `(chunks_evicted, bytes_released, segments)`. Each segment
+    /// re-selects evictable chunks oldest-first and rechecks evictability
+    /// inside [`Self::evict_chunk`], so writes landing during confirmation
+    /// abandon that chunk for this pass.
+    pub fn evict_cold_chunks_with_quota(
+        &mut self,
+        budget: u64,
+        task_quota: u64,
+    ) -> (usize, u64, usize) {
         if budget == 0 || self.chunks.is_empty() {
-            return (0, 0);
+            return (0, 0, 0);
         }
-        let mut order: Vec<(u64, usize)> = (0..self.chunks.len())
-            .filter(|&idx| self.chunk_evictable(idx))
-            .map(|idx| (self.chunks[idx].last_access.load(Ordering::Relaxed), idx))
-            .collect();
-        order.sort_unstable();
+        let segment = task_quota.min(EVICTION_SEGMENT_BYTES).max(1).min(budget);
         let mut count = 0usize;
         let mut freed = 0u64;
-        for (_, idx) in order {
-            if freed >= budget {
+        let mut segments = 0usize;
+        while freed < budget {
+            let target = freed.saturating_add(segment).min(budget);
+            let mut order: Vec<(u64, usize)> = (0..self.chunks.len())
+                .filter(|&idx| self.chunk_evictable(idx))
+                .map(|idx| (self.chunks[idx].last_access.load(Ordering::Relaxed), idx))
+                .collect();
+            if order.is_empty() {
                 break;
             }
-            match self.evict_chunk(idx) {
-                Ok(0) => {}
-                Ok(released) => {
-                    count += 1;
-                    freed += released;
+            order.sort_unstable();
+            segments += 1;
+            let mut progress = false;
+            for (_, idx) in order {
+                if freed >= target {
+                    break;
                 }
-                Err(e) => {
-                    log::warn!("chunk eviction skipped for {}[{}]: {}", self.name, idx, e);
+                match self.evict_chunk(idx) {
+                    Ok(0) => {}
+                    Ok(released) => {
+                        count += 1;
+                        freed += released;
+                        progress = true;
+                    }
+                    Err(e) => {
+                        log::warn!("chunk eviction skipped for {}[{}]: {}", self.name, idx, e);
+                    }
                 }
             }
+            if !progress {
+                break;
+            }
         }
-        (count, freed)
+        (count, freed, segments)
+    }
+
+    /// Quota-capped batch promotion for background scans.
+    ///
+    /// Loads at most `max_chunks` evicted chunks covering `rows`, returning
+    /// `(chunks_loaded, remaining_rows)`. Callers with a task memory quota
+    /// process the loaded prefix, release pressure, then continue with the
+    /// remainder instead of promoting the whole working set at once.
+    pub fn ensure_resident_range_with_quota(
+        &mut self,
+        rows: &[usize],
+        max_chunks: usize,
+    ) -> StorageResult<(usize, Vec<usize>)> {
+        let mut idxs: Vec<usize> = rows
+            .iter()
+            .filter_map(|row| self.chunk_index_for_row(*row))
+            .collect();
+        idxs.sort_unstable();
+        idxs.dedup();
+        let mut loaded = 0usize;
+        let mut done_through = 0usize;
+        for (position, idx) in idxs.iter().enumerate() {
+            if loaded >= max_chunks {
+                break;
+            }
+            if self.ensure_resident(*idx)? {
+                loaded += 1;
+            }
+            done_through = position + 1;
+        }
+        let remaining: Vec<usize> = if done_through >= idxs.len() {
+            Vec::new()
+        } else {
+            let pending: std::collections::HashSet<usize> =
+                idxs[done_through..].iter().copied().collect();
+            rows.iter()
+                .copied()
+                .filter(|row| {
+                    self.chunk_index_for_row(*row)
+                        .is_some_and(|idx| pending.contains(&idx))
+                })
+                .collect()
+        };
+        Ok((loaded, remaining))
     }
 
     /// Resident decoded bytes (excludes retained eviction snapshots).

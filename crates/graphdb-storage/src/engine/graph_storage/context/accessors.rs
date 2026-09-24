@@ -804,6 +804,9 @@ impl GraphStorageContext {
         transaction_id: graphdb_core::types::TransactionId,
         intents: &[graphdb_core::wal::OutboxIntent],
     ) -> graphdb_core::StorageResult<graphdb_core::types::CommitLsn> {
+        // Write-scope commit hook point: vertex scopes settle in the writer
+        // ahead of the timestamp commit; this WAL entry is the durability
+        // point for already scoped bindings.
         self.commit_staged_writes_with_durability(
             transaction_id,
             intents,
@@ -846,7 +849,9 @@ impl GraphStorageContext {
     }
 
     /// Append staged WAL with `DurabilityLevel::None` (no fsync). Barriers
-    /// are deferred to the group commit point (`finalize_group`).
+    /// are deferred to the group commit point (`finalize_group`). Write-scope
+    /// commit shares the writer hook; this grouped variant is the same
+    /// durability point without an extra scope step.
     pub(crate) fn commit_staged_writes_grouped(
         &self,
         transaction_id: graphdb_core::types::TransactionId,
@@ -879,6 +884,9 @@ impl GraphStorageContext {
     }
 
     pub(crate) fn abort_staged_writes(&self, transaction_id: graphdb_core::types::TransactionId) {
+        // Write-scope rollback hook point: vertex scopes discard in the
+        // writer/sync failure branches ahead of the timestamp abort; the
+        // undo log then removes already applied rows. This only drops WAL.
         self.persistent.staged_wal.remove(&transaction_id);
     }
 

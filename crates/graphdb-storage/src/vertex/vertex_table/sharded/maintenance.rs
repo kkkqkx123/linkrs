@@ -8,6 +8,23 @@ use graphdb_core::StorageResult;
 /// avoid global remapping.
 pub(super) const SHARD_FRAGMENTATION_THRESHOLD: f64 = 0.25;
 
+/// Long-term hole-rate watermark for stable row ids. Aliases the selective
+/// compaction threshold so the watermark policy has one named anchor: below
+/// it shards fold version chains only and live rows never move; above it the
+/// legacy path re-densifies while the stable path still moves nothing and
+/// absorbs holes through the free stack. Shard-count manifests stay the
+/// identifier-decoding anchor.
+pub const STABLE_ROW_ID_HOLE_WATERMARK: f64 = SHARD_FRAGMENTATION_THRESHOLD;
+
+/// Hole rate `1 - live / allocated` for one shard snapshot.
+pub fn hole_rate(live: usize, allocated: usize) -> f64 {
+    if allocated == 0 || live >= allocated {
+        0.0
+    } else {
+        1.0 - (live as f64 / allocated as f64)
+    }
+}
+
 impl ShardedVertexTable {
     /// GC split into (reclaimed vertices, reclaimed version-chain entries).
     /// A nonzero vertex count means some shard re-densified internal IDs:
@@ -91,17 +108,14 @@ impl ShardedVertexTable {
         let mut journals = Vec::new();
         for (idx, shard) in self.shards.iter().enumerate() {
             // Selective compaction: only compact shards with significant
-            // fragmentation to avoid global remapping overhead.
+            // fragmentation to avoid global remapping overhead. The
+            // long-term hole-rate watermark shares this threshold.
             {
                 let table = shard.read();
                 let (live, allocated) = table.id_hole_stats(cutoff);
                 if allocated > 0 {
-                    let frag = if live >= allocated {
-                        0.0
-                    } else {
-                        1.0 - (live as f64 / allocated as f64)
-                    };
-                    if frag < SHARD_FRAGMENTATION_THRESHOLD {
+                    let frag = hole_rate(live, allocated);
+                    if frag < STABLE_ROW_ID_HOLE_WATERMARK {
                         // Shard is sufficiently dense; lazy recycling will
                         // reclaim holes without compaction.
                         continue;
@@ -122,6 +136,35 @@ impl ShardedVertexTable {
         }
         let combined = super::super::compaction::CompactionJournal::combine(&journals);
         Ok((all_removed, all_mapping, combined))
+    }
+
+    /// Stable row-id collection across shards: hole absorption without moving
+    /// any live row.
+    ///
+    /// Unlike [`Self::compact_with_cutoff_collect_mapping`], this path has no
+    /// fragmentation gate (every shard absorbs its watermark-eligible holes
+    /// through the free stack) and always returns an empty mapping, so the
+    /// maintenance layer must produce zero edge endpoint rewrites. Use it to
+    /// validate the long-term policy before retiring the remap cascade.
+    pub fn compact_with_cutoff_stable_collect(
+        &self,
+        cutoff: Timestamp,
+    ) -> StorageResult<(
+        Vec<IdKey>,
+        std::collections::HashMap<u32, u32>,
+        super::super::compaction::CompactionJournal,
+    )> {
+        let mut all_removed = Vec::new();
+        let mut journals = Vec::new();
+        for shard in &self.shards {
+            let mut table = shard.write();
+            let (removed, mapping, journal) = table.compact_with_cutoff_stable_collect(cutoff)?;
+            debug_assert!(mapping.is_empty());
+            journals.push(journal);
+            all_removed.extend(removed);
+        }
+        let combined = super::super::compaction::CompactionJournal::combine(&journals);
+        Ok((all_removed, std::collections::HashMap::new(), combined))
     }
 
     /// Evict cold column chunks across shards oldest-first until `max_bytes`
@@ -145,6 +188,37 @@ impl ShardedVertexTable {
             freed += bytes;
         }
         (count, freed)
+    }
+
+    /// Quota-segmented eviction across shards for background tasks.
+    /// `task_quota` caps one segment; over-quota work proceeds in segments
+    /// instead of one burst. Returns `(chunks_evicted, bytes_released,
+    /// segments)`.
+    pub fn evict_cold_chunks_with_quota(
+        &self,
+        max_bytes: u64,
+        task_quota: u64,
+    ) -> (usize, u64, usize) {
+        if task_quota >= max_bytes {
+            let (count, freed) = self.evict_cold_chunks(max_bytes);
+            return (count, freed, usize::from(count > 0));
+        }
+        let mut count = 0usize;
+        let mut freed = 0u64;
+        let mut segments = 0usize;
+        for shard in &self.shards {
+            if freed >= max_bytes {
+                break;
+            }
+            let mut table = shard.write();
+            let (n, bytes, segs) = table
+                .columns
+                .evict_cold_chunks_with_quota(max_bytes.saturating_sub(freed), task_quota);
+            count += n;
+            freed += bytes;
+            segments += segs;
+        }
+        (count, freed, segments)
     }
 
     /// Eviction observability: `(resident_chunks, evicted_chunks,

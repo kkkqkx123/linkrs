@@ -48,6 +48,34 @@ pub(crate) struct CommitManifest {
     pub(crate) written_at_ms: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitHealthReport {
+    /// Whether `commit_manifest.json` exists.
+    pub manifest_present: bool,
+    /// Whether the manifest decoded as JSON.
+    pub manifest_decodable: bool,
+    /// Checkpoint epoch pinned by the manifest, if decodable.
+    pub epoch: Option<u64>,
+    /// `full` or `incremental`, if decodable.
+    pub kind: Option<String>,
+    /// Base epoch for incremental checkpoints, if decodable.
+    pub base_epoch: Option<u64>,
+    /// Files listed by the manifest.
+    pub listed_files: Vec<String>,
+    /// Listed files missing from disk.
+    pub missing_files: Vec<String>,
+    /// Orphan temp/staging files (tolerated, cleaned by recovery).
+    pub orphan_tmp_files: Vec<String>,
+}
+
+impl CommitHealthReport {
+    /// Whether the directory is safe to open strictly: a decodable manifest
+    /// with no missing files.
+    pub fn is_healthy(&self) -> bool {
+        self.manifest_present && self.manifest_decodable && self.missing_files.is_empty()
+    }
+}
+
 fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -218,6 +246,83 @@ impl ShardedVertexTable {
         cleanup_orphans_tolerant(path.as_ref());
     }
 
+    /// Offline read-only health inspection for one table directory.
+    ///
+    /// Reuses the recovery path's manifest decoding plus file existence
+    /// checks and reports: whether the commit manifest is present and
+    /// decodable, its epoch/kind/base-epoch chain pointers, which listed
+    /// files are missing, and which orphan temp files exist. Never writes;
+    /// cleanup stays with startup recovery. Baseline plus incremental epoch
+    /// chain continuity across directories is validated by the global
+    /// checkpoint manifest manager, which sees every table's pointers.
+    pub fn inspect_commit_health<P: AsRef<Path>>(path: P) -> StorageResult<CommitHealthReport> {
+        let dir = path.as_ref();
+        let manifest_path = commit_manifest_path(dir);
+        let manifest_present = manifest_path.exists();
+        let mut manifest_decodable = false;
+        let mut epoch = None;
+        let mut kind = None;
+        let mut base_epoch = None;
+        let mut listed_files = Vec::new();
+        let mut missing_files = Vec::new();
+        if manifest_present {
+            match std::fs::read(&manifest_path) {
+                Ok(payload) => match serde_json::from_slice::<CommitManifest>(&payload) {
+                    Ok(manifest) => {
+                        manifest_decodable = true;
+                        epoch = Some(manifest.epoch);
+                        kind = Some(manifest.kind.as_str().to_string());
+                        base_epoch = manifest.base_epoch;
+                        listed_files = manifest.files.clone();
+                        for rel in &manifest.files {
+                            if !dir.join(rel).exists() {
+                                missing_files.push(rel.clone());
+                            }
+                        }
+                    }
+                    Err(_) => {}
+                },
+                Err(_) => {}
+            }
+        }
+        let mut orphan_tmp_files = Vec::new();
+        if dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.ends_with(".tmp") || name.ends_with(".staging") || name == "staging" {
+                        orphan_tmp_files.push(name);
+                    }
+                }
+            }
+            for index in 0..usize::MAX {
+                let shard_dir = dir.join(format!("shard_{}", index));
+                if !shard_dir.exists() {
+                    break;
+                }
+                if let Ok(entries) = std::fs::read_dir(&shard_dir) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if name.ends_with(".tmp") {
+                            orphan_tmp_files.push(format!("shard_{}/{}", index, name));
+                        }
+                    }
+                }
+            }
+        }
+        orphan_tmp_files.sort();
+        Ok(CommitHealthReport {
+            manifest_present,
+            manifest_decodable,
+            epoch,
+            kind,
+            base_epoch,
+            listed_files,
+            missing_files,
+            orphan_tmp_files,
+        })
+    }
+
     fn check_table_manifest<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
         let manifest = Self::read_table_manifest(&path)?;
         let Some(manifest) = manifest else {
@@ -365,6 +470,24 @@ impl ShardedVertexTable {
 
     pub fn load<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
         let path = path.as_ref();
+        // Offline pre-flight: reuse the read-only inspection for a
+        // diagnostic line before the strict recovery path runs. Read-only;
+        // cleanup stays with startup recovery.
+        match Self::inspect_commit_health(&path) {
+            Ok(report) => log::debug!(
+                "vertex table '{}' pre-load health: healthy={} epoch={:?} missing={} orphans={}",
+                self.label_name,
+                report.is_healthy(),
+                report.epoch,
+                report.missing_files.len(),
+                report.orphan_tmp_files.len(),
+            ),
+            Err(e) => log::debug!(
+                "vertex table '{}' pre-load inspection failed: {}",
+                self.label_name,
+                e
+            ),
+        }
         // Refuse to mis-decode: persisted global IDs embed the shard count.
         self.check_table_manifest(&path)?;
         match Self::read_commit_manifest(&path)? {
@@ -667,5 +790,127 @@ mod commit_tests {
         assert!(!dir.join("stray.tmp").exists());
         assert!(!dir.join("left.staging").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn offline_inspection_reports_healthy_and_halfway_stores() {
+        let dir = unique_dir("health");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let ts: Timestamp = 10;
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                11,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(report.manifest_present && report.manifest_decodable);
+        assert_eq!(report.epoch, Some(11));
+        assert_eq!(report.kind.as_deref(), Some("full"));
+        assert!(report.missing_files.is_empty());
+        assert!(report.is_healthy());
+
+        std::fs::write(dir.join("half.tmp"), b"x").unwrap();
+        std::fs::write(dir.join("shard_0").join("page.tmp"), b"x").unwrap();
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(report.is_healthy());
+        assert_eq!(report.orphan_tmp_files.len(), 2);
+        let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        reloaded.load(&dir).unwrap();
+        assert!(reloaded.get_internal_id("v1", ts).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fault_matrix_missing_listed_file_refuses_open() {
+        let dir = unique_dir("fault-missing");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let ts: Timestamp = 10;
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                13,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        let manifest = ShardedVertexTable::read_commit_manifest(&dir)
+            .unwrap()
+            .expect("manifest");
+        let victim = manifest.files.first().expect("listed file").clone();
+        std::fs::remove_file(dir.join(&victim)).unwrap();
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(!report.is_healthy());
+        assert_eq!(report.missing_files, vec![victim.clone()]);
+        let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let err = reloaded.load(&dir).unwrap_err().to_string();
+        assert!(
+            err.contains("13") && err.contains("missing"),
+            "refusal must carry epoch and cause: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fault_matrix_broken_incremental_falls_back_to_baseline() {
+        let base = unique_dir("fault-base");
+        let incr = unique_dir("fault-incr");
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&incr);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let ts: Timestamp = 10;
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &base,
+                CompressionType::Zstd { level: 0 },
+                21,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        table
+            .insert("v2", &[("name".to_string(), Value::from("v2"))], ts)
+            .unwrap();
+        table
+            .flush_incremental_with_epoch(&incr, CompressionType::Zstd { level: 0 }, 22, Some(21))
+            .unwrap();
+        let report = ShardedVertexTable::inspect_commit_health(&incr).unwrap();
+        assert_eq!(report.epoch, Some(22));
+        assert_eq!(report.base_epoch, Some(21));
+
+        for entry in std::fs::read_dir(&incr).unwrap().flatten() {
+            let delta = entry.path().join("id_indexer.delta");
+            if delta.exists() {
+                std::fs::write(&delta, b"corrupt").unwrap();
+                let strict = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+                strict.load(&base).unwrap();
+                let err = strict.apply_delta_pages(&incr).unwrap_err().to_string();
+                assert!(err.contains("22"), "strict error carries epoch: {err}");
+                break;
+            }
+        }
+        let _ = std::fs::remove_file(incr.join(COMMIT_MANIFEST_FILE_NAME));
+        let legacy = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        legacy.load(&base).unwrap();
+        legacy.apply_delta_pages(&incr).unwrap();
+        assert!(legacy.get_internal_id("v1", ts).is_some());
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&incr);
     }
 }

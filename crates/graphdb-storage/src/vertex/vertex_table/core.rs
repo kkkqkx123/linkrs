@@ -150,6 +150,41 @@ impl VertexTable {
         self.insert_by_key(IdKey::Int(external_id), properties, ts)
     }
 
+    /// Scoped single-table insert forwarding the caller-owned write scope.
+    ///
+    /// The scope is only read here for the same-scope duplicate check; the
+    /// table never retains it. Recording stays with the caller (sharded
+    /// layer) after a successful apply, keeping cross-call ownership out of
+    /// the shard. Cross-scope conflicts still use the global read probe plus
+    /// write-lock recheck inside [`Self::insert_by_key`].
+    pub fn insert_with_scope(
+        &mut self,
+        key: IdKey,
+        properties: &[(String, Value)],
+        ts: Timestamp,
+        scope: &super::super::WriteScope,
+    ) -> StorageResult<u32> {
+        if scope.contains(self.label, &key) {
+            return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
+        }
+        self.insert_by_key(key, properties, ts)
+    }
+
+    /// Scoped lookup forwards to the plain global plus timestamp check.
+    ///
+    /// Staged rows are applied immediately with timestamp ordering, so the
+    /// global check already observes the caller's own writes at its write
+    /// timestamp; outside scopes stay hidden through the pending gate at the
+    /// operation layer. The scope is only read, never retained.
+    pub fn lookup_internal_id_scoped(
+        &self,
+        key: &IdKey,
+        ts: Timestamp,
+        _scope: &super::super::WriteScope,
+    ) -> PkLookup {
+        self.lookup_internal_id(key, ts)
+    }
+
     fn insert_by_key(
         &mut self,
         key: IdKey,

@@ -14,6 +14,7 @@ pub mod gc_manager;
 pub mod id_indexer;
 pub mod vertex_table;
 pub mod vertex_timestamp;
+pub mod write_scope;
 
 // Alias: external code uses `crate::vertex::column_store::*`.
 pub use column as column_store;
@@ -25,6 +26,7 @@ pub use gc_manager::VertexGcConfig;
 pub use id_indexer::{IdIndexer, IdKey, PkLookup};
 pub use vertex_table::ShardedVertexTable;
 pub use vertex_timestamp::VertexTimestamp;
+pub use write_scope::{WriteScope, MAX_WRITE_SCOPE_KEYS};
 
 use graphdb_core::{DataType, StorageError, StorageResult, Value};
 

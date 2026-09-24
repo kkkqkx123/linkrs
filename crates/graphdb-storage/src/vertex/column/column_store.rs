@@ -605,6 +605,30 @@ impl ColumnStore {
         (count, freed)
     }
 
+    /// Quota-segmented eviction across columns for background tasks.
+    /// `task_quota` caps one segment; over-quota work proceeds in segments.
+    /// Returns `(chunks_evicted, bytes_released, segments)`.
+    pub fn evict_cold_chunks_with_quota(
+        &mut self,
+        budget: u64,
+        task_quota: u64,
+    ) -> (usize, u64, usize) {
+        let mut count = 0usize;
+        let mut freed = 0u64;
+        let mut segments = 0usize;
+        for col in &mut self.columns {
+            if freed >= budget {
+                break;
+            }
+            let (n, bytes, segs) =
+                col.evict_cold_chunks_with_quota(budget.saturating_sub(freed), task_quota);
+            count += n;
+            freed += bytes;
+            segments += segs;
+        }
+        (count, freed, segments)
+    }
+
     /// Promote every evicted chunk back to resident. Used by background
     /// compaction and GC scans with a memory budget; over-budget scans
     /// proceed in segments.

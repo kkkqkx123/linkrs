@@ -1016,4 +1016,73 @@ mod tests {
             col.resident_memory_usage() + col.evicted_bytes()
         );
     }
+
+    #[test]
+    fn test_evict_double_confirm_abandons_chunk_written_during_selection() {
+        // Selection sees two evictable chunks; a write landing before the
+        // free rechecks evictability inside `evict_chunk` and abandons it.
+        let mut col = encoded_two_chunk_column();
+        assert!(col.chunk_evictable(0));
+        assert!(col.chunk_evictable(1));
+        col.set(1, Some(&Value::Int(1000))).unwrap();
+        assert!(!col.chunk_evictable(0));
+        assert_eq!(col.evict_chunk(0).unwrap(), 0);
+        let (evicted, _) = col.evict_cold_chunks(u64::MAX);
+        assert_eq!(evicted, 1);
+        assert_eq!(col.evicted_chunk_count(), 1);
+        assert_eq!(col.get(1), Some(Value::Int(1000)));
+    }
+
+    #[test]
+    fn test_quota_segments_large_eviction_without_changing_totals() {
+        let mut full = encoded_two_chunk_column();
+        let (full_evicted, full_freed) = full.evict_cold_chunks(u64::MAX);
+        let mut segmented = encoded_two_chunk_column();
+        let (seg_evicted, seg_freed, segments) =
+            segmented.evict_cold_chunks_with_quota(u64::MAX, 1);
+        assert_eq!((seg_evicted, seg_freed), (full_evicted, full_freed));
+        assert!(segments >= 2);
+        for i in 0..8 {
+            assert_eq!(segmented.get(i), Some(Value::Int((i % 4) as i32)));
+        }
+        assert!(segmented.compute_stats().is_ok());
+    }
+
+    #[test]
+    fn test_pressure_scan_matches_resident_with_quota_segmented_loads() {
+        // Working set larger than the per-segment quota: evict everything,
+        // then reload in quota-capped segments; results match resident and
+        // statistics stay usable after swap-out.
+        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        col.set_chunk_capacity(4);
+        let rows = 64usize;
+        for i in 0..rows {
+            col.set(i, Some(&Value::Int((i % 8) as i32))).unwrap();
+        }
+        col.clear_dirty();
+        col.materialize_chunks();
+        col.apply_encoding_to_chunks(crate::encoding::EncodingType::BitPacking, 255)
+            .unwrap();
+        let expected: Vec<Option<Value>> = (0..rows).map(|i| col.get(i)).collect();
+        let (evicted, freed, _) = col.evict_cold_chunks_with_quota(u64::MAX, u64::MAX);
+        assert!(evicted > 0 && freed > 0);
+        for (i, value) in expected.iter().enumerate() {
+            assert_eq!(col.get(i).as_ref(), value.as_ref());
+        }
+        assert!(col.compute_stats().is_ok());
+        let all_rows: Vec<usize> = (0..rows).collect();
+        let mut remaining = all_rows.clone();
+        let mut loaded_total = 0usize;
+        while !remaining.is_empty() {
+            let (loaded, rest) = col.ensure_resident_range_with_quota(&remaining, 2).unwrap();
+            assert!(loaded > 0 && loaded <= 4);
+            loaded_total += loaded;
+            remaining = rest;
+        }
+        assert!(loaded_total >= 4);
+        assert_eq!(col.evicted_chunk_count(), 0);
+        for (i, value) in expected.iter().enumerate() {
+            assert_eq!(col.get(i).as_ref(), value.as_ref());
+        }
+    }
 }

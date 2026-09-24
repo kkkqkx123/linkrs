@@ -108,20 +108,31 @@ impl VertexGcManager {
     }
 
     /// Walk all vertex tables evicting cold chunks up to `budget` bytes.
-    /// Tolerant by design: per-table failures only warn.
+    /// Tolerant by design: per-table failures only warn. Background batch
+    /// loads behind this pass are capped by
+    /// [`crate::vertex::column::MAX_BACKGROUND_LOAD_CHUNKS`] chunks per
+    /// segment and over-quota eviction proceeds in
+    /// [`crate::vertex::column::EVICTION_SEGMENT_BYTES`] segments.
     fn evict_cold_chunks(data_store: &GraphDataStore, budget: u64) {
+        use crate::vertex::column::EVICTION_SEGMENT_BYTES;
         let mut remaining = budget;
         let mut evicted = 0usize;
         let mut freed = 0u64;
+        let mut segments = 0usize;
         data_store.with_vertex_tables(|tables| {
             for table in tables.values() {
                 if remaining == 0 {
                     break;
                 }
-                let (n, bytes) = table.evict_cold_chunks(remaining);
+                let (n, bytes, segs) =
+                    table.evict_cold_chunks_with_quota(remaining, EVICTION_SEGMENT_BYTES);
                 evicted += n;
                 freed += bytes;
+                segments += segs;
                 remaining = remaining.saturating_sub(bytes);
+                if segs == 0 {
+                    continue;
+                }
             }
         });
         if evicted > 0 {
@@ -139,13 +150,14 @@ impl VertexGcManager {
                 });
             log::info!(
                 "chunk eviction under memory pressure: {} chunks, {} bytes released \
-                 (resident_chunks={} evicted_chunks={} evicted_bytes={} resident_bytes={})",
+                 (resident_chunks={} evicted_chunks={} evicted_bytes={} resident_bytes={} segments={})",
                 evicted,
                 freed,
                 resident_chunks,
                 evicted_chunks,
                 evicted_bytes,
                 resident_bytes,
+                segments,
             );
         }
     }

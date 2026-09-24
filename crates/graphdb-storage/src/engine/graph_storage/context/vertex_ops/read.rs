@@ -138,4 +138,39 @@ impl GraphStorageContext {
                 }
             })
     }
+
+    /// Scoped primary-key probe: the caller's buffer wins, otherwise the
+    /// global committed area. Outside scopes never observe the buffer, so
+    /// uncommitted keys stay invisible off-scope while the owning scope reads
+    /// its own writes.
+    pub fn lookup_pk_scoped(
+        &self,
+        label: LabelId,
+        external_id: &str,
+        ts: Timestamp,
+        scope: &crate::vertex::WriteScope,
+    ) -> crate::vertex::PkLookup {
+        self.persistent.data_store.with_vertex_tables(|tables| {
+            tables
+                .get(&label)
+                .map(|table| table.lookup_pk_with_scope(external_id, ts, scope))
+                .unwrap_or(crate::vertex::PkLookup::Missing)
+        })
+    }
+
+    /// Integer-keyed scoped probe. Same contract as [`Self::lookup_pk_scoped`].
+    pub fn lookup_pk_by_i64_scoped(
+        &self,
+        label: LabelId,
+        external_id: i64,
+        ts: Timestamp,
+        scope: &crate::vertex::WriteScope,
+    ) -> crate::vertex::PkLookup {
+        self.persistent.data_store.with_vertex_tables(|tables| {
+            tables
+                .get(&label)
+                .map(|table| table.lookup_pk_by_i64_with_scope(external_id, ts, scope))
+                .unwrap_or(crate::vertex::PkLookup::Missing)
+        })
+    }
 }

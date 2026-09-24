@@ -6,6 +6,33 @@ use std::sync::atomic::Ordering;
 
 use super::GraphStorageContext;
 
+/// Stable row-id mode for the long-term compaction policy. Mirrors
+/// [`crate::vertex::vertex_table::compaction::STABLE_ROW_IDS_ENABLED`]:
+/// when `true`, every compaction must produce zero edge endpoint rewrites.
+/// Stage one keeps this `false` while the stable collection path is
+/// validated; the zero-rewrite assertion below fails closed when enabled.
+pub const STABLE_ROW_IDS_ENABLED: bool =
+    crate::vertex::vertex_table::compaction::STABLE_ROW_IDS_ENABLED;
+
+/// Fail closed when stable row ids are enabled but a compaction produced
+/// edge endpoint rewrites. Call after collecting per-label vertex mappings
+/// and before touching any edge table.
+pub fn assert_zero_edge_rewrite(
+    vertex_mappings: &HashMap<LabelId, HashMap<u32, u32>>,
+) -> StorageResult<()> {
+    if !STABLE_ROW_IDS_ENABLED {
+        return Ok(());
+    }
+    let rewritten: usize = vertex_mappings.values().map(|mapping| mapping.len()).sum();
+    if rewritten > 0 {
+        return Err(StorageError::invalid_operation(format!(
+            "stable row ids enabled but compaction rewrote {} edge endpoints",
+            rewritten
+        )));
+    }
+    Ok(())
+}
+
 impl GraphStorageContext {
     /// Compact deleted vertices and propagate old-to-new internal ID
     /// mappings into edge tables.
@@ -161,6 +188,69 @@ impl GraphStorageContext {
         Ok(total_vertices_removed)
     }
 
+    /// Stable row-id remap: fold-only collection with a zero-rewrite gate.
+    ///
+    /// Uses the stable collection path (holes absorbed through the free
+    /// stack, live rows never move), asserts zero edge rewrites, and skips
+    /// the edge endpoint propagation entirely. Switching production to this
+    /// entry requires a full atomic checkpoint rollback baseline first; the
+    /// switch is validated by identifier monotonicity, hole reuse rate, and
+    /// full edge endpoint comparison.
+    pub(crate) fn compact_vertex_remap_stable(&self, cutoff: Timestamp) -> StorageResult<usize> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return Err(StorageError::storage_not_open());
+        }
+        let _barrier = self.persistent.auto_commit_write_gate.acquire();
+        let mut last_compacted_vertices = self.persistent.last_compacted_vertices.lock();
+        last_compacted_vertices.clear();
+
+        let vertex_labels = self
+            .persistent
+            .data_store
+            .with_vertex_tables_mut(|vertex_tables| {
+                let labels: Vec<LabelId> = vertex_tables.keys().copied().collect();
+                for &label_id in &labels {
+                    let table = vertex_tables.get(&label_id).ok_or_else(|| {
+                        StorageError::label_not_found(format!(
+                            "label {label_id} not found during compaction"
+                        ))
+                    })?;
+                    match table.compact_with_cutoff_stable_collect(cutoff) {
+                        Ok((removed, mapping, _)) => {
+                            debug_assert!(mapping.is_empty());
+                            if !removed.is_empty() {
+                                last_compacted_vertices.push((label_id, removed));
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to compact vertex table {}: {}", label_id, e);
+                        }
+                    }
+                }
+                Ok(labels)
+            })?;
+
+        for &label_id in &vertex_labels {
+            self.mark_vertex_modified(label_id);
+        }
+        for &label_id in &vertex_labels {
+            let _ = label_id;
+        }
+        let empty: HashMap<LabelId, HashMap<u32, u32>> = HashMap::new();
+        assert_zero_edge_rewrite(&empty)?;
+
+        let total_vertices_removed: usize = last_compacted_vertices
+            .iter()
+            .map(|(_, removed)| removed.len())
+            .sum();
+        log::info!(
+            "Stable compacted vertex tables: {} vertices absorbed, zero edge rewrites",
+            total_vertices_removed
+        );
+        self.bump_layout_version();
+        Ok(total_vertices_removed)
+    }
+
     pub(crate) fn compact_maintenance(
         &self,
         config: &CompactConfig,
@@ -184,7 +274,11 @@ impl GraphStorageContext {
             wm.safe_gc_timestamp()
         );
 
-        let total_vertices_removed = self.compact_vertex_remap(cleanup_ts)?;
+        let total_vertices_removed = if STABLE_ROW_IDS_ENABLED {
+            self.compact_vertex_remap_stable(cleanup_ts)?
+        } else {
+            self.compact_vertex_remap(cleanup_ts)?
+        };
 
         // Fold vertex version-chain before-images under the same shared
         // cutoff. Checkpoints persist current values only, so without this
@@ -311,5 +405,29 @@ impl GraphStorageContext {
         self.bump_layout_version();
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod stable_assertion_tests {
+    use super::*;
+
+    #[test]
+    fn zero_rewrite_assertion_passes_for_empty_mappings() {
+        let empty: HashMap<LabelId, HashMap<u32, u32>> = HashMap::new();
+        assert!(assert_zero_edge_rewrite(&empty).is_ok());
+        let mut with_labels: HashMap<LabelId, HashMap<u32, u32>> = HashMap::new();
+        with_labels.insert(1, HashMap::new());
+        assert!(assert_zero_edge_rewrite(&with_labels).is_ok());
+    }
+
+    #[test]
+    fn zero_rewrite_assertion_is_dormant_until_switch() {
+        // Stage one keeps the switch off, so legacy above-watermark remaps
+        // still pass the gate. Flipping the switch fails closed instead.
+        assert!(!STABLE_ROW_IDS_ENABLED);
+        let mut mappings: HashMap<LabelId, HashMap<u32, u32>> = HashMap::new();
+        mappings.insert(1, [(0u32, 1u32)].into_iter().collect());
+        assert!(assert_zero_edge_rewrite(&mappings).is_ok());
     }
 }

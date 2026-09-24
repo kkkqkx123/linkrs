@@ -461,6 +461,76 @@ mod tests {
     }
 
     #[test]
+    fn test_stable_collect_moves_no_live_rows_above_watermark() {
+        // 10 rows, 4 deletes: hole rate 0.4 exceeds the watermark, so the
+        // legacy path would re-densify. The stable path absorbs holes
+        // through the free stack and returns an empty mapping (zero edge
+        // rewrites) with survivors pinned to their ids.
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+        let ts_insert = 100;
+        let ts_delete = 200;
+        let mut before = std::collections::HashMap::new();
+        for i in 0..10 {
+            let name = format!("row_{}", i);
+            let id = insert_with_name(&table, &name, ts_insert);
+            before.insert(name, id);
+        }
+        for i in 0..4 {
+            table.delete(&format!("row_{}", i), ts_delete).unwrap();
+        }
+        let (removed, mapping, _) = table.compact_with_cutoff_stable_collect(ts_delete).unwrap();
+        assert_eq!(removed.len(), 4);
+        assert!(
+            mapping.is_empty(),
+            "stable collection must produce zero edge rewrites"
+        );
+        for i in 4..10 {
+            let name = format!("row_{}", i);
+            assert_eq!(
+                table.get_internal_id(&name, ts_delete),
+                before.get(&name).copied(),
+                "survivors never move under stable row ids"
+            );
+        }
+    }
+
+    #[test]
+    fn test_stable_holes_are_reused_by_new_inserts() {
+        // Identifier monotonicity plus hole reuse: new inserts fill free
+        // slots without shifting survivors.
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+        let ts_insert = 100;
+        let ts_delete = 200;
+        let ts_reinsert = 300;
+        let mut survivor_ids = std::collections::HashMap::new();
+        for i in 0..5 {
+            let name = format!("hole_{}", i);
+            insert_with_name(&table, &name, ts_insert);
+        }
+        table.delete("hole_1", ts_delete).unwrap();
+        table.delete("hole_3", ts_delete).unwrap();
+        let (removed, mapping, _) = table.compact_with_cutoff_stable_collect(ts_delete).unwrap();
+        assert_eq!(removed.len(), 2);
+        assert!(mapping.is_empty());
+        for name in ["hole_0", "hole_2", "hole_4"] {
+            survivor_ids.insert(
+                name.to_string(),
+                table.get_internal_id(name, ts_delete).unwrap(),
+            );
+        }
+        insert_with_name(&table, "hole_new_a", ts_reinsert);
+        insert_with_name(&table, "hole_new_b", ts_reinsert);
+        for (name, id) in &survivor_ids {
+            assert_eq!(
+                table.get_internal_id(name, ts_reinsert),
+                Some(*id),
+                "reused holes must not shift survivors"
+            );
+        }
+        assert_eq!(table.id_hole_stats(ts_reinsert).0, 5);
+    }
+
+    #[test]
     fn test_concurrent_same_key_insert_allocates_once() {
         use std::sync::Arc;
         let table = Arc::new(ShardedVertexTable::with_config(

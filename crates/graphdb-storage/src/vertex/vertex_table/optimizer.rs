@@ -55,6 +55,30 @@ impl VertexTable {
         ))
     }
 
+    /// Stable row-id collection: watermark-gated hole absorption without
+    /// moving any live row.
+    ///
+    /// Long-term compaction policy: deleted keys are pushed to the free stack
+    /// for reuse by new inserts, version chains are left to the caller's
+    /// fold pass, and no timestamp/column/index remap runs. The returned
+    /// mapping is always empty, so the maintenance layer must produce zero
+    /// edge endpoint rewrites (see the zero-rewrite assertion there).
+    /// Shard-count manifests stay the identifier-decoding anchor.
+    pub fn compact_with_cutoff_stable_collect(
+        &mut self,
+        cutoff: graphdb_core::types::Timestamp,
+    ) -> StorageResult<(Vec<IdKey>, HashMap<u32, u32>, CompactionJournal)> {
+        let deleted_ids: Vec<u32> = self.timestamps.iter_deleted(cutoff).collect();
+        let mut removed_keys = Vec::with_capacity(deleted_ids.len());
+        for id in &deleted_ids {
+            if let Some(key) = self.id_indexer.get_key(*id) {
+                self.id_indexer.remove(&key);
+                removed_keys.push(key);
+            }
+        }
+        Ok((removed_keys, HashMap::new(), CompactionJournal::default()))
+    }
+
     /// Compact the vertex table using the unified CompactionCoordinator
     ///
     /// Crate-internal re-layout step used by watermark-gated compaction

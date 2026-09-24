@@ -139,16 +139,41 @@ pub(crate) fn insert_vertex(
     let vertex = Vertex::new(vid, vertex.tag);
 
     let ts = ctx.get_write_timestamp()?;
+    // Caller-owned write scope created with the write timestamp; it travels
+    // by mutable borrow through context, vertex operation and shard layers,
+    // and is destroyed by the commit/rollback hooks below or by crash drop.
+    let mut scope = crate::vertex::WriteScope::new(ts);
+    log::trace!("write scope opened ts={}", scope.write_ts());
     let mut rollback = Vec::new();
-    let result =
-        insert_vertex_at_timestamp(ctx, space, space_info.space_id, vertex, ts, &mut rollback);
+    let result = insert_vertex_at_timestamp(
+        ctx,
+        space,
+        space_info.space_id,
+        vertex,
+        ts,
+        &mut rollback,
+        &mut scope,
+    );
 
     if result.is_err() {
         rollback_vertex_tags(ctx, space_info.space_id, &rollback, ts);
+        // Rollback hook: discard staged ownership and logically delete
+        // already applied rows with the existing undo semantics, before the
+        // timestamp abort hides the slot through the pending gate.
+        for item in &rollback {
+            ctx.rollback_write_scope(item.label_id, &mut scope, ts);
+        }
+        scope.clear();
     } else {
         for item in &rollback {
             record_vertex_insert(ctx, item.label_id, item.vid, Some(item.redo_entry.clone()))?;
+            // Commit hook: drop this label's scope ownership ahead of the
+            // timestamp commit; WAL durability stays the commit point, and
+            // the grouped commit variant shares this hook through
+            // `commit_staged_writes_grouped`.
+            ctx.commit_write_scope(item.label_id, &mut scope);
         }
+        debug_assert!(scope.is_empty());
     }
 
     if result.is_ok() {
@@ -167,6 +192,7 @@ fn insert_vertex_at_timestamp(
     vertex: Vertex,
     ts: Timestamp,
     rollback: &mut Vec<InsertedVertexTag>,
+    scope: &mut crate::vertex::WriteScope,
 ) -> StorageResult<VertexId> {
     let tag = &vertex.tag;
     let label_id = tag_label_id(ctx, space, &tag.name)?
@@ -186,10 +212,10 @@ fn insert_vertex_at_timestamp(
 
     match route_vertex_id(&vertex.vid)? {
         RoutedVertexId::Int(vid_int) => {
-            ctx.insert_vertex_by_i64(label_id, vid_int, &props, ts)?;
+            ctx.insert_vertex_by_i64_with_scope(label_id, vid_int, &props, ts, scope)?;
         }
         RoutedVertexId::Text(id_str) => {
-            ctx.insert_vertex(label_id, &id_str, &props, ts)?;
+            ctx.insert_vertex_with_scope(label_id, &id_str, &props, ts, scope)?;
         }
     }
 
@@ -817,6 +843,11 @@ pub(crate) fn batch_insert_vertices(
         .list_tag_indexes(space_info.space_id)?;
 
     let ts = ctx.get_write_timestamp()?;
+    // Batch write scope created with the batch timestamp; every merge below
+    // records into it, and the commit/rollback hooks destroy it. New write
+    // entries must wire both hooks (review gate).
+    let mut scope = crate::vertex::WriteScope::new(ts);
+    log::trace!("batch write scope opened ts={}", scope.write_ts());
     let mut batch_ctx = PrecheckedBatchContext {
         tag_map: &tag_map,
         tag_indexes: &tag_indexes,
@@ -836,6 +867,13 @@ pub(crate) fn batch_insert_vertices(
                 return Err(e);
             }
         }
+    }
+
+    // Scope capacity is enforced before any global mutation so no applied
+    // row ever escapes scope ownership.
+    if staged.len() > crate::vertex::MAX_WRITE_SCOPE_KEYS {
+        ctx.abort_write_timestamp(ts);
+        return Err(StorageError::capacity_exceeded());
     }
 
     // Phase B (merge): group staged rows by label and apply each table's
@@ -898,7 +936,10 @@ pub(crate) fn batch_insert_vertices(
                     (s.as_str(), staged[pos].props.as_slice())
                 })
                 .collect();
-            for (slot, result) in str_order.iter().zip(table.insert_batch_str(&rows, ts)) {
+            for (slot, result) in str_order
+                .iter()
+                .zip(table.insert_batch_str_with_scope(&rows, ts, &mut scope))
+            {
                 applied[*slot] = Some(result);
             }
         }
@@ -912,7 +953,10 @@ pub(crate) fn batch_insert_vertices(
                     (n, staged[pos].props.as_slice())
                 })
                 .collect();
-            for (slot, result) in i64_order.iter().zip(table.insert_batch_i64(&rows, ts)) {
+            for (slot, result) in i64_order
+                .iter()
+                .zip(table.insert_batch_i64_with_scope(&rows, ts, &mut scope))
+            {
                 applied[*slot] = Some(result);
             }
         }
@@ -945,6 +989,10 @@ pub(crate) fn batch_insert_vertices(
     }
     if let Some(e) = first_error {
         rollback_vertex_tags(ctx, space_info.space_id, &rollback, ts);
+        for item in &rollback {
+            ctx.rollback_write_scope(item.label_id, &mut scope, ts);
+        }
+        scope.clear();
         ctx.abort_write_timestamp(ts);
         return Err(e);
     }
@@ -963,6 +1011,10 @@ pub(crate) fn batch_insert_vertices(
             ts,
         ) {
             rollback_vertex_tags(ctx, space_info.space_id, &rollback, ts);
+            for item in &rollback {
+                ctx.rollback_write_scope(item.label_id, &mut scope, ts);
+            }
+            scope.clear();
             ctx.abort_write_timestamp(ts);
             return Err(e);
         }
@@ -992,6 +1044,7 @@ pub(crate) fn batch_insert_vertices(
 
     for item in &rollback {
         record_vertex_insert(ctx, item.label_id, item.vid, Some(item.redo_entry.clone()))?;
+        ctx.commit_write_scope(item.label_id, &mut scope);
     }
 
     ctx.commit_write_timestamp_ordered(ts)?;

@@ -34,6 +34,17 @@ use super::core::VertexTable;
 use graphdb_core::StorageResult;
 use std::collections::HashMap;
 
+/// Stable row-id mode switch for the long-term compaction policy.
+///
+/// `false` keeps the current watermark-gated remap cascade (above-watermark
+/// shards re-densify and propagate old-to-new mappings to edge endpoints).
+/// Flipping to `true` activates the terminal semantics (live rows never move;
+/// deletes are absorbed by the free stack; compaction produces zero edge
+/// rewrites) after a full atomic checkpoint rollback baseline is taken.
+/// Stage one keeps this `false` while the zero-rewrite assertion and stable
+/// collection path are validated; retirement deletes the remap cascade.
+pub const STABLE_ROW_IDS_ENABLED: bool = false;
+
 /// Unified compaction coordinator for VertexTable
 ///
 /// This struct ensures all three internal structures (id_indexer, timestamps, columns)
