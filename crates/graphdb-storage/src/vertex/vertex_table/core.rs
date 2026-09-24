@@ -764,6 +764,11 @@ impl VertexTable {
         &self.schema
     }
 
+    /// Replace the published schema without staging.
+    ///
+    /// Recovery and undo compensation only. Live evolution must go through
+    /// prepare/fill/publish/abort; while a staged change is pending this
+    /// is rejected.
     pub fn set_schema(&mut self, schema: VertexSchema) -> StorageResult<()> {
         if self.pending_schema_change.is_some() {
             return Err(StorageError::invalid_operation(

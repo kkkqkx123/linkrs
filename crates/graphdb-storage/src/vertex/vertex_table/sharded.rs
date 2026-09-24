@@ -297,11 +297,11 @@ mod tests {
     #[test]
     fn test_gc() {
         let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
-        let ts1 = 200;
-        let ts2 = 100;
-        insert_with_name(&table, "gc_test", ts1);
-        table.delete("gc_test", ts2).unwrap();
-        let (gc_vertices, gc_versions) = table.gc_detailed(150).unwrap();
+        let ts_insert = 100;
+        let ts_delete = 200;
+        insert_with_name(&table, "gc_test", ts_insert);
+        table.delete("gc_test", ts_delete).unwrap();
+        let (gc_vertices, gc_versions) = table.gc_detailed(250).unwrap();
 
         let count = gc_vertices + gc_versions;
         assert!(count > 0);
@@ -322,8 +322,8 @@ mod tests {
     #[test]
     fn test_id_hole_stats_tracks_allocated_and_live() {
         let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 8);
-        let ts_insert = 200;
-        let ts_delete = 100;
+        let ts_insert = 100;
+        let ts_delete = 200;
         for i in 0..100 {
             insert_with_name(&table, &format!("v_{}", i), ts_insert);
         }
@@ -335,21 +335,21 @@ mod tests {
         }
         // Deleted vertices leave holes: allocated stays at the high-water
         // mark, live only counts vertices not deleted at the cutoff.
-        let (live, allocated) = table.id_hole_stats(150);
+        let (live, allocated) = table.id_hole_stats(250);
         assert_eq!((live, allocated), (70, 100));
         // A cutoff before the deletes sees no holes.
-        let (live, allocated) = table.id_hole_stats(50);
+        let (live, allocated) = table.id_hole_stats(150);
         assert_eq!((live, allocated), (100, 100));
 
         // Physical removal + compaction re-densifies local IDs and resets
         // the allocation counters (same path as compact_vertex_remap).
         let (removed, mapping) = table
-            .compact_with_cutoff_collect_mapping(ts_insert)
+            .compact_with_cutoff_collect_mapping(ts_delete)
             .unwrap();
         assert_eq!(removed.len(), 30);
         assert!(!mapping.is_empty());
 
-        let (live, allocated) = table.id_hole_stats(150);
+        let (live, allocated) = table.id_hole_stats(250);
         assert_eq!((live, allocated), (70, 70));
     }
 

@@ -136,7 +136,11 @@ impl ShardedVertexTable {
         total
     }
 
+    #[allow(dead_code)]
     pub fn active_snapshot_count(&self) -> usize {
+        // Snapshots are global to VersionManager; tables never pin.
+        // Always zero by design. Use the GC coordinator diagnostics
+        // active count for the pass-wide value.
         0
     }
 }

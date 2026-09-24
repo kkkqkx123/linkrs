@@ -147,9 +147,11 @@ impl VertexGcManager {
 
         let mut total_removed = 0usize;
         let mut remapped_labels = Vec::new();
+        // Snapshots are global to VersionManager; per-table pin counts are
+        // always zero by design. Log the pass-wide active count once.
+        let pass_active = diagnostics.active_snapshot_count;
         if let Err(e) = self.data_store.with_vertex_tables_mut(|tables| {
             for table in tables.values() {
-                let active = table.active_snapshot_count();
                 match table.gc_detailed(safe_ts) {
                     Ok((reclaimed_vertices, version_entries)) => {
                         total_removed += reclaimed_vertices + version_entries;
@@ -160,11 +162,11 @@ impl VertexGcManager {
                             // Version-only passes leave IDs untouched.
                             remapped_labels.push(table.label());
                         }
-                        if reclaimed_vertices + version_entries > 0 && active > 0 {
+                        if reclaimed_vertices + version_entries > 0 && pass_active > 0 {
                             log::debug!(
                                 "GC removed {} entries from vertex table with {} active snapshots",
                                 reclaimed_vertices + version_entries,
-                                active,
+                                pass_active,
                             );
                         }
                     }

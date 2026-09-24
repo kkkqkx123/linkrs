@@ -11,6 +11,9 @@
 use super::{get_input_rows, NodeEstimator};
 use crate::optimizer::cost::estimate::NodeCostEstimate;
 use crate::optimizer::cost::CostCalculator;
+use crate::optimizer::cost_based::ndv::{
+    join_output_rows, join_selectivity, DEFAULT_JOIN_SELECTIVITY,
+};
 use crate::optimizer::error::CostError;
 use crate::optimizer::stats::StatsView;
 use crate::planning::plan::PlanNodeEnum;
@@ -30,7 +33,7 @@ impl<'a> JoinEstimator<'a> {
 impl<'a> NodeEstimator for JoinEstimator<'a> {
     fn estimate(
         &self,
-        _stats: &StatsView,
+        stats: &StatsView,
         node: &PlanNodeEnum,
         child_estimates: &[NodeCostEstimate],
     ) -> Result<(f64, u64), CostError> {
@@ -38,9 +41,12 @@ impl<'a> NodeEstimator for JoinEstimator<'a> {
         let right_rows = get_input_rows(child_estimates, 1);
 
         match node {
-            PlanNodeEnum::InnerJoin(_) => {
-                // Estimation of output rows for internal connections (assuming selectivity of 0.3)
-                let output_rows = (left_rows.min(right_rows) as f64 * 0.3).max(1.0) as u64;
+            PlanNodeEnum::InnerJoin(n) => {
+                // Containment estimate when NDV is known, else fixed fallback.
+                let selectivity = join_selectivity(stats, n.hash_keys(), n.probe_keys())
+                    .unwrap_or(DEFAULT_JOIN_SELECTIVITY);
+                let output_rows =
+                    join_output_rows(left_rows, right_rows, selectivity).max(1);
                 let cost = self
                     .cost_calculator
                     .calculate_hash_join_cost(left_rows, right_rows);
@@ -119,7 +125,7 @@ mod tests {
         let (cost, output_rows) = result.expect("Estimation should succeed");
         assert!(cost > 0.0);
         assert!(output_rows >= 1);
-        assert!(output_rows <= 100);
+        assert_eq!(output_rows, 6000);
     }
 
     #[test]
@@ -174,7 +180,7 @@ mod tests {
         let (cost, output_rows) = result.expect("Estimation should succeed");
         assert!(cost > 0.0);
         assert!(output_rows >= 1);
-        assert!(output_rows <= 100);
+        assert_eq!(output_rows, 6000);
     }
 
     #[test]

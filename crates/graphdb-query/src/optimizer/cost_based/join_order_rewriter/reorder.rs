@@ -4,6 +4,7 @@ use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::cost_based::join_order::{
     JoinCondition, JoinOrderOptimizer, JoinOrderResult, TableInfo,
 };
+use crate::optimizer::cost_based::ndv::refine_join_selectivity;
 use crate::optimizer::stats::StatsView;
 use crate::optimizer::JoinAlgorithm;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
@@ -294,6 +295,15 @@ fn try_optimize_join_tree(
     }
 
     assign_leaf_info(&mut chain, stats);
+
+    for pred in &mut chain.predicates {
+        pred.selectivity = refine_join_selectivity(
+            stats,
+            &pred.left_key,
+            &pred.right_key,
+            pred.selectivity,
+        );
+    }
 
     let (tables, conditions) = build_optimizer_input(&chain);
 
@@ -812,6 +822,15 @@ fn try_optimize_join_tree_logical(
     }
 
     assign_leaf_info_logical(&mut chain, stats);
+
+    for pred in &mut chain.predicates {
+        pred.selectivity = refine_join_selectivity(
+            stats,
+            &pred.left_key,
+            &pred.right_key,
+            pred.selectivity,
+        );
+    }
 
     let (tables, conditions) = build_optimizer_input_logical(&chain);
 

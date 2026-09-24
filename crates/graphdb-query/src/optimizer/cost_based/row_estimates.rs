@@ -259,8 +259,23 @@ fn estimate_node_output_rows_impl(
         }
 
         // ── Binary operators ──
-        // Joins multiply their inputs (semi-join keeps the left side).
-        InnerJoin(_) | LeftJoin(_) | RightJoin(_) | CrossJoin(_) => {
+        // Joins use containment selectivity when NDV is known, else cross product.
+        InnerJoin(n) => {
+            let children = node.children();
+            let raw = if children.len() >= 2 {
+                let left =
+                    estimate_node_output_rows_impl(children[0], stats, selectivity, cardinality);
+                let right =
+                    estimate_node_output_rows_impl(children[1], stats, selectivity, cardinality);
+                let sel = factor_cost::join_selectivity(stats, n.hash_keys(), n.probe_keys())
+                    .unwrap_or(1.0);
+                factor_cost::join_output_rows(left, right, sel)
+            } else {
+                child_rows_of_impl(node, stats, selectivity, cardinality)
+            };
+            corrected_rows(node, raw, stats.space(), cardinality)
+        }
+        LeftJoin(_) | RightJoin(_) | CrossJoin(_) => {
             let children = node.children();
             let raw = if children.len() >= 2 {
                 let left =
