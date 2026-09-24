@@ -3,6 +3,38 @@ use graphdb_core::Value;
 
 use crate::edge::RecordFormPreference;
 
+/// Thresholds deciding when a bundled-eligible table is narrow and
+/// read-heavy enough for the inline form.
+///
+/// Single source of truth for the width and access gates: shape admission
+/// still vetoes first, then the observed profile must pass all three gates.
+/// Recommended ranges are documented on each field; values never adapt to
+/// load at runtime.
+#[derive(Debug, Clone, Copy)]
+pub struct RecordFormProfileThresholds {
+    /// Maximum average property-byte width for the inline form.
+    /// Recommended range 8..=16. The bundled slot holds one 8-byte scalar
+    /// word plus a validity bit, so wider averages stay columnar.
+    pub max_inline_avg_bytes: u64,
+    /// Maximum write share `writes / (reads + writes)` for the inline form.
+    /// Recommended range 0.2..=0.4. Above this the table is write-hot and
+    /// stays columnar.
+    pub max_write_share: f64,
+    /// Minimum read-to-write ratio for the inline form. Recommended range
+    /// 2.0..=4.0. Only read-heavy tables migrate inline.
+    pub min_read_to_write_ratio: f64,
+}
+
+impl Default for RecordFormProfileThresholds {
+    fn default() -> Self {
+        Self {
+            max_inline_avg_bytes: 8,
+            max_write_share: 0.3,
+            min_read_to_write_ratio: 3.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EdgeTableConfig {
     pub initial_vertex_capacity: usize,
@@ -60,6 +92,10 @@ pub struct EdgeTableConfig {
     /// historical behavior; `ReadSnapshot` marks the read-only snapshot path
     /// and `BulkLoad` the batch-ingest path so mapping hints follow intent.
     pub memory_intent: MemoryIntent,
+    /// Width and access gates for automatic bundled migration. Shape
+    /// admission still vetoes first; the observed profile must then pass all
+    /// gates before the background path recommends the inline form.
+    pub record_form_profile: RecordFormProfileThresholds,
 }
 
 /// Declared memory intent for read-heavy paths.
@@ -126,6 +162,7 @@ impl Default for EdgeTableConfig {
             auto_encode_on_checkpoint: true,
             auto_encode_min_rows: 128,
             memory_intent: MemoryIntent::default(),
+            record_form_profile: RecordFormProfileThresholds::default(),
         }
     }
 }

@@ -88,7 +88,7 @@ fn column_block_matches_row_path_e2e() {
     );
     let space = space_info(&storage);
 
-    assert!(!column_block_enabled(), "column-block must default to off");
+    assert!(column_block_enabled(), "column-block must default to on");
 
     let queries = [
         "MATCH (n:node) RETURN count(n)",
@@ -96,19 +96,19 @@ fn column_block_matches_row_path_e2e() {
         "MATCH (n:node) RETURN n.value, n.name",
     ];
 
-    let row_results: Vec<Vec<String>> = queries
-        .iter()
-        .map(|sql| query_rows(&mut pipeline, &space, sql))
-        .collect();
-
-    set_column_block_enabled(true);
-    assert!(column_block_enabled(), "column-block should be enabled");
     let column_results: Vec<Vec<String>> = queries
         .iter()
         .map(|sql| query_rows(&mut pipeline, &space, sql))
         .collect();
+
     set_column_block_enabled(false);
-    assert!(!column_block_enabled(), "column-block should be restored");
+    assert!(!column_block_enabled(), "column-block should be disabled");
+    let row_results: Vec<Vec<String>> = queries
+        .iter()
+        .map(|sql| query_rows(&mut pipeline, &space, sql))
+        .collect();
+    set_column_block_enabled(true);
+    assert!(column_block_enabled(), "column-block should be restored");
 
     for (sql, (row, column)) in queries
         .iter()

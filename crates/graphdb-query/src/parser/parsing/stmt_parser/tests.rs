@@ -186,8 +186,7 @@ fn test_parse_delete_vertex_statement() {
         result.err()
     );
     if let Ok(Stmt::Delete(delete_stmt)) = result {
-        if let crate::parser::ast::DeleteTarget::Vertices { tag, vids } = delete_stmt.target
-        {
+        if let crate::parser::ast::DeleteTarget::Vertices { tag, vids } = delete_stmt.target {
             assert_eq!(tag, "person");
             assert_eq!(vids.len(), 1);
         } else {

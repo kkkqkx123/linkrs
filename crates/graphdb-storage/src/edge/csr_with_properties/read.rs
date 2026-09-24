@@ -359,4 +359,214 @@ impl CsrWithProperties {
                 .collect(),
         }
     }
+
+    /// Typed column-major batch decode without visibility filtering.
+    ///
+    /// Native edge columnar entry: the caller holds one authority verdict per
+    /// edge, so this decodes straight from the property columns into typed
+    /// [`crate::cursor::ColumnValues`]. Projection resolves once; each column
+    /// decodes according to its declared type and degrades to `General` on
+    /// type mismatch, so one mixed column never forces the whole batch back
+    /// to row transpose. Output order follows the input edge order.
+    pub fn get_typed_columns_batch_by_edge_ids(
+        &self,
+        edge_ids: &[EdgeId],
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Vec<(String, crate::cursor::ColumnValues)> {
+        use crate::cursor::ColumnValues;
+        use graphdb_core::types::DataType;
+        if self.inline {
+            return Vec::new();
+        }
+        let columns = self.resolve_projection(projection);
+        let mut out = Vec::with_capacity(columns.len());
+        for (col_idx, name) in columns {
+            let data_type = self
+                .property_schema
+                .get(col_idx)
+                .map(|s| s.data_type.clone())
+                .unwrap_or(DataType::Empty);
+            let Some(column) = self.property_columns.get(col_idx) else {
+                out.push((
+                    name.to_string(),
+                    ColumnValues::General(vec![None; edge_ids.len()]),
+                ));
+                continue;
+            };
+            let typed = match data_type {
+                DataType::BigInt => {
+                    let mut values = Vec::with_capacity(edge_ids.len());
+                    let mut valid = vec![0u8; edge_ids.len()];
+                    let mut mixed = false;
+                    for (i, edge_id) in edge_ids.iter().enumerate() {
+                        let cell = self
+                            .mapped_row(*edge_id)
+                            .and_then(|pos| column.get_at_ts(pos, query_ts));
+                        match cell {
+                            Some(Value::BigInt(v)) => {
+                                values.push(v);
+                                valid[i] = 1;
+                            }
+                            None => values.push(0),
+                            Some(_) => {
+                                mixed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if mixed {
+                        None
+                    } else {
+                        Some(ColumnValues::I64 { values, valid })
+                    }
+                }
+                DataType::Double => {
+                    let mut values = Vec::with_capacity(edge_ids.len());
+                    let mut valid = vec![0u8; edge_ids.len()];
+                    let mut mixed = false;
+                    for (i, edge_id) in edge_ids.iter().enumerate() {
+                        let cell = self
+                            .mapped_row(*edge_id)
+                            .and_then(|pos| column.get_at_ts(pos, query_ts));
+                        match cell {
+                            Some(Value::Double(v)) => {
+                                values.push(v);
+                                valid[i] = 1;
+                            }
+                            None => values.push(0.0),
+                            Some(_) => {
+                                mixed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if mixed {
+                        None
+                    } else {
+                        Some(ColumnValues::F64 { values, valid })
+                    }
+                }
+                DataType::Int => {
+                    let mut values = Vec::with_capacity(edge_ids.len());
+                    let mut valid = vec![0u8; edge_ids.len()];
+                    let mut mixed = false;
+                    for (i, edge_id) in edge_ids.iter().enumerate() {
+                        let cell = self
+                            .mapped_row(*edge_id)
+                            .and_then(|pos| column.get_at_ts(pos, query_ts));
+                        match cell {
+                            Some(Value::Int(v)) => {
+                                values.push(v);
+                                valid[i] = 1;
+                            }
+                            None => values.push(0),
+                            Some(_) => {
+                                mixed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if mixed {
+                        None
+                    } else {
+                        Some(ColumnValues::I32 { values, valid })
+                    }
+                }
+                DataType::Bool => {
+                    let mut values = Vec::with_capacity(edge_ids.len());
+                    let mut valid = vec![0u8; edge_ids.len()];
+                    let mut mixed = false;
+                    for (i, edge_id) in edge_ids.iter().enumerate() {
+                        let cell = self
+                            .mapped_row(*edge_id)
+                            .and_then(|pos| column.get_at_ts(pos, query_ts));
+                        match cell {
+                            Some(Value::Bool(v)) => {
+                                values.push(u8::from(v));
+                                valid[i] = 1;
+                            }
+                            None => values.push(0),
+                            Some(_) => {
+                                mixed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if mixed {
+                        None
+                    } else {
+                        Some(ColumnValues::Bool { values, valid })
+                    }
+                }
+                DataType::SmallInt => {
+                    let mut values = Vec::with_capacity(edge_ids.len());
+                    let mut valid = vec![0u8; edge_ids.len()];
+                    let mut mixed = false;
+                    for (i, edge_id) in edge_ids.iter().enumerate() {
+                        let cell = self
+                            .mapped_row(*edge_id)
+                            .and_then(|pos| column.get_at_ts(pos, query_ts));
+                        match cell {
+                            Some(Value::SmallInt(v)) => {
+                                values.push(v);
+                                valid[i] = 1;
+                            }
+                            None => values.push(0),
+                            Some(_) => {
+                                mixed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if mixed {
+                        None
+                    } else {
+                        Some(ColumnValues::I16 { values, valid })
+                    }
+                }
+                DataType::Float => {
+                    let mut values = Vec::with_capacity(edge_ids.len());
+                    let mut valid = vec![0u8; edge_ids.len()];
+                    let mut mixed = false;
+                    for (i, edge_id) in edge_ids.iter().enumerate() {
+                        let cell = self
+                            .mapped_row(*edge_id)
+                            .and_then(|pos| column.get_at_ts(pos, query_ts));
+                        match cell {
+                            Some(Value::Float(v)) => {
+                                values.push(v);
+                                valid[i] = 1;
+                            }
+                            None => values.push(0.0),
+                            Some(_) => {
+                                mixed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if mixed {
+                        None
+                    } else {
+                        Some(ColumnValues::F32 { values, valid })
+                    }
+                }
+                _ => None,
+            };
+            match typed {
+                Some(values) => out.push((name.to_string(), values)),
+                None => {
+                    let general: Vec<Option<Value>> = edge_ids
+                        .iter()
+                        .map(|edge_id| {
+                            self.mapped_row(*edge_id)
+                                .and_then(|pos| column.get_at_ts(pos, query_ts))
+                        })
+                        .collect();
+                    out.push((name.to_string(), ColumnValues::General(general)));
+                }
+            }
+        }
+        out
+    }
 }

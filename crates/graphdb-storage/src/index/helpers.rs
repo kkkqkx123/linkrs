@@ -300,9 +300,7 @@ mod tests {
         let entity = vertex_entity_ref(&v).expect("should resolve");
         assert_eq!(
             entity,
-            EntityRef::Vertex(
-                VertexId::try_from_string("uuid-abc").expect("test vertex id")
-            )
+            EntityRef::Vertex(VertexId::try_from_string("uuid-abc").expect("test vertex id"))
         );
     }
 

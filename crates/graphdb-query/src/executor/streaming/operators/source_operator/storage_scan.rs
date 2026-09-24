@@ -21,19 +21,36 @@ use super::util::{
 use super::SourceOperator;
 use super::SourceOperatorKind;
 
-/// Runtime switch: storage column-block scan mode (A1).
+/// Runtime switch: storage column-block scan mode.
 ///
-/// Rollback knob — set to `false` to keep the row-based scan path exactly as
-/// before the column-block path existed. Default off.
-static COLUMN_BLOCK_ENABLED: AtomicBool = AtomicBool::new(false);
+/// Default on: storage sources stream column-major batches through the
+/// `next_column_batch` cursor API and build chunk typed columns directly
+/// from those batches. Rollback: set `GRAPHDB_COLUMN_BLOCK_ENABLED=0` (or
+/// `false`/`off`) to force the row-based path without restarting with a
+/// different binary, or call `set_column_block_enabled(false)`
+/// programmatically. The row path is retained as the fallback.
+static COLUMN_BLOCK_ENABLED: AtomicBool = AtomicBool::new(true);
 
-/// Enable or disable the storage column-block scan mode (A1).
+/// Enable or disable the storage column-block scan mode.
 pub fn set_column_block_enabled(enabled: bool) {
     COLUMN_BLOCK_ENABLED.store(enabled, AtomicOrdering::Relaxed);
 }
 
 /// Whether the storage column-block scan mode is currently enabled.
+///
+/// The environment rollback overrides the static switch: when
+/// `GRAPHDB_COLUMN_BLOCK_ENABLED` is `0`/`false`/`off` (case-insensitive)
+/// the column-block path stays off even if it was enabled programmatically.
 pub fn column_block_enabled() -> bool {
+    if let Ok(raw) = std::env::var("GRAPHDB_COLUMN_BLOCK_ENABLED") {
+        let lowered = raw.trim().to_ascii_lowercase();
+        if matches!(lowered.as_str(), "0" | "false" | "off" | "no") {
+            return false;
+        }
+        if matches!(lowered.as_str(), "1" | "true" | "on" | "yes") {
+            return COLUMN_BLOCK_ENABLED.load(AtomicOrdering::Relaxed);
+        }
+    }
     COLUMN_BLOCK_ENABLED.load(AtomicOrdering::Relaxed)
 }
 
@@ -116,6 +133,7 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
                                 .collect()
                         }),
                         predicate: (!predicate.is_empty()).then(|| predicate.clone()),
+                        column_block_mode: column_block_enabled(),
                         ..ScanOptions::default()
                     },
                 )
@@ -320,29 +338,17 @@ fn build_column_chunk(
     let layout = Arc::clone(output_layout);
     let row_count = batch.len();
 
-    // Pre-compute per-column `Value` vectors once (used for both the rows and
-    // the fallback typed columns).
-    let mut prop_values: Vec<Vec<Value>> = Vec::with_capacity(batch.columns.len());
-    for column in &batch.columns {
-        prop_values.push(
-            (0..row_count)
-                .map(|row| {
-                    column
-                        .values
-                        .value_at(row)
-                        .unwrap_or_else(|| Value::Null(graphdb_core::value::NullType::Null))
-                })
-                .collect(),
-        );
-    }
-
+    // Row view is still emitted for downstream operators, but the typed
+    // layout is converted directly from the storage batch without an
+    // intermediate per-cell `Value` matrix: rows read via `value_at` once,
+    // typed columns convert straight from `ColumnValues` with validity
+    // bitmaps.
     let mut rows = Vec::with_capacity(row_count);
     for (row, tag_name) in batch.tag_names.iter().enumerate() {
         let mut properties = std::collections::HashMap::with_capacity(batch.columns.len());
-        for (index, column) in batch.columns.iter().enumerate() {
-            let value = &prop_values[index][row];
-            if !matches!(value, Value::Null(_)) {
-                properties.insert(column.name.clone(), value.clone());
+        for column in batch.columns.iter() {
+            if let Some(value) = column.values.value_at(row) {
+                properties.insert(column.name.clone(), value);
             }
         }
         let vertex = graphdb_core::Vertex::new(
@@ -370,11 +376,8 @@ fn build_column_chunk(
             chunk.rows.iter().map(|r| r[0].clone()).collect(),
         ));
         for prop in flatten {
-            match batch.columns.iter().position(|c| c.name == *prop) {
-                Some(index) => typed.push(typed_from_column(
-                    &batch.columns[index].values,
-                    &prop_values[index],
-                )),
+            match batch.columns.iter().find(|c| c.name == *prop) {
+                Some(column) => typed.push(typed_from_storage_column(&column.values)),
                 None => typed.push(TypedColumn::Fallback(
                     (0..row_count)
                         .map(|_| Value::Null(graphdb_core::value::NullType::Null))
@@ -389,6 +392,9 @@ fn build_column_chunk(
         runtime.columnar_stats().record_column_block_hit();
     }
 
+    // Memory is accounted as row allocation plus typed allocation, with no
+    // hidden intermediate matrix: the typed bytes above are the actual dense
+    // layouts, not a second copy of the row matrix.
     let typed_bytes = chunk
         .typed_columns
         .as_ref()
@@ -404,55 +410,133 @@ fn build_column_chunk(
 }
 
 /// Convert a storage [`ColumnValues`] into the chunk's [`TypedColumn`].
-fn typed_from_column(values: &crate::storage::ColumnValues, fallback: &[Value]) -> TypedColumn {
+///
+/// Validity bitmaps carry nulls so nullable columns stay typed instead of
+/// degrading to `Fallback`; narrow ints and floats widen to the evaluator
+/// layouts with the same null handling.
+fn typed_from_storage_column(values: &crate::storage::ColumnValues) -> TypedColumn {
     match values {
-        crate::storage::ColumnValues::I64 { values: v, .. } if values.all_valid() => {
-            TypedColumn::I64(v.clone())
-        }
-        crate::storage::ColumnValues::F64 { values: v, .. } if values.all_valid() => {
-            TypedColumn::F64(v.clone())
-        }
-        crate::storage::ColumnValues::I32 { values: v, .. } if values.all_valid() => {
-            TypedColumn::I32(v.clone())
-        }
-        crate::storage::ColumnValues::Bool { values: v, .. } if values.all_valid() => {
-            TypedColumn::Bool(v.iter().map(|&x| x != 0).collect())
-        }
-        // Narrow ints/floats widen to the nearest typed layout with full
-        // evaluator support; values are exact (i16->i32, f32->f64).
-        crate::storage::ColumnValues::I16 { values: v, .. } if values.all_valid() => {
-            TypedColumn::I32(v.iter().map(|&x| i32::from(x)).collect())
-        }
-        crate::storage::ColumnValues::F32 { values: v, .. } if values.all_valid() => {
-            TypedColumn::F64(v.iter().map(|&x| f64::from(x)).collect())
-        }
-        // General columns that happen to be uniform Date/String values are
-        // promoted to the typed layout so filtering stays vectorized.
-        crate::storage::ColumnValues::General { .. } => {
-            let mut dates = Vec::with_capacity(fallback.len());
-            let mut strings = Vec::with_capacity(fallback.len());
-            let mut is_date = true;
-            let mut is_string = true;
-            for v in fallback {
-                match v {
-                    Value::Date(d) => dates.push(d.to_days()),
-                    _ => is_date = false,
-                }
-                match v {
-                    Value::String(s) => strings.push(Arc::from(s.as_str())),
-                    _ => is_string = false,
-                }
-            }
-            if is_date {
-                TypedColumn::Date(dates)
-            } else if is_string {
-                TypedColumn::Utf8(strings)
+        crate::storage::ColumnValues::I64 { values: v, valid } => {
+            if values.all_valid() {
+                TypedColumn::I64(v.clone())
             } else {
-                TypedColumn::Fallback(fallback.to_vec())
+                TypedColumn::NullableI64(v.clone(), valid_to_bitmap(valid))
             }
         }
-        _ => TypedColumn::Fallback(fallback.to_vec()),
+        crate::storage::ColumnValues::F64 { values: v, valid } => {
+            if values.all_valid() {
+                TypedColumn::F64(v.clone())
+            } else {
+                TypedColumn::NullableF64(v.clone(), valid_to_bitmap(valid))
+            }
+        }
+        crate::storage::ColumnValues::I32 { values: v, valid } => {
+            if values.all_valid() {
+                TypedColumn::I32(v.clone())
+            } else {
+                TypedColumn::NullableI32(v.clone(), valid_to_bitmap(valid))
+            }
+        }
+        crate::storage::ColumnValues::Bool { values: v, valid } => {
+            let bools: Vec<bool> = v.iter().map(|&x| x != 0).collect();
+            if values.all_valid() {
+                TypedColumn::Bool(bools)
+            } else {
+                TypedColumn::NullableBool(bools, valid_to_bitmap(valid))
+            }
+        }
+        crate::storage::ColumnValues::I16 { values: v, valid } => {
+            let widened: Vec<i32> = v.iter().map(|&x| i32::from(x)).collect();
+            if values.all_valid() {
+                TypedColumn::I32(widened)
+            } else {
+                TypedColumn::NullableI32(widened, valid_to_bitmap(valid))
+            }
+        }
+        crate::storage::ColumnValues::F32 { values: v, valid } => {
+            let widened: Vec<f64> = v.iter().map(|&x| f64::from(x)).collect();
+            if values.all_valid() {
+                TypedColumn::F64(widened)
+            } else {
+                TypedColumn::NullableF64(widened, valid_to_bitmap(valid))
+            }
+        }
+        crate::storage::ColumnValues::General(general) => typed_from_general_values(general),
     }
+}
+
+/// Convert a `General` per-row column into a typed column when every
+/// non-null value shares one Date/String kind; otherwise `Fallback`.
+fn typed_from_general_values(general: &[Option<Value>]) -> TypedColumn {
+    let mut has_null = false;
+    let mut is_date = true;
+    let mut is_string = true;
+    for cell in general.iter() {
+        match cell {
+            None => has_null = true,
+            Some(Value::Date(_)) => is_string = false,
+            Some(Value::String(_)) => is_date = false,
+            Some(_) => {
+                is_date = false;
+                is_string = false;
+            }
+        }
+    }
+    if is_date && general.iter().any(|c| matches!(c, Some(Value::Date(_)))) {
+        let mut dates = Vec::with_capacity(general.len());
+        let mut bitmap = vec![0u64; general.len().div_ceil(64)];
+        for (i, cell) in general.iter().enumerate() {
+            match cell {
+                Some(Value::Date(d)) => {
+                    dates.push(d.to_days());
+                    bitmap[i / 64] |= 1u64 << (i % 64);
+                }
+                _ => dates.push(0),
+            }
+        }
+        if has_null {
+            return TypedColumn::NullableDate(dates, bitmap);
+        }
+        return TypedColumn::Date(dates);
+    }
+    if is_string && general.iter().any(|c| matches!(c, Some(Value::String(_)))) {
+        let mut strings = Vec::with_capacity(general.len());
+        let mut bitmap = vec![0u64; general.len().div_ceil(64)];
+        for (i, cell) in general.iter().enumerate() {
+            match cell {
+                Some(Value::String(s)) => {
+                    strings.push(Arc::from(s.as_str()));
+                    bitmap[i / 64] |= 1u64 << (i % 64);
+                }
+                _ => strings.push(Arc::from("")),
+            }
+        }
+        if has_null {
+            return TypedColumn::NullableUtf8(strings, bitmap);
+        }
+        return TypedColumn::Utf8(strings);
+    }
+    TypedColumn::Fallback(
+        general
+            .iter()
+            .map(|cell| {
+                cell.clone()
+                    .unwrap_or_else(|| Value::Null(graphdb_core::value::NullType::Null))
+            })
+            .collect(),
+    )
+}
+
+/// Convert a byte-per-row validity vector into the `u64` bitmap used by
+/// `Nullable*` typed columns.
+fn valid_to_bitmap(valid: &[u8]) -> Vec<u64> {
+    let mut bitmap = vec![0u64; valid.len().div_ceil(64)];
+    for (i, &v) in valid.iter().enumerate() {
+        if v == 1 {
+            bitmap[i / 64] |= 1u64 << (i % 64);
+        }
+    }
+    bitmap
 }
 
 /// Column-block pull loop for edges (A1).
@@ -500,22 +584,6 @@ fn build_edge_column_chunk(
     let layout = Arc::clone(output_layout);
     let row_count = batch.len();
 
-    // Pre-compute per-column `Value` vectors once (used for both the rows and
-    // the fallback typed columns).
-    let mut prop_values: Vec<Vec<Value>> = Vec::with_capacity(batch.columns.len());
-    for column in &batch.columns {
-        prop_values.push(
-            (0..row_count)
-                .map(|row| {
-                    column
-                        .values
-                        .value_at(row)
-                        .unwrap_or_else(|| Value::Null(graphdb_core::value::NullType::Null))
-                })
-                .collect(),
-        );
-    }
-
     let mut rows = Vec::with_capacity(row_count);
     for (row, (src, dst, edge_type, ranking)) in batch
         .srcs
@@ -527,10 +595,9 @@ fn build_edge_column_chunk(
         .enumerate()
     {
         let mut properties = std::collections::HashMap::with_capacity(batch.columns.len());
-        for (index, column) in batch.columns.iter().enumerate() {
-            let value = &prop_values[index][row];
-            if !matches!(value, Value::Null(_)) {
-                properties.insert(column.name.clone(), value.clone());
+        for column in batch.columns.iter() {
+            if let Some(value) = column.values.value_at(row) {
+                properties.insert(column.name.clone(), value);
             }
         }
         let edge = graphdb_core::Edge {
@@ -561,11 +628,8 @@ fn build_edge_column_chunk(
             chunk.rows.iter().map(|r| r[0].clone()).collect(),
         ));
         for prop in flatten {
-            match batch.columns.iter().position(|c| c.name == *prop) {
-                Some(index) => typed.push(typed_from_column(
-                    &batch.columns[index].values,
-                    &prop_values[index],
-                )),
+            match batch.columns.iter().find(|c| c.name == *prop) {
+                Some(column) => typed.push(typed_from_storage_column(&column.values)),
                 None => typed.push(TypedColumn::Fallback(
                     (0..row_count)
                         .map(|_| Value::Null(graphdb_core::value::NullType::Null))

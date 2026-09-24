@@ -8,8 +8,8 @@ use graphdb_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexI
 use graphdb_core::vertex_edge_path::Tag;
 use graphdb_core::{DataType, StorageError, Value, Vertex};
 use graphdb_storage::{
-    open_vertex_scan, GraphStorage, RequiredProperty, ScanOptions, ScanPredicate, StorageSchemaOps,
-    StorageWriter, VertexColumnBatch,
+    open_edge_scan, open_vertex_scan, GraphStorage, RequiredProperty, ScanOptions, ScanPredicate,
+    StorageSchemaOps, StorageWriter, VertexColumnBatch,
 };
 use parking_lot::RwLock;
 
@@ -266,3 +266,204 @@ fn _silence_unused() -> Option<StorageError> {
 
 #[allow(dead_code)]
 fn _unused(_: VertexColumnBatch) {}
+
+fn setup_edge_storage() -> Arc<RwLock<GraphStorage>> {
+    use graphdb_core::Edge;
+    let mut storage = GraphStorage::new().expect("storage init");
+    let mut space = SpaceInfo::new("t".to_string()).with_vid_type(DataType::BigInt);
+    storage.create_space(&mut space).unwrap();
+    storage
+        .create_tag(
+            "t",
+            &TagInfo::new("Node".to_string()).with_properties(vec![PropertyDef::new(
+                "value".to_string(),
+                DataType::BigInt,
+            )]),
+        )
+        .unwrap();
+    storage
+        .create_edge_type(
+            "t",
+            &EdgeTypeInfo::new("Link".to_string())
+                .with_src_tag("Node".to_string())
+                .with_dst_tag("Node".to_string())
+                .with_properties(vec![
+                    PropertyDef::new("weight".to_string(), DataType::Double),
+                    PropertyDef::new("label".to_string(), DataType::String),
+                ]),
+        )
+        .unwrap();
+    let vertices: Vec<Vertex> = (0..10i64)
+        .map(|i| {
+            Vertex::new(
+                VertexId::try_from_int64(i).expect("test vertex id"),
+                Tag::new(
+                    "Node".to_string(),
+                    vec![("value".to_string(), Value::BigInt(i))]
+                        .into_iter()
+                        .collect(),
+                ),
+            )
+        })
+        .collect();
+    storage.batch_insert_vertices("t", vertices).unwrap();
+    let mut edges = Vec::new();
+    for i in 0..8i64 {
+        let mut edge = Edge::new_empty(
+            VertexId::try_from_int64(i).expect("test vertex id"),
+            VertexId::try_from_int64((i + 1) % 10).expect("test vertex id"),
+            "Link".to_string(),
+            0,
+        );
+        edge.set_property("weight".to_string(), Value::Double(i as f64 * 1.5));
+        edge.set_property("label".to_string(), Value::string(format!("e{i}")));
+        edges.push(edge);
+    }
+    storage.batch_insert_edges("t", edges).unwrap();
+    Arc::new(RwLock::new(storage))
+}
+
+fn edge_options() -> ScanOptions {
+    let mut opts = ScanOptions::new();
+    opts.edge_type = Some("Link".to_string());
+    opts.column_block_mode = true;
+    opts
+}
+
+fn drain_edge_columns(
+    storage: &Arc<RwLock<GraphStorage>>,
+    opts: &ScanOptions,
+    prop_names: &[String],
+) -> Vec<Vec<Value>> {
+    let mut cursor = open_edge_scan(storage, "t", opts).expect("open edge cursor");
+    let mut out = Vec::new();
+    loop {
+        let batch = cursor
+            .next_column_batch(prop_names, 4)
+            .expect("edge column batch");
+        if batch.is_empty() {
+            break;
+        }
+        for row in 0..batch.len() {
+            let mut rec = vec![Value::from(batch.srcs[row]), Value::from(batch.dsts[row])];
+            for col in &batch.columns {
+                rec.push(
+                    col.values
+                        .value_at(row)
+                        .unwrap_or(Value::Null(graphdb_core::value::NullType::Null)),
+                );
+            }
+            out.push(rec);
+        }
+    }
+    out.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    out
+}
+
+fn drain_edge_rows(storage: &Arc<RwLock<GraphStorage>>, opts: &ScanOptions) -> Vec<Vec<Value>> {
+    let prop_names: Vec<String> = opts
+        .projection
+        .as_ref()
+        .map(|p| p.iter().map(|rp| rp.name.clone()).collect())
+        .unwrap_or_else(|| vec!["weight".to_string(), "label".to_string()]);
+    let mut cursor = open_edge_scan(storage, "t", opts).expect("open edge cursor");
+    let mut out = Vec::new();
+    loop {
+        let batch = cursor.next_batch(4).expect("edge batch");
+        if batch.is_empty() {
+            break;
+        }
+        for edge in batch {
+            let mut rec = vec![Value::from(edge.src), Value::from(edge.dst)];
+            for name in &prop_names {
+                rec.push(
+                    edge.props
+                        .get(name)
+                        .cloned()
+                        .unwrap_or(Value::Null(graphdb_core::value::NullType::Null)),
+                );
+            }
+            out.push(rec);
+        }
+    }
+    out.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    out
+}
+
+#[test]
+fn edge_column_batch_matches_row_path() {
+    let storage = setup_edge_storage();
+    let mut opts = edge_options();
+    opts.projection = Some(
+        vec!["weight".to_string(), "label".to_string()]
+            .into_iter()
+            .map(RequiredProperty::new)
+            .collect(),
+    );
+    let prop_names = vec!["weight".to_string(), "label".to_string()];
+    assert_eq!(
+        drain_edge_columns(&storage, &opts, &prop_names),
+        drain_edge_rows(&storage, &opts)
+    );
+}
+
+#[test]
+fn edge_column_batch_predicate_matches_row_path() {
+    let storage = setup_edge_storage();
+    {
+        let mut guard = storage.write();
+        guard
+            .delete_edge(
+                "t",
+                &VertexId::try_from_int64(0).expect("test vertex id"),
+                &VertexId::try_from_int64(1).expect("test vertex id"),
+                "Link",
+                0,
+            )
+            .expect("delete");
+    }
+    let mut opts = edge_options();
+    opts.projection = Some(
+        vec!["weight".to_string()]
+            .into_iter()
+            .map(RequiredProperty::new)
+            .collect(),
+    );
+    opts.predicate = Some(vec![ScanPredicate::ColumnRange {
+        column: "weight".to_string(),
+        lower: Some(Value::Double(3.0)),
+        upper: None,
+        include_lower: true,
+        include_upper: true,
+    }]);
+    let prop_names = vec!["weight".to_string()];
+    assert_eq!(
+        drain_edge_columns(&storage, &opts, &prop_names),
+        drain_edge_rows(&storage, &opts)
+    );
+}
+
+#[test]
+fn edge_column_batch_string_fallback_matches_row_path() {
+    let storage = setup_edge_storage();
+    let mut opts = edge_options();
+    opts.projection = Some(
+        vec!["label".to_string()]
+            .into_iter()
+            .map(RequiredProperty::new)
+            .collect(),
+    );
+    let prop_names = vec!["label".to_string()];
+    let columns = drain_edge_columns(&storage, &opts, &prop_names);
+    let rows = drain_edge_rows(&storage, &opts);
+    assert_eq!(columns, rows);
+    let mut cursor = open_edge_scan(&storage, "t", &opts).expect("open edge cursor");
+    let batch = cursor
+        .next_column_batch(&prop_names, 8)
+        .expect("edge batch");
+    assert!(!batch.is_empty());
+    assert!(matches!(
+        batch.columns[0].values,
+        graphdb_storage::ColumnValues::General(_)
+    ));
+}

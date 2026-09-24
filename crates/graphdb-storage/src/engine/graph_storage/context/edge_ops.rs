@@ -342,8 +342,7 @@ impl GraphStorageContext {
                     .push((*src_internal, *dst_internal, edge.rank));
             }
         }
-        let mut partitions: PartitionedEdges =
-            by_partition.into_iter().collect();
+        let mut partitions: PartitionedEdges = by_partition.into_iter().collect();
         partitions.sort_unstable_by_key(|(key, _)| *key);
 
         let mut applied = 0usize;

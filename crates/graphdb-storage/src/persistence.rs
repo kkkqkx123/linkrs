@@ -35,6 +35,8 @@ pub mod section {
     pub const EDGE_PROPS_SHARD: u32 = 0x0208;
     /// Per-table segment statistics snapshot for scan pruning.
     pub const EDGE_SEGMENT_STATS: u32 = 0x0209;
+    /// Per-table width and access profile for record-form decisions.
+    pub const EDGE_FORM_PROFILE: u32 = 0x020A;
 }
 
 /// Validate and consume a persistence header from a byte slice.

@@ -63,6 +63,7 @@ impl EdgeStore {
                 self.mark_property_columns_dirty_for_edge(src, dst, &[prop_name.to_string()]);
             }
             self.maybe_run_auto_maintenance();
+            self.observe_form_write(&[(prop_name.to_string(), value.clone())]);
             return Ok(true);
         }
 
@@ -148,6 +149,14 @@ impl EdgeStore {
                 }
             }
             self.maybe_run_auto_maintenance();
+            self.observe_form_write(&[(
+                self.schema
+                    .properties
+                    .first()
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default(),
+                params.value.clone(),
+            )]);
             return Ok(true);
         }
 

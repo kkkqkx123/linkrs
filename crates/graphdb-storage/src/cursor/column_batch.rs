@@ -238,88 +238,89 @@ impl ColumnValues {
 
     /// Compress the column to the rows where `keep[i]` is true, in order.
     pub fn compact(&mut self, keep: &[bool]) {
+        let selection: Vec<usize> = keep
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &k)| if k { Some(i) } else { None })
+            .collect();
+        self.select(&selection);
+    }
+
+    /// Compress the column to the rows at `selection` indices, in order.
+    ///
+    /// Selection-vector form of [`Self::compact`]: filtering produces an
+    /// index sequence instead of a boolean mask, and surviving rows are
+    /// gathered directly without decoding skipped rows again. Kind-specific
+    /// gathering keeps typed layouts typed; callers keep the same selection
+    /// for every column of the batch.
+    pub fn select(&mut self, selection: &[usize]) {
         match self {
             ColumnValues::I64 { values, valid } => {
-                let mut write = 0;
-                for (i, &k) in keep.iter().enumerate() {
-                    if k {
-                        values[write] = values[i];
-                        valid[write] = valid[i];
-                        write += 1;
-                    }
+                let mut next_values = Vec::with_capacity(selection.len());
+                let mut next_valid = Vec::with_capacity(selection.len());
+                for &i in selection {
+                    next_values.push(values[i]);
+                    next_valid.push(valid[i]);
                 }
-                values.truncate(write);
-                valid.truncate(write);
+                *values = next_values;
+                *valid = next_valid;
             }
             ColumnValues::F64 { values, valid } => {
-                let mut write = 0;
-                for (i, &k) in keep.iter().enumerate() {
-                    if k {
-                        values[write] = values[i];
-                        valid[write] = valid[i];
-                        write += 1;
-                    }
+                let mut next_values = Vec::with_capacity(selection.len());
+                let mut next_valid = Vec::with_capacity(selection.len());
+                for &i in selection {
+                    next_values.push(values[i]);
+                    next_valid.push(valid[i]);
                 }
-                values.truncate(write);
-                valid.truncate(write);
+                *values = next_values;
+                *valid = next_valid;
             }
             ColumnValues::I32 { values, valid } => {
-                let mut write = 0;
-                for (i, &k) in keep.iter().enumerate() {
-                    if k {
-                        values[write] = values[i];
-                        valid[write] = valid[i];
-                        write += 1;
-                    }
+                let mut next_values = Vec::with_capacity(selection.len());
+                let mut next_valid = Vec::with_capacity(selection.len());
+                for &i in selection {
+                    next_values.push(values[i]);
+                    next_valid.push(valid[i]);
                 }
-                values.truncate(write);
-                valid.truncate(write);
+                *values = next_values;
+                *valid = next_valid;
             }
             ColumnValues::Bool { values, valid } => {
-                let mut write = 0;
-                for (i, &k) in keep.iter().enumerate() {
-                    if k {
-                        values[write] = values[i];
-                        valid[write] = valid[i];
-                        write += 1;
-                    }
+                let mut next_values = Vec::with_capacity(selection.len());
+                let mut next_valid = Vec::with_capacity(selection.len());
+                for &i in selection {
+                    next_values.push(values[i]);
+                    next_valid.push(valid[i]);
                 }
-                values.truncate(write);
-                valid.truncate(write);
+                *values = next_values;
+                *valid = next_valid;
             }
             ColumnValues::I16 { values, valid } => {
-                let mut write = 0;
-                for (i, &k) in keep.iter().enumerate() {
-                    if k {
-                        values[write] = values[i];
-                        valid[write] = valid[i];
-                        write += 1;
-                    }
+                let mut next_values = Vec::with_capacity(selection.len());
+                let mut next_valid = Vec::with_capacity(selection.len());
+                for &i in selection {
+                    next_values.push(values[i]);
+                    next_valid.push(valid[i]);
                 }
-                values.truncate(write);
-                valid.truncate(write);
+                *values = next_values;
+                *valid = next_valid;
             }
             ColumnValues::F32 { values, valid } => {
-                let mut write = 0;
-                for (i, &k) in keep.iter().enumerate() {
-                    if k {
-                        values[write] = values[i];
-                        valid[write] = valid[i];
-                        write += 1;
-                    }
+                let mut next_values = Vec::with_capacity(selection.len());
+                let mut next_valid = Vec::with_capacity(selection.len());
+                for &i in selection {
+                    next_values.push(values[i]);
+                    next_valid.push(valid[i]);
                 }
-                values.truncate(write);
-                valid.truncate(write);
+                *values = next_values;
+                *valid = next_valid;
             }
             ColumnValues::General(values) => {
-                let mut write = 0;
-                for (i, &k) in keep.iter().enumerate() {
-                    if k {
-                        values[write] = values[i].take();
-                        write += 1;
-                    }
+                let mut next = Vec::with_capacity(selection.len());
+                for &i in selection {
+                    next.push(values[i].take());
                 }
-                values.truncate(write);
+                *values = next;
             }
         }
     }
@@ -639,6 +640,25 @@ impl VertexColumnBatch {
     pub fn len(&self) -> usize {
         self.vids.len()
     }
+
+    /// Gather the batch down to `selection` indices, in order.
+    pub fn select(&mut self, selection: &[usize]) {
+        let gather_ids = selection.iter().map(|&i| self.vids[i]).collect::<Vec<_>>();
+        let gather_internal = selection
+            .iter()
+            .map(|&i| self.internal_ids[i])
+            .collect::<Vec<_>>();
+        let gather_tags = selection
+            .iter()
+            .map(|&i| self.tag_names[i].clone())
+            .collect::<Vec<_>>();
+        self.vids = gather_ids;
+        self.internal_ids = gather_internal;
+        self.tag_names = gather_tags;
+        for column in &mut self.columns {
+            column.values.select(selection);
+        }
+    }
 }
 /// A column-major edge batch produced by `EdgeCursor::next_column_batch`.
 ///
@@ -671,6 +691,27 @@ impl EdgeColumnBatch {
 
     pub fn len(&self) -> usize {
         self.srcs.len()
+    }
+
+    /// Gather the batch down to `selection` indices, in order.
+    pub fn select(&mut self, selection: &[usize]) {
+        let gather_srcs = selection.iter().map(|&i| self.srcs[i]).collect::<Vec<_>>();
+        let gather_dsts = selection.iter().map(|&i| self.dsts[i]).collect::<Vec<_>>();
+        let gather_types = selection
+            .iter()
+            .map(|&i| self.edge_types[i].clone())
+            .collect::<Vec<_>>();
+        let gather_ranks = selection
+            .iter()
+            .map(|&i| self.rankings[i])
+            .collect::<Vec<_>>();
+        self.srcs = gather_srcs;
+        self.dsts = gather_dsts;
+        self.edge_types = gather_types;
+        self.rankings = gather_ranks;
+        for column in &mut self.columns {
+            column.values.select(selection);
+        }
     }
 }
 

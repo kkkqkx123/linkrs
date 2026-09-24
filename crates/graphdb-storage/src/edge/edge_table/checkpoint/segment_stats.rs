@@ -1,7 +1,7 @@
-//! Segment-statistics snapshot persistence.
+//! Segment-statistics and form-profile snapshot persistence.
 
 use super::super::core::EdgeStore;
-use super::layout::{file_bytes, segment_stats_path};
+use super::layout::{file_bytes, form_profile_path, segment_stats_path};
 use graphdb_core::{StorageError, StorageResult};
 use std::path::Path;
 
@@ -82,6 +82,82 @@ impl EdgeStore {
         }
         let stats = decode_segment_snapshot(&data)?;
         self.restore_segment_stats(stats);
+        Ok(())
+    }
+
+    /// Persist the width and access profile snapshot.
+    ///
+    /// Same commit point as the segment statistics: shadow file before the
+    /// manifest publish. Totals only, so the file stays 32 bytes plus the
+    /// page header regardless of table size.
+    pub(crate) fn flush_form_profile(
+        &self,
+        dir: &Path,
+        page_size: usize,
+        level: i32,
+    ) -> StorageResult<u64> {
+        let snapshot = self.form_profile_snapshot();
+        let encoded = snapshot.encode();
+        let mut payload = Vec::new();
+        crate::persistence::write_header_to(
+            &mut payload,
+            crate::persistence::section::EDGE_FORM_PROFILE,
+        )
+        .map_err(|e| {
+            StorageError::io_error(format!("Failed to write form profile header: {}", e))
+        })?;
+        payload.extend_from_slice(&(encoded.len() as u64).to_le_bytes());
+        payload.extend_from_slice(&encoded);
+        let path = form_profile_path(dir);
+        super::super::persistence::write_pages_to_file(&path, &payload, page_size, level, 1)?;
+        Ok(file_bytes(&path))
+    }
+
+    /// Load the width and access profile snapshot.
+    ///
+    /// Missing files from old checkpoints load as unknown (zero samples),
+    /// never as zero-width: decision logic must keep such tables columnar
+    /// rather than misreading the absence as narrow.
+    pub(crate) fn load_form_profile(&self, dir: &Path) -> StorageResult<()> {
+        use std::io::Read as _;
+        let path = form_profile_path(dir);
+        if !path.exists() {
+            self.restore_form_profile(super::super::stats::FormProfileSnapshot::default());
+            return Ok(());
+        }
+        let (raw, _) = super::super::persistence::read_pages_from_file(&path).map_err(|e| {
+            StorageError::deserialize_error(format!(
+                "missing form profile snapshot at {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+        let mut cursor = &raw[..];
+        let mut header_buf = [0u8; crate::persistence::HEADER_SIZE];
+        cursor.read_exact(&mut header_buf)?;
+        {
+            let mut slice = &header_buf[..];
+            let sid = crate::persistence::read_header(&mut slice)?;
+            if sid != crate::persistence::section::EDGE_FORM_PROFILE {
+                return Err(StorageError::deserialize_error(format!(
+                    "unexpected section id in form profile: expected {:#06x}, got {:#06x}",
+                    crate::persistence::section::EDGE_FORM_PROFILE,
+                    sid
+                )));
+            }
+        }
+        let mut len_bytes = [0u8; 8];
+        cursor.read_exact(&mut len_bytes)?;
+        let len = u64::from_le_bytes(len_bytes) as usize;
+        let mut data = vec![0u8; len];
+        cursor.read_exact(&mut data)?;
+        if !cursor.is_empty() {
+            return Err(StorageError::deserialize_error(
+                "unexpected trailing data in form profile".to_string(),
+            ));
+        }
+        let snapshot = super::super::stats::FormProfileSnapshot::decode(&data)?;
+        self.restore_form_profile(snapshot);
         Ok(())
     }
 }

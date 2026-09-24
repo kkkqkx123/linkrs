@@ -45,8 +45,7 @@ impl<'a> NodeEstimator for JoinEstimator<'a> {
                 // Containment estimate when NDV is known, else fixed fallback.
                 let selectivity = join_selectivity(stats, n.hash_keys(), n.probe_keys())
                     .unwrap_or(DEFAULT_JOIN_SELECTIVITY);
-                let output_rows =
-                    join_output_rows(left_rows, right_rows, selectivity).max(1);
+                let output_rows = join_output_rows(left_rows, right_rows, selectivity).max(1);
                 let cost = self
                     .cost_calculator
                     .calculate_hash_join_cost(left_rows, right_rows);

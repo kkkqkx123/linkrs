@@ -63,6 +63,7 @@ impl EdgeStore {
         flushed_bytes += self.flush_property_shards(dir, page_size, level)?;
         self.refresh_segment_stats();
         flushed_bytes += self.flush_segment_stats(dir, page_size, level)?;
+        flushed_bytes += self.flush_form_profile(dir, page_size, level)?;
         let (out_bytes, out_rebalanced) = self.flush_group_set(&GroupFlush {
             dir,
             page_size,

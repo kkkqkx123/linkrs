@@ -44,7 +44,7 @@ pub struct MigrateStats {
 }
 
 /// Executable pre-switch checklist for one record-form migration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrationPlan {
     /// Form the table holds now.
     pub current: RecordForm,
@@ -56,6 +56,8 @@ pub struct MigrationPlan {
     pub dropped_tombstones: u64,
     /// Groups the rebuilt directions will hold.
     pub groups_to_rebuild: usize,
+    /// Decision basis: shape trigger or profile trigger with key numbers.
+    pub basis: String,
 }
 
 struct LiveEdge {
@@ -162,6 +164,7 @@ impl EdgeStore {
         }
         let current = self.schema.record_form;
         self.check_record_form_target(target)?;
+        let basis = self.migration_basis(target);
         if current == target {
             return Ok(MigrationPlan {
                 current,
@@ -169,6 +172,7 @@ impl EdgeStore {
                 live_edges: 0,
                 dropped_tombstones: 0,
                 groups_to_rebuild: 0,
+                basis,
             });
         }
         let (out_live, mut dropped) = self.extract_live_edges(true, current, target)?;
@@ -188,7 +192,54 @@ impl EdgeStore {
             live_edges,
             dropped_tombstones: dropped.len() as u64,
             groups_to_rebuild,
+            basis,
         })
+    }
+
+    /// Human-readable decision basis for the migration plan.
+    ///
+    /// Records whether the target passes the shape gate and, for bundled
+    /// targets, the observed width and access numbers against the configured
+    /// thresholds. Unknown profiles report as unknown so operators see why a
+    /// narrow-looking table stays columnar.
+    fn migration_basis(&self, target: RecordForm) -> String {
+        if target != RecordForm::Bundled {
+            return format!(
+                "shape: target {:?} from {:?}; profile not consulted",
+                target, self.schema.record_form
+            );
+        }
+        if crate::edge::bundled_ineligibility_reason(
+            &self.schema.properties,
+            self.schema.oe_strategy,
+            self.schema.ie_strategy,
+        )
+        .is_some()
+        {
+            return format!(
+                "shape: bundled ineligible for {:?}; stays columnar",
+                self.schema.record_form
+            );
+        }
+        let snapshot = self.form_profile_snapshot();
+        if snapshot.is_unknown() {
+            return "profile: unknown (no width samples); stays columnar until observed narrow and read-heavy".to_string();
+        }
+        let avg = snapshot.avg_width_bytes().unwrap_or(0.0);
+        let reads = snapshot.reads;
+        let writes = snapshot.writes;
+        let hot = self.hot_groups(1).first().map(|(_, c)| *c).unwrap_or(0);
+        format!(
+            "profile: avg_width={:.2}B (max {}B), reads={} writes={} hot_group_writes={} thresholds(max_avg={}B,max_share={:.2},min_r2w={:.1})",
+            avg,
+            self.config.record_form_profile.max_inline_avg_bytes,
+            reads,
+            writes,
+            hot,
+            self.config.record_form_profile.max_inline_avg_bytes,
+            self.config.record_form_profile.max_write_share,
+            self.config.record_form_profile.min_read_to_write_ratio,
+        )
     }
 
     /// Target prechecks shared by the plan and the rebuild: arity, scalar

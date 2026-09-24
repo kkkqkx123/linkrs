@@ -772,6 +772,72 @@ impl EdgeStore {
             .collect()
     }
 
+    /// Typed column-major batch without a visibility recheck.
+    ///
+    /// Native edge columnar entry: decodes directly from the property
+    /// columns into typed [`crate::cursor::ColumnValues`], reusing the same
+    /// visibility verdict as the row batch above. Bundled tables decode the
+    /// inline value column per row; columnar tables decode per column with a
+    /// per-column fallback to `General` on type mismatch. Output order
+    /// follows the input edge order.
+    pub(crate) fn typed_columns_for_edges_assume_visible(
+        &self,
+        edge_ids: &[EdgeId],
+        rows: &[u32],
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Vec<(String, crate::cursor::ColumnValues)> {
+        if self.is_bundled() {
+            let Some(prop) = self.schema.properties.first() else {
+                return Vec::new();
+            };
+            let want = match projection {
+                None => true,
+                Some(names) => {
+                    if names.is_empty() {
+                        return Vec::new();
+                    }
+                    names.iter().any(|n| n == &prop.name)
+                }
+            };
+            if !want {
+                return Vec::new();
+            }
+            let mut general: Vec<Option<Value>> = Vec::with_capacity(edge_ids.len());
+            for (i, edge_id) in edge_ids.iter().enumerate() {
+                let row = rows.get(i).copied().unwrap_or(u32::MAX);
+                let decoded = self
+                    .out_csr
+                    .bundled_value_at(row, *edge_id)
+                    .and_then(|(raw, ok)| {
+                        if ok {
+                            Some(decode_scalar(raw, &prop.data_type))
+                        } else {
+                            None
+                        }
+                    });
+                general.push(decoded);
+            }
+            // Encode the single inline column with the same typed layout as
+            // the columnar path so the executor keeps one conversion.
+            let general_opts: Vec<Option<Value>> = general;
+            if let Some(typed) = crate::cursor::ColumnValues::from_general_with_type(
+                general_opts.clone(),
+                &prop.data_type,
+            ) {
+                return vec![(prop.name.clone(), typed)];
+            }
+            // from_general_with_type only covers the six numeric/bool kinds;
+            // other bundled kinds (date/time) stay General.
+            return vec![(
+                prop.name.clone(),
+                crate::cursor::ColumnValues::General(general_opts),
+            )];
+        }
+        self.properties
+            .get_typed_columns_batch_by_edge_ids(edge_ids, query_ts, projection)
+    }
+
     /// Hot record assembly without a visibility recheck.
     ///
     /// For streams that already filtered through the authority (or its
@@ -930,6 +996,7 @@ impl EdgeStore {
             } else {
                 self.properties_for_edge_projected_columnar_assume_visible(nbr.edge_id, ts, None)
             };
+            self.observe_form_read(1);
 
             return Some((
                 EdgeRecord {
@@ -1084,6 +1151,7 @@ impl EdgeStore {
         // querying the authority twice per edge.
         let mut hots = Vec::new();
         self.collect_visible_hots(&self.out_csr, src, ts, &mut hots);
+        self.observe_form_read(hots.len() as u64);
         if self.is_bundled() {
             return hots
                 .into_iter()
@@ -1157,6 +1225,7 @@ impl EdgeStore {
         // querying the authority twice per edge.
         let mut hots = Vec::new();
         self.collect_visible_hots(&self.in_csr, dst, ts, &mut hots);
+        self.observe_form_read(hots.len() as u64);
         if self.is_bundled() {
             return hots
                 .into_iter()

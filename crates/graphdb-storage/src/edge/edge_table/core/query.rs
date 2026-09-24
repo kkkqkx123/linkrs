@@ -20,6 +20,7 @@ impl EdgeStore {
         query_ts: Timestamp,
         predicates: &[ScanPredicate],
     ) -> bool {
+        self.observe_form_read(1);
         if !self.is_visible(edge_id, query_ts) {
             return false;
         }
@@ -68,6 +69,7 @@ impl EdgeStore {
         query_ts: Timestamp,
         candidates: Option<&[EdgeId]>,
     ) -> Vec<EdgeId> {
+        self.observe_form_read(candidates.map(|c| c.len() as u64).unwrap_or(1));
         if self.is_bundled() {
             // The stub columnar store holds no rows, so the walk runs over
             // the out-direction topology with per-edge predicate checks.

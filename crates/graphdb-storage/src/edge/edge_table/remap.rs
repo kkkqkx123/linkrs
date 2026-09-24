@@ -221,6 +221,12 @@ impl EdgeStore {
     /// Operation guide: run offline with no other writer, flush with
     /// `flush_incremental` after success, then reload to verify. The edge
     /// logical set is unchanged and the audit must report no drift.
+    /// Selection guide: small tables tolerating downtime use offline reshard
+    /// for any width change; large tables tolerating no downtime keep the
+    /// current width and densify vertex ids offline first; small width
+    /// adjustments on idle tables prefer reshard, while online record-form
+    /// migration only changes the inline versus columnar layout and never
+    /// changes the address width.
     pub fn reshard(&mut self, new_group_bits: u32) -> StorageResult<ReshardStats> {
         crate::edge::node_group::validate_group_bits(new_group_bits)?;
         let old_bits = self.config.node_group_bits;

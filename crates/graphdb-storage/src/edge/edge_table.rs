@@ -52,7 +52,9 @@ pub use core::{EdgeIndexStatus, EdgeStore, IncidentDeletedEdge, UpdateEdgeProper
 pub use iterator::{AdjacencyBatchAccessor, EdgeTableScanIterator, DEFAULT_ADJACENCY_BATCH};
 pub use record_form::MigrateStats;
 pub use staging::{EdgeStagingBatch, StagedDelete, StagedInsert};
-pub use stats::{DeletionStats, GroupSegmentStats, ScanPruneReport, TombstoneStats};
+pub use stats::{
+    DeletionStats, FormProfileSnapshot, GroupSegmentStats, ScanPruneReport, TombstoneStats,
+};
 pub use wal::EdgeWalDiagnosis;
 
 // Re-export from parent

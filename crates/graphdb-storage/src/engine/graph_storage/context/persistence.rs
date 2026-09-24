@@ -63,15 +63,12 @@ impl GraphStorageContext {
         let wm = gc.capture_watermarks();
         let margin = self.persistent.config.gc_safety_margin;
         let cleanup_ts = wm.safe_gc_timestamp_with_margin(margin);
-        let folded: usize = self
-            .persistent
-            .data_store
-            .with_vertex_tables(|tables| {
-                tables
-                    .values()
-                    .map(|table| table.fold_version_chains(cleanup_ts))
-                    .sum()
-            });
+        let folded: usize = self.persistent.data_store.with_vertex_tables(|tables| {
+            tables
+                .values()
+                .map(|table| table.fold_version_chains(cleanup_ts))
+                .sum()
+        });
         if folded > 0 {
             log::debug!(
                 "Pre-flush vertex fold: {} version entries folded (cleanup_ts={})",
@@ -198,15 +195,12 @@ impl GraphStorageContext {
         let wm = gc.capture_watermarks();
         let margin = self.persistent.config.gc_safety_margin;
         let cleanup_ts = wm.safe_gc_timestamp_with_margin(margin);
-        let folded: usize = self
-            .persistent
-            .data_store
-            .with_vertex_tables(|tables| {
-                tables
-                    .values()
-                    .map(|table| table.fold_version_chains(cleanup_ts))
-                    .sum()
-            });
+        let folded: usize = self.persistent.data_store.with_vertex_tables(|tables| {
+            tables
+                .values()
+                .map(|table| table.fold_version_chains(cleanup_ts))
+                .sum()
+        });
         if folded > 0 {
             log::debug!(
                 "Pre-flush vertex fold: {} version entries folded (cleanup_ts={})",

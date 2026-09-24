@@ -104,12 +104,8 @@ pub fn join_selectivity(
     for (left, right) in left_keys.iter().zip(right_keys.iter()) {
         let left_col = join_key_column(left)?;
         let right_col = join_key_column(right)?;
-        let left_ndv = stats
-            .property_ndv(None, &left_col)
-            .filter(|&n| n > 0)?;
-        let right_ndv = stats
-            .property_ndv(None, &right_col)
-            .filter(|&n| n > 0)?;
+        let left_ndv = stats.property_ndv(None, &left_col).filter(|&n| n > 0)?;
+        let right_ndv = stats.property_ndv(None, &right_col).filter(|&n| n > 0)?;
         let pair = 1.0 / u64::max(left_ndv, right_ndv).max(1) as f64;
         selectivity *= pair.clamp(0.0, 1.0);
         matched = true;
@@ -144,10 +140,7 @@ mod tests {
     use graphdb_core::types::expr::{Expression, ExpressionMeta};
     use std::sync::Arc;
 
-    fn variable_key(
-        ctx: &Arc<ExpressionAnalysisContext>,
-        name: &str,
-    ) -> ContextualExpression {
+    fn variable_key(ctx: &Arc<ExpressionAnalysisContext>, name: &str) -> ContextualExpression {
         let meta = ExpressionMeta::new(Expression::Variable(name.to_string()));
         let id = ctx.register_expression(meta);
         ContextualExpression::new(id, ctx.clone())

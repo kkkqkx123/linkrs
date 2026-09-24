@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 pub const GROUPS_MANIFEST_FILE: &str = "groups_manifest.bin";
 /// Segment-statistics snapshot inside an edge-table directory.
 pub const SEGMENT_STATS_FILE: &str = "segment_stats.bin";
+/// Width and access profile snapshot inside an edge-table directory.
+pub const FORM_PROFILE_FILE: &str = "form_profile.bin";
 
 pub fn out_group_file(group: usize) -> String {
     format!("out_g{}.bin", group)
@@ -63,6 +65,10 @@ pub(crate) fn manifest_path(dir: &Path) -> PathBuf {
 
 pub(crate) fn segment_stats_path(dir: &Path) -> PathBuf {
     dir.join(SEGMENT_STATS_FILE)
+}
+
+pub(crate) fn form_profile_path(dir: &Path) -> PathBuf {
+    dir.join(FORM_PROFILE_FILE)
 }
 
 /// Parse `"<prefix>{gid}.bin"` or `"<prefix>{gid}.append.bin"` into the gid.

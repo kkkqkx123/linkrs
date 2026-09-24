@@ -127,14 +127,12 @@ impl EdgeStore {
     /// a later crash replays the published schema only.
     pub fn publish_pending_add_property(&mut self) -> StorageResult<()> {
         let (name, data_type, nullable, default_value) = match self.pending_add_column.as_ref() {
-            Some(pending) if pending.state == PendingAddColumnState::Filled => {
-                (
-                    pending.name.clone(),
-                    pending.data_type.clone(),
-                    pending.nullable,
-                    pending.default_value.clone(),
-                )
-            }
+            Some(pending) if pending.state == PendingAddColumnState::Filled => (
+                pending.name.clone(),
+                pending.data_type.clone(),
+                pending.nullable,
+                pending.default_value.clone(),
+            ),
             Some(_) => {
                 return Err(StorageError::invalid_operation(
                     "pending add-column change must be filled before publishing".to_string(),

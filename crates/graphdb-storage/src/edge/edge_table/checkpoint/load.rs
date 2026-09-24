@@ -33,7 +33,7 @@ impl EdgeStore {
         let file_manifest = TableShardManifest::decode(&manifest_bytes)?;
         if file_manifest.group_bits != self.config.node_group_bits {
             return Err(StorageError::deserialize_error(format!(
-                "group layout mismatch: file uses {} address bits, table uses {}",
+                "group layout mismatch: file uses {} address bits, table uses {}; address width locks at creation with no online change branch, use the offline EdgeStore::reshard tool then checkpoint, see EdgeTableConfig::node_group_bits",
                 file_manifest.group_bits, self.config.node_group_bits
             )));
         }
@@ -42,7 +42,7 @@ impl EdgeStore {
         let manifest = if embedded != file_manifest {
             if embedded.group_bits != self.config.node_group_bits {
                 return Err(StorageError::deserialize_error(format!(
-                    "group layout mismatch: file uses {} address bits, table uses {}",
+                    "group layout mismatch: file uses {} address bits, table uses {}; address width locks at creation with no online change branch, use the offline EdgeStore::reshard tool then checkpoint, see EdgeTableConfig::node_group_bits",
                     embedded.group_bits, self.config.node_group_bits
                 )));
             }
@@ -77,6 +77,7 @@ impl EdgeStore {
         self.load_timestamp_shards(dir, &manifest)?;
         self.load_property_shards(dir, &manifest)?;
         self.load_segment_stats(dir)?;
+        self.load_form_profile(dir)?;
         let owner_stats = self.rebuild_owner_map_with_stats();
         if let Some(stats) = &self.stats_manager {
             stats.add_value_with_amount(

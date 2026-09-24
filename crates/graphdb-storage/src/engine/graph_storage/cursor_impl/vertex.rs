@@ -355,7 +355,9 @@ impl GraphVertexCursor {
 
         let (internal_ids, vids, tag_names, union_names, mut columns, _exhausted) = result;
 
-        // Apply pushed predicates over the decoded columns.
+        // Apply pushed predicates over the decoded columns. Filtering
+        // produces a selection vector (index sequence, not a boolean mask)
+        // and surviving rows are gathered via that selection.
         let (final_ids, final_vids, final_tags) = if self.predicate.is_empty() {
             (internal_ids, vids, tag_names)
         } else {
@@ -374,18 +376,21 @@ impl GraphVertexCursor {
                 }
             }
             if keep.iter().any(|&k| !k) {
-                let mut kept_ids = Vec::with_capacity(keep.iter().filter(|&&k| k).count());
-                let mut kept_vids = Vec::with_capacity(kept_ids.capacity());
-                let mut kept_tags = Vec::with_capacity(kept_ids.capacity());
-                for (row, &k) in keep.iter().enumerate() {
-                    if k {
-                        kept_ids.push(internal_ids[row]);
-                        kept_vids.push(vids[row]);
-                        kept_tags.push(tag_names[row].clone());
-                    }
+                let selection: Vec<usize> = keep
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &k)| if k { Some(i) } else { None })
+                    .collect();
+                let mut kept_ids = Vec::with_capacity(selection.len());
+                let mut kept_vids = Vec::with_capacity(selection.len());
+                let mut kept_tags = Vec::with_capacity(selection.len());
+                for &row in &selection {
+                    kept_ids.push(internal_ids[row]);
+                    kept_vids.push(vids[row]);
+                    kept_tags.push(tag_names[row].clone());
                 }
                 for column in columns.iter_mut() {
-                    column.compact(&keep);
+                    column.select(&selection);
                 }
                 (kept_ids, kept_vids, kept_tags)
             } else {

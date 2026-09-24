@@ -162,6 +162,7 @@ impl EdgeStore {
         self.edge_owner
             .insert(edge_id, self.owner_gid_for(src, dst));
         self.debug_assert_copies_consistent(edge_id);
+        self.observe_form_write(property_values);
         Ok(edge_id)
     }
 

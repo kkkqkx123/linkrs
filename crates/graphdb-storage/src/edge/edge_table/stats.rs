@@ -455,6 +455,123 @@ impl ScanPruneReport {
     }
 }
 
+/// Observed width and access profile for one edge table.
+///
+/// Per-table aggregate only: total property-byte width over sampled writes,
+/// sampled write count, and relaxed read/write access counters. Memory is
+/// O(1) per table plus the existing per-group write map; no per-edge state
+/// is kept and over-limit groups aggregate by owner id. Missing snapshots
+/// from old checkpoints decode as unknown, never as zero, so decision logic
+/// must treat unknown as keep-columnar.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FormProfileSnapshot {
+    pub width_bytes: u64,
+    pub width_samples: u64,
+    pub reads: u64,
+    pub writes: u64,
+}
+
+impl FormProfileSnapshot {
+    pub fn is_unknown(&self) -> bool {
+        self.width_samples == 0
+    }
+
+    pub fn avg_width_bytes(&self) -> Option<f64> {
+        if self.width_samples == 0 {
+            None
+        } else {
+            Some(self.width_bytes as f64 / self.width_samples as f64)
+        }
+    }
+
+    pub fn write_share(&self) -> Option<f64> {
+        let total = self.reads.saturating_add(self.writes);
+        if total == 0 {
+            None
+        } else {
+            Some(self.writes as f64 / total as f64)
+        }
+    }
+
+    pub fn read_to_write_ratio(&self) -> Option<f64> {
+        if self.writes == 0 {
+            None
+        } else {
+            Some(self.reads as f64 / self.writes as f64)
+        }
+    }
+
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(32);
+        out.extend_from_slice(&self.width_bytes.to_le_bytes());
+        out.extend_from_slice(&self.width_samples.to_le_bytes());
+        out.extend_from_slice(&self.reads.to_le_bytes());
+        out.extend_from_slice(&self.writes.to_le_bytes());
+        out
+    }
+
+    pub fn decode(data: &[u8]) -> StorageResult<Self> {
+        if data.len() != 32 {
+            return Err(StorageError::deserialize_error(
+                "form profile snapshot must hold 32 bytes",
+            ));
+        }
+        let mut cursor = 0usize;
+        let take_u64 = |data: &[u8], cursor: &mut usize| {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&data[*cursor..*cursor + 8]);
+            *cursor += 8;
+            u64::from_le_bytes(bytes)
+        };
+        Ok(Self {
+            width_bytes: take_u64(data, &mut cursor),
+            width_samples: take_u64(data, &mut cursor),
+            reads: take_u64(data, &mut cursor),
+            writes: take_u64(data, &mut cursor),
+        })
+    }
+}
+
+/// Estimated in-memory byte width of one property value for profiling.
+///
+/// Fixed-size scalars use their wire size; strings, blobs and containers use
+/// heap length; all other types use a small constant so unknown widths never
+/// force an inline decision.
+pub fn estimate_value_bytes(value: &Value) -> u64 {
+    match value {
+        Value::Empty => 0,
+        Value::Null(_) => 0,
+        Value::Bool(_) => 1,
+        Value::SmallInt(_) => 2,
+        Value::Int(_) => 4,
+        Value::BigInt(_) => 8,
+        Value::Float(_) => 4,
+        Value::Double(_) => 8,
+        Value::Decimal128(_) => 16,
+        Value::String(s) => s.len() as u64,
+        Value::FixedString(s) => s.len() as u64,
+        Value::Blob(b) => b.len() as u64,
+        Value::Date(_) => 8,
+        Value::Time(_) => 8,
+        Value::DateTime(_) => 8,
+        Value::Uuid(_) => 16,
+        Value::Interval(_) => 16,
+        Value::Json(_) | Value::JsonB(_) => 32,
+        Value::List(_) | Value::Map(_) | Value::Set(_) => 32,
+        Value::Geography(_) => 32,
+        Value::Vector(v) => (v.dimension() as u64).saturating_mul(4),
+        Value::DataSet(_) => 32,
+        Value::Struct(_) | Value::Array(_) => 32,
+        Value::Vertex(_) | Value::Edge(_) | Value::Path(_) => 32,
+        Value::VertexId(_) | Value::EdgeId(_) => 8,
+    }
+}
+
+/// Estimated byte width of one edge property set for profiling.
+pub fn estimate_props_bytes(props: &[(String, Value)]) -> u64 {
+    props.iter().map(|(_, v)| estimate_value_bytes(v)).sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::super::{EdgeSchema, EdgeStrategy, RecordForm};

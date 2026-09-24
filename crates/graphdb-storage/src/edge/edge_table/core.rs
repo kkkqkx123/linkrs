@@ -31,6 +31,7 @@ use crate::index::edge_index_manager::EdgePropertyIndex;
 use crate::schema::LabelVersionHistory;
 use graphdb_core::types::{EdgeId, LabelId, Timestamp};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub use super::config::{AutoMaintenanceConfig, EdgeTableConfig, UpdateEdgePropertyByKeyParams};
@@ -97,6 +98,20 @@ pub struct EdgeStore {
     /// Committed write counts by owner group for hotspot observability.
     /// Bounded by the group count; the write-hot path only increments.
     pub(crate) group_write_counts: HashMap<u32, u64>,
+    /// Relaxed width and access profile for record-form decisions.
+    ///
+    /// Totals only, merged with relaxed atomics so the write path pays one
+    /// add per commit and reads pay one add per scan batch. Group hotspot
+    /// detail reuses `group_write_counts`; no per-edge state is kept.
+    pub(crate) form_width_bytes: AtomicU64,
+    pub(crate) form_width_samples: AtomicU64,
+    pub(crate) form_reads: AtomicU64,
+    pub(crate) form_writes: AtomicU64,
+    /// Last automatically migrated target for hysteresis. Automatic
+    /// migration only moves columnar to bundled; a bundled table never
+    /// auto-reverses until an operator migrates manually, so a single
+    /// migration cannot ping-pong on threshold noise.
+    pub(crate) last_auto_migrated_to_bundled: bool,
 
     /// In-flight staged add-column change. Memory-only: a crash before
     /// publishing is equivalent to aborting, because reload rebuilds the
@@ -163,6 +178,43 @@ impl std::fmt::Debug for EdgeStore {
             .field("next_edge_id", &self.next_edge_id)
             .field("config", &self.config)
             .finish()
+    }
+}
+
+impl EdgeStore {
+    /// Single write-path observation entry: relaxed width sample plus write
+    /// counters. Called once per committed insert batch entry, never blocks.
+    pub(crate) fn observe_form_write(&self, props: &[(String, graphdb_core::Value)]) {
+        use super::stats::estimate_props_bytes;
+        let bytes = estimate_props_bytes(props);
+        self.form_width_bytes.fetch_add(bytes, Ordering::Relaxed);
+        self.form_width_samples.fetch_add(1, Ordering::Relaxed);
+        self.form_writes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Single read-path observation entry: relaxed read counter. Called once
+    /// per scan batch or point read, never blocks.
+    pub(crate) fn observe_form_read(&self, rows: u64) {
+        self.form_reads.fetch_add(rows.max(1), Ordering::Relaxed);
+    }
+
+    /// Current width and access snapshot for record-form decisions.
+    pub fn form_profile_snapshot(&self) -> super::stats::FormProfileSnapshot {
+        super::stats::FormProfileSnapshot {
+            width_bytes: self.form_width_bytes.load(Ordering::Relaxed),
+            width_samples: self.form_width_samples.load(Ordering::Relaxed),
+            reads: self.form_reads.load(Ordering::Relaxed),
+            writes: self.form_writes.load(Ordering::Relaxed),
+        }
+    }
+
+    pub(crate) fn restore_form_profile(&self, snapshot: super::stats::FormProfileSnapshot) {
+        self.form_width_bytes
+            .store(snapshot.width_bytes, Ordering::Relaxed);
+        self.form_width_samples
+            .store(snapshot.width_samples, Ordering::Relaxed);
+        self.form_reads.store(snapshot.reads, Ordering::Relaxed);
+        self.form_writes.store(snapshot.writes, Ordering::Relaxed);
     }
 }
 

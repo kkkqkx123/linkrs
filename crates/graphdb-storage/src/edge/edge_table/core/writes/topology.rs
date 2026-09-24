@@ -282,6 +282,9 @@ impl EdgeStore {
             let owner = self.owner_gid_for(*src, *dst);
             *self.group_write_counts.entry(owner).or_insert(0) += 1;
         }
+        for (_, _, _, property_values, _) in entries {
+            self.observe_form_write(property_values);
+        }
         if let Some(ts) = entries.iter().map(|(_, _, _, _, ts)| *ts).max() {
             let pressured = self.check_and_apply_write_backpressure(ts);
             self.maybe_run_auto_maintenance();
@@ -474,6 +477,9 @@ impl EdgeStore {
             let owner = self.owner_gid_for(*src, *dst);
             *self.group_write_counts.entry(owner).or_insert(0) += 1;
         }
+        for (_, _, _, property_values, _) in entries {
+            self.observe_form_write(property_values);
+        }
         if let Some(ts) = entries.iter().map(|(_, _, _, _, ts)| *ts).max() {
             let pressured = self.check_and_apply_write_backpressure(ts);
             self.maybe_run_auto_maintenance();
@@ -601,6 +607,7 @@ impl EdgeStore {
         self.edge_owner
             .insert(edge_id, self.owner_gid_for(src, dst));
         self.debug_assert_copies_consistent(edge_id);
+        self.observe_form_write(property_values);
         Ok(edge_id)
     }
 }
