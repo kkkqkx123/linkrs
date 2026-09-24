@@ -37,6 +37,7 @@ pub mod iterator;
 pub mod mvcc;
 pub mod persistence;
 pub mod record_form;
+pub mod record_form_auto;
 pub mod remap;
 pub mod schema_add_column;
 pub mod schema_drop_column;

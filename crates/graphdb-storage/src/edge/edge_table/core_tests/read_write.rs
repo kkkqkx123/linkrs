@@ -494,10 +494,11 @@ fn predicate_prune_stays_sound_across_stats_rebuild() {
         include_upper: true,
     };
     // Snapshot 150 sees 5.0: a shrinking rebuild would prune this away.
-    let old_hits =
-        table
-            .properties
-            .filter_edge_ids_by_predicates(std::slice::from_ref(&covering_old), 150, None);
+    let old_hits = table.properties.filter_edge_ids_by_predicates(
+        std::slice::from_ref(&covering_old),
+        150,
+        None,
+    );
     assert_eq!(old_hits.len(), 1);
     // Current snapshot sees 100.0: the old range matches nothing.
     let new_hits = table
@@ -559,9 +560,10 @@ fn chunk_zone_skip_matches_full_walk_across_chunks() {
         include_lower: true,
         include_upper: true,
     };
-    let hits = table
-        .properties
-        .filter_edge_ids_by_predicates(std::slice::from_ref(&selective), 150, None);
+    let hits =
+        table
+            .properties
+            .filter_edge_ids_by_predicates(std::slice::from_ref(&selective), 150, None);
     assert_eq!(hits.len(), 101);
     for edge_id in &hits {
         let props = table

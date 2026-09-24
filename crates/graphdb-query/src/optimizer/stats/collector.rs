@@ -348,9 +348,10 @@ impl StatisticsCollector {
         Ok((out_freq.len() as f64 / n, in_freq.len() as f64 / n))
     }
 
-    /// Merge storage-level snapshot bounds into a property statistics entry,
-    /// overriding the sampled envelope when the snapshot carries usable
-    /// bounds.  Returns `true` when the snapshot provides information.
+    /// Merge storage-level snapshot bounds and cardinality into a property
+    /// statistics entry, overriding the sampled envelope when the snapshot
+    /// carries usable bounds. Returns `true` when the snapshot provides
+    /// information.
     fn merge_snapshot_bounds(
         stat: &mut PropertyStatistics,
         snapshot: Option<&crate::storage::stats_reader::ColumnStatsSnapshot>,
@@ -358,15 +359,27 @@ impl StatisticsCollector {
         let Some(snap) = snapshot else {
             return false;
         };
-        if !snap.has_envelope() {
-            return false;
+        let mut useful = false;
+        if snap.has_envelope() {
+            // The zone-map envelope is conservative (never shrinks after writes)
+            // and covers the full column rather than a head-biased sample, so it
+            // is always preferred when available.
+            stat.min_value.clone_from(&snap.min_value);
+            stat.max_value.clone_from(&snap.max_value);
+            useful = true;
         }
-        // The zone-map envelope is conservative (never shrinks after writes)
-        // and covers the full column rather than a head-biased sample, so it
-        // is always preferred when available.
-        stat.min_value.clone_from(&snap.min_value);
-        stat.max_value.clone_from(&snap.max_value);
-        true
+        // The snapshot HLL estimate covers the full column while sampling
+        // only sees a head-biased window, so a snapshot estimate larger than
+        // the sampled distinct count replaces it. Both sides are estimates:
+        // keeping the larger avoids underestimation that would inflate
+        // selectivity and misorder joins.
+        if let Some(ndv) = snap.distinct_count {
+            if ndv > 0 {
+                stat.distinct_values = stat.distinct_values.max(ndv);
+                useful = true;
+            }
+        }
+        useful
     }
 
     /// Collect per-property distinct-value (NDV) estimates from a sampled

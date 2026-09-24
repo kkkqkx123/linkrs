@@ -167,11 +167,12 @@ impl ColumnEncoding {
                 "Cannot set value on unencoded column through ColumnEncoding".to_string(),
             )),
             Self::Fsst(col) => match value {
-                Some(Value::String(s)) => {
+                Some(v) if v.string_value().is_some() => {
+                    let s = v.string_value().unwrap_or("");
                     if row_idx == col.len() {
-                        col.append(Some(s.as_str()))?;
+                        col.append(Some(s))?;
                     } else {
-                        col.set(row_idx, Some(s.as_str()))?;
+                        col.set(row_idx, Some(s))?;
                     }
                     Ok(())
                 }

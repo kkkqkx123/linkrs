@@ -347,7 +347,9 @@ impl TransactionOps {
                     prop.name = original.clone();
                 }
             }
-            table.apply_schema(schema);
+            table
+                .apply_schema(schema)
+                .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
         }
 
         Ok(())
@@ -413,7 +415,9 @@ impl TransactionOps {
         for prop_name in prop_names {
             schema.properties.retain(|p| p.name != *prop_name);
         }
-        table.apply_schema(schema);
+        table
+            .apply_schema(schema)
+            .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
 
         Ok(())
     }

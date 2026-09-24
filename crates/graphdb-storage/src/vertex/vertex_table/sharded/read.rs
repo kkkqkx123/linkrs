@@ -392,10 +392,11 @@ impl ShardedVertexTable {
 
         let mut merged: Vec<(String, crate::cursor::ColumnValues)> = resolved_names
             .iter()
-            .map(|n| {
+            .zip(types.iter())
+            .map(|(n, data_type)| {
                 (
                     n.clone(),
-                    crate::cursor::ColumnValues::General(vec![None; global_ids.len()]),
+                    empty_typed_column(data_type.as_ref(), global_ids.len()),
                 )
             })
             .collect();
@@ -415,6 +416,12 @@ impl ShardedVertexTable {
         }
 
         for (index, data_type) in types.into_iter().enumerate() {
+            // Already-typed merges skip the box-and-retype roundtrip; only
+            // `General` columns (unknown type or cross-shard kind mismatch)
+            // attempt recovery through the declared type.
+            if !matches!(merged[index].1, crate::cursor::ColumnValues::General(_)) {
+                continue;
+            }
             if let Some(data_type) = data_type {
                 let general = merged[index].1.to_general();
                 if let Some(typed) =
@@ -425,5 +432,42 @@ impl ShardedVertexTable {
             }
         }
         merged
+    }
+}
+
+/// Pre-sized all-null column of the declared type for sharded merges, so
+/// same-kind per-shard decodes scatter directly into a typed target.
+fn empty_typed_column(
+    data_type: Option<&graphdb_core::types::DataType>,
+    len: usize,
+) -> crate::cursor::ColumnValues {
+    use crate::cursor::ColumnValues;
+    use graphdb_core::types::DataType;
+    match data_type {
+        Some(DataType::BigInt) => ColumnValues::I64 {
+            values: vec![0; len],
+            valid: vec![0; len],
+        },
+        Some(DataType::Double) => ColumnValues::F64 {
+            values: vec![0.0; len],
+            valid: vec![0; len],
+        },
+        Some(DataType::Int) => ColumnValues::I32 {
+            values: vec![0; len],
+            valid: vec![0; len],
+        },
+        Some(DataType::Bool) => ColumnValues::Bool {
+            values: vec![0; len],
+            valid: vec![0; len],
+        },
+        Some(DataType::SmallInt) => ColumnValues::I16 {
+            values: vec![0; len],
+            valid: vec![0; len],
+        },
+        Some(DataType::Float) => ColumnValues::F32 {
+            values: vec![0.0; len],
+            valid: vec![0; len],
+        },
+        _ => ColumnValues::General(vec![None; len]),
     }
 }

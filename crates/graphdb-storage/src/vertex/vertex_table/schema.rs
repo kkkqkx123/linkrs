@@ -4,7 +4,6 @@
 //! Schema modifications invalidate the property index cache, which is rebuilt on-demand.
 
 use crate::schema::{ChangeDetails, PropertyChange, SchemaObjectType};
-use crate::types::StoragePropertyDef;
 use graphdb_core::StorageResult;
 
 use super::core::VertexTable;
@@ -16,7 +15,7 @@ impl VertexTable {
     /// 1. Computing next version number from history
     /// 2. Creating a PropertyChange event
     /// 3. Recording it in the version history
-    fn record_schema_change(&mut self, details: ChangeDetails) -> StorageResult<()> {
+    pub(super) fn record_schema_change(&mut self, details: ChangeDetails) -> StorageResult<()> {
         let mut history_guard = self
             .version_history
             .lock()
@@ -45,137 +44,5 @@ impl VertexTable {
     /// Does NOT add the column (it already exists), but DOES record the change.
     pub fn rebuild_schema_change_from_redo(&mut self, details: ChangeDetails) -> StorageResult<()> {
         self.record_schema_change(details)
-    }
-
-    pub fn add_property(&mut self, prop: StoragePropertyDef) -> StorageResult<()> {
-        if !self.is_open {
-            return Err(graphdb_core::StorageError::storage_not_open());
-        }
-
-        if self.columns.get_column(&prop.name).is_some() {
-            return Err(graphdb_core::StorageError::column_already_exists(
-                prop.name.clone(),
-            ));
-        }
-
-        // Add to columns first (potentially failing operation)
-        self.columns
-            .add_column(prop.name.clone(), prop.data_type.clone(), prop.nullable);
-        if let Some(col) = self.columns.get_column_mut(&prop.name) {
-            col.set_chunk_capacity(self.chunk_capacity);
-        }
-        if matches!(
-            prop.data_type,
-            graphdb_core::DataType::String | graphdb_core::DataType::Blob
-        ) {
-            if let Some(col) = self.columns.get_column_mut(&prop.name) {
-                col.set_overflow_threshold(self.string_overflow_threshold);
-            }
-        }
-
-        // Only modify schema if columns addition succeeded
-        self.schema.properties.push(prop.clone());
-
-        // Update cache with new property
-        let idx = self.schema.properties.len() - 1;
-        self.property_index_cache.insert(prop.name.clone(), idx);
-
-        self.record_schema_change(ChangeDetails::PropertyAdded {
-            name: prop.name.clone(),
-            data_type: prop.data_type.clone(),
-            nullable: prop.nullable,
-            default_value: prop.default_value.clone(),
-        })?;
-
-        Ok(())
-    }
-
-    pub fn remove_property(&mut self, prop_name: &str) -> StorageResult<()> {
-        if !self.is_open {
-            return Err(graphdb_core::StorageError::storage_not_open());
-        }
-
-        let index = self
-            .schema
-            .properties
-            .iter()
-            .position(|prop| prop.name == prop_name)
-            .ok_or_else(|| graphdb_core::StorageError::column_not_found(prop_name.to_string()))?;
-
-        // GUARD: Prevent removal of primary key property
-        if index == self.schema.primary_key_index {
-            return Err(graphdb_core::StorageError::not_supported(
-                "Removing the primary key property is not supported".to_string(),
-            ));
-        }
-
-        // Get property details before removal for change recording
-        let removed_prop = self.schema.properties[index].clone();
-
-        // Remove from columns first (potentially failing operation)
-        self.columns.remove_column(prop_name)?;
-
-        // Only modify schema if columns removal succeeded
-        self.schema.properties.remove(index);
-        if index < self.schema.primary_key_index {
-            self.schema.primary_key_index -= 1;
-        }
-
-        // Rebuild cache: remove deleted property and adjust indices
-        self.property_index_cache.remove(prop_name);
-        for idx in self.property_index_cache.values_mut() {
-            if *idx > index {
-                *idx -= 1;
-            }
-        }
-
-        self.record_schema_change(ChangeDetails::PropertyRemoved {
-            name: removed_prop.name,
-            data_type: removed_prop.data_type,
-        })?;
-
-        Ok(())
-    }
-
-    pub fn rename_property(&mut self, old_name: &str, new_name: &str) -> StorageResult<()> {
-        if !self.is_open {
-            return Err(graphdb_core::StorageError::storage_not_open());
-        }
-
-        if self
-            .schema
-            .properties
-            .iter()
-            .any(|prop| prop.name == new_name)
-        {
-            return Err(graphdb_core::StorageError::column_already_exists(
-                new_name.to_string(),
-            ));
-        }
-
-        let index = self
-            .schema
-            .properties
-            .iter()
-            .position(|prop| prop.name == old_name)
-            .ok_or_else(|| graphdb_core::StorageError::column_not_found(old_name.to_string()))?;
-
-        // Rename in columns first (potentially failing operation)
-        self.columns.rename_column(old_name, new_name.to_string())?;
-
-        // Only modify schema if columns rename succeeded
-        self.schema.properties[index].name = new_name.to_string();
-
-        // Update cache: rename key, keep index
-        if let Some(idx) = self.property_index_cache.remove(old_name) {
-            self.property_index_cache.insert(new_name.to_string(), idx);
-        }
-
-        self.record_schema_change(ChangeDetails::PropertyRenamed {
-            old_name: old_name.to_string(),
-            new_name: new_name.to_string(),
-        })?;
-
-        Ok(())
     }
 }

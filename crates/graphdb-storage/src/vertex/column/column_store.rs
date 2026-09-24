@@ -134,6 +134,51 @@ fn decode_column_values_at_ts(
             }
             ColumnValues::I32 { values, valid }
         }
+        DataType::Bool => {
+            let mut values = Vec::with_capacity(rows.len());
+            let mut valid = vec![0u8; rows.len()];
+            for (i, &row) in rows.iter().enumerate() {
+                match column.get_at_ts(row, query_ts) {
+                    Some(Value::Bool(v)) => {
+                        values.push(u8::from(v));
+                        valid[i] = 1;
+                    }
+                    Some(_) => return general_column_at_ts(column, rows, query_ts),
+                    None => values.push(0),
+                }
+            }
+            ColumnValues::Bool { values, valid }
+        }
+        DataType::SmallInt => {
+            let mut values = Vec::with_capacity(rows.len());
+            let mut valid = vec![0u8; rows.len()];
+            for (i, &row) in rows.iter().enumerate() {
+                match column.get_at_ts(row, query_ts) {
+                    Some(Value::SmallInt(v)) => {
+                        values.push(v);
+                        valid[i] = 1;
+                    }
+                    Some(_) => return general_column_at_ts(column, rows, query_ts),
+                    None => values.push(0),
+                }
+            }
+            ColumnValues::I16 { values, valid }
+        }
+        DataType::Float => {
+            let mut values = Vec::with_capacity(rows.len());
+            let mut valid = vec![0u8; rows.len()];
+            for (i, &row) in rows.iter().enumerate() {
+                match column.get_at_ts(row, query_ts) {
+                    Some(Value::Float(v)) => {
+                        values.push(v);
+                        valid[i] = 1;
+                    }
+                    Some(_) => return general_column_at_ts(column, rows, query_ts),
+                    None => values.push(0.0),
+                }
+            }
+            ColumnValues::F32 { values, valid }
+        }
         _ => general_column_at_ts(column, rows, query_ts),
     }
 }
@@ -588,7 +633,10 @@ impl ColumnStore {
 
         match encoding_type {
             EncodingType::Fsst => {
-                if col.data_type != DataType::String && col.data_type != DataType::Json {
+                if col.data_type != DataType::String
+                    && col.data_type != DataType::Json
+                    && !matches!(col.data_type, DataType::FixedString(_))
+                {
                     return Err(StorageError::not_supported(format!(
                         "FSST encoding does not support type {:?}",
                         col.data_type

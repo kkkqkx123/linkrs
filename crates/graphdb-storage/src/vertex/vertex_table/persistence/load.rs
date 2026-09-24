@@ -77,7 +77,7 @@ impl VertexTable {
             .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
         let schema: crate::vertex::VertexSchema = serde_json::from_str(&schema_json)
             .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
-        self.set_schema(schema);
+        self.set_schema(schema)?;
         if !meta_cursor.is_empty() {
             return Err(StorageError::deserialize_error(
                 "trailing bytes in vertex metadata",

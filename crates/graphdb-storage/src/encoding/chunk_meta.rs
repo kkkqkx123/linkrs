@@ -201,7 +201,7 @@ pub fn profile_chunk(
         data_type,
         DataType::SmallInt | DataType::Int | DataType::BigInt
     );
-    let is_str = matches!(data_type, DataType::String);
+    let is_str = matches!(data_type, DataType::String | DataType::FixedString(_));
     if is_str {
         distinct_str = Some(std::collections::HashSet::new());
     }
@@ -286,6 +286,12 @@ pub fn profile_chunk(
                         str_len += s.len();
                         if let Some(set) = distinct_str.as_mut() {
                             set.insert(s.to_string());
+                        }
+                    }
+                    Value::FixedString(s) => {
+                        str_len += s.len();
+                        if let Some(set) = distinct_str.as_mut() {
+                            set.insert(s.clone());
                         }
                     }
                     _ => {}

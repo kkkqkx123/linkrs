@@ -13,5 +13,6 @@ pub mod optimizer;
 pub mod persistence;
 pub mod schema;
 pub mod sharded;
+pub mod staged_schema;
 
 pub use sharded::ShardedVertexTable;

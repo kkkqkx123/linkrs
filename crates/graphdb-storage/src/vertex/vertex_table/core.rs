@@ -68,6 +68,11 @@ pub struct VertexTable {
     /// Rows per chunk for chunk-local encodings (applied when columns are
     /// created).
     pub(super) chunk_capacity: usize,
+    /// One in-flight staged schema change (prepare/fill/publish/abort).
+    /// Pending state lives only in memory; publishing is the visibility
+    /// boundary. While set, `set_schema` is rejected so the staged change
+    /// cannot be silently discarded.
+    pub(super) pending_schema_change: Option<super::staged_schema::PendingVertexSchemaChange>,
 }
 
 impl VertexTable {
@@ -123,6 +128,7 @@ impl VertexTable {
             encoding_selector: EncodingSelector::default(),
             string_overflow_threshold: config.string_overflow_threshold,
             chunk_capacity: config.chunk_capacity,
+            pending_schema_change: None,
         }
     }
 
@@ -758,7 +764,12 @@ impl VertexTable {
         &self.schema
     }
 
-    pub fn set_schema(&mut self, schema: VertexSchema) {
+    pub fn set_schema(&mut self, schema: VertexSchema) -> StorageResult<()> {
+        if self.pending_schema_change.is_some() {
+            return Err(StorageError::invalid_operation(
+                "set_schema rejected while a staged vertex schema change is pending".to_string(),
+            ));
+        }
         self.schema = schema;
 
         // Rebuild property index cache
@@ -766,6 +777,7 @@ impl VertexTable {
         for (idx, prop) in self.schema.properties.iter().enumerate() {
             self.property_index_cache.insert(prop.name.clone(), idx);
         }
+        Ok(())
     }
 
     /// Get reference to version history Arc for shared access
@@ -815,6 +827,17 @@ impl VertexTable {
     // Snapshot truth lives in the transaction layer watermarks. The caller
     // passes the watermark safe timestamp; timestamp compaction is always
     // cutoff-gated.
+
+    /// Fold version-chain before-images eligible at `cutoff`.
+    ///
+    /// Fold-only entry for watermark-coordinated maintenance: drops
+    /// before-images no active snapshot can observe without touching the ID
+    /// space (no re-densification, no timestamp compaction). Returns the
+    /// number of version entries folded. The cutoff must come from the
+    /// shared watermark capture of the maintenance pass.
+    pub fn fold_version_chains(&mut self, cutoff: Timestamp) -> usize {
+        self.columns.gc_versions(cutoff)
+    }
 
     /// Perform garbage collection on version data older than min_ts
     ///

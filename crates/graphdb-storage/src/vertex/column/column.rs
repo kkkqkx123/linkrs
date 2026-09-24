@@ -502,14 +502,27 @@ impl Column {
                 // Chunk-local encodings are authoritative when present;
                 // raw chunks fall through to the inner buffer below.
                 if chunk.encoding.is_encoded() {
-                    return chunk.encoding.get(local as usize);
+                    return self.restore_string_type(chunk.encoding.get(local as usize));
                 }
             }
         }
         if self.encoding.is_encoded() {
-            return self.encoding.get(row_idx);
+            return self.restore_string_type(self.encoding.get(row_idx));
         }
         self.inner().get(row_idx)
+    }
+
+    /// Restore the declared string type for values served from a
+    /// type-agnostic string encoding (dictionary / FSST), which always
+    /// decodes to `Value::String`. Raw reads already carry the declared
+    /// type, so only encoded reads pass through here.
+    fn restore_string_type(&self, value: Option<Value>) -> Option<Value> {
+        match (value, &self.data_type) {
+            (Some(Value::String(s)), DataType::FixedString(_)) => {
+                Some(Value::FixedString(s.to_string()))
+            }
+            (v, _) => v,
+        }
     }
 
     pub fn is_null(&self, row_idx: usize) -> bool {
@@ -678,6 +691,11 @@ impl Column {
                         new_offsets.push(new_data.len() as u64);
                         match &v {
                             Value::String(s) => {
+                                let bytes = s.as_bytes();
+                                new_data.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+                                new_data.extend_from_slice(bytes);
+                            }
+                            Value::FixedString(s) => {
                                 let bytes = s.as_bytes();
                                 new_data.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
                                 new_data.extend_from_slice(bytes);

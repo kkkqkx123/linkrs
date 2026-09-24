@@ -61,7 +61,7 @@ pub fn data_type_family(data_type: &DataType) -> DataTypeFamily {
         DataType::SmallInt | DataType::Int | DataType::BigInt => DataTypeFamily::Integer,
         DataType::Float | DataType::Double => DataTypeFamily::Float,
         DataType::Bool => DataTypeFamily::Bool,
-        DataType::String => DataTypeFamily::String,
+        DataType::String | DataType::FixedString(_) => DataTypeFamily::String,
         _ => DataTypeFamily::Other,
     }
 }
@@ -199,10 +199,7 @@ impl EncodingSelector {
     pub fn select_for_strings(&self, values: &[Option<Value>]) -> EncodingType {
         let non_null: Vec<&str> = values
             .iter()
-            .filter_map(|v| match v {
-                Some(Value::String(s)) => Some(s.as_str()),
-                _ => None,
-            })
+            .filter_map(|v| v.as_ref().and_then(|vv| vv.string_value()))
             .collect();
 
         if non_null.len() < self.thresholds.string_min_rows {
@@ -273,7 +270,7 @@ impl EncodingSelector {
                 self.select_for_integers(values)
             }
             DataType::Float | DataType::Double => self.select_for_floats(values),
-            DataType::String => self.select_for_strings(values),
+            DataType::String | DataType::FixedString(_) => self.select_for_strings(values),
             _ => EncodingType::None,
         }
     }
@@ -309,7 +306,9 @@ impl EncodingSelector {
         // encodings to noise.
         let small = profile.num_values < self.thresholds.string_min_rows;
         match &profile.data_type {
-            DataType::String if small => return EncodingType::Dictionary,
+            DataType::String | DataType::FixedString(_) if small => {
+                return EncodingType::Dictionary
+            }
             DataType::SmallInt | DataType::Int | DataType::BigInt if small => {
                 return EncodingType::BitPacking
             }
@@ -333,7 +332,7 @@ impl EncodingSelector {
                 }
             }
             DataType::Float | DataType::Double => EncodingType::Alp,
-            DataType::String => {
+            DataType::String | DataType::FixedString(_) => {
                 let total = profile.num_values.max(1);
                 let distinct = profile.distinct.unwrap_or(total);
                 let ratio = distinct as f64 / total as f64;

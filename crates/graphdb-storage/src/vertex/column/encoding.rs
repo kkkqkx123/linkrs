@@ -32,7 +32,10 @@ impl Column {
     }
 
     pub fn apply_fsst_encoding(&mut self, max_symbols: usize) -> StorageResult<()> {
-        if self.data_type != DataType::String && self.data_type != DataType::Json {
+        if self.data_type != DataType::String
+            && self.data_type != DataType::Json
+            && !matches!(self.data_type, DataType::FixedString(_))
+        {
             return Err(StorageError::not_supported(format!(
                 "FSST encoding does not support type {:?}",
                 self.data_type
@@ -46,6 +49,7 @@ impl Column {
             } else {
                 match self.get(i) {
                     Some(Value::String(s)) => strings.push(Some(s.to_string())),
+                    Some(Value::FixedString(s)) => strings.push(Some(s)),
                     Some(Value::Json(j)) => strings.push(Some(j.as_str().to_string())),
                     _ => strings.push(None),
                 }
@@ -90,9 +94,10 @@ impl Column {
     }
 
     pub fn apply_dictionary_encoding(&mut self) -> StorageResult<()> {
-        if self.data_type != DataType::String {
+        if self.data_type != DataType::String && !matches!(self.data_type, DataType::FixedString(_))
+        {
             return Err(StorageError::not_supported(
-                "Dictionary encoding only supports String type".to_string(),
+                "Dictionary encoding only supports String and FixedString types".to_string(),
             ));
         }
 

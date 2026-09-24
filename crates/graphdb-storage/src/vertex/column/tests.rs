@@ -889,4 +889,55 @@ mod tests {
         assert_eq!(dst.version_chain_len(3), 0);
         assert_eq!(dst.get_at_ts(3, 100), None);
     }
+
+    #[test]
+    fn test_fixed_string_dictionary_roundtrip_preserves_type() {
+        let mut col = Column::new("code".to_string(), 0, DataType::FixedString(4), true);
+        let values = ["ab", "cd", "ab", "ef"];
+        for (i, s) in values.iter().enumerate() {
+            col.set(i, Some(&Value::FixedString(s.to_string())))
+                .unwrap();
+        }
+        col.apply_dictionary_encoding().unwrap();
+        assert_eq!(
+            col.encoding_type(),
+            crate::encoding::EncodingType::Dictionary
+        );
+        for (i, s) in values.iter().enumerate() {
+            assert_eq!(col.get(i), Some(Value::FixedString(s.to_string())));
+        }
+    }
+
+    #[test]
+    fn test_fixed_string_chunk_dictionary_preserves_type() {
+        let mut col = Column::new("code".to_string(), 0, DataType::FixedString(4), true);
+        col.set_chunk_capacity(4);
+        for i in 0..8 {
+            col.set(i, Some(&Value::FixedString(format!("v{}", i % 2))))
+                .unwrap();
+        }
+        col.clear_dirty();
+        col.materialize_chunks();
+        col.apply_encoding_to_chunks(crate::encoding::EncodingType::Dictionary, 255)
+            .unwrap();
+        assert_eq!(
+            col.chunk_encoding_metadata()[0].1,
+            crate::encoding::EncodingType::Dictionary
+        );
+        for i in 0..8 {
+            assert_eq!(col.get(i), Some(Value::FixedString(format!("v{}", i % 2))));
+        }
+    }
+
+    #[test]
+    fn test_fixed_string_selector_prefers_dictionary() {
+        let selector = crate::encoding::EncodingSelector::default();
+        let values: Vec<Option<Value>> = (0..100)
+            .map(|i| Some(Value::FixedString(format!("s{}", i % 5))))
+            .collect();
+        assert_eq!(
+            selector.select_for_column(&DataType::FixedString(8), &values),
+            crate::encoding::EncodingType::Dictionary
+        );
+    }
 }

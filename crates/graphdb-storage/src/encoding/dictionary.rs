@@ -194,22 +194,24 @@ impl DictionaryColumn {
         }
 
         match value {
-            Some(Value::String(s)) => {
-                let idx = self.encoder.dictionary.insert(s);
-                if row_idx < self.encoder.indices.len() {
-                    self.encoder.indices[row_idx] = idx;
-                    self.encoder.null_bitmap.set(row_idx, false);
-                } else {
-                    self.encoder.indices.push(idx);
-                    self.encoder.null_bitmap.push(false);
+            Some(v) => match v.string_value() {
+                Some(s) => {
+                    let idx = self.encoder.dictionary.insert(s);
+                    if row_idx < self.encoder.indices.len() {
+                        self.encoder.indices[row_idx] = idx;
+                        self.encoder.null_bitmap.set(row_idx, false);
+                    } else {
+                        self.encoder.indices.push(idx);
+                        self.encoder.null_bitmap.push(false);
+                    }
                 }
-            }
-            Some(v) => {
-                return Err(StorageError::type_mismatch(
-                    graphdb_core::DataType::String,
-                    v.data_type(),
-                ));
-            }
+                None => {
+                    return Err(StorageError::type_mismatch(
+                        graphdb_core::DataType::String,
+                        v.data_type(),
+                    ));
+                }
+            },
             None => {
                 if row_idx < self.encoder.indices.len() {
                     self.encoder.indices[row_idx] = 0;

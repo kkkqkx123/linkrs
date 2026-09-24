@@ -68,6 +68,25 @@ fn new_table(label: LabelId, label_name: &str, schema: VertexSchema) -> VertexTa
     )
 }
 
+/// Single-step schema helpers over the staged machine for test setup.
+fn staged_add(table: &mut VertexTable, prop: StoragePropertyDef) -> StorageResult<()> {
+    table.prepare_add_property_staged(prop)?;
+    table.fill_pending_schema_change()?;
+    table.publish_pending_schema_change()
+}
+
+fn staged_remove(table: &mut VertexTable, name: &str) -> StorageResult<()> {
+    table.prepare_remove_property_staged(name)?;
+    table.fill_pending_schema_change()?;
+    table.publish_pending_schema_change()
+}
+
+fn staged_rename(table: &mut VertexTable, old_name: &str, new_name: &str) -> StorageResult<()> {
+    table.prepare_rename_property_staged(old_name, new_name)?;
+    table.fill_pending_schema_change()?;
+    table.publish_pending_schema_change()
+}
+
 fn create_test_schema() -> VertexSchema {
     // The first property is the primary key, which mirrors the external
     // id: inserts below omit it and let the table auto-fill the mirror.
@@ -249,12 +268,11 @@ fn test_rename_and_remove_property() {
     let schema = create_test_schema();
     let mut table = new_table(0, "person", schema);
 
-    table
-        .add_property(StoragePropertyDef::new(
-            "city".to_string(),
-            DataType::String,
-        ))
-        .expect("add property should succeed");
+    staged_add(
+        &mut table,
+        StoragePropertyDef::new("city".to_string(), DataType::String),
+    )
+    .expect("add property should succeed");
 
     let internal_id = table
         .insert(
@@ -268,12 +286,8 @@ fn test_rename_and_remove_property() {
         )
         .unwrap();
 
-    table
-        .rename_property("age", "years")
-        .expect("rename should succeed");
-    table
-        .remove_property("city")
-        .expect("remove should succeed");
+    staged_rename(&mut table, "age", "years").expect("rename should succeed");
+    staged_remove(&mut table, "city").expect("remove should succeed");
 
     let record = table
         .get_by_internal_id(internal_id, 100)
@@ -388,12 +402,11 @@ fn test_add_property_increments_version() {
     let v1 = table.schema().schema_version;
     assert_eq!(v1, 1, "Initial version should be 1");
 
-    table
-        .add_property(StoragePropertyDef::new(
-            "email".to_string(),
-            DataType::String,
-        ))
-        .expect("add_property should succeed");
+    staged_add(
+        &mut table,
+        StoragePropertyDef::new("email".to_string(), DataType::String),
+    )
+    .expect("add_property should succeed");
 
     let v2 = table.schema().schema_version;
     assert_eq!(v2, 2, "Version should increment after add_property");
@@ -410,9 +423,7 @@ fn test_remove_property_increments_version() {
 
     let v1 = table.schema().schema_version;
 
-    table
-        .remove_property("email")
-        .expect("remove_property should succeed");
+    staged_remove(&mut table, "email").expect("remove_property should succeed");
 
     let v2 = table.schema().schema_version;
     assert_eq!(v2, v1 + 1, "Version should increment after remove_property");
@@ -425,9 +436,7 @@ fn test_rename_property_increments_version() {
 
     let v1 = table.schema().schema_version;
 
-    table
-        .rename_property("name", "full_name")
-        .expect("rename_property should succeed");
+    staged_rename(&mut table, "name", "full_name").expect("rename_property should succeed");
 
     let v2 = table.schema().schema_version;
     assert_eq!(v2, v1 + 1, "Version should increment after rename_property");
@@ -440,30 +449,24 @@ fn test_sequential_property_modifications() {
 
     assert_eq!(table.schema().schema_version, 1);
 
-    table
-        .add_property(StoragePropertyDef::new(
-            "email".to_string(),
-            DataType::String,
-        ))
-        .expect("add_property 1 should succeed");
+    staged_add(
+        &mut table,
+        StoragePropertyDef::new("email".to_string(), DataType::String),
+    )
+    .expect("add_property 1 should succeed");
     assert_eq!(table.schema().schema_version, 2);
 
-    table
-        .add_property(StoragePropertyDef::new(
-            "phone".to_string(),
-            DataType::String,
-        ))
-        .expect("add_property 2 should succeed");
+    staged_add(
+        &mut table,
+        StoragePropertyDef::new("phone".to_string(), DataType::String),
+    )
+    .expect("add_property 2 should succeed");
     assert_eq!(table.schema().schema_version, 3);
 
-    table
-        .rename_property("email", "email_address")
-        .expect("rename_property should succeed");
+    staged_rename(&mut table, "email", "email_address").expect("rename_property should succeed");
     assert_eq!(table.schema().schema_version, 4);
 
-    table
-        .remove_property("phone")
-        .expect("remove_property should succeed");
+    staged_remove(&mut table, "phone").expect("remove_property should succeed");
     assert_eq!(table.schema().schema_version, 5);
 }
 
@@ -474,12 +477,11 @@ fn test_version_history_add_property() {
     let schema = create_test_schema();
     let mut table = new_table(1, "User", schema);
 
-    table
-        .add_property(StoragePropertyDef::new(
-            "email".to_string(),
-            DataType::String,
-        ))
-        .expect("add_property should succeed");
+    staged_add(
+        &mut table,
+        StoragePropertyDef::new("email".to_string(), DataType::String),
+    )
+    .expect("add_property should succeed");
 
     let history = table.version_history.lock().unwrap();
     let changes = history.change_log.get_version_changes(2);
@@ -509,9 +511,7 @@ fn test_version_history_remove_property() {
 
     let mut table = new_table(1, "User", schema);
 
-    table
-        .remove_property("email")
-        .expect("remove_property should succeed");
+    staged_remove(&mut table, "email").expect("remove_property should succeed");
 
     let history = table.version_history.lock().unwrap();
     let changes = history.change_log.get_version_changes(2);
@@ -536,9 +536,7 @@ fn test_version_history_rename_property() {
     let schema = create_test_schema();
     let mut table = new_table(1, "User", schema);
 
-    table
-        .rename_property("name", "full_name")
-        .expect("rename_property should succeed");
+    staged_rename(&mut table, "name", "full_name").expect("rename_property should succeed");
 
     let history = table.version_history.lock().unwrap();
     let changes = history.change_log.get_version_changes(2);

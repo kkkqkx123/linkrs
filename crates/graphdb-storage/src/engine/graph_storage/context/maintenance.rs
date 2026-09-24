@@ -157,6 +157,32 @@ impl GraphStorageContext {
 
         let total_vertices_removed = self.compact_vertex_remap(cleanup_ts)?;
 
+        // Fold vertex version-chain before-images under the same shared
+        // cutoff. Checkpoints persist current values only, so without this
+        // step chains survive until the next background GC pass even though
+        // no active snapshot can observe them. Fold-only: ID
+        // re-densification already happened in the remap above.
+        let total_versions_folded = self
+            .persistent
+            .data_store
+            .with_vertex_tables_mut(|vertex_tables| {
+                let mut folded = 0usize;
+                for table in vertex_tables.values() {
+                    folded += table.fold_version_chains(cleanup_ts);
+                    let (entries, max_len, memory_bytes) = table.version_chain_pressure();
+                    if max_len > 0 {
+                        log::debug!(
+                            "vertex table '{}' chain pressure after fold: entries={} max_len={} memory_bytes={}",
+                            table.label_name(),
+                            entries,
+                            max_len,
+                            memory_bytes,
+                        );
+                    }
+                }
+                Ok(folded)
+            })?;
+
         let edge_keys_and_removed: Vec<(EdgeTableKey, usize)> = self
             .persistent
             .data_store
@@ -243,8 +269,9 @@ impl GraphStorageContext {
         }
 
         log::info!(
-            "Compaction completed: {} vertices, {} edges removed (cleanup_ts={})",
+            "Compaction completed: {} vertices, {} version entries folded, {} edges removed (cleanup_ts={})",
             total_vertices_removed,
+            total_versions_folded,
             total_edges_removed,
             cleanup_ts
         );

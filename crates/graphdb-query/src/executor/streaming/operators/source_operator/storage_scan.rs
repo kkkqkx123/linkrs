@@ -415,6 +415,17 @@ fn typed_from_column(values: &crate::storage::ColumnValues, fallback: &[Value]) 
         crate::storage::ColumnValues::I32 { values: v, .. } if values.all_valid() => {
             TypedColumn::I32(v.clone())
         }
+        crate::storage::ColumnValues::Bool { values: v, .. } if values.all_valid() => {
+            TypedColumn::Bool(v.iter().map(|&x| x != 0).collect())
+        }
+        // Narrow ints/floats widen to the nearest typed layout with full
+        // evaluator support; values are exact (i16->i32, f32->f64).
+        crate::storage::ColumnValues::I16 { values: v, .. } if values.all_valid() => {
+            TypedColumn::I32(v.iter().map(|&x| i32::from(x)).collect())
+        }
+        crate::storage::ColumnValues::F32 { values: v, .. } if values.all_valid() => {
+            TypedColumn::F64(v.iter().map(|&x| f64::from(x)).collect())
+        }
         // General columns that happen to be uniform Date/String values are
         // promoted to the typed layout so filtering stays vectorized.
         crate::storage::ColumnValues::General { .. } => {
