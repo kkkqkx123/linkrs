@@ -133,6 +133,37 @@ impl VertexTable {
         Ok(())
     }
 
+    /// Overlay a since-baseline primary-key delta (`id_indexer.delta`)
+    /// onto the loaded baseline. Returns the applied entry count.
+    /// Corrupt entries fail the whole delta: the caller either refuses
+    /// the open (commit-manifested checkpoints) or discards the delta and
+    /// keeps the baseline (legacy path). Replay never extends the live
+    /// delta log.
+    pub(crate) fn load_id_indexer_delta(&mut self, path: &Path) -> StorageResult<usize> {
+        let (data, _) = Self::read_pages_from_file(path)?;
+        let mut cursor = &data[..];
+        let mut header_buf = [0u8; HEADER_SIZE];
+        cursor.read_exact(&mut header_buf)?;
+        {
+            let mut slice = &header_buf[..];
+            let sid = read_header(&mut slice)?;
+            if sid != section::VERTEX_ID_INDEXER_DELTA {
+                return Err(StorageError::deserialize_error(format!(
+                    "unexpected section id in vertex id_indexer delta: expected {:#06x}, got {:#06x}",
+                    section::VERTEX_ID_INDEXER_DELTA,
+                    sid
+                )));
+            }
+        }
+
+        let remaining = cursor;
+        let entries = crate::vertex::IdIndexer::deserialize_delta(remaining)?;
+        let count = entries.len();
+        self.id_indexer.apply_delta_entries(&entries)?;
+
+        Ok(count)
+    }
+
     fn load_columns(&mut self, path: &Path) -> StorageResult<()> {
         let (data, total_rows) = Self::read_pages_from_file(path)?;
         let mut cursor = &data[..];

@@ -14,6 +14,9 @@ use super::zone_map::ZoneBounds;
 
 use bitvec::prelude::*;
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
+
+use super::chunk_residency::{ChunkResidency, EvictedSnapshot};
 
 /// Unified column storage interface.
 pub trait ColumnStorage: Send + Sync + std::fmt::Debug {
@@ -330,6 +333,11 @@ impl Column {
         row_idx: usize,
         value: Option<&Value>,
     ) -> StorageResult<()> {
+        // Overlay writes to an evicted chunk load it first so point-write
+        // semantics never change under eviction.
+        if let Some(chunk_idx) = self.chunk_index_for_row(row_idx) {
+            self.ensure_resident(chunk_idx)?;
+        }
         // Chunked columns always route through the chunk layer so a point
         // write never decodes the whole column.
         if !self.chunks.is_empty()
@@ -398,6 +406,12 @@ impl Column {
             }
         }
         self.mark_dirty(row_idx);
+        // Overlay writes to an evicted chunk load it first so point-write
+        // semantics never change under eviction. Load failures propagate
+        // as storage errors instead of silently dropping the write.
+        if let Some(chunk_idx) = self.chunk_index_for_row(row_idx) {
+            self.ensure_resident(chunk_idx)?;
+        }
         // Chunked columns always route through the chunk layer so a point
         // write never decodes the whole column.
         if !self.chunks.is_empty()
@@ -495,14 +509,40 @@ impl Column {
             let capacity = self.chunk_capacity.max(1);
             let chunk_idx = row_idx / capacity;
             if let Some(chunk) = self.chunks.get(chunk_idx) {
-                let local = (row_idx.saturating_sub(chunk.row_offset)) as u32;
-                if let Some(hit) = chunk.overlay.get(local) {
-                    return hit;
-                }
-                // Chunk-local encodings are authoritative when present;
-                // raw chunks fall through to the inner buffer below.
-                if chunk.encoding.is_encoded() {
-                    return self.restore_string_type(chunk.encoding.get(local as usize));
+                // Recency stamp for watermark-ordered eviction. Atomic so
+                // shared-reference reads participate without a lock upgrade.
+                chunk.touch();
+                match &chunk.residency {
+                    ChunkResidency::Resident => {
+                        let local = (row_idx.saturating_sub(chunk.row_offset)) as u32;
+                        if let Some(hit) = chunk.overlay.get(local) {
+                            return hit;
+                        }
+                        // Chunk-local encodings are authoritative when present;
+                        // raw chunks fall through to the inner buffer below.
+                        if chunk.encoding.is_encoded() {
+                            return self.restore_string_type(chunk.encoding.get(local as usize));
+                        }
+                    }
+                    ChunkResidency::Evicted(snapshot) => {
+                        // Cold miss served from the compressed snapshot
+                        // without promoting: promotion happens on `&mut`
+                        // paths (writes, batch prefetch, encode, flush).
+                        // The snapshot is checksummed in memory, so a
+                        // decode failure here is unreachable; warn and fall
+                        // through rather than failing the read.
+                        match snapshot.decode_row(row_idx) {
+                            Ok(value) => return value,
+                            Err(e) => {
+                                log::warn!(
+                                    "evicted chunk {} row {} snapshot decode failed: {}; falling back to base buffers",
+                                    chunk_idx,
+                                    row_idx,
+                                    e
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -571,7 +611,21 @@ impl Column {
         let chunk_bytes: usize = self
             .chunks
             .iter()
-            .map(|c| c.overlay.memory_usage() + c.encoding_meta.memory_usage())
+            .map(|c| {
+                c.overlay.memory_usage()
+                    + c.encoding_meta.memory_usage()
+                    + c.data.len()
+                    + c.offsets.len() * 8
+                    + c.null_bitmap
+                        .as_ref()
+                        .map(|bm| bm.as_raw_slice().len())
+                        .unwrap_or(0)
+                    + c.encoding.memory_usage()
+                    + c.residency
+                        .evicted_snapshot()
+                        .map(|snapshot| snapshot.compressed_bytes())
+                        .unwrap_or(0)
+            })
             .sum();
         let hll_bytes = self.hll.as_ref().map(|_| 64usize).unwrap_or(0);
         self.inner().memory_usage()
@@ -797,8 +851,244 @@ impl Column {
     }
 
     // -----------------------------------------------------------------------
-    // Chunk eviction / reload (lazy loading)
+    // Chunk eviction / reload
     // -----------------------------------------------------------------------
+
+    /// Whether the chunk may be evicted: chunk-level checks plus exclusion
+    /// of chunks overlapped by column-level version chains.
+    pub fn chunk_evictable(&self, chunk_idx: usize) -> bool {
+        let Some(chunk) = self.chunks.get(chunk_idx) else {
+            return false;
+        };
+        if !chunk.is_evictable() {
+            return false;
+        }
+        let start = chunk.row_offset;
+        let end = start.saturating_add(chunk.row_count);
+        self.with_version_chains_read(|chains| match chains {
+            None => true,
+            Some(entries) => entries
+                .iter()
+                .take(end)
+                .skip(start.min(entries.len()))
+                .all(|chain| chain.is_empty()),
+        })
+    }
+
+    /// Synchronously load an evicted chunk and mark it hot. Returns whether
+    /// a load happened. Load failures propagate as storage errors.
+    pub fn ensure_resident(&mut self, chunk_idx: usize) -> StorageResult<bool> {
+        let snapshot = match self.chunks.get(chunk_idx) {
+            Some(chunk) => match &chunk.residency {
+                ChunkResidency::Resident => return Ok(false),
+                ChunkResidency::Evicted(snapshot) => snapshot.clone(),
+            },
+            None => return Ok(false),
+        };
+        let pairs = snapshot.decode_all()?;
+        let is_var = super::is_variable_length_type(&self.data_type);
+        let (row_offset, row_count, nullable) = {
+            let chunk = &self.chunks[chunk_idx];
+            (chunk.row_offset, chunk.row_count, self.nullable)
+        };
+        let fresh = if is_var {
+            ColumnChunk::new_variable(row_offset, row_count, nullable)
+        } else {
+            ColumnChunk::new(
+                row_offset,
+                row_count,
+                super::element_size(&self.data_type),
+                nullable,
+            )
+        };
+        fresh.touch();
+        self.chunks[chunk_idx] = fresh;
+        for (row, value) in &pairs {
+            self.write_raw_inner(*row, value.as_ref())?;
+        }
+        // Restore the pre-evict encoding from the same values so promotion
+        // never leaves a raw chunk under a stale column-level mirror: mixed
+        // raw/encoded states would misroute reads through the mirror.
+        // Profiles (min/max/raw size) come from the snapshot; counts and
+        // the compressed size reflect the fresh encoding. Values come from
+        // the decoded snapshot (overflow rows as placeholders, mirroring
+        // the encode-time base) rather than re-reading through the mirror.
+        if snapshot.encoding != crate::encoding::EncodingType::None {
+            let values: Vec<Option<Value>> = pairs
+                .iter()
+                .map(|(row, value)| {
+                    if matches!(self.data_type, DataType::String | DataType::Blob)
+                        && self.overflow_rows.contains_key(row)
+                    {
+                        match self.data_type {
+                            DataType::Blob => Some(Value::Blob(Vec::new())),
+                            _ => Some(Value::string("")),
+                        }
+                    } else {
+                        value.clone()
+                    }
+                })
+                .collect();
+            let encoded = Self::encode_slice(
+                &values,
+                &self.data_type,
+                self.nullable,
+                snapshot.encoding,
+                255,
+            );
+            if encoded.is_encoded() {
+                let num_values = values.iter().filter(|v| v.is_some()).count() as u32;
+                if let Some(chunk) = self.chunks.get_mut(chunk_idx) {
+                    chunk.encoding = encoded;
+                    chunk.clear_overlay_after_flush();
+                    chunk.encoding_meta = snapshot.meta.clone();
+                    chunk.encoding_meta.scheme = chunk.encoding.encoding_type();
+                    chunk.encoding_meta.num_values = num_values;
+                    chunk.encoding_meta.all_null = num_values == 0;
+                    chunk.encoding_meta.compressed_size = chunk.encoding.memory_usage() as u64;
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// Batch miss-load: promote every evicted chunk covering `rows` once
+    /// before a grouped decode, avoiding per-row page faults. Returns the
+    /// number of chunks loaded.
+    pub fn ensure_resident_range(&mut self, rows: &[usize]) -> StorageResult<usize> {
+        let mut idxs: Vec<usize> = rows
+            .iter()
+            .filter_map(|row| self.chunk_index_for_row(*row))
+            .collect();
+        idxs.sort_unstable();
+        idxs.dedup();
+        let mut loaded = 0usize;
+        for idx in idxs {
+            if self.ensure_resident(idx)? {
+                loaded += 1;
+            }
+        }
+        Ok(loaded)
+    }
+
+    /// Promote every evicted chunk. Used by encoding passes and flush
+    /// snapshots so persisted output keeps full fidelity; the source table
+    /// is untouched when this runs on its flush-time clone.
+    pub fn ensure_all_resident(&mut self) -> StorageResult<usize> {
+        let mut loaded = 0usize;
+        for idx in 0..self.chunks.len() {
+            if self.ensure_resident(idx)? {
+                loaded += 1;
+            }
+        }
+        Ok(loaded)
+    }
+
+    /// Release one cold chunk's decoded buffers, retaining the compressed
+    /// snapshot, row range, encoding scheme, and profiles. Returns bytes
+    /// released, or 0 when the chunk is not evictable. Zone maps and HLL
+    /// stay resident at the column level and keep serving.
+    pub fn evict_chunk(&mut self, chunk_idx: usize) -> StorageResult<u64> {
+        if !self.chunk_evictable(chunk_idx) {
+            return Ok(0);
+        }
+        let (start, count, encoding, meta) = {
+            let chunk = &self.chunks[chunk_idx];
+            (
+                chunk.row_offset,
+                chunk.row_count,
+                chunk.encoding.encoding_type(),
+                chunk.encoding_meta.clone(),
+            )
+        };
+        let values: Vec<Option<Value>> = (start..start.saturating_add(count))
+            .map(|row| self.get(row))
+            .collect();
+        let snapshot = EvictedSnapshot::capture(start, values, encoding, meta)?;
+        let released = {
+            let chunk = &self.chunks[chunk_idx];
+            (chunk.data.len()
+                + chunk.offsets.len() * 8
+                + chunk
+                    .null_bitmap
+                    .as_ref()
+                    .map(|bm| bm.as_raw_slice().len())
+                    .unwrap_or(0)
+                + chunk.encoding.memory_usage()) as u64
+        };
+        {
+            let chunk = &mut self.chunks[chunk_idx];
+            chunk.data = Vec::new();
+            chunk.offsets = Vec::new();
+            chunk.null_bitmap = None;
+            chunk.encoding = ColumnEncoding::None;
+            chunk.residency = ChunkResidency::Evicted(snapshot);
+        }
+        Ok(released)
+    }
+
+    /// Evict resident cold chunks oldest-first until `budget` bytes are
+    /// released. Returns `(chunks_evicted, bytes_released)`. Per-chunk
+    /// failures are skipped with a warning so one corruptible chunk never
+    /// blocks the watermark pass.
+    pub fn evict_cold_chunks(&mut self, budget: u64) -> (usize, u64) {
+        if budget == 0 || self.chunks.is_empty() {
+            return (0, 0);
+        }
+        let mut order: Vec<(u64, usize)> = (0..self.chunks.len())
+            .filter(|&idx| self.chunk_evictable(idx))
+            .map(|idx| (self.chunks[idx].last_access.load(Ordering::Relaxed), idx))
+            .collect();
+        order.sort_unstable();
+        let mut count = 0usize;
+        let mut freed = 0u64;
+        for (_, idx) in order {
+            if freed >= budget {
+                break;
+            }
+            match self.evict_chunk(idx) {
+                Ok(0) => {}
+                Ok(released) => {
+                    count += 1;
+                    freed += released;
+                }
+                Err(e) => {
+                    log::warn!("chunk eviction skipped for {}[{}]: {}", self.name, idx, e);
+                }
+            }
+        }
+        (count, freed)
+    }
+
+    /// Resident decoded bytes (excludes retained eviction snapshots).
+    pub fn resident_memory_usage(&self) -> usize {
+        self.memory_usage().saturating_sub(self.evicted_bytes())
+    }
+
+    /// Compressed snapshot bytes retained for evicted chunks.
+    pub fn evicted_bytes(&self) -> usize {
+        self.chunks
+            .iter()
+            .filter_map(|chunk| chunk.residency.evicted_snapshot())
+            .map(|snapshot| snapshot.compressed_bytes())
+            .sum()
+    }
+
+    /// Chunks with decoded data in memory.
+    pub fn resident_chunk_count(&self) -> usize {
+        self.chunks
+            .iter()
+            .filter(|chunk| chunk.residency.is_resident())
+            .count()
+    }
+
+    /// Chunks released with only the snapshot retained.
+    pub fn evicted_chunk_count(&self) -> usize {
+        self.chunks
+            .iter()
+            .filter(|chunk| chunk.residency.is_evicted())
+            .count()
+    }
 
     /// Base value for encoding inputs and persisted buffers: overflow rows
     /// contribute their inline placeholder (the payload travels in the
@@ -1046,6 +1336,8 @@ impl Column {
     // -----------------------------------------------------------------------
 
     /// Per-chunk encoding metadata: (chunk_idx, encoding type, row count).
+    /// Evicted chunks report their pre-evict scheme so sidecars and chunk
+    /// profiles keep describing the flushed layout.
     pub fn chunk_encoding_metadata(&self) -> Vec<(usize, crate::encoding::EncodingType, usize)> {
         if self.chunks.is_empty() {
             return vec![(0, self.encoding.encoding_type(), self.len())];
@@ -1053,7 +1345,7 @@ impl Column {
         self.chunks
             .iter()
             .enumerate()
-            .map(|(i, c)| (i, c.encoding.encoding_type(), c.row_count))
+            .map(|(i, c)| (i, c.evicted_encoding(), c.row_count))
             .collect()
     }
 
@@ -1073,6 +1365,12 @@ impl Column {
         }
         if self.chunks.is_empty() {
             return Ok(());
+        }
+        // Encoding rebuilds need decoded buffers: promote evicted chunks
+        // first so every chunk below is resident. Load failures propagate
+        // instead of silently encoding a partial column.
+        for idx in 0..self.chunks.len() {
+            self.ensure_resident(idx)?;
         }
         let total = self.len();
         for idx in 0..self.chunks.len() {

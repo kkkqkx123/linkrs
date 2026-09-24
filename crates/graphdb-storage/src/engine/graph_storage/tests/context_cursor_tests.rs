@@ -430,3 +430,86 @@ fn edge_column_stats_snapshot_matches_inserted_range() {
         .edge_column_stats("test_space", "KNOWS", "missing")
         .is_none());
 }
+
+#[test]
+fn cursor_allowlist_requires_tag_filter() {
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    insert_test_vertex(&mut storage, 1, "Alice");
+
+    let err = storage
+        .create_vertex_cursor(
+            "test_space",
+            &ScanOptions::default().with_internal_id_allowlist(vec![0]),
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("tag"),
+        "allowlist without tag must name the tag requirement: {err}"
+    );
+}
+
+#[test]
+fn cursor_allowlist_decodes_exact_id_set() {
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    insert_test_vertex(&mut storage, 1, "Alice");
+    insert_test_vertex(&mut storage, 2, "Bob");
+    insert_test_vertex(&mut storage, 3, "Carol");
+
+    let mut probe = storage
+        .create_vertex_cursor(
+            "test_space",
+            &ScanOptions::default().with_tag("Person".to_string()),
+        )
+        .expect("probe cursor should open");
+    let flat = probe.next_flat_batch(16).expect("probe batch");
+    assert_eq!(flat.len(), 3);
+    // u32::MAX is out of range for every shard and must yield no row,
+    // mirroring batch point-lookup semantics. Expected vids come from the
+    // probed rows themselves: flat order follows shard layout, not
+    // insertion order.
+    let wanted = vec![
+        flat[0].internal_id as u32,
+        flat[2].internal_id as u32,
+        u32::MAX,
+    ];
+    let mut expected: Vec<i64> = vec![flat[0].vid, flat[2].vid]
+        .into_iter()
+        .filter_map(|v| v.as_int64())
+        .collect();
+    expected.sort_unstable();
+
+    let mut cursor = storage
+        .create_vertex_cursor(
+            "test_space",
+            &ScanOptions::default()
+                .with_tag("Person".to_string())
+                .with_internal_id_allowlist(wanted.clone()),
+        )
+        .expect("allowlist cursor should open");
+    let rows = cursor.next_batch(16).expect("allowlist batch");
+    assert_eq!(rows.len(), 2);
+    let mut vids: Vec<i64> = rows.iter().filter_map(|r| r.vid.as_int64()).collect();
+    vids.sort_unstable();
+    assert_eq!(vids, expected);
+
+    // The column-block path honors the same allowlist.
+    let mut column_cursor = storage
+        .create_vertex_cursor(
+            "test_space",
+            &ScanOptions::default()
+                .with_tag("Person".to_string())
+                .with_internal_id_allowlist(wanted),
+        )
+        .expect("column allowlist cursor should open");
+    let batch = column_cursor
+        .next_column_batch(&["name".to_string()], 16)
+        .expect("column batch");
+    assert_eq!(batch.len(), 2);
+    let mut batch_vids: Vec<i64> = batch.vids.iter().filter_map(|v| v.as_int64()).collect();
+    batch_vids.sort_unstable();
+    assert_eq!(batch_vids, expected);
+}

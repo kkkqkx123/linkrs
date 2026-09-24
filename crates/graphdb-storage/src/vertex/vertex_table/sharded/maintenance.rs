@@ -61,20 +61,34 @@ impl ShardedVertexTable {
     /// The cutoff must be the watermark safe timestamp, never a bare
     /// transaction stamp.
     ///
-    /// Returns the removed external keys and the old-to-new *global* internal
-    /// ID mapping (shard-local rows translated into encoded global IDs), which
-    /// callers must propagate to edge CSR rows before dependent queries.
+    /// Returns the removed external keys, the old-to-new *global* internal
+    /// ID mapping (shard-local rows translated into encoded global IDs),
+    /// and the combined journal of the per-shard executions, which callers
+    /// must propagate to edge CSR rows before dependent queries.
     ///
     /// Shards whose fragmentation ratio is below
     /// [`SHARD_FRAGMENTATION_THRESHOLD`] are skipped (segment-level
     /// compaction): lazy ID recycling already reclaims their holes without a
-    /// global remap, avoiding cross-shard coordination.
+    /// global remap, avoiding cross-shard coordination. The threshold is the
+    /// hole-rate watermark for stable row IDs: below it, free-stack reuse
+    /// absorbs deletes and live rows never move; above it, a barriered
+    /// compact reclaims the shard and the returned mapping must propagate
+    /// to edge endpoints before any new write is admitted.
+    ///
+    /// Each compacted shard runs under its shard write lock, which is the
+    /// per-shard commit barrier: concurrent writes to that shard block
+    /// while reads continue on their snapshots.
     pub fn compact_with_cutoff_collect_mapping(
         &self,
         cutoff: Timestamp,
-    ) -> StorageResult<(Vec<IdKey>, std::collections::HashMap<u32, u32>)> {
+    ) -> StorageResult<(
+        Vec<IdKey>,
+        std::collections::HashMap<u32, u32>,
+        super::super::compaction::CompactionJournal,
+    )> {
         let mut all_removed = Vec::new();
         let mut all_mapping = std::collections::HashMap::new();
+        let mut journals = Vec::new();
         for (idx, shard) in self.shards.iter().enumerate() {
             // Selective compaction: only compact shards with significant
             // fragmentation to avoid global remapping overhead.
@@ -95,7 +109,9 @@ impl ShardedVertexTable {
                 }
             }
             let mut table = shard.write();
-            let (removed, local_mapping) = table.compact_with_cutoff_collect_mapping(cutoff)?;
+            let (removed, local_mapping, journal) =
+                table.compact_with_cutoff_collect_mapping(cutoff)?;
+            journals.push(journal);
             for (old_local, new_local) in local_mapping {
                 all_mapping.insert(
                     self.encode_id(idx, old_local),
@@ -104,7 +120,53 @@ impl ShardedVertexTable {
             }
             all_removed.extend(removed);
         }
-        Ok((all_removed, all_mapping))
+        let combined = super::super::compaction::CompactionJournal::combine(&journals);
+        Ok((all_removed, all_mapping, combined))
+    }
+
+    /// Evict cold column chunks across shards oldest-first until `max_bytes`
+    /// are released. Returns `(chunks_evicted, bytes_released)`.
+    ///
+    /// Each shard is handled under its shard write lock with the
+    /// evictability rechecked inside: a chunk that gained an overlay write
+    /// or a version chain since selection is skipped for this pass.
+    pub fn evict_cold_chunks(&self, max_bytes: u64) -> (usize, u64) {
+        let mut count = 0usize;
+        let mut freed = 0u64;
+        for shard in &self.shards {
+            if freed >= max_bytes {
+                break;
+            }
+            let mut table = shard.write();
+            let (n, bytes) = table
+                .columns
+                .evict_cold_chunks(max_bytes.saturating_sub(freed));
+            count += n;
+            freed += bytes;
+        }
+        (count, freed)
+    }
+
+    /// Eviction observability: `(resident_chunks, evicted_chunks,
+    /// evicted_bytes, resident_bytes)` across shards.
+    pub fn eviction_stats(&self) -> (usize, usize, usize, usize) {
+        let mut resident_chunks = 0usize;
+        let mut evicted_chunks = 0usize;
+        let mut evicted_bytes = 0usize;
+        let mut resident_bytes = 0usize;
+        for shard in &self.shards {
+            let table = shard.read();
+            resident_chunks += table.columns.resident_chunk_count();
+            evicted_chunks += table.columns.evicted_chunk_count();
+            evicted_bytes += table.columns.evicted_bytes();
+            resident_bytes += table.columns.resident_memory_usage();
+        }
+        (
+            resident_chunks,
+            evicted_chunks,
+            evicted_bytes,
+            resident_bytes,
+        )
     }
 
     pub fn version_history_ref(

@@ -28,12 +28,23 @@ impl VertexTable {
         Self::write_pages_to_file(&meta_path, &meta_payload, page_size, level, 1)?;
 
         let id_indexer_path = path.join("id_indexer.bin");
-        self.flush_id_indexer(&id_indexer_path)?;
+        self.flush_id_indexer_baseline(path, &id_indexer_path)?;
 
         let columns_path = path.join("columns.bin");
         // Encoding is a flush-time concern. Work on a snapshot so active
         // writes keep using the unmodified in-memory representation.
         let mut columns = self.columns.clone();
+        // Evicted chunks promote on the snapshot only: persisted output
+        // keeps full fidelity while the live table stays evicted.
+        match columns.ensure_all_resident() {
+            Ok(0) => {}
+            Ok(loaded) => {
+                log::debug!("flush promoted {} evicted chunks", loaded);
+            }
+            Err(e) => {
+                log::warn!("flush chunk promotion failed: {}", e);
+            }
+        }
         // Use the persistent encoding selector so compression feedback
         // accumulates across flushes, enabling the re-encoding detector.
         // Selection is streaming per chunk: each chunk profiles its own
@@ -185,6 +196,36 @@ impl VertexTable {
 
         let page_size = crate::compression::DEFAULT_PAGE_SIZE;
         let total_rows = self.id_indexer.len() as u32;
+        Self::write_pages_to_file(path, &payload, page_size, 3, total_rows)
+    }
+
+    /// Anchor a new primary-key baseline: full snapshot plus removal of any
+    /// superseded `id_indexer.delta`, with the live delta log cleared.
+    /// Full-flush path only.
+    pub(super) fn flush_id_indexer_baseline(&self, dir: &Path, path: &Path) -> StorageResult<()> {
+        self.flush_id_indexer(path)?;
+        let delta_path = dir.join("id_indexer.delta");
+        if delta_path.exists() {
+            std::fs::remove_file(&delta_path)?;
+        }
+        self.id_indexer.clear_index_delta();
+        Ok(())
+    }
+
+    /// Persist the since-baseline primary-key delta (`id_indexer.delta`).
+    /// Skipped by the caller when the delta is empty; shares the checkpoint
+    /// commit with the column delta pages.
+    pub(super) fn flush_id_indexer_delta(&self, path: &Path) -> StorageResult<()> {
+        let mut payload = Vec::new();
+        write_header_to(&mut payload, section::VERTEX_ID_INDEXER_DELTA).map_err(|e| {
+            StorageError::io_error(format!("Failed to write id_indexer delta header: {}", e))
+        })?;
+
+        let delta_data = self.id_indexer.serialize_delta();
+        payload.extend_from_slice(&delta_data);
+
+        let page_size = crate::compression::DEFAULT_PAGE_SIZE;
+        let total_rows = self.id_indexer.delta_len() as u32;
         Self::write_pages_to_file(path, &payload, page_size, 3, total_rows)
     }
 

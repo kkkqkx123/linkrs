@@ -429,6 +429,21 @@ impl GraphStorageContext {
             .mark_modified(TableId::vertex(label));
     }
 
+    /// Record-cache bookkeeping for a freshly inserted vertex ID. Writer
+    /// paths outside the context module use this instead of reaching into
+    /// the persistent state directly.
+    pub(crate) fn cache_inserted_vertex_id(
+        &self,
+        label: LabelId,
+        external_id: &str,
+        internal_id: u32,
+        ts: Timestamp,
+    ) {
+        self.persistent
+            .cache_manager
+            .cache_vertex_id(label, external_id, internal_id, ts);
+    }
+
     pub fn mark_edge_modified(&self, label: LabelId) {
         self.persistent
             .table_tracker

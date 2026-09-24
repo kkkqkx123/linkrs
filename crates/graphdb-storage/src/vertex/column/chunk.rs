@@ -6,10 +6,12 @@
 //! lets point writes land in a row-level overlay without decoding the whole
 //! column, and lets flush profile and encode each chunk independently.
 
-use crate::encoding::{ChunkEncodingMeta, ColumnEncoding};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::encoding::{ChunkEncodingMeta, ColumnEncoding, EncodingType};
 use crate::persistence::dirty_page::DirtyPageTracker;
 use crate::vertex::column::chunk_encoding::{UpdateOverlay, DEFAULT_OVERLAY_CAPACITY};
-use crate::vertex::column::chunk_residency::ChunkResidency;
+use crate::vertex::column::chunk_residency::{next_tick, ChunkResidency};
 use crate::vertex::column::mvcc::{RowVisibility, VersionEntry};
 use graphdb_core::Value;
 
@@ -57,6 +59,9 @@ pub struct ColumnChunk {
     pub updates_since_encode: u64,
     /// Memory residency state (resident vs evicted to disk).
     pub residency: ChunkResidency,
+    /// Last access tick for eviction ordering. Atomic so point reads on the
+    /// shared-reference path can stamp recency without a lock upgrade.
+    pub last_access: AtomicU64,
 }
 
 impl ColumnChunk {
@@ -88,6 +93,7 @@ impl ColumnChunk {
             encoding_meta: ChunkEncodingMeta::default(),
             updates_since_encode: 0,
             residency: ChunkResidency::Resident,
+            last_access: AtomicU64::new(0),
         }
     }
 
@@ -114,7 +120,35 @@ impl ColumnChunk {
             encoding_meta: ChunkEncodingMeta::default(),
             updates_since_encode: 0,
             residency: ChunkResidency::Resident,
+            last_access: AtomicU64::new(0),
         }
+    }
+
+    /// Stamp recency for eviction ordering. Lock-free so shared-reference
+    /// reads participate without upgrading to a write lock.
+    pub fn touch(&self) {
+        self.last_access.store(next_tick(), Ordering::Relaxed);
+    }
+
+    /// Effective encoding scheme: live encoding when resident, pre-evict
+    /// scheme when evicted.
+    pub fn evicted_encoding(&self) -> EncodingType {
+        self.residency
+            .effective_encoding(self.encoding.encoding_type())
+    }
+
+    /// Whether this chunk may be evicted: resident, encoded, with no
+    /// unmerged overlay writes and no live version-chain entries. Raw and
+    /// dirty-overlay chunks stay resident; the column layer additionally
+    /// excludes chunks overlapped by column-level version chains.
+    pub fn is_evictable(&self) -> bool {
+        matches!(self.residency, ChunkResidency::Resident)
+            && self.encoding.is_encoded()
+            && self.overlay.len() == 0
+            && self
+                .version_chains
+                .as_ref()
+                .is_none_or(|chains| chains.iter().all(|chain| chain.is_empty()))
     }
 
     /// Write one row: in-place when the encoding absorbs it, otherwise into
@@ -206,6 +240,7 @@ impl Clone for ColumnChunk {
             encoding_meta: self.encoding_meta.clone(),
             updates_since_encode: self.updates_since_encode,
             residency: self.residency.clone(),
+            last_access: AtomicU64::new(self.last_access.load(Ordering::Relaxed)),
         }
     }
 }
@@ -219,6 +254,7 @@ impl std::fmt::Debug for ColumnChunk {
             .field("offsets_len", &self.offsets.len())
             .field("has_bitmap", &self.null_bitmap.is_some())
             .field("encoding", &self.encoding.encoding_type())
+            .field("resident", &self.residency.is_resident())
             .finish()
     }
 }

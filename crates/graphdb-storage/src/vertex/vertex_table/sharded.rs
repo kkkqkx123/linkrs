@@ -3,7 +3,7 @@ use parking_lot::RwLock;
 use super::core::{VertexTable, VertexTableConfig};
 
 mod maintenance;
-mod persistence;
+pub(crate) mod persistence;
 mod read;
 mod routing;
 mod schema;
@@ -343,7 +343,7 @@ mod tests {
 
         // Physical removal + compaction re-densifies local IDs and resets
         // the allocation counters (same path as compact_vertex_remap).
-        let (removed, mapping) = table
+        let (removed, mapping, _) = table
             .compact_with_cutoff_collect_mapping(ts_delete)
             .unwrap();
         assert_eq!(removed.len(), 30);
@@ -374,5 +374,248 @@ mod tests {
                 num_shards * n
             );
         }
+    }
+
+    #[test]
+    fn test_table_manifest_rejects_shard_count_mismatch() {
+        let dir = std::env::temp_dir().join(format!("sharded_manifest_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+        let ts = TEST_TS;
+        insert_with_name(&table, "v_manifest", ts);
+        table
+            .flush(&dir, crate::compression::CompressionType::Zstd { level: 0 })
+            .unwrap();
+
+        assert!(dir.join("table_manifest.json").exists());
+
+        let same = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+        same.load(&dir).unwrap();
+        assert!(same.get_internal_id("v_manifest", ts).is_some());
+
+        let other = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 8);
+        let err = other.load(&dir).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("num_shards"),
+            "mismatch error must name the shard count: {msg}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_table_manifest_missing_stays_loadable() {
+        let dir =
+            std::env::temp_dir().join(format!("sharded_manifest_legacy_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        insert_with_name(&table, "v_legacy", TEST_TS);
+        table
+            .flush(&dir, crate::compression::CompressionType::Zstd { level: 0 })
+            .unwrap();
+        // True legacy layout: neither the layout manifest nor the commit
+        // manifest exists. A present commit manifest pins its file set, so
+        // removing only the layout manifest is an incomplete commit and
+        // must refuse instead.
+        std::fs::remove_file(dir.join("table_manifest.json")).unwrap();
+        std::fs::remove_file(dir.join("commit_manifest.json")).unwrap();
+
+        let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        reloaded.load(&dir).unwrap();
+        assert!(reloaded.get_internal_id("v_legacy", TEST_TS).is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_low_fragmentation_keeps_row_ids_stable() {
+        // Single shard, 5 rows, 1 delete: hole rate 0.2 stays below the
+        // watermark, so compaction must not move any live row and the
+        // edge cascade sees an empty mapping (zero edge writes).
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+        let ts_insert = 100;
+        let ts_delete = 200;
+        let mut before = std::collections::HashMap::new();
+        for i in 0..5 {
+            let name = format!("stable_{}", i);
+            let id = insert_with_name(&table, &name, ts_insert);
+            before.insert(name, id);
+        }
+        table.delete("stable_0", ts_delete).unwrap();
+        let (removed, mapping, _) = table
+            .compact_with_cutoff_collect_mapping(ts_delete)
+            .unwrap();
+        assert!(
+            removed.is_empty() && mapping.is_empty(),
+            "below-watermark compaction must skip the shard without remapping live rows"
+        );
+        for i in 1..5 {
+            let name = format!("stable_{}", i);
+            assert_eq!(
+                table.get_internal_id(&name, ts_delete),
+                before.get(&name).copied()
+            );
+        }
+        assert_eq!(table.get_internal_id("stable_0", ts_delete), None);
+    }
+
+    #[test]
+    fn test_concurrent_same_key_insert_allocates_once() {
+        use std::sync::Arc;
+        let table = Arc::new(ShardedVertexTable::with_config(
+            1,
+            "person".to_string(),
+            test_schema(),
+            8,
+        ));
+        let ts = TEST_TS;
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let t = Arc::clone(&table);
+            handles.push(std::thread::spawn(move || {
+                t.insert(
+                    "hot_key",
+                    &[("name".to_string(), Value::from("hot_key"))],
+                    ts,
+                )
+                .map(|_| ())
+            }));
+        }
+        let mut oks = 0usize;
+        for h in handles {
+            if h.join().unwrap().is_ok() {
+                oks += 1;
+            }
+        }
+        assert_eq!(oks, 1, "same-key concurrent inserts allocate exactly once");
+        assert_eq!(table.total_count(), 1);
+    }
+
+    #[test]
+    fn test_pk_delta_baseline_plus_incremental_reload() {
+        use crate::vertex::vertex_table::sharded::persistence::COMMIT_MANIFEST_FILE_NAME;
+        let base = std::env::temp_dir().join(format!("pk_base_{}", std::process::id()));
+        let incr = std::env::temp_dir().join(format!("pk_incr_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&incr);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+        let ts = TEST_TS;
+        for i in 0..4 {
+            insert_with_name(&table, &format!("base_{}", i), ts);
+        }
+        table
+            .flush(
+                &base,
+                crate::compression::CompressionType::Zstd { level: 0 },
+            )
+            .unwrap();
+
+        for i in 0..3 {
+            insert_with_name(&table, &format!("incr_{}", i), ts);
+        }
+        table.delete("base_0", ts).unwrap();
+        table
+            .flush_incremental_with_epoch(
+                &incr,
+                crate::compression::CompressionType::Zstd { level: 0 },
+                2,
+                Some(1),
+            )
+            .unwrap();
+        // Incremental shards carry the pk delta instead of a rewritten full
+        // index for shards whose ids did not move.
+        let mut saw_delta = false;
+        for entry in std::fs::read_dir(&incr).unwrap().flatten() {
+            let shard = entry.path();
+            if shard.is_dir()
+                && (shard.join("id_indexer.delta").exists()
+                    || shard.join("id_indexer.bin").exists())
+            {
+                saw_delta = true;
+            }
+        }
+        assert!(saw_delta, "incremental must persist pk changes");
+
+        let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+        reloaded.load(&base).unwrap();
+        reloaded.apply_delta_pages(&incr).unwrap();
+        for i in 0..4 {
+            let visible = reloaded
+                .get_internal_id(&format!("base_{}", i), ts)
+                .is_some();
+            assert_eq!(visible, i != 0, "baseline delete must survive the overlay");
+        }
+        for i in 0..3 {
+            assert!(reloaded
+                .get_internal_id(&format!("incr_{}", i), ts)
+                .is_some());
+        }
+
+        // A corrupt manifest-listed delta refuses the open with epoch info...
+        for entry in std::fs::read_dir(&incr).unwrap().flatten() {
+            let delta = entry.path().join("id_indexer.delta");
+            if delta.exists() {
+                std::fs::write(&delta, b"corrupt").unwrap();
+                let err = reloaded.apply_delta_pages(&incr).unwrap_err().to_string();
+                assert!(
+                    err.contains('2'),
+                    "strict delta error must carry the epoch: {err}"
+                );
+                break;
+            }
+        }
+        // ...while the legacy path (no commit manifest) discards the delta
+        // and keeps the baseline.
+        let _ = std::fs::remove_file(incr.join(COMMIT_MANIFEST_FILE_NAME));
+        let legacy = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+        legacy.load(&base).unwrap();
+        legacy.apply_delta_pages(&incr).unwrap();
+        assert!(legacy.get_internal_id("base_1", ts).is_some());
+
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&incr);
+    }
+
+    #[test]
+    fn test_insert_batch_str_groups_shards_and_aligns_results() {
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 8);
+        let ts = TEST_TS;
+        let names: Vec<String> = (0..100).map(|i| format!("b_{}", i)).collect();
+        let props: Vec<Vec<(String, Value)>> = names
+            .iter()
+            .map(|n| vec![("name".to_string(), Value::from(n.as_str()))])
+            .collect();
+        let rows: Vec<(&str, &[(String, Value)])> = names
+            .iter()
+            .zip(props.iter())
+            .map(|(n, p)| (n.as_str(), p.as_slice()))
+            .collect();
+        let results = table.insert_batch_str(&rows, ts);
+        assert_eq!(results.len(), rows.len());
+        let mut ids = std::collections::HashSet::new();
+        for result in &results {
+            assert!(ids.insert(result.as_ref().unwrap()), "duplicate global id");
+        }
+        for name in &names {
+            assert!(table.get_internal_id(name, ts).is_some());
+        }
+        assert_eq!(table.total_count(), 100);
+    }
+
+    #[test]
+    fn test_insert_batch_reports_per_row_errors() {
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+        let ts = TEST_TS;
+        insert_with_name(&table, "dup", ts);
+        let pa = vec![("name".to_string(), Value::from("dup"))];
+        let pb = vec![("name".to_string(), Value::from("fresh"))];
+        let rows: Vec<(&str, &[(String, Value)])> =
+            vec![("fresh", pb.as_slice()), ("dup", pa.as_slice())];
+        let results = table.insert_batch_str(&rows, ts);
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_err());
+        assert!(table.get_internal_id("fresh", ts).is_some());
     }
 }

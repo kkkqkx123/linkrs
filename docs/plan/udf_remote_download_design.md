@@ -249,4 +249,3 @@ signature_policy = "off"
 3. 签名（可选能力）：`signature_policy != off` 且条目携带 signature 时验证；
     ...
 
-[truncated 6551 chars]

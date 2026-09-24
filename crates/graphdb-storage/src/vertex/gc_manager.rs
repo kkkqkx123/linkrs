@@ -107,6 +107,49 @@ impl VertexGcManager {
         *self.gc_event_sink.write() = Some(sink);
     }
 
+    /// Walk all vertex tables evicting cold chunks up to `budget` bytes.
+    /// Tolerant by design: per-table failures only warn.
+    fn evict_cold_chunks(data_store: &GraphDataStore, budget: u64) {
+        let mut remaining = budget;
+        let mut evicted = 0usize;
+        let mut freed = 0u64;
+        data_store.with_vertex_tables(|tables| {
+            for table in tables.values() {
+                if remaining == 0 {
+                    break;
+                }
+                let (n, bytes) = table.evict_cold_chunks(remaining);
+                evicted += n;
+                freed += bytes;
+                remaining = remaining.saturating_sub(bytes);
+            }
+        });
+        if evicted > 0 {
+            let (resident_chunks, evicted_chunks, evicted_bytes, resident_bytes) = data_store
+                .with_vertex_tables(|tables| {
+                    let mut stats = (0usize, 0usize, 0usize, 0usize);
+                    for table in tables.values() {
+                        let s = table.eviction_stats();
+                        stats.0 += s.0;
+                        stats.1 += s.1;
+                        stats.2 += s.2;
+                        stats.3 += s.3;
+                    }
+                    stats
+                });
+            log::info!(
+                "chunk eviction under memory pressure: {} chunks, {} bytes released \
+                 (resident_chunks={} evicted_chunks={} evicted_bytes={} resident_bytes={})",
+                evicted,
+                freed,
+                resident_chunks,
+                evicted_chunks,
+                evicted_bytes,
+                resident_bytes,
+            );
+        }
+    }
+
     fn emit_gc_event(&self, reclaimed_entries: u64) {
         if reclaimed_entries == 0 {
             return;
@@ -186,6 +229,21 @@ impl VertexGcManager {
                     cache.invalidate_vertices_by_label(label);
                     cache.invalidate_id_indexes_by_label(label);
                 }
+            }
+        }
+
+        // Watermark-triggered chunk eviction on the same background pass:
+        // under High/Critical process pressure, release cold encoded column
+        // chunks oldest-first so memory converges with the working set.
+        // Runs without shard locks held at entry; each shard evicts under
+        // its own write lock with a recheck inside.
+        match crate::memory_watermark::pressure() {
+            crate::memory_watermark::Pressure::Low => {}
+            crate::memory_watermark::Pressure::High => {
+                Self::evict_cold_chunks(&self.data_store, 64 * 1024 * 1024);
+            }
+            crate::memory_watermark::Pressure::Critical => {
+                Self::evict_cold_chunks(&self.data_store, u64::MAX);
             }
         }
 

@@ -215,75 +215,6 @@ fn insert_vertex_at_timestamp(
     Ok(vertex.vid)
 }
 
-/// Batch variant of [`insert_vertex_at_timestamp`] using pre-resolved schema
-/// data: tag table (one `list_tags` per batch), pre-scanned SERIAL state (one
-/// column scan per touched serial column), and pre-listed tag indexes (one
-/// `list_tag_indexes` per batch). Row semantics match the per-row path.
-fn insert_vertex_at_timestamp_prechecked(
-    ctx: &GraphStorageContext,
-    space_id: u64,
-    batch: &mut PrecheckedBatchContext<'_>,
-    vertex: Vertex,
-    ts: Timestamp,
-    rollback: &mut Vec<InsertedVertexTag>,
-) -> StorageResult<VertexId> {
-    let tag = &vertex.tag;
-    let vid = VertexId::normalize_for_vid_type(batch.vid_type, vertex.vid)?;
-    let tag_info = batch
-        .tag_map
-        .get(tag.name.as_str())
-        .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag.name)))?;
-    let label_id = tag_info.tag_id;
-    let props: Vec<(String, Value)> = tag
-        .properties
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    let props = super::constraints::apply_tag_constraints_prechecked(
-        ctx,
-        space_id,
-        tag_info,
-        batch.serial_state,
-        props,
-    )?;
-    let redo = InsertVertexRedo {
-        label: label_id,
-        vid,
-        properties: props.clone(),
-    };
-    let redo_entry = ctx.append_wal_redo(WalOpType::InsertVertex, ts, &redo)?;
-
-    match route_vertex_id(&vid)? {
-        RoutedVertexId::Int(vid_int) => {
-            ctx.insert_vertex_by_i64(label_id, vid_int, &props, ts)?;
-        }
-        RoutedVertexId::Text(id_str) => {
-            ctx.insert_vertex(label_id, &id_str, &props, ts)?;
-        }
-    }
-
-    let vid_value = Value::from(vid);
-    rollback.push(InsertedVertexTag {
-        label_id,
-        vid,
-        vertex_id: vid_value.clone(),
-        tag_name: tag.name.clone(),
-        redo_entry,
-    });
-
-    super::index_maintenance::update_vertex_indexes_with_list(
-        ctx,
-        batch.tag_indexes,
-        space_id,
-        &vid_value,
-        &tag.name,
-        &props,
-        ts,
-    )?;
-
-    Ok(vid)
-}
-
 fn rollback_vertex_tags(
     ctx: &GraphStorageContext,
     space_id: u64,
@@ -755,6 +686,72 @@ fn delete_incident_edges_of_type(
     Ok(())
 }
 
+/// One validated, WAL-appended vertex insert awaiting table application.
+///
+/// Phase A of [`batch_insert_vertices`] stages rows in memory; phase B merges
+/// them into the tables with shard-grouped writes; phase C finishes indexes
+/// and caches. A staged row touches no table or index state, so dropping it
+/// is a free abort.
+struct StagedVertexRow {
+    label_id: LabelId,
+    vid: VertexId,
+    key: IdKey,
+    vertex_id: Value,
+    tag_name: String,
+    props: Vec<(String, Value)>,
+    redo_entry: TransactionWalEntry,
+}
+
+/// Validate, constrain, and WAL-append one batch row without touching table
+/// or index state. Uses the batch's pre-resolved schema context, so row
+/// semantics match the former per-row path.
+fn stage_vertex_row(
+    ctx: &GraphStorageContext,
+    space_id: u64,
+    batch: &mut PrecheckedBatchContext<'_>,
+    vertex: &Vertex,
+    ts: Timestamp,
+) -> StorageResult<StagedVertexRow> {
+    let tag = &vertex.tag;
+    let vid = VertexId::normalize_for_vid_type(batch.vid_type, vertex.vid)?;
+    let tag_info = batch
+        .tag_map
+        .get(tag.name.as_str())
+        .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag.name)))?;
+    let label_id = tag_info.tag_id;
+    let props: Vec<(String, Value)> = tag
+        .properties
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let props = super::constraints::apply_tag_constraints_prechecked(
+        ctx,
+        space_id,
+        tag_info,
+        batch.serial_state,
+        props,
+    )?;
+    let redo = InsertVertexRedo {
+        label: label_id,
+        vid,
+        properties: props.clone(),
+    };
+    let redo_entry = ctx.append_wal_redo(WalOpType::InsertVertex, ts, &redo)?;
+    let key = match route_vertex_id(&vid)? {
+        RoutedVertexId::Int(vid_int) => IdKey::Int(vid_int),
+        RoutedVertexId::Text(id_str) => IdKey::Text(id_str),
+    };
+    Ok(StagedVertexRow {
+        label_id,
+        vid,
+        key,
+        vertex_id: Value::from(vid),
+        tag_name: tag.name.clone(),
+        props,
+        redo_entry,
+    })
+}
+
 pub(crate) fn batch_insert_vertices(
     ctx: &GraphStorageContext,
     space: &str,
@@ -820,8 +817,6 @@ pub(crate) fn batch_insert_vertices(
         .list_tag_indexes(space_info.space_id)?;
 
     let ts = ctx.get_write_timestamp()?;
-    let mut ids = Vec::with_capacity(vertices.len());
-    let mut rollback = Vec::new();
     let mut batch_ctx = PrecheckedBatchContext {
         tag_map: &tag_map,
         tag_indexes: &tag_indexes,
@@ -829,23 +824,170 @@ pub(crate) fn batch_insert_vertices(
         vid_type: &space_info.vid_type,
     };
 
-    for vertex in vertices {
-        let id = match insert_vertex_at_timestamp_prechecked(
-            ctx,
-            space_info.space_id,
-            &mut batch_ctx,
-            vertex,
-            ts,
-            &mut rollback,
-        ) {
-            Ok(id) => id,
+    // Phase A (stage): validate, constrain, and WAL-append every row in
+    // input order. No table or index state is touched, so a failure here
+    // only aborts the timestamp; there is nothing to roll back.
+    let mut staged: Vec<StagedVertexRow> = Vec::with_capacity(vertices.len());
+    for vertex in &vertices {
+        match stage_vertex_row(ctx, space_info.space_id, &mut batch_ctx, vertex, ts) {
+            Ok(row) => staged.push(row),
             Err(e) => {
-                rollback_vertex_tags(ctx, space_info.space_id, &rollback, ts);
+                ctx.abort_write_timestamp(ts);
+                return Err(e);
+            }
+        }
+    }
+
+    // Phase B (merge): group staged rows by label and apply each table's
+    // rows with shard-grouped staged writes (one lock hold per shard
+    // instead of one per row). Results stay aligned with the input; every
+    // row is attempted so the caller can roll back every applied row when
+    // any row fails.
+    let mut label_order: Vec<LabelId> = Vec::new();
+    let mut by_label: HashMap<LabelId, Vec<usize>> = HashMap::new();
+    for (pos, row) in staged.iter().enumerate() {
+        by_label
+            .entry(row.label_id)
+            .or_insert_with(|| {
+                label_order.push(row.label_id);
+                Vec::new()
+            })
+            .push(pos);
+    }
+    let tables: Vec<(LabelId, std::sync::Arc<crate::vertex::ShardedVertexTable>)> =
+        match ctx.data_store().with_vertex_tables(|tables| {
+            label_order
+                .iter()
+                .map(|label_id| {
+                    tables
+                        .get(label_id)
+                        .cloned()
+                        .map(|t| (*label_id, t))
+                        .ok_or_else(|| {
+                            StorageError::label_not_found(format!("vertex label {}", label_id))
+                        })
+                })
+                .collect::<StorageResult<Vec<_>>>()
+        }) {
+            Ok(tables) => tables,
+            Err(e) => {
                 ctx.abort_write_timestamp(ts);
                 return Err(e);
             }
         };
-        ids.push(id);
+    // `applied[pos]` is filled exactly once: every staged row is routed to
+    // exactly one shard group of its label table.
+    let mut applied: Vec<Option<StorageResult<u32>>> = (0..staged.len()).map(|_| None).collect();
+    for (label_id, table) in &tables {
+        let positions = &by_label[label_id];
+        let mut str_order: Vec<usize> = Vec::new();
+        let mut i64_order: Vec<usize> = Vec::new();
+        for &pos in positions {
+            match staged[pos].key {
+                IdKey::Text(_) => str_order.push(pos),
+                IdKey::Int(_) => i64_order.push(pos),
+            }
+        }
+        if !str_order.is_empty() {
+            let rows: Vec<(&str, &[(String, Value)])> = str_order
+                .iter()
+                .map(|&pos| {
+                    let IdKey::Text(ref s) = staged[pos].key else {
+                        unreachable!("str_order only holds text keys");
+                    };
+                    (s.as_str(), staged[pos].props.as_slice())
+                })
+                .collect();
+            for (slot, result) in str_order.iter().zip(table.insert_batch_str(&rows, ts)) {
+                applied[*slot] = Some(result);
+            }
+        }
+        if !i64_order.is_empty() {
+            let rows: Vec<(i64, &[(String, Value)])> = i64_order
+                .iter()
+                .map(|&pos| {
+                    let IdKey::Int(n) = staged[pos].key else {
+                        unreachable!("i64_order only holds int keys");
+                    };
+                    (n, staged[pos].props.as_slice())
+                })
+                .collect();
+            for (slot, result) in i64_order.iter().zip(table.insert_batch_i64(&rows, ts)) {
+                applied[*slot] = Some(result);
+            }
+        }
+    }
+
+    let mut rollback: Vec<InsertedVertexTag> = Vec::with_capacity(staged.len());
+    let mut internal_ids: Vec<u32> = vec![0; staged.len()];
+    let mut first_error: Option<StorageError> = None;
+    for (pos, row) in staged.iter().enumerate() {
+        match applied[pos]
+            .take()
+            .expect("every staged row is applied once")
+        {
+            Ok(internal_id) => {
+                internal_ids[pos] = internal_id;
+                rollback.push(InsertedVertexTag {
+                    label_id: row.label_id,
+                    vid: row.vid,
+                    vertex_id: row.vertex_id.clone(),
+                    tag_name: row.tag_name.clone(),
+                    redo_entry: row.redo_entry.clone(),
+                });
+            }
+            Err(e) => {
+                if first_error.is_none() {
+                    first_error = Some(e);
+                }
+            }
+        }
+    }
+    if let Some(e) = first_error {
+        rollback_vertex_tags(ctx, space_info.space_id, &rollback, ts);
+        ctx.abort_write_timestamp(ts);
+        return Err(e);
+    }
+
+    // Phase C (finish): per-row index maintenance plus the id-cache and
+    // domain bookkeeping that `insert_vertex` normally performs inline.
+    // Table rows are all applied, so a failure here rolls everything back.
+    for (pos, row) in staged.iter().enumerate() {
+        if let Err(e) = super::index_maintenance::update_vertex_indexes_with_list(
+            ctx,
+            batch_ctx.tag_indexes,
+            space_info.space_id,
+            &row.vertex_id,
+            &row.tag_name,
+            &row.props,
+            ts,
+        ) {
+            rollback_vertex_tags(ctx, space_info.space_id, &rollback, ts);
+            ctx.abort_write_timestamp(ts);
+            return Err(e);
+        }
+        match &row.key {
+            IdKey::Text(id_str) => {
+                ctx.cache_inserted_vertex_id(row.label_id, id_str, internal_ids[pos], ts);
+                ctx.mark_vertex_modified(row.label_id);
+                ctx.observe_vertex_id_string(row.label_id);
+            }
+            IdKey::Int(vid_int) => {
+                ctx.cache_inserted_vertex_id(
+                    row.label_id,
+                    &vid_int.to_string(),
+                    internal_ids[pos],
+                    ts,
+                );
+                ctx.mark_vertex_modified(row.label_id);
+                ctx.observe_vertex_id_i64(row.label_id, *vid_int);
+            }
+        }
+    }
+
+    let mut ids = Vec::with_capacity(staged.len());
+    for row in &staged {
+        ids.push(row.vid);
     }
 
     for item in &rollback {

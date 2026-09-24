@@ -21,6 +21,8 @@ pub mod section {
     pub const VERTEX_ID_INDEXER: u32 = 0x0102;
     pub const VERTEX_COLUMNS: u32 = 0x0103;
     pub const VERTEX_TIMESTAMPS: u32 = 0x0104;
+    /// Since-baseline primary-key delta (`id_indexer.delta`).
+    pub const VERTEX_ID_INDEXER_DELTA: u32 = 0x0105;
 
     pub const EDGE_META: u32 = 0x0201;
     pub const EDGE_OUT_CSR: u32 = 0x0202;

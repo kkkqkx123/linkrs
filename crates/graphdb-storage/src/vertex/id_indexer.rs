@@ -30,6 +30,37 @@ const MAX_CAPACITY: usize = u32::MAX as usize;
 const ID_KEY_TYPE_INT: u8 = 0;
 const ID_KEY_TYPE_TEXT: u8 = 1;
 
+/// Visibility-aware primary-key lookup result.
+///
+/// Collapses the old two-step read (`get_index` plus a timestamp check in
+/// the caller) into one call: committed bindings passing the caller's
+/// visibility predicate report as [`PkLookup::Visible`], everything else is
+/// [`PkLookup::Missing`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PkLookup {
+    /// Committed binding visible at the read timestamp.
+    Visible(u32),
+    /// No binding, or a committed binding invisible at the read timestamp.
+    Missing,
+}
+
+impl PkLookup {
+    /// Visible id, if any.
+    pub fn visible_id(self) -> Option<u32> {
+        match self {
+            Self::Visible(id) => Some(id),
+            Self::Missing => None,
+        }
+    }
+}
+
+/// One committed index mutation since the last baseline flush.
+#[derive(Debug, Clone)]
+enum IndexDelta {
+    Insert { key: IdKey, id: u32 },
+    Remove { key: IdKey },
+}
+
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum IdKey {
     Int(i64),
@@ -136,6 +167,15 @@ pub struct IdManager {
     /// Recycled local IDs from deletions, for lazy reuse without global
     /// compaction. Reduces fragmentation by filling holes immediately.
     free_ids: Vec<u32>,
+    /// Committed mutations since the last baseline flush, backing the
+    /// incremental `id_indexer.delta` file. Cleared on baseline flush;
+    /// dropped (with the baseline-invalidated flag set) when compaction
+    /// re-densifies ids, forcing the next flush to anchor a new baseline.
+    delta_log: Vec<IndexDelta>,
+    /// Set when compaction moved live rows after the last baseline flush.
+    /// The next incremental flush must rewrite the full baseline instead
+    /// of appending a delta addressed by stale ids.
+    baseline_invalidated: bool,
     config: IdIndexerConfig,
 }
 
@@ -151,6 +191,8 @@ impl IdManager {
             key_to_id: HashMap::with_capacity(capacity),
             live_ids: BTreeSet::new(),
             free_ids: Vec::new(),
+            delta_log: Vec::new(),
+            baseline_invalidated: false,
             config,
         }
     }
@@ -190,8 +232,10 @@ impl IdManager {
                 }
                 self.keys[idx] = Some(key.clone());
             }
-            self.key_to_id.insert(key, recycled);
+            self.key_to_id.insert(key.clone(), recycled);
             self.live_ids.insert(recycled);
+            self.delta_log
+                .push(IndexDelta::Insert { key, id: recycled });
             return Ok(recycled);
         }
 
@@ -213,10 +257,21 @@ impl IdManager {
 
         let index = self.keys.len() as u32;
         self.keys.push(Some(key.clone()));
-        self.key_to_id.insert(key, index);
+        self.key_to_id.insert(key.clone(), index);
         self.live_ids.insert(index);
+        self.delta_log.push(IndexDelta::Insert { key, id: index });
 
         Ok(index)
+    }
+
+    /// Visibility-aware lookup: the global committed area gated by the
+    /// caller's row-visibility predicate. Collapses the old two-step read
+    /// into one two-state call.
+    pub fn lookup(&self, key: &IdKey, is_visible: impl Fn(u32) -> bool) -> PkLookup {
+        match self.key_to_id.get(key).copied() {
+            Some(id) if is_visible(id) => PkLookup::Visible(id),
+            _ => PkLookup::Missing,
+        }
     }
 
     pub fn get_id(&self, key: &IdKey) -> Option<u32> {
@@ -235,8 +290,10 @@ impl IdManager {
         self.key_to_id.len()
     }
 
-    /// Next free index: local ids are never reused, so this equals the
-    /// highest index ever allocated plus one (gaps from deletions included).
+    /// High-water mark of the local id space (holes from deletions
+    /// included). Deleted slots are recycled through the free stack on
+    /// insert, so live row IDs stay stable until a watermark-gated
+    /// compaction re-densifies them.
     pub fn next_index(&self) -> u32 {
         self.keys.len() as u32
     }
@@ -248,6 +305,7 @@ impl IdManager {
             }
             self.live_ids.remove(&idx);
             self.free_ids.push(idx);
+            self.delta_log.push(IndexDelta::Remove { key: key.clone() });
         })
     }
 
@@ -264,41 +322,52 @@ impl IdManager {
     }
 
     pub fn compact(&mut self) -> StorageResult<HashMap<u32, u32>> {
+        let mapping = self.compute_compact_mapping();
+        if mapping.is_empty() {
+            // Already dense; still clear free list if it had stale entries.
+            // Ids did not move, so the since-baseline delta stays valid.
+            self.free_ids.clear();
+            return Ok(HashMap::new());
+        }
+
         let entries: Vec<(u32, IdKey)> = self
             .key_to_id
             .iter()
             .map(|(key, &idx)| (idx, key.clone()))
             .collect();
-
-        if entries.is_empty() {
-            // No live entries: reset to empty dense state and clear free list.
-            self.keys.clear();
-            self.live_ids.clear();
-            self.free_ids.clear();
-            return Ok(HashMap::new());
-        }
-
         let mut entries = entries;
         entries.sort_by_key(|(old_id, _)| *old_id);
-
-        let mut mapping = HashMap::new();
-        for (new_id, (old_id, _)) in entries.iter().enumerate() {
-            let new_id_u32 = new_id as u32;
-            if *old_id != new_id_u32 {
-                mapping.insert(*old_id, new_id_u32);
-            }
-        }
-
-        if mapping.is_empty() {
-            // Already dense; still clear free list if it had stale entries.
-            self.free_ids.clear();
-            return Ok(HashMap::new());
-        }
-
         self.rebuild_with_mapping(&entries)?;
         self.free_ids.clear();
+        // Live rows moved: delta entries addressed by old ids are stale.
+        // Drop them and force the next flush to anchor a new baseline.
+        self.delta_log.clear();
+        self.baseline_invalidated = true;
 
         Ok(mapping)
+    }
+
+    /// Pure dense-mapping computation without mutating the index.
+    ///
+    /// Sorting live entries ascending and assigning dense `0..n` yields the
+    /// old-to-new mapping for rows that move; unmoved rows are absent.
+    /// The compaction coordinator calls this first so replacements for the
+    /// timestamp and column structures can be built before any mutation,
+    /// keeping the three structures atomically consistent.
+    pub fn compute_compact_mapping(&self) -> HashMap<u32, u32> {
+        let mut olds: Vec<u32> = self.key_to_id.values().copied().collect();
+        if olds.is_empty() {
+            return HashMap::new();
+        }
+        olds.sort_unstable();
+        let mut mapping = HashMap::new();
+        for (new_id, old_id) in olds.into_iter().enumerate() {
+            let new_id_u32 = new_id as u32;
+            if old_id != new_id_u32 {
+                mapping.insert(old_id, new_id_u32);
+            }
+        }
+        mapping
     }
 
     fn rebuild_with_mapping(&mut self, entries: &[(u32, IdKey)]) -> StorageResult<()> {
@@ -330,6 +399,160 @@ impl IdManager {
         self.keys[index as usize] = Some(key.clone());
         self.key_to_id.insert(key, index);
         self.live_ids.insert(index);
+    }
+
+    /// Committed mutations since the last baseline flush.
+    pub fn delta_len(&self) -> usize {
+        self.delta_log.len()
+    }
+
+    /// Whether compaction moved live rows since the last baseline flush.
+    /// Consumes the flag: the next incremental flush anchors a new full
+    /// baseline when this returns true.
+    pub fn take_baseline_invalidated(&mut self) -> bool {
+        std::mem::take(&mut self.baseline_invalidated)
+    }
+
+    /// Drop the since-baseline delta without persisting it. Baseline-flush
+    /// path only: the fresh full snapshot supersedes every delta entry.
+    pub fn clear_index_delta(&mut self) {
+        self.delta_log.clear();
+        self.baseline_invalidated = false;
+    }
+
+    /// Serialize the since-baseline delta for `id_indexer.delta`.
+    ///
+    /// Entry encoding reuses the key bytes ([`IdKey::write_to`]): `count:u32`
+    /// followed by per-entry `op:u8` (`0` insert with `id:u32`, `1` remove)
+    /// plus `key_len:u32` and key bytes. No new key format is introduced.
+    pub fn serialize_delta(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(self.delta_log.len() as u32).to_le_bytes());
+        let mut key_buf = Vec::new();
+        for delta in &self.delta_log {
+            match delta {
+                IndexDelta::Insert { key, id } => {
+                    buf.push(0u8);
+                    buf.extend_from_slice(&id.to_le_bytes());
+                    key.write_to(&mut key_buf);
+                    buf.extend_from_slice(&(key_buf.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(&key_buf);
+                }
+                IndexDelta::Remove { key } => {
+                    buf.push(1u8);
+                    key.write_to(&mut key_buf);
+                    buf.extend_from_slice(&(key_buf.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(&key_buf);
+                }
+            }
+        }
+        buf
+    }
+
+    /// Decode delta entries. Corrupt bytes fail the whole delta so the
+    /// caller either refuses the open (commit-manifested checkpoints) or
+    /// discards the delta and keeps the baseline (legacy path).
+    pub fn deserialize_delta(data: &[u8]) -> StorageResult<Vec<(u8, u32, IdKey)>> {
+        let mut cursor = data;
+        let take = |cursor: &mut &[u8], len: usize, field: &str| -> StorageResult<Vec<u8>> {
+            if len > cursor.len() {
+                return Err(StorageError::deserialize_error(format!(
+                    "pk delta {} length {} exceeds remaining {}",
+                    field,
+                    len,
+                    cursor.len()
+                )));
+            }
+            let (head, tail) = cursor.split_at(len);
+            *cursor = tail;
+            Ok(head.to_vec())
+        };
+        if cursor.len() < 4 {
+            return Err(StorageError::deserialize_error(
+                "pk delta truncated count".to_string(),
+            ));
+        }
+        let count = u32::from_le_bytes(
+            take(&mut cursor, 4, "count")?[..4]
+                .try_into()
+                .map_err(|_| {
+                    StorageError::deserialize_error("pk delta count malformed".to_string())
+                })?,
+        ) as usize;
+        let mut out = Vec::with_capacity(count.min(1 << 20));
+        for _ in 0..count {
+            let op = take(&mut cursor, 1, "op")?[0];
+            if op != 0 && op != 1 {
+                return Err(StorageError::deserialize_error(format!(
+                    "pk delta unknown op {}",
+                    op
+                )));
+            }
+            let id = if op == 0 {
+                u32::from_le_bytes(take(&mut cursor, 4, "id")?[..4].try_into().map_err(|_| {
+                    StorageError::deserialize_error("pk delta id malformed".to_string())
+                })?)
+            } else {
+                0
+            };
+            let key_len =
+                u32::from_le_bytes(take(&mut cursor, 4, "key_len")?[..4].try_into().map_err(
+                    |_| StorageError::deserialize_error("pk delta key_len malformed".to_string()),
+                )?) as usize;
+            let key_bytes = take(&mut cursor, key_len, "key")?;
+            out.push((op, id, IdKey::from_bytes(&key_bytes)?));
+        }
+        if !cursor.is_empty() {
+            return Err(StorageError::deserialize_error(format!(
+                "pk delta has {} trailing bytes",
+                cursor.len()
+            )));
+        }
+        Ok(out)
+    }
+
+    /// Apply decoded delta entries onto the loaded baseline without
+    /// recording them again (replay must not extend the live delta log).
+    /// Insert restores the exact baseline id; remove drops the key and
+    /// recycles its id.
+    pub fn apply_delta_entries(&mut self, entries: &[(u8, u32, IdKey)]) -> StorageResult<()> {
+        for (op, id, key) in entries {
+            match op {
+                0 => {
+                    if let Some(existing) = self.key_to_id.get(key).copied() {
+                        if existing != *id {
+                            return Err(StorageError::deserialize_error(format!(
+                                "pk delta insert diverges for {:?}: baseline {} vs delta {}",
+                                key, existing, id
+                            )));
+                        }
+                        continue;
+                    }
+                    while self.keys.len() <= *id as usize {
+                        self.keys.push(None);
+                    }
+                    self.keys[*id as usize] = Some(key.clone());
+                    self.key_to_id.insert(key.clone(), *id);
+                    self.live_ids.insert(*id);
+                }
+                1 => {
+                    if let Some(idx) = self.key_to_id.remove(key) {
+                        if (idx as usize) < self.keys.len() {
+                            self.keys[idx as usize] = None;
+                        }
+                        self.live_ids.remove(&idx);
+                        self.free_ids.push(idx);
+                    }
+                }
+                _ => {
+                    return Err(StorageError::deserialize_error(format!(
+                        "pk delta unknown op {}",
+                        op
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn memory_usage(&self) -> usize {
@@ -483,6 +706,42 @@ impl IdIndexer {
         manager.remove(key)
     }
 
+    /// Visibility-aware two-state lookup.
+    pub fn lookup(&self, key: &IdKey, is_visible: impl Fn(u32) -> bool) -> PkLookup {
+        self.manager.lock().lookup(key, is_visible)
+    }
+
+    /// Committed mutations since the last baseline flush.
+    pub fn delta_len(&self) -> usize {
+        self.manager.lock().delta_len()
+    }
+
+    /// Consume the compaction-invalidation flag (next incremental flush
+    /// anchors a new full baseline when true).
+    pub fn take_baseline_invalidated(&self) -> bool {
+        self.manager.lock().take_baseline_invalidated()
+    }
+
+    /// Drop the since-baseline delta (baseline-flush path only).
+    pub fn clear_index_delta(&self) {
+        self.manager.lock().clear_index_delta()
+    }
+
+    /// Serialize the since-baseline delta for `id_indexer.delta`.
+    pub fn serialize_delta(&self) -> Vec<u8> {
+        self.manager.lock().serialize_delta()
+    }
+
+    /// Decode delta entries from `id_indexer.delta` bytes.
+    pub fn deserialize_delta(data: &[u8]) -> StorageResult<Vec<(u8, u32, IdKey)>> {
+        IdManager::deserialize_delta(data)
+    }
+
+    /// Apply decoded delta entries onto the loaded baseline.
+    pub fn apply_delta_entries(&self, entries: &[(u8, u32, IdKey)]) -> StorageResult<()> {
+        self.manager.lock().apply_delta_entries(entries)
+    }
+
     pub fn iter(&self) -> Vec<(IdKey, u32)> {
         let manager = self.manager.lock();
         manager.iter()
@@ -508,10 +767,31 @@ impl IdIndexer {
         manager.compact()
     }
 
+    /// Pure dense-mapping preview without mutating the index. The
+    /// compaction coordinator computes this before building any
+    /// replacement structures so failures leave all state untouched.
+    pub fn compute_compact_mapping(&self) -> HashMap<u32, u32> {
+        self.manager.lock().compute_compact_mapping()
+    }
+
     /// Serialize the index to bytes for persistence.
     pub fn serialize(&self) -> Vec<u8> {
         let manager = self.manager.lock();
         manager.serialize()
+    }
+
+    /// Byte snapshot for compaction journaling: captured before any remap
+    /// mutation so a mid-compaction failure can restore the index exactly.
+    pub fn snapshot_bytes(&self) -> Vec<u8> {
+        self.serialize()
+    }
+
+    /// Restore a snapshot captured by [`Self::snapshot_bytes`], discarding
+    /// any partial remap applied since. Used only for compaction rollback.
+    pub fn restore_snapshot(&self, bytes: &[u8]) -> StorageResult<()> {
+        let manager = IdManager::deserialize(bytes)?;
+        *self.manager.lock() = manager;
+        Ok(())
     }
 
     /// Deserialize from bytes, rebuilding the index.
@@ -850,5 +1130,119 @@ mod tests {
         for i in 0..1000 {
             assert_eq!(deserialized.get_index(&IdKey::Int(i)), Some(i as u32));
         }
+    }
+
+    #[test]
+    fn test_compute_mapping_is_pure_and_matches_compact() {
+        let indexer = IdIndexer::new();
+        for i in 0..5 {
+            indexer.insert(IdKey::Int(i)).unwrap();
+        }
+        indexer.remove(&IdKey::Int(1));
+        indexer.remove(&IdKey::Int(3));
+
+        let preview = indexer.compute_compact_mapping();
+        let mut expected = HashMap::new();
+        expected.insert(2u32, 1u32);
+        expected.insert(4u32, 2u32);
+        assert_eq!(preview, expected);
+        // Preview mutated nothing: live set and lookups are unchanged.
+        assert_eq!(indexer.live_ids(), vec![0, 2, 4]);
+        assert_eq!(indexer.get_index(&IdKey::Int(4)), Some(4));
+
+        let applied = indexer.compact().unwrap();
+        assert_eq!(applied, expected);
+    }
+
+    #[test]
+    fn test_free_stack_reuses_hole_without_moving_survivors() {
+        let indexer = IdIndexer::new();
+        for i in 0..3 {
+            indexer.insert(IdKey::Int(i)).unwrap();
+        }
+        indexer.remove(&IdKey::Int(1));
+        let reused = indexer.insert(IdKey::Int(99)).unwrap();
+        assert_eq!(reused, 1);
+        assert_eq!(indexer.get_index(&IdKey::Int(0)), Some(0));
+        assert_eq!(indexer.get_index(&IdKey::Int(2)), Some(2));
+        assert_eq!(indexer.get_index(&IdKey::Int(99)), Some(1));
+    }
+    #[test]
+    fn test_snapshot_restore_rolls_back_partial_remap() {
+        let indexer = IdIndexer::new();
+        for i in 0..3 {
+            indexer.insert(IdKey::Int(i)).unwrap();
+        }
+        let snapshot = indexer.snapshot_bytes();
+        indexer.remove(&IdKey::Int(0));
+        indexer.compact().unwrap();
+        assert_eq!(indexer.get_index(&IdKey::Int(1)), Some(0));
+        indexer.restore_snapshot(&snapshot).unwrap();
+        assert_eq!(indexer.get_index(&IdKey::Int(0)), Some(0));
+        assert_eq!(indexer.get_index(&IdKey::Int(1)), Some(1));
+        assert_eq!(indexer.get_index(&IdKey::Int(2)), Some(2));
+    }
+
+    #[test]
+    fn test_lookup_collapses_index_and_visibility_check() {
+        let indexer = IdIndexer::new();
+        indexer.insert(IdKey::Text("a".to_string())).unwrap();
+        assert_eq!(
+            indexer.lookup(&IdKey::Text("a".to_string()), |_| true),
+            PkLookup::Visible(0)
+        );
+        assert_eq!(
+            indexer.lookup(&IdKey::Text("a".to_string()), |_| false),
+            PkLookup::Missing
+        );
+        assert_eq!(
+            indexer.lookup(&IdKey::Text("nope".to_string()), |_| true),
+            PkLookup::Missing
+        );
+    }
+
+    #[test]
+    fn test_delta_roundtrip_restores_exact_ids() {
+        let indexer = IdIndexer::new();
+        for i in 0..5 {
+            indexer.insert(IdKey::Int(i)).unwrap();
+        }
+        indexer.remove(&IdKey::Int(1));
+        indexer.remove(&IdKey::Int(3));
+
+        let baseline = indexer.serialize();
+        let delta = indexer.serialize_delta();
+        let entries = IdIndexer::deserialize_delta(&delta).unwrap();
+        assert_eq!(entries.len(), indexer.delta_len());
+
+        // Replay onto an empty loader plus the baseline snapshot.
+        let restored_base = IdIndexer::deserialize(&baseline).unwrap();
+        assert_eq!(restored_base.len(), 3);
+        let mut replay = IdManager::new();
+        replay.apply_delta_entries(&entries).unwrap();
+        for (key, id) in indexer.iter() {
+            assert_eq!(replay.get_id(&key), Some(id));
+        }
+        assert_eq!(replay.len(), 3);
+
+        // Corrupt bytes fail the whole delta, never partially.
+        let mut corrupt = delta.clone();
+        corrupt[4] ^= 0xff;
+        assert!(IdIndexer::deserialize_delta(&corrupt).is_err());
+    }
+
+    #[test]
+    fn test_compact_drops_delta_and_invalidates_baseline() {
+        let indexer = IdIndexer::new();
+        for i in 0..4 {
+            indexer.insert(IdKey::Int(i)).unwrap();
+        }
+        assert!(indexer.delta_len() > 0);
+        indexer.remove(&IdKey::Int(0));
+        indexer.remove(&IdKey::Int(1));
+        indexer.compact().unwrap();
+        assert_eq!(indexer.delta_len(), 0);
+        assert!(indexer.take_baseline_invalidated());
+        assert!(!indexer.take_baseline_invalidated());
     }
 }

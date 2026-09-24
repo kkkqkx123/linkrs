@@ -42,6 +42,11 @@ pub(crate) struct GraphVertexCursor {
     exhausted: bool,
     /// Read timestamp captured when the cursor is opened.
     ts: Timestamp,
+    /// Semi-mask allowlist: decode exactly these global internal IDs
+    /// instead of enumerating live IDs. Only valid with a tag filter.
+    allowlist: Option<Vec<u32>>,
+    /// Whether the allowlist has been loaded into `pending_ids` once.
+    allowlist_loaded: bool,
 }
 
 impl std::fmt::Debug for GraphVertexCursor {
@@ -53,6 +58,7 @@ impl std::fmt::Debug for GraphVertexCursor {
             .field("pending_ids", &self.pending_ids.len())
             .field("limit", &self.limit)
             .field("offset_remaining", &self.offset_remaining)
+            .field("allowlist", &self.allowlist.as_ref().map(Vec::len))
             .field("exhausted", &self.exhausted)
             .finish()
     }
@@ -93,13 +99,24 @@ impl GraphVertexCursor {
             names: tags.names,
         };
 
-        let exhausted = ctx.data_store().with_vertex_tables(|tables| {
-            tags.labels.iter().all(|label_id| {
-                tables
-                    .get(label_id)
-                    .is_none_or(|t| t.id_hole_stats(ts).0 == 0)
-            })
-        });
+        // Internal ID spaces are per tag table: an allowlist without a tag
+        // restriction has no well-defined decoding domain.
+        if options.internal_id_allowlist.is_some() && options.tag.is_none() {
+            return Err(StorageError::invalid_operation(
+                "internal_id_allowlist requires a tag filter: internal IDs are per-table",
+            ));
+        }
+
+        let exhausted = match &options.internal_id_allowlist {
+            Some(ids) => ids.is_empty(),
+            None => ctx.data_store().with_vertex_tables(|tables| {
+                tags.labels.iter().all(|label_id| {
+                    tables
+                        .get(label_id)
+                        .is_none_or(|t| t.id_hole_stats(ts).0 == 0)
+                })
+            }),
+        };
 
         Ok(Self {
             ctx,
@@ -121,17 +138,41 @@ impl GraphVertexCursor {
             predicate: options.predicate.clone().unwrap_or_default(),
             exhausted,
             ts,
+            allowlist: options.internal_id_allowlist.clone(),
+            allowlist_loaded: false,
         })
     }
 
     /// Load the next non-empty table's snapshot-visible live ids into
     /// `pending_ids`, advancing through tables until one has ids. Sets
     /// `exhausted` when no table remains.
+    ///
+    /// In allowlist mode the first existing tagged table is loaded once with
+    /// the allowlist as its pending IDs; later calls exhaust the cursor.
+    /// Point-lookup batch decoding skips invalid IDs, so no pre-filtering
+    /// happens here.
     fn load_next_table(&mut self, tables: &HashMap<LabelId, Arc<ShardedVertexTable>>) {
         self.current_table = None;
         self.current_label = None;
         self.pending_ids.clear();
         self.pending_idx = 0;
+        if let Some(ids) = self.allowlist.clone() {
+            if self.allowlist_loaded {
+                self.exhausted = true;
+                return;
+            }
+            self.allowlist_loaded = true;
+            for label_id in &self.tags.labels {
+                if let Some(table) = tables.get(label_id) {
+                    self.current_label = Some(*label_id);
+                    self.pending_ids = ids;
+                    self.current_table = Some(Arc::clone(table));
+                    return;
+                }
+            }
+            self.exhausted = true;
+            return;
+        }
         while self.current_table_idx < self.tags.labels.len() {
             let label_id = self.tags.labels[self.current_table_idx];
             self.current_table_idx += 1;

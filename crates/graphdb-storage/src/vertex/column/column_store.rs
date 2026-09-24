@@ -589,6 +589,53 @@ impl ColumnStore {
         self.columns.iter().map(|c| c.dirty_count()).sum()
     }
 
+    /// Evict cold column chunks oldest-first until `budget` bytes are
+    /// released. Returns `(chunks_evicted, bytes_released)`.
+    pub fn evict_cold_chunks(&mut self, budget: u64) -> (usize, u64) {
+        let mut count = 0usize;
+        let mut freed = 0u64;
+        for col in &mut self.columns {
+            if freed >= budget {
+                break;
+            }
+            let (n, bytes) = col.evict_cold_chunks(budget.saturating_sub(freed));
+            count += n;
+            freed += bytes;
+        }
+        (count, freed)
+    }
+
+    /// Promote every evicted chunk back to resident. Used by background
+    /// compaction and GC scans with a memory budget; over-budget scans
+    /// proceed in segments.
+    pub fn ensure_all_resident(&mut self) -> StorageResult<usize> {
+        let mut loaded = 0usize;
+        for col in &mut self.columns {
+            loaded += col.ensure_all_resident()?;
+        }
+        Ok(loaded)
+    }
+
+    /// Resident decoded bytes across columns.
+    pub fn resident_memory_usage(&self) -> usize {
+        self.columns.iter().map(|c| c.resident_memory_usage()).sum()
+    }
+
+    /// Compressed snapshot bytes retained for evicted chunks.
+    pub fn evicted_bytes(&self) -> usize {
+        self.columns.iter().map(|c| c.evicted_bytes()).sum()
+    }
+
+    /// Chunks with decoded data in memory.
+    pub fn resident_chunk_count(&self) -> usize {
+        self.columns.iter().map(|c| c.resident_chunk_count()).sum()
+    }
+
+    /// Chunks released with only the snapshot retained.
+    pub fn evicted_chunk_count(&self) -> usize {
+        self.columns.iter().map(|c| c.evicted_chunk_count()).sum()
+    }
+
     pub fn mark_row_dirty(&mut self, row_idx: usize) {
         for col in &mut self.columns {
             col.mark_dirty(row_idx);

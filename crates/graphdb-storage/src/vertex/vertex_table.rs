@@ -15,4 +15,5 @@ pub mod schema;
 pub mod sharded;
 pub mod staged_schema;
 
+pub(crate) use sharded::persistence::CommitKind;
 pub use sharded::ShardedVertexTable;

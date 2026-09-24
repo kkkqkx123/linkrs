@@ -264,6 +264,11 @@ impl Column {
         let raw_size = flush_data.len() as u64 + flush_offsets.len() as u64 * 8;
         let total_rows = self.len();
         for idx in 0..self.chunks.len() {
+            // Evicted chunks keep their pre-evict profile: zone maps and
+            // HLL stay resident at the column level and keep serving.
+            if self.chunks[idx].residency.is_evicted() {
+                continue;
+            }
             let start = self.chunks[idx].row_offset;
             let end = (start + self.chunks[idx].row_count).min(total_rows);
             let mut min: Option<Value> = None;

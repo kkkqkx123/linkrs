@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use super::super::{
-    primary_key_mirror_value, ColumnStore, IdIndexer, IdKey, LabelId, Timestamp, VertexId,
-    VertexRecord, VertexSchema, VertexTimestamp,
+    primary_key_mirror_value, ColumnStore, IdIndexer, IdKey, LabelId, PkLookup, Timestamp,
+    VertexId, VertexRecord, VertexSchema, VertexTimestamp,
 };
 use crate::encoding::EncodingSelector;
 use crate::schema::{LabelVersionHistory, SchemaObjectType};
@@ -160,22 +160,7 @@ impl VertexTable {
             return Err(StorageError::storage_not_open());
         }
 
-        match &key {
-            IdKey::Int(id) if *id < 0 => {
-                return Err(StorageError::invalid_input(format!(
-                    "Vertex id cannot be negative: {}",
-                    id
-                )));
-            }
-            IdKey::Text(id) if id.len() > graphdb_core::types::VERTEX_ID_MAX_SIZE => {
-                return Err(StorageError::invalid_input(format!(
-                    "Vertex id exceeds max length of {} bytes: got {} bytes",
-                    graphdb_core::types::VERTEX_ID_MAX_SIZE,
-                    id.len()
-                )));
-            }
-            _ => {}
-        }
+        Self::validate_key_shape(&key)?;
 
         let mut converted: Vec<(String, Value)> = Vec::with_capacity(properties.len());
         for (name, value) in properties {
@@ -221,6 +206,45 @@ impl VertexTable {
             .set_versioned(internal_id as usize, &converted, ts)?;
 
         Ok(internal_id)
+    }
+
+    fn validate_key_shape(key: &IdKey) -> StorageResult<()> {
+        match key {
+            IdKey::Int(id) if *id < 0 => Err(StorageError::invalid_input(format!(
+                "Vertex id cannot be negative: {}",
+                id
+            ))),
+            IdKey::Text(id) if id.len() > graphdb_core::types::VERTEX_ID_MAX_SIZE => {
+                Err(StorageError::invalid_input(format!(
+                    "Vertex id exceeds max length of {} bytes: got {} bytes",
+                    graphdb_core::types::VERTEX_ID_MAX_SIZE,
+                    id.len()
+                )))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Read-lock duplicate probe for the insert fast path: whether `key`
+    /// already names a row visible at `ts`. A hit lets the sharded insert
+    /// return the duplicate error without an exclusive section; misses and
+    /// timestamp-deleted keys still go through the write-locked atomic
+    /// path, which rechecks before allocating.
+    pub(crate) fn is_duplicate(&self, key: &IdKey, ts: Timestamp) -> bool {
+        self.id_indexer
+            .get_index(key)
+            .is_some_and(|id| self.timestamps.is_valid(id, ts))
+    }
+
+    /// Visibility-aware primary-key lookup. Collapses the old `get_index`
+    /// plus timestamp-recheck pair into one call so cursor layers need no
+    /// secondary filtering.
+    pub fn lookup_internal_id(&self, key: &IdKey, ts: Timestamp) -> PkLookup {
+        if !self.is_open {
+            return PkLookup::Missing;
+        }
+        self.id_indexer
+            .lookup(key, |id| self.timestamps.is_valid(id, ts))
     }
 
     /// Enforce the primary key mirror invariant on one write.
@@ -643,36 +667,6 @@ impl VertexTable {
         Ok(deleted_count)
     }
 
-    pub fn get_internal_id(&self, external_id: &str, ts: Timestamp) -> Option<u32> {
-        if !self.is_open {
-            return None;
-        }
-
-        let internal_id = self
-            .id_indexer
-            .get_index(&IdKey::Text(external_id.to_string()))?;
-        if self.timestamps.is_valid(internal_id, ts) {
-            Some(internal_id)
-        } else {
-            None
-        }
-    }
-
-    pub fn get_internal_id_by_i64(&self, external_id: i64, ts: Timestamp) -> Option<u32> {
-        if !self.is_open {
-            return None;
-        }
-
-        let internal_id = self.id_indexer.get_index(&IdKey::Int(external_id))?;
-        if self.timestamps.is_valid(internal_id, ts) {
-            Some(internal_id)
-        } else {
-            None
-        }
-    }
-
-    /// Lookup internal ID from external i64 without timestamp check.
-    /// Returns Some(internal_id) even for deleted vertices.
     pub fn get_internal_id_by_i64_raw(&self, external_id: i64) -> Option<u32> {
         if !self.is_open {
             return None;
@@ -715,16 +709,20 @@ impl VertexTable {
         self.id_indexer.len()
     }
 
-    /// Next free local id within this table: local ids are never reused, so
-    /// this is the highest id ever allocated plus one.
+    /// Next free local id within this table: the high-water mark of the
+    /// local id space. Deleted slots are recycled through the free stack
+    /// on insert, so this only grows while holes remain unreused; row IDs
+    /// stay stable for live rows between watermark-gated compactions.
     pub fn next_local_id(&self) -> u32 {
         self.id_indexer.next_index()
     }
 
     /// Live vertex count at `ts` (excludes vertices deleted at or before
-    /// `ts`) and total allocated local IDs (the high-water mark, never
-    /// reused until compaction). The gap `allocated - live` is the number of
-    /// slots reclaimable by a compaction at `ts`.
+    /// `ts`) and total allocated local IDs (the high-water mark, including
+    /// free-stack holes awaiting reuse). The gap `allocated - live` is the
+    /// number of slots reclaimable by a compaction at `ts`; below the
+    /// hole-rate watermark the free stack absorbs deletes without moving
+    /// live rows.
     pub fn id_hole_stats(&self, ts: Timestamp) -> (usize, usize) {
         let allocated = self.next_local_id() as usize;
         let deleted = self.timestamps.iter_deleted(ts).count();

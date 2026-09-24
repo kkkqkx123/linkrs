@@ -940,4 +940,80 @@ mod tests {
             crate::encoding::EncodingType::Dictionary
         );
     }
+
+    fn encoded_two_chunk_column() -> Column {
+        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        col.set_chunk_capacity(4);
+        for i in 0..8 {
+            col.set(i, Some(&Value::Int((i % 4) as i32))).unwrap();
+        }
+        col.clear_dirty();
+        col.materialize_chunks();
+        col.apply_encoding_to_chunks(crate::encoding::EncodingType::BitPacking, 255)
+            .unwrap();
+        assert!(col.chunk_evictable(0));
+        assert!(col.chunk_evictable(1));
+        col
+    }
+
+    #[test]
+    fn test_evicted_point_and_batch_reads_match_resident() {
+        let mut col = encoded_two_chunk_column();
+        let (evicted, freed) = col.evict_cold_chunks(u64::MAX);
+        assert_eq!(evicted, 2);
+        assert!(freed > 0);
+        assert_eq!(col.evicted_chunk_count(), 2);
+        assert_eq!(col.resident_chunk_count(), 0);
+        assert!(col.evicted_bytes() > 0);
+        for i in 0..8 {
+            assert_eq!(col.get(i), Some(Value::Int((i % 4) as i32)));
+        }
+        // Served from snapshots: still evicted, stats still resident.
+        assert_eq!(col.evicted_chunk_count(), 2);
+        assert!(col.compute_stats().is_ok());
+        // Batch promotion loads each covered chunk exactly once.
+        let loaded = col.ensure_resident_range(&[0, 1, 6, 7]).unwrap();
+        assert_eq!(loaded, 2);
+        assert_eq!(col.evicted_chunk_count(), 0);
+        for i in 0..8 {
+            assert_eq!(col.get(i), Some(Value::Int((i % 4) as i32)));
+        }
+    }
+
+    #[test]
+    fn test_overlay_chunks_never_evict() {
+        let mut col = encoded_two_chunk_column();
+        // Out-of-width update lands in the overlay: chunk 0 goes dirty.
+        col.set(1, Some(&Value::Int(1000))).unwrap();
+        assert_eq!(col.get(1), Some(Value::Int(1000)));
+        assert!(!col.chunk_evictable(0));
+        assert!(col.chunk_evictable(1));
+        let (evicted, _) = col.evict_cold_chunks(u64::MAX);
+        assert_eq!(evicted, 1);
+        assert_eq!(col.evicted_chunk_count(), 1);
+        assert_eq!(col.get(1), Some(Value::Int(1000)));
+    }
+
+    #[test]
+    fn test_write_before_load_preserves_point_write_semantics() {
+        let mut col = encoded_two_chunk_column();
+        col.evict_cold_chunks(u64::MAX);
+        assert_eq!(col.evicted_chunk_count(), 2);
+        col.set(3, Some(&Value::Int(42))).unwrap();
+        assert_eq!(col.evicted_chunk_count(), 1);
+        assert_eq!(col.get(3), Some(Value::Int(42)));
+        assert_eq!(col.get(0), Some(Value::Int(0)));
+    }
+
+    #[test]
+    fn test_resident_accounting_splits_snapshot_bytes() {
+        let mut col = encoded_two_chunk_column();
+        let resident_before = col.resident_memory_usage();
+        col.evict_cold_chunks(u64::MAX);
+        assert!(col.resident_memory_usage() < resident_before);
+        assert_eq!(
+            col.memory_usage(),
+            col.resident_memory_usage() + col.evicted_bytes()
+        );
+    }
 }

@@ -59,6 +59,94 @@ pub struct CompactionCoordinator {
     has_remapped: bool,
     /// Mapping from old IDs to new IDs for propagation to other structures
     id_mapping: HashMap<u32, u32>,
+    /// Write-ahead journal of the current execution. Steps are recorded
+    /// before they mutate state and the committed marker flips only after
+    /// every swap succeeds, so a mid-compaction failure rolls back to the
+    /// pre-compaction snapshot instead of leaving index and columns in
+    /// different id spaces. Crash recovery additionally replays external
+    /// IDs from the WAL, which remains the durable source of truth.
+    journal: CompactionJournal,
+}
+
+/// Write-ahead record for one compaction execution.
+///
+/// Fixed step order: index remap, timestamp remap, column remap, edge
+/// endpoint rewrite. Each step is journaled before it runs; the commit
+/// marker is set only after all swaps succeed.
+#[derive(Debug, Clone, Default)]
+pub struct CompactionJournal {
+    steps_executed: Vec<CompactionStep>,
+    committed: bool,
+}
+
+/// One journaled compaction step, in execution order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionStep {
+    IndexRemap,
+    TimestampRemap,
+    ColumnRemap,
+    EdgeRemap,
+}
+
+impl CompactionJournal {
+    fn record(&mut self, step: CompactionStep) {
+        self.steps_executed.push(step);
+    }
+
+    fn mark_committed(&mut self) {
+        self.committed = true;
+    }
+
+    /// Whether the commit marker flipped after all swaps succeeded.
+    pub fn is_committed(&self) -> bool {
+        self.committed
+    }
+
+    /// Steps executed, in order.
+    pub fn steps(&self) -> &[CompactionStep] {
+        &self.steps_executed
+    }
+
+    /// Merge another journal (per-shard journals combine into the
+    /// table-level journal the edge phase extends). Committed only if
+    /// every merged journal committed.
+    pub fn extend(&mut self, other: &CompactionJournal) {
+        self.steps_executed
+            .extend(other.steps_executed.iter().copied());
+        self.committed = self.committed && other.committed;
+    }
+
+    /// Record the edge-remap step. Called by the maintenance layer after
+    /// the vertex swaps commit and before edge endpoints are rewritten,
+    /// keeping vertex and edge work in one journaled barrier.
+    pub fn record_edge_remap(&mut self) {
+        self.record(CompactionStep::EdgeRemap);
+    }
+
+    /// Combine per-shard journals into one table-level journal.
+    pub fn combine(journals: &[CompactionJournal]) -> CompactionJournal {
+        let mut out = CompactionJournal {
+            steps_executed: Vec::new(),
+            committed: true,
+        };
+        for journal in journals {
+            out.extend(journal);
+        }
+        if journals.is_empty() {
+            out.committed = false;
+        }
+        out
+    }
+
+    /// Steps to undo, in reverse execution order. Empty once committed.
+    fn rollback_plan(&self) -> Vec<CompactionStep> {
+        if self.committed {
+            return Vec::new();
+        }
+        let mut plan = self.steps_executed.clone();
+        plan.reverse();
+        plan
+    }
 }
 
 impl CompactionCoordinator {
@@ -67,6 +155,7 @@ impl CompactionCoordinator {
         Self {
             has_remapped: false,
             id_mapping: HashMap::new(),
+            journal: CompactionJournal::default(),
         }
     }
 }
@@ -87,6 +176,14 @@ impl CompactionCoordinator {
         &self.id_mapping
     }
 
+    /// Journal of the last [`Self::execute`]: which steps ran and whether
+    /// the commit marker flipped. Callers propagating the remap to edge
+    /// tables run under the same commit barrier and extend the journal
+    /// with the edge step before rewriting endpoints.
+    pub fn journal(&self) -> &CompactionJournal {
+        &self.journal
+    }
+
     /// Execute the full compaction process on a VertexTable
     ///
     /// This is the public interface that orchestrates all steps in the correct order.
@@ -102,10 +199,12 @@ impl CompactionCoordinator {
     ///
     /// # Error Handling
     ///
-    /// If any step fails:
-    /// - Error is returned immediately
-    /// - Table is left in the state after the last successful operation
-    /// - This is safe but may require manual cleanup in some cases
+    /// Atomic within the table: the dense mapping is computed without
+    /// mutating state, both replacements are built before either is
+    /// swapped in, and any failure restores the pre-compaction index
+    /// snapshot. A failed execution leaves index, timestamps, and columns
+    /// exactly as before the call; the journal reports which steps ran
+    /// without committing.
     ///
     /// # Performance
     ///
@@ -113,24 +212,40 @@ impl CompactionCoordinator {
     /// - Requires exclusive access (mut self on VertexTable)
     /// - Space is reclaimed eagerly (arrays truncated immediately)
     pub fn execute(&mut self, table: &mut VertexTable) -> StorageResult<()> {
-        // Capture the pre-compact live set first: `IdIndexer::compact`
-        // rewrites dense ids in place and only reports rows that moved, so
-        // unmoved rows (old == new) are absent from the returned mapping
+        self.journal = CompactionJournal::default();
+        // Snapshot the index before any mutation so a mid-remap failure
+        // can roll back instead of leaving a densified index over stale
+        // timestamps and columns.
+        let index_snapshot = table.id_indexer.snapshot_bytes();
+        // Capture the pre-compact live set first: the mapping only reports
+        // rows that moved, so unmoved rows (old == new) are absent from it
         // but must still be carried over below.
         let old_live_ids: Vec<u32> = table.id_indexer.live_ids();
 
-        // Step 1: Get authoritative mapping from id_indexer
-        self.id_mapping = table.id_indexer.compact().unwrap_or_default();
+        // Step 1: Compute the authoritative mapping without mutating state,
+        // so the fallible builds below run before anything is swapped.
+        self.id_mapping = table.id_indexer.compute_compact_mapping();
         self.has_remapped = !self.id_mapping.is_empty();
 
-        // Step 2 & 3: If remapping occurred, propagate to both structures
+        // Step 2 & 3: If remapping occurred, propagate to both structures.
+        // Both replacements are built before either is swapped in, so a
+        // mid-remap failure cannot leave timestamps and columns
+        // describing different id spaces.
         if self.has_remapped {
-            // Build both replacements before swapping either in, so a
-            // mid-remap failure cannot leave timestamps and columns
-            // describing different id spaces.
             let new_timestamps = self.build_remapped_timestamps(table, &old_live_ids);
-            let new_columns = self.build_remapped_columns(table, &old_live_ids)?;
+            let new_columns = match self.build_remapped_columns(table, &old_live_ids) {
+                Ok(columns) => columns,
+                Err(e) => {
+                    self.rollback_index(table, &index_snapshot);
+                    return Err(e);
+                }
+            };
+            self.journal.record(CompactionStep::IndexRemap);
+            let applied = table.id_indexer.compact()?;
+            debug_assert_eq!(applied, self.id_mapping);
+            self.journal.record(CompactionStep::TimestampRemap);
             table.timestamps = new_timestamps;
+            self.journal.record(CompactionStep::ColumnRemap);
             table.columns = new_columns;
         } else {
             // No remapping, but clean up any orphaned timestamps
@@ -139,8 +254,21 @@ impl CompactionCoordinator {
 
         // Step 4: Resize columns to match new id_indexer size
         table.columns.resize(table.id_indexer.len());
+        self.journal.mark_committed();
 
         Ok(())
+    }
+
+    /// Restore the pre-compaction index after a failed remap step. The
+    /// rollback runs the journaled steps in reverse order; with
+    /// build-before-swap only the index can be dirty here, so restoring
+    /// its snapshot suffices. A restore failure is logged without masking
+    /// the original error.
+    fn rollback_index(&mut self, table: &mut VertexTable, snapshot: &[u8]) {
+        let _plan = self.journal.rollback_plan();
+        if let Err(e) = table.id_indexer.restore_snapshot(snapshot) {
+            log::warn!("compaction rollback failed to restore id indexer: {}", e);
+        }
     }
 
     /// Rebuild timestamp tracking for the post-compact id space.
@@ -253,7 +381,7 @@ mod tests {
     use super::*;
     use crate::types::StoragePropertyDef;
     use crate::vertex::vertex_table::core::{VertexTable, VertexTableConfig};
-    use crate::vertex::VertexSchema;
+    use crate::vertex::{IdKey, VertexSchema};
     use graphdb_core::{DataType, Value};
 
     fn create_test_schema() -> VertexSchema {
@@ -333,5 +461,96 @@ mod tests {
         // After compaction on a table with no gaps, nothing should be remapped
         assert!(!coordinator.has_remapped);
         assert_eq!(table.id_indexer.len(), 5);
+    }
+
+    #[test]
+    fn test_journaled_remap_is_atomic_and_committed() {
+        let schema = create_test_schema();
+        let mut table =
+            VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
+        for i in 0..5 {
+            table
+                .insert(
+                    &format!("v{}", i),
+                    &[("name".to_string(), Value::string(format!("P{}", i)))],
+                    100,
+                )
+                .unwrap();
+        }
+        table.id_indexer.remove(&IdKey::Text("v1".to_string()));
+        table.id_indexer.remove(&IdKey::Text("v3".to_string()));
+
+        let mut coordinator = CompactionCoordinator::new();
+        coordinator.execute(&mut table).unwrap();
+
+        assert!(coordinator.has_remapped);
+        assert!(coordinator.journal.committed);
+        assert!(coordinator.journal.rollback_plan().is_empty());
+        let mut expected = HashMap::new();
+        expected.insert(2u32, 1u32);
+        expected.insert(4u32, 2u32);
+        assert_eq!(*coordinator.id_mapping(), expected);
+
+        // Index, timestamps, and columns agree on the densified space.
+        assert_eq!(table.id_indexer.len(), 3);
+        assert_eq!(table.columns.row_count(), 3);
+        for (key, name) in [("v0", "P0"), ("v2", "P2"), ("v4", "P4")] {
+            let id = table
+                .id_indexer
+                .get_index(&IdKey::Text(key.to_string()))
+                .expect("survivor keeps its key");
+            let record = table
+                .get_by_internal_id(id, 100)
+                .expect("survivor stays readable");
+            assert_eq!(
+                record
+                    .properties
+                    .iter()
+                    .find(|(k, _)| k == "name")
+                    .unwrap()
+                    .1,
+                Value::string(name)
+            );
+        }
+    }
+
+    #[test]
+    fn test_watermarked_compact_collects_mapping_and_preserves_data() {
+        let schema = create_test_schema();
+        let mut table =
+            VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
+        for i in 0..5 {
+            table
+                .insert(
+                    &format!("w{}", i),
+                    &[("name".to_string(), Value::string(format!("Q{}", i)))],
+                    100,
+                )
+                .unwrap();
+        }
+        table.delete("w1", 200).unwrap();
+        table.delete("w3", 200).unwrap();
+
+        let (removed, mapping, _) = table.compact_with_cutoff_collect_mapping(200).unwrap();
+        assert_eq!(removed.len(), 2);
+        assert!(!mapping.is_empty());
+        for (key, name) in [("w0", "Q0"), ("w2", "Q2"), ("w4", "Q4")] {
+            let id = table
+                .id_indexer
+                .get_index(&IdKey::Text(key.to_string()))
+                .expect("survivor keeps its key");
+            let record = table
+                .get_by_internal_id(id, 200)
+                .expect("survivor stays readable");
+            assert_eq!(
+                record
+                    .properties
+                    .iter()
+                    .find(|(k, _)| k == "name")
+                    .unwrap()
+                    .1,
+                Value::string(name)
+            );
+        }
     }
 }

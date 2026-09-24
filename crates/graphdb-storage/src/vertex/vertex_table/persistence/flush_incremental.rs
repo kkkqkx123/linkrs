@@ -50,8 +50,22 @@ impl VertexTable {
         let timestamps_path = path.join("timestamps.bin");
         self.flush_timestamps(&timestamps_path)?;
 
-        let id_indexer_path = path.join("id_indexer.bin");
-        self.flush_id_indexer(&id_indexer_path)?;
+        // Primary-key baseline plus delta: a compaction-invalidated baseline
+        // is rewritten in full as the new anchor (superseding any delta);
+        // otherwise only the since-baseline delta is persisted alongside
+        // the column delta pages under the same checkpoint commit.
+        if self.id_indexer.take_baseline_invalidated() {
+            let id_indexer_path = path.join("id_indexer.bin");
+            self.flush_id_indexer_baseline(path, &id_indexer_path)?;
+        } else if self.id_indexer.delta_len() > 0 {
+            let delta_path = path.join("id_indexer.delta");
+            self.flush_id_indexer_delta(&delta_path)?;
+        } else {
+            let delta_path = path.join("id_indexer.delta");
+            if delta_path.exists() {
+                std::fs::remove_file(&delta_path)?;
+            }
+        }
 
         // Clear the dirty mark only for pages actually written this round, so
         // pages skipped (e.g. filtered out of an externally supplied list) stay
@@ -80,6 +94,12 @@ impl VertexTable {
             let col_dirty = col.dirty_pages();
             for page_id in col_dirty {
                 if !dirty_set.contains(&(page_id as u64)) {
+                    continue;
+                }
+                // Sparse schemas leave never-written columns shorter than
+                // their dirty marks (e.g. a delete dirties every column):
+                // out-of-range pages carry no rows and are skipped.
+                if page_id * crate::persistence::dirty_page::ROWS_PER_PAGE >= col.len() {
                     continue;
                 }
                 let page_bytes = col.serialize_page(page_id)?;

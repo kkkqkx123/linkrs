@@ -305,6 +305,13 @@ impl EdgeStore {
     /// Propagate vertex compaction old-to-new internal ID mappings into this
     /// edge table.
     ///
+    /// Must run inside the compaction commit barrier held by the maintenance
+    /// layer (vertex remap and edge rewrite share one barrier and one
+    /// journal): the caller journaled the vertex mapping before this call,
+    /// and an empty mapping short-circuits to a no-op so stable row IDs
+    /// (free-stack reuse below the hole-rate watermark) produce zero edge
+    /// writes.
+    ///
     /// The table references two vertex label ID spaces:
     /// - `src_mapping` applies to out shard rows and in shard neighbor keys
     /// - `dst_mapping` applies to in shard rows and out shard neighbor keys

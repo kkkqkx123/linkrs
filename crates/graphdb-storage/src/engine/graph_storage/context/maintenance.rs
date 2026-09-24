@@ -15,22 +15,37 @@ impl GraphStorageContext {
     /// watermark safe timestamp; bare transaction stamps are rejected by
     /// convention and must never be passed here.
     ///
-    /// Returns the number of removed vertices. Compaction is an in-memory
-    /// re-layout: it writes no WAL entries, and crash recovery replays
-    /// external IDs from the WAL, so no persistence ordering constraint
-    /// applies here.
+    /// Returns the number of removed vertices. Compaction runs under a
+    /// commit barrier holding the auto-commit write gate: same-table writes
+    /// block for the whole vertex-remap plus edge-remap sequence while
+    /// reads continue on their pre-compaction snapshots. Steps execute in
+    /// fixed order (index, timestamps, columns, edge endpoints) with each
+    /// vertex mapping journaled before the edge rewrite consumes it, so a
+    /// mid-pass failure never leaves index and columns in different id
+    /// spaces. Crash recovery replays external IDs from the WAL, which
+    /// remains the durable source of truth.
     pub(crate) fn compact_vertex_remap(&self, cutoff: Timestamp) -> StorageResult<usize> {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
         }
+
+        // Commit barrier: reuse the auto-commit write gate, no new lock
+        // primitive. Held across the vertex remap and the edge endpoint
+        // rewrite below so the two phases commit as one unit.
+        let _barrier = self.persistent.auto_commit_write_gate.acquire();
 
         let mut last_compacted_vertices = self.persistent.last_compacted_vertices.lock();
         last_compacted_vertices.clear();
 
         // Old-to-new internal ID mappings produced by vertex compaction,
         // keyed by vertex label. Propagated to edge tables afterwards
-        // (edge rows/neighbors are per-label internal IDs).
+        // (edge rows/neighbors are per-label internal IDs). Journals ride
+        // along so the edge rewrite extends the same commit record.
         let mut vertex_mappings: HashMap<LabelId, HashMap<u32, u32>> = HashMap::new();
+        let mut vertex_journals: HashMap<
+            LabelId,
+            crate::vertex::vertex_table::compaction::CompactionJournal,
+        > = HashMap::new();
 
         let vertex_labels = self
             .persistent
@@ -44,10 +59,11 @@ impl GraphStorageContext {
                         ))
                     })?;
                     match table.compact_with_cutoff_collect_mapping(cutoff) {
-                        Ok((removed, mapping)) => {
+                        Ok((removed, mapping, journal)) => {
                             if !removed.is_empty() {
                                 last_compacted_vertices.push((label_id, removed));
                                 vertex_mappings.insert(label_id, mapping);
+                                vertex_journals.insert(label_id, journal);
                             }
                         }
                         Err(e) => {
@@ -106,6 +122,19 @@ impl GraphStorageContext {
                     table.remap_vertex_ids(src_mapping, dst_mapping)?;
                     Ok((key, true))
                 })?;
+            // Same barrier, same journal: the vertex mappings were journaled
+            // before the rewrite above, and the edge phase is recorded here
+            // once per remapped endpoint label.
+            for (key, did_remap) in &remapped {
+                if !did_remap {
+                    continue;
+                }
+                for label in [key.src_label, key.dst_label] {
+                    if let Some(journal) = vertex_journals.get_mut(&label) {
+                        journal.record_edge_remap();
+                    }
+                }
+            }
             let remapped_edge_keys: Vec<EdgeTableKey> = remapped
                 .into_iter()
                 .filter(|(_, did_remap)| *did_remap)

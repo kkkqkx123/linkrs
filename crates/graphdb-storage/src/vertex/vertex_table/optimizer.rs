@@ -6,25 +6,27 @@
 //! - Batch timestamp checks during compaction via CompactionCoordinator
 //! - Range-based column copying instead of row-by-row operations
 
-use super::compaction::CompactionCoordinator;
+use super::compaction::{CompactionCoordinator, CompactionJournal};
 use super::core::VertexTable;
 use crate::vertex::IdKey;
 use graphdb_core::StorageResult;
 use std::collections::HashMap;
 
 impl VertexTable {
-    /// Compact vertices deleted at or before `cutoff` and return both the removed
-    /// external keys and the old-to-new internal ID mapping.
+    /// Compact vertices deleted at or before `cutoff` and return the removed
+    /// external keys, the old-to-new internal ID mapping, and the journal of
+    /// the coordinated execution.
     ///
     /// The cutoff must be derived from the global GC watermarks. Callers
     /// pass the watermark safe timestamp, never a bare transaction stamp.
     /// The mapping is required by callers that propagate the remap to
     /// dependent row-indexed structures (edge CSR rows) so vertex references
-    /// stay stable.
+    /// stay stable; the journal lets the maintenance layer extend the same
+    /// commit record across the edge rewrite.
     pub fn compact_with_cutoff_collect_mapping(
         &mut self,
         cutoff: graphdb_core::types::Timestamp,
-    ) -> StorageResult<(Vec<IdKey>, HashMap<u32, u32>)> {
+    ) -> StorageResult<(Vec<IdKey>, HashMap<u32, u32>, CompactionJournal)> {
         let deleted_ids: Vec<u32> = self.timestamps.iter_deleted(cutoff).collect();
 
         let mut removed_keys = Vec::with_capacity(deleted_ids.len());
@@ -38,8 +40,19 @@ impl VertexTable {
 
         let mut coordinator = CompactionCoordinator::new();
         coordinator.execute(self)?;
+        if coordinator.journal().is_committed() {
+            log::debug!(
+                "vertex compact committed: remapped={} steps={:?}",
+                !coordinator.id_mapping().is_empty(),
+                coordinator.journal().steps(),
+            );
+        }
 
-        Ok((removed_keys, coordinator.id_mapping().clone()))
+        Ok((
+            removed_keys,
+            coordinator.id_mapping().clone(),
+            coordinator.journal().clone(),
+        ))
     }
 
     /// Compact the vertex table using the unified CompactionCoordinator
@@ -65,8 +78,13 @@ impl VertexTable {
     ///
     /// # Atomicity Guarantee
     ///
-    /// All steps execute in sequence. If any step fails, an error is returned
-    /// immediately and the table is left in the state after the last successful step.
+    /// The coordinated execution is atomic within the table: the dense
+    /// mapping is computed without mutating state, timestamp and column
+    /// replacements are built before either is swapped in, and any failure
+    /// restores the pre-compaction index snapshot. The caller must hold the
+    /// commit barrier (shard write lock, extended to the write gate at the
+    /// maintenance layer) across the vertex remap and the edge endpoint
+    /// rewrite that consumes the returned mapping.
     ///
     /// # Invariants Maintained
     ///

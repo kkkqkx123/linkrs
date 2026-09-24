@@ -22,7 +22,7 @@ use crate::types::StoragePropertyDef;
 
 pub use column::ColumnStore;
 pub use gc_manager::VertexGcConfig;
-pub use id_indexer::{IdIndexer, IdKey};
+pub use id_indexer::{IdIndexer, IdKey, PkLookup};
 pub use vertex_table::ShardedVertexTable;
 pub use vertex_timestamp::VertexTimestamp;
 

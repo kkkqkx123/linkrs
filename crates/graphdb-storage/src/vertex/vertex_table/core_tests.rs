@@ -4,6 +4,13 @@ use graphdb_core::error::storage::StorageErrorKind;
 use graphdb_core::types::Timestamp;
 use graphdb_core::DataType;
 
+/// Tri-state lookup collapsed to its visible id for single-table tests.
+fn lookup_visible(table: &VertexTable, key: &str, ts: Timestamp) -> Option<u32> {
+    table
+        .lookup_internal_id(&IdKey::Text(key.to_string()), ts)
+        .visible_id()
+}
+
 /// Test-only extension trait for invariant verification.
 trait VerifyInvariants {
     fn verify_invariants(&self) -> StorageResult<()>;
@@ -126,7 +133,7 @@ fn test_insert_and_get() {
 
     assert_eq!(internal_id, 0);
 
-    let lookup_id = table.get_internal_id("v1", 100).unwrap();
+    let lookup_id = lookup_visible(&table, "v1", 100).unwrap();
     let record = table.get_by_internal_id(lookup_id, 100).unwrap();
     // `id` is auto-filled from the external key on top of the two payloads.
     assert_eq!(record.properties.len(), 3);
@@ -219,9 +226,9 @@ fn test_delete() {
 
     table.delete("v1", 200).unwrap();
 
-    let internal_id = table.get_internal_id("v1", 150).unwrap();
+    let internal_id = lookup_visible(&table, "v1", 150).unwrap();
     assert!(table.get_by_internal_id(internal_id, 150).is_some());
-    assert!(table.get_internal_id("v1", 250).is_none());
+    assert!(lookup_visible(&table, "v1", 250).is_none());
 }
 
 #[test]
@@ -390,8 +397,8 @@ fn test_batch_delete() {
     let count_after_delete = table.scan(200).count();
     assert_eq!(count_after_delete, 1);
 
-    assert!(table.get_internal_id("v2", 200).is_some());
-    assert!(table.get_internal_id("v1", 200).is_none());
+    assert!(lookup_visible(&table, "v2", 200).is_some());
+    assert!(lookup_visible(&table, "v1", 200).is_none());
 }
 
 #[test]
@@ -706,9 +713,8 @@ fn test_compact_id_consistency() {
     assert_eq!(after_count, 3);
 
     for (key, expected_name) in &[("v0", "Alice"), ("v4", "Charlie"), ("v8", "Eve")] {
-        let internal_id = table
-            .get_internal_id(key, 200)
-            .unwrap_or_else(|| panic!("should find {}", key));
+        let internal_id =
+            lookup_visible(&table, key, 200).unwrap_or_else(|| panic!("should find {}", key));
         let record = table
             .get_by_internal_id(internal_id, 200)
             .unwrap_or_else(|| panic!("should retrieve {}", key));
@@ -755,7 +761,7 @@ fn test_vertex_snapshot_isolation() {
     table.delete("v1", 300).unwrap();
 
     assert!(table.get_by_internal_id(0, 100).is_some());
-    assert!(table.get_internal_id("v1", 300).is_none());
+    assert!(lookup_visible(&table, "v1", 300).is_none());
 }
 
 #[test]
@@ -980,14 +986,13 @@ fn test_partial_compact_preserves_unmoved_rows() {
     table.delete("v1", 200).unwrap();
     table.delete("v3", 200).unwrap();
 
-    let (removed, _mapping) = table
+    let (removed, _mapping, _journal) = table
         .compact_with_cutoff_collect_mapping(300)
         .expect("partial compact should succeed");
     assert_eq!(removed.len(), 2);
 
     for (key, name) in [("v0", "Alice"), ("v2", "Carol"), ("v4", "Eve")] {
-        let id = table
-            .get_internal_id(key, 300)
+        let id = lookup_visible(&table, key, 300)
             .unwrap_or_else(|| panic!("{} lost after partial compact", key));
         let record = table
             .get_by_internal_id(id, 300)
@@ -1019,18 +1024,18 @@ fn test_compact_preserves_moved_row_history() {
     table
         .insert("v0", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
-    let v0 = table.get_internal_id("v0", 100).expect("v0 exists");
+    let v0 = lookup_visible(&table, "v0", 100).expect("v0 exists");
     table
         .update_property(v0, "name", &Value::string("Alice2"), 200)
         .unwrap();
     table.delete("tmp", 250).unwrap();
 
-    let (_, mapping) = table
+    let (_, mapping, _) = table
         .compact_with_cutoff_collect_mapping(300)
         .expect("compact should succeed");
     assert!(!mapping.is_empty(), "expected rows to move");
 
-    let id = table.get_internal_id("v0", 300).expect("v0 survives");
+    let id = lookup_visible(&table, "v0", 300).expect("v0 survives");
     let name_at = |ts: Timestamp| {
         table
             .get_by_internal_id(id, ts)

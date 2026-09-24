@@ -1,6 +1,6 @@
 use super::routing::decode_id;
 use super::ShardedVertexTable;
-use crate::vertex::{IdKey, VertexRecord};
+use crate::vertex::{IdKey, PkLookup, VertexRecord};
 use graphdb_core::types::Timestamp;
 
 impl ShardedVertexTable {
@@ -143,17 +143,33 @@ impl ShardedVertexTable {
     }
 
     pub fn get_internal_id(&self, external_id: &str, ts: Timestamp) -> Option<u32> {
-        let idx = self.shard_index_by_str(external_id);
-        let table = self.shards[idx].read();
-        let local_id = table.get_internal_id(external_id, ts)?;
-        Some(self.encode_id(idx, local_id))
+        self.lookup_pk(external_id, ts).visible_id()
     }
 
     pub fn get_internal_id_by_i64(&self, external_id: i64, ts: Timestamp) -> Option<u32> {
+        self.lookup_pk_by_i64(external_id, ts).visible_id()
+    }
+
+    /// Visibility-aware primary-key lookup with global ids. Read-locked:
+    /// committed bindings invisible at `ts` resolve as missing, so callers
+    /// need no secondary timestamp filtering.
+    pub fn lookup_pk(&self, external_id: &str, ts: Timestamp) -> PkLookup {
+        let idx = self.shard_index_by_str(external_id);
+        let table = self.shards[idx].read();
+        match table.lookup_internal_id(&IdKey::Text(external_id.to_string()), ts) {
+            PkLookup::Visible(local_id) => PkLookup::Visible(self.encode_id(idx, local_id)),
+            PkLookup::Missing => PkLookup::Missing,
+        }
+    }
+
+    /// Integer-keyed lookup. Same contract as [`lookup_pk`](Self::lookup_pk).
+    pub fn lookup_pk_by_i64(&self, external_id: i64, ts: Timestamp) -> PkLookup {
         let idx = self.shard_index_by_i64(external_id);
         let table = self.shards[idx].read();
-        let local_id = table.get_internal_id_by_i64(external_id, ts)?;
-        Some(self.encode_id(idx, local_id))
+        match table.lookup_internal_id(&IdKey::Int(external_id), ts) {
+            PkLookup::Visible(local_id) => PkLookup::Visible(self.encode_id(idx, local_id)),
+            PkLookup::Missing => PkLookup::Missing,
+        }
     }
 
     /// Total allocated vertex slots across all shards, including deleted but

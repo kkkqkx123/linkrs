@@ -211,6 +211,21 @@ impl CheckpointScheduler {
     pub fn pending(&self) -> bool {
         self.pending.load(Ordering::Acquire)
     }
+
+    /// Monotonic checkpoint epoch hint for table commit manifests. Reads the
+    /// published checkpoint sequence (the scheduler's single-flight order),
+    /// so per-table commits share one global order without a new clock.
+    pub fn epoch_hint(&self) -> u64 {
+        self.coordinator
+            .read()
+            .manifest_manager
+            .load_latest()
+            .ok()
+            .flatten()
+            .map(|m| m.checkpoint_id.saturating_add(1))
+            .unwrap_or(1)
+            .max(1)
+    }
 }
 
 impl Drop for CheckpointScheduler {

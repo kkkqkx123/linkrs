@@ -149,6 +149,15 @@ pub struct ScanOptions {
     /// cursor via `VertexCursor::next_column_batch` instead of row-major
     /// batches. Default off — the row-based path stays the fallback.
     pub column_block_mode: bool,
+    /// Optional internal-ID allowlist (semi-mask) for vertex scans: when
+    /// set, the cursor decodes exactly these global internal IDs instead of
+    /// enumerating the table's live IDs. IDs that are deleted, invisible at
+    /// the read timestamp, or out of range yield no row, mirroring the
+    /// batch point-lookup semantics. Internal ID spaces are per tag table,
+    /// so an allowlist requires [`ScanOptions::tag`]; opening without a tag
+    /// fails. The join/expand layer uses this to push a known vertex set
+    /// into the scan instead of scanning whole tables.
+    pub internal_id_allowlist: Option<Vec<u32>>,
 }
 
 impl ScanOptions {
@@ -189,6 +198,13 @@ impl ScanOptions {
     /// Builder: restrict a vertex scan to a single tag by name.
     pub fn with_tag(mut self, tag: String) -> Self {
         self.tag = Some(tag);
+        self
+    }
+
+    /// Builder: decode exactly these global internal IDs instead of
+    /// enumerating live IDs (semi-mask pushdown). Requires `with_tag`.
+    pub fn with_internal_id_allowlist(mut self, ids: Vec<u32>) -> Self {
+        self.internal_id_allowlist = Some(ids);
         self
     }
 
