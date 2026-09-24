@@ -64,13 +64,13 @@ fn build_vertices(count: usize) -> Vec<Vertex> {
     (0..count)
         .map(|i| {
             Vertex::new(
-                VertexId::from_int64(i as i64),
-                vec![Tag::new(
+                VertexId::try_from_int64(i as i64).expect("valid vertex id"),
+                Tag::new(
                     TAG.to_string(),
                     [("value".to_string(), Value::BigInt(i as i64))]
                         .into_iter()
                         .collect(),
-                )],
+                )
             )
         })
         .collect()
@@ -79,8 +79,8 @@ fn build_vertices(count: usize) -> Vec<Vertex> {
 fn build_edges(count: usize) -> Vec<Edge> {
     (0..count)
         .map(|i| Edge {
-            src: VertexId::from_int64(i as i64),
-            dst: VertexId::from_int64((i as i64 + 1) % count as i64),
+            src: VertexId::try_from_int64(i as i64).expect("valid vertex id"),
+            dst: VertexId::try_from_int64((i as i64 + 1) % count as i64).expect("valid vertex id"),
             edge_type: EDGE.to_string(),
             ranking: 0,
             props: Default::default(),

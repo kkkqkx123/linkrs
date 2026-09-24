@@ -60,8 +60,8 @@ fn indexed_storage() -> GraphStorage {
 
 fn build_vertex(id: i64) -> Vertex {
     Vertex::new(
-        VertexId::from_int64(id),
-        vec![Tag::new(
+        VertexId::try_from_int64(id).expect("valid vertex id"),
+        Tag::new(
             "Node".to_string(),
             [
                 ("name".to_string(), Value::string(format!("node_{id}"))),
@@ -73,7 +73,7 @@ fn build_vertex(id: i64) -> Vertex {
             ]
             .into_iter()
             .collect(),
-        )],
+        ),
     )
 }
 

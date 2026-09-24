@@ -21,8 +21,8 @@ fn bench_json_serialization(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "json_serialization");
 
     let vertex = Vertex::new(
-        VertexId::from_int64(42),
-        vec![Tag::new(
+        VertexId::try_from_int64(42).expect("valid vertex id"),
+        Tag::new(
             "Node".to_string(),
             vec![
                 ("name".to_string(), Value::string("test_node")),
@@ -30,7 +30,7 @@ fn bench_json_serialization(c: &mut Criterion) {
             ]
             .into_iter()
             .collect(),
-        )],
+        ),
     );
 
     group.bench_function("serialize_vertex", |b| {
@@ -44,8 +44,8 @@ fn bench_json_serialization(c: &mut Criterion) {
         let vertices: Vec<Vertex> = (0..100)
             .map(|i| {
                 Vertex::new(
-                    VertexId::from_int64(i),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(i).expect("valid vertex id"),
+                    Tag::new(
                         "Node".to_string(),
                         vec![
                             ("name".to_string(), Value::string(format!("node_{}", i))),
@@ -53,7 +53,7 @@ fn bench_json_serialization(c: &mut Criterion) {
                         ]
                         .into_iter()
                         .collect(),
-                    )],
+                    ),
                 )
             })
             .collect();
@@ -74,8 +74,8 @@ fn bench_json_deserialization(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "json_deserialization");
 
     let vertex = Vertex::new(
-        VertexId::from_int64(42),
-        vec![Tag::new(
+        VertexId::try_from_int64(42).expect("valid vertex id"),
+        Tag::new(
             "Node".to_string(),
             vec![
                 ("name".to_string(), Value::string("test_node")),
@@ -83,7 +83,7 @@ fn bench_json_deserialization(c: &mut Criterion) {
             ]
             .into_iter()
             .collect(),
-        )],
+        ),
     );
     let json = serde_json::to_string(&vertex).unwrap();
 

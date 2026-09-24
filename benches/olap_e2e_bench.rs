@@ -115,8 +115,8 @@ fn build_storage() -> SharedStorage {
         let vertices: Vec<Vertex> = (start..end)
             .map(|i| {
                 Vertex::new(
-                    VertexId::from_int64(i as i64),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(i as i64).expect("valid vertex id"),
+                    Tag::new(
                         TAG.to_string(),
                         [
                             ("name".to_string(), Value::string(format!("p{}", i))),
@@ -125,7 +125,7 @@ fn build_storage() -> SharedStorage {
                         ]
                         .into_iter()
                         .collect(),
-                    )],
+                    ),
                 )
             })
             .collect();
@@ -159,8 +159,8 @@ fn build_storage() -> SharedStorage {
                 continue;
             }
             edges.push(Edge {
-                src: VertexId::from_int64(i as i64),
-                dst: VertexId::from_int64(dst as i64),
+                src: VertexId::try_from_int64(i as i64).expect("valid vertex id"),
+                dst: VertexId::try_from_int64(dst as i64).expect("valid vertex id"),
                 edge_type: EDGE_TYPE.to_string(),
                 ranking: 0,
                 props: [(

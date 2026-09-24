@@ -72,16 +72,16 @@ fn build_data(partitions: usize) -> Arc<RwLock<GraphStorage>> {
         let vertices: Vec<Vertex> = (0..edges_per_partition)
             .map(|i| {
                 Vertex::new(
-                    VertexId::from_int64((p as i64) * TOTAL_EDGES as i64 + i as i64),
-                    vec![Tag::new(
+                    VertexId::try_from_int64((p as i64) * TOTAL_EDGES as i64 + i as i64).expect("valid vertex id"),
+                    Tag::new(
                         tag.clone(),
                         [("value".to_string(), Value::BigInt(i as i64))]
                             .into_iter()
                             .collect(),
-                    )],
+                    ),
                 )
             })
-            .collect();
+            .collect::<Vec<_>>();
         storage
             .batch_insert_vertices(SPACE, vertices)
             .expect("batch insert vertices");
@@ -94,8 +94,8 @@ fn build_data(partitions: usize) -> Arc<RwLock<GraphStorage>> {
         let dst_tag = (p + 1) % tag_count;
         for i in 0..edges_per_partition {
             edges.push(Edge {
-                src: VertexId::from_int64(src_tag as i64 * TOTAL_EDGES as i64 + i as i64),
-                dst: VertexId::from_int64(dst_tag as i64 * TOTAL_EDGES as i64 + i as i64),
+                src: VertexId::try_from_int64(src_tag as i64 * TOTAL_EDGES as i64 + i as i64).expect("valid vertex id"),
+                dst: VertexId::try_from_int64(dst_tag as i64 * TOTAL_EDGES as i64 + i as i64).expect("valid vertex id"),
                 edge_type: EDGE.to_string(),
                 ranking: 0,
                 props: Default::default(),

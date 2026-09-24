@@ -19,8 +19,8 @@ fn create_benchmark_group<'a>(
 fn setup_vertices(storage: &mut GraphStorage, space: &str, count: usize) {
     for i in 0..count {
         let vertex = Vertex::new(
-            VertexId::from_string(format!("v{}", i)),
-            vec![Tag::new(
+            VertexId::try_from_string(format!("v{}", i)).expect("valid vertex id"),
+            Tag::new(
                 "Node".to_string(),
                 vec![
                     ("name".to_string(), Value::string(format!("vertex_{}", i))),
@@ -28,7 +28,7 @@ fn setup_vertices(storage: &mut GraphStorage, space: &str, count: usize) {
                 ]
                 .into_iter()
                 .collect(),
-            )],
+            ),
         );
         storage.insert_vertex(space, vertex).expect("insert vertex");
     }
@@ -69,8 +69,8 @@ fn bench_data_loading_workflow(c: &mut Criterion) {
                     for k in 1..=epv.min(vertices.saturating_sub(1)) {
                         let dst = (src + k) % vertices;
                         let edge = Edge {
-                            src: VertexId::from_string(format!("v{}", src)),
-                            dst: VertexId::from_string(format!("v{}", dst)),
+                            src: VertexId::try_from_string(format!("v{}", src)).expect("valid vertex id"),
+                            dst: VertexId::try_from_string(format!("v{}", dst)).expect("valid vertex id"),
                             edge_type: "Link".to_string(),
                             ranking: 0,
                             props: [("weight".to_string(), Value::Double(1.0))]
@@ -107,7 +107,7 @@ fn bench_query_analysis_workflow(c: &mut Criterion) {
 
     group.bench_function("simple_query_1k_data", |b| {
         b.iter(|| {
-            let _ = storage.get_vertex(space, &VertexId::from_string("v0"));
+            let _ = storage.get_vertex(space, "Node", &VertexId::try_from_string("v0").expect("valid vertex id"));
         });
     });
 
@@ -138,13 +138,13 @@ fn bench_search_workflow(c: &mut Criterion) {
 
     group.bench_function("fulltext_search", |b| {
         b.iter(|| {
-            let _ = storage.get_vertex(space, &VertexId::from_string("v0"));
+            let _ = storage.get_vertex(space, "Node", &VertexId::try_from_string("v0").expect("valid vertex id"));
         });
     });
 
     group.bench_function("vertex_lookup", |b| {
         b.iter(|| {
-            let _ = storage.get_vertex(space, &VertexId::from_string("v50"));
+            let _ = storage.get_vertex(space, "Node", &VertexId::try_from_string("v50").expect("valid vertex id"));
         });
     });
 
@@ -172,11 +172,11 @@ fn bench_write_transaction_workflow(c: &mut Criterion) {
 
             for i in 0..100 {
                 let vertex = Vertex::new(
-                    VertexId::from_string(format!("u{}", i)),
-                    vec![Tag::new(
+                    VertexId::try_from_string(format!("u{}", i)).expect("valid vertex id"),
+                    Tag::new(
                         "Node".to_string(),
                         [("value".to_string(), Value::Int(i))].into_iter().collect(),
-                    )],
+                    ),
                 );
                 storage.insert_vertex(space, vertex).expect("insert");
             }
@@ -204,8 +204,8 @@ fn bench_concurrent_mixed_workload(c: &mut Criterion) {
 
     group.bench_function("concurrent_read", |b| {
         b.iter(|| {
-            let _ = storage.get_vertex(space, &VertexId::from_string("v0"));
-            let _ = storage.get_vertex(space, &VertexId::from_string("v50"));
+            let _ = storage.get_vertex(space, "Node", &VertexId::try_from_string("v0").expect("valid vertex id"));
+            let _ = storage.get_vertex(space, "Node", &VertexId::try_from_string("v50").expect("valid vertex id"));
         });
     });
 

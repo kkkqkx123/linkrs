@@ -51,7 +51,7 @@ fn bench_write_set_operations(c: &mut Criterion) {
             b.iter(|| {
                 let mut ws = WriteSet::new();
                 for i in 0..size {
-                    ws.record_vertex(VertexId::from_int64(i as i64));
+                    ws.record_vertex(VertexId::try_from_int64(i as i64).expect("valid vertex id"));
                 }
                 black_box(ws);
             });
@@ -66,10 +66,10 @@ fn bench_write_set_operations(c: &mut Criterion) {
                 let mut ws1 = WriteSet::new();
                 let mut ws2 = WriteSet::new();
                 for i in 0..size {
-                    ws1.record_vertex(VertexId::from_int64(i as i64));
-                    ws2.record_vertex(VertexId::from_int64((i + size) as i64));
+                    ws1.record_vertex(VertexId::try_from_int64(i as i64).expect("valid vertex id"));
+                    ws2.record_vertex(VertexId::try_from_int64((i + size) as i64).expect("valid vertex id"));
                 }
-                ws2.record_vertex(VertexId::from_int64(0));
+                ws2.record_vertex(VertexId::try_from_int64(0).expect("valid vertex id"));
                 b.iter(|| {
                     black_box(ws1.has_conflict_with(&ws2));
                 });
@@ -128,7 +128,7 @@ fn bench_conflict_detection(c: &mut Criterion) {
                     {
                         let ctx = mgr.get_context(txn_a).unwrap();
                         for i in 0..count {
-                            ctx.record_vertex_write(VertexId::from_int64(i as i64));
+                            ctx.record_vertex_write(VertexId::try_from_int64(i as i64).expect("valid vertex id"));
                         }
                     }
                     let _ = mgr.check_write_set_conflict(txn_a);
@@ -138,7 +138,7 @@ fn bench_conflict_detection(c: &mut Criterion) {
                     {
                         let ctx = mgr.get_context(txn_b).unwrap();
                         for i in 0..count {
-                            ctx.record_vertex_write(VertexId::from_int64((i + count) as i64));
+                            ctx.record_vertex_write(VertexId::try_from_int64((i + count) as i64).expect("valid vertex id"));
                         }
                     }
                     let _ = black_box(mgr.check_write_set_conflict(txn_b));

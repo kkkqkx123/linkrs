@@ -46,13 +46,13 @@ fn build_vertices(vertex_count: u64) -> GraphStorage {
             .insert_vertex(
                 "bench",
                 Vertex::new(
-                    VertexId::from_int64(id),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(id).expect("valid vertex id"),
+                    Tag::new(
                         "Node".to_string(),
                         [("value".to_string(), Value::BigInt(id))]
                             .into_iter()
                             .collect(),
-                    )],
+                    ),
                 ),
             )
             .expect("vertex insert");
@@ -78,8 +78,8 @@ fn build_vertices_with_edges(vertex_count: u64, edges_per_vertex: usize) -> Grap
                 .insert_edge(
                     "bench",
                     Edge {
-                        src: VertexId::from_int64(src),
-                        dst: VertexId::from_int64(dst),
+                        src: VertexId::try_from_int64(src).expect("valid vertex id"),
+                        dst: VertexId::try_from_int64(dst).expect("valid vertex id"),
                         edge_type: "Link".to_string(),
                         ranking: 0,
                         props: HashMap::new(),
@@ -100,13 +100,13 @@ fn bench_real_vertex_insert(c: &mut Criterion) {
             let id = next_id;
             next_id += 1;
             let vertex = Vertex::new(
-                VertexId::from_int64(id),
-                vec![Tag::new(
+                VertexId::try_from_int64(id).expect("valid vertex id"),
+                Tag::new(
                     "Node".to_string(),
                     [("value".to_string(), Value::BigInt(id))]
                         .into_iter()
                         .collect(),
-                )],
+                )
             );
             black_box(
                 storage
@@ -129,13 +129,13 @@ fn bench_bulk_vertex_insert(c: &mut Criterion) {
                     let vertices: Vec<_> = (0..size as i64)
                         .map(|i| {
                             Vertex::new(
-                                VertexId::from_int64(i),
-                                vec![Tag::new(
+                                VertexId::try_from_int64(i).expect("valid vertex id"),
+                                Tag::new(
                                     "Node".to_string(),
                                     [("value".to_string(), Value::BigInt(i))]
                                         .into_iter()
                                         .collect(),
-                                )],
+                                ),
                             )
                         })
                         .collect();
@@ -167,13 +167,13 @@ fn bench_real_edge_insert(c: &mut Criterion) {
             .insert_vertex(
                 "bench",
                 Vertex::new(
-                    VertexId::from_int64(id),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(id).expect("valid vertex id"),
+                    Tag::new(
                         "Node".to_string(),
                         [("value".to_string(), Value::BigInt(id))]
                             .into_iter()
                             .collect(),
-                    )],
+                    ),
                 ),
             )
             .expect("vertex insert");
@@ -188,8 +188,8 @@ fn bench_real_edge_insert(c: &mut Criterion) {
                 .insert_edge(
                     "bench",
                     Edge {
-                        src: VertexId::from_int64(src),
-                        dst: VertexId::from_int64(dst),
+                        src: VertexId::try_from_int64(src).expect("valid vertex id"),
+                        dst: VertexId::try_from_int64(dst).expect("valid vertex id"),
                         edge_type: "Link".to_string(),
                         ranking: next_id,
                         props: HashMap::new(),
@@ -229,8 +229,8 @@ fn bench_edge_insert_density(c: &mut Criterion) {
                             (1..=max_edges as i64).map(move |k| {
                                 let dst = (src + k) % vertex_count as i64;
                                 Edge {
-                                    src: VertexId::from_int64(src),
-                                    dst: VertexId::from_int64(dst),
+                                    src: VertexId::try_from_int64(src).expect("valid vertex id"),
+                                    dst: VertexId::try_from_int64(dst).expect("valid vertex id"),
                                     edge_type: "Link".to_string(),
                                     ranking: 0,
                                     props: HashMap::new(),
@@ -260,13 +260,13 @@ fn bench_real_cursor_scan(c: &mut Criterion) {
             .insert_vertex(
                 "bench",
                 Vertex::new(
-                    VertexId::from_int64(id),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(id).expect("valid vertex id"),
+                    Tag::new(
                         "Node".to_string(),
                         [("value".to_string(), Value::BigInt(id))]
                             .into_iter()
                             .collect(),
-                    )],
+                    ),
                 ),
             )
             .expect("vertex insert");
@@ -372,13 +372,13 @@ fn bench_real_checkpoint(c: &mut Criterion) {
             .insert_vertex(
                 "bench",
                 Vertex::new(
-                    VertexId::from_int64(id),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(id).expect("valid vertex id"),
+                    Tag::new(
                         "Node".to_string(),
                         [("value".to_string(), Value::BigInt(id))]
                             .into_iter()
                             .collect(),
-                    )],
+                    ),
                 ),
             )
             .expect("vertex insert");
@@ -421,13 +421,13 @@ fn bench_scaled_checkpoint(c: &mut Criterion) {
                 .insert_vertex(
                     "bench",
                     Vertex::new(
-                        VertexId::from_int64(id),
-                        vec![Tag::new(
+                        VertexId::try_from_int64(id).expect("valid vertex id"),
+                        Tag::new(
                             "Node".to_string(),
                             [("value".to_string(), Value::BigInt(id))]
                                 .into_iter()
                                 .collect(),
-                        )],
+                        ),
                     ),
                 )
                 .expect("vertex insert");
@@ -505,13 +505,13 @@ fn bench_sparse_id_insert_throughput(c: &mut Criterion) {
                             .insert_vertex(
                                 "bench",
                                 Vertex::new(
-                                    VertexId::from_int64(id),
-                                    vec![Tag::new(
+                                    VertexId::try_from_int64(id).expect("valid vertex id"),
+                                    Tag::new(
                                         "Node".to_string(),
                                         [("value".to_string(), Value::BigInt(id))]
                                             .into_iter()
                                             .collect(),
-                                    )],
+                                    ),
                                 ),
                             )
                             .expect("vertex insert");
@@ -521,13 +521,13 @@ fn bench_sparse_id_insert_throughput(c: &mut Criterion) {
                             .insert_vertex(
                                 "bench",
                                 Vertex::new(
-                                    VertexId::from_int64(high),
-                                    vec![Tag::new(
+                                    VertexId::try_from_int64(high).expect("valid vertex id"),
+                                    Tag::new(
                                         "Node".to_string(),
                                         [("value".to_string(), Value::BigInt(high))]
                                             .into_iter()
                                             .collect(),
-                                    )],
+                                    ),
                                 ),
                             )
                             .expect("vertex insert");
@@ -541,8 +541,8 @@ fn bench_sparse_id_insert_throughput(c: &mut Criterion) {
                             .insert_edge(
                                 "bench",
                                 Edge {
-                                    src: VertexId::from_int64(src),
-                                    dst: VertexId::from_int64(dst),
+                                    src: VertexId::try_from_int64(src).expect("valid vertex id"),
+                                    dst: VertexId::try_from_int64(dst).expect("valid vertex id"),
                                     edge_type: "Link".to_string(),
                                     ranking: 0,
                                     props: HashMap::new(),
@@ -555,8 +555,8 @@ fn bench_sparse_id_insert_throughput(c: &mut Criterion) {
                             .insert_edge(
                                 "bench",
                                 Edge {
-                                    src: VertexId::from_int64(high),
-                                    dst: VertexId::from_int64(0),
+                                    src: VertexId::try_from_int64(high).expect("valid vertex id"),
+                                    dst: VertexId::try_from_int64(0).expect("valid vertex id"),
                                     edge_type: "Link".to_string(),
                                     ranking: 0,
                                     props: HashMap::new(),

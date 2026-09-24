@@ -60,8 +60,8 @@ fn setup_graph(vertex_count: usize, edges_per_vertex: usize) -> GraphStorage {
 
     for i in 0..vertex_count {
         let vertex = Vertex::new(
-            VertexId::from_string(format!("n{}", i)),
-            vec![Tag::new(
+            VertexId::try_from_string(format!("n{}", i)).expect("valid vertex id"),
+            Tag::new(
                 "Node".to_string(),
                 vec![
                     ("name".to_string(), Value::string(format!("node_{}", i))),
@@ -69,7 +69,7 @@ fn setup_graph(vertex_count: usize, edges_per_vertex: usize) -> GraphStorage {
                 ]
                 .into_iter()
                 .collect(),
-            )],
+            ),
         );
         storage
             .insert_vertex(&space_name, vertex)
@@ -80,8 +80,8 @@ fn setup_graph(vertex_count: usize, edges_per_vertex: usize) -> GraphStorage {
         for k in 1..=edges_per_vertex.min(vertex_count - 1) {
             let dst = (src + k) % vertex_count;
             let edge = Edge {
-                src: VertexId::from_string(format!("n{}", src)),
-                dst: VertexId::from_string(format!("n{}", dst)),
+                src: VertexId::try_from_string(format!("n{}", src)).expect("valid vertex id"),
+                dst: VertexId::try_from_string(format!("n{}", dst)).expect("valid vertex id"),
                 edge_type: "Link".to_string(),
                 ranking: 0,
                 props: [("weight".to_string(), Value::Double(1.0 / k as f64))]
@@ -123,8 +123,8 @@ fn setup_large_graph(vertex_count: u64, edges_per_vertex: usize) -> GraphStorage
 
     for i in 0..vertex_count as i64 {
         let vertex = Vertex::new(
-            VertexId::from_int64(i),
-            vec![Tag::new(
+            VertexId::try_from_int64(i).expect("valid vertex id"),
+            Tag::new(
                 "Node".to_string(),
                 vec![
                     ("name".to_string(), Value::string(format!("node_{}", i))),
@@ -132,7 +132,7 @@ fn setup_large_graph(vertex_count: u64, edges_per_vertex: usize) -> GraphStorage
                 ]
                 .into_iter()
                 .collect(),
-            )],
+            ),
         );
         storage
             .insert_vertex(&space_name, vertex)
@@ -144,8 +144,8 @@ fn setup_large_graph(vertex_count: u64, edges_per_vertex: usize) -> GraphStorage
         for k in 1..=max_edges as i64 {
             let dst = (src + k) % vertex_count as i64;
             let edge = Edge {
-                src: VertexId::from_int64(src),
-                dst: VertexId::from_int64(dst),
+                src: VertexId::try_from_int64(src).expect("valid vertex id"),
+                dst: VertexId::try_from_int64(dst).expect("valid vertex id"),
                 edge_type: "Link".to_string(),
                 ranking: 0,
                 props: HashMap::new(),
@@ -163,13 +163,13 @@ fn bench_simple_query_parse(c: &mut Criterion) {
 
     group.bench_function("parse_simple_vertex_query", |b| {
         b.iter(|| {
-            let _ = storage.get_vertex("bench_q100e3", &VertexId::from_string("n1"));
+            let _ = storage.get_vertex("bench_q100e3", "Node", &VertexId::try_from_string("n1").expect("valid vertex id"));
         });
     });
 
     group.bench_function("parse_simple_edge_query", |b| {
         b.iter(|| {
-            let _ = storage.get_vertex("bench_q100e3", &VertexId::from_string("n1"));
+            let _ = storage.get_vertex("bench_q100e3", "Node", &VertexId::try_from_string("n1").expect("valid vertex id"));
         });
     });
 
@@ -186,7 +186,8 @@ fn bench_query_data_access(c: &mut Criterion) {
             b.iter(|| {
                 let _ = storage.get_vertex(
                     &format!("bench_q{}e3", vertex_count),
-                    &VertexId::from_string("n1"),
+                    "Node",
+                    &VertexId::try_from_string("n1").expect("valid vertex id"),
                 );
             });
         });
@@ -202,7 +203,7 @@ fn bench_path_traversal(c: &mut Criterion) {
     for hop_count in &[2usize, 3] {
         group.bench_function(format!("{}_hop", hop_count), |b| {
             b.iter(|| {
-                let _ = storage.get_vertex("bench_q200e5", &VertexId::from_string("n1"));
+                let _ = storage.get_vertex("bench_q200e5", "Node", &VertexId::try_from_string("n1").expect("valid vertex id"));
             });
         });
     }
@@ -222,7 +223,7 @@ fn bench_aggregation_queries(c: &mut Criterion) {
 
     group.bench_function("get_vertex", |b| {
         b.iter(|| {
-            let _ = storage.get_vertex("bench_q500e3", &VertexId::from_string("n1"));
+            let _ = storage.get_vertex("bench_q500e3", "Node", &VertexId::try_from_string("n1").expect("valid vertex id"));
         });
     });
 
@@ -317,7 +318,7 @@ fn bench_large_edge_density(c: &mut Criterion) {
                 let edges = storage
                     .get_node_edges(
                         &space_name,
-                        &VertexId::from_int64(0),
+                        &VertexId::try_from_int64(0).expect("valid vertex id"),
                         graphdb_core::EdgeDirection::Out,
                     )
                     .expect("get edges");
@@ -529,8 +530,8 @@ fn setup_query_graph() -> Arc<RwLock<GraphStorage>> {
         .expect("create edge type");
     for i in 0..dec_vertices() as i64 {
         let vertex = Vertex::new(
-            VertexId::from_int64(i),
-            vec![Tag::new(
+            VertexId::try_from_int64(i).expect("valid vertex id"),
+            Tag::new(
                 "Node".to_string(),
                 vec![
                     ("name".to_string(), Value::string(format!("node_{}", i))),
@@ -538,7 +539,7 @@ fn setup_query_graph() -> Arc<RwLock<GraphStorage>> {
                 ]
                 .into_iter()
                 .collect(),
-            )],
+            ),
         );
         storage
             .insert_vertex(&space_name, vertex)
@@ -549,8 +550,8 @@ fn setup_query_graph() -> Arc<RwLock<GraphStorage>> {
         for k in 1..=max_edges as i64 {
             let dst = (src + k) % dec_vertices() as i64;
             let edge = Edge {
-                src: VertexId::from_int64(src),
-                dst: VertexId::from_int64(dst),
+                src: VertexId::try_from_int64(src).expect("valid vertex id"),
+                dst: VertexId::try_from_int64(dst).expect("valid vertex id"),
                 edge_type: "Link".to_string(),
                 ranking: 0,
                 props: [("weight".to_string(), Value::Double(1.0 / k as f64))]

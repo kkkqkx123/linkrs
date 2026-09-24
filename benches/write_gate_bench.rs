@@ -76,13 +76,13 @@ fn run_concurrent_writers(
                         .insert_vertex(
                             SPACE,
                             Vertex::new(
-                                VertexId::from_int64(id),
-                                vec![Tag::new(
+                                VertexId::try_from_int64(id).expect("valid vertex id"),
+                                Tag::new(
                                     TAG.to_string(),
                                     [("value".to_string(), Value::BigInt(id))]
                                         .into_iter()
                                         .collect(),
-                                )],
+                                ),
                             ),
                         )
                         .expect("insert vertex");

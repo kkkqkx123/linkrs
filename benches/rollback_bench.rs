@@ -63,13 +63,13 @@ fn setup_storage() -> (GraphStorage, Option<TempDir>) {
             .iter()
             .map(|&i| {
                 Vertex::new(
-                    VertexId::from_int64(i),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(i).expect("valid vertex id"),
+                    Tag::new(
                         TAG.to_string(),
                         [("value".to_string(), Value::BigInt(i))]
                             .into_iter()
                             .collect(),
-                    )],
+                    ),
                 )
             })
             .collect();
@@ -101,13 +101,13 @@ fn run_transaction(storage: &GraphStorage, edge_count: usize, tx_seq: u64) -> Ru
 
     let edges: Vec<Edge> = (0..edge_count)
         .map(|i| Edge {
-            src: VertexId::from_int64(i as i64 % VERTEX_COUNT as i64),
-            dst: VertexId::from_int64((i as i64 + 1) % VERTEX_COUNT as i64),
+            src: VertexId::try_from_int64(i as i64 % VERTEX_COUNT as i64).expect("valid vertex id"),
+            dst: VertexId::try_from_int64((i as i64 + 1) % VERTEX_COUNT as i64).expect("valid vertex id"),
             edge_type: EDGE.to_string(),
             ranking: tx_seq as i64 * 2_000_000 + i as i64,
             props: Default::default(),
         })
-        .collect();
+        .collect::<Vec<_>>();
 
     let write_start = Instant::now();
     for edge in edges {

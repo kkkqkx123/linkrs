@@ -53,13 +53,13 @@ fn setup() -> GraphStorage {
         let vertices: Vec<Vertex> = (start..end)
             .map(|i| {
                 Vertex::new(
-                    VertexId::from_int64(i as i64),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(i as i64).expect("valid vertex id"),
+                    Tag::new(
                         TAG.to_string(),
                         vec![("value".to_string(), Value::BigInt(i as i64))]
                             .into_iter()
                             .collect(),
-                    )],
+                    ),
                 )
             })
             .collect();
@@ -76,8 +76,8 @@ fn setup() -> GraphStorage {
             props.insert("weight".to_string(), Value::BigInt(k * 7));
             props.insert("label".to_string(), Value::string(format!("e{src}_{k}")));
             edges.push(Edge {
-                src: VertexId::from_int64(src),
-                dst: VertexId::from_int64((src + k) % VERTEX_COUNT as i64),
+                src: VertexId::try_from_int64(src).expect("valid vertex id"),
+                dst: VertexId::try_from_int64((src + k) % VERTEX_COUNT as i64).expect("valid vertex id"),
                 edge_type: EDGE.to_string(),
                 ranking: 0,
                 props,
@@ -103,7 +103,9 @@ fn main() {
     let storage = setup();
     println!("vertices={VERTEX_COUNT}, edges/vertex={EDGES_PER_VERTEX}");
 
-    let seeds: Vec<VertexId> = (0..VERTEX_COUNT as i64).map(VertexId::from_int64).collect();
+    let seeds: Vec<VertexId> = (0..VERTEX_COUNT as i64)
+        .map(|i| VertexId::try_from_int64(i).expect("valid vertex id"))
+        .collect();
     let no_types: Vec<String> = Vec::new();
     let iterations = 20;
 

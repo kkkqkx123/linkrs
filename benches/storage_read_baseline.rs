@@ -61,7 +61,7 @@ fn build_table(vertex_count: u64, props: &[(&str, DataType)], label: &str) -> Gr
                     map.push((name.to_string(), value));
                 }
                 Vertex::new(
-                    VertexId::try_from_int64(i as i64).expect("valid vid"),
+                    VertexId::try_from_int64(i as i64).expect("valid vertex id"),
                     Tag::new(label.to_string(), map.into_iter().collect()),
                 )
             })

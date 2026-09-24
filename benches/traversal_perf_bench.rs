@@ -57,8 +57,8 @@ fn setup_data() -> Arc<RwLock<GraphStorage>> {
         let vertices: Vec<Vertex> = (start..end)
             .map(|i| {
                 Vertex::new(
-                    VertexId::from_int64(i as i64),
-                    vec![Tag::new(
+                    VertexId::try_from_int64(i as i64).expect("valid vertex id"),
+                    Tag::new(
                         TAG.to_string(),
                         vec![
                             ("value".to_string(), Value::BigInt(i as i64)),
@@ -66,7 +66,7 @@ fn setup_data() -> Arc<RwLock<GraphStorage>> {
                         ]
                         .into_iter()
                         .collect(),
-                    )],
+                    ),
                 )
             })
             .collect();
@@ -80,8 +80,8 @@ fn setup_data() -> Arc<RwLock<GraphStorage>> {
     for src in 0..VERTEX_COUNT as i64 {
         for k in 1..=3i64 {
             edges.push(Edge {
-                src: VertexId::from_int64(src),
-                dst: VertexId::from_int64((src + k) % VERTEX_COUNT as i64),
+                src: VertexId::try_from_int64(src).expect("valid vertex id"),
+                dst: VertexId::try_from_int64((src + k) % VERTEX_COUNT as i64).expect("valid vertex id"),
                 edge_type: EDGE.to_string(),
                 ranking: 0,
                 props: Default::default(),
