@@ -86,17 +86,17 @@ impl ExpressionEvaluator {
                     // Explicitly releasing the borrow of func_ref
                     drop(func_ref);
 
-                    // If the context supports caching, use cache-aware execution.
-                    if context.supports_cache() {
-                        // Retrieve the cache (variable borrowing).
-                        if let Some(cache) = context.get_cache() {
-                            return owned_func.execute_with_cache(&arg_values, cache);
-                        }
-                    }
-                    // Otherwise, use the normal execution mode.
-                    // If graph storage is available, use storage-backed execution
+                    // Storage-backed execution takes precedence: the cache
+                    // path cannot supply graph storage to the builtins that
+                    // need it (e.g. startnode/endnode label resolution).
                     if let Some(storage) = context.get_graph_storage() {
                         owned_func.execute_with_storage(&arg_values, &storage)
+                    } else if context.supports_cache() {
+                        // Retrieve the cache (variable borrowing).
+                        match context.get_cache() {
+                            Some(cache) => owned_func.execute_with_cache(&arg_values, cache),
+                            None => owned_func.execute(&arg_values),
+                        }
                     } else {
                         owned_func.execute(&arg_values)
                     }

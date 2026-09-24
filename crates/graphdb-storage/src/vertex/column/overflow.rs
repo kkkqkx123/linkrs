@@ -101,7 +101,15 @@ impl OverflowStore {
                 "overflow section too small".to_string(),
             ));
         }
-        let stored_crc = u32::from_le_bytes(bytes[bytes.len() - 4..].try_into().unwrap());
+        let stored_crc = u32::from_le_bytes(
+            bytes[bytes.len() - 4..]
+                .try_into()
+                .map_err(|_| {
+                    StorageError::deserialize_error(
+                        "overflow section CRC tail malformed".to_string(),
+                    )
+                })?,
+        );
         let computed = crc32fast::hash(&bytes[..bytes.len() - 4]);
         if stored_crc != computed {
             return Err(StorageError::deserialize_error(format!(

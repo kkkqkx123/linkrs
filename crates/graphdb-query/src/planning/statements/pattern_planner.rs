@@ -117,13 +117,20 @@ fn logical_expand_all(
     })
 }
 
-fn require_single_neighbor_tag(labels: &[String]) -> Result<String, PlannerError> {
-    if labels.len() != 1 {
-        return Err(PlannerError::PlanGenerationFailed(
-            "Traversal requires exactly one neighbor label".to_string(),
-        ));
+/// Resolve the neighbor label carried by a node pattern.
+///
+/// A single label is passed through to the plan. An unlabelled node pattern
+/// yields an empty label: the executor derives the neighbor label from the
+/// edge type schema and skips hops it cannot resolve. Multiple labels cannot
+/// be represented by one plan-level label and stay an error.
+fn neighbor_tag(labels: &[String]) -> Result<String, PlannerError> {
+    match labels {
+        [] => Ok(String::new()),
+        [single] => Ok(single.clone()),
+        _ => Err(PlannerError::PlanGenerationFailed(
+            "Traversal neighbor supports at most one label".to_string(),
+        )),
     }
-    Ok(labels[0].clone())
 }
 
 fn logical_argument(var_name: &str) -> LogicalNodeEnum {
@@ -597,7 +604,7 @@ pub fn plan_pattern_edge_with_input(
 
     expand_node.set_step_limit(1);
     expand_node.set_path_semantic(edge.path_semantic.clone());
-    let dst_tag = require_single_neighbor_tag(dst_labels)?;
+    let dst_tag = neighbor_tag(dst_labels)?;
     expand_node.set_dst_tag(dst_tag.clone());
 
     expand_node.set_input_var(input_var.to_string());
