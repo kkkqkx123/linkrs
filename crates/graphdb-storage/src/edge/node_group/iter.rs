@@ -64,7 +64,7 @@ impl<'a> Iterator for ShardCsrIterator<'a> {
                     continue;
                 };
                 let global = local.saturating_add(self.base);
-                return Some((VertexId::from_u32(u32::try_from(global).ok()?), nbr));
+                return Some((VertexId::from_u32(global), nbr));
             }
             if !self.advance_group() {
                 return None;

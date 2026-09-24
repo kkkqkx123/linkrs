@@ -5,6 +5,9 @@ use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::Value;
 use std::collections::HashSet;
 
+type ProjectedProps = Vec<(String, Option<Value>)>;
+type ProjectedBatch = Vec<Option<ProjectedProps>>;
+
 impl CsrWithProperties {
     /// Read the property row for `edge_id` at `query_ts`, decoding only the
     /// projected columns.
@@ -121,7 +124,7 @@ impl CsrWithProperties {
         edge_ids: &[EdgeId],
         query_ts: Timestamp,
         projection: Option<&[String]>,
-    ) -> Vec<Option<Vec<(String, Option<Value>)>>> {
+    ) -> ProjectedBatch {
         if self.inline {
             return edge_ids.iter().map(|_| None).collect();
         }

@@ -15,6 +15,10 @@ use graphdb_core::{StorageError, StorageResult};
 use super::helpers;
 use super::GraphStorageContext;
 
+type LabelPair = (LabelId, LabelId);
+type EdgeEndpoints = Vec<(u32, u32, i64)>;
+type PartitionedEdges = Vec<(LabelPair, EdgeEndpoints)>;
+
 /// Project a stored internal endpoint id to its external `VertexId` using the
 /// edge table's owning label. Unresolved ids stay unchanged (dangling edge).
 fn endpoint_to_external(
@@ -329,7 +333,7 @@ impl GraphStorageContext {
                 resolved
             });
 
-        let mut by_partition: HashMap<(LabelId, LabelId), Vec<(u32, u32, i64)>> = HashMap::new();
+        let mut by_partition: HashMap<LabelPair, EdgeEndpoints> = HashMap::new();
         for (edge, slot) in params.edges.iter().zip(resolved.iter()) {
             if let Some((src_internal, dst_internal, actual_src, actual_dst)) = slot {
                 by_partition
@@ -338,7 +342,7 @@ impl GraphStorageContext {
                     .push((*src_internal, *dst_internal, edge.rank));
             }
         }
-        let mut partitions: Vec<((LabelId, LabelId), Vec<(u32, u32, i64)>)> =
+        let mut partitions: PartitionedEdges =
             by_partition.into_iter().collect();
         partitions.sort_unstable_by_key(|(key, _)| *key);
 

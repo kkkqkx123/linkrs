@@ -261,7 +261,7 @@ fn test_edge_existence_after_vertex_ops() {
         .assert_edge_exists(2, 3, "KNOWS")
         .assert_edge_exists(3, 1, "KNOWS")
         // Update a vertex (should not affect edges)
-        .exec_dml("UPDATE 1 SET name = 'AliceUpdated'")
+        .exec_dml("UPDATE 1 ON Person SET name = 'AliceUpdated'")
         .assert_success()
         // Edges should still exist
         .assert_edge_exists(1, 2, "KNOWS")

@@ -301,7 +301,7 @@ mod tests {
         assert_eq!(
             entity,
             EntityRef::Vertex(
-                VertexId::try_from_string("uuid-abc".to_string()).expect("test vertex id")
+                VertexId::try_from_string("uuid-abc").expect("test vertex id")
             )
         );
     }

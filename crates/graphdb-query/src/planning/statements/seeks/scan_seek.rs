@@ -102,7 +102,7 @@ impl ScanSeek {
         &self,
         vertex: &Vertex,
         pattern: &NodePattern,
-        any_label: bool,
+        _any_label: bool,
     ) -> bool {
         if !pattern.labels.is_empty() {
             // Single-label vertices carry exactly one tag, so a conjunction

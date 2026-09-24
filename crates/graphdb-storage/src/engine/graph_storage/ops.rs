@@ -100,6 +100,7 @@ pub(crate) fn edge_label_id(
         .map(|edge_type| edge_type.edge_type_id))
 }
 
+#[allow(dead_code)]
 pub(crate) fn value_to_string(value: &Value) -> String {
     match value {
         Value::SmallInt(i) => i.to_string(),

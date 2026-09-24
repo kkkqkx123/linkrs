@@ -106,7 +106,7 @@ fn threshold_matches_linear_results_on_both_flag_states() {
     for (endpoint, edge) in [(50u32, 1u64), (10, 2), (30, 3), (20, 4), (40, 5)] {
         csr.insert_edge(
             0u32,
-            VertexId::edge_endpoint_key((endpoint) as u32, 0),
+            VertexId::edge_endpoint_key(endpoint, 0),
             EdgeId(edge),
             1,
         )

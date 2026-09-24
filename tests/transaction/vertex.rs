@@ -48,7 +48,7 @@ fn test_transaction_vertex_update() {
             "Person",
             HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(30))]),
         )
-        .exec_dml("UPDATE 1 SET name = 'AliceUpdated', age = 31")
+        .exec_dml("UPDATE 1 ON Person SET name = 'AliceUpdated', age = 31")
         .assert_success()
         .assert_vertex_props(
             1,
@@ -72,7 +72,7 @@ fn test_transaction_vertex_delete() {
         .assert_success()
         .assert_vertex_exists(1, "Person")
         .assert_vertex_exists(2, "Person")
-        .exec_dml("DELETE VERTEX 1")
+        .exec_dml("DELETE VERTEX Person FROM 1")
         .assert_success()
         .assert_vertex_not_exists(1, "Person")
         .assert_vertex_exists(2, "Person");

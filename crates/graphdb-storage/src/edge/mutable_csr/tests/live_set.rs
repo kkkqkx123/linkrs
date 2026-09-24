@@ -218,10 +218,10 @@ fn huge_degree_index_agrees_with_scan_and_stays_proportional() {
         );
     }
     assert!(csr
-        .get_edge(0u32, VertexId::edge_endpoint_key((999_999) as u32, 0), 1)
+        .get_edge(0u32, VertexId::edge_endpoint_key(999_999_u32, 0), 1)
         .is_none());
     assert!(csr
-        .get_edge_physical(0u32, VertexId::edge_endpoint_key((999_999) as u32, 0))
+        .get_edge_physical(0u32, VertexId::edge_endpoint_key(999_999_u32, 0))
         .is_none());
     let rebuilds_before = csr.live_set_rebuild_count();
     for i in 0..1992i64 {

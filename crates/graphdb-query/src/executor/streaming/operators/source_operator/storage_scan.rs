@@ -346,7 +346,7 @@ fn build_column_chunk(
             }
         }
         let vertex = graphdb_core::Vertex::new(
-            batch.vids[row].clone(),
+            batch.vids[row],
             graphdb_core::Tag::new(tag_name.clone(), properties),
         );
         let mut row_vec = Vec::with_capacity(flatten.len() + 1);

@@ -578,11 +578,11 @@ impl VertexId {
                     }
                 };
                 if let DataType::FixedString(width) = vid_type {
-                    if text.as_bytes().len() > *width {
+                    if text.len() > *width {
                         return Err(invalid(format!(
                             "Vertex id exceeds FIXEDSTRING({}) width: {} bytes",
                             width,
-                            text.as_bytes().len()
+                            text.len()
                         )));
                     }
                 }

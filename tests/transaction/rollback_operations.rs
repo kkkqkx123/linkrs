@@ -26,7 +26,7 @@ fn test_rollback_insert_vertex() {
         .assert_success()
         .assert_vertex_exists(1, "Person")
         // Delete the vertex (simulating rollback scenario)
-        .exec_dml("DELETE VERTEX 1")
+        .exec_dml("DELETE VERTEX Person FROM 1")
         .assert_success()
         // Verify vertex is gone
         .assert_vertex_not_exists(1, "Person");
@@ -49,7 +49,7 @@ fn test_rollback_update_vertex() {
             HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(25))]),
         )
         // Update the vertex
-        .exec_dml("UPDATE 1 SET age = 30")
+        .exec_dml("UPDATE 1 ON Person SET age = 30")
         .assert_success()
         .assert_vertex_props(
             1,
@@ -71,7 +71,7 @@ fn test_rollback_delete_vertex() {
         .assert_success()
         .assert_vertex_exists(1, "Person")
         // Delete vertex
-        .exec_dml("DELETE VERTEX 1")
+        .exec_dml("DELETE VERTEX Person FROM 1")
         .assert_success()
         .assert_vertex_not_exists(1, "Person")
         // Re-insert vertex (simulating rollback of delete)
@@ -213,7 +213,7 @@ fn test_operation_sequence_with_modifications() {
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1->2:(2020)")
         .assert_success()
         // Update vertex
-        .exec_dml("UPDATE 1 SET age = 31")
+        .exec_dml("UPDATE 1 ON Person SET age = 31")
         .assert_success()
         .assert_vertex_props(
             1,

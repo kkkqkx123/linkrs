@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use graphdb_core::metadata::IndexMetadataManager;
 use graphdb_core::types::{ColumnId, EdgeIdentifier, LabelId, TagInfo, Timestamp, VertexId};
-use graphdb_core::vertex_edge_path::Tag;
 use graphdb_core::wal::redo::{
     DeleteEdgeRedo, DeleteVertexRedo, InsertVertexRedo, UpdateVertexPropRedo,
 };
@@ -463,7 +462,7 @@ pub(crate) fn delete_vertex(
         ctx.index_metadata_manager(),
         space_info.space_id,
         &id_value,
-        &tag_name,
+        tag_name,
         ts,
     )?;
 

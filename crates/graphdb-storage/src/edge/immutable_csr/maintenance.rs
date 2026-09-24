@@ -98,14 +98,14 @@ impl ImmutableCsr {
         let mut kept_values = Vec::with_capacity(self.values.len());
         let mut kept_valid = BitVec::new();
         let mut new_degrees = Vec::with_capacity(rows);
-        for vid in 0..rows {
+        for (vid, want) in wanted.iter().enumerate().take(rows) {
             let start = self.offsets[vid] as usize;
             let degree = self.degrees[vid] as usize;
             let end = start.saturating_add(degree).min(self.hot_entries.len());
             let mut kept = 0usize;
             for idx in start..end {
                 let cold = self.cold_entries[idx];
-                if wanted[vid] && is_reclaimable_cold(&cold, cutoff) {
+                if *want && is_reclaimable_cold(&cold, cutoff) {
                     on_edge_removed(self.hot_entries[idx].edge_id, cold.delete_ts);
                     removed += 1;
                 } else {

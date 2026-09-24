@@ -53,7 +53,7 @@ fn test_storage_vertex_update_persistence() {
             "Person",
             HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(30))]),
         )
-        .exec_dml("UPDATE 1 SET name = 'AliceUpdated', age = 31")
+        .exec_dml("UPDATE 1 ON Person SET name = 'AliceUpdated', age = 31")
         .assert_success()
         .assert_vertex_props(
             1,
@@ -77,7 +77,7 @@ fn test_storage_vertex_delete_persistence() {
         .assert_success()
         .assert_vertex_exists(1, "Person")
         .assert_vertex_exists(2, "Person")
-        .exec_dml("DELETE VERTEX 1")
+        .exec_dml("DELETE VERTEX Person FROM 1")
         .assert_success()
         .assert_vertex_not_exists(1, "Person")
         .assert_vertex_exists(2, "Person");
@@ -199,7 +199,7 @@ fn test_storage_cascading_delete() {
         .assert_edge_exists(1, 2, "KNOWS")
         .assert_edge_exists(2, 3, "KNOWS")
         .assert_edge_exists(3, 1, "KNOWS")
-        .exec_dml("DETACH DELETE VERTEX 1")
+        .exec_dml("DETACH DELETE VERTEX Person FROM 1")
         .assert_success()
         .assert_vertex_not_exists(1, "Person")
         .assert_vertex_exists(2, "Person")
@@ -377,10 +377,10 @@ fn test_storage_update_and_query() {
         .assert_success()
         .exec_dml("INSERT VERTEX Counter(value) VALUES 1:(0)")
         .assert_success()
-        .exec_dml("UPDATE 1 SET value = 10")
+        .exec_dml("UPDATE 1 ON Counter SET value = 10")
         .assert_success()
         .assert_vertex_props(1, "Counter", HashMap::from([("value", Value::Int(10))]))
-        .exec_dml("UPDATE 1 SET value = 20")
+        .exec_dml("UPDATE 1 ON Counter SET value = 20")
         .assert_success()
         .assert_vertex_props(1, "Counter", HashMap::from([("value", Value::Int(20))]));
 }

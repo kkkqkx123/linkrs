@@ -161,11 +161,11 @@ impl VertexTable {
                     id
                 )));
             }
-            IdKey::Text(id) if id.as_bytes().len() > graphdb_core::types::VERTEX_ID_MAX_SIZE => {
+            IdKey::Text(id) if id.len() > graphdb_core::types::VERTEX_ID_MAX_SIZE => {
                 return Err(StorageError::invalid_input(format!(
                     "Vertex id exceeds max length of {} bytes: got {} bytes",
                     graphdb_core::types::VERTEX_ID_MAX_SIZE,
-                    id.as_bytes().len()
+                    id.len()
                 )));
             }
             _ => {}

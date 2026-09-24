@@ -3,18 +3,6 @@ use crate::engine::graph_storage::ops::endpoint_label_id;
 use graphdb_core::types::{LabelId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
 
-pub(crate) fn vid_to_string(vid: &VertexId) -> String {
-    if let Some(s) = vid.as_str() {
-        s.to_string()
-    } else if let Some(i) = vid.as_int64() {
-        i.to_string()
-    } else if let Some(u) = vid.as_u64() {
-        u.to_string()
-    } else {
-        format!("{:?}", vid.as_bytes())
-    }
-}
-
 pub(crate) fn record_vertex_read(ctx: &GraphStorageContext, vid: VertexId) {
     if let Some(recorder) = ctx.mutation_recorder() {
         recorder.record_vertex_read(vid);

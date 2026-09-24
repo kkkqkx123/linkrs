@@ -150,7 +150,7 @@ fn pure_row_iter_matches_allocating_read() {
         inner
             .insert_edge(
                 0,
-                VertexId::edge_endpoint_key((dst) as u32, 0),
+                VertexId::edge_endpoint_key(dst, 0),
                 EdgeId(dst as u64),
                 0,
             )
@@ -169,7 +169,7 @@ fn bundled_row_iter_matches_allocating_read() {
         inner
             .insert_edge(
                 0,
-                VertexId::edge_endpoint_key((dst) as u32, 0),
+                VertexId::edge_endpoint_key(dst, 0),
                 EdgeId(dst as u64),
                 0,
             )
@@ -188,7 +188,7 @@ fn pure_variant_reports_fragmentation_and_holes() {
         inner
             .insert_edge(
                 0,
-                VertexId::edge_endpoint_key((dst) as u32, 0),
+                VertexId::edge_endpoint_key(dst, 0),
                 EdgeId(dst as u64),
                 0,
             )
@@ -213,7 +213,7 @@ fn bundled_variant_reports_fragmentation() {
         inner
             .insert_edge(
                 0,
-                VertexId::edge_endpoint_key((dst) as u32, 0),
+                VertexId::edge_endpoint_key(dst, 0),
                 EdgeId(dst as u64),
                 0,
             )
@@ -341,7 +341,7 @@ fn pure_and_bundled_direct_pack_match_topology() {
     for dst in [3u32, 1, 2] {
         pure.insert_edge(
             0,
-            VertexId::edge_endpoint_key((dst) as u32, 0),
+            VertexId::edge_endpoint_key(dst, 0),
             EdgeId(dst as u64),
             0,
         )
@@ -362,7 +362,7 @@ fn pure_and_bundled_direct_pack_match_topology() {
         bundled
             .insert_edge(
                 0,
-                VertexId::edge_endpoint_key((dst) as u32, 0),
+                VertexId::edge_endpoint_key(dst, 0),
                 EdgeId(dst as u64),
                 0,
             )
@@ -408,7 +408,7 @@ fn pure_threshold_ignores_rank_half_explicitly() {
         inner
             .insert_edge(
                 0,
-                VertexId::edge_endpoint_key((dst) as u32, 0),
+                VertexId::edge_endpoint_key(dst, 0),
                 EdgeId(dst as u64),
                 0,
             )

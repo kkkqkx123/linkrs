@@ -603,7 +603,7 @@ impl TemplateExtractor {
                             Self::expr_to_template_string(&result.expression)
                         })
                         .collect();
-                    let tag_values_templates = vec![format!("({})", value_templates.join(", "))];
+                    let tag_values_templates = [format!("({})", value_templates.join(", "))];
 
                     parts.push(format!(
                         "{}: {}",

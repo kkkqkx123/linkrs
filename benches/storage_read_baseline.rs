@@ -61,8 +61,8 @@ fn build_table(vertex_count: u64, props: &[(&str, DataType)], label: &str) -> Gr
                     map.push((name.to_string(), value));
                 }
                 Vertex::new(
-                    VertexId::from_int64(i as i64),
-                    vec![Tag::new(label.to_string(), map.into_iter().collect())],
+                    VertexId::try_from_int64(i as i64).expect("valid vid"),
+                    Tag::new(label.to_string(), map.into_iter().collect()),
                 )
             })
             .collect();
@@ -126,6 +126,7 @@ fn bench_scan(
 fn bench_random_access(
     storage: &GraphStorage,
     space: &str,
+    tag: &str,
     indices: &[i64],
     projected: bool,
     iterations: usize,
@@ -134,13 +135,13 @@ fn bench_random_access(
     for _ in 0..iterations {
         let start = Instant::now();
         for &id in indices {
-            let vid = VertexId::from_int64(id);
+            let vid = VertexId::try_from_int64(id).expect("valid vid");
             if projected {
                 let _ = storage
-                    .get_vertex_projected(space, &vid, &["v".to_string()])
+                    .get_vertex_projected(space, tag, &vid, &["v".to_string()])
                     .expect("get projected");
             } else {
-                let _ = storage.get_vertex(space, &vid).expect("get vertex");
+                let _ = storage.get_vertex(space, tag, &vid).expect("get vertex");
             }
         }
         samples.push(start.elapsed().as_secs_f64() * 1e6);
@@ -185,8 +186,8 @@ fn main() {
             if label == "narrow" {
                 let mut rng = StdRng::seed_from_u64(42);
                 let indices: Vec<i64> = (0..10_000).map(|_| rng.gen_range(0..n as i64)).collect();
-                let full_us = bench_random_access(&storage, &space, &indices, false, 7);
-                let proj_us = bench_random_access(&storage, &space, &indices, true, 7);
+                let full_us = bench_random_access(&storage, &space, label, &indices, false, 7);
+                let proj_us = bench_random_access(&storage, &space, label, &indices, true, 7);
                 let per_op_full = full_us / indices.len() as f64;
                 let per_op_proj = proj_us / indices.len() as f64;
                 println!(

@@ -81,6 +81,7 @@ fn logical_filter(input: LogicalNodeEnum, condition: ContextualExpression) -> Lo
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn logical_expand_all(
     space_id: u64,
     edge_types: Vec<String>,

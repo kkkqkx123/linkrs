@@ -26,7 +26,6 @@ pub use id_indexer::{IdIndexer, IdKey};
 pub use vertex_table::ShardedVertexTable;
 pub use vertex_timestamp::VertexTimestamp;
 
-use graphdb_core::vertex_edge_path::Tag;
 use graphdb_core::{DataType, StorageError, StorageResult, Value};
 
 pub use graphdb_core::types::{LabelId, Timestamp, VertexId, INVALID_TIMESTAMP, MAX_TIMESTAMP};
@@ -36,21 +35,6 @@ pub struct VertexRecord {
     pub vid: VertexId,
     pub internal_id: u32,
     pub properties: Vec<(String, Value)>,
-}
-
-impl VertexRecord {
-    pub fn into_vertex_with_tag(self, tag_name: &str) -> graphdb_core::Vertex {
-        let properties: std::collections::HashMap<String, Value> =
-            self.properties.into_iter().collect();
-
-        graphdb_core::Vertex::new(
-            self.vid,
-            Tag {
-                name: tag_name.to_string(),
-                properties,
-            },
-        )
-    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

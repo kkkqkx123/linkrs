@@ -639,7 +639,7 @@ fn test_dml_values_rejected_at_planning() {
     setup_person_graph(&mut db);
 
     assert_expression_subquery_rejected(&mut db, "SET 1.age = EXISTS { MATCH (p:person) }");
-    assert_expression_subquery_rejected(&mut db, "UPDATE 1 SET age = EXISTS { MATCH (p:person) }");
+    assert_expression_subquery_rejected(&mut db, "UPDATE 1 ON person SET age = EXISTS { MATCH (p:person) }");
     assert_expression_subquery_rejected(
         &mut db,
         "INSERT VERTEX person(name) VALUES 'p9': (EXISTS { MATCH (p:person) })",

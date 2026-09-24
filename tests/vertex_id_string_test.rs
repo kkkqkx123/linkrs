@@ -42,7 +42,7 @@ fn test_string_vertex_id_delete_and_rollback() {
         .expect("Create tag should succeed");
     txn.execute("INSERT VERTEX user(name) VALUES \"alice\":(\"Alice Smith\")")
         .expect("Insert should succeed");
-    txn.execute("DELETE VERTEX \"alice\"")
+    txn.execute("DELETE VERTEX user FROM \"alice\"")
         .expect("Delete should succeed");
 
     txn.rollback().expect("Rollback should succeed");
@@ -72,7 +72,7 @@ fn test_string_vertex_id_update_and_rollback() {
         .expect("Create tag should succeed");
     txn.execute("INSERT VERTEX user(name, age) VALUES \"alice\":(\"Alice Smith\", 25)")
         .expect("Insert should succeed");
-    txn.execute("UPDATE VERTEX \"alice\" SET age = 26")
+    txn.execute("UPDATE VERTEX \"alice\" ON user SET age = 26")
         .expect("Update should succeed");
 
     txn.rollback().expect("Rollback should succeed");

@@ -400,7 +400,6 @@ pub(super) fn expand_on_chunk(
             config.max_depth = step_limit;
         }
         config.vertex_tag = ctx.dst_tag.to_string();
-        let mut config = config;
         config.path_semantic = ctx.path_semantic.clone();
         match config.path_semantic {
             // Walk/Trail/Acyclic allow or constrain repeats per path, so

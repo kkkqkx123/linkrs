@@ -313,7 +313,7 @@ fn test_ddl_tag_lifecycle() {
         .assert_vertex_exists(1, "TestTag")
         .exec_ddl("ALTER TAG TestTag DROP (email)")
         .assert_success()
-        .exec_dml("DELETE VERTEX 1")
+        .exec_dml("DELETE VERTEX TestTag FROM 1")
         .assert_success()
         .exec_ddl("DROP TAG TestTag")
         .assert_success()

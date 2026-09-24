@@ -171,7 +171,7 @@ mod ast_validation {
             .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .exec_dml("INSERT VERTEX person(name) VALUES 1:('Alice')")
             .assert_success()
-            .query("UPDATE VERTEX 1 SET person.name = 'Bob'")
+            .query("UPDATE VERTEX 1 ON person SET person.name = 'Bob'")
             .assert_success();
     }
 
@@ -183,7 +183,7 @@ mod ast_validation {
             .exec_ddl("CREATE TAG person(id INT, name STRING)")
             .exec_dml("INSERT VERTEX person(name) VALUES 1:('Alice')")
             .assert_success()
-            .query("DELETE VERTEX 1")
+            .query("DELETE VERTEX person FROM 1")
             .assert_success();
     }
 

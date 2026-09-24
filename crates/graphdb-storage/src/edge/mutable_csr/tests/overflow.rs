@@ -35,7 +35,7 @@ fn test_overflow_storage_lookup() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
     for vid in 0..5u32 {
         for i in 0..6 {
-            let dst = VertexId::edge_endpoint_key((vid as u32 + 1) * 100 + i as u32, 0);
+            let dst = VertexId::edge_endpoint_key((vid + 1) * 100 + i as u32, 0);
             csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1)
                 .unwrap();
         }
@@ -49,7 +49,7 @@ fn test_overflow_get_chunks_transparent() {
     let mut csr = MutableCsr::with_overflow_chunk_edges(10, 100, 2);
     for vid in 0..20u32 {
         for i in 0..6 {
-            let dst = VertexId::edge_endpoint_key((vid as u32 + 1) * 100 + i as u32, 0);
+            let dst = VertexId::edge_endpoint_key((vid + 1) * 100 + i as u32, 0);
             csr.insert_edge(vid, dst, EdgeId(vid as u64 * 10 + i as u64), 1)
                 .unwrap();
         }

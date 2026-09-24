@@ -35,7 +35,7 @@ fn test_basic_crud_flow() {
             Value::string("alice@example.com"),
         ])
         // Update
-        .exec_dml("UPDATE 1 SET email = 'newalice@example.com'")
+        .exec_dml("UPDATE 1 ON User SET email = 'newalice@example.com'")
         .assert_success()
         .assert_vertex_props(1, "User", {
             let mut map = HashMap::new();
@@ -46,7 +46,7 @@ fn test_basic_crud_flow() {
         .query("MATCH (u:User) RETURN u.email")
         .assert_result_contains(vec![Value::string("newalice@example.com")])
         // Delete
-        .exec_dml("DELETE VERTEX 1")
+        .exec_dml("DELETE VERTEX User FROM 1")
         .assert_success()
         .assert_vertex_not_exists(1, "User")
         // Read (empty again)
@@ -74,7 +74,7 @@ fn test_schema_evolution_flow() {
         .exec_ddl("ALTER TAG Product ADD (stock INT)")
         .assert_success()
         // Update existing data with new field
-        .exec_dml("UPDATE 1 SET stock = 10")
+        .exec_dml("UPDATE 1 ON Product SET stock = 10")
         .assert_success()
         // Query with new field
         .query("MATCH (p:Product) RETURN p.name, p.price, p.stock")
@@ -88,7 +88,7 @@ fn test_schema_evolution_flow() {
         .exec_ddl("ALTER TAG Product ADD (category STRING)")
         .assert_success()
         // Update with new field
-        .exec_dml("UPDATE 1 SET category = 'Electronics'")
+        .exec_dml("UPDATE 1 ON Product SET category = 'Electronics'")
         .assert_success()
         // Query all fields
         .query("MATCH (p:Product) RETURN p.name, p.category")
@@ -196,9 +196,9 @@ fn test_ecommerce_order_flow() {
         )
         .assert_success()
         // Update product stock
-        .exec_dml("UPDATE 101 SET stock = stock - 1")
+        .exec_dml("UPDATE 101 ON Product SET stock = stock - 1")
         .assert_success()
-        .exec_dml("UPDATE 102 SET stock = stock - 1")
+        .exec_dml("UPDATE 102 ON Product SET stock = stock - 1")
         .assert_success()
         // Verify stock update
         .assert_vertex_props(101, "Product", {
@@ -291,7 +291,7 @@ fn test_social_network_complete_flow() {
         .query("FIND SHORTEST PATH FROM 1 TO 4 OVER KNOWS")
         .assert_success()
         // Update: Alice moves to LA
-        .exec_dml("UPDATE 1 SET city = 'LA'")
+        .exec_dml("UPDATE 1 ON Person SET city = 'LA'")
         .assert_success()
         // Query: Verify update
         .query("MATCH (p:Person) WHERE p.name == 'Alice' RETURN p.city")
@@ -375,11 +375,11 @@ fn test_batch_operations_flow() {
         .query("MATCH (i:Item) WHERE i.category == 'A' RETURN i.name, i.price")
         .assert_result_count(3)
         // Batch update
-        .exec_dml("UPDATE 1 SET price = price * 1.1")
+        .exec_dml("UPDATE 1 ON Item SET price = price * 1.1")
         .assert_success()
-        .exec_dml("UPDATE 2 SET price = price * 1.1")
+        .exec_dml("UPDATE 2 ON Item SET price = price * 1.1")
         .assert_success()
-        .exec_dml("UPDATE 5 SET price = price * 1.1")
+        .exec_dml("UPDATE 5 ON Item SET price = price * 1.1")
         .assert_success()
         // Verify updates
         .query("FETCH PROP ON Item 1")
@@ -390,7 +390,7 @@ fn test_batch_operations_flow() {
             map
         })
         // Batch delete
-        .exec_dml("DELETE VERTEX 3, 4")
+        .exec_dml("DELETE VERTEX Item FROM 3, 4")
         .assert_success()
         .assert_vertex_count("Item", 3)
         .assert_vertex_not_exists(3, "Item")
