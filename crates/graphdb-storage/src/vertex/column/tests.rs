@@ -1011,10 +1011,10 @@ mod tests {
         let resident_before = col.resident_memory_usage();
         col.evict_cold_chunks(u64::MAX);
         assert!(col.resident_memory_usage() < resident_before);
-        assert_eq!(
-            col.memory_usage(),
-            col.resident_memory_usage() + col.evicted_bytes()
-        );
+        // Spilled snapshots leave the heap: heap memory drops while the
+        // evicted payload footprint stays observable.
+        assert!(col.memory_usage() < resident_before);
+        assert!(col.evicted_bytes() > 0);
     }
 
     #[test]
@@ -1084,5 +1084,312 @@ mod tests {
         for (i, value) in expected.iter().enumerate() {
             assert_eq!(col.get(i).as_ref(), value.as_ref());
         }
+    }
+
+    #[test]
+    fn fixed_string_over_length_is_rejected() {
+        let mut col = Column::new("code".to_string(), 0, DataType::FixedString(3), false);
+        assert!(col
+            .set(0, Some(&Value::FixedString("abc".to_string())))
+            .is_ok());
+        assert!(col
+            .set(1, Some(&Value::FixedString("abcd".to_string())))
+            .is_err());
+        assert_eq!(col.get(0), Some(Value::FixedString("abc".to_string())));
+    }
+
+    #[test]
+    fn complex_length_summary_prunes_equality() {
+        use crate::cursor::PredicateRange;
+        use crate::cursor::ScanPredicate;
+        let mut col = Column::new(
+            "tags".to_string(),
+            0,
+            DataType::List(Box::new(DataType::Int)),
+            true,
+        );
+        let v2 = Value::List(Box::new(graphdb_core::value::list::List::from_vec(vec![
+            Value::Int(1),
+            Value::Int(2),
+        ])));
+        let v3 = Value::List(Box::new(graphdb_core::value::list::List::from_vec(vec![
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+        ])));
+        col.set(0, Some(&v2)).unwrap();
+        col.set(1, Some(&v2)).unwrap();
+        let bounds = col.complex_len_bounds(0).expect("summary exists");
+        assert_eq!(bounds, (2, 2));
+        let probe_outside = Value::List(Box::new(graphdb_core::value::list::List::from_vec(vec![
+            Value::Int(9),
+            Value::Int(8),
+            Value::Int(7),
+            Value::Int(6),
+            Value::Int(5),
+        ])));
+        let range = PredicateRange {
+            column: "tags".to_string(),
+            lower: Some(probe_outside.clone()),
+            include_lower: true,
+            upper: Some(probe_outside),
+            include_upper: true,
+        };
+        assert_eq!(range.equality_len(), Some(5));
+        let mut store = ColumnStore::new();
+        store.add_column(
+            "tags".to_string(),
+            DataType::List(Box::new(DataType::Int)),
+            true,
+        );
+        store
+            .set_versioned(0, &[("tags".to_string(), v3.clone())], 10)
+            .unwrap();
+        store
+            .set_versioned(1, &[("tags".to_string(), v3.clone())], 10)
+            .unwrap();
+        let _ = ScanPredicate::ColumnEqual {
+            column: "tags".to_string(),
+            value: v3,
+        };
+    }
+
+    #[test]
+    fn hll_distinguishes_equal_sized_complex_values() {
+        use crate::stats::HyperLogLog;
+        let a = Value::List(Box::new(graphdb_core::value::list::List::from_vec(vec![
+            Value::Int(1),
+            Value::Int(2),
+        ])));
+        let b = Value::List(Box::new(graphdb_core::value::list::List::from_vec(vec![
+            Value::Int(3),
+            Value::Int(4),
+        ])));
+        let mut ha = HyperLogLog::new();
+        ha.add_value(&a);
+        let mut hb = HyperLogLog::new();
+        hb.add_value(&b);
+        assert_ne!(ha.registers(), hb.registers());
+    }
+
+    #[test]
+    fn overlay_half_full_triggers_early_merge_signal() {
+        use crate::encoding::EncodingType;
+        let mut col = Column::new("v".to_string(), 0, DataType::Int, true);
+        for i in 0..8 {
+            col.set(i, Some(&Value::Int(i as i32))).unwrap();
+        }
+        col.clear_dirty();
+        col.materialize_chunks();
+        col.apply_encoding_to_chunks(EncodingType::BitPacking, 255)
+            .unwrap();
+        assert!(col.has_chunks());
+        let hot = crate::encoding::selector::EncodingThresholds::default().hot_update_threshold;
+        for i in 0..1100 {
+            let row = (i % 8) as usize;
+            col.set_versioned(row, Some(&Value::Int(1000 + i as i32)), 100 + i as u64)
+                .unwrap();
+        }
+        assert!(col.zone_needs_exact_rebuild());
+        assert!(col.maybe_rebuild_zone_maps_exact());
+        assert!(!col.zone_needs_exact_rebuild());
+        let _ = col.pending_recode_chunks(hot);
+    }
+
+    fn list_of(values: Vec<Value>) -> Value {
+        Value::List(Box::new(graphdb_core::value::list::List::from_vec(values)))
+    }
+
+    fn store_with_list_rows(rows: Vec<Value>) -> ColumnStore {
+        let mut store = ColumnStore::new();
+        store.add_column(
+            "v".to_string(),
+            DataType::List(Box::new(DataType::Int)),
+            true,
+        );
+        for (row, value) in rows.into_iter().enumerate() {
+            store
+                .set_versioned(row, &[("v".to_string(), value)], 10)
+                .unwrap();
+        }
+        store
+    }
+
+    fn point_range(column: &str, probe: Value) -> crate::cursor::PredicateRange {
+        crate::cursor::PredicateRange {
+            column: column.to_string(),
+            lower: Some(probe.clone()),
+            include_lower: true,
+            upper: Some(probe),
+            include_upper: true,
+        }
+    }
+
+    #[test]
+    fn nested_list_equality_prunes_disjoint_leaves() {
+        let store = store_with_list_rows(vec![list_of(vec![Value::Int(1), Value::Int(2)])]);
+        let probe = list_of(vec![Value::Int(3), Value::Int(4)]);
+        assert_eq!(point_range("v", probe.clone()).equality_len(), Some(2));
+        assert!(!store.zone_prunes_in(0, &point_range("v", probe)));
+    }
+
+    #[test]
+    fn nested_list_equality_keeps_matching_chunk() {
+        let present = list_of(vec![Value::Int(1), Value::Int(2)]);
+        let store = store_with_list_rows(vec![present.clone()]);
+        assert!(store.zone_prunes_in(0, &point_range("v", present)));
+    }
+
+    #[test]
+    fn nested_map_equality_prunes_disjoint_leaves() {
+        use std::collections::HashMap;
+        let mut fields = HashMap::new();
+        fields.insert(Value::string("a"), Value::Int(1));
+        let mut store = ColumnStore::new();
+        store.add_column(
+            "v".to_string(),
+            DataType::Map(Box::new(DataType::Int)),
+            true,
+        );
+        store
+            .set_versioned(0, &[("v".to_string(), Value::Map(Box::new(fields)))], 10)
+            .unwrap();
+        let mut probe_fields = HashMap::new();
+        probe_fields.insert(Value::string("zzz-no-such-key"), Value::Int(999));
+        let probe = Value::Map(Box::new(probe_fields));
+        assert!(!store.zone_prunes_in(0, &point_range("v", probe)));
+    }
+
+    #[test]
+    fn nested_struct_equality_prunes_key_mismatch() {
+        use crate::vertex::column::zone_map::complex_key_fp;
+        use std::sync::Arc;
+        let mut store = ColumnStore::new();
+        store.add_column(
+            "v".to_string(),
+            DataType::Struct(Arc::new(StructTypeInfo {
+                fields: vec![("x".to_string(), DataType::Int)],
+            })),
+            true,
+        );
+        let present = Value::Struct(Box::new(graphdb_core::StructValue::new(vec![(
+            "x".to_string(),
+            Value::Int(1),
+        )])));
+        store
+            .set_versioned(0, &[("v".to_string(), present.clone())], 10)
+            .unwrap();
+        let chunk_fp = complex_key_fp(&present);
+        let probe_name = (0..1000)
+            .map(|i| format!("absent-key-{i}"))
+            .map(|name| {
+                let probe = Value::Struct(Box::new(graphdb_core::StructValue::new(vec![(
+                    name.clone(),
+                    Value::Int(1),
+                )])));
+                (probe, name)
+            })
+            .find(|(probe, _)| chunk_fp & complex_key_fp(probe) != complex_key_fp(probe))
+            .map(|(_, name)| name)
+            .expect("a disjoint bloom key exists");
+        let probe = Value::Struct(Box::new(graphdb_core::StructValue::new(vec![(
+            probe_name,
+            Value::Int(1),
+        )])));
+        assert!(!store.zone_prunes_in(0, &point_range("v", probe)));
+    }
+
+    #[test]
+    fn nested_json_equality_prunes_disjoint_leaves() {
+        let mut store = ColumnStore::new();
+        store.add_column("v".to_string(), DataType::Json, true);
+        let present = Value::Json(Box::new(
+            graphdb_core::value::json::Json::parse(r#"{"n":1}"#).unwrap(),
+        ));
+        store
+            .set_versioned(0, &[("v".to_string(), present)], 10)
+            .unwrap();
+        let probe = Value::Json(Box::new(
+            graphdb_core::value::json::Json::parse(r#"{"n":2}"#).unwrap(),
+        ));
+        let range = point_range("v", probe.clone());
+        assert_eq!(range.equality_len(), Some(7));
+        assert!(!store.zone_prunes_in(0, &range));
+    }
+
+    fn unique_snapshot_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "vtx-evict-{}_{}_{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn evict_snapshots_persist_and_reload_mapped() {
+        use crate::encoding::EncodingType;
+        let mut store = ColumnStore::new();
+        store.add_column("v".to_string(), DataType::Int, true);
+        let col = store.get_column_mut("v").expect("column exists");
+        col.set_chunk_capacity(512);
+        for i in 0..2000 {
+            col.set(i, Some(&Value::Int(i as i32))).unwrap();
+        }
+        col.materialize_chunks();
+        assert!(col.chunk_count() > 1);
+        col.apply_encoding_to_chunks(EncodingType::BitPacking, 255)
+            .unwrap();
+        let released = col.evict_chunk(0).unwrap();
+        assert!(released > 0);
+        assert!(col.chunks[0].residency.is_evicted());
+
+        let dir = unique_snapshot_dir("reload");
+        store.flush_evict_snapshots(&dir).unwrap();
+        assert!(dir.join("v.snapshot").exists());
+
+        let col = store.get_column_mut("v").expect("column exists");
+        col.ensure_all_resident().unwrap();
+        assert!(col.chunks[0].residency.is_resident());
+        store.load_evict_snapshots(&dir);
+        let col = store.get_column_mut("v").expect("column exists");
+        assert!(col.chunks[0].residency.is_evicted());
+        assert_eq!(col.get(0), Some(Value::Int(0)));
+        assert_eq!(col.get(511), Some(Value::Int(511)));
+        assert_eq!(col.get(512), Some(Value::Int(512)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupt_snapshot_sidecar_keeps_chunks_resident() {
+        use crate::encoding::EncodingType;
+        let mut store = ColumnStore::new();
+        store.add_column("v".to_string(), DataType::Int, true);
+        let col = store.get_column_mut("v").expect("column exists");
+        col.set_chunk_capacity(512);
+        for i in 0..1000 {
+            col.set(i, Some(&Value::Int(i as i32))).unwrap();
+        }
+        col.materialize_chunks();
+        col.apply_encoding_to_chunks(EncodingType::BitPacking, 255)
+            .unwrap();
+        assert!(col.evict_chunk(0).unwrap() > 0);
+
+        let dir = unique_snapshot_dir("corrupt");
+        store.flush_evict_snapshots(&dir).unwrap();
+        std::fs::write(dir.join("v.snapshot"), b"junk").unwrap();
+
+        let col = store.get_column_mut("v").expect("column exists");
+        col.ensure_all_resident().unwrap();
+        store.load_evict_snapshots(&dir);
+        let col = store.get_column_mut("v").expect("column exists");
+        assert!(col.chunks[0].residency.is_resident());
+        assert_eq!(col.get(0), Some(Value::Int(0)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1,9 +1,15 @@
-//! Caller-owned primary-key write scope (phase two).
+//! Caller-owned single-request primary-key dedup scope.
 //!
 //! The storage engine applies vertex rows immediately with timestamp ordering
-//! and logical undo. The scope object carries the per-write ownership that the
-//! shard and index layers must never retain: every uncommitted primary key
-//! lives in the caller's buffer, shards only forward it.
+//! and logical undo. The scope object carries the per-request ownership that
+//! the shard and index layers must never retain: every uncommitted primary
+//! key lives in the caller's buffer, shards only forward it.
+//!
+//! Contract: one scope serves exactly one write request at one write
+//! timestamp. It is a duplicate filter for that request, not a transaction
+//! isolation mechanism. Multi-statement atomicity stays with timestamp
+//! ordering plus the outer write-ahead log; reusing a scope across
+//! timestamps or across independent requests is a misuse and is rejected.
 //!
 //! Lifecycle: created at the write entry together with the write timestamp
 //! (single and batch inserts each create one), threaded by mutable borrow
@@ -69,6 +75,21 @@ impl WriteScope {
     /// Write timestamp this scope was created for.
     pub fn write_ts(&self) -> Timestamp {
         self.write_ts
+    }
+
+    /// Reject reuse across write timestamps.
+    ///
+    /// One scope serves one request at one timestamp; callers must create a
+    /// fresh scope per request instead of sharing it across statements.
+    pub fn ensure_same_write_ts(&self, ts: Timestamp) -> StorageResult<()> {
+        if self.write_ts != ts {
+            return Err(StorageError::invalid_operation(format!(
+                "write scope created for ts={} cannot serve ts={}: \
+                 scopes are single-request dedup filters, not transaction write sets",
+                self.write_ts, ts
+            )));
+        }
+        Ok(())
     }
 
     /// Number of staged keys.
@@ -199,5 +220,12 @@ mod tests {
         assert!(scope.contains(2, &IdKey::Int(1)));
         scope.rollback_label(2);
         assert!(scope.is_empty());
+    }
+
+    #[test]
+    fn scope_rejects_cross_timestamp_reuse() {
+        let scope = WriteScope::new(10);
+        assert!(scope.ensure_same_write_ts(10).is_ok());
+        assert!(scope.ensure_same_write_ts(11).is_err());
     }
 }

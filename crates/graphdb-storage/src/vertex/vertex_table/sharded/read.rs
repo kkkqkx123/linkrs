@@ -8,8 +8,9 @@ impl ShardedVertexTable {
     ///
     /// `mask[i] == false` means the row's zone-map chunk provably cannot
     /// contain values matching any of `ranges`, so the id can be skipped
-    /// before decoding. Unknown columns, chunks without bounds, and
-    /// non-scalar types keep the id (conservative).
+    /// before decoding. Unknown columns and chunks without bounds keep the
+    /// id (conservative). Complex equality probes first prune on the
+    /// per-chunk length summary, then fall back to whole-value ordering.
     pub fn zone_prune_mask(
         &self,
         ids: &[u32],
@@ -34,16 +35,7 @@ impl ShardedVertexTable {
                 let (_, local_id) = decode_id(ids[pos], self.num_shards);
                 let chunk = local_id as usize / crate::vertex::column_store::ZONE_MAP_CHUNK_ROWS;
                 for range in ranges {
-                    let Some(bounds) = table.columns.zone_maps_for_column(&range.column) else {
-                        continue;
-                    };
-                    let Some(zb) = bounds.get(chunk) else {
-                        continue;
-                    };
-                    let (Some(min), Some(max)) = (&zb.min, &zb.max) else {
-                        continue;
-                    };
-                    if !range.overlaps(min, max) {
+                    if !table.columns.zone_prunes_in(chunk, range) {
                         mask[pos] = false;
                         break;
                     }
@@ -112,13 +104,32 @@ impl ShardedVertexTable {
             _ => (None, None),
         };
         Some(ColumnStatsSnapshot {
-            row_count: self.id_hole_stats(ts).0 as u64,
+            row_count: self.approximate_id_hole_stats(ts).0 as u64,
             null_count,
             distinct_count,
             hll,
             min_value: min,
             max_value: max,
         })
+    }
+
+    /// Table-level cardinality snapshot for the optimizer.
+    ///
+    /// Wraps [`Self::approximate_id_hole_stats`] in the shared
+    /// [`crate::stats_reader::TableCardinalitySnapshot`] shape so the query
+    /// layer no longer reassembles live versus allocated counts itself.
+    /// Shard-inconsistent like the underlying counts; for sizing and plan
+    /// costing only.
+    pub fn table_cardinality_at(
+        &self,
+        ts: Timestamp,
+    ) -> crate::stats_reader::TableCardinalitySnapshot {
+        let (live, allocated) = self.approximate_id_hole_stats(ts);
+        crate::stats_reader::TableCardinalitySnapshot {
+            live_rows: live as u64,
+            allocated_slots: allocated as u64,
+            shard_count: self.num_shards,
+        }
     }
 
     pub fn get_by_internal_id(&self, global_id: u32, ts: Timestamp) -> Option<VertexRecord> {
@@ -178,8 +189,10 @@ impl ShardedVertexTable {
     /// Shards are read without a global lock, so concurrent inserts and
     /// deletes may be observed inconsistently across shards. Use it for sizing
     /// and statistics, not for exact live accounting. Exact live counts come
-    /// from `id_hole_stats`.
-    pub fn total_count(&self) -> usize {
+    /// from `approximate_id_hole_stats`. The `approximate_` prefix marks the
+    /// cross-shard inconsistency in the name so callers cannot mistake it for
+    /// a strongly consistent count.
+    pub fn approximate_total_count(&self) -> usize {
         let mut total = 0;
         for shard in &self.shards {
             total += shard.read().total_count();
@@ -194,7 +207,12 @@ impl ShardedVertexTable {
     /// unreclaimed vertex slots. Edge CSR row space stays at the allocated
     /// high-water mark until compaction reclaims it, so a large gap is the
     /// trigger signal for automatic background compaction.
-    pub fn id_hole_stats(&self, ts: Timestamp) -> (usize, usize) {
+    ///
+    /// Shards are read without a global lock, so the two numbers may come
+    /// from different instants under concurrent writes. The `approximate_`
+    /// prefix marks this cross-shard inconsistency; use the result for
+    /// sizing and compaction signals, never as a strongly consistent census.
+    pub fn approximate_id_hole_stats(&self, ts: Timestamp) -> (usize, usize) {
         let mut live = 0;
         let mut allocated = 0;
         for shard in &self.shards {
@@ -205,7 +223,15 @@ impl ShardedVertexTable {
         (live, allocated)
     }
 
-    pub fn scan(&self, ts: Timestamp) -> Vec<VertexRecord> {
+    /// Cross-shard scan without a global consistency guarantee.
+    ///
+    /// Each shard is scanned under its own read lock and the per-shard
+    /// results are concatenated in shard order. Concurrent inserts and
+    /// deletes may be observed inconsistently across shards, so the result
+    /// is a shard-inconsistent snapshot suitable for statistics, debugging
+    /// and snapshot-tolerant scans only. The `_shard_inconsistent` suffix
+    /// marks this contract in the name. Point lookups stay shard-consistent.
+    pub fn scan_shard_inconsistent(&self, ts: Timestamp) -> Vec<VertexRecord> {
         use rayon::prelude::*;
         let per_shard: Vec<(usize, Vec<VertexRecord>)> = self
             .shards
@@ -235,12 +261,16 @@ impl ShardedVertexTable {
     /// Snapshot-visible live global internal IDs at `ts`, in shard order.
     ///
     /// Enumeration and point reads share this one visibility predicate.
-    /// There is no unfiltered variant; sizing callers use `total_count` or
-    /// `id_hole_stats` instead.
+    /// There is no unfiltered variant; sizing callers use
+    /// `approximate_total_count` or `approximate_id_hole_stats` instead.
+    ///
+    /// Shards are read without a global lock, so concurrent writes may be
+    /// observed inconsistently across shards. The `_shard_inconsistent`
+    /// suffix marks this contract in the name.
     ///
     /// Mirrors the ordering of the previous `scan_projected` so lazy
     /// paginated scans yield records in a stable order.
-    pub fn live_ids(&self, ts: Timestamp) -> Vec<u32> {
+    pub fn live_ids_shard_inconsistent(&self, ts: Timestamp) -> Vec<u32> {
         let mut ids = Vec::new();
         for (shard_idx, shard) in self.shards.iter().enumerate() {
             let table = shard.read();

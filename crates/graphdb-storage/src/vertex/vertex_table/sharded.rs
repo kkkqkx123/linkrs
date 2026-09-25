@@ -79,11 +79,14 @@ impl ShardedVertexTable {
                 }
             }
 
-            if table.columns.row_count() != id_count {
+            // Stable row ids leave holes: absorbed deletes keep their
+            // column rows and timestamp capacity until free-stack reuse,
+            // so the column store may be wider than the live key count.
+            if table.columns.row_count() < id_count {
                 return Err(graphdb_core::StorageError::new(
                     StorageErrorKind::StorageError,
                     format!(
-                        "Column count ({}) mismatch with id_indexer.len() ({})",
+                        "Column count ({}) below id_indexer.len() ({})",
                         table.columns.row_count(),
                         id_count
                     ),
@@ -98,8 +101,14 @@ impl ShardedVertexTable {
     /// Reads every live row at the maximum timestamp and rebuilds it in a
     /// fresh table with `new_num_shards`. The source stays untouched; the
     /// caller flushes the returned table and checkpoints it as the new
-    /// baseline. Online shard count changes stay rejected by the table
-    /// manifest; this is the only adjustment outlet.
+    /// baseline, then retires the old checkpoint directory. Online shard
+    /// count changes stay rejected by the table manifest; this is the only
+    /// adjustment outlet.
+    ///
+    /// Offline fence: the caller must hold the maintenance barrier with no
+    /// concurrent writes, and no staged schema change may be pending on any
+    /// shard. A pending schema change rejects the rebuild so a half-applied
+    /// schema cannot leak into the new shard layout.
     pub fn reshard_to(&self, new_num_shards: usize) -> graphdb_core::StorageResult<Self> {
         use graphdb_core::types::MAX_TIMESTAMP;
         let target = new_num_shards
@@ -110,6 +119,15 @@ impl ShardedVertexTable {
                 "reshard is a no-op: table already uses {} shards",
                 self.num_shards
             )));
+        }
+        for (idx, shard) in self.shards.iter().enumerate() {
+            if shard.read().has_pending_schema_change() {
+                return Err(graphdb_core::StorageError::invalid_operation(format!(
+                    "reshard refused: shard {} holds a pending schema change; \
+                     finish or abort it before offline redistribution",
+                    idx
+                )));
+            }
         }
         let schema = self.schema();
         let rebuilt = Self::with_config(self.label, self.label_name.clone(), schema, target);
@@ -222,7 +240,7 @@ mod tests {
                 Value::from(format!("s_{}", i))
             );
         }
-        assert_eq!(table.total_count(), n);
+        assert_eq!(table.approximate_total_count(), n);
     }
 
     #[test]
@@ -335,17 +353,17 @@ mod tests {
         });
         h1.join().unwrap();
         h2.join().unwrap();
-        assert_eq!(table.total_count(), 200);
+        assert_eq!(table.approximate_total_count(), 200);
     }
 
     #[test]
-    fn test_scan() {
+    fn test_scan_shard_inconsistent() {
         let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
         let ts = TEST_TS;
         for i in 0..50 {
             insert_with_name(&table, &format!("k{}", i), ts);
         }
-        let results = table.scan(ts);
+        let results = table.scan_shard_inconsistent(ts);
         assert_eq!(results.len(), 50);
     }
 
@@ -356,7 +374,7 @@ mod tests {
         for i in 0..200 {
             insert_with_name(&table, &format!("p_{}", i), ts);
         }
-        let expected = table.scan(ts);
+        let expected = table.scan_shard_inconsistent(ts);
         assert_eq!(expected.len(), 200);
         // Fresh overlay chunks stay resident by design; the sharded pass
         // must still keep quota totals consistent with the full pass and
@@ -364,7 +382,7 @@ mod tests {
         let (full_evicted, full_freed) = table.evict_cold_chunks(u64::MAX);
         let (seg_evicted, seg_freed, _) = table.evict_cold_chunks_with_quota(u64::MAX, 1);
         assert_eq!((seg_evicted, seg_freed), (full_evicted, full_freed));
-        let after = table.scan(ts);
+        let after = table.scan_shard_inconsistent(ts);
         assert_eq!(after.len(), expected.len());
         let mut before_ids: Vec<u32> = expected.iter().map(|r| r.internal_id).collect();
         let mut after_ids: Vec<u32> = after.iter().map(|r| r.internal_id).collect();
@@ -394,8 +412,8 @@ mod tests {
         });
         let _ = table.evict_cold_chunks(u64::MAX);
         handle.join().expect("writer thread failed");
-        assert_eq!(table.total_count(), 150);
-        let results = table.scan(ts);
+        assert_eq!(table.approximate_total_count(), 150);
+        let results = table.scan_shard_inconsistent(ts);
         assert_eq!(results.len(), 150);
     }
 
@@ -432,7 +450,7 @@ mod tests {
         for i in 0..100 {
             insert_with_name(&table, &format!("v_{}", i), ts_insert);
         }
-        let (live, allocated) = table.id_hole_stats(150);
+        let (live, allocated) = table.approximate_id_hole_stats(150);
         assert_eq!((live, allocated), (100, 100));
 
         for i in 0..30 {
@@ -440,10 +458,10 @@ mod tests {
         }
         // Deleted vertices leave holes: allocated stays at the high-water
         // mark, live only counts vertices not deleted at the cutoff.
-        let (live, allocated) = table.id_hole_stats(250);
+        let (live, allocated) = table.approximate_id_hole_stats(250);
         assert_eq!((live, allocated), (70, 100));
         // A cutoff before the deletes sees no holes.
-        let (live, allocated) = table.id_hole_stats(150);
+        let (live, allocated) = table.approximate_id_hole_stats(150);
         assert_eq!((live, allocated), (100, 100));
 
         // Physical removal + compaction re-densifies local IDs and resets
@@ -454,7 +472,7 @@ mod tests {
         assert_eq!(removed.len(), 30);
         assert!(!mapping.is_empty());
 
-        let (live, allocated) = table.id_hole_stats(250);
+        let (live, allocated) = table.approximate_id_hole_stats(250);
         assert_eq!((live, allocated), (70, 70));
     }
 
@@ -510,25 +528,26 @@ mod tests {
     }
 
     #[test]
-    fn test_table_manifest_missing_stays_loadable() {
+    fn test_table_manifest_missing_refuses_open() {
         let dir =
-            std::env::temp_dir().join(format!("sharded_manifest_legacy_{}", std::process::id()));
+            std::env::temp_dir().join(format!("sharded_manifest_missing_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
-        insert_with_name(&table, "v_legacy", TEST_TS);
+        insert_with_name(&table, "v_missing", TEST_TS);
         table
             .flush(&dir, crate::compression::CompressionType::Zstd { level: 0 })
             .unwrap();
-        // True legacy layout: neither the layout manifest nor the commit
-        // manifest exists. A present commit manifest pins its file set, so
-        // removing only the layout manifest is an incomplete commit and
-        // must refuse instead.
+        // Missing manifests refuse: global IDs embed the shard layout and
+        // the commit manifest pins the file set.
         std::fs::remove_file(dir.join("table_manifest.json")).unwrap();
         std::fs::remove_file(dir.join("commit_manifest.json")).unwrap();
 
         let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
-        reloaded.load(&dir).unwrap();
-        assert!(reloaded.get_internal_id("v_legacy", TEST_TS).is_some());
+        let err = reloaded.load(&dir).unwrap_err().to_string();
+        assert!(
+            err.contains("manifest"),
+            "missing manifest must refuse: {err}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -568,7 +587,7 @@ mod tests {
     #[test]
     fn test_stable_collect_moves_no_live_rows_above_watermark() {
         // 10 rows, 4 deletes: hole rate 0.4 exceeds the watermark, so the
-        // legacy path would re-densify. The stable path absorbs holes
+        // offline remap path would re-densify. The stable path absorbs holes
         // through the free stack and returns an empty mapping (zero edge
         // rewrites) with survivors pinned to their ids.
         let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
@@ -632,14 +651,13 @@ mod tests {
                 "reused holes must not shift survivors"
             );
         }
-        assert_eq!(table.id_hole_stats(ts_reinsert).0, 5);
+        assert_eq!(table.approximate_id_hole_stats(ts_reinsert).0, 5);
     }
 
     #[test]
-    fn test_legacy_and_stable_agree_on_removed_set_above_watermark() {
+    fn test_offline_and_stable_agree_on_removed_set_above_watermark() {
         let build = || {
-            let table =
-                ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+            let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
             for i in 0..10 {
                 insert_with_name(&table, &format!("row_{}", i), 100);
             }
@@ -648,34 +666,65 @@ mod tests {
             }
             table
         };
-        let legacy = build();
-        let (legacy_removed, legacy_mapping, _) =
-            legacy.compact_with_cutoff_collect_mapping(200).unwrap();
+        let offline = build();
+        let (offline_removed, offline_mapping, _) =
+            offline.compact_with_cutoff_collect_mapping(200).unwrap();
         let stable = build();
         let (stable_removed, stable_mapping, _) =
             stable.compact_with_cutoff_stable_collect(200).unwrap();
-        let mut legacy_sorted = legacy_removed
+        let mut offline_sorted = offline_removed
             .iter()
             .map(|k| k.to_string())
             .collect::<Vec<_>>();
-        legacy_sorted.sort();
+        offline_sorted.sort();
         let mut stable_sorted = stable_removed
             .iter()
             .map(|k| k.to_string())
             .collect::<Vec<_>>();
         stable_sorted.sort();
-        assert_eq!(legacy_sorted, stable_sorted);
-        assert!(!legacy_mapping.is_empty());
+        assert_eq!(offline_sorted, stable_sorted);
+        assert!(!offline_mapping.is_empty());
         assert!(stable_mapping.is_empty());
         for i in 4..10 {
             let name = format!("row_{}", i);
-            let legacy_id = legacy.get_internal_id(&name, 200).expect("legacy survivor");
+            let offline_id = offline
+                .get_internal_id(&name, 200)
+                .expect("offline survivor");
             let stable_before = build().get_internal_id(&name, 200).expect("pre compact id");
             let stable_id = stable.get_internal_id(&name, 200).expect("stable survivor");
             assert_eq!(stable_id, stable_before);
             assert!(stable.get_by_internal_id(stable_id, 200).is_some());
-            assert!(legacy.get_by_internal_id(legacy_id, 200).is_some());
+            assert!(offline.get_by_internal_id(offline_id, 200).is_some());
         }
+    }
+
+    #[test]
+    fn test_gc_detailed_keeps_row_ids_stable() {
+        // Background GC must absorb deletes without moving survivors: no
+        // edge cascade is involved on this path by design.
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+        let ts_insert = 100;
+        let ts_delete = 200;
+        let mut before = std::collections::HashMap::new();
+        for i in 0..5 {
+            let name = format!("gc_{}", i);
+            let id = insert_with_name(&table, &name, ts_insert);
+            before.insert(name, id);
+        }
+        table.delete("gc_1", ts_delete).unwrap();
+        table.delete("gc_3", ts_delete).unwrap();
+        let (reclaimed, _) = table.gc_detailed(ts_delete).unwrap();
+        assert_eq!(reclaimed, 2);
+        for i in [0, 2, 4] {
+            let name = format!("gc_{}", i);
+            assert_eq!(
+                table.get_internal_id(&name, ts_delete),
+                before.get(&name).copied(),
+                "background GC must not move survivors"
+            );
+        }
+        assert_eq!(table.get_internal_id("gc_1", ts_delete), None);
+        table.verify_invariants().unwrap();
     }
 
     #[test]
@@ -707,7 +756,7 @@ mod tests {
             }
         }
         assert_eq!(oks, 1, "same-key concurrent inserts allocate exactly once");
-        assert_eq!(table.total_count(), 1);
+        assert_eq!(table.approximate_total_count(), 1);
     }
 
     #[test]
@@ -783,13 +832,12 @@ mod tests {
                 break;
             }
         }
-        // ...while the legacy path (no commit manifest) discards the delta
-        // and keeps the baseline.
+        // ...and the repair entry enforces the same strict semantics.
         let _ = std::fs::remove_file(incr.join(COMMIT_MANIFEST_FILE_NAME));
-        let legacy = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
-        legacy.load(&base).unwrap();
-        legacy.apply_delta_pages(&incr).unwrap();
-        assert!(legacy.get_internal_id("base_1", ts).is_some());
+        let reloaded_missing =
+            ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+        reloaded_missing.load(&base).unwrap();
+        assert!(reloaded_missing.apply_delta_pages(&incr).is_err());
 
         let _ = std::fs::remove_dir_all(&base);
         let _ = std::fs::remove_dir_all(&incr);
@@ -818,7 +866,7 @@ mod tests {
         for name in &names {
             assert!(table.get_internal_id(name, ts).is_some());
         }
-        assert_eq!(table.total_count(), 100);
+        assert_eq!(table.approximate_total_count(), 100);
     }
 
     #[test]
@@ -846,7 +894,7 @@ mod tests {
         }
         let rebuilt = table.reshard_to(8).expect("reshard succeeds");
         assert_eq!(rebuilt.num_shards(), 8);
-        assert_eq!(rebuilt.total_count(), 20);
+        assert_eq!(rebuilt.approximate_total_count(), 20);
         for i in 0..20 {
             let name = format!("r_{}", i);
             let old_id = table.get_internal_id(&name, ts).expect("old row");
@@ -856,5 +904,47 @@ mod tests {
             assert_eq!(old_record.properties, new_record.properties);
         }
         assert!(table.reshard_to(2).is_err());
+    }
+
+    #[test]
+    fn test_table_cardinality_matches_hole_stats() {
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+        for i in 0..10 {
+            insert_with_name(&table, &format!("card_{}", i), 100);
+        }
+        for i in 0..3 {
+            table.delete(&format!("card_{}", i), 200).unwrap();
+        }
+        let snapshot = table.table_cardinality_at(250);
+        assert_eq!((snapshot.live_rows, snapshot.allocated_slots), (7, 10));
+        assert_eq!(snapshot.shard_count, 4);
+        assert_eq!(snapshot.hole_count(), 3);
+        assert!((snapshot.hole_rate() - 0.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_reshard_refuses_pending_schema_change() {
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        insert_with_name(&table, "r_0", TEST_TS);
+        table
+            .prepare_add_property_staged(StoragePropertyDef {
+                name: "nick".to_string(),
+                data_type: DataType::String,
+                nullable: true,
+                default_value: None,
+            })
+            .unwrap();
+        let err = match table.reshard_to(4) {
+            Ok(_) => panic!("reshard must refuse with pending schema change"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("pending schema change"),
+            "fence must name the pending schema change: {err}"
+        );
+        table.abort_pending_schema_change();
+        let rebuilt = table.reshard_to(4).expect("reshard succeeds after abort");
+        assert_eq!(rebuilt.num_shards(), 4);
+        assert!(rebuilt.get_internal_id("r_0", TEST_TS).is_some());
     }
 }

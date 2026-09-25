@@ -121,6 +121,23 @@ impl ColumnStorage for VariableWidthColumn {
     }
 
     fn set(&mut self, row_idx: usize, value: Option<&Value>) -> StorageResult<()> {
+        if let DataType::FixedString(limit) = &self.data_type {
+            if let Some(v) = value {
+                let len = match v {
+                    Value::FixedString(s) => Some(s.len()),
+                    Value::String(s) => Some(s.len()),
+                    _ => None,
+                };
+                if let Some(len) = len {
+                    if len > *limit {
+                        return Err(StorageError::invalid_input(format!(
+                            "FixedString({}) cannot hold {} bytes",
+                            limit, len
+                        )));
+                    }
+                }
+            }
+        }
         let was_null = self
             .null_bitmap
             .as_ref()

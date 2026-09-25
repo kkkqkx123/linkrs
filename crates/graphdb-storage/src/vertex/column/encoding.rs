@@ -254,7 +254,13 @@ impl Column {
 
     /// Rebuild zone maps and per-chunk encoding profiles in one pass.
     pub fn rebuild_chunk_profiles(&mut self) {
-        self.rebuild_zone_maps();
+        if self.maybe_rebuild_zone_maps_exact() {
+            // Exact rebuild already refreshed zone maps and summaries from
+            // current plus version chains; fall through to refresh chunk
+            // encoding profiles below.
+        } else {
+            self.rebuild_zone_maps();
+        }
         if self.chunks.is_empty() {
             return;
         }

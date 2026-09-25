@@ -224,6 +224,67 @@ impl ColumnStore {
             .map(|&index| self.columns[index].zone_maps())
     }
 
+    /// Per-chunk length summaries of one column, for complex equality
+    /// pre-pruning. `None` when the column does not exist.
+    pub fn zone_complex_for_column(
+        &self,
+        name: &str,
+    ) -> Option<&[super::zone_map::ComplexZoneSummary]> {
+        self.name_to_index
+            .get(name)
+            .map(|&index| self.columns[index].zone_complex())
+    }
+
+    /// Whether the zone chunk covering `chunk` may contain rows matching
+    /// `range`. Returns true unless the chunk provably lies outside.
+    ///
+    /// Equality probes on length-carrying values first check the per-chunk
+    /// length summary; a probe length outside the recorded interval skips
+    /// the chunk without decoding. Nested equality probes then check the
+    /// scalar-leaf interval and the key bloom: disjoint leaf ranges or
+    /// probe key bits outside the chunk fingerprint skip the chunk even
+    /// when outer lengths coincide. All probes then fall back to
+    /// whole-value min/max ordering, preserving the conservative contract.
+    pub fn zone_prunes_in(&self, chunk: usize, range: &crate::cursor::PredicateRange) -> bool {
+        if let Some(probe_len) = range.equality_len() {
+            if let Some(summary) = self
+                .zone_complex_for_column(&range.column)
+                .and_then(|s| s.get(chunk))
+            {
+                if let (Some(lo), Some(hi)) = (summary.len_min, summary.len_max) {
+                    if probe_len < lo || probe_len > hi {
+                        return false;
+                    }
+                }
+                if let Some((probe_lo, probe_hi)) = range.equality_leaf_range() {
+                    if let (Some(lo), Some(hi)) = (&summary.leaf_min, &summary.leaf_max) {
+                        use super::zone_map::compare_values;
+                        if compare_values(&probe_hi, lo) == std::cmp::Ordering::Less
+                            || compare_values(&probe_lo, hi) == std::cmp::Ordering::Greater
+                        {
+                            return false;
+                        }
+                    }
+                }
+                if let Some(probe_fp) = range.equality_key_fp() {
+                    if summary.key_fp & probe_fp != probe_fp {
+                        return false;
+                    }
+                }
+            }
+        }
+        let Some(bounds) = self.zone_maps_for_column(&range.column) else {
+            return true;
+        };
+        let Some(zb) = bounds.get(chunk) else {
+            return true;
+        };
+        let (Some(min), Some(max)) = (&zb.min, &zb.max) else {
+            return true;
+        };
+        range.overlaps(min, max)
+    }
+
     /// Global min/max bounds of one column, merged across all chunks with the
     /// same numeric comparison semantics used by pushed-predicate evaluation.
     /// `None` when the column is absent or has no recorded bounds.
@@ -467,6 +528,19 @@ impl ColumnStore {
         removed
     }
 
+    /// Exact zone rebuild for columns past the stale-write threshold.
+    /// Called from watermark-coordinated maintenance after version chains
+    /// fold, so long update histories regain pruning precision.
+    pub fn maybe_rebuild_zones_exact(&mut self) -> usize {
+        let mut rebuilt = 0;
+        for col in &mut self.columns {
+            if col.maybe_rebuild_zone_maps_exact() {
+                rebuilt += 1;
+            }
+        }
+        rebuilt
+    }
+
     /// Copy the MVCC row state (creation timestamp + before-image chain) of
     /// every column from another store's row, used by table compaction to
     /// preserve version history when rows move into a rebuilt store.
@@ -551,10 +625,6 @@ impl ColumnStore {
         &self.columns
     }
 
-    pub(crate) fn columns_mut(&mut self) -> &mut [Column] {
-        &mut self.columns
-    }
-
     /// Collect all dirty pages across columns.
     pub fn collect_dirty_pages(&self) -> Vec<crate::persistence::dirty_page::PageId> {
         let mut pages = Vec::new();
@@ -605,6 +675,114 @@ impl ColumnStore {
         (count, freed)
     }
 
+    /// Persist every evicted chunk into a `{column}.snapshot` checkpoint
+    /// sidecar, reusing the already compressed pages without promoting the
+    /// live chunks. Columns without evicted chunks drop their sidecar;
+    /// sidecars of dropped columns are swept. Failures of the structural
+    /// encoding fail the flush; a single unreadable snapshot only warns
+    /// and stays resident on reload.
+    pub fn flush_evict_snapshots(&self, dir: &std::path::Path) -> StorageResult<()> {
+        use super::chunk_residency::{encode_snapshot_sidecar, ChunkResidency, SnapshotChunkPlan};
+
+        let mut live = std::collections::HashSet::new();
+        for col in &self.columns {
+            let file_name = format!("{}.snapshot", col.name);
+            live.insert(file_name.clone());
+            let mut plans = Vec::new();
+            for chunk in col.chunks.iter() {
+                let ChunkResidency::Evicted(snapshot) = &chunk.residency else {
+                    continue;
+                };
+                let Ok(row_offset) = u32::try_from(chunk.row_offset) else {
+                    log::warn!(
+                        "snapshot sidecar skips chunk at row {} of column {}: offset exceeds u32",
+                        chunk.row_offset,
+                        col.name,
+                    );
+                    continue;
+                };
+                let Ok(rows) = u32::try_from(chunk.row_count) else {
+                    log::warn!(
+                        "snapshot sidecar skips chunk of column {}: row count exceeds u32",
+                        col.name,
+                    );
+                    continue;
+                };
+                let pages = match snapshot.compressed_pages() {
+                    Ok(pages) => pages,
+                    Err(e) => {
+                        log::warn!(
+                            "snapshot sidecar skips evicted chunk of column {}: {}",
+                            col.name,
+                            e
+                        );
+                        continue;
+                    }
+                };
+                plans.push(SnapshotChunkPlan {
+                    row_offset,
+                    rows,
+                    encoding: snapshot.encoding,
+                    meta: &snapshot.meta,
+                    uncompressed_bytes: snapshot.uncompressed_bytes as u64,
+                    pages,
+                });
+            }
+            if plans.is_empty() {
+                let stale = dir.join(&file_name);
+                if stale.exists() {
+                    if let Err(e) = std::fs::remove_file(&stale) {
+                        log::warn!(
+                            "cannot remove stale snapshot sidecar {}: {}",
+                            stale.display(),
+                            e
+                        );
+                    }
+                }
+                continue;
+            }
+            let bytes = encode_snapshot_sidecar(&plans)?;
+            crate::compression::write_shadow_file(dir.join(&file_name), &bytes)?;
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.ends_with(".snapshot") && !live.contains(&name) {
+                    log::debug!("removing orphan snapshot sidecar {}", name);
+                    if let Err(e) = std::fs::remove_file(entry.path()) {
+                        log::warn!("cannot remove orphan snapshot sidecar {}: {}", name, e);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Re-evict chunks persisted by [`Self::flush_evict_snapshots`] from
+    /// memory-mapped sidecars. A missing or corrupt sidecar only warns and
+    /// keeps the affected chunks resident; the open never fails over a
+    /// derived cache.
+    pub fn load_evict_snapshots(&mut self, dir: &std::path::Path) {
+        use super::chunk_residency::open_snapshot_sidecar;
+
+        for col in &mut self.columns {
+            let path = dir.join(format!("{}.snapshot", col.name));
+            if !path.exists() {
+                continue;
+            }
+            let mapped = match open_snapshot_sidecar(&path) {
+                Ok(mapped) => mapped,
+                Err(e) => {
+                    log::warn!("ignoring corrupt snapshot sidecar for {}: {}", col.name, e);
+                    continue;
+                }
+            };
+            for record in mapped.chunks {
+                col.restore_mapped_chunk(record, &mapped.map);
+            }
+        }
+    }
+
     /// Quota-segmented eviction across columns for background tasks.
     /// `task_quota` caps one segment; over-quota work proceeds in segments.
     /// Returns `(chunks_evicted, bytes_released, segments)`.
@@ -627,17 +805,6 @@ impl ColumnStore {
             segments += segs;
         }
         (count, freed, segments)
-    }
-
-    /// Promote every evicted chunk back to resident. Used by background
-    /// compaction and GC scans with a memory budget; over-budget scans
-    /// proceed in segments.
-    pub fn ensure_all_resident(&mut self) -> StorageResult<usize> {
-        let mut loaded = 0usize;
-        for col in &mut self.columns {
-            loaded += col.ensure_all_resident()?;
-        }
-        Ok(loaded)
     }
 
     /// Resident decoded bytes across columns.
@@ -692,50 +859,7 @@ impl ColumnStore {
             .get_column_mut(col_name)
             .ok_or_else(|| StorageError::column_not_found(col_name.to_string()))?;
 
-        if col.is_empty() {
-            return Ok(());
-        }
-
-        // Chunk-level path: each resident chunk selects and stores its own
-        // encoding so point updates only decode the affected chunk.
-        if col.has_chunks() {
-            return col.apply_encoding_to_chunks(encoding_type, fsst_max_symbols);
-        }
-
-        match encoding_type {
-            EncodingType::Fsst => {
-                if col.data_type != DataType::String
-                    && col.data_type != DataType::Json
-                    && !matches!(col.data_type, DataType::FixedString(_))
-                {
-                    return Err(StorageError::not_supported(format!(
-                        "FSST encoding does not support type {:?}",
-                        col.data_type
-                    )));
-                }
-                col.apply_fsst_encoding(fsst_max_symbols)?;
-            }
-            EncodingType::Dictionary => {
-                col.apply_dictionary_encoding()?;
-            }
-            EncodingType::Rle => {
-                col.apply_rle_encoding()?;
-            }
-            EncodingType::BitPacking => {
-                col.apply_bitpacking_encoding()?;
-            }
-            EncodingType::Alp => {
-                col.apply_alp_encoding()?;
-            }
-            EncodingType::Constant => {
-                col.apply_constant_encoding()?;
-            }
-            EncodingType::None => {}
-        }
-        // Encodings are built from placeholder base values; overflow rows
-        // keep snapshot from the side store, so mappings are preserved.
-
-        Ok(())
+        col.apply_selected_encoding(encoding_type, fsst_max_symbols)
     }
 
     pub fn memory_size(&self) -> usize {

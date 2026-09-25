@@ -40,7 +40,9 @@ pub use chunk::ColumnChunk;
 pub use column::{Column, ColumnStorage, EVICTION_SEGMENT_BYTES, MAX_BACKGROUND_LOAD_CHUNKS};
 pub use column_store::ColumnStore;
 pub use fixed_width::element_size;
-pub use zone_map::{compare_values, ZONE_MAP_CHUNK_ROWS};
+pub use zone_map::{
+    compare_values, complex_key_fp, complex_leaf_range, complex_len, ZONE_MAP_CHUNK_ROWS,
+};
 
 use graphdb_core::DataType;
 

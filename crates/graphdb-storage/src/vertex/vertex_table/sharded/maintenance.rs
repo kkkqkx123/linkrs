@@ -11,8 +11,8 @@ pub(super) const SHARD_FRAGMENTATION_THRESHOLD: f64 = 0.25;
 /// Long-term hole-rate watermark for stable row ids. Aliases the selective
 /// compaction threshold so the watermark policy has one named anchor: below
 /// it shards fold version chains only and live rows never move; above it the
-/// legacy path re-densifies while the stable path still moves nothing and
-/// absorbs holes through the free stack. Shard-count manifests stay the
+/// offline remap path re-densifies while the stable path still moves nothing
+/// and absorbs holes through the free stack. Shard-count manifests stay the
 /// identifier-decoding anchor.
 pub const STABLE_ROW_ID_HOLE_WATERMARK: f64 = SHARD_FRAGMENTATION_THRESHOLD;
 
@@ -27,9 +27,10 @@ pub fn hole_rate(live: usize, allocated: usize) -> f64 {
 
 impl ShardedVertexTable {
     /// GC split into (reclaimed vertices, reclaimed version-chain entries).
-    /// A nonzero vertex count means some shard re-densified internal IDs:
-    /// caches keyed by internal ID must be invalidated for this label.
-    /// The cutoff must be the global watermark safe timestamp.
+    /// Stable row-id semantic: reclaimed vertices only lose their keys to
+    /// the free stack, live rows never move, so no cache invalidation is
+    /// required for this label. The cutoff must be the global watermark
+    /// safe timestamp.
     pub fn gc_detailed(&self, min_ts: Timestamp) -> StorageResult<(usize, usize)> {
         let mut reclaimed_vertices = 0;
         let mut version_entries = 0;
@@ -73,10 +74,13 @@ impl ShardedVertexTable {
     }
 
     /// Compact vertices deleted at or before `ts` across all shards.
-    /// Watermark-gated vertex compaction across shards.
-    ///
-    /// The cutoff must be the watermark safe timestamp, never a bare
-    /// transaction stamp.
+    /// Offline remap tool: re-densifies above-watermark shards and returns
+    /// the old-to-new *global* internal ID mapping for edge endpoint
+    /// propagation under the maintenance commit barrier, followed by a
+    /// checkpoint. Production compaction uses
+    /// [`Self::compact_with_cutoff_stable_collect`] instead and never moves
+    /// live rows. The cutoff must be the watermark safe timestamp, never a
+    /// bare transaction stamp.
     ///
     /// Returns the removed external keys, the old-to-new *global* internal
     /// ID mapping (shard-local rows translated into encoded global IDs),

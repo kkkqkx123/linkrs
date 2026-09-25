@@ -237,7 +237,7 @@ mod tests {
                     let label = worker_id as u32;
                     catalog
                         .with_vertex_table_mut(label, |table| {
-                            let _ = table.total_count();
+                            let _ = table.approximate_total_count();
                             Ok(())
                         })
                         .expect("data operation should complete");

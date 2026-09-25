@@ -38,6 +38,7 @@ impl GraphStorageContext {
             if let Err(e) = persistent.spiller.cleanup_stale_files() {
                 log::warn!("Failed to clean up stale spill files: {}", e);
             }
+            crate::vertex::column::chunk_residency::cleanup_stale_spill_dirs();
             let ctx = Self {
                 persistent,
                 runtime: GraphStorageRuntime::new(),

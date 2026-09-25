@@ -36,14 +36,12 @@ use std::collections::HashMap;
 
 /// Stable row-id mode switch for the long-term compaction policy.
 ///
-/// `false` keeps the current watermark-gated remap cascade (above-watermark
-/// shards re-densify and propagate old-to-new mappings to edge endpoints).
-/// Flipping to `true` activates the terminal semantics (live rows never move;
-/// deletes are absorbed by the free stack; compaction produces zero edge
-/// rewrites) after a full atomic checkpoint rollback baseline is taken.
-/// Stage one keeps this `false` while the zero-rewrite assertion and stable
-/// collection path are validated; retirement deletes the remap cascade.
-pub const STABLE_ROW_IDS_ENABLED: bool = false;
+/// `true` makes stable row ids the production semantic (live rows never
+/// move; deletes are absorbed by the free stack; production compaction
+/// produces zero edge rewrites). The remap cascade below stays available
+/// as an explicit offline tool only: it must run under the maintenance
+/// commit barrier followed by a checkpoint, never inside background GC.
+pub const STABLE_ROW_IDS_ENABLED: bool = true;
 
 /// Unified compaction coordinator for VertexTable
 ///
@@ -55,7 +53,8 @@ pub const STABLE_ROW_IDS_ENABLED: bool = false;
 /// ```ignore
 /// let mut table = VertexTable::with_config(...);
 /// // ... insert/delete vertices ...
-/// table.compact_coordinated()?;  // Uses CompactionCoordinator internally
+/// // Cutoff-gated offline remap (watermark safe timestamp only).
+/// let (_, mapping, _) = table.compact_with_cutoff_collect_mapping(cutoff)?;
 /// ```
 ///
 /// # Invariants Enforced

@@ -42,9 +42,13 @@ pub fn create_space(storage: &mut GraphStorage, name: &str) -> u64 {
     storage.get_space_id(name).unwrap()
 }
 
-/// Create a Person tag with name and age properties.
+/// Create a Person tag. The leading `id` column is the primary key and
+/// materializes the external vertex id; `name` and `age` are ordinary
+/// properties. Vertices built by [`create_person_vertex`] omit `id`, so the
+/// storage layer fills it from the vertex id mirror.
 pub fn create_person_tag(storage: &mut GraphStorage, space: &str) -> u32 {
     let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+        PropertyDef::new("id".to_string(), DataType::BigInt),
         PropertyDef::new("name".to_string(), DataType::String),
         PropertyDef::new("age".to_string(), DataType::BigInt),
     ]);
@@ -53,10 +57,12 @@ pub fn create_person_tag(storage: &mut GraphStorage, space: &str) -> u32 {
         .expect("Failed to create Person tag")
 }
 
-/// Create an Employee tag with company and salary properties.
+/// Create an Employee tag. The leading `id` column is the primary key
+/// mirroring the vertex id; `company` and `salary` are ordinary properties.
 #[allow(dead_code)]
 pub fn create_employee_tag(storage: &mut GraphStorage, space: &str) -> u32 {
     let tag = graphdb_core::types::TagInfo::new("Employee".to_string()).with_properties(vec![
+        PropertyDef::new("id".to_string(), DataType::BigInt),
         PropertyDef::new("company".to_string(), DataType::String),
         PropertyDef::new("salary".to_string(), DataType::BigInt),
     ]);

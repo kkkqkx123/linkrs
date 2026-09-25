@@ -56,6 +56,17 @@ impl VertexTimestamp {
         false
     }
 
+    /// Invalidate one slot after its key left the index through stable
+    /// collection. The slot stops appearing in deletion scans and stays
+    /// reusable: the next insert on the recycled id overwrites both stamps.
+    pub fn invalidate_slot(&mut self, index: u32) {
+        let idx = index as usize;
+        if idx < self.start_ts.len() {
+            self.start_ts[idx] = INVALID_TIMESTAMP;
+            self.end_ts[idx] = MAX_TIMESTAMP;
+        }
+    }
+
     pub fn is_valid(&self, index: u32, ts: Timestamp) -> bool {
         let idx = index as usize;
         if idx >= self.start_ts.len() {
@@ -101,38 +112,6 @@ impl VertexTimestamp {
     pub fn clear(&mut self) {
         self.start_ts.clear();
         self.end_ts.clear();
-    }
-
-    /// Compact and return the ID remapping (old_id → new_id).
-    ///
-    /// Cutoff-gated entry point: only rows invisible below `cutoff` are
-    /// removed, so the caller must pass the watermark-derived cutoff.
-    /// Table-local pin state alone cannot prove that no snapshot observes
-    /// a deleted row (a statement at an older snapshot may touch the table
-    /// after this pass), hence there is deliberately no uncutoffed form.
-    pub fn compact_with_cutoff(
-        &mut self,
-        cutoff: Timestamp,
-    ) -> std::collections::HashMap<u32, u32> {
-        let mut mapping = std::collections::HashMap::new();
-        let mut write_idx = 0;
-
-        for read_idx in 0..self.start_ts.len() {
-            let keep = self.end_ts[read_idx] == MAX_TIMESTAMP || self.end_ts[read_idx] > cutoff;
-            if keep {
-                // This entry is still observable, keep it
-                if write_idx != read_idx {
-                    self.start_ts[write_idx] = self.start_ts[read_idx];
-                    self.end_ts[write_idx] = self.end_ts[read_idx];
-                    mapping.insert(read_idx as u32, write_idx as u32);
-                }
-                write_idx += 1;
-            }
-        }
-
-        self.start_ts.truncate(write_idx);
-        self.end_ts.truncate(write_idx);
-        mapping
     }
 
     pub fn dump(&self) -> Vec<Timestamp> {
@@ -293,27 +272,27 @@ mod tests {
         assert!(!vts.is_valid(0, 250));
     }
 
-    /// Test: Verify version compaction removes deleted vertices
+    /// Test: invalidated slots leave deletion scans and free the id for reuse.
     #[test]
-    fn test_compaction_removes_deleted_versions() {
+    fn test_invalidate_slot_drops_from_deleted_scan() {
         let mut vts = VertexTimestamp::new();
 
         vts.insert(0, 100);
         vts.insert(1, 101);
-        vts.insert(2, 102);
-        vts.remove(0, 200); // v0 deleted
-                            // v1 remains active
-        vts.remove(2, 200); // v2 deleted
+        vts.remove(0, 200);
+        vts.remove(1, 200);
 
-        let initial_count = vts.start_ts.len();
-        assert_eq!(initial_count, 3);
+        assert_eq!(vts.iter_deleted(200).count(), 2);
+        vts.invalidate_slot(0);
+        assert!(!vts.is_valid(0, 150));
 
-        // Compact (remove inactive versions)
-        vts.compact_with_cutoff(MAX_TIMESTAMP);
+        let remaining: Vec<u32> = vts.iter_deleted(200).collect();
+        assert_eq!(remaining, vec![1]);
 
-        // After compaction, only active vertex (1) should remain, moved to index 0
-        assert_eq!(vts.start_ts.len(), 1);
-        assert!(vts.is_valid(0, 150));
+        // The slot is reusable: a recycled id overwrites both stamps.
+        vts.insert(0, 300);
+        assert!(vts.is_valid(0, 300));
+        assert!(!vts.is_valid(0, 250));
     }
 
     /// Test: Verify multiple insertions and deletions
@@ -391,9 +370,9 @@ mod tests {
         assert!(!deleted_at_300.contains(&1));
     }
 
-    /// Test: cutoff-gated compaction keeps rows a live snapshot may see.
+    /// Test: cutoff-gated deletion scans keep rows a live snapshot may see.
     #[test]
-    fn test_compact_with_cutoff_keeps_visible_rows() {
+    fn test_deleted_scan_keeps_visible_rows() {
         let mut vts = VertexTimestamp::new();
 
         vts.insert(0, 100);
@@ -402,20 +381,16 @@ mod tests {
         vts.remove(0, 200);
         vts.remove(2, 300);
 
-        // Cutoff 150: neither deletion is invisible yet, nothing moves.
-        let mapping = vts.compact_with_cutoff(150);
-        assert!(mapping.is_empty());
-        assert_eq!(vts.start_ts.len(), 3);
+        // Cutoff 150: neither deletion is eligible yet.
+        assert!(vts.iter_deleted(150).next().is_none());
         // Row 0 is still observable at 150 (deleted at 200).
         assert!(vts.is_valid(0, 150));
 
         // Cutoff 200: row 0 (end 200) is reclaimable, row 2 (end 300)
         // must survive for snapshots in [102, 300).
-        let mapping = vts.compact_with_cutoff(200);
-        assert_eq!(vts.start_ts.len(), 2);
-        // Old row 2 moved to index 1 and stays observable at 250.
-        assert_eq!(mapping.get(&2), Some(&1));
-        assert!(vts.is_valid(1, 250));
-        assert!(!vts.is_valid(1, 300));
+        let deleted: Vec<u32> = vts.iter_deleted(200).collect();
+        assert_eq!(deleted, vec![0]);
+        assert!(vts.is_valid(2, 250));
+        assert!(!vts.is_valid(2, 300));
     }
 }

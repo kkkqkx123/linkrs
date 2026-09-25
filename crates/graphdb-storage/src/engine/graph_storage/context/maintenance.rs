@@ -8,9 +8,9 @@ use super::GraphStorageContext;
 
 /// Stable row-id mode for the long-term compaction policy. Mirrors
 /// [`crate::vertex::vertex_table::compaction::STABLE_ROW_IDS_ENABLED`]:
-/// when `true`, every compaction must produce zero edge endpoint rewrites.
-/// Stage one keeps this `false` while the stable collection path is
-/// validated; the zero-rewrite assertion below fails closed when enabled.
+/// when `true`, every production compaction must produce zero edge
+/// endpoint rewrites; the legacy remap entry stays available as an
+/// explicit offline tool only.
 pub const STABLE_ROW_IDS_ENABLED: bool =
     crate::vertex::vertex_table::compaction::STABLE_ROW_IDS_ENABLED;
 
@@ -34,13 +34,13 @@ pub fn assert_zero_edge_rewrite(
 }
 
 impl GraphStorageContext {
-    /// Compact deleted vertices and propagate old-to-new internal ID
-    /// mappings into edge tables.
+    /// Offline vertex remap with old-to-new internal ID propagation into
+    /// edge tables.
     ///
-    /// Shared by manual compaction transactions and the background
-    /// maintenance thread (auto-compaction). The cutoff must be the
-    /// watermark safe timestamp; bare transaction stamps are rejected by
-    /// convention and must never be passed here.
+    /// Explicit offline tool only: production and background maintenance go
+    /// through the stable path. The cutoff must be the watermark safe
+    /// timestamp; bare transaction stamps are rejected by convention and
+    /// must never be passed here.
     ///
     /// Returns the number of removed vertices. Compaction runs under a
     /// commit barrier holding the auto-commit write gate: same-table writes
@@ -109,9 +109,8 @@ impl GraphStorageContext {
         // vertex records for remapped labels are keyed by stale IDs.
         // Bump their invalidation generations (O(1) per label) so newer
         // readers fall back to the remapped tables. The zero-rewrite gate
-        // also runs here; while the stable switch stays off it passes
-        // through, documenting the future fail-closed behavior.
-        let _ = assert_zero_edge_rewrite(&vertex_mappings);
+        // fails closed under stable row ids.
+        assert_zero_edge_rewrite(&vertex_mappings)?;
         for &label_id in vertex_mappings.keys() {
             self.persistent
                 .cache_manager
@@ -235,9 +234,6 @@ impl GraphStorageContext {
 
         for &label_id in &vertex_labels {
             self.mark_vertex_modified(label_id);
-        }
-        for &label_id in &vertex_labels {
-            let _ = label_id;
         }
         let empty: HashMap<LabelId, HashMap<u32, u32>> = HashMap::new();
         assert_zero_edge_rewrite(&empty)?;
@@ -426,11 +422,11 @@ mod stable_assertion_tests {
 
     #[test]
     fn zero_rewrite_assertion_is_dormant_until_switch() {
-        // Stage one keeps the switch off, so legacy above-watermark remaps
-        // still pass the gate. Flipping the switch fails closed instead.
-        assert!(!STABLE_ROW_IDS_ENABLED);
+        // Stable row ids are enabled, so any above-watermark remap fails
+        // the gate instead of passing through.
+        assert!(STABLE_ROW_IDS_ENABLED);
         let mut mappings: HashMap<LabelId, HashMap<u32, u32>> = HashMap::new();
         mappings.insert(1, [(0u32, 1u32)].into_iter().collect());
-        assert!(assert_zero_edge_rewrite(&mappings).is_ok());
+        assert!(assert_zero_edge_rewrite(&mappings).is_err());
     }
 }

@@ -12,9 +12,9 @@
 //!   - Compact/remapping algorithm
 //!   - Uses HashMap for storage (no unnecessary concurrency)
 //!
-//! - **IdIndexer**: Simple wrapper for API consistency
-//!   - All operations are single-threaded at runtime
-//!   - External synchronization via GraphDataStore's RwLock ensures correctness
+//! - **IdIndexer**: Shared handle for direct index users
+//!   - Internal lock allows sharing across threads for index-only work
+//!   - Table-level consistency still needs the outer shard lock
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -22,10 +22,17 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use graphdb_core::error::{StorageError, StorageResult};
+use graphdb_core::types::VERTEX_ID_MAX_SIZE;
 
 const DEFAULT_INITIAL_CAPACITY: usize = 1024;
 const DEFAULT_GROWTH_FACTOR: f64 = 1.5;
 const MAX_CAPACITY: usize = u32::MAX as usize;
+
+/// Since-baseline delta entries beyond this count force the next
+/// incremental flush to anchor a new full baseline instead of extending
+/// the delta file. Bounds delta replay cost, delta file size, and the
+/// double-stored key memory between baselines.
+pub const PK_DELTA_ANCHOR_THRESHOLD: usize = 8192;
 
 const ID_KEY_TYPE_INT: u8 = 0;
 const ID_KEY_TYPE_TEXT: u8 = 1;
@@ -152,6 +159,28 @@ impl IdIndexerConfig {
     }
 }
 
+/// Primary-key shape shared by every index mutation path.
+///
+/// The table layer validates the same shape, but the indexer enforces it
+/// again so direct index users and persisted-file replays cannot smuggle in
+/// over-long text keys or negative integer keys.
+fn validate_key_shape(key: &IdKey) -> StorageResult<()> {
+    match key {
+        IdKey::Int(id) if *id < 0 => Err(StorageError::invalid_input(format!(
+            "Vertex id cannot be negative: {}",
+            id
+        ))),
+        IdKey::Text(id) if id.len() > VERTEX_ID_MAX_SIZE => {
+            Err(StorageError::invalid_input(format!(
+                "Vertex id exceeds max length of {} bytes: got {} bytes",
+                VERTEX_ID_MAX_SIZE,
+                id.len()
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Core bidirectional mapping between external IDs and internal indices.
 ///
 /// This struct manages the fundamental lookup operations:
@@ -212,6 +241,7 @@ impl IdManager {
     }
 
     pub fn insert(&mut self, key: IdKey) -> StorageResult<u32> {
+        validate_key_shape(&key)?;
         if self.key_to_id.contains_key(&key) {
             return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
         }
@@ -413,6 +443,13 @@ impl IdManager {
         std::mem::take(&mut self.baseline_invalidated)
     }
 
+    /// Whether the next incremental flush must anchor a new full baseline:
+    /// either compaction moved live rows, or the since-baseline delta grew
+    /// past [`PK_DELTA_ANCHOR_THRESHOLD`]. Consumes the invalidation flag.
+    pub fn should_anchor_baseline(&mut self) -> bool {
+        self.take_baseline_invalidated() || self.delta_log.len() >= PK_DELTA_ANCHOR_THRESHOLD
+    }
+
     /// Drop the since-baseline delta without persisting it. Baseline-flush
     /// path only: the fresh full snapshot supersedes every delta entry.
     pub fn clear_index_delta(&mut self) {
@@ -450,8 +487,7 @@ impl IdManager {
     }
 
     /// Decode delta entries. Corrupt bytes fail the whole delta so the
-    /// caller either refuses the open (commit-manifested checkpoints) or
-    /// discards the delta and keeps the baseline (legacy path).
+    /// caller refuses the open.
     pub fn deserialize_delta(data: &[u8]) -> StorageResult<Vec<(u8, u32, IdKey)>> {
         let mut cursor = data;
         let take = |cursor: &mut &[u8], len: usize, field: &str| -> StorageResult<Vec<u8>> {
@@ -479,6 +515,17 @@ impl IdManager {
                     StorageError::deserialize_error("pk delta count malformed".to_string())
                 })?,
         ) as usize;
+        // Sanity bound mirroring the baseline check: every entry needs at
+        // least its op, key length, and key tag byte on the wire, so a count
+        // the remaining bytes cannot hold is corruption rather than data.
+        const MIN_DELTA_ENTRY_BYTES: usize = 6;
+        if count > cursor.len() / MIN_DELTA_ENTRY_BYTES {
+            return Err(StorageError::deserialize_error(format!(
+                "pk delta count {} exceeds wire capacity of {} bytes",
+                count,
+                cursor.len(),
+            )));
+        }
         let mut out = Vec::with_capacity(count.min(1 << 20));
         for _ in 0..count {
             let op = take(&mut cursor, 1, "op")?[0];
@@ -519,6 +566,7 @@ impl IdManager {
         for (op, id, key) in entries {
             match op {
                 0 => {
+                    validate_key_shape(key)?;
                     if let Some(existing) = self.key_to_id.get(key).copied() {
                         if existing != *id {
                             return Err(StorageError::deserialize_error(format!(
@@ -557,9 +605,26 @@ impl IdManager {
 
     pub fn memory_usage(&self) -> usize {
         let keys_size = self.keys.capacity() * std::mem::size_of::<Option<IdKey>>();
+        let mut heap_bytes = 0usize;
+        for key_opt in &self.keys {
+            if let Some(IdKey::Text(text)) = key_opt {
+                heap_bytes += text.len();
+            }
+        }
+        for delta in &self.delta_log {
+            match delta {
+                IndexDelta::Insert { key, .. } | IndexDelta::Remove { key } => {
+                    if let IdKey::Text(text) = key {
+                        heap_bytes += text.len();
+                    }
+                }
+            }
+        }
         let map_estimate =
             self.key_to_id.len() * (std::mem::size_of::<IdKey>() + std::mem::size_of::<u32>());
-        keys_size + map_estimate
+        let set_estimate = self.live_ids.len() * (std::mem::size_of::<u32>() + 32);
+        let free_estimate = self.free_ids.capacity() * std::mem::size_of::<u32>();
+        keys_size + heap_bytes + map_estimate + set_estimate + free_estimate
     }
 
     pub fn memory_size(&self) -> usize {
@@ -601,6 +666,19 @@ impl IdManager {
         cursor.read_exact(&mut count_bytes)?;
         let count = u32::from_le_bytes(count_bytes) as usize;
 
+        // Sanity bound: every entry needs at least its id, key length, and
+        // key tag byte on the wire, so a count the remaining bytes cannot
+        // hold is corruption rather than data. This also bounds the
+        // pre-allocation below by the file size.
+        const MIN_ENTRY_BYTES: usize = 9;
+        if count > data.len().saturating_sub(4) / MIN_ENTRY_BYTES {
+            return Err(StorageError::deserialize_error(format!(
+                "pk baseline count {} exceeds wire capacity of {} bytes",
+                count,
+                data.len(),
+            )));
+        }
+
         let mut manager = Self::with_config(IdIndexerConfig::default());
         manager.reserve(count);
 
@@ -616,7 +694,18 @@ impl IdManager {
             cursor.read_exact(&mut key_bytes)?;
 
             let key = IdKey::from_bytes(&key_bytes)?;
+            validate_key_shape(&key)?;
             manager.set_at(internal_id, key);
+        }
+
+        // Baselines hold each live key exactly once; fewer bindings than
+        // declared means duplicated or colliding keys in a corrupt file.
+        if manager.len() != count {
+            return Err(StorageError::deserialize_error(format!(
+                "pk baseline holds {} bindings for declared count {}",
+                manager.len(),
+                count
+            )));
         }
 
         // Rebuild free list for holes left by non-dense persisted ids
@@ -716,10 +805,10 @@ impl IdIndexer {
         self.manager.lock().delta_len()
     }
 
-    /// Consume the compaction-invalidation flag (next incremental flush
-    /// anchors a new full baseline when true).
-    pub fn take_baseline_invalidated(&self) -> bool {
-        self.manager.lock().take_baseline_invalidated()
+    /// Whether the next incremental flush must anchor a new full baseline
+    /// (compaction moved rows, or the delta passed its scale threshold).
+    pub fn should_anchor_baseline(&self) -> bool {
+        self.manager.lock().should_anchor_baseline()
     }
 
     /// Drop the since-baseline delta (baseline-flush path only).
@@ -1242,7 +1331,50 @@ mod tests {
         indexer.remove(&IdKey::Int(1));
         indexer.compact().unwrap();
         assert_eq!(indexer.delta_len(), 0);
-        assert!(indexer.take_baseline_invalidated());
-        assert!(!indexer.take_baseline_invalidated());
+        assert!(indexer.should_anchor_baseline());
+        assert!(!indexer.should_anchor_baseline());
+    }
+
+    #[test]
+    fn test_indexer_rejects_oversized_text_and_negative_int() {
+        let indexer = IdIndexer::new();
+        let oversized = "k".repeat(graphdb_core::types::VERTEX_ID_MAX_SIZE + 1);
+        assert!(indexer.insert(IdKey::Text(oversized)).is_err());
+        assert!(indexer.insert(IdKey::Int(-1)).is_err());
+        assert_eq!(indexer.len(), 0);
+    }
+
+    #[test]
+    fn test_deserialize_rejects_impossible_count() {
+        let mut corrupt = 0x0100_0000u32.to_le_bytes().to_vec();
+        corrupt.extend_from_slice(&[0u8; 8]);
+        assert!(IdIndexer::deserialize(&corrupt).is_err());
+    }
+
+    #[test]
+    fn test_delta_rejects_impossible_count() {
+        let mut corrupt = u32::MAX.to_le_bytes().to_vec();
+        corrupt.extend_from_slice(&[0u8; 8]);
+        assert!(IdIndexer::deserialize_delta(&corrupt).is_err());
+    }
+
+    #[test]
+    fn test_delta_apply_rejects_divergence() {
+        let mut base = IdManager::new();
+        base.apply_delta_entries(&[(0, 7, IdKey::Int(3))]).unwrap();
+        let divergent = vec![(0u8, 9u32, IdKey::Int(3))];
+        assert!(base.apply_delta_entries(&divergent).is_err());
+        let idempotent = vec![(0u8, 7u32, IdKey::Int(3))];
+        assert!(base.apply_delta_entries(&idempotent).is_ok());
+    }
+
+    #[test]
+    fn test_over_threshold_delta_forces_anchor() {
+        let indexer = IdIndexer::new();
+        assert!(!indexer.should_anchor_baseline());
+        for i in 0..PK_DELTA_ANCHOR_THRESHOLD as i64 {
+            indexer.insert(IdKey::Int(i)).unwrap();
+        }
+        assert!(indexer.should_anchor_baseline());
     }
 }

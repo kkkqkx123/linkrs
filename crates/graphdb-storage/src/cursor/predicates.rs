@@ -217,6 +217,55 @@ impl PredicateRange {
         }
         true
     }
+
+    /// Length of the equality probe when this range is a closed point
+    /// (`lower == upper`, both inclusive). Used for length pre-pruning of
+    /// complex values: a chunk whose length interval excludes the probe
+    /// length cannot contain a match. Returns `None` for open ranges and
+    /// for values without a prunable length.
+    pub fn equality_len(&self) -> Option<usize> {
+        if !self.include_lower || !self.include_upper {
+            return None;
+        }
+        let lower = self.lower.as_ref()?;
+        let upper = self.upper.as_ref()?;
+        if compare_scalar(lower, upper) != std::cmp::Ordering::Equal {
+            return None;
+        }
+        crate::vertex::column_store::complex_len(lower)
+    }
+
+    /// Scalar-leaf interval of the equality probe, if closed point over a
+    /// leaf-carrying complex value. A chunk whose leaf interval is disjoint
+    /// cannot contain a match even when outer lengths coincide. Uses the
+    /// same flattening as chunk summaries, so exactly equal pairs share
+    /// the interval.
+    pub fn equality_leaf_range(&self) -> Option<(graphdb_core::Value, graphdb_core::Value)> {
+        if !self.include_lower || !self.include_upper {
+            return None;
+        }
+        let lower = self.lower.as_ref()?;
+        let upper = self.upper.as_ref()?;
+        if compare_scalar(lower, upper) != std::cmp::Ordering::Equal {
+            return None;
+        }
+        crate::vertex::column_store::complex_leaf_range(lower)
+    }
+
+    /// Key fingerprint of the equality probe, if it carries keyed content.
+    /// Returns `None` for keyless probes so the bloom gate stays disabled.
+    pub fn equality_key_fp(&self) -> Option<u64> {
+        if !self.include_lower || !self.include_upper {
+            return None;
+        }
+        let lower = self.lower.as_ref()?;
+        let upper = self.upper.as_ref()?;
+        if compare_scalar(lower, upper) != std::cmp::Ordering::Equal {
+            return None;
+        }
+        let fp = crate::vertex::column_store::complex_key_fp(lower);
+        (fp != 0).then_some(fp)
+    }
 }
 
 impl ScanPredicate {

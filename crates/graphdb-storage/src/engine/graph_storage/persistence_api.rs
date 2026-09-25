@@ -16,7 +16,10 @@ impl GraphStorage {
     /// path manifest decoding per label and validates baseline plus
     /// incremental epoch chain continuity. Returns a one-line summary;
     /// cleanup stays with startup recovery.
-    pub fn offline_inspect_vertex_store(&self, vertices_dir: &std::path::Path) -> StorageResult<String> {
+    pub fn offline_inspect_vertex_store(
+        &self,
+        vertices_dir: &std::path::Path,
+    ) -> StorageResult<String> {
         let health = ShardedVertexTable::inspect_store_health(vertices_dir)?;
         let summary = format!(
             "vertex store health: tables={} chain_ok={} healthy={} issues={:?}",
@@ -32,9 +35,11 @@ impl GraphStorage {
     /// Offline redistribution of one vertex label to a new shard count.
     ///
     /// The only adjustment outlet for the shard-count change: rebuilds every
-    /// live row into a fresh table and swaps it into the catalog. The caller
-    /// checkpoints afterwards as the new baseline; online shard count changes
-    /// stay rejected by the table manifest.
+    /// live row into a fresh table and swaps it into the catalog. Callers
+    /// must hold the offline maintenance barrier (no concurrent writes),
+    /// then checkpoint the rebuilt table as the new baseline and retire the
+    /// old checkpoint directory; online shard count changes stay rejected
+    /// by the table manifest.
     pub fn offline_reshard_vertex_table(
         &self,
         label: LabelId,
@@ -46,7 +51,7 @@ impl GraphStorage {
             })?;
             table.reshard_to(new_num_shards)
         })?;
-        let rows = rebuilt.total_count();
+        let rows = rebuilt.approximate_total_count();
         let shards = rebuilt.num_shards();
         self.ctx.data_store().with_vertex_tables_mut(|tables| {
             tables.insert(label, Arc::new(rebuilt));
@@ -75,12 +80,9 @@ impl GraphStorage {
         sorted: bool,
     ) -> StorageResult<usize> {
         let table = self.ctx.data_store().with_vertex_tables(|tables| {
-            tables
-                .get(&label)
-                .cloned()
-                .ok_or_else(|| {
-                    StorageError::label_not_found(format!("vertex label {} not found", label))
-                })
+            tables.get(&label).cloned().ok_or_else(|| {
+                StorageError::label_not_found(format!("vertex label {} not found", label))
+            })
         })?;
         let borrowed: Vec<(&str, &[(String, Value)])> = rows
             .iter()
@@ -99,12 +101,9 @@ impl GraphStorage {
         sorted: bool,
     ) -> StorageResult<usize> {
         let table = self.ctx.data_store().with_vertex_tables(|tables| {
-            tables
-                .get(&label)
-                .cloned()
-                .ok_or_else(|| {
-                    StorageError::label_not_found(format!("vertex label {} not found", label))
-                })
+            tables.get(&label).cloned().ok_or_else(|| {
+                StorageError::label_not_found(format!("vertex label {} not found", label))
+            })
         })?;
         let borrowed: Vec<(i64, &[(String, Value)])> = rows
             .iter()

@@ -140,7 +140,7 @@ impl ShardedVertexTable {
         ts: Timestamp,
         sorted: bool,
     ) -> StorageResult<usize> {
-        if self.total_count() != 0 {
+        if self.approximate_total_count() != 0 {
             return Err(StorageError::invalid_operation(
                 "bulk import requires an empty table: use insert_batch for incremental writes"
                     .to_string(),
@@ -150,8 +150,7 @@ impl ShardedVertexTable {
             for pair in rows.windows(2) {
                 if pair[0].0 >= pair[1].0 {
                     return Err(StorageError::invalid_input(
-                        "sorted bulk import input must be strictly ordered and unique"
-                            .to_string(),
+                        "sorted bulk import input must be strictly ordered and unique".to_string(),
                     ));
                 }
             }
@@ -187,7 +186,7 @@ impl ShardedVertexTable {
         ts: Timestamp,
         sorted: bool,
     ) -> StorageResult<usize> {
-        if self.total_count() != 0 {
+        if self.approximate_total_count() != 0 {
             return Err(StorageError::invalid_operation(
                 "bulk import requires an empty table: use insert_batch for incremental writes"
                     .to_string(),
@@ -197,8 +196,7 @@ impl ShardedVertexTable {
             for pair in rows.windows(2) {
                 if pair[0].0 >= pair[1].0 {
                     return Err(StorageError::invalid_input(
-                        "sorted bulk import input must be strictly ordered and unique"
-                            .to_string(),
+                        "sorted bulk import input must be strictly ordered and unique".to_string(),
                     ));
                 }
             }
@@ -300,7 +298,9 @@ impl ShardedVertexTable {
     /// conflicts reuse the read-lock probe plus write-lock recheck in the
     /// single-table path, still allocating once. On success the binding is
     /// recorded in the caller's scope (capacity [`MAX_WRITE_SCOPE_KEYS`]).
-    /// The shard never retains the scope across calls.
+    /// The shard never retains the scope across calls. The scope is a
+    /// single-request dedup filter bound to `ts`, not a transaction write
+    /// set; timestamp mismatches are rejected.
     pub fn insert_with_scope(
         &self,
         external_id: &str,
@@ -308,6 +308,7 @@ impl ShardedVertexTable {
         ts: Timestamp,
         scope: &mut WriteScope,
     ) -> StorageResult<u32> {
+        scope.ensure_same_write_ts(ts)?;
         let key = IdKey::Text(external_id.to_string());
         if scope.contains(self.label, &key) {
             return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
@@ -333,6 +334,7 @@ impl ShardedVertexTable {
         ts: Timestamp,
         scope: &mut WriteScope,
     ) -> StorageResult<u32> {
+        scope.ensure_same_write_ts(ts)?;
         let key = IdKey::Int(external_id);
         if scope.contains(self.label, &key) {
             return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
@@ -352,12 +354,24 @@ impl ShardedVertexTable {
     /// before touching global state. Same-scope duplicates and over-capacity
     /// rows fail per row without allocating; global conflicts follow the plain
     /// batch contract. Successful rows are recorded in application order.
+    /// The scope must belong to `ts`; mismatched scopes fail every row.
     pub fn insert_batch_str_with_scope(
         &self,
         rows: &[(&str, &[(String, Value)])],
         ts: Timestamp,
         scope: &mut WriteScope,
     ) -> Vec<StorageResult<u32>> {
+        if scope.ensure_same_write_ts(ts).is_err() {
+            return rows
+                .iter()
+                .map(|_| {
+                    Err(StorageError::invalid_operation(
+                        "write scope timestamp mismatch: scopes are single-request only"
+                            .to_string(),
+                    ))
+                })
+                .collect();
+        }
         let mut by_shard: Vec<Vec<usize>> = vec![Vec::new(); self.num_shards];
         for (pos, (external_id, _)) in rows.iter().enumerate() {
             by_shard[self.shard_index_by_str(external_id)].push(pos);
@@ -406,6 +420,17 @@ impl ShardedVertexTable {
         ts: Timestamp,
         scope: &mut WriteScope,
     ) -> Vec<StorageResult<u32>> {
+        if scope.ensure_same_write_ts(ts).is_err() {
+            return rows
+                .iter()
+                .map(|_| {
+                    Err(StorageError::invalid_operation(
+                        "write scope timestamp mismatch: scopes are single-request only"
+                            .to_string(),
+                    ))
+                })
+                .collect();
+        }
         let mut by_shard: Vec<Vec<usize>> = vec![Vec::new(); self.num_shards];
         for (pos, (external_id, _)) in rows.iter().enumerate() {
             by_shard[self.shard_index_by_i64(*external_id)].push(pos);
@@ -572,7 +597,7 @@ mod scoped_tests {
         assert!(table
             .insert_with_scope("dup", &props("dup"), ts, &mut scope)
             .is_err());
-        assert_eq!(table.total_count(), 1);
+        assert_eq!(table.approximate_total_count(), 1);
     }
 
     #[test]
@@ -587,7 +612,7 @@ mod scoped_tests {
         assert!(table
             .insert_with_scope("hot", &props("hot"), ts, &mut second)
             .is_err());
-        assert_eq!(table.total_count(), 1);
+        assert_eq!(table.approximate_total_count(), 1);
         assert!(second.is_empty());
     }
 
@@ -618,7 +643,7 @@ mod scoped_tests {
         assert!(table
             .insert_with_scope("overflow", &props("overflow"), ts, &mut scope)
             .is_err());
-        assert_eq!(table.total_count(), 0);
+        assert_eq!(table.approximate_total_count(), 0);
     }
 
     #[test]
@@ -648,7 +673,7 @@ mod scoped_tests {
             }
         }
         assert_eq!(oks, 1);
-        assert_eq!(table.total_count(), 1);
+        assert_eq!(table.approximate_total_count(), 1);
     }
 
     #[test]
@@ -663,7 +688,7 @@ mod scoped_tests {
         assert_eq!(results.len(), 2);
         let oks = results.iter().filter(|r| r.is_ok()).count();
         assert_eq!(oks, 1);
-        assert_eq!(table.total_count(), 1);
+        assert_eq!(table.approximate_total_count(), 1);
         assert_eq!(scope.len(), 1);
     }
 
@@ -681,7 +706,7 @@ mod scoped_tests {
         let rows: Vec<(&str, &[(String, Value)])> = vec![("overflow", holder.as_slice())];
         let results = table.insert_batch_str_with_scope(&rows, ts, &mut scope);
         assert!(results[0].is_err());
-        assert_eq!(table.total_count(), 0);
+        assert_eq!(table.approximate_total_count(), 0);
     }
 
     #[test]
@@ -694,8 +719,19 @@ mod scoped_tests {
             vec![(42, holder.as_slice()), (42, holder.as_slice())];
         let results = table.insert_batch_i64_with_scope(&rows, ts, &mut scope);
         assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
-        assert_eq!(table.total_count(), 1);
+        assert_eq!(table.approximate_total_count(), 1);
         assert_eq!(scope.len(), 1);
+    }
+
+    #[test]
+    fn scoped_insert_rejects_cross_timestamp_reuse() {
+        let table = ShardedVertexTable::with_config(7, "scoped".to_string(), test_schema(), 4);
+        let mut scope = WriteScope::new(100);
+        assert!(table
+            .insert_with_scope("k1", &props("k1"), 101, &mut scope)
+            .is_err());
+        assert_eq!(table.approximate_total_count(), 0);
+        assert!(scope.is_empty());
     }
 
     #[test]
@@ -703,16 +739,17 @@ mod scoped_tests {
         let table = ShardedVertexTable::with_config(7, "scoped".to_string(), test_schema(), 4);
         let ts: Timestamp = 100;
         let names: Vec<String> = (0..10).map(|i| format!("s_{:02}", i)).collect();
-        let holders: Vec<Vec<(String, Value)>> =
-            names.iter().map(|n| props(n)).collect();
+        let holders: Vec<Vec<(String, Value)>> = names.iter().map(|n| props(n)).collect();
         let rows: Vec<(&str, &[(String, Value)])> = names
             .iter()
             .zip(holders.iter())
             .map(|(n, p)| (n.as_str(), p.as_slice()))
             .collect();
-        let count = table.bulk_import_str(&rows, ts, true).expect("sorted import");
+        let count = table
+            .bulk_import_str(&rows, ts, true)
+            .expect("sorted import");
         assert_eq!(count, 10);
-        assert_eq!(table.total_count(), 10);
+        assert_eq!(table.approximate_total_count(), 10);
         for name in &names {
             assert!(table.get_internal_id(name, ts).is_some());
         }
@@ -735,6 +772,6 @@ mod scoped_tests {
         let unsorted: Vec<(&str, &[(String, Value)])> =
             vec![("z", ha.as_slice()), ("a", hb.as_slice())];
         assert!(unsorted_table.bulk_import_str(&unsorted, ts, true).is_err());
-        assert_eq!(unsorted_table.total_count(), 0);
+        assert_eq!(unsorted_table.approximate_total_count(), 0);
     }
 }

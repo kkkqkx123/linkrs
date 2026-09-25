@@ -33,6 +33,52 @@ pub struct ColumnStatsSnapshot {
     pub max_value: Option<Value>,
 }
 
+/// Immutable point-in-time cardinality for one vertex tag or edge type.
+///
+/// Derived from live versus allocated slot counts, so optimizers get a
+/// table-level row estimate without reassembling it from column snapshots.
+/// Counts come from shard-inconsistent reads; use them for sizing and plan
+/// costing, never as a strongly consistent census. Never persisted;
+/// recomputed per timestamp.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TableCardinalitySnapshot {
+    /// Live rows visible at the snapshot timestamp.
+    pub live_rows: u64,
+    /// Allocated slots including deleted-but-unreclaimed holes.
+    pub allocated_slots: u64,
+    /// Shards contributing to the counts.
+    pub shard_count: usize,
+}
+
+impl TableCardinalitySnapshot {
+    /// Deleted-but-unreclaimed slots.
+    pub fn hole_count(&self) -> u64 {
+        self.allocated_slots.saturating_sub(self.live_rows)
+    }
+
+    /// Hole rate `1 - live / allocated`, zero for empty tables.
+    pub fn hole_rate(&self) -> f64 {
+        if self.allocated_slots == 0 || self.live_rows >= self.allocated_slots {
+            0.0
+        } else {
+            1.0 - (self.live_rows as f64 / self.allocated_slots as f64)
+        }
+    }
+
+    /// Whether the snapshot carries any rows at all.
+    pub fn is_empty(&self) -> bool {
+        self.live_rows == 0 && self.allocated_slots == 0
+    }
+
+    /// Merge `other` into `self`: counts and shard counts add up, the hole
+    /// rate is always recomputed from the merged totals, never averaged.
+    pub fn absorb(&mut self, other: &TableCardinalitySnapshot) {
+        self.live_rows += other.live_rows;
+        self.allocated_slots += other.allocated_slots;
+        self.shard_count += other.shard_count;
+    }
+}
+
 impl ColumnStatsSnapshot {
     /// Whether this snapshot carries any usable bound for selectivity
     /// estimation.
@@ -123,6 +169,15 @@ pub trait ColumnStatsReader: Send + Sync {
         _edge_type: &str,
         _column: &str,
     ) -> Option<Arc<ColumnStatsSnapshot>> {
+        None
+    }
+
+    /// Table-level cardinality of vertex tag `tag` inside `space`.
+    fn vertex_table_stats(
+        &self,
+        _space: &str,
+        _tag: &str,
+    ) -> Option<Arc<TableCardinalitySnapshot>> {
         None
     }
 
@@ -232,5 +287,30 @@ mod tests {
         let mut max = Some(Value::string("P99"));
         merge_max(&mut max, Some(Value::string("P100")));
         assert_eq!(max, Some(Value::string("P99")));
+    }
+
+    #[test]
+    fn table_cardinality_absorb_sums_and_recomputes_hole_rate() {
+        let mut acc = TableCardinalitySnapshot {
+            live_rows: 70,
+            allocated_slots: 100,
+            shard_count: 2,
+        };
+        let other = TableCardinalitySnapshot {
+            live_rows: 30,
+            allocated_slots: 50,
+            shard_count: 1,
+        };
+        acc.absorb(&other);
+        assert_eq!(acc.live_rows, 100);
+        assert_eq!(acc.allocated_slots, 150);
+        assert_eq!(acc.shard_count, 3);
+        assert_eq!(acc.hole_count(), 50);
+        let rate = acc.hole_rate();
+        assert!((rate - (1.0 - 100.0 / 150.0)).abs() < 1e-9);
+        assert!(!acc.is_empty());
+        let empty = TableCardinalitySnapshot::default();
+        assert!(empty.is_empty());
+        assert_eq!(empty.hole_rate(), 0.0);
     }
 }

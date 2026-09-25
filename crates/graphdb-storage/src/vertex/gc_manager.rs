@@ -211,10 +211,9 @@ impl VertexGcManager {
                     Ok((reclaimed_vertices, version_entries)) => {
                         total_removed += reclaimed_vertices + version_entries;
                         if reclaimed_vertices > 0 {
-                            // Internal IDs were re-densified: cached ID
-                            // mappings and vertex records for this label
-                            // are keyed by stale IDs until invalidated.
-                            // Version-only passes leave IDs untouched.
+                            // Stable row ids keep live rows in place; cached
+                            // entries for reclaimed keys must still drop so
+                            // later reads miss instead of serving deletes.
                             remapped_labels.push(table.label());
                         }
                         if reclaimed_vertices + version_entries > 0 && pass_active > 0 {

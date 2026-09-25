@@ -87,7 +87,7 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
         let gate = ctx.pending_gate();
         ctx.data_store().with_vertex_tables(|tables| {
             if let Some(table) = tables.get(&tag_id) {
-                let records = table.scan(ts);
+                let records = table.scan_shard_inconsistent(ts);
                 for chunk in records.chunks(BATCH_SIZE) {
                     for record in chunk {
                         let (create_ts, delete_ts) = match table.row_timestamps(record.internal_id)
@@ -199,7 +199,7 @@ pub(crate) fn count_vertices_by_tag(
     let count = ctx.data_store().with_vertex_tables(|vertex_tables| {
         vertex_tables
             .get(&tag_info.tag_id)
-            .map(|t| t.id_hole_stats(ts).0 as u64)
+            .map(|t| t.approximate_id_hole_stats(ts).0 as u64)
             .unwrap_or(0)
     });
     Ok(count)

@@ -14,7 +14,7 @@ impl VertexTable {
         self.load_internal(path)
     }
 
-    fn read_pages_from_file(path: &Path) -> StorageResult<(Vec<u8>, u32)> {
+    pub(crate) fn read_pages_from_file(path: &Path) -> StorageResult<(Vec<u8>, u32)> {
         let file = std::fs::File::open(path).map_err(|e| {
             StorageError::io_error(format!("Failed to open {}: {}", path.display(), e))
         })?;
@@ -91,6 +91,9 @@ impl VertexTable {
         self.load_columns(&columns_path)?;
         // Reconstruct lazy-loaded chunk segments from sidecars when present.
         self.load_chunk_metadata(path);
+        // Restore persisted eviction state from mmap sidecars. Derived
+        // cache only: failures keep chunks resident without failing load.
+        self.columns.load_evict_snapshots(path);
 
         let timestamps_path = path.join("timestamps.bin");
         self.load_timestamps(&timestamps_path)?;
@@ -135,10 +138,8 @@ impl VertexTable {
 
     /// Overlay a since-baseline primary-key delta (`id_indexer.delta`)
     /// onto the loaded baseline. Returns the applied entry count.
-    /// Corrupt entries fail the whole delta: the caller either refuses
-    /// the open (commit-manifested checkpoints) or discards the delta and
-    /// keeps the baseline (legacy path). Replay never extends the live
-    /// delta log.
+    /// Corrupt entries fail the whole delta and refuse the open.
+    /// Replay never extends the live delta log.
     pub(crate) fn load_id_indexer_delta(&mut self, path: &Path) -> StorageResult<usize> {
         let (data, _) = Self::read_pages_from_file(path)?;
         let mut cursor = &data[..];
@@ -162,6 +163,110 @@ impl VertexTable {
         self.id_indexer.apply_delta_entries(&entries)?;
 
         Ok(count)
+    }
+
+    /// Offline read-only verification of one shard's primary-key files.
+    ///
+    /// Returns issue strings, empty when the index is openable: the
+    /// baseline decodes with a matching row count, the delta decodes, and
+    /// the delta applies onto the baseline without divergence. A delta
+    /// without a same-directory baseline only gets a format check (its
+    /// anchor lives in the base checkpoint). Never writes.
+    pub(crate) fn verify_pk_files(dir: &Path) -> Vec<String> {
+        use crate::vertex::id_indexer::IdManager;
+
+        let mut issues = Vec::new();
+        let base_path = dir.join("id_indexer.bin");
+        let delta_path = dir.join("id_indexer.delta");
+        if !base_path.exists() && !delta_path.exists() {
+            return issues;
+        }
+        let mut baseline: Option<IdManager> = None;
+        if base_path.exists() {
+            match Self::decode_pk_baseline(&base_path) {
+                Ok(manager) => baseline = Some(manager),
+                Err(e) => issues.push(format!(
+                    "pk baseline corrupt at {}: {}",
+                    base_path.display(),
+                    e
+                )),
+            }
+        }
+        if delta_path.exists() {
+            match Self::decode_pk_delta(&delta_path) {
+                Ok(entries) => {
+                    if let Some(mut manager) = baseline {
+                        if base_path.exists() {
+                            issues.push(format!(
+                                "pk delta present alongside baseline at {}: superseded files must not linger",
+                                delta_path.display(),
+                            ));
+                        }
+                        if let Err(e) = manager.apply_delta_entries(&entries) {
+                            issues.push(format!(
+                                "pk delta diverges at {}: {}",
+                                delta_path.display(),
+                                e
+                            ));
+                        }
+                    }
+                }
+                Err(e) => issues.push(format!(
+                    "pk delta corrupt at {}: {}",
+                    delta_path.display(),
+                    e
+                )),
+            }
+        }
+        issues
+    }
+
+    fn decode_pk_baseline(path: &Path) -> StorageResult<crate::vertex::id_indexer::IdManager> {
+        use crate::vertex::id_indexer::IdManager;
+
+        let (data, total_rows) = Self::read_pages_from_file(path)?;
+        let mut cursor = &data[..];
+        let mut header_buf = [0u8; HEADER_SIZE];
+        cursor.read_exact(&mut header_buf)?;
+        {
+            let mut slice = &header_buf[..];
+            let sid = read_header(&mut slice)?;
+            if sid != section::VERTEX_ID_INDEXER {
+                return Err(StorageError::deserialize_error(format!(
+                    "unexpected section id in vertex id_indexer: expected {:#06x}, got {:#06x}",
+                    section::VERTEX_ID_INDEXER,
+                    sid
+                )));
+            }
+        }
+        let manager = IdManager::deserialize(cursor)?;
+        if total_rows != manager.len() as u32 {
+            return Err(StorageError::deserialize_error(format!(
+                "id_indexer total_rows mismatch: header={}, actual={}",
+                total_rows,
+                manager.len()
+            )));
+        }
+        Ok(manager)
+    }
+
+    fn decode_pk_delta(path: &Path) -> StorageResult<Vec<(u8, u32, crate::vertex::IdKey)>> {
+        let (data, _) = Self::read_pages_from_file(path)?;
+        let mut cursor = &data[..];
+        let mut header_buf = [0u8; HEADER_SIZE];
+        cursor.read_exact(&mut header_buf)?;
+        {
+            let mut slice = &header_buf[..];
+            let sid = read_header(&mut slice)?;
+            if sid != section::VERTEX_ID_INDEXER_DELTA {
+                return Err(StorageError::deserialize_error(format!(
+                    "unexpected section id in vertex id_indexer delta: expected {:#06x}, got {:#06x}",
+                    section::VERTEX_ID_INDEXER_DELTA,
+                    sid
+                )));
+            }
+        }
+        crate::vertex::id_indexer::IdManager::deserialize_delta(cursor)
     }
 
     fn load_columns(&mut self, path: &Path) -> StorageResult<()> {

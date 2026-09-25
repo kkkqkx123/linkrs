@@ -23,7 +23,7 @@ impl GraphStorageContext {
             .with_vertex_tables(|tables| {
                 tables.get(&label).map(|table| {
                     table
-                        .scan(ts)
+                        .scan_shard_inconsistent(ts)
                         .into_iter()
                         .filter_map(|record| {
                             let (create_ts, delete_ts) =
@@ -53,12 +53,19 @@ impl GraphStorageContext {
 
     /// Allocated vertex slots across all tables, including deleted but not
     /// yet reclaimed entries. Storage scale for stats and checkpoints, not
-    /// a live count; exact live counts come from `id_hole_stats`.
+    /// a live count; exact live counts come from
+    /// `approximate_id_hole_stats`. The `approximate_` prefix marks the
+    /// cross-shard inconsistency: shards are read without a global lock.
     pub fn total_vertex_count(&self) -> usize {
         self.persistent
             .data_store
             .catalog_read_snapshot()
-            .with_vertex_tables(|tables| tables.values().map(|table| table.total_count()).sum())
+            .with_vertex_tables(|tables| {
+                tables
+                    .values()
+                    .map(|table| table.approximate_total_count())
+                    .sum()
+            })
     }
 
     /// Live edge count on the stored leg. Unlike `total_vertex_count`,

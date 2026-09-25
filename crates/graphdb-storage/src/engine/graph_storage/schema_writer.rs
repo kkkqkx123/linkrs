@@ -389,7 +389,7 @@ pub(crate) fn drop_tag(
             .and_then(|tag| vertex_tables.get(&tag.tag_id))
             .map(|table| {
                 table
-                    .id_hole_stats(graphdb_transaction::wal::Timestamp::MAX)
+                    .approximate_id_hole_stats(graphdb_transaction::wal::Timestamp::MAX)
                     .0
                     > 0
             })

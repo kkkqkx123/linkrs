@@ -113,7 +113,7 @@ impl GraphVertexCursor {
                 tags.labels.iter().all(|label_id| {
                     tables
                         .get(label_id)
-                        .is_none_or(|t| t.id_hole_stats(ts).0 == 0)
+                        .is_none_or(|t| t.approximate_id_hole_stats(ts).0 == 0)
                 })
             }),
         };
@@ -177,7 +177,7 @@ impl GraphVertexCursor {
             let label_id = self.tags.labels[self.current_table_idx];
             self.current_table_idx += 1;
             if let Some(table) = tables.get(&label_id) {
-                let ids = table.live_ids(self.ts);
+                let ids = table.live_ids_shard_inconsistent(self.ts);
                 if !ids.is_empty() {
                     self.current_label = Some(label_id);
                     self.pending_ids = ids;

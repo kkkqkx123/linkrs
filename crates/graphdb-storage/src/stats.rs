@@ -115,8 +115,16 @@ fn hash_value(value: &Value, hasher: &mut DefaultHasher) {
         Value::Json(j) => j.as_str().hash(hasher),
         Value::JsonB(j) => j.to_json_string().hash(hasher),
         _ => {
-            std::mem::discriminant(value).hash(hasher);
-            value.estimated_size().hash(hasher);
+            // Complex values must hash their content, not just the
+            // discriminant plus an estimated size: equal-sized but
+            // different lists otherwise collide and poison the distinct
+            // estimate. Postcard gives the canonical payload bytes.
+            if let Ok(bytes) = postcard::to_allocvec(value) {
+                bytes.hash(hasher);
+            } else {
+                std::mem::discriminant(value).hash(hasher);
+                value.estimated_size().hash(hasher);
+            }
         }
     }
 }

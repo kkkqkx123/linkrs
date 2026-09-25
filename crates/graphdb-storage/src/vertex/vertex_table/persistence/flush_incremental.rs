@@ -50,11 +50,11 @@ impl VertexTable {
         let timestamps_path = path.join("timestamps.bin");
         self.flush_timestamps(&timestamps_path)?;
 
-        // Primary-key baseline plus delta: a compaction-invalidated baseline
-        // is rewritten in full as the new anchor (superseding any delta);
-        // otherwise only the since-baseline delta is persisted alongside
-        // the column delta pages under the same checkpoint commit.
-        if self.id_indexer.take_baseline_invalidated() {
+        // Primary-key baseline plus delta: an invalidated or over-threshold
+        // baseline is rewritten in full as the new anchor (superseding any
+        // delta); otherwise only the since-baseline delta is persisted
+        // alongside the column delta pages under the same checkpoint commit.
+        if self.id_indexer.should_anchor_baseline() {
             let id_indexer_path = path.join("id_indexer.bin");
             self.flush_id_indexer_baseline(path, &id_indexer_path)?;
         } else if self.id_indexer.delta_len() > 0 {

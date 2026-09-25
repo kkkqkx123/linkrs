@@ -17,12 +17,12 @@ trait VerifyInvariants {
 }
 
 impl VerifyInvariants for VertexTable {
-    /// Verify internal consistency after compaction.
+    /// Verify internal consistency after maintenance.
     ///
-    /// Invariants checked:
+    /// Invariants checked (holes-tolerant under stable row ids):
     /// 1. Every key in id_indexer has a valid timestamp entry
     /// 2. Every valid timestamp entry has a corresponding key in id_indexer
-    /// 3. Column count matches id_indexer.len()
+    /// 3. Column count covers id_indexer.len() (absorbed holes stay allocated)
     fn verify_invariants(&self) -> StorageResult<()> {
         let id_count = self.id_indexer.len();
 
@@ -50,12 +50,12 @@ impl VerifyInvariants for VertexTable {
             }
         }
 
-        // Check 3: Column count matches id_indexer.len()
-        if self.columns.row_count() != id_count {
+        // Check 3: Column count covers id_indexer.len()
+        if self.columns.row_count() < id_count {
             return Err(StorageError::new(
                 StorageErrorKind::StorageError,
                 format!(
-                    "Column count ({}) mismatch with id_indexer.len() ({})",
+                    "Column count ({}) below id_indexer.len() ({})",
                     self.columns.row_count(),
                     id_count
                 ),
@@ -651,7 +651,7 @@ fn test_compact_multiple_cycles() {
         }
 
         table
-            .compact_coordinated()
+            .compact_with_cutoff_collect_mapping(ts_compact)
             .unwrap_or_else(|_| panic!("compact cycle {} should succeed", cycle));
 
         let mut expected_count = 0;
@@ -703,7 +703,9 @@ fn test_compact_id_consistency() {
     let before_count = table.scan(150).count();
     assert_eq!(before_count, 5);
 
-    table.compact_coordinated().expect("compact should succeed");
+    table
+        .compact_with_cutoff_collect_mapping(200)
+        .expect("compact should succeed");
 
     if cfg!(debug_assertions) {
         table.verify_invariants().unwrap();

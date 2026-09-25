@@ -10,7 +10,7 @@
 //! but the overall table state (columns, timestamps, schema) requires external synchronization.
 //!
 //! For multi-threaded access, use `ShardedVertexTable` which wraps `VertexTable` with per-shard
-//! `parking_lot::Mutex` provides shard-level concurrency.
+//! `parking_lot::RwLock` providing shard-level concurrency.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -156,7 +156,9 @@ impl VertexTable {
     /// table never retains it. Recording stays with the caller (sharded
     /// layer) after a successful apply, keeping cross-call ownership out of
     /// the shard. Cross-scope conflicts still use the global read probe plus
-    /// write-lock recheck inside [`Self::insert_by_key`].
+    /// write-lock recheck inside [`Self::insert_by_key`]. The scope is a
+    /// single-request filter bound to `ts`; mismatched timestamps are
+    /// rejected before touching global state.
     pub fn insert_with_scope(
         &mut self,
         key: IdKey,
@@ -164,6 +166,7 @@ impl VertexTable {
         ts: Timestamp,
         scope: &super::super::WriteScope,
     ) -> StorageResult<u32> {
+        scope.ensure_same_write_ts(ts)?;
         if scope.contains(self.label, &key) {
             return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
         }
@@ -874,7 +877,9 @@ impl VertexTable {
     /// number of version entries folded. The cutoff must come from the
     /// shared watermark capture of the maintenance pass.
     pub fn fold_version_chains(&mut self, cutoff: Timestamp) -> usize {
-        self.columns.gc_versions(cutoff)
+        let removed = self.columns.gc_versions(cutoff);
+        self.columns.maybe_rebuild_zones_exact();
+        removed
     }
 
     /// Perform garbage collection on version data older than min_ts
@@ -883,13 +888,15 @@ impl VertexTable {
     /// property version-chain entries that no active snapshot can observe.
     ///
     /// Returns `(reclaimed vertices, reclaimed version-chain entries)`.
-    /// A nonzero vertex count means internal IDs were re-densified
-    /// (`compact_coordinated`): caches keyed by internal ID must be
-    /// invalidated for this label. Version-only passes leave IDs untouched.
+    /// Stable row-id semantic: reclaimed vertices only lose their keys to
+    /// the free stack, live rows never move, so caches keyed by internal ID
+    /// stay valid across this call. ID re-densification lives exclusively
+    /// in the barriered offline remap path, never in background GC.
     pub fn gc_detailed(&mut self, min_ts: Timestamp) -> StorageResult<(usize, usize)> {
         // Property version-chain GC runs every pass regardless of deleted
         // vertices so before-images of overwritten properties are reclaimed.
         let version_removed = self.columns.gc_versions(min_ts);
+        self.columns.maybe_rebuild_zones_exact();
         let version_stats = self.columns.version_chain_stats();
         log::trace!(
             "vertex gc version stats: total_rows={} total_entries={} max_len={} avg_len={:.2} memory_bytes={} removed={}",
@@ -921,36 +928,20 @@ impl VertexTable {
             return Ok((0, version_removed));
         }
 
-        let count = deleted_ids.len();
+        let mut count = 0usize;
 
-        // Remove from id_indexer
+        // Stable absorption: drop keys to the free stack and invalidate
+        // their timestamp slots without moving any live row. Freed ids are
+        // recycled by later inserts; columns keep their holes until reuse.
         for id in &deleted_ids {
             if let Some(key) = self.id_indexer.get_key(*id) {
                 self.id_indexer.remove(&key);
+                self.timestamps.invalidate_slot(*id);
+                count += 1;
             }
         }
 
-        // Compact to reclaim space
-        self.compact_coordinated()?;
-
-        // Timestamp compaction is cutoff-gated: only rows invisible below
-        // the watermark cutoff (`min_ts`) are physically removed.
-        self.compact_timestamps(min_ts);
-
         Ok((count, version_removed))
-    }
-
-    /// Compact timestamps independently of id_indexer and columns.
-    ///
-    /// Crate-internal cutoff-gated cleanup. The cutoff must come from the
-    /// global GC watermarks. External callers must go through the
-    /// watermark-gated compaction entry points instead of calling this
-    /// directly.
-    pub(crate) fn compact_timestamps(
-        &mut self,
-        cutoff: Timestamp,
-    ) -> std::collections::HashMap<u32, u32> {
-        self.timestamps.compact_with_cutoff(cutoff)
     }
 }
 

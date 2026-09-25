@@ -42,9 +42,11 @@ fn setup_storage(nullable: bool) -> Arc<RwLock<GraphStorage>> {
             ("group".to_string(), Value::BigInt(i % 7)),
             ("name".to_string(), Value::string(format!("node_{i}"))),
         ];
+        // The primary key column (`value`) must mirror the vertex id and can
+        // never be null, so the nullable path is exercised on `group`.
         if nullable && i % 3 == 0 {
-            props[0] = (
-                "value".to_string(),
+            props[1] = (
+                "group".to_string(),
                 Value::Null(graphdb_core::value::NullType::Null),
             );
         }

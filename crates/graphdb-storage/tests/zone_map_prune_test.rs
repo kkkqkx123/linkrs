@@ -26,24 +26,36 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
     storage
         .create_tag(
             SPACE,
-            &TagInfo::new("Node".to_string()).with_properties(vec![PropertyDef::new(
-                "value".to_string(),
-                DataType::BigInt,
-            )]),
+            &TagInfo::new("Node".to_string()).with_properties(vec![
+                PropertyDef::new("value".to_string(), DataType::BigInt),
+                PropertyDef::new("payload".to_string(), DataType::BigInt),
+            ]),
         )
         .unwrap();
 
-    // value = i for i in [0, 5000): spans multiple 1024-row zones.
+    // value and payload both start at i for i in [0, 5000): spans multiple
+    // 1024-row zones. `value` is the primary key mirroring the vertex id, so
+    // the widening-update scenario mutates `payload` instead.
     let vertices: Vec<Vertex> = (0..5000i64)
         .map(|i| {
-            let props = vec![("value".to_string(), Value::BigInt(i))];
+            let props = vec![
+                ("value".to_string(), Value::BigInt(i)),
+                ("payload".to_string(), Value::BigInt(i)),
+            ];
             Vertex::new(
                 VertexId::try_from_int64(i).expect("test vertex id"),
                 Tag::new("Node".to_string(), props.into_iter().collect()),
             )
         })
         .collect();
-    storage.batch_insert_vertices(SPACE, vertices).unwrap();
+    // A single write scope buffers at most 4096 primary keys (the storage
+    // layer's `MAX_WRITE_SCOPE_KEYS`), so a bulk load larger than that is
+    // split into consecutive committed batches.
+    for chunk in vertices.chunks(4096) {
+        storage
+            .batch_insert_vertices(SPACE, chunk.to_vec())
+            .unwrap();
+    }
     Arc::new(RwLock::new(storage))
 }
 
@@ -125,12 +137,12 @@ fn equality_across_zone_boundary_finds_all_matches() {
 fn update_widening_bounds_keeps_results_correct() {
     let storage = setup_storage();
 
-    // Move one row far outside every recorded bound.
+    // Move one row's payload far outside every recorded bound.
     let updated = Vertex::new(
         VertexId::try_from_int64(42).expect("test vertex id"),
         Tag::new(
             "Node".to_string(),
-            vec![("value".to_string(), Value::BigInt(99_999))]
+            vec![("payload".to_string(), Value::BigInt(99_999))]
                 .into_iter()
                 .collect(),
         ),
@@ -145,7 +157,7 @@ fn update_widening_bounds_keeps_results_correct() {
     let high = drain_with_predicate(
         &storage,
         vec![ScanPredicate::ColumnRange {
-            column: "value".to_string(),
+            column: "payload".to_string(),
             lower: Some(Value::BigInt(50_000)),
             upper: None,
             include_lower: true,
@@ -158,7 +170,7 @@ fn update_widening_bounds_keeps_results_correct() {
     let mid = drain_with_predicate(
         &storage,
         vec![ScanPredicate::ColumnRange {
-            column: "value".to_string(),
+            column: "payload".to_string(),
             lower: Some(Value::BigInt(100)),
             upper: Some(Value::BigInt(200)),
             include_lower: true,

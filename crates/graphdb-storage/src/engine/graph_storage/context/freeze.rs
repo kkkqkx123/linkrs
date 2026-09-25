@@ -121,7 +121,7 @@ impl GraphStorageContext {
                 let mut live = 0;
                 let mut allocated = 0;
                 for table in tables.values() {
-                    let (l, a) = table.id_hole_stats(safe_ts);
+                    let (l, a) = table.approximate_id_hole_stats(safe_ts);
                     live += l;
                     allocated += a;
                 }
@@ -133,8 +133,9 @@ impl GraphStorageContext {
             return Ok(());
         }
 
-        let cleanup_ts = wm.safe_gc_timestamp();
-        let removed = self.compact_vertex_remap(cleanup_ts)?;
+        let margin = self.persistent.config.gc_safety_margin;
+        let cleanup_ts = wm.safe_gc_timestamp_with_margin(margin);
+        let removed = self.compact_vertex_remap_stable(cleanup_ts)?;
         *self.runtime.last_auto_compact.lock() = Some(std::time::Instant::now());
         log::info!(
             "Automatic vertex compaction removed {} vertices (holes={}, live={})",

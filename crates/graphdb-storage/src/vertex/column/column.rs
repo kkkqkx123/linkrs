@@ -110,6 +110,14 @@ pub struct Column {
     /// nulls leave them stale but conservative), so pruning stays correct
     /// for any MVCC snapshot.
     pub(super) zone_maps: Vec<ZoneBounds>,
+    /// Per-chunk length summaries for complex and variable-length values,
+    /// parallel to `zone_maps`. Used for equality length pre-pruning when
+    /// whole-value ordering alone cannot skip a chunk.
+    pub(super) zone_complex: Vec<super::zone_map::ComplexZoneSummary>,
+    /// Versioned writes since the last exact zone rebuild. Feeds the
+    /// shrink trigger so long update histories do not leave pruning
+    /// permanently stale.
+    pub(super) zone_stale_writes: u64,
     /// Per-row version chains (before-images), lazily allocated.
     /// `None` means no updates have occurred and no version history is retained.
     pub(super) version_chains: Option<Vec<Vec<super::mvcc::VersionEntry>>>,
@@ -152,6 +160,8 @@ impl Column {
             encoding: ColumnEncoding::None,
             stats: None,
             zone_maps: Vec::new(),
+            zone_complex: Vec::new(),
+            zone_stale_writes: 0,
             version_chains: None,
             visibility: super::mvcc::RowVisibility::new(),
             dirty_tracker: crate::persistence::dirty_page::DirtyPageTracker::new(0),
@@ -288,6 +298,17 @@ impl Column {
         let local = (row_idx - self.chunks[chunk_idx].row_offset) as u32;
         let data_type = self.data_type.clone();
         let decision = self.chunks[chunk_idx].set_value(local, value.cloned(), &data_type);
+        // A recode verdict means the encoding cannot absorb more point
+        // writes: mark the chunk hot immediately so the next flush (or an
+        // early merge) re-encodes it instead of letting the overlay grow
+        // to full and forcing a whole-column fallback.
+        if decision == crate::vertex::column::chunk_encoding::UpdateDecision::OverlayAndRecode {
+            self.chunks[chunk_idx].updates_since_encode =
+                self.chunks[chunk_idx].updates_since_encode.max(
+                    crate::encoding::selector::EncodingThresholds::default().hot_update_threshold
+                        + 1,
+                );
+        }
         // Raw chunks have no encoded base: mirror the write into the raw
         // buffer that serves as their storage.
         if decision == crate::vertex::column::chunk_encoding::UpdateDecision::InPlace
@@ -328,6 +349,7 @@ impl Column {
 
     fn observe_write(&mut self, row_idx: usize, value: Option<&Value>) {
         self.update_zone_maps(row_idx, value);
+        self.zone_stale_writes = self.zone_stale_writes.saturating_add(1);
         if let Some(ref mut hll) = self.hll {
             if let Some(v) = value {
                 if !v.is_null() {
@@ -429,6 +451,11 @@ impl Column {
             && self.write_via_chunks(row_idx, value)
         {
             self.observe_write(row_idx, value);
+            if let Some(chunk_idx) = self.chunk_index_for_row(row_idx) {
+                let hot =
+                    crate::encoding::selector::EncodingThresholds::default().hot_update_threshold;
+                let _ = self.maybe_merge_hot_chunk(chunk_idx, hot);
+            }
             return Ok(());
         }
         if self.encoding.is_encoded() && self.chunks.is_empty() {
@@ -633,7 +660,7 @@ impl Column {
                     + c.encoding.memory_usage()
                     + c.residency
                         .evicted_snapshot()
-                        .map(|snapshot| snapshot.compressed_bytes())
+                        .map(|snapshot| snapshot.resident_bytes())
                         .unwrap_or(0)
             })
             .sum();
@@ -660,6 +687,8 @@ impl Column {
         self.inner_mut().clear();
         self.encoding = ColumnEncoding::None;
         self.zone_maps.clear();
+        self.zone_complex.clear();
+        self.zone_stale_writes = 0;
         self.with_version_chains_write(|chains| {
             *chains = None;
         });
@@ -995,10 +1024,12 @@ impl Column {
         Ok(loaded)
     }
 
-    /// Release one cold chunk's decoded buffers, retaining the compressed
-    /// snapshot, row range, encoding scheme, and profiles. Returns bytes
-    /// released, or 0 when the chunk is not evictable. Zone maps and HLL
-    /// stay resident at the column level and keep serving.
+    /// Release one cold chunk's decoded buffers, spilling the compressed
+    /// snapshot to a spill file and retaining only row range, encoding
+    /// scheme, and profiles in memory. Returns bytes released, or 0 when
+    /// the chunk is not evictable. Zone maps and HLL stay resident at the
+    /// column level and keep serving. A spill failure reports an error so
+    /// the caller skips the chunk instead of retaining heap pages.
     pub fn evict_chunk(&mut self, chunk_idx: usize) -> StorageResult<u64> {
         if !self.chunk_evictable(chunk_idx) {
             return Ok(0);
@@ -1015,7 +1046,7 @@ impl Column {
         let values: Vec<Option<Value>> = (start..start.saturating_add(count))
             .map(|row| self.get(row))
             .collect();
-        let snapshot = EvictedSnapshot::capture(start, values, encoding, meta)?;
+        let snapshot = EvictedSnapshot::capture_spilled(start, values, encoding, meta)?;
         let released = {
             let chunk = &self.chunks[chunk_idx];
             (chunk.data.len()
@@ -1151,7 +1182,77 @@ impl Column {
         self.memory_usage().saturating_sub(self.evicted_bytes())
     }
 
-    /// Compressed snapshot bytes retained for evicted chunks.
+    /// Chunk indexes whose overlay or update count makes them recode
+    /// candidates at the current hot threshold.
+    pub fn pending_recode_chunks(&self, hot_threshold: u64) -> Vec<usize> {
+        self.chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.needs_recode(hot_threshold))
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+
+    /// Early merge for one hot chunk, before its overlay fills.
+    ///
+    /// Raw chunks merge cheaply: overlay values are written back to the raw
+    /// buffer and the overlay clears, so later writes stay in place.
+    /// Encoded chunks are only marked hot here; the actual re-encode stays
+    /// with the flush path, which has the full chunk profile. Returns
+    /// whether any merge or hot-marking happened. Never fails the write:
+    /// merge errors leave the overlay intact.
+    pub fn maybe_merge_hot_chunk(&mut self, chunk_idx: usize, hot_threshold: u64) -> bool {
+        let (overlay_len, updates, encoded, evicted) = match self.chunks.get(chunk_idx) {
+            Some(c) => (
+                c.overlay.len(),
+                c.updates_since_encode,
+                c.encoding.is_encoded(),
+                !c.residency.is_resident(),
+            ),
+            None => return false,
+        };
+        if evicted {
+            return false;
+        }
+        let half_overlay = super::chunk_encoding::DEFAULT_OVERLAY_CAPACITY / 2;
+        let half_updates = hot_threshold / 2;
+        if overlay_len < half_overlay && updates < half_updates {
+            return false;
+        }
+        if !encoded {
+            let merged: Vec<(u32, Option<Value>)> = self.chunks[chunk_idx]
+                .overlay
+                .iter()
+                .map(|(k, v)| (*k, v.clone()))
+                .collect();
+            let mut applied = 0usize;
+            for (local, value) in merged {
+                let row = self.chunks[chunk_idx].row_offset + local as usize;
+                if self.write_raw_inner(row, value.as_ref()).is_ok() {
+                    applied += 1;
+                }
+            }
+            if applied > 0 {
+                if let Some(chunk) = self.chunks.get_mut(chunk_idx) {
+                    chunk.overlay.clear();
+                    chunk.updates_since_encode = 0;
+                }
+                return true;
+            }
+            return false;
+        }
+        if let Some(chunk) = self.chunks.get_mut(chunk_idx) {
+            if !chunk.needs_recode(hot_threshold) {
+                chunk.updates_since_encode = hot_threshold + 1;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Compressed snapshot payload bytes for evicted chunks, wherever they
+    /// live (heap or spill files). Used for eviction observability; spilled
+    /// bytes no longer count toward heap memory.
     pub fn evicted_bytes(&self) -> usize {
         self.chunks
             .iter()
@@ -1433,6 +1534,102 @@ impl Column {
             .enumerate()
             .map(|(i, c)| (i, c.evicted_encoding(), c.row_count))
             .collect()
+    }
+
+    /// Re-evict one resident chunk from checkpoint sidecar pages without
+    /// decoding them onto the heap. Matches by row window; a mismatch or
+    /// an already-evicted chunk keeps current state and reports false so
+    /// the caller stays resident. Used by reload to restore the persisted
+    /// eviction state.
+    pub fn restore_mapped_chunk(
+        &mut self,
+        record: super::chunk_residency::MappedChunk,
+        map: &std::sync::Arc<memmap2::Mmap>,
+    ) -> bool {
+        let Some(chunk) = self.chunks.iter_mut().find(|c| {
+            c.row_offset == record.row_offset as usize && c.row_count == record.rows as usize
+        }) else {
+            log::warn!(
+                "snapshot sidecar window [{}, {}) matches no chunk of column {}",
+                record.row_offset,
+                record.row_offset as usize + record.rows as usize,
+                self.name,
+            );
+            return false;
+        };
+        if !chunk.residency.is_resident() {
+            return false;
+        }
+        let snapshot = super::chunk_residency::EvictedSnapshot::from_mapped(
+            record.rows,
+            record.encoding,
+            record.meta,
+            record.uncompressed_bytes,
+            map.clone(),
+            record.frames,
+        );
+        chunk.data = Vec::new();
+        chunk.offsets = Vec::new();
+        chunk.null_bitmap = None;
+        chunk.encoding = crate::encoding::ColumnEncoding::None;
+        chunk.residency = ChunkResidency::Evicted(snapshot);
+        true
+    }
+
+    /// Apply one selected encoding to this column.
+    ///
+    /// Single-column form of the store-level dispatch: chunked columns go
+    /// through the per-chunk path, unchunked columns through the matching
+    /// column-level encoder. Empty columns are a no-op.
+    pub fn apply_selected_encoding(
+        &mut self,
+        encoding_type: crate::encoding::EncodingType,
+        fsst_max_symbols: usize,
+    ) -> StorageResult<()> {
+        if self.is_empty() {
+            return Ok(());
+        }
+
+        // Chunk-level path: each resident chunk selects and stores its own
+        // encoding so point updates only decode the affected chunk.
+        if self.has_chunks() {
+            return self.apply_encoding_to_chunks(encoding_type, fsst_max_symbols);
+        }
+
+        match encoding_type {
+            crate::encoding::EncodingType::Fsst => {
+                if self.data_type != DataType::String
+                    && self.data_type != DataType::Json
+                    && !matches!(self.data_type, DataType::FixedString(_))
+                {
+                    return Err(StorageError::not_supported(format!(
+                        "FSST encoding does not support type {:?}",
+                        self.data_type
+                    )));
+                }
+                self.apply_fsst_encoding(fsst_max_symbols)?;
+            }
+            crate::encoding::EncodingType::Dictionary => {
+                self.apply_dictionary_encoding()?;
+            }
+            crate::encoding::EncodingType::Rle => {
+                self.apply_rle_encoding()?;
+            }
+            crate::encoding::EncodingType::BitPacking => {
+                self.apply_bitpacking_encoding()?;
+            }
+            crate::encoding::EncodingType::Alp => {
+                self.apply_alp_encoding()?;
+            }
+            crate::encoding::EncodingType::Constant => {
+                self.apply_constant_encoding()?;
+            }
+            crate::encoding::EncodingType::None => {}
+        }
+        // Encodings are built from placeholder base values; overflow rows
+        // keep snapshot from the side store, so mappings are preserved.
+
+        Ok(())
     }
 
     /// Apply an encoding type independently per chunk.

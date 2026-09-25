@@ -783,8 +783,11 @@ fn test_string_vertex_id_operations() {
         .with_comment(Some("string ID space".to_string()));
     storage.create_space(&mut space).unwrap();
 
-    // Create a tag
+    // Create a tag. The leading `id` column is the primary key that mirrors
+    // the (string) vertex id; name/age are ordinary properties, so `id` is
+    // left out of the insert payloads below and filled by the storage mirror.
     let person_tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+        graphdb_core::types::PropertyDef::new("id".to_string(), graphdb_core::DataType::String),
         graphdb_core::types::PropertyDef::new("name".to_string(), graphdb_core::DataType::String),
         graphdb_core::types::PropertyDef::new("age".to_string(), graphdb_core::DataType::BigInt),
     ]);

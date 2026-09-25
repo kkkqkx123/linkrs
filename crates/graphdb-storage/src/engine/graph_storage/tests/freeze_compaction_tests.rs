@@ -218,7 +218,10 @@ fn test_compact_maintenance_propagates_vertex_remap_to_edge_tables() {
         .data_store()
         .with_vertex_tables(|tables| {
             Ok::<usize, graphdb_core::StorageError>(
-                tables.values().map(|t| t.total_count()).sum::<usize>(),
+                tables
+                    .values()
+                    .map(|t| t.approximate_total_count())
+                    .sum::<usize>(),
             )
         })
         .unwrap();
@@ -232,7 +235,10 @@ fn test_compact_maintenance_propagates_vertex_remap_to_edge_tables() {
         .data_store()
         .with_vertex_tables(|tables| {
             Ok::<usize, graphdb_core::StorageError>(
-                tables.values().map(|t| t.total_count()).sum::<usize>(),
+                tables
+                    .values()
+                    .map(|t| t.approximate_total_count())
+                    .sum::<usize>(),
             )
         })
         .unwrap();
@@ -348,7 +354,7 @@ fn test_auto_vertex_compaction_reclaims_id_holes() {
             Ok::<(usize, usize), graphdb_core::StorageError>(
                 tables
                     .values()
-                    .map(|t| t.id_hole_stats(u64::MAX))
+                    .map(|t| t.approximate_id_hole_stats(u64::MAX))
                     .fold((0, 0), |(l, a), (x, y)| (l + x, a + y)),
             )
         })
@@ -368,16 +374,55 @@ fn test_auto_vertex_compaction_reclaims_id_holes() {
             Ok::<(usize, usize), graphdb_core::StorageError>(
                 tables
                     .values()
-                    .map(|t| t.id_hole_stats(u64::MAX))
+                    .map(|t| t.approximate_id_hole_stats(u64::MAX))
                     .fold((0, 0), |(l, a), (x, y)| (l + x, a + y)),
             )
         })
         .unwrap();
     assert_eq!(
         (live, allocated),
-        (60, 60),
-        "auto compaction should re-densify ID space"
+        (100, 100),
+        "stable compaction absorbs tombstones without re-densifying the ID space"
     );
+
+    // Absorbed holes are reusable by new inserts through the free stack;
+    // recycled slots must serve fresh data. (Allocation counts are
+    // routing-dependent across shards, so exact reuse counts stay covered
+    // by the table-level hole-reuse test.)
+    for i in 101..=105i64 {
+        insert_test_vertex(&mut storage, i, &format!("v{i}"));
+    }
+    let (live, allocated) = storage
+        .ctx
+        .data_store()
+        .with_vertex_tables(|tables| {
+            Ok::<(usize, usize), graphdb_core::StorageError>(
+                tables
+                    .values()
+                    .map(|t| t.approximate_id_hole_stats(u64::MAX))
+                    .fold((0, 0), |(l, a), (x, y)| (l + x, a + y)),
+            )
+        })
+        .unwrap();
+    assert!(
+        allocated <= 105,
+        "allocation must not exceed one slot per new insert: {live}/{allocated}"
+    );
+    for i in 101..=105i64 {
+        let vertex = storage
+            .get_vertex(
+                "test_space",
+                "Person",
+                &VertexId::try_from_int64(i).expect("test vertex id"),
+            )
+            .unwrap()
+            .unwrap_or_else(|| panic!("vertex v{i} lost after hole reuse"));
+        assert_eq!(
+            vertex.property_value("name"),
+            Some(Value::string(format!("v{i}"))),
+            "vertex v{i} property corrupted by hole reuse"
+        );
+    }
 
     // Surviving edges still resolve through the remapped edge CSR.
     for (src, dst) in &expected_edges {

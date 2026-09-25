@@ -67,7 +67,7 @@ pub(crate) fn scan_vertex_serial_column(
     let ts = ctx.version_manager().write_timestamp();
     ctx.data_store().with_vertex_tables(|tables| {
         let table = tables.get(&label)?;
-        let ids = table.live_ids(ts);
+        let ids = table.live_ids_shard_inconsistent(ts);
         let mut present: Vec<i64> = Vec::new();
         let mut max_value: Option<i64> = None;
         if !ids.is_empty() {

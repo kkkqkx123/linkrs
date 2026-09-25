@@ -73,71 +73,10 @@ impl VertexTable {
         for id in &deleted_ids {
             if let Some(key) = self.id_indexer.get_key(*id) {
                 self.id_indexer.remove(&key);
+                self.timestamps.invalidate_slot(*id);
                 removed_keys.push(key);
             }
         }
         Ok((removed_keys, HashMap::new(), CompactionJournal::default()))
-    }
-
-    /// Compact the vertex table using the unified CompactionCoordinator
-    ///
-    /// Crate-internal re-layout step used by watermark-gated compaction
-    /// paths. External callers must go through the watermark-gated
-    /// collection mapping entry point instead of calling this directly.
-    ///
-    /// # Unified Coordination
-    ///
-    /// CompactionCoordinator ensures atomic coordination of three internal structures:
-    /// - **id_indexer**: Key↔ID mapping (authoritative source)
-    /// - **timestamps**: MVCC visibility tracking ([start_ts, end_ts) ranges)
-    /// - **columns**: Property data in columnar format
-    ///
-    /// # Process
-    ///
-    /// 1. Get authoritative ID mapping from id_indexer.compact()
-    /// 2. Propagate remapping to timestamps (if any IDs moved)
-    /// 3. Propagate remapping to columns (if any IDs moved)
-    /// 4. Resize columns to match new id_indexer size
-    /// 5. Verify all invariants (debug builds only)
-    ///
-    /// # Atomicity Guarantee
-    ///
-    /// The coordinated execution is atomic within the table: the dense
-    /// mapping is computed without mutating state, timestamp and column
-    /// replacements are built before either is swapped in, and any failure
-    /// restores the pre-compaction index snapshot. The caller must hold the
-    /// commit barrier (shard write lock, extended to the write gate at the
-    /// maintenance layer) across the vertex remap and the edge endpoint
-    /// rewrite that consumes the returned mapping.
-    ///
-    /// # Invariants Maintained
-    ///
-    /// After successful compaction:
-    /// - Every id_indexer entry has a corresponding timestamps entry
-    /// - Every timestamps entry has a corresponding id_indexer entry (no orphans)
-    /// - columns.row_count() == id_indexer.len()
-    /// - All property data is preserved in new positions
-    ///
-    /// # Performance
-    ///
-    /// - Time complexity: O(n) in number of vertices
-    /// - Space complexity: O(n) for temporary remapping structures
-    /// - Exclusive access required (no concurrent reads)
-    /// - Space reclamation is eager (arrays truncated immediately)
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// // Basic usage
-    /// table.compact_coordinated()?;
-    ///
-    /// // With timing/logging
-    /// let start = std::time::Instant::now();
-    /// table.compact_coordinated()?;
-    /// log::info!("Compaction took {:?}", start.elapsed());
-    /// ```
-    pub(crate) fn compact_coordinated(&mut self) -> StorageResult<()> {
-        let mut coordinator = super::compaction::CompactionCoordinator::new();
-        coordinator.execute(self)
     }
 }

@@ -18,9 +18,104 @@ pub(crate) const COMMIT_MANIFEST_FILE_NAME: &str = "commit_manifest.json";
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct TableManifest {
+    format_version: u8,
     label: graphdb_core::types::LabelId,
     label_name: String,
     num_shards: usize,
+    checksum: u32,
+}
+
+/// Persistent layout version of both manifests. Development builds keep this
+/// at 1; there is no migration, unknown versions are rejected.
+const MANIFEST_FORMAT_VERSION: u8 = 1;
+
+fn table_manifest_checksum(
+    format_version: u8,
+    label: graphdb_core::types::LabelId,
+    label_name: &str,
+    num_shards: usize,
+) -> u32 {
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(&[format_version]);
+    hasher.update(&label.to_le_bytes());
+    hasher.update(label_name.as_bytes());
+    hasher.update(&(num_shards as u64).to_le_bytes());
+    hasher.finalize()
+}
+
+fn commit_manifest_checksum(
+    format_version: u8,
+    epoch: u64,
+    kind: CommitKind,
+    base_epoch: Option<u64>,
+    files: &[String],
+    written_at_ms: u64,
+) -> u32 {
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(&[format_version]);
+    hasher.update(&epoch.to_le_bytes());
+    hasher.update(kind.as_str().as_bytes());
+    hasher.update(&base_epoch.unwrap_or(u64::MAX).to_le_bytes());
+    for file in files {
+        hasher.update(file.as_bytes());
+        hasher.update(&[0]);
+    }
+    hasher.update(&written_at_ms.to_le_bytes());
+    hasher.finalize()
+}
+
+fn verify_table_manifest(manifest: &TableManifest, path: &Path) -> StorageResult<()> {
+    if manifest.format_version != MANIFEST_FORMAT_VERSION {
+        return Err(graphdb_core::StorageError::deserialize_error(format!(
+            "unsupported table manifest version {} at {}, expected {}",
+            manifest.format_version,
+            path.display(),
+            MANIFEST_FORMAT_VERSION,
+        )));
+    }
+    let expected = table_manifest_checksum(
+        manifest.format_version,
+        manifest.label,
+        &manifest.label_name,
+        manifest.num_shards,
+    );
+    if expected != manifest.checksum {
+        return Err(graphdb_core::StorageError::deserialize_error(format!(
+            "table manifest checksum mismatch at {}: expected {:#010x}, got {:#010x}",
+            path.display(),
+            expected,
+            manifest.checksum,
+        )));
+    }
+    Ok(())
+}
+
+fn verify_commit_manifest_content(manifest: &CommitManifest, path: &Path) -> StorageResult<()> {
+    if manifest.format_version != MANIFEST_FORMAT_VERSION {
+        return Err(graphdb_core::StorageError::deserialize_error(format!(
+            "unsupported commit manifest version {} at {}, expected {}",
+            manifest.format_version,
+            path.display(),
+            MANIFEST_FORMAT_VERSION,
+        )));
+    }
+    let expected = commit_manifest_checksum(
+        manifest.format_version,
+        manifest.epoch,
+        manifest.kind,
+        manifest.base_epoch,
+        &manifest.files,
+        manifest.written_at_ms,
+    );
+    if expected != manifest.checksum {
+        return Err(graphdb_core::StorageError::deserialize_error(format!(
+            "commit manifest checksum mismatch at {}: expected {:#010x}, got {:#010x}",
+            path.display(),
+            expected,
+            manifest.checksum,
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -41,11 +136,13 @@ impl CommitKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CommitManifest {
+    pub(crate) format_version: u8,
     pub(crate) epoch: u64,
     pub(crate) kind: CommitKind,
     pub(crate) base_epoch: Option<u64>,
     pub(crate) files: Vec<String>,
     pub(crate) written_at_ms: u64,
+    pub(crate) checksum: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,13 +163,20 @@ pub struct CommitHealthReport {
     pub missing_files: Vec<String>,
     /// Orphan temp/staging files (tolerated, cleaned by recovery).
     pub orphan_tmp_files: Vec<String>,
+    /// Whether every shard's primary-key files decode and agree.
+    pub pk_index_ok: bool,
+    /// Per-shard primary-key decode issues, empty when healthy.
+    pub pk_issues: Vec<String>,
 }
 
 impl CommitHealthReport {
     /// Whether the directory is safe to open strictly: a decodable manifest
-    /// with no missing files.
+    /// with no missing files and a verifiable primary-key index.
     pub fn is_healthy(&self) -> bool {
-        self.manifest_present && self.manifest_decodable && self.missing_files.is_empty()
+        self.manifest_present
+            && self.manifest_decodable
+            && self.missing_files.is_empty()
+            && self.pk_index_ok
     }
 }
 
@@ -119,6 +223,13 @@ fn collect_committed_files(dir: &Path) -> StorageResult<Vec<String>> {
                     .and_then(|n| n.to_str())
                     .unwrap_or_default();
                 if name.ends_with(".tmp") || name == COMMIT_MANIFEST_FILE_NAME {
+                    continue;
+                }
+                // Checkpoint sidecars are derived mmap caches, not
+                // authoritative state: excluded so a missing or pruned
+                // sidecar never refuses the open. Reload re-evicts from
+                // whatever sidecars exist and keeps the rest resident.
+                if name.ends_with(".snapshot") {
                     continue;
                 }
                 let rel = path.strip_prefix(root).map_err(|e| {
@@ -191,10 +302,19 @@ fn cleanup_orphans_tolerant(dir: &Path) {
 
 impl ShardedVertexTable {
     fn write_table_manifest<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
+        let format_version = MANIFEST_FORMAT_VERSION;
+        let checksum = table_manifest_checksum(
+            format_version,
+            self.label,
+            &self.label_name,
+            self.num_shards,
+        );
         let manifest = TableManifest {
+            format_version,
             label: self.label,
             label_name: self.label_name.clone(),
             num_shards: self.num_shards,
+            checksum,
         };
         let payload = serde_json::to_vec(&manifest)
             .map_err(|e| graphdb_core::StorageError::serialize_error(e.to_string()))?;
@@ -217,6 +337,7 @@ impl ShardedVertexTable {
                 e
             ))
         })?;
+        verify_table_manifest(&manifest, &manifest_path)?;
         Ok(Some(manifest))
     }
 
@@ -235,6 +356,7 @@ impl ShardedVertexTable {
                 e
             ))
         })?;
+        verify_commit_manifest_content(&manifest, &manifest_path)?;
         Ok(Some(manifest))
     }
 
@@ -245,12 +367,24 @@ impl ShardedVertexTable {
         base_epoch: Option<u64>,
     ) -> StorageResult<()> {
         let files = collect_committed_files(path.as_ref())?;
+        let format_version = MANIFEST_FORMAT_VERSION;
+        let written_at_ms = now_ms();
+        let checksum = commit_manifest_checksum(
+            format_version,
+            epoch,
+            kind,
+            base_epoch,
+            &files,
+            written_at_ms,
+        );
         let manifest = CommitManifest {
+            format_version,
             epoch,
             kind,
             base_epoch,
             files,
-            written_at_ms: now_ms(),
+            written_at_ms,
+            checksum,
         };
         let payload = serde_json::to_vec(&manifest)
             .map_err(|e| graphdb_core::StorageError::serialize_error(e.to_string()))?;
@@ -269,7 +403,8 @@ impl ShardedVertexTable {
     /// Reuses the recovery path's manifest decoding plus file existence
     /// checks and reports: whether the commit manifest is present and
     /// decodable, its epoch/kind/base-epoch chain pointers, which listed
-    /// files are missing, and which orphan temp files exist. Never writes;
+    /// files are missing, which orphan temp files exist, and whether every
+    /// shard's primary-key files decode and agree. Never writes;
     /// cleanup stays with startup recovery. Baseline plus incremental epoch
     /// chain continuity across directories is validated by the global
     /// checkpoint manifest manager, which sees every table's pointers.
@@ -287,14 +422,16 @@ impl ShardedVertexTable {
             match std::fs::read(&manifest_path) {
                 Ok(payload) => match serde_json::from_slice::<CommitManifest>(&payload) {
                     Ok(manifest) => {
-                        manifest_decodable = true;
-                        epoch = Some(manifest.epoch);
-                        kind = Some(manifest.kind.as_str().to_string());
-                        base_epoch = manifest.base_epoch;
-                        listed_files = manifest.files.clone();
-                        for rel in &manifest.files {
-                            if !dir.join(rel).exists() {
-                                missing_files.push(rel.clone());
+                        if verify_commit_manifest_content(&manifest, &manifest_path).is_ok() {
+                            manifest_decodable = true;
+                            epoch = Some(manifest.epoch);
+                            kind = Some(manifest.kind.as_str().to_string());
+                            base_epoch = manifest.base_epoch;
+                            listed_files = manifest.files.clone();
+                            for rel in &manifest.files {
+                                if !dir.join(rel).exists() {
+                                    missing_files.push(rel.clone());
+                                }
                             }
                         }
                     }
@@ -329,6 +466,19 @@ impl ShardedVertexTable {
             }
         }
         orphan_tmp_files.sort();
+        let mut pk_issues = Vec::new();
+        for index in 0..usize::MAX {
+            let shard_dir = dir.join(format!("shard_{}", index));
+            if !shard_dir.exists() {
+                break;
+            }
+            for issue in crate::vertex::vertex_table::core::VertexTable::verify_pk_files(&shard_dir)
+            {
+                pk_issues.push(format!("shard_{}: {}", index, issue));
+            }
+        }
+        pk_issues.sort();
+        let pk_index_ok = pk_issues.is_empty();
         Ok(CommitHealthReport {
             manifest_present,
             manifest_decodable,
@@ -338,6 +488,8 @@ impl ShardedVertexTable {
             listed_files,
             missing_files,
             orphan_tmp_files,
+            pk_index_ok,
+            pk_issues,
         })
     }
 
@@ -380,6 +532,9 @@ impl ShardedVertexTable {
                         }
                         for missing in &report.missing_files {
                             issues.push(format!("{}: listed file missing: {}", name, missing));
+                        }
+                        for pk_issue in &report.pk_issues {
+                            issues.push(format!("{}: {}", name, pk_issue));
                         }
                         tables.push((name, report));
                     }
@@ -443,7 +598,11 @@ impl ShardedVertexTable {
     fn check_table_manifest<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
         let manifest = Self::read_table_manifest(&path)?;
         let Some(manifest) = manifest else {
-            return Ok(());
+            return Err(graphdb_core::StorageError::deserialize_error(format!(
+                "vertex table '{}' missing table manifest at {}: refusing open without shard layout pin",
+                self.label_name,
+                path.as_ref().join(TABLE_MANIFEST_FILE_NAME).display(),
+            )));
         };
         if manifest.num_shards != self.num_shards {
             return Err(graphdb_core::StorageError::invalid_operation(format!(
@@ -633,17 +792,11 @@ impl ShardedVertexTable {
                 Ok(())
             }
             None => {
-                // Legacy path without a commit manifest: keep loadable.
-                for (i, shard) in self.shards.iter().enumerate() {
-                    let shard_dir = path.join(format!("shard_{}", i));
-                    if shard_dir.exists() {
-                        let mut table = shard.write();
-                        table.load(&shard_dir)?;
-                    } else {
-                        let _ = i;
-                    }
-                }
-                Ok(())
+                return Err(graphdb_core::StorageError::deserialize_error(format!(
+                    "vertex table '{}' missing commit manifest at {}: refusing open without checkpoint pin",
+                    self.label_name,
+                    path.join(COMMIT_MANIFEST_FILE_NAME).display(),
+                )));
             }
         }
     }
@@ -652,7 +805,10 @@ impl ShardedVertexTable {
         let path = path.as_ref();
         match Self::read_commit_manifest(&path)? {
             Some(manifest) => self.apply_delta_pages_strict(path, &manifest),
-            None => self.apply_delta_pages_legacy(path),
+            None => Err(graphdb_core::StorageError::deserialize_error(format!(
+                "missing commit manifest at {}: refusing delta apply without checkpoint pin",
+                path.join(COMMIT_MANIFEST_FILE_NAME).display(),
+            ))),
         }
     }
 
@@ -673,7 +829,7 @@ impl ShardedVertexTable {
             }
             let mut table = shard.write();
             if shard_dir.join("columns_pages").exists() {
-                table.apply_delta_pages_strict(&shard_dir).map_err(|e| {
+                table.apply_delta_pages(&shard_dir).map_err(|e| {
                     graphdb_core::StorageError::deserialize_error(format!(
                         "checkpoint epoch {} shard {} delta corrupt at {}: {}",
                         manifest.epoch,
@@ -732,67 +888,6 @@ impl ShardedVertexTable {
                     e
                 ))
             })?;
-        }
-        Ok(())
-    }
-
-    fn apply_delta_pages_legacy(&self, path: &Path) -> StorageResult<()> {
-        for (i, shard) in self.shards.iter().enumerate() {
-            let shard_dir = path.join(format!("shard_{}", i));
-            let has_delta = shard_dir.join("columns_pages").exists()
-                || shard_dir.join("timestamps.bin").exists()
-                || shard_dir.join("id_indexer.bin").exists()
-                || shard_dir.join("id_indexer.delta").exists();
-            if has_delta && shard_dir.exists() {
-                let mut table = shard.write();
-                // Apply column delta pages if any (corrupted pages are skipped internally)
-                if shard_dir.join("columns_pages").exists() {
-                    if let Err(e) = table.apply_delta_pages(&shard_dir) {
-                        log::warn!(
-                            "Failed to apply delta pages for shard {}: {}, falling back to base",
-                            i,
-                            e
-                        );
-                    }
-                }
-                // For incremental, timestamps and id_indexer are flushed fully; reload them
-                let ts_path = shard_dir.join("timestamps.bin");
-                if ts_path.exists() {
-                    if let Err(e) = table.load_timestamps(&ts_path) {
-                        log::warn!(
-                            "Failed to load timestamps for shard {} from {}: {}",
-                            i,
-                            ts_path.display(),
-                            e
-                        );
-                    }
-                }
-                let id_path = shard_dir.join("id_indexer.bin");
-                if id_path.exists() {
-                    if let Err(e) = table.load_id_indexer(&id_path) {
-                        log::warn!(
-                            "Failed to load id_indexer for shard {} from {}: {}",
-                            i,
-                            id_path.display(),
-                            e
-                        );
-                    }
-                } else {
-                    // A corrupt delta alone never affects the baseline: it is
-                    // discarded and rebuilt by the next flush.
-                    let delta_path = shard_dir.join("id_indexer.delta");
-                    if delta_path.exists() {
-                        if let Err(e) = table.load_id_indexer_delta(&delta_path) {
-                            log::warn!(
-                                "Discarding corrupt id_indexer delta for shard {} from {}: {}",
-                                i,
-                                delta_path.display(),
-                                e
-                            );
-                        }
-                    }
-                }
-            }
         }
         Ok(())
     }
@@ -874,15 +969,15 @@ mod commit_tests {
     }
 
     #[test]
-    fn missing_commit_manifest_stays_legacy_loadable() {
-        let dir = unique_dir("legacy");
+    fn missing_commit_manifest_refuses_open() {
+        let dir = unique_dir("missing-manifest");
         let _ = std::fs::remove_dir_all(&dir);
         let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
         let ts: Timestamp = 10;
         table
             .insert(
-                "v_legacy",
-                &[("name".to_string(), Value::from("v_legacy"))],
+                "v_missing",
+                &[("name".to_string(), Value::from("v_missing"))],
                 ts,
             )
             .unwrap();
@@ -891,8 +986,11 @@ mod commit_tests {
             .unwrap();
         std::fs::remove_file(dir.join(COMMIT_MANIFEST_FILE_NAME)).unwrap();
         let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
-        reloaded.load(&dir).unwrap();
-        assert!(reloaded.get_internal_id("v_legacy", ts).is_some());
+        let err = reloaded.load(&dir).unwrap_err().to_string();
+        assert!(
+            err.contains("commit manifest"),
+            "missing manifest must refuse: {err}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1023,10 +1121,10 @@ mod commit_tests {
             }
         }
         let _ = std::fs::remove_file(incr.join(COMMIT_MANIFEST_FILE_NAME));
-        let legacy = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
-        legacy.load(&base).unwrap();
-        legacy.apply_delta_pages(&incr).unwrap();
-        assert!(legacy.get_internal_id("v1", ts).is_some());
+        let reloaded_missing =
+            ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        reloaded_missing.load(&base).unwrap();
+        assert!(reloaded_missing.apply_delta_pages(&incr).is_err());
         let _ = std::fs::remove_dir_all(&base);
         let _ = std::fs::remove_dir_all(&incr);
     }
@@ -1059,6 +1157,42 @@ mod commit_tests {
         assert!(
             err.contains("commit manifest"),
             "corrupt manifest must refuse with manifest cause: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fault_matrix_tampered_manifest_checksum_refuses_open() {
+        let dir = unique_dir("fault-tamper");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let ts: Timestamp = 10;
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                19,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        let manifest_path = dir.join(COMMIT_MANIFEST_FILE_NAME);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["epoch"] = serde_json::Value::from(20u64);
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(report.manifest_present);
+        assert!(!report.manifest_decodable);
+        assert!(!report.is_healthy());
+        let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let err = reloaded.load(&dir).unwrap_err().to_string();
+        assert!(
+            err.contains("checksum"),
+            "tampered manifest must refuse on checksum: {err}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1106,5 +1240,179 @@ mod commit_tests {
         assert!(!health.is_healthy());
         assert!(health.issues.iter().any(|m| m.contains("missing")));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn write_enveloped_delta(path: &std::path::Path, raw: &[u8]) {
+        use crate::persistence::{section, write_header_to};
+        let mut payload = Vec::new();
+        write_header_to(&mut payload, section::VERTEX_ID_INDEXER_DELTA).unwrap();
+        payload.extend_from_slice(raw);
+        let page_size = crate::compression::DEFAULT_PAGE_SIZE;
+        let mut writer = crate::compression::PageWriter::new(page_size, 3);
+        let mut pages_buf = Vec::new();
+        writer.write_all(&mut pages_buf, &payload).unwrap();
+        let mut final_buf = Vec::new();
+        crate::compression::ColumnFileHeader {
+            page_size,
+            page_count: writer.page_count(),
+            total_rows: 1,
+        }
+        .serialize(&mut final_buf)
+        .unwrap();
+        final_buf.extend_from_slice(&pages_buf);
+        crate::compression::write_shadow_file(path, &final_buf).unwrap();
+    }
+
+    #[test]
+    fn pk_baseline_corrupt_refuses_open_and_health() {
+        let dir = unique_dir("pk-base-corrupt");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+        let ts: Timestamp = 10;
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                41,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(report.is_healthy());
+        assert!(report.pk_index_ok);
+        assert!(report.pk_issues.is_empty());
+
+        std::fs::write(dir.join("shard_0").join("id_indexer.bin"), b"corrupt").unwrap();
+        let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+        let err = reloaded.load(&dir).unwrap_err().to_string();
+        assert!(
+            err.contains("41") && err.contains("shard"),
+            "baseline corruption must refuse with epoch and shard: {err}"
+        );
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(!report.is_healthy());
+        assert!(!report.pk_index_ok);
+        assert!(report.pk_issues.iter().any(|m| m.contains("pk baseline")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pk_diverging_delta_refuses_apply_and_health() {
+        use crate::vertex::id_indexer::{IdKey, IdManager};
+
+        let base = unique_dir("pk-div-base");
+        let incr = unique_dir("pk-div-incr");
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&incr);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+        let ts: Timestamp = 10;
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &base,
+                CompressionType::Zstd { level: 0 },
+                42,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        table
+            .insert("v2", &[("name".to_string(), Value::from("v2"))], ts)
+            .unwrap();
+        table
+            .flush_incremental_with_epoch(&incr, CompressionType::Zstd { level: 0 }, 43, Some(42))
+            .unwrap();
+
+        let mut mgr = IdManager::new();
+        mgr.insert(IdKey::Text("v1".to_string())).unwrap();
+        let mut raw = mgr.serialize_delta();
+        raw[5..9].copy_from_slice(&7u32.to_le_bytes());
+        write_enveloped_delta(&incr.join("shard_0").join("id_indexer.delta"), &raw);
+
+        let strict = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+        strict.load(&base).unwrap();
+        let err = strict.apply_delta_pages(&incr).unwrap_err().to_string();
+        assert!(
+            err.contains("diverges"),
+            "divergent delta must refuse on divergence: {err}"
+        );
+        // Per-directory health only checks decodability here (the anchor
+        // lives in the base directory); the divergence refuses at apply.
+        let report = ShardedVertexTable::inspect_commit_health(&incr).unwrap();
+        assert!(report.pk_index_ok);
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&incr);
+    }
+
+    #[test]
+    fn pk_lingering_delta_flagged_by_health() {
+        use crate::vertex::id_indexer::{IdKey, IdManager};
+
+        let dir = unique_dir("pk-linger");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+        let ts: Timestamp = 10;
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                44,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+
+        let mut mgr = IdManager::new();
+        mgr.insert(IdKey::Text("v1".to_string())).unwrap();
+        let mut raw = mgr.serialize_delta();
+        raw[5..9].copy_from_slice(&7u32.to_le_bytes());
+        write_enveloped_delta(&dir.join("shard_0").join("id_indexer.delta"), &raw);
+
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(!report.is_healthy());
+        assert!(!report.pk_index_ok);
+        assert!(report.pk_issues.iter().any(|m| m.contains("diverges")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn snapshot_sidecars_stay_outside_manifest_and_load() {
+        let dir = unique_dir("snap-manifest");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+        let ts: Timestamp = 10;
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                45,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        let manifest = ShardedVertexTable::read_commit_manifest(&dir)
+            .unwrap()
+            .expect("commit manifest present");
+        assert!(manifest.files.iter().all(|f| !f.ends_with(".snapshot")));
+
+        std::fs::write(dir.join("shard_0").join("name.snapshot"), b"junk").unwrap();
+        let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+        reloaded.load(&dir).unwrap();
+        assert!(reloaded.get_internal_id("v1", ts).is_some());
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(report.is_healthy());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

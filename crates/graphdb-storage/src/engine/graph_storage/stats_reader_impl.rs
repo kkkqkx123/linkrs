@@ -16,6 +16,7 @@ use std::sync::Arc;
 use super::context::GraphStorageContext;
 use super::ops::{edge_label_id, tag_label_id};
 use crate::stats_reader::ColumnStatsSnapshot;
+use crate::stats_reader::TableCardinalitySnapshot;
 
 pub(crate) fn vertex_column_stats(
     ctx: &GraphStorageContext,
@@ -28,6 +29,20 @@ pub(crate) fn vertex_column_stats(
         tables
             .get(&label)
             .and_then(|table| table.column_stats_snapshot_at(column, ctx.get_read_timestamp()))
+    })?;
+    Some(Arc::new(snapshot))
+}
+
+pub(crate) fn vertex_table_stats(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag: &str,
+) -> Option<Arc<TableCardinalitySnapshot>> {
+    let label = tag_label_id(ctx, space, tag).ok()??;
+    let snapshot = ctx.data_store().with_vertex_tables(|tables| {
+        tables
+            .get(&label)
+            .map(|table| table.table_cardinality_at(ctx.get_read_timestamp()))
     })?;
     Some(Arc::new(snapshot))
 }
