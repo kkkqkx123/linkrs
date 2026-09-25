@@ -95,6 +95,9 @@ pub enum SourceOperatorKind {
         /// Tag-restricted scan: only rows of this tag are scanned at the
         /// storage layer.
         tag: Option<String>,
+        /// Optional semi-mask pushed from join or expand: decode exactly
+        /// these global internal ids instead of enumerating the table.
+        semi_mask: Option<Vec<u32>>,
         cursor: Option<Box<dyn VertexCursor>>,
     },
     /// Buffered edge scan — rows come from the spec.
@@ -242,6 +245,7 @@ impl SourceOperator {
                 projected_properties: projected_properties.clone(),
                 predicate: predicate.clone(),
                 tag: tag.clone(),
+                semi_mask: None,
                 cursor: None,
             },
             super::spec::SourceSpec::ScanEdges { rows, col_names } => {
@@ -377,6 +381,15 @@ impl SourceOperator {
                 physical_operator_id: PhysicalOperatorId(0),
             },
             frame: None,
+        }
+    }
+
+    /// Install a join or expand semi-mask on a vertex scan. The mask decodes
+    /// exactly the given global internal ids instead of enumerating the
+    /// table. Must be called before open; opening without a tag fails.
+    pub fn set_semi_mask(&mut self, ids: Vec<u32>) {
+        if let SourceOperatorKind::StorageScanVertices { semi_mask, .. } = &mut self.kind {
+            *semi_mask = Some(ids);
         }
     }
 

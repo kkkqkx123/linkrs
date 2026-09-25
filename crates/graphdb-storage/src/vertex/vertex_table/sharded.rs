@@ -92,6 +92,61 @@ impl ShardedVertexTable {
         }
         Ok(())
     }
+
+    /// Offline redistribution to a new shard count.
+    ///
+    /// Reads every live row at the maximum timestamp and rebuilds it in a
+    /// fresh table with `new_num_shards`. The source stays untouched; the
+    /// caller flushes the returned table and checkpoints it as the new
+    /// baseline. Online shard count changes stay rejected by the table
+    /// manifest; this is the only adjustment outlet.
+    pub fn reshard_to(&self, new_num_shards: usize) -> graphdb_core::StorageResult<Self> {
+        use graphdb_core::types::MAX_TIMESTAMP;
+        let target = new_num_shards
+            .clamp(1, super::sharded::routing::MAX_SHARDS)
+            .next_power_of_two();
+        if target == self.num_shards {
+            return Err(graphdb_core::StorageError::invalid_operation(format!(
+                "reshard is a no-op: table already uses {} shards",
+                self.num_shards
+            )));
+        }
+        let schema = self.schema();
+        let rebuilt = Self::with_config(self.label, self.label_name.clone(), schema, target);
+        let ts = MAX_TIMESTAMP - 1;
+        for key in self.external_id_keys() {
+            let (global, record) = match &key {
+                crate::vertex::IdKey::Text(name) => {
+                    let Some(global) = self.get_internal_id(name, ts) else {
+                        continue;
+                    };
+                    let Some(record) = self.get_by_internal_id(global, ts) else {
+                        continue;
+                    };
+                    (global, record)
+                }
+                crate::vertex::IdKey::Int(n) => {
+                    let Some(global) = self.get_internal_id_by_i64(*n, ts) else {
+                        continue;
+                    };
+                    let Some(record) = self.get_by_internal_id(global, ts) else {
+                        continue;
+                    };
+                    (global, record)
+                }
+            };
+            let _ = global;
+            match &key {
+                crate::vertex::IdKey::Text(name) => {
+                    rebuilt.insert(name, &record.properties, ts)?;
+                }
+                crate::vertex::IdKey::Int(n) => {
+                    rebuilt.insert_by_i64(*n, &record.properties, ts)?;
+                }
+            }
+        }
+        Ok(rebuilt)
+    }
 }
 
 #[cfg(test)]
@@ -292,6 +347,56 @@ mod tests {
         }
         let results = table.scan(ts);
         assert_eq!(results.len(), 50);
+    }
+
+    #[test]
+    fn test_sharded_eviction_pressure_scan_matches_resident() {
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+        let ts = TEST_TS;
+        for i in 0..200 {
+            insert_with_name(&table, &format!("p_{}", i), ts);
+        }
+        let expected = table.scan(ts);
+        assert_eq!(expected.len(), 200);
+        // Fresh overlay chunks stay resident by design; the sharded pass
+        // must still keep quota totals consistent with the full pass and
+        // leave scans intact.
+        let (full_evicted, full_freed) = table.evict_cold_chunks(u64::MAX);
+        let (seg_evicted, seg_freed, _) = table.evict_cold_chunks_with_quota(u64::MAX, 1);
+        assert_eq!((seg_evicted, seg_freed), (full_evicted, full_freed));
+        let after = table.scan(ts);
+        assert_eq!(after.len(), expected.len());
+        let mut before_ids: Vec<u32> = expected.iter().map(|r| r.internal_id).collect();
+        let mut after_ids: Vec<u32> = after.iter().map(|r| r.internal_id).collect();
+        before_ids.sort_unstable();
+        after_ids.sort_unstable();
+        assert_eq!(before_ids, after_ids);
+    }
+
+    #[test]
+    fn test_sharded_eviction_concurrent_write_keeps_new_rows() {
+        use std::sync::Arc;
+        let table = Arc::new(ShardedVertexTable::with_config(
+            1,
+            "t".to_string(),
+            test_schema(),
+            4,
+        ));
+        let ts = TEST_TS;
+        for i in 0..100 {
+            insert_with_name(&table, &format!("c_{}", i), ts);
+        }
+        let writer = Arc::clone(&table);
+        let handle = std::thread::spawn(move || {
+            for i in 100..150 {
+                insert_with_name(&writer, &format!("c_{}", i), ts);
+            }
+        });
+        let _ = table.evict_cold_chunks(u64::MAX);
+        handle.join().expect("writer thread failed");
+        assert_eq!(table.total_count(), 150);
+        let results = table.scan(ts);
+        assert_eq!(results.len(), 150);
     }
 
     #[test]
@@ -531,6 +636,49 @@ mod tests {
     }
 
     #[test]
+    fn test_legacy_and_stable_agree_on_removed_set_above_watermark() {
+        let build = || {
+            let table =
+                ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+            for i in 0..10 {
+                insert_with_name(&table, &format!("row_{}", i), 100);
+            }
+            for i in 0..4 {
+                table.delete(&format!("row_{}", i), 200).unwrap();
+            }
+            table
+        };
+        let legacy = build();
+        let (legacy_removed, legacy_mapping, _) =
+            legacy.compact_with_cutoff_collect_mapping(200).unwrap();
+        let stable = build();
+        let (stable_removed, stable_mapping, _) =
+            stable.compact_with_cutoff_stable_collect(200).unwrap();
+        let mut legacy_sorted = legacy_removed
+            .iter()
+            .map(|k| k.to_string())
+            .collect::<Vec<_>>();
+        legacy_sorted.sort();
+        let mut stable_sorted = stable_removed
+            .iter()
+            .map(|k| k.to_string())
+            .collect::<Vec<_>>();
+        stable_sorted.sort();
+        assert_eq!(legacy_sorted, stable_sorted);
+        assert!(!legacy_mapping.is_empty());
+        assert!(stable_mapping.is_empty());
+        for i in 4..10 {
+            let name = format!("row_{}", i);
+            let legacy_id = legacy.get_internal_id(&name, 200).expect("legacy survivor");
+            let stable_before = build().get_internal_id(&name, 200).expect("pre compact id");
+            let stable_id = stable.get_internal_id(&name, 200).expect("stable survivor");
+            assert_eq!(stable_id, stable_before);
+            assert!(stable.get_by_internal_id(stable_id, 200).is_some());
+            assert!(legacy.get_by_internal_id(legacy_id, 200).is_some());
+        }
+    }
+
+    #[test]
     fn test_concurrent_same_key_insert_allocates_once() {
         use std::sync::Arc;
         let table = Arc::new(ShardedVertexTable::with_config(
@@ -687,5 +835,26 @@ mod tests {
         assert!(results[0].is_ok());
         assert!(results[1].is_err());
         assert!(table.get_internal_id("fresh", ts).is_some());
+    }
+
+    #[test]
+    fn test_reshard_rebuilds_all_rows_under_new_count() {
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let ts = TEST_TS;
+        for i in 0..20 {
+            insert_with_name(&table, &format!("r_{}", i), ts);
+        }
+        let rebuilt = table.reshard_to(8).expect("reshard succeeds");
+        assert_eq!(rebuilt.num_shards(), 8);
+        assert_eq!(rebuilt.total_count(), 20);
+        for i in 0..20 {
+            let name = format!("r_{}", i);
+            let old_id = table.get_internal_id(&name, ts).expect("old row");
+            let new_id = rebuilt.get_internal_id(&name, ts).expect("rebuilt row");
+            let old_record = table.get_by_internal_id(old_id, ts).expect("old record");
+            let new_record = rebuilt.get_by_internal_id(new_id, ts).expect("new record");
+            assert_eq!(old_record.properties, new_record.properties);
+        }
+        assert!(table.reshard_to(2).is_err());
     }
 }

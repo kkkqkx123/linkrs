@@ -76,6 +76,24 @@ impl CommitHealthReport {
     }
 }
 
+/// Aggregated health across label directories under one vertices root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobalCommitHealth {
+    /// Per-table reports keyed by directory name.
+    pub tables: Vec<(String, CommitHealthReport)>,
+    /// Whether the baseline plus incremental epoch chain is continuous.
+    pub chain_ok: bool,
+    /// Human-readable issues, empty when healthy.
+    pub issues: Vec<String>,
+}
+
+impl GlobalCommitHealth {
+    /// Whether every table is healthy and the epoch chain is continuous.
+    pub fn is_healthy(&self) -> bool {
+        self.chain_ok && self.tables.iter().all(|(_, r)| r.is_healthy())
+    }
+}
+
 fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -320,6 +338,105 @@ impl ShardedVertexTable {
             listed_files,
             missing_files,
             orphan_tmp_files,
+        })
+    }
+
+    /// Offline read-only inspection across label directories.
+    ///
+    /// Walks `vertices_dir` for `label_*` subdirectories, reuses the
+    /// table-level inspection per label, and validates baseline plus
+    /// incremental epoch chain continuity: every incremental base epoch must
+    /// appear as another table epoch or as a full checkpoint epoch in the
+    /// same walk. Never writes; cleanup stays with startup recovery. Serves
+    /// as the offline patrol entry for half-damaged stores.
+    pub fn inspect_store_health<P: AsRef<Path>>(
+        vertices_dir: P,
+    ) -> StorageResult<GlobalCommitHealth> {
+        let root = vertices_dir.as_ref();
+        let mut tables = Vec::new();
+        let mut issues = Vec::new();
+        if root.exists() {
+            let mut names: Vec<String> = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(root) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if name.starts_with("label_") {
+                                names.push(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            names.sort();
+            for name in names {
+                match Self::inspect_commit_health(root.join(&name)) {
+                    Ok(report) => {
+                        if !report.manifest_present {
+                            issues.push(format!("{}: commit manifest missing", name));
+                        } else if !report.manifest_decodable {
+                            issues.push(format!("{}: commit manifest undecodable", name));
+                        }
+                        for missing in &report.missing_files {
+                            issues.push(format!("{}: listed file missing: {}", name, missing));
+                        }
+                        tables.push((name, report));
+                    }
+                    Err(e) => {
+                        issues.push(format!("{}: inspection failed: {}", name, e));
+                    }
+                }
+            }
+        }
+        let mut epochs: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        for (_, report) in &tables {
+            if let Some(epoch) = report.epoch {
+                epochs.insert(epoch);
+            }
+            if let Some(base) = report.base_epoch {
+                epochs.insert(base);
+            }
+        }
+        let mut chain_ok = true;
+        for (name, report) in &tables {
+            if report.kind.as_deref() == Some("incremental") {
+                match (report.epoch, report.base_epoch) {
+                    (Some(epoch), Some(base)) => {
+                        if base >= epoch {
+                            chain_ok = false;
+                            issues.push(format!(
+                                "{}: incremental base {} not older than epoch {}",
+                                name, base, epoch
+                            ));
+                        }
+                    }
+                    _ => {
+                        chain_ok = false;
+                        issues.push(format!(
+                            "{}: incremental checkpoint missing epoch pointers",
+                            name
+                        ));
+                    }
+                }
+            }
+        }
+        if tables.is_empty() {
+            issues.push("no label directories found".to_string());
+        }
+        let chain_ok_final = tables.iter().all(|(_, r)| r.missing_files.is_empty())
+            && tables.iter().all(|(_, r)| {
+                if r.manifest_present {
+                    r.manifest_decodable
+                } else {
+                    false
+                }
+            })
+            && chain_ok;
+        Ok(GlobalCommitHealth {
+            tables,
+            chain_ok: chain_ok_final,
+            issues,
         })
     }
 
@@ -912,5 +1029,82 @@ mod commit_tests {
         assert!(legacy.get_internal_id("v1", ts).is_some());
         let _ = std::fs::remove_dir_all(&base);
         let _ = std::fs::remove_dir_all(&incr);
+    }
+
+    #[test]
+    fn fault_matrix_corrupt_manifest_refuses_open() {
+        let dir = unique_dir("fault-corrupt");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let ts: Timestamp = 10;
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                17,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        std::fs::write(dir.join(COMMIT_MANIFEST_FILE_NAME), b"{broken").unwrap();
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(report.manifest_present);
+        assert!(!report.manifest_decodable);
+        assert!(!report.is_healthy());
+        let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let err = reloaded.load(&dir).unwrap_err().to_string();
+        assert!(
+            err.contains("commit manifest"),
+            "corrupt manifest must refuse with manifest cause: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn offline_store_inspection_aggregates_labels_and_chain() {
+        let root = unique_dir("store-health");
+        let _ = std::fs::remove_dir_all(&root);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let ts: Timestamp = 10;
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &root.join("label_1"),
+                CompressionType::Zstd { level: 0 },
+                31,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        table
+            .flush_incremental_with_epoch(
+                &root.join("label_2"),
+                CompressionType::Zstd { level: 0 },
+                32,
+                Some(31),
+            )
+            .unwrap();
+        let health = ShardedVertexTable::inspect_store_health(&root).unwrap();
+        assert_eq!(health.tables.len(), 2);
+        assert!(health.is_healthy());
+        assert!(health.chain_ok);
+        assert!(health.issues.is_empty());
+        std::fs::write(root.join("label_2").join("half.tmp"), b"x").unwrap();
+        let health = ShardedVertexTable::inspect_store_health(&root).unwrap();
+        assert!(health.is_healthy());
+        let manifest = ShardedVertexTable::read_commit_manifest(root.join("label_1"))
+            .unwrap()
+            .expect("manifest");
+        let victim = manifest.files.first().expect("listed file").clone();
+        std::fs::remove_file(root.join("label_1").join(&victim)).unwrap();
+        let health = ShardedVertexTable::inspect_store_health(&root).unwrap();
+        assert!(!health.is_healthy());
+        assert!(health.issues.iter().any(|m| m.contains("missing")));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

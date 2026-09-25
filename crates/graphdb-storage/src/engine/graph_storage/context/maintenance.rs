@@ -108,7 +108,10 @@ impl GraphStorageContext {
         // Compaction re-densifies internal IDs: cached ID mappings and
         // vertex records for remapped labels are keyed by stale IDs.
         // Bump their invalidation generations (O(1) per label) so newer
-        // readers fall back to the remapped tables.
+        // readers fall back to the remapped tables. The zero-rewrite gate
+        // also runs here; while the stable switch stays off it passes
+        // through, documenting the future fail-closed behavior.
+        let _ = assert_zero_edge_rewrite(&vertex_mappings);
         for &label_id in vertex_mappings.keys() {
             self.persistent
                 .cache_manager

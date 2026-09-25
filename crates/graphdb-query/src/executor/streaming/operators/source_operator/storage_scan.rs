@@ -57,6 +57,10 @@ pub fn column_block_enabled() -> bool {
 /// Open the storage-backed scan source variants, creating the cursor that
 /// streams batches from storage.
 pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
+    // Fixed execution batch shared by storage and executor: the operator
+    // chunk size clamped to the storage default keeps vectorized batches
+    // aligned end to end.
+    let fixed_batch = op.config.chunk_size.clamp(1, 2048);
     let state = match &mut op.kind {
         SourceOperatorKind::StorageScanVertices {
             storage,
@@ -67,31 +71,32 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
             projected_properties,
             predicate,
             tag,
+            semi_mask,
             cursor,
         } => {
             let storage_ref = storage.as_ref().ok_or_else(|| {
                 QueryError::execution("StorageScanVertices requires storage".to_string())
             })?;
+            let mut options = ScanOptions {
+                limit: *limit,
+                vertex_id_range: partition_range.clone(),
+                projection: (!projected_properties.is_empty()).then(|| {
+                    projected_properties
+                        .iter()
+                        .map(|n| RequiredProperty::new(n.clone()))
+                        .collect()
+                }),
+                predicate: (!predicate.is_empty()).then(|| predicate.clone()),
+                tag: tag.clone(),
+                column_block_mode: column_block_enabled(),
+                batch_size: fixed_batch,
+                ..ScanOptions::default()
+            };
+            if let Some(mask) = semi_mask.clone() {
+                options = options.with_internal_id_allowlist(mask);
+            }
             *cursor = Some(
-                open_vertex_scan(
-                    storage_ref,
-                    space_name,
-                    &ScanOptions {
-                        limit: *limit,
-                        vertex_id_range: partition_range.clone(),
-                        projection: (!projected_properties.is_empty()).then(|| {
-                            projected_properties
-                                .iter()
-                                .map(|n| RequiredProperty::new(n.clone()))
-                                .collect()
-                        }),
-                        predicate: (!predicate.is_empty()).then(|| predicate.clone()),
-                        tag: tag.clone(),
-                        column_block_mode: column_block_enabled(),
-                        ..ScanOptions::default()
-                    },
-                )
-                .map_err(|error| {
+                open_vertex_scan(storage_ref, space_name, &options).map_err(|error| {
                     storage_error("StorageScanVertices", "open cursor", space_name, error)
                 })?,
             );
@@ -134,6 +139,7 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
                         }),
                         predicate: (!predicate.is_empty()).then(|| predicate.clone()),
                         column_block_mode: column_block_enabled(),
+                        batch_size: fixed_batch,
                         ..ScanOptions::default()
                     },
                 )
@@ -316,8 +322,9 @@ fn next_column_chunk(
         Some(c) => c,
         None => return Ok(None),
     };
+    let fixed_batch = op.config.chunk_size.clamp(1, 2048);
     let batch = cur
-        .next_column_batch(projected_properties, op.config.chunk_size)
+        .next_column_batch(projected_properties, fixed_batch)
         .map_err(|error| storage_error(source, "read column batch", space_name, error))?;
     if batch.is_empty() {
         return Ok(None);
