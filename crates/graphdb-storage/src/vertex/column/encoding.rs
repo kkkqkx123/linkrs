@@ -12,26 +12,23 @@ use super::Column;
 
 impl Column {
     pub fn encoding_type(&self) -> EncodingType {
-        self.encoding.encoding_type()
+        self.encoding.read().encoding_type()
     }
 
-    pub fn encoding(&self) -> &ColumnEncoding {
-        &self.encoding
+    /// Owned snapshot of the column-level encoding marker for persistence
+    /// serialization.
+    pub fn encoding_snapshot(&self) -> ColumnEncoding {
+        self.encoding.read().clone()
     }
 
-    pub fn set_stats(&mut self, stats: ColumnStats) {
-        self.stats = Some(stats);
+    pub fn set_stats(&self, stats: ColumnStats) {
+        *self.stats.write() = Some(stats);
         // Loaded data bypasses write_value, so the zone maps must be
         // rebuilt from the persisted column contents.
         self.rebuild_zone_maps();
     }
 
-    pub(super) fn sync_row_count_from_encoding(&mut self) {
-        let encoded_len = self.encoding.len();
-        self.inner_mut().resize(encoded_len);
-    }
-
-    pub fn apply_fsst_encoding(&mut self, max_symbols: usize) -> StorageResult<()> {
+    pub fn apply_fsst_encoding(&self, max_symbols: usize) -> StorageResult<()> {
         if self.data_type != DataType::String
             && self.data_type != DataType::Json
             && !matches!(self.data_type, DataType::FixedString(_))
@@ -88,12 +85,12 @@ impl Column {
             updates_since_rebuild: 0,
         };
 
-        self.encoding = ColumnEncoding::Fsst(fsst_col);
+        *self.encoding.write() = ColumnEncoding::Fsst(fsst_col);
 
         Ok(())
     }
 
-    pub fn apply_dictionary_encoding(&mut self) -> StorageResult<()> {
+    pub fn apply_dictionary_encoding(&self) -> StorageResult<()> {
         if self.data_type != DataType::String && !matches!(self.data_type, DataType::FixedString(_))
         {
             return Err(StorageError::not_supported(
@@ -109,12 +106,12 @@ impl Column {
             dict_col.set(i, value.as_ref())?;
         }
 
-        self.encoding = ColumnEncoding::Dictionary(dict_col);
+        *self.encoding.write() = ColumnEncoding::Dictionary(dict_col);
 
         Ok(())
     }
 
-    pub fn apply_rle_encoding(&mut self) -> StorageResult<()> {
+    pub fn apply_rle_encoding(&self) -> StorageResult<()> {
         use crate::encoding::{RleBoolColumn, RleIntColumn};
 
         match self.data_type {
@@ -124,7 +121,7 @@ impl Column {
                     let value = self.get(i);
                     rle_col.append(value.as_ref())?;
                 }
-                self.encoding = ColumnEncoding::RleBool(rle_col);
+                *self.encoding.write() = ColumnEncoding::RleBool(rle_col);
             }
             DataType::SmallInt | DataType::Int | DataType::BigInt => {
                 let mut rle_col = RleIntColumn::new();
@@ -132,7 +129,7 @@ impl Column {
                     let value = self.get(i);
                     rle_col.append(value.as_ref())?;
                 }
-                self.encoding = ColumnEncoding::RleInt(rle_col);
+                *self.encoding.write() = ColumnEncoding::RleInt(rle_col);
             }
             _ => {
                 return Err(StorageError::not_supported(format!(
@@ -145,7 +142,7 @@ impl Column {
         Ok(())
     }
 
-    pub fn apply_bitpacking_encoding(&mut self) -> StorageResult<()> {
+    pub fn apply_bitpacking_encoding(&self) -> StorageResult<()> {
         use crate::encoding::BitPackedIntColumn;
 
         match self.data_type {
@@ -155,7 +152,7 @@ impl Column {
                     values.push(self.get(i));
                 }
                 let bp_col = BitPackedIntColumn::analyze(&values, self.data_type.clone())?;
-                self.encoding = ColumnEncoding::BitPacked(bp_col);
+                *self.encoding.write() = ColumnEncoding::BitPacked(bp_col);
             }
             _ => {
                 return Err(StorageError::not_supported(format!(
@@ -168,7 +165,7 @@ impl Column {
         Ok(())
     }
 
-    pub fn apply_constant_encoding(&mut self) -> StorageResult<()> {
+    pub fn apply_constant_encoding(&self) -> StorageResult<()> {
         use crate::encoding::ConstantColumn;
 
         let mut values: Vec<Option<Value>> = Vec::with_capacity(self.len());
@@ -182,11 +179,11 @@ impl Column {
         }
         let first = values.first().cloned().unwrap_or(None);
         let col = ConstantColumn::new(first, self.len());
-        self.encoding = ColumnEncoding::Constant(col);
+        *self.encoding.write() = ColumnEncoding::Constant(col);
         Ok(())
     }
 
-    pub fn apply_alp_encoding(&mut self) -> StorageResult<()> {
+    pub fn apply_alp_encoding(&self) -> StorageResult<()> {
         use crate::encoding::AlpColumn;
 
         match self.data_type {
@@ -196,7 +193,7 @@ impl Column {
                     values.push(self.get(i));
                 }
                 let alp_col = AlpColumn::analyze_values(&values, self.data_type.clone())?;
-                self.encoding = ColumnEncoding::Alp(alp_col);
+                *self.encoding.write() = ColumnEncoding::Alp(alp_col);
             }
             _ => {
                 return Err(StorageError::not_supported(format!(
@@ -234,9 +231,10 @@ impl Column {
                     .unwrap_or(0),
             ) as u64;
 
-        let compressed_size = if self.encoding.is_encoded() {
+        let enc = self.encoding.read().clone();
+        let compressed_size = if enc.is_encoded() {
             let mut metadata = Vec::new();
-            self.encoding.serialize_meta(&mut metadata)?;
+            enc.serialize_meta(&mut metadata)?;
             metadata.len() as u64
         } else {
             raw_size
@@ -253,7 +251,7 @@ impl Column {
     }
 
     /// Rebuild zone maps and per-chunk encoding profiles in one pass.
-    pub fn rebuild_chunk_profiles(&mut self) {
+    pub fn rebuild_chunk_profiles(&self) {
         if self.maybe_rebuild_zone_maps_exact() {
             // Exact rebuild already refreshed zone maps and summaries from
             // current plus version chains; fall through to refresh chunk
@@ -261,7 +259,7 @@ impl Column {
         } else {
             self.rebuild_zone_maps();
         }
-        if self.chunks.is_empty() {
+        if self.chunks.read().is_empty() {
             return;
         }
         // Raw size is column-wide and identical for every chunk: resolve the
@@ -269,14 +267,31 @@ impl Column {
         let (flush_data, flush_offsets, _) = self.get_flush_data();
         let raw_size = flush_data.len() as u64 + flush_offsets.len() as u64 * 8;
         let total_rows = self.len();
-        for idx in 0..self.chunks.len() {
-            // Evicted chunks keep their pre-evict profile: zone maps and
-            // HLL stay resident at the column level and keep serving.
-            if self.chunks[idx].residency.is_evicted() {
+        // Windows are read once up front; the per-chunk refresh below only
+        // touches segment latches, so no container lock is held across rows.
+        let windows: Vec<(usize, usize, bool)> = {
+            let chunks = self.chunks.read();
+            chunks
+                .iter()
+                .map(|chunk| {
+                    (
+                        chunk.row_offset,
+                        chunk.row_count,
+                        chunk.read_state().residency.is_evicted(),
+                    )
+                })
+                .collect()
+        };
+        if windows.is_empty() {
+            return;
+        }
+        for (start, count_rows, evicted) in windows {
+            // Evicted chunks keep their pre-evict profile: zone maps stay
+            // resident in the segment state and keep serving.
+            if evicted {
                 continue;
             }
-            let start = self.chunks[idx].row_offset;
-            let end = (start + self.chunks[idx].row_count).min(total_rows);
+            let end = (start + count_rows).min(total_rows);
             let mut min: Option<Value> = None;
             let mut max: Option<Value> = None;
             let mut count = 0u32;
@@ -292,14 +307,21 @@ impl Column {
                 }
             }
             let all_null = count == 0;
-            let enc_bytes = self.chunks[idx].encoding.memory_usage() as u64;
-            self.chunks[idx].refresh_encoding_meta(count, all_null, min, max, enc_bytes, raw_size);
+            // Refresh the owning chunk's profile by window match; a missing
+            // window (concurrent-free exclusive load only) skips silently.
+            let chunks = self.chunks.read();
+            if let Some(chunk) = chunks.iter().find(|chunk| {
+                chunk.row_offset == start && chunk.row_count == count_rows
+            }) {
+                let enc_bytes = chunk.read_state().encoding.memory_usage() as u64;
+                chunk.refresh_encoding_meta(count, all_null, min, max, enc_bytes, raw_size);
+            }
         }
     }
 
     /// Persisted column statistics meta (min/max/null/distinct from the last
     /// flush), if any. Complements the always-fresh zone maps with counts.
-    pub fn stats(&self) -> Option<&crate::column_stats::ColumnStats> {
-        self.stats.as_ref()
+    pub fn stats(&self) -> Option<crate::column_stats::ColumnStats> {
+        self.stats.read().clone()
     }
 }

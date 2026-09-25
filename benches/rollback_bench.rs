@@ -102,7 +102,8 @@ fn run_transaction(storage: &GraphStorage, edge_count: usize, tx_seq: u64) -> Ru
     let edges: Vec<Edge> = (0..edge_count)
         .map(|i| Edge {
             src: VertexId::try_from_int64(i as i64 % VERTEX_COUNT as i64).expect("valid vertex id"),
-            dst: VertexId::try_from_int64((i as i64 + 1) % VERTEX_COUNT as i64).expect("valid vertex id"),
+            dst: VertexId::try_from_int64((i as i64 + 1) % VERTEX_COUNT as i64)
+                .expect("valid vertex id"),
             edge_type: EDGE.to_string(),
             ranking: tx_seq as i64 * 2_000_000 + i as i64,
             props: Default::default(),

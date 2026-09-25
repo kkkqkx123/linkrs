@@ -34,6 +34,17 @@ pub fn assert_zero_edge_rewrite(
 }
 
 impl GraphStorageContext {
+    /// Offline maintenance barrier for explicit offline tools.
+    ///
+    /// Serializes against auto-commit writes for the whole lease lifetime so
+    /// a rebuild and its catalog swap commit as one unit while reads continue
+    /// on their pre-tool snapshots.
+    pub(crate) fn offline_maintenance_barrier(
+        &self,
+    ) -> std::sync::Arc<super::autocommit::AutoCommitWriteLease> {
+        self.persistent.auto_commit_write_gate.acquire()
+    }
+
     /// Offline vertex remap with old-to-new internal ID propagation into
     /// edge tables.
     ///
@@ -424,7 +435,7 @@ mod stable_assertion_tests {
     fn zero_rewrite_assertion_is_dormant_until_switch() {
         // Stable row ids are enabled, so any above-watermark remap fails
         // the gate instead of passing through.
-        assert!(STABLE_ROW_IDS_ENABLED);
+        const _: () = assert!(STABLE_ROW_IDS_ENABLED);
         let mut mappings: HashMap<LabelId, HashMap<u32, u32>> = HashMap::new();
         mappings.insert(1, [(0u32, 1u32)].into_iter().collect());
         assert!(assert_zero_edge_rewrite(&mappings).is_err());

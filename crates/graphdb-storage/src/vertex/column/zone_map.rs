@@ -333,28 +333,51 @@ pub fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
 // Column zone-map methods
 // ---------------------------------------------------------------------------
 
+/// Zone-map state shared across a column's segments.
+///
+/// Zone granularity (`ZONE_MAP_CHUNK_ROWS`) is independent of the segment
+/// (chunk) capacity: one zone spans many segments when the capacity is
+/// small, so zones cannot be sliced per segment without duplicating shared
+/// entries. They live here behind a dedicated latch instead. Widening takes
+/// the latch once per write and only does a few comparisons, so the shared
+/// section stays around a hundred nanoseconds and never nests inside a
+/// segment latch (segment-before-zone order holds on every path).
+#[derive(Debug, Clone, Default)]
+pub(super) struct ZoneMaps {
+    /// Per-zone min/max bounds over written values, used by scans for
+    /// zone-map pruning. Bounds only ever widen after writes (deletes and
+    /// nulls leave them stale but conservative), so pruning stays correct
+    /// for any MVCC snapshot.
+    pub maps: Vec<ZoneBounds>,
+    /// Per-zone length summaries for complex and variable-length values,
+    /// parallel to `maps`. Used for equality length pre-pruning when
+    /// whole-value ordering alone cannot skip a zone.
+    pub complex: Vec<ComplexZoneSummary>,
+}
+
 impl Column {
-    /// Widen the chunk bounds covering `row_idx` with `value`.
+    /// Widen the zone bounds covering `row_idx` with `value`.
     ///
-    /// Bounds never shrink: a later update that removes a chunk's extreme
+    /// Bounds never shrink: a later update that removes a zone's extreme
     /// leaves stale-but-conservative bounds, which keeps pruning sound
     /// for any MVCC snapshot.
-    pub(super) fn update_zone_maps(&mut self, row_idx: usize, value: Option<&Value>) {
+    pub(super) fn update_zone_maps(&self, row_idx: usize, value: Option<&Value>) {
         let Some(v) = value else {
             return;
         };
         if v.is_null() {
             return;
         }
+        let mut zone = self.zone.write();
         let chunk = row_idx / ZONE_MAP_CHUNK_ROWS;
-        if chunk >= self.zone_maps.len() {
-            self.zone_maps.resize_with(chunk + 1, ZoneBounds::default);
+        if chunk >= zone.maps.len() {
+            zone.maps.resize_with(chunk + 1, ZoneBounds::default);
         }
-        if chunk >= self.zone_complex.len() {
-            self.zone_complex
+        if chunk >= zone.complex.len() {
+            zone.complex
                 .resize_with(chunk + 1, ComplexZoneSummary::default);
         }
-        let bounds = &mut self.zone_maps[chunk];
+        let bounds = &mut zone.maps[chunk];
         match &bounds.min {
             Some(min) if compare_values(min, v) != std::cmp::Ordering::Greater => {}
             _ => bounds.min = Some(v.clone()),
@@ -364,7 +387,7 @@ impl Column {
             _ => bounds.max = Some(v.clone()),
         }
         if let Some(len) = complex_len(v) {
-            let summary = &mut self.zone_complex[chunk];
+            let summary = &mut zone.complex[chunk];
             summary.count += 1;
             match summary.len_min {
                 Some(cur) if cur <= len => {}
@@ -388,7 +411,7 @@ impl Column {
         }
     }
 
-    /// Recompute chunk bounds from the current column contents without
+    /// Recompute zone bounds from the current column contents without
     /// shrinking them.
     ///
     /// Recomputation only widens: historical extrema stay, so the bounds
@@ -396,7 +419,9 @@ impl Column {
     /// a version chain, not just the current contents. Pruning against
     /// these bounds is therefore sound for any snapshot timestamp; the
     /// price is the documented stale-but-conservative tradeoff.
-    pub fn rebuild_zone_maps(&mut self) {
+    ///
+    /// Exclusive-only (load/analyze path): it rewrites shared zone state.
+    pub fn rebuild_zone_maps(&self) {
         for row_idx in 0..self.len() {
             // Chunk-aware base read: overlay first, then chunk encodings.
             let value = self.get(row_idx);
@@ -412,28 +437,18 @@ impl Column {
     /// garbage-collected shrink away, while live history stays covered, so
     /// pruning regains precision without breaking historical reads. The
     /// stale-write counter resets on success.
-    pub fn rebuild_zone_maps_exact(&mut self) {
-        self.zone_maps.clear();
-        self.zone_complex.clear();
-        self.zone_stale_writes = 0;
+    ///
+    /// Exclusive-only (GC path): it rewrites shared zone state.
+    pub fn rebuild_zone_maps_exact(&self) {
+        self.zone.write().maps.clear();
+        self.zone.write().complex.clear();
+        self.zone_stale_writes.store(0, std::sync::atomic::Ordering::Relaxed);
         let total = self.len();
         for row_idx in 0..total {
             let value = self.get(row_idx);
             self.update_zone_maps(row_idx, value.as_ref());
         }
-        let chained: Vec<(usize, Option<Value>)> = self.with_version_chains_read(|chains| {
-            chains
-                .map(|entries| {
-                    entries
-                        .iter()
-                        .enumerate()
-                        .flat_map(|(row, chain)| {
-                            chain.iter().map(move |entry| (row, entry.value.clone()))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default()
-        });
+        let chained: Vec<(usize, Option<Value>)> = self.collect_chained_values();
         for (row_idx, value) in chained {
             self.update_zone_maps(row_idx, value.as_ref());
         }
@@ -441,12 +456,13 @@ impl Column {
 
     /// Whether accumulated versioned writes make an exact rebuild worthwhile.
     pub fn zone_needs_exact_rebuild(&self) -> bool {
-        self.zone_stale_writes >= ZONE_STALE_REBUILD_THRESHOLD
+        self.zone_stale_writes.load(std::sync::atomic::Ordering::Relaxed)
+            >= ZONE_STALE_REBUILD_THRESHOLD
     }
 
     /// Rebuild exactly when the stale-write threshold is crossed. Returns
     /// whether a rebuild happened.
-    pub fn maybe_rebuild_zone_maps_exact(&mut self) -> bool {
+    pub fn maybe_rebuild_zone_maps_exact(&self) -> bool {
         if !self.zone_needs_exact_rebuild() {
             return false;
         }
@@ -454,19 +470,26 @@ impl Column {
         true
     }
 
-    /// Per-chunk min/max bounds (one entry per [`ZONE_MAP_CHUNK_ROWS`] rows).
-    pub fn zone_maps(&self) -> &[ZoneBounds] {
-        &self.zone_maps
+    /// Per-zone min/max bounds (one entry per [`ZONE_MAP_CHUNK_ROWS`] rows).
+    pub fn zone_maps(&self) -> Vec<ZoneBounds> {
+        self.zone.read().maps.clone()
     }
 
-    /// Per-chunk length summaries parallel to [`Self::zone_maps`].
-    pub fn zone_complex(&self) -> &[ComplexZoneSummary] {
-        &self.zone_complex
+    /// Per-zone length summaries parallel to [`Self::zone_maps`].
+    pub fn zone_complex(&self) -> Vec<ComplexZoneSummary> {
+        self.zone.read().complex.clone()
+    }
+
+    /// Bounds of one zone chunk, if the zone exists.
+    pub fn zone_for_chunk(&self, chunk: usize) -> Option<ZoneBounds> {
+        self.zone.read().maps.get(chunk).cloned()
     }
 
     /// Length interval of one zone chunk, if any measured value exists.
     pub fn complex_len_bounds(&self, chunk: usize) -> Option<(usize, usize)> {
-        self.zone_complex
+        self.zone
+            .read()
+            .complex
             .get(chunk)
             .and_then(|s| match (s.len_min, s.len_max) {
                 (Some(lo), Some(hi)) => Some((lo, hi)),

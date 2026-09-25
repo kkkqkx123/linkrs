@@ -251,7 +251,7 @@ impl CsrWithProperties {
                 let Some(bounds) = self
                     .property_columns
                     .get(*col)
-                    .and_then(|c| c.zone_maps().get(chunk))
+                    .and_then(|c| c.zone_for_chunk(chunk))
                 else {
                     continue;
                 };

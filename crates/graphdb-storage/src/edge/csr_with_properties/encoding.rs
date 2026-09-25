@@ -31,11 +31,11 @@ impl CsrWithProperties {
             }
         }
         let persisted = col.stats();
-        let null_count = persisted.map(|s| s.null_count);
-        let (distinct_count, hll) = match persisted.and_then(|s| s.hll.clone()) {
+        let null_count = persisted.as_ref().map(|s| s.null_count);
+        let (distinct_count, hll) = match persisted.as_ref().and_then(|s| s.hll.clone()) {
             Some(h) => {
                 let est = h.estimate();
-                (Some(est), persisted.and_then(|s| s.hll.clone()))
+                (Some(est), persisted.as_ref().and_then(|s| s.hll.clone()))
             }
             None => (None, None),
         };

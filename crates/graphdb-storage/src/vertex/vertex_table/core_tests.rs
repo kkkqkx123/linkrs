@@ -28,7 +28,7 @@ impl VerifyInvariants for VertexTable {
 
         // Check 1: Every key in id_indexer has a valid timestamp entry
         for (key, idx) in self.id_indexer.iter() {
-            let start_ts = self.timestamps.get_start_ts(idx);
+            let start_ts = self.timestamps.read().get_start_ts(idx);
             if start_ts.is_none() {
                 return Err(StorageError::new(
                     StorageErrorKind::StorageError,
@@ -38,8 +38,8 @@ impl VerifyInvariants for VertexTable {
         }
 
         // Check 2: Every valid timestamp entry has a corresponding key in id_indexer
-        for idx in 0..self.timestamps.size() {
-            if let Some(_start_ts) = self.timestamps.get_start_ts(idx as u32) {
+        for idx in 0..self.timestamps.read().size() {
+            if let Some(_start_ts) = self.timestamps.read().get_start_ts(idx as u32) {
                 let key = self.id_indexer.get_key(idx as u32);
                 if key.is_none() {
                     return Err(StorageError::new(
@@ -598,7 +598,7 @@ fn test_compact_delete_all() {
         "id_indexer should be empty after removing all deleted entries"
     );
     assert_eq!(
-        table.timestamps.size(),
+        table.timestamps.read().size(),
         0,
         "timestamps should be empty after removing all deleted entries"
     );
@@ -737,7 +737,7 @@ fn test_compact_id_consistency() {
 
     assert_eq!(
         table.id_indexer.len(),
-        table.timestamps.size(),
+        table.timestamps.read().size(),
         "id_indexer and timestamps must have same size"
     );
     assert_eq!(
@@ -943,10 +943,11 @@ fn test_flush_chunk_sidecars_and_chunked_reload() {
             crate::compression::CompressionType::Zstd { level: 3 },
         )
         .unwrap();
-    // Chunk metadata is written alongside columns.bin without format change.
+    // Raw columns carry their chunks inside columns.bin; no chunk metadata
+    // sidecar is written anymore.
     assert!(shard.join("columns.bin").exists());
-    assert!(shard.join("age.chunks").exists());
-    assert!(shard.join("name.chunks").exists());
+    assert!(!shard.join("age.chunks").exists());
+    assert!(!shard.join("name.chunks").exists());
 
     let mut reloaded = new_table(0, "person", schema);
     reloaded.load(&shard).unwrap();
@@ -956,7 +957,7 @@ fn test_flush_chunk_sidecars_and_chunked_reload() {
     assert_eq!(props.get("age"), Some(&Value::Int(10)));
 
     // Chunked columns serve point reads after reload.
-    let age = reloaded.columns.get_column_mut("age").unwrap();
+    let age = reloaded.columns.get_column("age").unwrap();
     age.set_chunk_capacity(8);
     age.materialize_chunks();
     assert!(age.chunk_count() >= 2);
@@ -965,6 +966,89 @@ fn test_flush_chunk_sidecars_and_chunked_reload() {
     let rec = reloaded.get_by_internal_id(0, 100).unwrap();
     let props: std::collections::HashMap<String, Value> = rec.properties.into_iter().collect();
     assert_eq!(props.get("age"), Some(&Value::Int(0)));
+}
+
+#[test]
+fn test_flush_raw_chunk_under_encoded_column_keeps_rows() {
+    use tempfile::TempDir;
+    // Per-chunk selection can leave one chunk raw while the column-level
+    // mirror still reports the scheme of the first chunk. The per-chunk
+    // record form describes encodings only, so such a column must dump raw.
+    let mut schema = create_test_schema();
+    schema.properties.push(StoragePropertyDef {
+        name: "score".to_string(),
+        data_type: DataType::Double,
+        nullable: true,
+        default_value: None,
+    });
+    let config = || VertexTableConfig {
+        chunk_capacity: 8,
+        ..VertexTableConfig::default()
+    };
+    let mut table = VertexTable::with_config(0, "person".to_string(), schema.clone(), config());
+    let values: Vec<f64> = (0..16u32)
+        .map(|row| {
+            if row < 8 {
+                1.0 + row as f64 * 0.5
+            } else {
+                // Fraction-free-but-irrational spacing defeats the ALP
+                // exception budget, so this chunk selects raw storage.
+                row as f64 * std::f64::consts::PI
+            }
+        })
+        .collect();
+    for (row, value) in values.iter().enumerate() {
+        table
+            .insert(
+                &format!("v{}", row),
+                &[
+                    ("name".to_string(), Value::string(format!("n{}", row))),
+                    ("score".to_string(), Value::Double(*value)),
+                ],
+                100,
+            )
+            .unwrap();
+    }
+    let schemes: Vec<_> = {
+        let col = table.columns.get_column("score").unwrap();
+        col.materialize_chunks();
+        col.apply_encoding_to_chunks(crate::encoding::EncodingType::Alp, 255)
+            .unwrap();
+        col.chunk_encoding_metadata()
+            .into_iter()
+            .map(|(_, scheme, _)| scheme)
+            .collect()
+    };
+    assert_eq!(
+        schemes,
+        vec![
+            crate::encoding::EncodingType::Alp,
+            crate::encoding::EncodingType::None
+        ],
+        "mixed layout is the case under test"
+    );
+
+    let tmp = TempDir::new().unwrap();
+    let shard = tmp.path().join("shard");
+    table
+        .flush(
+            &shard,
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .unwrap();
+
+    let mut reloaded = VertexTable::with_config(0, "person".to_string(), schema, config());
+    reloaded.load(&shard).unwrap();
+    let col = reloaded.columns.get_column("score").unwrap();
+    assert_eq!(col.len(), 16);
+    for (row, value) in values.iter().enumerate() {
+        assert_eq!(
+            col.get(row),
+            Some(Value::Double(*value)),
+            "row {} lost",
+            row
+        );
+    }
 }
 
 #[test]
@@ -1011,7 +1095,7 @@ fn test_partial_compact_preserves_unmoved_rows() {
         table.verify_invariants().unwrap();
     }
     assert_eq!(table.columns.row_count(), table.id_indexer.len());
-    assert_eq!(table.id_indexer.len(), table.timestamps.size());
+    assert_eq!(table.id_indexer.len(), table.timestamps.read().size());
 }
 
 #[test]

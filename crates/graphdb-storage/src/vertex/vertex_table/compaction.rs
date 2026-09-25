@@ -92,10 +92,10 @@ pub struct CompactionJournal {
 /// One journaled compaction step, in execution order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompactionStep {
-    IndexRemap,
-    TimestampRemap,
-    ColumnRemap,
-    EdgeRemap,
+    Index,
+    Timestamp,
+    Column,
+    Edge,
 }
 
 impl CompactionJournal {
@@ -130,7 +130,7 @@ impl CompactionJournal {
     /// the vertex swaps commit and before edge endpoints are rewritten,
     /// keeping vertex and edge work in one journaled barrier.
     pub fn record_edge_remap(&mut self) {
-        self.record(CompactionStep::EdgeRemap);
+        self.record(CompactionStep::Edge);
     }
 
     /// Combine per-shard journals into one table-level journal.
@@ -250,12 +250,12 @@ impl CompactionCoordinator {
                     return Err(e);
                 }
             };
-            self.journal.record(CompactionStep::IndexRemap);
+            self.journal.record(CompactionStep::Index);
             let applied = table.id_indexer.compact()?;
             debug_assert_eq!(applied, self.id_mapping);
-            self.journal.record(CompactionStep::TimestampRemap);
-            table.timestamps = new_timestamps;
-            self.journal.record(CompactionStep::ColumnRemap);
+            self.journal.record(CompactionStep::Timestamp);
+        *table.timestamps.write() = new_timestamps;
+            self.journal.record(CompactionStep::Column);
             table.columns = new_columns;
         } else {
             // No remapping, but clean up any orphaned timestamps
@@ -296,9 +296,9 @@ impl CompactionCoordinator {
 
         for &old_id in old_live_ids {
             let new_id = self.id_mapping.get(&old_id).copied().unwrap_or(old_id);
-            if let Some(start_ts) = table.timestamps.get_start_ts(old_id) {
+            if let Some(start_ts) = table.timestamps.read().get_start_ts(old_id) {
                 new_timestamps.insert(new_id, start_ts);
-                if let Some(end_ts) = table.timestamps.get_end_ts(old_id) {
+                if let Some(end_ts) = table.timestamps.read().get_end_ts(old_id) {
                     if end_ts < crate::vertex::MAX_TIMESTAMP {
                         new_timestamps.remove(new_id, end_ts);
                     }
@@ -328,7 +328,7 @@ impl CompactionCoordinator {
         for prop in &table.schema.properties {
             if let (Some(src), Some(dst)) = (
                 table.columns.get_column(&prop.name),
-                new_columns.get_column_mut(&prop.name),
+                new_columns.get_column(&prop.name),
             ) {
                 dst.set_chunk_capacity(src.chunk_capacity());
                 dst.set_overflow_threshold(table.string_overflow_threshold);
@@ -367,13 +367,13 @@ impl CompactionCoordinator {
             super::super::VertexTimestamp::with_capacity(table.id_indexer.len());
 
         // Copy only timestamps entries that have corresponding id_indexer entries
-        for idx in 0..table.timestamps.size() {
+        for idx in 0..table.timestamps.read().size() {
             let idx_u32 = idx as u32;
             if table.id_indexer.get_key(idx_u32).is_some() {
                 // This ID is still in id_indexer, keep its timestamp info
-                if let Some(start_ts) = table.timestamps.get_start_ts(idx_u32) {
+                if let Some(start_ts) = table.timestamps.read().get_start_ts(idx_u32) {
                     new_timestamps.insert(idx_u32, start_ts);
-                    if let Some(end_ts) = table.timestamps.get_end_ts(idx_u32) {
+                    if let Some(end_ts) = table.timestamps.read().get_end_ts(idx_u32) {
                         if end_ts < crate::vertex::MAX_TIMESTAMP {
                             new_timestamps.remove(idx_u32, end_ts);
                         }
@@ -382,7 +382,7 @@ impl CompactionCoordinator {
             }
         }
 
-        table.timestamps = new_timestamps;
+        *table.timestamps.write() = new_timestamps;
     }
 }
 

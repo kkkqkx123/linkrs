@@ -17,18 +17,30 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
-        let internal_id = self
+        // Caller-owned staging scope: the update is buffered and applied at
+        // the commit hook inside this call, so a failed request leaves no
+        // global write behind. The table handle is cloned out of the catalog
+        // first so staging and commit never nest catalog locks.
+        let mut scope = crate::vertex::WriteScope::new(ts);
+        let table = self
             .persistent
             .data_store
-            .with_vertex_tables_mut(|vertex_tables| {
-                let table = vertex_tables.get(&label).ok_or_else(|| {
+            .with_vertex_tables(|vertex_tables| {
+                vertex_tables.get(&label).cloned().ok_or_else(|| {
                     StorageError::label_not_found(format!("vertex label {}", label))
-                })?;
-                let internal_id = table
-                    .get_internal_id(external_id, ts)
-                    .ok_or(StorageError::vertex_not_found())?;
-                table.update_property(internal_id, property_name, value, ts)?;
-                Ok(internal_id)
+                })
+            })?;
+        let internal_id = table
+            .get_internal_id(external_id, ts)
+            .ok_or(StorageError::vertex_not_found())?;
+        table
+            .update_property_with_scope(internal_id, property_name, value, ts, &mut scope)
+            .inspect_err(|_| {
+                self.rollback_write_scope(label, &mut scope, ts);
+            })?;
+        self.commit_write_scope(label, &mut scope, ts)
+            .inspect_err(|_| {
+                self.rollback_write_scope(label, &mut scope, ts);
             })?;
 
         self.persistent
@@ -51,18 +63,26 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
-        let internal_id = self
+        let mut scope = crate::vertex::WriteScope::new(ts);
+        let table = self
             .persistent
             .data_store
-            .with_vertex_tables_mut(|vertex_tables| {
-                let table = vertex_tables.get(&label).ok_or_else(|| {
+            .with_vertex_tables(|vertex_tables| {
+                vertex_tables.get(&label).cloned().ok_or_else(|| {
                     StorageError::label_not_found(format!("vertex label {}", label))
-                })?;
-                let internal_id = table
-                    .get_internal_id_by_i64(external_id, ts)
-                    .ok_or(StorageError::vertex_not_found())?;
-                table.update_property(internal_id, property_name, value, ts)?;
-                Ok(internal_id)
+                })
+            })?;
+        let internal_id = table
+            .get_internal_id_by_i64(external_id, ts)
+            .ok_or(StorageError::vertex_not_found())?;
+        table
+            .update_property_with_scope(internal_id, property_name, value, ts, &mut scope)
+            .inspect_err(|_| {
+                self.rollback_write_scope(label, &mut scope, ts);
+            })?;
+        self.commit_write_scope(label, &mut scope, ts)
+            .inspect_err(|_| {
+                self.rollback_write_scope(label, &mut scope, ts);
             })?;
 
         self.persistent

@@ -27,8 +27,6 @@ pub struct EncodingThresholds {
     pub alp_exception_threshold: f64,
     /// Maximum dictionary entries per chunk.
     pub dict_max_entries_per_chunk: usize,
-    /// Chunk update count above which a chunk is considered hot.
-    pub hot_update_threshold: u64,
 }
 
 impl Default for EncodingThresholds {
@@ -42,7 +40,6 @@ impl Default for EncodingThresholds {
             fsst_max_symbols: 255,
             alp_exception_threshold: 0.25,
             dict_max_entries_per_chunk: 65536,
-            hot_update_threshold: 1000,
         }
     }
 }

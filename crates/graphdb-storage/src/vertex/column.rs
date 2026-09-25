@@ -36,7 +36,7 @@ pub mod zone_map;
 #[cfg(test)]
 mod tests;
 
-pub use chunk::ColumnChunk;
+pub use chunk::{ChunkFlushView, ColumnChunk};
 pub use column::{Column, ColumnStorage, EVICTION_SEGMENT_BYTES, MAX_BACKGROUND_LOAD_CHUNKS};
 pub use column_store::ColumnStore;
 pub use fixed_width::element_size;

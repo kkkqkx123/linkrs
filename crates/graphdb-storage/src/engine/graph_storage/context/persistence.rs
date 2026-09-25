@@ -610,7 +610,35 @@ impl GraphStorageContext {
                                 if let Some(name_str) = dir_name.to_str() {
                                     if let Some(label_str) = name_str.strip_prefix("label_") {
                                         if let Ok(label_id) = label_str.parse::<LabelId>() {
-                                            if let Some(table) = vertex_tables.get(&label_id) {
+                                            if let Some(table) =
+                                                vertex_tables.get(&label_id).cloned()
+                                            {
+                                                // The persisted layout owns the
+                                                // identifier decoding: adopt the
+                                                // manifest layout when it differs
+                                                // from the running configuration
+                                                // (which only governs new tables).
+                                                // Layout or version mismatches
+                                                // refuse the open with a rebuild
+                                                // directive instead of mis-decoding.
+                                                if let Some(layout) =
+                                                    crate::vertex::vertex_table::ShardedVertexTable::manifest_layout(&path)?
+                                                {
+                                                    if layout != table.layout() {
+                                                        let rebuilt = std::sync::Arc::new(
+                                                            crate::vertex::vertex_table::ShardedVertexTable::with_layout(
+                                                                label_id,
+                                                                table.label_name().to_string(),
+                                                                table.schema(),
+                                                                layout,
+                                                            ),
+                                                        );
+                                                        vertex_tables.insert(label_id, rebuilt);
+                                                    }
+                                                }
+                                                let table = vertex_tables
+                                                    .get(&label_id)
+                                                    .expect("table present after layout adopt");
                                                 table.as_ref().load(&path)?;
                                             }
                                         }

@@ -1,17 +1,18 @@
 use parking_lot::RwLock;
 
 use super::core::{VertexTable, VertexTableConfig};
+use super::sharded::routing::ShardLayout;
 
 mod maintenance;
 pub(crate) mod persistence;
 mod read;
-mod routing;
+pub(crate) mod routing;
 mod schema;
 mod write;
 
 pub struct ShardedVertexTable {
     shards: Vec<RwLock<VertexTable>>,
-    num_shards: usize,
+    layout: ShardLayout,
     label: graphdb_core::types::LabelId,
     label_name: String,
 }
@@ -31,9 +32,25 @@ impl ShardedVertexTable {
         schema: crate::vertex::VertexSchema,
         num_shards: usize,
     ) -> Self {
-        let num_shards = num_shards.clamp(1, routing::MAX_SHARDS).next_power_of_two();
-        let mut shards = Vec::with_capacity(num_shards);
-        for _ in 0..num_shards {
+        Self::with_layout(
+            label,
+            label_name,
+            schema,
+            ShardLayout::for_new_table(num_shards),
+        )
+    }
+
+    /// Build a table under an explicit versioned layout. New tables use
+    /// [`ShardLayout::for_new_table`]; opened tables use the layout pinned
+    /// in their manifest.
+    pub(crate) fn with_layout(
+        label: graphdb_core::types::LabelId,
+        label_name: String,
+        schema: crate::vertex::VertexSchema,
+        layout: ShardLayout,
+    ) -> Self {
+        let mut shards = Vec::with_capacity(layout.num_shards);
+        for _ in 0..layout.num_shards {
             shards.push(RwLock::new(VertexTable::with_config(
                 label,
                 label_name.clone(),
@@ -43,7 +60,7 @@ impl ShardedVertexTable {
         }
         Self {
             shards,
-            num_shards,
+            layout,
             label,
             label_name,
         }
@@ -58,7 +75,7 @@ impl ShardedVertexTable {
             let id_count = table.id_indexer.len();
 
             for (key, idx) in table.id_indexer.iter() {
-                let start_ts = table.timestamps.get_start_ts(idx);
+                let start_ts = table.timestamps.read().get_start_ts(idx);
                 if start_ts.is_none() {
                     return Err(graphdb_core::StorageError::new(
                         StorageErrorKind::StorageError,
@@ -67,8 +84,8 @@ impl ShardedVertexTable {
                 }
             }
 
-            for idx in 0..table.timestamps.size() {
-                if let Some(_start_ts) = table.timestamps.get_start_ts(idx as u32) {
+            for idx in 0..table.timestamps.read().size() {
+                if let Some(_start_ts) = table.timestamps.read().get_start_ts(idx as u32) {
                     let key = table.id_indexer.get_key(idx as u32);
                     if key.is_none() {
                         return Err(graphdb_core::StorageError::new(
@@ -99,25 +116,30 @@ impl ShardedVertexTable {
     /// Offline redistribution to a new shard count.
     ///
     /// Reads every live row at the maximum timestamp and rebuilds it in a
-    /// fresh table with `new_num_shards`. The source stays untouched; the
-    /// caller flushes the returned table and checkpoints it as the new
-    /// baseline, then retires the old checkpoint directory. Online shard
-    /// count changes stay rejected by the table manifest; this is the only
-    /// adjustment outlet.
+    /// fresh table with `new_num_shards`, returning the rebuilt table plus
+    /// the old-global to new-global internal id mapping the rebuild
+    /// produced. The source stays untouched; the caller flushes the returned
+    /// table and checkpoints it as the new baseline, then retires the old
+    /// checkpoint directory. Online shard count changes stay rejected by the
+    /// table manifest; this is the only adjustment outlet.
     ///
     /// Offline fence: the caller must hold the maintenance barrier with no
     /// concurrent writes, and no staged schema change may be pending on any
     /// shard. A pending schema change rejects the rebuild so a half-applied
     /// schema cannot leak into the new shard layout.
-    pub fn reshard_to(&self, new_num_shards: usize) -> graphdb_core::StorageResult<Self> {
+    pub fn reshard_to(
+        &self,
+        new_num_shards: usize,
+    ) -> graphdb_core::StorageResult<(
+        Self,
+        std::collections::HashMap<u32, u32>,
+    )> {
         use graphdb_core::types::MAX_TIMESTAMP;
-        let target = new_num_shards
-            .clamp(1, super::sharded::routing::MAX_SHARDS)
-            .next_power_of_two();
-        if target == self.num_shards {
+        let target = ShardLayout::for_new_table(new_num_shards);
+        if target == self.layout {
             return Err(graphdb_core::StorageError::invalid_operation(format!(
                 "reshard is a no-op: table already uses {} shards",
-                self.num_shards
+                self.layout.num_shards
             )));
         }
         for (idx, shard) in self.shards.iter().enumerate() {
@@ -130,46 +152,47 @@ impl ShardedVertexTable {
             }
         }
         let schema = self.schema();
-        let rebuilt = Self::with_config(self.label, self.label_name.clone(), schema, target);
+        let rebuilt = Self::with_layout(self.label, self.label_name.clone(), schema, target);
         let ts = MAX_TIMESTAMP - 1;
+        let mut id_mapping: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
         for key in self.external_id_keys() {
-            let (global, record) = match &key {
+            let (old_global, record) = match &key {
                 crate::vertex::IdKey::Text(name) => {
-                    let Some(global) = self.get_internal_id(name, ts) else {
+                    let Some(old_global) = self.get_internal_id(name, ts) else {
                         continue;
                     };
-                    let Some(record) = self.get_by_internal_id(global, ts) else {
+                    let Some(record) = self.get_by_internal_id(old_global, ts) else {
                         continue;
                     };
-                    (global, record)
+                    (old_global, record)
                 }
                 crate::vertex::IdKey::Int(n) => {
-                    let Some(global) = self.get_internal_id_by_i64(*n, ts) else {
+                    let Some(old_global) = self.get_internal_id_by_i64(*n, ts) else {
                         continue;
                     };
-                    let Some(record) = self.get_by_internal_id(global, ts) else {
+                    let Some(record) = self.get_by_internal_id(old_global, ts) else {
                         continue;
                     };
-                    (global, record)
+                    (old_global, record)
                 }
             };
-            let _ = global;
-            match &key {
+            let new_global = match &key {
                 crate::vertex::IdKey::Text(name) => {
-                    rebuilt.insert(name, &record.properties, ts)?;
+                    rebuilt.insert(name, &record.properties, ts)?
                 }
                 crate::vertex::IdKey::Int(n) => {
-                    rebuilt.insert_by_i64(*n, &record.properties, ts)?;
+                    rebuilt.insert_by_i64(*n, &record.properties, ts)?
                 }
-            }
+            };
+            id_mapping.insert(old_global, new_global);
         }
-        Ok(rebuilt)
+        Ok((rebuilt, id_mapping))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::routing::{decode_id, encode_id, SEGMENT_SLOTS};
+    use super::routing::{decode_id, encode_id, ShardLayout, SEGMENT_SLOTS};
     use super::*;
     use graphdb_core::types::MAX_TIMESTAMP;
     const TEST_TS: Timestamp = MAX_TIMESTAMP - 1;
@@ -199,18 +222,20 @@ mod tests {
     #[test]
     fn test_encode_decode_id() {
         for num_shards in [1usize, 2, 4, 8, 16, 32, 64, 128, 256] {
+            let layout = ShardLayout::for_new_table(num_shards);
+            let slots = layout.segment_slots();
             for shard in 0..num_shards {
                 for local in [
                     0,
                     1,
                     42,
-                    SEGMENT_SLOTS - 1,
-                    SEGMENT_SLOTS,
-                    SEGMENT_SLOTS * num_shards as u32,
+                    slots - 1,
+                    slots,
+                    slots * num_shards as u32,
                     u32::MAX / num_shards as u32,
                 ] {
-                    let e = encode_id(shard, local, num_shards);
-                    let (s, l) = decode_id(e, num_shards);
+                    let e = encode_id(shard, local, layout);
+                    let (s, l) = decode_id(e, layout);
                     assert_eq!(s, shard, "shard mismatch: {e:#x}");
                     assert_eq!(l, local, "local mismatch: {e:#x}");
                 }
@@ -301,6 +326,18 @@ mod tests {
             .unwrap()
     }
 
+    /// Guard over a version manager with no write in flight: every stamp is a
+    /// slot the manager never owned, so the plain timestamp predicate applies.
+    fn scan_guard<'a>(
+        ts: Timestamp,
+        manager: &'a graphdb_transaction::VersionManager,
+    ) -> crate::mvcc_visibility::VisibilityGuard<'a> {
+        crate::mvcc_visibility::VisibilityGuard::new(
+            ts,
+            crate::mvcc_visibility::PendingGate::new(manager, None),
+        )
+    }
+
     #[test]
     fn test_delete() {
         let table = ShardedVertexTable::with_config(1, "person".to_string(), test_schema(), 4);
@@ -357,13 +394,14 @@ mod tests {
     }
 
     #[test]
-    fn test_scan_shard_inconsistent() {
+    fn test_scan() {
         let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
         let ts = TEST_TS;
         for i in 0..50 {
             insert_with_name(&table, &format!("k{}", i), ts);
         }
-        let results = table.scan_shard_inconsistent(ts);
+        let manager = graphdb_transaction::VersionManager::new();
+        let results = table.scan(&scan_guard(ts, &manager));
         assert_eq!(results.len(), 50);
     }
 
@@ -374,7 +412,8 @@ mod tests {
         for i in 0..200 {
             insert_with_name(&table, &format!("p_{}", i), ts);
         }
-        let expected = table.scan_shard_inconsistent(ts);
+        let manager = graphdb_transaction::VersionManager::new();
+        let expected = table.scan(&scan_guard(ts, &manager));
         assert_eq!(expected.len(), 200);
         // Fresh overlay chunks stay resident by design; the sharded pass
         // must still keep quota totals consistent with the full pass and
@@ -382,7 +421,7 @@ mod tests {
         let (full_evicted, full_freed) = table.evict_cold_chunks(u64::MAX);
         let (seg_evicted, seg_freed, _) = table.evict_cold_chunks_with_quota(u64::MAX, 1);
         assert_eq!((seg_evicted, seg_freed), (full_evicted, full_freed));
-        let after = table.scan_shard_inconsistent(ts);
+        let after = table.scan(&scan_guard(ts, &manager));
         assert_eq!(after.len(), expected.len());
         let mut before_ids: Vec<u32> = expected.iter().map(|r| r.internal_id).collect();
         let mut after_ids: Vec<u32> = after.iter().map(|r| r.internal_id).collect();
@@ -413,8 +452,105 @@ mod tests {
         let _ = table.evict_cold_chunks(u64::MAX);
         handle.join().expect("writer thread failed");
         assert_eq!(table.approximate_total_count(), 150);
-        let results = table.scan_shard_inconsistent(ts);
+        let manager = graphdb_transaction::VersionManager::new();
+        let results = table.scan(&scan_guard(ts, &manager));
         assert_eq!(results.len(), 150);
+    }
+
+    /// A column-major scan must not surface a property value written by a
+    /// foreign uncommitted transaction: the row is decoded at the version
+    /// below the pending stamp.
+    #[test]
+    fn test_scan_columns_hides_foreign_pending_property_write() {
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+        let manager = graphdb_transaction::VersionManager::new();
+        let insert_ts = manager.acquire_insert_timestamp().expect("insert stamp");
+        let id = table
+            .insert(
+                "dave",
+                &[
+                    ("name".to_string(), Value::from("dave")),
+                    ("age".to_string(), Value::Int(30)),
+                ],
+                insert_ts,
+            )
+            .expect("insert");
+        manager.commit_ordered(insert_ts).expect("commit insert");
+
+        let pending_ts = manager.acquire_insert_timestamp().expect("pending stamp");
+        table
+            .update_property(id, "age", &Value::Int(99), pending_ts)
+            .expect("pending update");
+
+        let guard = crate::mvcc_visibility::VisibilityGuard::new(
+            pending_ts,
+            crate::mvcc_visibility::PendingGate::new(&manager, None),
+        );
+        let age = ["age".to_string()];
+        let (ids, vids, columns) = table.scan_columns(&[id], &guard, &age);
+        assert_eq!(ids, vec![id]);
+        assert_eq!(vids.len(), 1);
+        assert_eq!(columns[0].1.value_at(0), Some(Value::Int(30)));
+
+        // The row-major decode applies the same fallback.
+        let records = table.resolve_projected_batch(&[id], &guard, Some(&age));
+        let record = records[0].as_ref().expect("visible record");
+        assert_eq!(
+            record
+                .properties
+                .iter()
+                .find(|(name, _)| name == "age")
+                .expect("age column")
+                .1,
+            Value::Int(30)
+        );
+
+        // Once the writer commits, the same snapshot observes the new value.
+        manager.commit_ordered(pending_ts).expect("commit pending");
+        let committed = crate::mvcc_visibility::VisibilityGuard::new(
+            pending_ts,
+            crate::mvcc_visibility::PendingGate::new(&manager, None),
+        );
+        let (_, _, columns) = table.scan_columns(&[id], &committed, &age);
+        assert_eq!(columns[0].1.value_at(0), Some(Value::Int(99)));
+    }
+
+    #[test]
+    fn test_scan_recovers_foreign_pending_delete() {
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+        let manager = graphdb_transaction::VersionManager::new();
+        let insert_ts = manager.acquire_insert_timestamp().expect("insert stamp");
+        let id = insert_with_name(&table, "erin", insert_ts);
+        manager.commit_ordered(insert_ts).expect("commit insert");
+
+        let pending_ts = manager.acquire_insert_timestamp().expect("pending stamp");
+        table
+            .delete_by_internal_id(id, pending_ts)
+            .expect("pending delete");
+        let guard = crate::mvcc_visibility::VisibilityGuard::new(
+            pending_ts,
+            crate::mvcc_visibility::PendingGate::new(&manager, None),
+        );
+
+        let records = table.scan(&guard);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].internal_id, id);
+
+        let ids = table.live_ids(&guard);
+        assert_eq!(ids, vec![id]);
+
+        let resolved = table
+            .resolve_projected(id, &guard, None)
+            .expect("point read sees pre-delete version");
+        assert_eq!(resolved.internal_id, id);
+
+        manager.commit_ordered(pending_ts).expect("commit delete");
+        let committed = crate::mvcc_visibility::VisibilityGuard::new(
+            pending_ts,
+            crate::mvcc_visibility::PendingGate::new(&manager, None),
+        );
+        assert!(table.scan(&committed).is_empty());
+        assert!(table.live_ids(&committed).is_empty());
     }
 
     #[test]
@@ -892,13 +1028,15 @@ mod tests {
         for i in 0..20 {
             insert_with_name(&table, &format!("r_{}", i), ts);
         }
-        let rebuilt = table.reshard_to(8).expect("reshard succeeds");
+        let (rebuilt, mapping) = table.reshard_to(8).expect("reshard succeeds");
         assert_eq!(rebuilt.num_shards(), 8);
         assert_eq!(rebuilt.approximate_total_count(), 20);
+        assert_eq!(mapping.len(), 20);
         for i in 0..20 {
             let name = format!("r_{}", i);
             let old_id = table.get_internal_id(&name, ts).expect("old row");
             let new_id = rebuilt.get_internal_id(&name, ts).expect("rebuilt row");
+            assert_eq!(mapping.get(&old_id), Some(&new_id));
             let old_record = table.get_by_internal_id(old_id, ts).expect("old record");
             let new_record = rebuilt.get_by_internal_id(new_id, ts).expect("new record");
             assert_eq!(old_record.properties, new_record.properties);
@@ -943,7 +1081,7 @@ mod tests {
             "fence must name the pending schema change: {err}"
         );
         table.abort_pending_schema_change();
-        let rebuilt = table.reshard_to(4).expect("reshard succeeds after abort");
+        let (rebuilt, _) = table.reshard_to(4).expect("reshard succeeds after abort");
         assert_eq!(rebuilt.num_shards(), 4);
         assert!(rebuilt.get_internal_id("r_0", TEST_TS).is_some());
     }

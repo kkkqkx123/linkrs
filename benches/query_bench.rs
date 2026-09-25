@@ -163,13 +163,21 @@ fn bench_simple_query_parse(c: &mut Criterion) {
 
     group.bench_function("parse_simple_vertex_query", |b| {
         b.iter(|| {
-            let _ = storage.get_vertex("bench_q100e3", "Node", &VertexId::try_from_string("n1").expect("valid vertex id"));
+            let _ = storage.get_vertex(
+                "bench_q100e3",
+                "Node",
+                &VertexId::try_from_string("n1").expect("valid vertex id"),
+            );
         });
     });
 
     group.bench_function("parse_simple_edge_query", |b| {
         b.iter(|| {
-            let _ = storage.get_vertex("bench_q100e3", "Node", &VertexId::try_from_string("n1").expect("valid vertex id"));
+            let _ = storage.get_vertex(
+                "bench_q100e3",
+                "Node",
+                &VertexId::try_from_string("n1").expect("valid vertex id"),
+            );
         });
     });
 
@@ -203,7 +211,11 @@ fn bench_path_traversal(c: &mut Criterion) {
     for hop_count in &[2usize, 3] {
         group.bench_function(format!("{}_hop", hop_count), |b| {
             b.iter(|| {
-                let _ = storage.get_vertex("bench_q200e5", "Node", &VertexId::try_from_string("n1").expect("valid vertex id"));
+                let _ = storage.get_vertex(
+                    "bench_q200e5",
+                    "Node",
+                    &VertexId::try_from_string("n1").expect("valid vertex id"),
+                );
             });
         });
     }
@@ -223,7 +235,11 @@ fn bench_aggregation_queries(c: &mut Criterion) {
 
     group.bench_function("get_vertex", |b| {
         b.iter(|| {
-            let _ = storage.get_vertex("bench_q500e3", "Node", &VertexId::try_from_string("n1").expect("valid vertex id"));
+            let _ = storage.get_vertex(
+                "bench_q500e3",
+                "Node",
+                &VertexId::try_from_string("n1").expect("valid vertex id"),
+            );
         });
     });
 

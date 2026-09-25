@@ -21,10 +21,7 @@ pub(super) fn select_encoding_for_column(
     for ci in 0..n_chunks {
         let start = ci * capacity;
         let end = (start + capacity).min(total);
-        let hot = col
-            .chunk_for_row(start)
-            .map(|c| c.needs_recode(selector.thresholds().hot_update_threshold))
-            .unwrap_or(false);
+        let hot = col.chunk_needs_recode_for_row(start);
         let profile = profile_chunk((start..end).map(|r| col.get(r)), &col.data_type, hot);
         let choice = selector.select_for_chunk_profile(&profile);
         *votes.entry(choice.to_u8()).or_insert(0) += 1;

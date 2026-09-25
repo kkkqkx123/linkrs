@@ -187,7 +187,7 @@ mod tests {
         }
         // Narrow plus read-heavy now recommends bundled.
         assert_eq!(table.recommended_record_form(), RecordForm::Bundled);
-        let _ = narrow_read_heavy(&table);
+        narrow_read_heavy(&table);
     }
 
     #[test]

@@ -22,24 +22,30 @@ struct TableManifest {
     label: graphdb_core::types::LabelId,
     label_name: String,
     num_shards: usize,
+    segment_slots_bits: u32,
     checksum: u32,
 }
 
-/// Persistent layout version of both manifests. Development builds keep this
-/// at 1; there is no migration, unknown versions are rejected.
-const MANIFEST_FORMAT_VERSION: u8 = 1;
+/// Persistent layout version of both manifests. Version 2 pins the full
+/// shard layout (shard count plus segment slot width) that global internal
+/// IDs are encoded with. Version 1 manifests carry only the shard count and
+/// are rejected with a rebuild directive; there is no automatic migration
+/// and unknown versions are rejected the same way.
+const MANIFEST_FORMAT_VERSION: u8 = 2;
 
 fn table_manifest_checksum(
     format_version: u8,
     label: graphdb_core::types::LabelId,
     label_name: &str,
     num_shards: usize,
+    segment_slots_bits: u32,
 ) -> u32 {
     let mut hasher = crc32fast::Hasher::new();
     hasher.update(&[format_version]);
     hasher.update(&label.to_le_bytes());
     hasher.update(label_name.as_bytes());
     hasher.update(&(num_shards as u64).to_le_bytes());
+    hasher.update(&segment_slots_bits.to_le_bytes());
     hasher.finalize()
 }
 
@@ -67,7 +73,9 @@ fn commit_manifest_checksum(
 fn verify_table_manifest(manifest: &TableManifest, path: &Path) -> StorageResult<()> {
     if manifest.format_version != MANIFEST_FORMAT_VERSION {
         return Err(graphdb_core::StorageError::deserialize_error(format!(
-            "unsupported table manifest version {} at {}, expected {}",
+            "unsupported table manifest version {} at {}, expected {}: \
+             the shard layout format changed; rebuild the table with the \
+             offline redistribution tool instead of opening it in place",
             manifest.format_version,
             path.display(),
             MANIFEST_FORMAT_VERSION,
@@ -78,6 +86,7 @@ fn verify_table_manifest(manifest: &TableManifest, path: &Path) -> StorageResult
         manifest.label,
         &manifest.label_name,
         manifest.num_shards,
+        manifest.segment_slots_bits,
     );
     if expected != manifest.checksum {
         return Err(graphdb_core::StorageError::deserialize_error(format!(
@@ -307,13 +316,15 @@ impl ShardedVertexTable {
             format_version,
             self.label,
             &self.label_name,
-            self.num_shards,
+            self.layout.num_shards,
+            self.layout.segment_slots_bits,
         );
         let manifest = TableManifest {
             format_version,
             label: self.label,
             label_name: self.label_name.clone(),
-            num_shards: self.num_shards,
+            num_shards: self.layout.num_shards,
+            segment_slots_bits: self.layout.segment_slots_bits,
             checksum,
         };
         let payload = serde_json::to_vec(&manifest)
@@ -322,6 +333,25 @@ impl ShardedVertexTable {
             path.as_ref().join(TABLE_MANIFEST_FILE_NAME),
             &payload,
         )
+    }
+
+    /// Shard layout pinned in the table manifest at `path`, if any.
+    ///
+    /// Opening a table adopts this layout: the running configuration's
+    /// shard count only applies to newly created tables. A missing manifest
+    /// yields `None` (the caller keeps its configured layout and the strict
+    /// load below refuses the open); an unknown version or checksum failure
+    /// errors with a rebuild directive instead of auto-migrating.
+    pub(crate) fn manifest_layout<P: AsRef<Path>>(
+        path: P,
+    ) -> StorageResult<Option<super::routing::ShardLayout>> {
+        let Some(manifest) = Self::read_table_manifest(&path)? else {
+            return Ok(None);
+        };
+        Ok(Some(super::routing::ShardLayout {
+            num_shards: manifest.num_shards,
+            segment_slots_bits: manifest.segment_slots_bits,
+        }))
     }
 
     fn read_table_manifest<P: AsRef<Path>>(path: P) -> StorageResult<Option<TableManifest>> {
@@ -419,25 +449,21 @@ impl ShardedVertexTable {
         let mut listed_files = Vec::new();
         let mut missing_files = Vec::new();
         if manifest_present {
-            match std::fs::read(&manifest_path) {
-                Ok(payload) => match serde_json::from_slice::<CommitManifest>(&payload) {
-                    Ok(manifest) => {
-                        if verify_commit_manifest_content(&manifest, &manifest_path).is_ok() {
-                            manifest_decodable = true;
-                            epoch = Some(manifest.epoch);
-                            kind = Some(manifest.kind.as_str().to_string());
-                            base_epoch = manifest.base_epoch;
-                            listed_files = manifest.files.clone();
-                            for rel in &manifest.files {
-                                if !dir.join(rel).exists() {
-                                    missing_files.push(rel.clone());
-                                }
+            if let Ok(payload) = std::fs::read(&manifest_path) {
+                if let Ok(manifest) = serde_json::from_slice::<CommitManifest>(&payload) {
+                    if verify_commit_manifest_content(&manifest, &manifest_path).is_ok() {
+                        manifest_decodable = true;
+                        epoch = Some(manifest.epoch);
+                        kind = Some(manifest.kind.as_str().to_string());
+                        base_epoch = manifest.base_epoch;
+                        listed_files = manifest.files.clone();
+                        for rel in &manifest.files {
+                            if !dir.join(rel).exists() {
+                                missing_files.push(rel.clone());
                             }
                         }
                     }
-                    Err(_) => {}
-                },
-                Err(_) => {}
+                }
             }
         }
         let mut orphan_tmp_files = Vec::new();
@@ -604,14 +630,20 @@ impl ShardedVertexTable {
                 path.as_ref().join(TABLE_MANIFEST_FILE_NAME).display(),
             )));
         };
-        if manifest.num_shards != self.num_shards {
+        if manifest.num_shards != self.layout.num_shards
+            || manifest.segment_slots_bits != self.layout.segment_slots_bits
+        {
             return Err(graphdb_core::StorageError::invalid_operation(format!(
-                "vertex table '{}' persisted with num_shards={} but opened with num_shards={} \
-                 (manifest {}): global internal IDs embed the shard count and would \
-                 mis-decode; reopen with vertex_table_shards={} or migrate the data",
+                "vertex table '{}' persisted with layout (num_shards={}, segment_slots_bits={}) \
+                 but opened with layout (num_shards={}, segment_slots_bits={}) \
+                 (manifest {}): global internal IDs embed the shard layout and would \
+                 mis-decode; reopen with vertex_table_shards={} or migrate the data with \
+                 the offline redistribution tool",
                 self.label_name,
                 manifest.num_shards,
-                self.num_shards,
+                manifest.segment_slots_bits,
+                self.layout.num_shards,
+                self.layout.segment_slots_bits,
                 path.as_ref().join(TABLE_MANIFEST_FILE_NAME).display(),
                 manifest.num_shards,
             )));
@@ -749,7 +781,7 @@ impl ShardedVertexTable {
         // Offline pre-flight: reuse the read-only inspection for a
         // diagnostic line before the strict recovery path runs. Read-only;
         // cleanup stays with startup recovery.
-        match Self::inspect_commit_health(&path) {
+        match Self::inspect_commit_health(path) {
             Ok(report) => log::debug!(
                 "vertex table '{}' pre-load health: healthy={} epoch={:?} missing={} orphans={}",
                 self.label_name,
@@ -765,8 +797,8 @@ impl ShardedVertexTable {
             ),
         }
         // Refuse to mis-decode: persisted global IDs embed the shard count.
-        self.check_table_manifest(&path)?;
-        match Self::read_commit_manifest(&path)? {
+        self.check_table_manifest(path)?;
+        match Self::read_commit_manifest(path)? {
             Some(manifest) => {
                 self.verify_commit_manifest(path, &manifest)?;
                 for (i, shard) in self.shards.iter().enumerate() {
@@ -791,19 +823,17 @@ impl ShardedVertexTable {
                 }
                 Ok(())
             }
-            None => {
-                return Err(graphdb_core::StorageError::deserialize_error(format!(
-                    "vertex table '{}' missing commit manifest at {}: refusing open without checkpoint pin",
-                    self.label_name,
-                    path.join(COMMIT_MANIFEST_FILE_NAME).display(),
-                )));
-            }
+            None => Err(graphdb_core::StorageError::deserialize_error(format!(
+                "vertex table '{}' missing commit manifest at {}: refusing open without checkpoint pin",
+                self.label_name,
+                path.join(COMMIT_MANIFEST_FILE_NAME).display(),
+            ))),
         }
     }
 
     pub fn apply_delta_pages<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
         let path = path.as_ref();
-        match Self::read_commit_manifest(&path)? {
+        match Self::read_commit_manifest(path)? {
             Some(manifest) => self.apply_delta_pages_strict(path, &manifest),
             None => Err(graphdb_core::StorageError::deserialize_error(format!(
                 "missing commit manifest at {}: refusing delta apply without checkpoint pin",
@@ -1208,7 +1238,7 @@ mod commit_tests {
             .unwrap();
         table
             .flush_with_epoch(
-                &root.join("label_1"),
+                root.join("label_1"),
                 CompressionType::Zstd { level: 0 },
                 31,
                 CommitKind::Full,
@@ -1217,7 +1247,7 @@ mod commit_tests {
             .unwrap();
         table
             .flush_incremental_with_epoch(
-                &root.join("label_2"),
+                root.join("label_2"),
                 CompressionType::Zstd { level: 0 },
                 32,
                 Some(31),

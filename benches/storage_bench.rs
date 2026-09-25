@@ -106,7 +106,7 @@ fn bench_real_vertex_insert(c: &mut Criterion) {
                     [("value".to_string(), Value::BigInt(id))]
                         .into_iter()
                         .collect(),
-                )
+                ),
             );
             black_box(
                 storage

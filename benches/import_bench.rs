@@ -70,7 +70,7 @@ fn build_vertices(count: usize) -> Vec<Vertex> {
                     [("value".to_string(), Value::BigInt(i as i64))]
                         .into_iter()
                         .collect(),
-                )
+                ),
             )
         })
         .collect()

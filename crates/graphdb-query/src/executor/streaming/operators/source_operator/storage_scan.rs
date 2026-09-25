@@ -95,11 +95,9 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
             if let Some(mask) = semi_mask.clone() {
                 options = options.with_internal_id_allowlist(mask);
             }
-            *cursor = Some(
-                open_vertex_scan(storage_ref, space_name, &options).map_err(|error| {
-                    storage_error("StorageScanVertices", "open cursor", space_name, error)
-                })?,
-            );
+            *cursor = Some(open_vertex_scan(storage_ref, space_name, &options).map_err(
+                |error| storage_error("StorageScanVertices", "open cursor", space_name, error),
+            )?);
             GlobalState::Source(SourceState::StorageScanVertices {
                 partition_id: op.config.partition_id.unwrap_or(0),
                 partition_range: partition_range.clone(),

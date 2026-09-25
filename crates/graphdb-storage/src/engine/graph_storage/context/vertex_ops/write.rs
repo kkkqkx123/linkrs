@@ -21,7 +21,7 @@ impl GraphStorageContext {
         let internal_id = self
             .persistent
             .data_store
-            .with_vertex_tables_mut(|vertex_tables| {
+            .with_vertex_tables(|vertex_tables| {
                 let table = vertex_tables.get(&label).ok_or_else(|| {
                     StorageError::label_not_found(format!("vertex label {}", label))
                 })?;
@@ -53,7 +53,7 @@ impl GraphStorageContext {
         let internal_id = self
             .persistent
             .data_store
-            .with_vertex_tables_mut(|vertex_tables| {
+            .with_vertex_tables(|vertex_tables| {
                 let table = vertex_tables.get(&label).ok_or_else(|| {
                     StorageError::label_not_found(format!("vertex label {}", label))
                 })?;
@@ -72,10 +72,12 @@ impl GraphStorageContext {
         Ok(internal_id)
     }
 
-    /// Scoped vertex insert threading the caller-owned write scope.
+    /// Scoped vertex insert staging the caller-owned row.
     ///
-    /// Forwards the scope through the shard table without retaining it; the
-    /// caller destroys the scope on commit, rollback, or crash.
+    /// Buffers the validated row in the scope without touching global
+    /// state; the caller applies it through [`Self::commit_write_scope`].
+    /// The scope travels by mutable borrow and is destroyed by the commit /
+    /// rollback hooks or by crash drop.
     pub fn insert_vertex_with_scope(
         &self,
         label: LabelId,
@@ -83,32 +85,22 @@ impl GraphStorageContext {
         properties: &[(String, Value)],
         ts: Timestamp,
         scope: &mut WriteScope,
-    ) -> StorageResult<u32> {
+    ) -> StorageResult<()> {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
         }
-        let internal_id = self
-            .persistent
+        self.persistent
             .data_store
-            .with_vertex_tables_mut(|vertex_tables| {
+            .with_vertex_tables(|vertex_tables| {
                 let table = vertex_tables.get(&label).ok_or_else(|| {
                     StorageError::label_not_found(format!("vertex label {}", label))
                 })?;
                 table.insert_with_scope(external_id, properties, ts, scope)
             })?;
-        debug_assert!(matches!(
-            self.lookup_pk_scoped(label, external_id, ts, scope),
-            crate::vertex::PkLookup::Visible(id) if id == internal_id
-        ));
-        self.persistent
-            .cache_manager
-            .cache_vertex_id(label, external_id, internal_id, ts);
-        self.mark_vertex_modified(label);
-        self.observe_vertex_id_string(label);
-        Ok(internal_id)
+        Ok(())
     }
 
-    /// Integer-keyed scoped insert. Same forwarding contract as
+    /// Integer-keyed scoped insert staging. Same contract as
     /// [`Self::insert_vertex_with_scope`].
     pub fn insert_vertex_by_i64_with_scope(
         &self,
@@ -117,50 +109,43 @@ impl GraphStorageContext {
         properties: &[(String, Value)],
         ts: Timestamp,
         scope: &mut WriteScope,
-    ) -> StorageResult<u32> {
+    ) -> StorageResult<()> {
         VertexId::try_from_int64(external_id)?;
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
         }
-        let internal_id = self
-            .persistent
+        self.persistent
             .data_store
-            .with_vertex_tables_mut(|vertex_tables| {
+            .with_vertex_tables(|vertex_tables| {
                 let table = vertex_tables.get(&label).ok_or_else(|| {
                     StorageError::label_not_found(format!("vertex label {}", label))
                 })?;
                 table.insert_by_i64_with_scope(external_id, properties, ts, scope)
             })?;
-        debug_assert!(matches!(
-            self.lookup_pk_by_i64_scoped(label, external_id, ts, scope),
-            crate::vertex::PkLookup::Visible(id) if id == internal_id
-        ));
-        self.persistent.cache_manager.cache_vertex_id(
-            label,
-            &external_id.to_string(),
-            internal_id,
-            ts,
-        );
-        self.mark_vertex_modified(label);
-        self.observe_vertex_id_i64(label, external_id);
-        Ok(internal_id)
+        Ok(())
     }
 
-    /// Commit hook for one label's staged bindings. Called before the
-    /// timestamp commit; WAL durability stays the commit point.
-    pub fn commit_write_scope(&self, label: LabelId, scope: &mut WriteScope) -> usize {
+    /// Commit hook for one label's staged rows: applies them to the table,
+    /// then drops the label's staging records. Called before the timestamp
+    /// commit; WAL durability stays the commit point. Returns the staged
+    /// key to allocated global id mapping for the label.
+    pub fn commit_write_scope(
+        &self,
+        label: LabelId,
+        scope: &mut WriteScope,
+        ts: Timestamp,
+    ) -> StorageResult<Vec<(crate::vertex::IdKey, u32)>> {
         self.persistent.data_store.with_vertex_tables(|tables| {
             tables
                 .get(&label)
-                .map(|table| table.commit_write_scope(scope))
-                .unwrap_or(0)
+                .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", label)))
+                .and_then(|table| table.commit_write_scope(scope, ts))
         })
     }
 
-    /// Rollback hook for one label's staged bindings. Discards the scope
-    /// records and logically deletes already applied rows with the existing
-    /// undo semantics. Called before the timestamp abort and from the undo
-    /// failure branches.
+    /// Rollback hook for one label's staged rows. Discards the scope records
+    /// without touching global state. Called before the timestamp abort and
+    /// from the undo failure branches.
     pub fn rollback_write_scope(&self, label: LabelId, scope: &mut WriteScope, ts: Timestamp) {
         self.persistent.data_store.with_vertex_tables(|tables| {
             if let Some(table) = tables.get(&label) {

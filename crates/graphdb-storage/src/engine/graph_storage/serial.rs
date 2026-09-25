@@ -65,14 +65,15 @@ pub(crate) fn scan_vertex_serial_column(
     prop_name: &str,
 ) -> Option<SerialColumnScan> {
     let ts = ctx.version_manager().write_timestamp();
+    let guard = ctx.visibility_guard(ts);
     ctx.data_store().with_vertex_tables(|tables| {
         let table = tables.get(&label)?;
-        let ids = table.live_ids_shard_inconsistent(ts);
+        let ids = table.live_ids(&guard);
         let mut present: Vec<i64> = Vec::new();
         let mut max_value: Option<i64> = None;
         if !ids.is_empty() {
             let projection = [prop_name.to_string()];
-            for record in table.get_projected_batch(&ids, ts, Some(&projection)) {
+            for record in table.resolve_projected_batch(&ids, &guard, Some(&projection)) {
                 let Some(record) = record else {
                     continue;
                 };

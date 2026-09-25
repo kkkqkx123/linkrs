@@ -42,7 +42,7 @@ impl VertexTable {
                     )));
                 }
             };
-            let Some(col) = self.columns.get_column_mut(&col_name) else {
+            let Some(col) = self.columns.get_column(&col_name) else {
                 return Err(graphdb_core::StorageError::deserialize_error(format!(
                     "delta page {} targets unknown column {}",
                     path.display(),

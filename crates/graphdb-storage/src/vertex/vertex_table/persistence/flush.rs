@@ -59,39 +59,12 @@ impl VertexTable {
 
         let timestamps_path = path.join("timestamps.bin");
         self.flush_timestamps(&timestamps_path)?;
-        // Write per-column chunk metadata alongside columns.bin so reload
-        // can reconstruct lazy-loaded segments without changing the format.
-        self.flush_chunk_metadata(path)?;
         // Persist evicted chunks into mmap sidecars so reload restores the
         // eviction state instead of decoding everything onto the heap.
         self.columns.flush_evict_snapshots(path)?;
         // Successful full flush clears dirty tracking (data now persisted).
         self.clear_dirty();
 
-        Ok(())
-    }
-
-    /// Write per-column chunk metadata as `{col_name}.chunks` sidecar files.
-    fn flush_chunk_metadata(&self, dir: &Path) -> StorageResult<()> {
-        for col in self.columns.columns() {
-            let chunk_meta: Vec<(usize, usize, u8)> = if col.has_chunks() {
-                col.chunk_encoding_metadata()
-                    .into_iter()
-                    .map(|(idx, enc, rows)| (idx, rows, enc.to_u8()))
-                    .collect()
-            } else {
-                vec![(0, col.len(), col.encoding_type().to_u8())]
-            };
-            let mut buf = Vec::new();
-            buf.extend_from_slice(&(chunk_meta.len() as u32).to_le_bytes());
-            for (idx, rows, enc) in &chunk_meta {
-                buf.extend_from_slice(&(*idx as u32).to_le_bytes());
-                buf.extend_from_slice(&(*rows as u32).to_le_bytes());
-                buf.push(*enc);
-            }
-            let file_name = format!("{}.chunks", col.name);
-            crate::compression::write_shadow_file(dir.join(file_name), &buf)?;
-        }
         Ok(())
     }
 
@@ -181,18 +154,13 @@ impl VertexTable {
         payload.extend_from_slice(&column_count.to_le_bytes());
         payload.push(COLUMNS_FORMAT_VERSION);
 
-        let col_names: Vec<String> = self
-            .columns
-            .columns()
-            .iter()
-            .map(|c| c.name.clone())
-            .collect();
+        let col_names: Vec<String> = self.columns.column_names();
         let mut selections = Vec::with_capacity(col_names.len());
         for name in &col_names {
             let mut snapshot = self
                 .columns
                 .get_column(name)
-                .cloned()
+                .map(|col| col.clone())
                 .ok_or_else(|| StorageError::column_not_found(name.clone()))?;
             // Rebuild overflow sidecars from live rows so deleted payloads shrink.
             snapshot.rebuild_overflow();
@@ -287,24 +255,27 @@ impl VertexTable {
     /// Layout matches the historical per-column record exactly.
     fn append_column_payload(
         payload: &mut Vec<u8>,
-        col: &mut crate::vertex::column::Column,
+        col: &crate::vertex::column::Column,
     ) -> StorageResult<()> {
         let name_bytes = col.name.as_bytes();
         payload.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
         payload.extend_from_slice(name_bytes);
 
-        if col.encoding_type() != EncodingType::None {
+        // The encoded record form describes each chunk by its encoding only;
+        // a chunk without one would contribute no base bytes. Segment first,
+        // then let the actual layout pick the record form.
+        if col.encoding_type() != EncodingType::None && !col.has_chunks() {
+            col.materialize_chunks();
+        }
+        let encoded_layout = col.encoding_type() != EncodingType::None && col.all_chunks_encoded();
+        if encoded_layout {
             payload.push(1u8);
             payload.push(1u8);
-            // Ensure per-chunk segmentation exists on the snapshot.
-            if !col.has_chunks() {
-                col.materialize_chunks();
-            }
             let chunk_count = col.chunk_count().max(1) as u32;
             payload.extend_from_slice(&chunk_count.to_le_bytes());
             for ci in 0..col.chunk_count().max(1) {
-                let chunk = col.chunk_at(ci);
-                let (row_offset, row_count) = match chunk {
+                let chunk = col.chunk_flush_view(ci);
+                let (row_offset, row_count) = match &chunk {
                     Some(c) => (c.row_offset as u32, c.row_count as u32),
                     None => (0u32, col.len() as u32),
                 };
@@ -312,23 +283,23 @@ impl VertexTable {
                 payload.extend_from_slice(&row_count.to_le_bytes());
                 // Compression metadata.
                 let mut meta_buf = Vec::new();
-                if let Some(c) = chunk {
+                if let Some(c) = &chunk {
                     c.encoding_meta.serialize(&mut meta_buf)?;
                 }
                 payload.extend_from_slice(&(meta_buf.len() as u32).to_le_bytes());
                 payload.extend_from_slice(&meta_buf);
                 // Full encoding metadata for this chunk.
                 let mut enc_buf = Vec::new();
-                if let Some(c) = chunk {
+                if let Some(c) = &chunk {
                     c.encoding.serialize_meta(&mut enc_buf)?;
                 } else {
-                    col.encoding().serialize_meta(&mut enc_buf)?;
+                    col.encoding_snapshot().serialize_meta(&mut enc_buf)?;
                 }
                 payload.extend_from_slice(&(enc_buf.len() as u32).to_le_bytes());
                 payload.extend_from_slice(&enc_buf);
                 // Overlay entries.
                 let overlay_entries: Vec<(u32, Option<graphdb_core::Value>)> = chunk
-                    .map(|c| c.overlay.iter().map(|(k, v)| (*k, v.clone())).collect())
+                    .map(|c| c.overlay)
                     .unwrap_or_default();
                 let overlay_bytes = postcard::to_allocvec(&overlay_entries)
                     .map_err(|e| StorageError::serialize_error(e.to_string()))?;
@@ -422,7 +393,7 @@ impl VertexTable {
             StorageError::io_error(format!("Failed to write timestamps header: {}", e))
         })?;
 
-        let timestamps = self.timestamps.dump();
+        let timestamps = self.timestamps.read().dump();
         let count = timestamps.len() as u32;
         payload.extend_from_slice(&count.to_le_bytes());
 

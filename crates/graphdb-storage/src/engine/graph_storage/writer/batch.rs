@@ -22,7 +22,7 @@ pub(super) struct PrecheckedBatchContext<'a> {
     pub(super) vid_type: &'a DataType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct InsertedVertexTag {
     pub(super) label_id: LabelId,
     pub(super) vid: VertexId,

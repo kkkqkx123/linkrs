@@ -90,7 +90,10 @@ impl VertexTable {
 
         // Collect all (col_name, page_id, bytes) to flush in parallel
         let mut tasks: Vec<(String, usize, Vec<u8>)> = Vec::new();
-        for col in self.columns.columns() {
+        for col_name in self.columns.column_names() {
+            let Some(col) = self.columns.get_column(&col_name) else {
+                continue;
+            };
             let col_dirty = col.dirty_pages();
             for page_id in col_dirty {
                 if !dirty_set.contains(&(page_id as u64)) {
@@ -114,7 +117,10 @@ impl VertexTable {
                     continue;
                 }
                 let pid = page_id.page_id as usize;
-                for col in self.columns.columns() {
+                for col_name in self.columns.column_names() {
+                    let Some(col) = self.columns.get_column(&col_name) else {
+                        continue;
+                    };
                     if pid * crate::persistence::dirty_page::ROWS_PER_PAGE >= col.len() {
                         continue;
                     }

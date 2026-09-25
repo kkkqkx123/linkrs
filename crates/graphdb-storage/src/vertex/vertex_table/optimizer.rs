@@ -27,7 +27,7 @@ impl VertexTable {
         &mut self,
         cutoff: graphdb_core::types::Timestamp,
     ) -> StorageResult<(Vec<IdKey>, HashMap<u32, u32>, CompactionJournal)> {
-        let deleted_ids: Vec<u32> = self.timestamps.iter_deleted(cutoff).collect();
+        let deleted_ids: Vec<u32> = self.timestamps.read().iter_deleted(cutoff).collect();
 
         let mut removed_keys = Vec::with_capacity(deleted_ids.len());
 
@@ -68,12 +68,12 @@ impl VertexTable {
         &mut self,
         cutoff: graphdb_core::types::Timestamp,
     ) -> StorageResult<(Vec<IdKey>, HashMap<u32, u32>, CompactionJournal)> {
-        let deleted_ids: Vec<u32> = self.timestamps.iter_deleted(cutoff).collect();
+        let deleted_ids: Vec<u32> = self.timestamps.read().iter_deleted(cutoff).collect();
         let mut removed_keys = Vec::with_capacity(deleted_ids.len());
         for id in &deleted_ids {
             if let Some(key) = self.id_indexer.get_key(*id) {
                 self.id_indexer.remove(&key);
-                self.timestamps.invalidate_slot(*id);
+                self.timestamps.write().invalidate_slot(*id);
                 removed_keys.push(key);
             }
         }

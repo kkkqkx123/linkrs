@@ -11,8 +11,18 @@ use graphdb_core::{DataType, Value};
 
 use crate::encoding::{ChunkEncodingMeta, ColumnEncoding};
 
-/// Default per-chunk overlay capacity in rows.
-pub const DEFAULT_OVERLAY_CAPACITY: usize = 1024;
+/// Chunk-row divisor turning chunk size into its overlay budget.
+///
+/// Pending-update memory for a column is then `rows / OVERLAY_CAPACITY_DIVISOR`
+/// no matter how finely the column is chunked: shrinking the chunk shrinks
+/// each chunk's budget by the same factor.
+pub const OVERLAY_CAPACITY_DIVISOR: usize = 64;
+
+/// Overlay budget for a chunk holding `chunk_rows` rows.
+pub fn overlay_capacity_for(chunk_rows: usize) -> usize {
+    (chunk_rows / OVERLAY_CAPACITY_DIVISOR).max(1)
+}
+
 /// Default dictionary entry cap per chunk.
 pub const DEFAULT_DICT_MAX_ENTRIES_PER_CHUNK: usize = 65536;
 /// Default ALP exception-rate ceiling above which a chunk falls back to raw.
@@ -47,6 +57,11 @@ impl UpdateOverlay {
 
     pub fn len(&self) -> usize {
         self.values.len()
+    }
+
+    /// Row budget this overlay absorbs before the chunk is due a re-encode.
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     pub fn is_full(&self) -> bool {

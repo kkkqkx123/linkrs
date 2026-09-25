@@ -77,7 +77,8 @@ fn setup() -> GraphStorage {
             props.insert("label".to_string(), Value::string(format!("e{src}_{k}")));
             edges.push(Edge {
                 src: VertexId::try_from_int64(src).expect("valid vertex id"),
-                dst: VertexId::try_from_int64((src + k) % VERTEX_COUNT as i64).expect("valid vertex id"),
+                dst: VertexId::try_from_int64((src + k) % VERTEX_COUNT as i64)
+                    .expect("valid vertex id"),
                 edge_type: EDGE.to_string(),
                 ranking: 0,
                 props,

@@ -89,8 +89,6 @@ impl VertexTable {
 
         let columns_path = path.join("columns.bin");
         self.load_columns(&columns_path)?;
-        // Reconstruct lazy-loaded chunk segments from sidecars when present.
-        self.load_chunk_metadata(path);
         // Restore persisted eviction state from mmap sidecars. Derived
         // cache only: failures keep chunks resident without failing load.
         self.columns.load_evict_snapshots(path);
@@ -98,7 +96,7 @@ impl VertexTable {
         let timestamps_path = path.join("timestamps.bin");
         self.load_timestamps(&timestamps_path)?;
 
-        self.is_open = true;
+        self.is_open.store(true, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 
@@ -325,7 +323,7 @@ impl VertexTable {
                 // derived per-chunk profiles (zone min/max, sizes) are
                 // recomputed from the restored state so later selection and
                 // update checks observe fresh metadata.
-                if let Some(col) = self.columns.get_column_mut(&name) {
+                if let Some(col) = self.columns.get_column(&name) {
                     if col.has_chunks() {
                         col.rebuild_chunk_profiles();
                     }
@@ -397,7 +395,7 @@ impl VertexTable {
                     cursor.read_exact(&mut stats_bytes)?;
                     let stats =
                         crate::column_stats::ColumnStats::deserialize_meta(&mut &stats_bytes[..])?;
-                    if let Some(col) = self.columns.get_column_mut(&name) {
+                    if let Some(col) = self.columns.get_column(&name) {
                         col.set_stats(stats);
                     }
                 }
@@ -423,7 +421,7 @@ impl VertexTable {
     /// Load one chunked column record. Returns whether an overflow sidecar
     /// must be restored afterwards (the caller owns the flush directory).
     fn load_column_chunked(&mut self, name: &str, cursor: &mut &[u8]) -> StorageResult<bool> {
-        use crate::vertex::column::{element_size, is_variable_length_type, ColumnChunk};
+        use crate::vertex::column::ColumnChunk;
         use graphdb_core::Value;
 
         let mut flag = [0u8; 1];
@@ -495,34 +493,29 @@ impl VertexTable {
             });
         }
 
-        // Rebuild column state from chunk records.
-        let total_rows = recs
-            .iter()
-            .map(|r| r.row_offset + r.row_count)
-            .max()
-            .unwrap_or(0);
+        // Rebuild column state from chunk records. Encoded chunks serve
+        // their encoding directly; their owned raw buffers stay empty.
         let col = self
             .columns
-            .get_column_mut(name)
+            .get_column(name)
             .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
-        col.resize(total_rows);
         let data_type = col.data_type.clone();
         let nullable = col.nullable;
-        let elem_size = element_size(&data_type);
-        let is_var = is_variable_length_type(&data_type);
         let mut chunks = Vec::with_capacity(recs.len());
         for rec in &recs {
-            let mut chunk = if is_var {
-                ColumnChunk::new_variable(rec.row_offset, rec.row_count, nullable)
-            } else {
-                ColumnChunk::new(rec.row_offset, rec.row_count, elem_size, nullable)
-            };
-            chunk.encoding = rec.encoding.clone();
-            chunk.encoding_meta = rec.meta.clone();
+            let chunk = ColumnChunk::new(rec.row_offset, rec.row_count, &data_type, nullable);
+            let mut state = chunk.write_state();
+            state.encoding = rec.encoding.clone();
+            state.encoding_meta = rec.meta.clone();
             for (local, v) in &rec.overlay {
-                chunk.overlay.put(*local, v.clone());
+                state.overlay.put(*local, v.clone());
             }
-            chunk.updates_since_encode = chunk.overlay.len() as u64;
+            state.updates_since_encode = state.overlay.len() as u64;
+            // Restored windows carry no per-row MVCC deltas (checkpoints
+            // persist current values), but the state slices must still span
+            // the window so later splits and truncates stay in bounds.
+            state.visibility.ensure_len(rec.row_count);
+            drop(state);
             chunks.push(chunk);
         }
         let first_encoding = recs.first().map(|r| r.encoding.clone());
@@ -534,35 +527,8 @@ impl VertexTable {
         let mut flag = [0u8; 1];
         cursor.read_exact(&mut flag)?;
         let overflow_present = flag[0] != 0;
-        Self::load_stats_suffix(&mut self.columns, name, cursor)?;
+        Self::load_stats_suffix(&self.columns, name, cursor)?;
         Ok(overflow_present)
-    }
-
-    /// Load of chunk sidecars: materializes segments from the `{col}.chunks`
-    /// metadata written by flush. Columns restored from chunk records in
-    /// `columns.bin` already carry authoritative chunk state (encodings,
-    /// overlays, rebuilt profiles) and are left untouched; the sidecar only
-    /// fills the gap for raw columns.
-    fn load_chunk_metadata(&mut self, dir: &Path) {
-        for col_name in self
-            .columns
-            .columns()
-            .iter()
-            .map(|c| c.name.clone())
-            .collect::<Vec<_>>()
-        {
-            let sidecar = dir.join(format!("{}.chunks", col_name));
-            if !sidecar.exists() {
-                continue;
-            }
-            if let Some(col) = self.columns.get_column_mut(&col_name) {
-                if col.has_chunks() {
-                    continue;
-                }
-                col.materialize_chunks();
-                col.rebuild_chunk_profiles();
-            }
-        }
     }
 
     /// Best-effort restore of a `<col>.overflow` sidecar: a corrupt or
@@ -582,7 +548,7 @@ impl VertexTable {
         }
         match std::fs::read(&sidecar) {
             Ok(bytes) => {
-                if let Some(col) = columns.get_column_mut(name) {
+                if let Some(col) = columns.get_column(name) {
                     if let Err(e) = col.load_overflow_bytes(&bytes) {
                         log::warn!("ignoring corrupt overflow sidecar for {}: {}", name, e);
                     }
@@ -595,7 +561,7 @@ impl VertexTable {
     }
 
     fn load_stats_suffix(
-        columns: &mut crate::vertex::ColumnStore,
+        columns: &crate::vertex::ColumnStore,
         name: &str,
         cursor: &mut &[u8],
     ) -> StorageResult<()> {
@@ -608,7 +574,7 @@ impl VertexTable {
             let mut stats_bytes = vec![0u8; stats_len];
             cursor.read_exact(&mut stats_bytes)?;
             let stats = crate::column_stats::ColumnStats::deserialize_meta(&mut &stats_bytes[..])?;
-            if let Some(col) = columns.get_column_mut(name) {
+            if let Some(col) = columns.get_column(name) {
                 col.set_stats(stats);
             }
         }
@@ -691,9 +657,9 @@ impl VertexTable {
             timestamps.push(u64::from_le_bytes(ts_bytes));
         }
 
-        self.timestamps.load(&timestamps);
+        self.timestamps.write().load(&timestamps);
 
-        self.is_open = true;
+        self.is_open.store(true, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 }

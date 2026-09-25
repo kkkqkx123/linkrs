@@ -72,6 +72,29 @@ impl RowVisibility {
         self.len = new_len;
     }
 
+    /// Keep the first `keep` entries, dropping the tail.
+    pub fn truncate(&mut self, keep: usize) {
+        self.create_ts.truncate(keep);
+        self.len = self.len.min(keep);
+    }
+
+    /// Split off entries at `at`, returning the tail as a new slice.
+    pub fn split_off(&mut self, at: usize) -> Self {
+        let tail = self.create_ts.split_off(at);
+        let tail_len = tail.len();
+        self.len = self.len.min(at);
+        Self {
+            create_ts: tail,
+            len: tail_len,
+        }
+    }
+
+    /// Append a tail slice produced by [`Self::split_off`].
+    pub fn extend_tail(&mut self, tail: Self) {
+        self.create_ts.extend(tail.create_ts);
+        self.len += tail.len;
+    }
+
     pub fn clear(&mut self) {
         self.create_ts.clear();
         self.len = 0;
@@ -101,64 +124,102 @@ pub struct VersionChainStats {
 // ---------------------------------------------------------------------------
 
 impl Column {
-    /// Ensure the MVCC metadata vectors are at least `n` rows long.
-    /// New (never-written) rows default to start_ts 0, i.e. their loaded or
-    /// not-yet-written value is treated as current.
-    pub(super) fn ensure_row_meta(&mut self, n: usize) {
-        if self.visibility.len() < n {
-            self.with_version_chains_write(|chains| {
-                if let Some(chains) = chains.as_mut() {
-                    chains.resize(n, Vec::new());
-                }
-            });
-        }
-        self.visibility.ensure_len(n);
-    }
-
     /// Versioned write: records the current value as a before-image valid on
     /// `[create_ts, ts)`, then stores `value` as the current value valid
     /// from `ts` onward. Rows written for the first time get no before-image.
+    ///
+    /// Before-image capture and the value write share one segment latch so a
+    /// concurrent snapshot read never observes half a versioned write.
     pub fn set_versioned(
-        &mut self,
+        &self,
         row_idx: usize,
         value: Option<&Value>,
         ts: Timestamp,
     ) -> graphdb_core::StorageResult<()> {
-        self.ensure_row_meta(row_idx + 1);
-        let old_create = self
-            .visibility
-            .create_ts()
-            .get(row_idx)
-            .copied()
-            .unwrap_or(0);
-        // Only record a before-image when the current value genuinely predates
-        // this write (guards against zero-length ranges from rollback writes
-        // that reuse the transaction's original timestamp).
-        if row_idx < self.len() && old_create < ts {
-            let current = self.get(row_idx);
-            if current.is_some() || self.is_null(row_idx) {
-                // Capture visibility length before closure to avoid borrow conflict.
-                let vis_len = self.visibility.len();
-                // Use with_version_chains_write for controlled mutable access.
-                self.with_version_chains_write(|chains| {
-                    if chains.is_none() {
-                        *chains = Some(vec![Vec::new(); vis_len]);
-                    }
-                    if let Some(chains) = chains.as_mut() {
-                        if row_idx >= chains.len() {
-                            chains.resize(row_idx + 1, Vec::new());
-                        }
-                        chains[row_idx].push(VersionEntry {
-                            start_ts: old_create,
-                            end_ts: ts,
-                            value: current,
-                        });
-                    }
-                });
+        if value.is_none() && !self.nullable {
+            return Err(graphdb_core::StorageError::null_value_not_allowed(
+                self.name.clone(),
+            ));
+        }
+        if let Some(v) = value {
+            if v.is_null() && !self.nullable {
+                return Err(graphdb_core::StorageError::null_value_not_allowed(
+                    self.name.clone(),
+                ));
             }
         }
-        self.write_value(row_idx, value)?;
-        self.visibility.mark_created(row_idx, ts);
+        let use_chunk_layer = self.chunk_layer_routes(&self.chunks.read());
+        // Capture the before-image inputs before taking the write latch so
+        // the segment latch never nests inside a second container access.
+        let (old_create, current, cur_null) = {
+            let chunks = self.chunks.read();
+            let capacity = self.chunk_capacity();
+            let chunk = chunks.get(row_idx / capacity.max(1));
+            let old_create = chunk
+                .map(|chunk| {
+                    if row_idx >= chunk.row_offset
+                        && row_idx < chunk.row_offset + chunk.row_count
+                    {
+                        chunk
+                            .read_state()
+                            .visibility
+                            .create_ts()
+                            .get(row_idx - chunk.row_offset)
+                            .copied()
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    }
+                })
+                .unwrap_or(0);
+            let covered = chunk.is_some_and(|chunk| {
+                row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count
+            });
+            let (current, cur_null) = if covered && old_create < ts {
+                let current = self.get_in(&chunks, row_idx);
+                let cur_null = chunk.is_some_and(|chunk| {
+                    chunk.read_state().raw.as_storage().is_null(row_idx - chunk.row_offset)
+                });
+                (current, cur_null)
+            } else {
+                (None, false)
+            };
+            (old_create, current, cur_null)
+        };
+        let absorbed = self.with_resident_chunk(row_idx, |chunk, state| {
+            let local = row_idx - chunk.row_offset;
+            state.visibility.ensure_len(chunk.row_count);
+            // Only record a before-image when the current value genuinely predates
+            // this write (guards against zero-length ranges from rollback writes
+            // that reuse the transaction's original timestamp).
+            if local < chunk.row_count && old_create < ts && (current.is_some() || cur_null) {
+                if state.version_chains.is_none() {
+                    state.version_chains = Some(vec![Vec::new(); chunk.row_count]);
+                }
+                if let Some(chains) = state.version_chains.as_mut() {
+                    if chains.len() < chunk.row_count {
+                        chains.resize(chunk.row_count, Vec::new());
+                    }
+                    if local < chains.len() {
+                        chains[local].push(VersionEntry {
+                            start_ts: old_create,
+                            end_ts: ts,
+                            value: current.clone(),
+                        });
+                    }
+                }
+            }
+            let absorbed = self.write_core(chunk, state, row_idx, value, use_chunk_layer)?;
+            state.visibility.mark_created(local, ts);
+            Ok(absorbed)
+        })?;
+        self.observe_write(row_idx, value);
+        self.mark_dirty(row_idx);
+        if absorbed {
+            if let Some(chunk_idx) = self.chunk_index_for_row(row_idx) {
+                let _ = self.maybe_merge_hot_chunk(chunk_idx);
+            }
+        }
         Ok(())
     }
 
@@ -176,19 +237,113 @@ impl Column {
     /// (`VertexTimestamp::is_valid` or the table scan) and never serve this
     /// result directly.
     pub fn get_at_ts(&self, row_idx: usize, query_ts: Timestamp) -> Option<Value> {
-        let start_ts = self.visibility.create_ts.get(row_idx).copied().unwrap_or(0);
-        if crate::mvcc_visibility::Visibility::is_column_visible(query_ts, start_ts) {
-            // Chunk-routed base read: overlay first, then encoded base.
-            return self.get(row_idx);
+        let chunks = self.chunks.read();
+        let capacity = self.chunk_capacity();
+        let chunk = chunks.get(row_idx / capacity.max(1))?;
+        if row_idx < chunk.row_offset || row_idx >= chunk.row_offset + chunk.row_count {
+            return None;
         }
-        self.with_version_chains_read(|chains| {
-            chains.and_then(|c| c.get(row_idx)).and_then(|chain| {
+        let local = row_idx - chunk.row_offset;
+        let state = chunk.read_state();
+        let start_ts = state
+            .visibility
+            .create_ts()
+            .get(local)
+            .copied()
+            .unwrap_or(0);
+        if crate::mvcc_visibility::Visibility::is_column_visible(query_ts, start_ts) {
+            drop(state);
+            // Chunk-routed base read: overlay first, then encoded base.
+            return self.get_in(&chunks, row_idx);
+        }
+        let chain = state
+            .version_chains
+            .as_ref()
+            .and_then(|c| c.get(local))
+            .cloned();
+        drop(state);
+        drop(chunks);
+        let chain = chain?;
+        if chain.is_empty() {
+            return None;
+        }
+        // Version chain is ordered by start_ts ascending (oldest first).
+        // Binary search finds the candidate interval containing query_ts
+        // in O(log n) instead of O(n) linear scan.
+        let idx = match chain.binary_search_by_key(&query_ts, |e| e.start_ts) {
+            Ok(i) => i,
+            Err(i) => {
+                if i == 0 {
+                    return None;
+                }
+                i - 1
+            }
+        };
+        let entry = &chain[idx];
+        if crate::mvcc_visibility::Visibility::is_version_visible(
+            query_ts,
+            entry.start_ts,
+            entry.end_ts,
+        ) {
+            return entry.value.clone();
+        }
+        // After folding/GC intervals may have been merged; a single
+        // predecessor check suffices for contiguous chains. Fall back
+        // to neighbour check for the rare folded-gap case.
+        if idx + 1 < chain.len() {
+            let nxt = &chain[idx + 1];
+            if crate::mvcc_visibility::Visibility::is_version_visible(
+                query_ts,
+                nxt.start_ts,
+                nxt.end_ts,
+            ) {
+                return nxt.value.clone();
+            }
+        }
+        None
+    }
+
+    /// Start timestamp of the version covering `query_ts` for a row.
+    ///
+    /// Internal companion of [`Column::get_at_ts`]: returns the stamp the
+    /// value read was written at (the current `create_ts` when the current
+    /// value covers `query_ts`, otherwise the covering before-image's
+    /// `start_ts`, else 0 when no version covers it). Pending-aware point
+    /// lookups use it to detect a value written by a foreign uncommitted
+    /// transaction and fall back to `stamp - 1`.
+    pub fn start_ts_at(&self, row_idx: usize, query_ts: Timestamp) -> Timestamp {
+        let chunks = self.chunks.read();
+        let capacity = self.chunk_capacity();
+        let chunk = chunks.get(row_idx / capacity.max(1));
+        let Some(chunk) = chunk else {
+            return 0;
+        };
+        if row_idx < chunk.row_offset || row_idx >= chunk.row_offset + chunk.row_count {
+            return 0;
+        }
+        let local = row_idx - chunk.row_offset;
+        let state = chunk.read_state();
+        let start_ts = state
+            .visibility
+            .create_ts()
+            .get(local)
+            .copied()
+            .unwrap_or(0);
+        if crate::mvcc_visibility::Visibility::is_column_visible(query_ts, start_ts) {
+            return start_ts;
+        }
+        let chain = state
+            .version_chains
+            .as_ref()
+            .and_then(|c| c.get(local))
+            .cloned();
+        drop(state);
+        drop(chunks);
+        chain
+            .and_then(|chain| {
                 if chain.is_empty() {
                     return None;
                 }
-                // Version chain is ordered by start_ts ascending (oldest first).
-                // Binary search finds the candidate interval containing query_ts
-                // in O(log n) instead of O(n) linear scan.
                 let idx = match chain.binary_search_by_key(&query_ts, |e| e.start_ts) {
                     Ok(i) => i,
                     Err(i) => {
@@ -204,11 +359,8 @@ impl Column {
                     entry.start_ts,
                     entry.end_ts,
                 ) {
-                    return entry.value.clone();
+                    return Some(entry.start_ts);
                 }
-                // After folding/GC intervals may have been merged; a single
-                // predecessor check suffices for contiguous chains. Fall back
-                // to neighbour check for the rare folded-gap case.
                 if idx + 1 < chain.len() {
                     let nxt = &chain[idx + 1];
                     if crate::mvcc_visibility::Visibility::is_version_visible(
@@ -216,74 +368,24 @@ impl Column {
                         nxt.start_ts,
                         nxt.end_ts,
                     ) {
-                        return nxt.value.clone();
+                        return Some(nxt.start_ts);
                     }
                 }
                 None
             })
-        })
-    }
-
-    /// Start timestamp of the version covering `query_ts` for a row.
-    ///
-    /// Internal companion of [`Column::get_at_ts`]: returns the stamp the
-    /// value read was written at (the current `create_ts` when the current
-    /// value covers `query_ts`, otherwise the covering before-image's
-    /// `start_ts`, else 0 when no version covers it). Pending-aware point
-    /// lookups use it to detect a value written by a foreign uncommitted
-    /// transaction and fall back to `stamp - 1`.
-    pub fn start_ts_at(&self, row_idx: usize, query_ts: Timestamp) -> Timestamp {
-        let start_ts = self.visibility.create_ts.get(row_idx).copied().unwrap_or(0);
-        if crate::mvcc_visibility::Visibility::is_column_visible(query_ts, start_ts) {
-            return start_ts;
-        }
-        self.with_version_chains_read(|chains| {
-            chains
-                .and_then(|c| c.get(row_idx))
-                .and_then(|chain| {
-                    if chain.is_empty() {
-                        return None;
-                    }
-                    let idx = match chain.binary_search_by_key(&query_ts, |e| e.start_ts) {
-                        Ok(i) => i,
-                        Err(i) => {
-                            if i == 0 {
-                                return None;
-                            }
-                            i - 1
-                        }
-                    };
-                    let entry = &chain[idx];
-                    if crate::mvcc_visibility::Visibility::is_version_visible(
-                        query_ts,
-                        entry.start_ts,
-                        entry.end_ts,
-                    ) {
-                        return Some(entry.start_ts);
-                    }
-                    if idx + 1 < chain.len() {
-                        let nxt = &chain[idx + 1];
-                        if crate::mvcc_visibility::Visibility::is_version_visible(
-                            query_ts,
-                            nxt.start_ts,
-                            nxt.end_ts,
-                        ) {
-                            return Some(nxt.start_ts);
-                        }
-                    }
-                    None
-                })
-                .unwrap_or(0)
-        })
+            .unwrap_or(0)
     }
 
     /// Garbage-collect version-chain entries eligible under
     /// `Visibility::is_gc_eligible`, keeping one baseline entry when the
     /// retained chain would otherwise start after the cutoff.
-    pub fn gc_versions(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
+    /// Exclusive-only (GC path): it rewrites every segment's chains.
+    pub fn gc_versions(&self, min_active_snapshot_ts: Timestamp) -> usize {
+        let chunks = self.chunks.read();
         let mut removed = 0;
-        self.with_version_chains_write(|chains| {
-            if let Some(chains) = chains.as_mut() {
+        for chunk in chunks.iter() {
+            let mut state = chunk.write_state();
+            if let Some(chains) = state.version_chains.as_mut() {
                 for chain in chains.iter_mut() {
                     let before = chain.len();
                     if chain.is_empty() {
@@ -329,7 +431,7 @@ impl Column {
                     *chain = new_chain;
                 }
             }
-        });
+        }
         removed
     }
 
@@ -340,116 +442,135 @@ impl Column {
     /// stores (e.g. table compaction rebuilds into fresh columns) so
     /// snapshot reads stay intact after the remap. Lazily allocates the
     /// destination chain only when the source actually retains history.
-    pub(crate) fn clone_row_state_from(&mut self, src: &Column, from: usize, to: usize) {
-        let src_create = src.visibility.create_ts().get(from).copied();
-        let src_has_chains = src.with_version_chains_read(|chains| chains.is_some());
-        let src_chain =
-            src.with_version_chains_read(|chains| chains.and_then(|c| c.get(from)).cloned());
-        self.ensure_row_meta(to + 1);
+    /// Exclusive-only (compaction path): source and destination are both
+    /// quiescent, but locking stays per-segment for uniformity.
+    pub(crate) fn clone_row_state_from(&self, src: &Column, from: usize, to: usize) {
+        let capacity = src.chunk_capacity();
+        let src_chunks = src.chunks.read();
+        let Some(src_chunk) = src_chunks.get(from / capacity.max(1)) else {
+            return;
+        };
+        if from < src_chunk.row_offset || from >= src_chunk.row_offset + src_chunk.row_count {
+            return;
+        }
+        let src_local = from - src_chunk.row_offset;
+        let src_state = src_chunk.read_state();
+        let src_create = src_state.visibility.create_ts().get(src_local).copied();
+        let src_chain = src_state
+            .version_chains
+            .as_ref()
+            .and_then(|c| c.get(src_local))
+            .cloned();
+        let src_has_chains = src_state.version_chains.is_some();
+        drop(src_state);
+        drop(src_chunks);
+        let dst_idx = self.ensure_coverage(to);
+        let dst_chunks = self.chunks.read();
+        let Some(dst_chunk) = dst_chunks.get(dst_idx) else {
+            return;
+        };
+        if to < dst_chunk.row_offset || to >= dst_chunk.row_offset + dst_chunk.row_count {
+            return;
+        }
+        let dst_local = to - dst_chunk.row_offset;
+        let mut dst_state = dst_chunk.write_state();
+        dst_state.visibility.ensure_len(dst_chunk.row_count);
         if let Some(create_ts) = src_create {
-            if to < self.visibility.create_ts.len() {
-                self.visibility.create_ts[to] = create_ts;
+            if dst_local < dst_state.visibility.create_ts().len() {
+                dst_state.visibility.mark_created(dst_local, create_ts);
             }
         }
         if src_has_chains {
-            self.with_version_chains_write(|dst| {
-                if dst.is_none() {
-                    *dst = Some(vec![Vec::new(); to + 1]);
+            if dst_state.version_chains.is_none() {
+                dst_state.version_chains = Some(vec![Vec::new(); dst_chunk.row_count]);
+            }
+            if let Some(vecs) = dst_state.version_chains.as_mut() {
+                if vecs.len() < dst_chunk.row_count {
+                    vecs.resize(dst_chunk.row_count, Vec::new());
                 }
-                if let Some(vecs) = dst.as_mut() {
-                    if to >= vecs.len() {
-                        vecs.resize(to + 1, Vec::new());
-                    }
-                    vecs[to] = src_chain.clone().unwrap_or_default();
+                if dst_local < vecs.len() {
+                    vecs[dst_local] = src_chain.clone().unwrap_or_default();
                 }
-            });
+            }
         }
+    }
+
+    /// Every retained before-image value as global `(row, value)` pairs for
+    /// exact zone rebuilds. Segment latches are taken one at a time and
+    /// released before the caller widens zone state.
+    pub(super) fn collect_chained_values(&self) -> Vec<(usize, Option<Value>)> {
+        let chunks = self.chunks.read();
+        let mut out = Vec::new();
+        for chunk in chunks.iter() {
+            let state = chunk.read_state();
+            if let Some(chains) = state.version_chains.as_ref() {
+                for (local, chain) in chains.iter().enumerate() {
+                    for entry in chain.iter() {
+                        out.push((chunk.row_offset + local, entry.value.clone()));
+                    }
+                }
+            }
+        }
+        out
     }
 
     #[cfg(test)]
     pub fn version_chain_len(&self, row_idx: usize) -> usize {
-        self.with_version_chains_read(|chains| {
-            chains
-                .and_then(|c| c.get(row_idx))
-                .map(|c| c.len())
-                .unwrap_or(0)
-        })
+        let chunks = self.chunks.read();
+        let capacity = self.chunk_capacity();
+        chunks
+            .get(row_idx / capacity.max(1))
+            .filter(|chunk| {
+                row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count
+            })
+            .map(|chunk| {
+                chunk
+                    .read_state()
+                    .version_chains
+                    .as_ref()
+                    .and_then(|c| c.get(row_idx - chunk.row_offset))
+                    .map(|c| c.len())
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0)
     }
 
     pub fn version_chain_stats(&self) -> VersionChainStats {
-        self.with_version_chains_read(|chains| {
-            let total_rows = chains.map(|v| v.len()).unwrap_or(0);
-            let total_entries: usize = chains
-                .map(|c| c.iter().map(|chain| chain.len()).sum())
-                .unwrap_or(0);
-            let max_len = chains
-                .map(|c| c.iter().map(|chain| chain.len()).max().unwrap_or(0))
-                .unwrap_or(0);
-            let avg_len = if total_rows > 0 {
-                total_entries as f64 / total_rows as f64
-            } else {
-                0.0
-            };
-            let memory_bytes = chains
-                .map(|c| {
-                    c.iter()
-                        .map(|chain| {
-                            chain.len() * std::mem::size_of::<VersionEntry>()
-                                + chain
-                                    .iter()
-                                    .map(|e| {
-                                        e.value
-                                            .as_ref()
-                                            .map(super::value_payload_bytes)
-                                            .unwrap_or(0)
-                                    })
-                                    .sum::<usize>()
-                        })
-                        .sum::<usize>()
-                })
-                .unwrap_or(0)
-                + self.visibility.memory_usage();
-            VersionChainStats {
-                total_rows,
-                total_entries,
-                max_len,
-                avg_len,
-                memory_bytes,
+        let chunks = self.chunks.read();
+        let mut total_rows = 0usize;
+        let mut total_entries = 0usize;
+        let mut max_len = 0usize;
+        let mut memory_bytes = 0usize;
+        for chunk in chunks.iter() {
+            let state = chunk.read_state();
+            if let Some(chains) = state.version_chains.as_ref() {
+                total_rows += chains.len();
+                for chain in chains.iter() {
+                    total_entries += chain.len();
+                    max_len = max_len.max(chain.len());
+                    memory_bytes += chain.len() * std::mem::size_of::<VersionEntry>();
+                    for entry in chain.iter() {
+                        memory_bytes += entry
+                            .value
+                            .as_ref()
+                            .map(super::value_payload_bytes)
+                            .unwrap_or(0);
+                    }
+                }
             }
-        })
-    }
-
-    /// Execute a closure with read-only access to the version chains.
-    ///
-    /// This method enables concurrent version chain reads by providing
-    /// controlled access to the internal `Option<Vec<Vec<VersionEntry>>>`.
-    /// Multiple threads can call this method simultaneously since it only
-    /// requires `&self`.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let stats = column.with_version_chains_read(|chains| {
-    ///     chains.map(|c| c.iter().map(|chain| chain.len()).sum::<usize>())
-    ///          .unwrap_or(0)
-    /// });
-    /// ```
-    pub fn with_version_chains_read<R>(
-        &self,
-        f: impl FnOnce(Option<&Vec<Vec<VersionEntry>>>) -> R,
-    ) -> R {
-        f(self.version_chains.as_ref())
-    }
-
-    /// Execute a closure with exclusive access to the version chains.
-    ///
-    /// This method provides controlled mutable access to the internal
-    /// `Option<Vec<Vec<VersionEntry>>>`. Only one thread can call this
-    /// method at a time since it requires `&mut self`.
-    pub fn with_version_chains_write<R>(
-        &mut self,
-        f: impl FnOnce(&mut Option<Vec<Vec<VersionEntry>>>) -> R,
-    ) -> R {
-        f(&mut self.version_chains)
+            memory_bytes += state.visibility.memory_usage();
+        }
+        let avg_len = if total_rows > 0 {
+            total_entries as f64 / total_rows as f64
+        } else {
+            0.0
+        };
+        VersionChainStats {
+            total_rows,
+            total_entries,
+            max_len,
+            avg_len,
+            memory_bytes,
+        }
     }
 }

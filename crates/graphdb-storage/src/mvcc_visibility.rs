@@ -92,6 +92,7 @@ impl Visibility {
 /// Concrete types only, no dynamic dispatch. Callers keep the original
 /// timestamp predicate for the first read and use this gate only to recheck
 /// the surviving stamps of the record they already fetched.
+#[derive(Clone, Copy)]
 pub struct PendingGate<'a> {
     manager: &'a VersionManager,
     own_write: Option<Timestamp>,
@@ -196,10 +197,65 @@ impl<'a> PendingGate<'a> {
     }
 }
 
+/// Read snapshot paired with the gate that qualifies it.
+///
+/// The plain [`PendingGate`] predicates take the snapshot as an argument on
+/// every call, so a caller can pair one read's stamp with another read's
+/// snapshot. This type binds the two once: every predicate it exposes is
+/// evaluated at its own [`Self::snapshot`], and the storage entry points that
+/// yield rows or columns take it instead of a bare timestamp. A read path
+/// therefore cannot omit the pending recheck by accident.
+///
+/// The pending-aware resolution walks *below* the snapshot to read the version
+/// that predates a foreign uncommitted write; [`Self::at`] derives the lowered
+/// guard for that walk while keeping the same gate.
+pub struct VisibilityGuard<'a> {
+    snapshot: Timestamp,
+    gate: PendingGate<'a>,
+}
+
+impl<'a> VisibilityGuard<'a> {
+    /// Built by the storage context (or by a scan closure that cloned the
+    /// version-manager handle up front). There is no other legitimate source
+    /// for a read snapshot plus gate, so the constructor stays crate-private.
+    pub(crate) fn new(snapshot: Timestamp, gate: PendingGate<'a>) -> Self {
+        Self { snapshot, gate }
+    }
+
+    /// The snapshot every predicate on this guard is evaluated at.
+    pub fn snapshot(&self) -> Timestamp {
+        self.snapshot
+    }
+
+    /// The same gate evaluated at a lowered snapshot.
+    pub(crate) fn at(&self, snapshot: Timestamp) -> Self {
+        Self {
+            snapshot,
+            gate: self.gate,
+        }
+    }
+
+    /// Row liveness at this guard's snapshot.
+    #[inline]
+    pub(crate) fn is_row_visible(
+        &self,
+        create_ts: Timestamp,
+        delete_ts: Option<Timestamp>,
+    ) -> bool {
+        self.gate
+            .is_row_visible(self.snapshot, create_ts, delete_ts)
+    }
+
+    /// Whether `stamp` names a foreign uncommitted write at this snapshot.
+    #[inline]
+    pub(crate) fn is_foreign_pending(&self, stamp: Timestamp) -> bool {
+        self.gate.is_foreign_pending(self.snapshot, stamp)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Visibility;
-
     #[test]
     fn visible_when_created_before_snapshot() {
         assert!(Visibility::is_visible(10, 5, None));

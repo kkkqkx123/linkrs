@@ -4,27 +4,33 @@
 //! (`Resident`) or released (`Evicted`). Evicted chunks keep their row
 //! range, pre-evict encoding scheme, compression profile, and column-level
 //! statistics; the decoded buffers are freed and the compressed snapshot
-//! pages spill to per-snapshot files under the process spill directory, so
-//! eviction genuinely releases heap memory instead of retaining it.
+//! pages leave the heap, so eviction genuinely releases memory instead of
+//! retaining it in another form.
 //!
-//! The snapshot reuses the dirty-page envelope ([`PageData`]) and its
-//! row-page addressing, so no new file or page type is introduced. Each
-//! snapshot page is individually checksummed and compressed, giving
-//! bounded-cost point reads (one page) and one-shot batch reloads. Spill
-//! files are reference-counted: clones share one file and the last dropped
-//! reference deletes it. A spill write failure fails the eviction, never
-//! silently keeping the snapshot in memory.
+//! There is exactly one snapshot representation and one snapshot format: a
+//! read-only `mmap` of `VKSP` frames plus their frame index. A snapshot's
+//! pages therefore either belong to the process (a spill file written at
+//! eviction time, reference-counted and deleted with the last dropped
+//! reference) or to a checkpoint sidecar (owned by the checkpoint directory
+//! and never deleted by readers). Spill and checkpoint bytes go through the
+//! same encoder and the same parser, and reads never differ between them.
+//!
+//! Pages reuse the dirty-page envelope ([`PageData`]) and its row-page
+//! addressing, so no new page type is introduced. Each snapshot page is
+//! individually compressed, giving bounded-cost point reads (one page) and
+//! one-shot batch reloads. A spill write failure fails the eviction instead
+//! of silently keeping the snapshot on the heap.
 //!
 //! Checkpoint sidecars persist evicted snapshots across restarts: full flush
 //! writes one `{column}.snapshot` file per column holding the already
 //! compressed pages of every evicted chunk, and reload re-evicts matching
-//! chunks backed by a read-only `mmap` of the sidecar instead of decoding
-//! them onto the heap. Sidecars are derived caches excluded from the commit
-//! manifest: a missing or corrupt sidecar only keeps chunks resident and
-//! never fails the open.
+//! chunks from a mapping of the sidecar. Sidecars are derived caches
+//! excluded from the commit manifest: a missing or corrupt sidecar only
+//! keeps chunks resident and never fails the open. A missing sidecar never
+//! changes what a read observes — the checkpoint pages stay authoritative.
 
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -152,13 +158,10 @@ impl ChunkResidency {
 /// Compressed snapshot of one evicted chunk's current values.
 ///
 /// Values are captured overlay-merged (what `get` serves), split along the
-/// shared row-page addressing, and stored per page as a checksummed
-/// [`PageData`] envelope compressed with zstd. Point reads decode a single
-/// page; batch reloads decode each page once.
-///
-/// In-memory snapshots keep the pages on the heap; spilled snapshots keep
-/// them in a reference-counted spill file and only page metadata in memory.
-/// Clones share one spill file and the last dropped clone deletes it.
+/// shared row-page addressing, and stored per page as a [`PageData`]
+/// envelope compressed with zstd. The pages live in a read-only `mmap` of a
+/// `VKSP` file, so an evicted chunk holds frame metadata and a mapping
+/// instead of payload bytes.
 #[derive(Debug, Clone)]
 pub struct EvictedSnapshot {
     /// Rows covered, starting at the chunk's `row_offset`.
@@ -167,76 +170,36 @@ pub struct EvictedSnapshot {
     pub encoding: EncodingType,
     /// Pre-evict compression profile, restored on promotion.
     pub meta: ChunkEncodingMeta,
-    /// Snapshot pages, heap or spill-file resident.
-    pages: SnapshotPages,
+    /// Compressed pages: shared mapping plus its frame index.
+    pages: Arc<SnapshotPages>,
     /// Uncompressed envelope bytes (for memory accounting).
     pub uncompressed_bytes: usize,
 }
 
-/// Where an evicted snapshot's compressed pages live.
-#[derive(Debug, Clone)]
-enum SnapshotPages {
-    /// Compressed pages retained on the heap.
-    Memory(Vec<EvictedPage>),
-    /// Compressed pages in a spill file, shared across clones.
-    Spilled(Arc<SpilledPages>),
-    /// Compressed pages in a checkpoint sidecar, shared across clones.
-    /// The mapping is read-only page cache; only frame metadata counts
-    /// toward heap usage.
-    Mapped(Arc<MappedSnapshotPages>),
-}
-
-/// Reference-counted spill file for one evicted chunk. Dropping the last
-/// reference deletes the file; partial files from failed spills are removed
-/// by the spilling call itself.
+/// Read-only mapping backing one or more evicted snapshots.
+///
+/// Clones of a snapshot share one mapping. Spill mappings also name the
+/// file they came from: the last dropped reference deletes it, so eviction
+/// never leaves payload bytes on the heap and never orphans a file.
 #[derive(Debug)]
-struct SpilledPages {
-    path: PathBuf,
-    frames: Vec<SpilledFrame>,
+struct SnapshotPages {
+    map: Arc<memmap2::Mmap>,
+    frames: Vec<MappedFrame>,
+    /// Spill file owned by this mapping, or `None` for a checkpoint
+    /// sidecar, which the checkpoint directory owns.
+    owned: Option<PathBuf>,
 }
 
-/// One framed page inside a spill file: `len:u32` prefix followed by the
-/// compressed [`PageData`] serialization (checksum envelope).
-#[derive(Debug, Clone, Copy)]
-struct SpilledFrame {
-    /// Absolute row-page id (`row / ROWS_PER_PAGE`), shared with the
-    /// dirty-page and incremental-checkpoint addressing.
-    page_id: u32,
-    /// First absolute row covered by this page.
-    start_row: u32,
-    /// Rows covered by this page.
-    rows: u32,
-    /// Byte offset of the frame (length prefix) in the spill file.
-    offset: u64,
-    /// Compressed payload bytes excluding the length prefix.
-    len: u32,
-}
-
-impl Drop for SpilledPages {
+impl Drop for SnapshotPages {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        if let Some(path) = &self.owned {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
-/// One compressed row page inside an eviction snapshot.
-#[derive(Debug, Clone)]
-pub struct EvictedPage {
-    /// Absolute row-page id (`row / ROWS_PER_PAGE`), shared with the
-    /// dirty-page and incremental-checkpoint addressing.
-    pub page_id: u32,
-    /// First absolute row covered by this page.
-    pub start_row: u32,
-    /// Rows covered by this page.
-    pub rows: u32,
-    /// zstd-compressed [`PageData`] serialization (checksum envelope).
-    pub compressed: Vec<u8>,
-}
-
-/// One framed page inside a memory-mapped checkpoint sidecar.
-///
-/// Byte layout mirrors [`SpilledFrame`] (`len:u32` prefix plus the
-/// compressed [`PageData`] serialization), addressed as slices of the
-/// shared mapping instead of file offset reads.
+/// One framed page inside a snapshot mapping: a `len:u32` prefix followed
+/// by the compressed [`PageData`] serialization.
 #[derive(Debug, Clone, Copy)]
 pub struct MappedFrame {
     /// Absolute row-page id (`row / ROWS_PER_PAGE`).
@@ -251,348 +214,24 @@ pub struct MappedFrame {
     pub len: u32,
 }
 
-/// Reference-counted view of checkpoint sidecar pages. Clones share one
-/// mapping; the sidecar file itself is owned by the checkpoint directory
-/// and never deleted by readers.
+/// One compressed row page staged for sidecar encoding.
 #[derive(Debug, Clone)]
-pub struct MappedSnapshotPages {
-    map: Arc<memmap2::Mmap>,
-    frames: Vec<MappedFrame>,
+pub struct EvictedPage {
+    /// Absolute row-page id (`row / ROWS_PER_PAGE`), shared with the
+    /// dirty-page and incremental-checkpoint addressing.
+    pub page_id: u32,
+    /// First absolute row covered by this page.
+    pub start_row: u32,
+    /// Rows covered by this page.
+    pub rows: u32,
+    /// zstd-compressed [`PageData`] serialization (checksum envelope).
+    pub compressed: Vec<u8>,
 }
 
-impl EvictedSnapshot {
-    /// Capture chunk values starting at absolute `start_row` with the
-    /// pre-evict `encoding` scheme tag and compression profile. Pages stay
-    /// on the heap; eviction prefers [`Self::capture_spilled`].
-    pub fn capture(
-        start_row: usize,
-        values: Vec<Option<Value>>,
-        encoding: EncodingType,
-        meta: ChunkEncodingMeta,
-    ) -> StorageResult<Self> {
-        let rows = values.len() as u32;
-        let compressed = Self::compress_pages(start_row, &values)?;
-        let mut pages = Vec::with_capacity(compressed.len());
-        let mut uncompressed_bytes = 0usize;
-        for (page_no, (payload, serialized_len)) in compressed.into_iter().enumerate() {
-            let abs_start = start_row + page_no * ROWS_PER_PAGE;
-            let window_rows = values
-                .len()
-                .saturating_sub(page_no * ROWS_PER_PAGE)
-                .min(ROWS_PER_PAGE) as u32;
-            uncompressed_bytes += serialized_len;
-            pages.push(EvictedPage {
-                page_id: (abs_start / ROWS_PER_PAGE) as u32,
-                start_row: abs_start as u32,
-                rows: window_rows,
-                compressed: payload,
-            });
-        }
-        Ok(Self {
-            rows,
-            encoding,
-            meta,
-            pages: SnapshotPages::Memory(pages),
-            uncompressed_bytes,
-        })
-    }
-
-    /// Capture chunk values and spill the compressed pages to a spill file,
-    /// keeping only page metadata in memory. A spill failure removes the
-    /// partial file and reports an error so the caller skips the eviction
-    /// instead of silently retaining heap pages.
-    pub fn capture_spilled(
-        start_row: usize,
-        values: Vec<Option<Value>>,
-        encoding: EncodingType,
-        meta: ChunkEncodingMeta,
-    ) -> StorageResult<Self> {
-        let rows = values.len() as u32;
-        let compressed = Self::compress_pages(start_row, &values)?;
-        let mut uncompressed_bytes = 0usize;
-        for (_, serialized_len) in &compressed {
-            uncompressed_bytes += serialized_len;
-        }
-        let dir = vertex_spill_dir()?;
-        let seq = SPILL_SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = dir.join(format!("spill-{}-{}.pages", std::process::id(), seq));
-        let spill_result = (|| {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-                .map_err(|e| {
-                    StorageError::io_error(format!(
-                        "vertex spill file {} unavailable: {}",
-                        path.display(),
-                        e
-                    ))
-                })?;
-            let mut frames = Vec::with_capacity(compressed.len());
-            let mut offset = 0u64;
-            for (page_no, (payload, _)) in compressed.into_iter().enumerate() {
-                let abs_start = start_row + page_no * ROWS_PER_PAGE;
-                let window_rows = (rows as usize)
-                    .saturating_sub(page_no * ROWS_PER_PAGE)
-                    .min(ROWS_PER_PAGE) as u32;
-                file.write_all(&(payload.len() as u32).to_le_bytes())
-                    .map_err(|e| {
-                        StorageError::io_error(format!(
-                            "vertex spill write to {} failed: {}",
-                            path.display(),
-                            e
-                        ))
-                    })?;
-                file.write_all(&payload).map_err(|e| {
-                    StorageError::io_error(format!(
-                        "vertex spill write to {} failed: {}",
-                        path.display(),
-                        e
-                    ))
-                })?;
-                frames.push(SpilledFrame {
-                    page_id: (abs_start / ROWS_PER_PAGE) as u32,
-                    start_row: abs_start as u32,
-                    rows: window_rows,
-                    offset,
-                    len: payload.len() as u32,
-                });
-                offset += 4 + payload.len() as u64;
-            }
-            Ok::<Vec<SpilledFrame>, StorageError>(frames)
-        })();
-        match spill_result {
-            Ok(frames) => Ok(Self {
-                rows,
-                encoding,
-                meta,
-                pages: SnapshotPages::Spilled(Arc::new(SpilledPages { path, frames })),
-                uncompressed_bytes,
-            }),
-            Err(e) => {
-                let _ = std::fs::remove_file(&path);
-                Err(e)
-            }
-        }
-    }
-
-    /// Compress one value window per row page. Returns the compressed
-    /// payloads with their uncompressed envelope sizes.
-    fn compress_pages(
-        start_row: usize,
-        values: &[Option<Value>],
-    ) -> StorageResult<Vec<(Vec<u8>, usize)>> {
-        let mut out = Vec::new();
-        for (page_no, window) in values.chunks(ROWS_PER_PAGE).enumerate() {
-            let abs_start = start_row + page_no * ROWS_PER_PAGE;
-            let payload = postcard::to_allocvec(window)
-                .map_err(|e| StorageError::serialize_error(e.to_string()))?;
-            let page = PageData::new((abs_start / ROWS_PER_PAGE) as u32, payload, false);
-            let serialized = page.serialize();
-            let serialized_len = serialized.len();
-            let compressed =
-                zstd::encode_all(serialized.as_slice(), EVICT_ZSTD_LEVEL).map_err(|e| {
-                    StorageError::io_error(format!("eviction snapshot compress failed: {}", e))
-                })?;
-            out.push((compressed, serialized_len));
-        }
-        Ok(out)
-    }
-
-    /// Compressed bytes of the snapshot payload, wherever it lives
-    /// (heap, spill file, or checkpoint mapping). Used for eviction
-    /// observability.
-    pub fn compressed_bytes(&self) -> usize {
-        match &self.pages {
-            SnapshotPages::Memory(pages) => pages.iter().map(|p| p.compressed.len()).sum(),
-            SnapshotPages::Spilled(spilled) => spilled.frames.iter().map(|f| f.len as usize).sum(),
-            SnapshotPages::Mapped(mapped) => mapped.frames.iter().map(|f| f.len as usize).sum(),
-        }
-    }
-
-    /// Heap bytes retained by the snapshot: the full payload for
-    /// in-memory snapshots, only page metadata for spilled or mapped ones.
-    pub fn resident_bytes(&self) -> usize {
-        match &self.pages {
-            SnapshotPages::Memory(pages) => pages.iter().map(|p| p.compressed.len()).sum(),
-            SnapshotPages::Spilled(_) | SnapshotPages::Mapped(_) => 0,
-        }
-    }
-
-    /// Whether the snapshot pages spilled to a file.
-    pub fn is_spilled(&self) -> bool {
-        matches!(self.pages, SnapshotPages::Spilled(_))
-    }
-
-    /// Whether the snapshot pages map a checkpoint sidecar.
-    pub fn is_mapped(&self) -> bool {
-        matches!(self.pages, SnapshotPages::Mapped(_))
-    }
-
-    /// Build an evicted snapshot over checkpoint sidecar pages without
-    /// copying payloads. Used by reload to re-evict chunks whose pages
-    /// already persist in the sidecar.
-    pub fn from_mapped(
-        rows: u32,
-        encoding: EncodingType,
-        meta: ChunkEncodingMeta,
-        uncompressed_bytes: usize,
-        map: Arc<memmap2::Mmap>,
-        frames: Vec<MappedFrame>,
-    ) -> Self {
-        Self {
-            rows,
-            encoding,
-            meta,
-            pages: SnapshotPages::Mapped(Arc::new(MappedSnapshotPages { map, frames })),
-            uncompressed_bytes,
-        }
-    }
-
-    /// Materialize the compressed page payloads without decoding them, in
-    /// page order. Used by checkpoint sidecar persistence so evicted chunks
-    /// persist without promoting back onto the heap.
-    pub fn compressed_pages(&self) -> StorageResult<Vec<EvictedPage>> {
-        match &self.pages {
-            SnapshotPages::Memory(pages) => Ok(pages.clone()),
-            SnapshotPages::Spilled(spilled) => {
-                let mut file = File::open(&spilled.path).map_err(|e| {
-                    StorageError::io_error(format!(
-                        "vertex spill file {} unavailable: {}",
-                        spilled.path.display(),
-                        e
-                    ))
-                })?;
-                let mut out = Vec::with_capacity(spilled.frames.len());
-                for frame in &spilled.frames {
-                    let compressed = Self::read_frame_at(&mut file, frame)?;
-                    out.push(EvictedPage {
-                        page_id: frame.page_id,
-                        start_row: frame.start_row,
-                        rows: frame.rows,
-                        compressed,
-                    });
-                }
-                Ok(out)
-            }
-            SnapshotPages::Mapped(mapped) => {
-                let mut out = Vec::with_capacity(mapped.frames.len());
-                for frame in &mapped.frames {
-                    out.push(EvictedPage {
-                        page_id: frame.page_id,
-                        start_row: frame.start_row,
-                        rows: frame.rows,
-                        compressed: Self::mapped_frame_bytes(&mapped.map, frame)?.to_vec(),
-                    });
-                }
-                Ok(out)
-            }
-        }
-    }
-
-    /// Spill file path, if spilled. Test observability only.
-    #[cfg(test)]
-    pub(crate) fn spill_file_path(&self) -> Option<std::path::PathBuf> {
-        match &self.pages {
-            SnapshotPages::Spilled(spilled) => Some(spilled.path.clone()),
-            SnapshotPages::Memory(_) | SnapshotPages::Mapped(_) => None,
-        }
-    }
-
-    /// Decode one absolute row. Used by the shared-reference read path;
-    /// failures are reported so `&mut` callers can propagate them.
-    pub fn decode_row(&self, abs_row: usize) -> StorageResult<Option<Value>> {
-        let (page_id, start_row, compressed) = match &self.pages {
-            SnapshotPages::Memory(pages) => {
-                let page = pages
-                    .iter()
-                    .find(|p| {
-                        let start = p.start_row as usize;
-                        abs_row >= start && abs_row < start + p.rows as usize
-                    })
-                    .ok_or_else(|| {
-                        StorageError::deserialize_error(format!(
-                            "evicted snapshot has no page for row {}",
-                            abs_row
-                        ))
-                    })?;
-                (page.page_id, page.start_row, page.compressed.clone())
-            }
-            SnapshotPages::Spilled(spilled) => {
-                let frame = Self::spilled_frame_for(spilled, abs_row)?;
-                (
-                    frame.page_id,
-                    frame.start_row,
-                    Self::read_frame_bytes(spilled, &frame)?,
-                )
-            }
-            SnapshotPages::Mapped(mapped) => {
-                let frame = Self::mapped_frame_for(mapped, abs_row)?;
-                (
-                    frame.page_id,
-                    frame.start_row,
-                    Self::mapped_frame_bytes(&mapped.map, &frame)?.to_vec(),
-                )
-            }
-        };
-        let values = Self::decode_compressed(&compressed, page_id, start_row)?;
-        let offset = abs_row - start_row as usize;
-        values.get(offset).cloned().ok_or_else(|| {
-            StorageError::deserialize_error(format!(
-                "evicted snapshot page {} missing row {}",
-                page_id, abs_row
-            ))
-        })
-    }
-
-    /// Decode every covered row as `(absolute row, value)` pairs in order.
-    /// Used by batch reloads so each page is decompressed exactly once.
-    pub fn decode_all(&self) -> StorageResult<Vec<(usize, Option<Value>)>> {
-        let mut out = Vec::with_capacity(self.rows as usize);
-        match &self.pages {
-            SnapshotPages::Memory(pages) => {
-                for page in pages {
-                    let values =
-                        Self::decode_compressed(&page.compressed, page.page_id, page.start_row)?;
-                    for (offset, value) in values.into_iter().enumerate() {
-                        out.push((page.start_row as usize + offset, value));
-                    }
-                }
-            }
-            SnapshotPages::Spilled(spilled) => {
-                let mut file = File::open(&spilled.path).map_err(|e| {
-                    StorageError::io_error(format!(
-                        "vertex spill file {} unavailable: {}",
-                        spilled.path.display(),
-                        e
-                    ))
-                })?;
-                for frame in &spilled.frames {
-                    let compressed = Self::read_frame_at(&mut file, frame)?;
-                    let values =
-                        Self::decode_compressed(&compressed, frame.page_id, frame.start_row)?;
-                    for (offset, value) in values.into_iter().enumerate() {
-                        out.push((frame.start_row as usize + offset, value));
-                    }
-                }
-            }
-            SnapshotPages::Mapped(mapped) => {
-                for frame in &mapped.frames {
-                    let compressed = Self::mapped_frame_bytes(&mapped.map, frame)?;
-                    let values =
-                        Self::decode_compressed(compressed, frame.page_id, frame.start_row)?;
-                    for (offset, value) in values.into_iter().enumerate() {
-                        out.push((frame.start_row as usize + offset, value));
-                    }
-                }
-            }
-        }
-        Ok(out)
-    }
-
-    fn spilled_frame_for(spilled: &SpilledPages, abs_row: usize) -> StorageResult<SpilledFrame> {
-        spilled
-            .frames
+impl SnapshotPages {
+    /// The frame covering an absolute row.
+    fn frame_for(&self, abs_row: usize) -> StorageResult<MappedFrame> {
+        self.frames
             .iter()
             .find(|f| {
                 let start = f.start_row as usize;
@@ -607,59 +246,223 @@ impl EvictedSnapshot {
             })
     }
 
-    fn read_frame_bytes(spilled: &SpilledPages, frame: &SpilledFrame) -> StorageResult<Vec<u8>> {
-        let mut file = File::open(&spilled.path).map_err(|e| {
-            StorageError::io_error(format!(
-                "vertex spill file {} unavailable: {}",
-                spilled.path.display(),
-                e
-            ))
-        })?;
-        Self::read_frame_at(&mut file, frame)
-    }
-
-    fn read_frame_at(file: &mut File, frame: &SpilledFrame) -> StorageResult<Vec<u8>> {
-        file.seek(SeekFrom::Start(frame.offset + 4))
-            .map_err(|e| StorageError::io_error(format!("vertex spill seek failed: {}", e)))?;
-        let mut buf = vec![0u8; frame.len as usize];
-        file.read_exact(&mut buf)
-            .map_err(|e| StorageError::io_error(format!("vertex spill read failed: {}", e)))?;
-        Ok(buf)
-    }
-
-    fn mapped_frame_for(
-        mapped: &MappedSnapshotPages,
-        abs_row: usize,
-    ) -> StorageResult<MappedFrame> {
-        mapped
-            .frames
-            .iter()
-            .find(|f| {
-                let start = f.start_row as usize;
-                abs_row >= start && abs_row < start + f.rows as usize
-            })
-            .copied()
-            .ok_or_else(|| {
-                StorageError::deserialize_error(format!(
-                    "mapped snapshot has no page for row {}",
-                    abs_row
-                ))
-            })
-    }
-
-    fn mapped_frame_bytes<'a>(
-        map: &'a memmap2::Mmap,
-        frame: &MappedFrame,
-    ) -> StorageResult<&'a [u8]> {
+    /// The compressed bytes of one frame.
+    fn frame_bytes<'a>(&'a self, frame: &MappedFrame) -> StorageResult<&'a [u8]> {
         let start = frame.offset.saturating_add(4);
         let end = start.saturating_add(frame.len as u64);
-        map.get(start as usize..end as usize).ok_or_else(|| {
+        self.map.get(start as usize..end as usize).ok_or_else(|| {
             StorageError::deserialize_error(format!(
-                "mapped snapshot frame for rows {}..{} out of range",
+                "snapshot frame for rows {}..{} out of range",
                 frame.start_row,
                 frame.start_row as usize + frame.rows as usize,
             ))
         })
+    }
+}
+
+impl EvictedSnapshot {
+    /// Capture chunk values starting at absolute `start_row` with the
+    /// pre-evict `encoding` scheme tag and compression profile, and write
+    /// the pages to a snapshot file this snapshot owns. Eviction therefore
+    /// leaves the heap immediately: only the mapping and its frame index
+    /// stay. A write or read-back failure removes the partial file and
+    /// reports an error, so the caller skips the eviction instead of
+    /// silently retaining the pages.
+    pub fn capture(
+        start_row: usize,
+        values: Vec<Option<Value>>,
+        encoding: EncodingType,
+        meta: ChunkEncodingMeta,
+    ) -> StorageResult<Self> {
+        let rows = values.len() as u32;
+        let (pages, uncompressed_bytes) = Self::compress_pages(start_row, &values)?;
+        let plan = SnapshotChunkPlan {
+            row_offset: start_row as u32,
+            rows,
+            encoding,
+            meta: &meta,
+            uncompressed_bytes: uncompressed_bytes as u64,
+            pages,
+        };
+        let bytes = encode_snapshot_sidecar(std::slice::from_ref(&plan))?;
+        let dir = vertex_spill_dir()?;
+        let seq = SPILL_SEQ.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!("spill-{}-{}.vksp", std::process::id(), seq));
+        let written = Self::spill_mapping(&path, &bytes).and_then(|map| {
+            let frames = parse_snapshot_sidecar(map.clone())?
+                .chunks
+                .into_iter()
+                .next()
+                .map(|chunk| chunk.frames)
+                .ok_or_else(|| {
+                    StorageError::deserialize_error(
+                        "vertex snapshot file holds no chunk record".to_string(),
+                    )
+                })?;
+            Ok((map, frames))
+        });
+        match written {
+            Ok((map, frames)) => Ok(Self {
+                rows,
+                encoding,
+                meta,
+                pages: Arc::new(SnapshotPages {
+                    map,
+                    frames,
+                    owned: Some(path),
+                }),
+                uncompressed_bytes,
+            }),
+            Err(e) => {
+                let _ = std::fs::remove_file(&path);
+                Err(e)
+            }
+        }
+    }
+
+    /// Create, fill and map one snapshot file, returning the shared mapping
+    /// with the frame index read back from it.
+    fn spill_mapping(path: &Path, bytes: &[u8]) -> StorageResult<Arc<memmap2::Mmap>> {
+        let spill_error = |stage: &str, e: &std::io::Error| {
+            StorageError::io_error(format!(
+                "vertex snapshot file {} {}: {}",
+                path.display(),
+                stage,
+                e
+            ))
+        };
+        let mut file = OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|e| spill_error("unavailable", &e))?;
+        file.write_all(bytes)
+            .map_err(|e| spill_error("write failed", &e))?;
+        file.flush().map_err(|e| spill_error("flush failed", &e))?;
+        // The mapping keeps the file alive; the handle is not needed after.
+        Ok(Arc::new(
+            unsafe { memmap2::Mmap::map(&file) }.map_err(|e| spill_error("map failed", &e))?,
+        ))
+    }
+
+    /// Compress one [`EvictedPage`] per row page, returning them in page
+    /// order with the total uncompressed envelope size.
+    fn compress_pages(
+        start_row: usize,
+        values: &[Option<Value>],
+    ) -> StorageResult<(Vec<EvictedPage>, usize)> {
+        let mut pages = Vec::new();
+        let mut uncompressed_bytes = 0usize;
+        for (page_no, window) in values.chunks(ROWS_PER_PAGE).enumerate() {
+            let abs_start = start_row + page_no * ROWS_PER_PAGE;
+            let payload = postcard::to_allocvec(window)
+                .map_err(|e| StorageError::serialize_error(e.to_string()))?;
+            let page = PageData::new((abs_start / ROWS_PER_PAGE) as u32, payload, false);
+            let serialized = page.serialize();
+            uncompressed_bytes += serialized.len();
+            let compressed =
+                zstd::encode_all(serialized.as_slice(), EVICT_ZSTD_LEVEL).map_err(|e| {
+                    StorageError::io_error(format!("eviction snapshot compress failed: {}", e))
+                })?;
+            pages.push(EvictedPage {
+                page_id: (abs_start / ROWS_PER_PAGE) as u32,
+                start_row: abs_start as u32,
+                rows: window.len() as u32,
+                compressed,
+            });
+        }
+        Ok((pages, uncompressed_bytes))
+    }
+
+    /// Compressed bytes of the snapshot payload. Used for eviction
+    /// observability.
+    pub fn compressed_bytes(&self) -> usize {
+        self.pages.frames.iter().map(|f| f.len as usize).sum()
+    }
+
+    /// Build an evicted snapshot over checkpoint sidecar pages without
+    /// copying payloads. Used by reload to re-evict chunks whose pages
+    /// already persist in the sidecar; the checkpoint directory owns those
+    /// bytes, so the snapshot never deletes them.
+    pub fn from_mapped(
+        rows: u32,
+        encoding: EncodingType,
+        meta: ChunkEncodingMeta,
+        uncompressed_bytes: usize,
+        map: Arc<memmap2::Mmap>,
+        frames: Vec<MappedFrame>,
+    ) -> Self {
+        Self {
+            rows,
+            encoding,
+            meta,
+            pages: Arc::new(SnapshotPages {
+                map,
+                frames,
+                owned: None,
+            }),
+            uncompressed_bytes,
+        }
+    }
+
+    /// Materialize the compressed page payloads without decoding them, in
+    /// page order. Used by checkpoint sidecar persistence so evicted chunks
+    /// persist without promoting the live chunk back onto the heap.
+    pub fn compressed_pages(&self) -> StorageResult<Vec<EvictedPage>> {
+        self.pages
+            .frames
+            .iter()
+            .map(|frame| {
+                Ok(EvictedPage {
+                    page_id: frame.page_id,
+                    start_row: frame.start_row,
+                    rows: frame.rows,
+                    compressed: self.pages.frame_bytes(frame)?.to_vec(),
+                })
+            })
+            .collect()
+    }
+
+    /// Spill file this snapshot owns, if any. Test observability only.
+    #[cfg(test)]
+    pub(crate) fn spill_file_path(&self) -> Option<PathBuf> {
+        self.pages.owned.clone()
+    }
+
+    /// Decode one absolute row. Used by the shared-reference read path;
+    /// failures are reported so `&mut` callers can propagate them.
+    pub fn decode_row(&self, abs_row: usize) -> StorageResult<Option<Value>> {
+        let frame = self.pages.frame_for(abs_row)?;
+        let values = Self::decode_compressed(
+            self.pages.frame_bytes(&frame)?,
+            frame.page_id,
+            frame.start_row,
+        )?;
+        let offset = abs_row - frame.start_row as usize;
+        values.get(offset).cloned().ok_or_else(|| {
+            StorageError::deserialize_error(format!(
+                "evicted snapshot page {} missing row {}",
+                frame.page_id, abs_row
+            ))
+        })
+    }
+
+    /// Decode every covered row as `(absolute row, value)` pairs in order.
+    /// Used by batch reloads so each page is decompressed exactly once.
+    pub fn decode_all(&self) -> StorageResult<Vec<(usize, Option<Value>)>> {
+        let mut out = Vec::with_capacity(self.rows as usize);
+        for frame in &self.pages.frames {
+            let values = Self::decode_compressed(
+                self.pages.frame_bytes(frame)?,
+                frame.page_id,
+                frame.start_row,
+            )?;
+            for (offset, value) in values.into_iter().enumerate() {
+                out.push((frame.start_row as usize + offset, value));
+            }
+        }
+        Ok(out)
     }
 
     fn decode_compressed(
@@ -986,17 +789,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn spilled_snapshot_roundtrips_values_and_deletes_file() {
+    fn spill_roundtrips_values_and_deletes_file() {
         let values = vec![Some(Value::Int(7)), None, Some(Value::string("hello"))];
-        let snapshot = EvictedSnapshot::capture_spilled(
+        let snapshot = EvictedSnapshot::capture(
             0,
             values.clone(),
             EncodingType::None,
             ChunkEncodingMeta::default(),
         )
         .expect("spill must succeed");
-        assert!(snapshot.is_spilled());
-        assert_eq!(snapshot.resident_bytes(), 0);
         assert!(snapshot.compressed_bytes() > 0);
 
         let path = snapshot
@@ -1019,17 +820,51 @@ mod tests {
     }
 
     #[test]
-    fn memory_snapshot_stays_on_heap() {
+    fn spill_file_is_a_valid_checkpoint_sidecar() {
+        // Eviction and checkpointing share one format: the bytes a snapshot
+        // spills must parse exactly like a `{column}.snapshot` sidecar.
+        let values: Vec<Option<Value>> = (0..ROWS_PER_PAGE + 5)
+            .map(|i| {
+                if i % 3 == 0 {
+                    None
+                } else {
+                    Some(Value::Int(i as i32))
+                }
+            })
+            .collect();
         let snapshot = EvictedSnapshot::capture(
-            0,
-            vec![Some(Value::Int(1))],
-            EncodingType::None,
+            ROWS_PER_PAGE,
+            values,
+            EncodingType::Rle,
             ChunkEncodingMeta::default(),
         )
-        .expect("capture must succeed");
-        assert!(!snapshot.is_spilled());
-        assert!(snapshot.spill_file_path().is_none());
-        assert!(snapshot.resident_bytes() > 0);
+        .expect("spill must succeed");
+        let path = snapshot
+            .spill_file_path()
+            .expect("spilled snapshot has a file");
+        let parsed = open_snapshot_sidecar(&path).expect("spill bytes parse as a sidecar");
+        assert_eq!(parsed.chunks.len(), 1);
+        let record = &parsed.chunks[0];
+        assert_eq!(record.row_offset as usize, ROWS_PER_PAGE);
+        assert_eq!(record.rows as usize, ROWS_PER_PAGE + 5);
+        assert_eq!(record.encoding, EncodingType::Rle);
+        // Two pages: the window starts on the second row page.
+        assert_eq!(record.frames.len(), 2);
+        assert_eq!(record.frames[0].page_id, 1);
+        assert_eq!(record.frames[1].page_id, 2);
+        let restored = EvictedSnapshot::from_mapped(
+            record.rows,
+            record.encoding,
+            record.meta.clone(),
+            record.uncompressed_bytes,
+            parsed.map.clone(),
+            record.frames.clone(),
+        );
+        assert_eq!(
+            restored.decode_all().unwrap(),
+            snapshot.decode_all().unwrap()
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     fn unique_sidecar_path(tag: &str) -> PathBuf {
@@ -1079,8 +914,9 @@ mod tests {
             mapped.map,
             record.frames,
         );
-        assert!(restored.is_mapped());
-        assert_eq!(restored.resident_bytes(), 0);
+        // A checkpoint-backed snapshot never owns the bytes it reads.
+        assert!(restored.spill_file_path().is_none());
+        assert_eq!(restored.compressed_bytes(), snapshot.compressed_bytes());
         assert_eq!(restored.decode_row(0).unwrap(), Some(Value::Int(11)));
         assert_eq!(restored.decode_row(1).unwrap(), None);
         assert_eq!(restored.decode_row(2).unwrap(), Some(Value::Int(13)));

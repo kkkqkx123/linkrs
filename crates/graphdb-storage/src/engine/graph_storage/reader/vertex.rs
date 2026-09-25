@@ -76,53 +76,21 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
 
     // Single-label scan: every table row yields its own single-tag vertex.
     // The same id string stored under two labels denotes two independent
-    // vertices and is never merged. Per-row visibility handling is unchanged.
+    // vertices and is never merged.
     let mut out = Vec::new();
 
-    const BATCH_SIZE: usize = 256;
-
     for tag in &tags {
-        let tag_id = tag.tag_id;
-        let tag_name = &tag.tag_name;
-        let gate = ctx.pending_gate();
-        ctx.data_store().with_vertex_tables(|tables| {
-            if let Some(table) = tables.get(&tag_id) {
-                let records = table.scan_shard_inconsistent(ts);
-                for chunk in records.chunks(BATCH_SIZE) {
-                    for record in chunk {
-                        let (create_ts, delete_ts) = match table.row_timestamps(record.internal_id)
-                        {
-                            Some(stamps) => stamps,
-                            None => continue,
-                        };
-                        if !gate.is_row_visible(ts, create_ts, delete_ts) {
-                            continue;
-                        }
-                        let starts = table.row_picked_starts(record.internal_id, ts);
-                        let record = if starts
-                            .iter()
-                            .any(|stamp| gate.is_foreign_pending(ts, *stamp))
-                        {
-                            match crate::engine::graph_storage::context::GraphStorageContext::resolve_on_table(
-                                table, record.internal_id, ts, &gate,
-                            ) {
-                                Some((resolved, _, _, _)) => resolved,
-                                None => continue,
-                            }
-                        } else {
-                            record.clone()
-                        };
-                        record_vertex_read(ctx, record.vid);
-                        let props: HashMap<String, Value> =
-                            record.properties.iter().cloned().collect();
-                        out.push(Vertex::new(
-                            record.vid,
-                            Tag::new(tag_name.clone(), props),
-                        ));
-                    }
-                }
-            }
-        });
+        let Some(records) = ctx.scan_vertices(tag.tag_id, ts) else {
+            continue;
+        };
+        for record in records {
+            record_vertex_read(ctx, record.vid);
+            let props: HashMap<String, Value> = record.properties.iter().cloned().collect();
+            out.push(Vertex::new(
+                record.vid,
+                Tag::new(tag.tag_name.clone(), props),
+            ));
+        }
     }
 
     Ok(out)

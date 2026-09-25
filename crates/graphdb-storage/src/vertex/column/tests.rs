@@ -338,7 +338,7 @@ mod tests {
         col.set(4, Some(&Value::string("d"))).unwrap();
         assert_eq!(col.null_count(), 3);
 
-        let expected = col.null_bitmap().map(|b| b.count_ones()).unwrap_or(0);
+        let expected = (0..col.len()).filter(|row| col.is_null(*row)).count();
         assert_eq!(col.null_count(), expected);
 
         col.clear();
@@ -667,9 +667,10 @@ mod tests {
                 data_type
             );
             assert_eq!(crate::vertex::column::element_size(&data_type), 0);
-            let col = Column::new("c".to_string(), 0, data_type, true);
+            let mut col = Column::new("c".to_string(), 0, data_type, true);
+            col.reserve(1);
             assert!(matches!(
-                col.inner,
+                col.chunks.read()[0].read_state().raw,
                 crate::vertex::column::column::ColumnInner::Variable(_)
             ));
         }
@@ -715,10 +716,7 @@ mod tests {
 
         store.clear_pages(&[("name".to_string(), 0)]);
         let remaining = store
-            .columns()
-            .iter()
-            .map(|col| (col.name.clone(), col.dirty_pages()))
-            .collect::<Vec<_>>();
+            .for_each_column(|col| (col.name.clone(), col.dirty_pages()));
         assert_eq!(
             remaining,
             vec![
@@ -742,8 +740,8 @@ mod tests {
         for i in 0..10 {
             assert_eq!(col.get(i), Some(Value::Int(i as i32)));
         }
-        assert_eq!(col.chunk_for_row(3).unwrap().row_offset, 0);
-        assert!(col.chunk_for_row(100).is_none());
+        assert_eq!(col.chunk_index_for_row(3), Some(0));
+        assert_eq!(col.chunk_index_for_row(100), None);
     }
 
     #[test]
@@ -755,8 +753,8 @@ mod tests {
         }
         col.materialize_chunks();
         assert_eq!(col.get(3), Some(Value::Int(3)));
-        assert_eq!(col.chunk_for_row(3).unwrap().row_offset, 0);
-        assert!(col.chunk_for_row(100).is_none());
+        assert_eq!(col.chunk_index_for_row(3), Some(0));
+        assert_eq!(col.chunk_index_for_row(100), None);
     }
 
     #[test]
@@ -809,12 +807,12 @@ mod tests {
     fn test_column_store_collect_dirty_pages() {
         let mut store = ColumnStore::new();
         store.add_column("age".to_string(), DataType::Int, true);
-        let col = store.get_column_mut("age").unwrap();
+        let col = store.get_column("age").unwrap();
         col.set_chunk_capacity(4);
         for i in 0..8 {
             col.set(i, Some(&Value::Int(i as i32))).unwrap();
         }
-        store.get_column_mut("age").unwrap().materialize_chunks();
+        store.get_column("age").unwrap().materialize_chunks();
         // Written rows report dirty pages; clearing resets the tracking.
         assert!(!store.collect_dirty_pages().is_empty());
         store.clear_dirty();
@@ -1184,16 +1182,15 @@ mod tests {
         col.apply_encoding_to_chunks(EncodingType::BitPacking, 255)
             .unwrap();
         assert!(col.has_chunks());
-        let hot = crate::encoding::selector::EncodingThresholds::default().hot_update_threshold;
         for i in 0..1100 {
             let row = (i % 8) as usize;
-            col.set_versioned(row, Some(&Value::Int(1000 + i as i32)), 100 + i as u64)
+            col.set_versioned(row, Some(&Value::Int(1000 + i)), 100 + i as u64)
                 .unwrap();
         }
         assert!(col.zone_needs_exact_rebuild());
         assert!(col.maybe_rebuild_zone_maps_exact());
         assert!(!col.zone_needs_exact_rebuild());
-        let _ = col.pending_recode_chunks(hot);
+        assert!(!col.pending_recode_chunks().is_empty());
     }
 
     fn list_of(values: Vec<Value>) -> Value {
@@ -1336,7 +1333,7 @@ mod tests {
         use crate::encoding::EncodingType;
         let mut store = ColumnStore::new();
         store.add_column("v".to_string(), DataType::Int, true);
-        let col = store.get_column_mut("v").expect("column exists");
+        let col = store.get_column("v").expect("column exists");
         col.set_chunk_capacity(512);
         for i in 0..2000 {
             col.set(i, Some(&Value::Int(i as i32))).unwrap();
@@ -1347,18 +1344,18 @@ mod tests {
             .unwrap();
         let released = col.evict_chunk(0).unwrap();
         assert!(released > 0);
-        assert!(col.chunks[0].residency.is_evicted());
+        assert!(col.chunks.read()[0].read_state().residency.is_evicted());
 
         let dir = unique_snapshot_dir("reload");
         store.flush_evict_snapshots(&dir).unwrap();
         assert!(dir.join("v.snapshot").exists());
 
-        let col = store.get_column_mut("v").expect("column exists");
+        let col = store.get_column("v").expect("column exists");
         col.ensure_all_resident().unwrap();
-        assert!(col.chunks[0].residency.is_resident());
+        assert!(col.chunks.read()[0].read_state().residency.is_resident());
         store.load_evict_snapshots(&dir);
-        let col = store.get_column_mut("v").expect("column exists");
-        assert!(col.chunks[0].residency.is_evicted());
+        let col = store.get_column("v").expect("column exists");
+        assert!(col.chunks.read()[0].read_state().residency.is_evicted());
         assert_eq!(col.get(0), Some(Value::Int(0)));
         assert_eq!(col.get(511), Some(Value::Int(511)));
         assert_eq!(col.get(512), Some(Value::Int(512)));
@@ -1370,7 +1367,7 @@ mod tests {
         use crate::encoding::EncodingType;
         let mut store = ColumnStore::new();
         store.add_column("v".to_string(), DataType::Int, true);
-        let col = store.get_column_mut("v").expect("column exists");
+        let col = store.get_column("v").expect("column exists");
         col.set_chunk_capacity(512);
         for i in 0..1000 {
             col.set(i, Some(&Value::Int(i as i32))).unwrap();
@@ -1384,12 +1381,118 @@ mod tests {
         store.flush_evict_snapshots(&dir).unwrap();
         std::fs::write(dir.join("v.snapshot"), b"junk").unwrap();
 
-        let col = store.get_column_mut("v").expect("column exists");
+        let col = store.get_column("v").expect("column exists");
         col.ensure_all_resident().unwrap();
         store.load_evict_snapshots(&dir);
-        let col = store.get_column_mut("v").expect("column exists");
-        assert!(col.chunks[0].residency.is_resident());
+        let col = store.get_column("v").expect("column exists");
+        assert!(col.chunks.read()[0].read_state().residency.is_resident());
         assert_eq!(col.get(0), Some(Value::Int(0)));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn per_chunk_selection_leaves_a_raw_chunk_under_an_encoded_mirror() {
+        use crate::encoding::EncodingType;
+        let mut col = Column::new("v".to_string(), 0, DataType::Double, true);
+        col.set_chunk_capacity(8);
+        for i in 0..16usize {
+            let value = if i == 8 {
+                None
+            } else {
+                Some(Value::Double(1.0 + i as f64))
+            };
+            col.set(i, value.as_ref()).unwrap();
+        }
+        col.materialize_chunks();
+        col.apply_encoding_to_chunks(EncodingType::Alp, 255)
+            .unwrap();
+
+        // The leading null makes chunk 1 fall back to raw storage while the
+        // column-level mirror still reports the scheme of chunk 0.
+        let schemes: Vec<_> = col
+            .chunk_encoding_metadata()
+            .into_iter()
+            .map(|(_, scheme, _)| scheme)
+            .collect();
+        assert_eq!(schemes, vec![EncodingType::Alp, EncodingType::None]);
+        assert_eq!(col.encoding_type(), EncodingType::Alp);
+
+        for i in 0..16usize {
+            let expected = if i == 8 {
+                None
+            } else {
+                Some(Value::Double(1.0 + i as f64))
+            };
+            assert_eq!(col.get(i), expected, "row {} lost", i);
+        }
+    }
+
+    #[test]
+    fn chunk_owned_storage_counts_every_byte_once_and_evicts_payload() {
+        use crate::encoding::EncodingType;
+        let mut col = Column::new("v".to_string(), 0, DataType::Int, true);
+        col.set_chunk_capacity(512);
+        for i in 0..2000 {
+            col.set(i, Some(&Value::Int(i as i32))).unwrap();
+        }
+        assert_eq!(col.len(), 2000);
+        let raw_bytes = 2000usize * 4;
+        // Single representation: the raw payload lives only in chunks.
+        assert!(col.memory_usage() >= raw_bytes);
+        col.apply_encoding_to_chunks(EncodingType::BitPacking, 255)
+            .unwrap();
+        let mem_encoded = col.memory_usage();
+        let mut released = 0u64;
+        for idx in 0..col.chunk_count() {
+            released += col.evict_chunk(idx).unwrap();
+        }
+        assert_eq!(col.evicted_chunk_count(), col.chunk_count());
+        // The whole raw payload left the heap...
+        assert!(
+            released >= raw_bytes as u64,
+            "eviction freed {} bytes, raw payload is {}",
+            released,
+            raw_bytes
+        );
+        // ...and heap accounting is conserved (no double count, no leak).
+        let mem_after = col.memory_usage();
+        assert!(
+            mem_after + released as usize >= mem_encoded,
+            "heap {} + released {} must cover pre-evict {}",
+            mem_after,
+            released,
+            mem_encoded
+        );
+        // Windows (not buffers) define length, so length survives eviction
+        // and every row still reads back from its snapshot.
+        assert_eq!(col.len(), 2000);
+        for i in 0..2000 {
+            assert_eq!(col.get(i), Some(Value::Int(i as i32)), "row {} lost", i);
+        }
+    }
+
+    #[test]
+    fn raw_chunk_under_encoded_mirror_keeps_raw_values_authoritative() {
+        use crate::encoding::EncodingType;
+        let mut col = Column::new("v".to_string(), 0, DataType::Double, true);
+        col.set_chunk_capacity(8);
+        for i in 0..16usize {
+            let value = if i == 8 {
+                None
+            } else {
+                Some(Value::Double(1.0 + i as f64))
+            };
+            col.set(i, value.as_ref()).unwrap();
+        }
+        // Encode per chunk (writes already created chunk windows): the chunk
+        // encodings become authoritative here, and later point writes only
+        // reach the encoding or overlay.
+        col.apply_selected_encoding(EncodingType::Alp, 255).unwrap();
+        assert_eq!(col.encoding_type(), EncodingType::Alp);
+        col.set(3, Some(&Value::Double(99.0))).unwrap();
+        col.materialize_chunks();
+        assert_eq!(col.get(3), Some(Value::Double(99.0)));
+        assert_eq!(col.get(8), None);
+        assert_eq!(col.get(15), Some(Value::Double(16.0)));
     }
 }

@@ -1,9 +1,402 @@
+use std::collections::HashMap;
+
+use super::super::core::VertexTable;
 use super::routing::decode_id;
 use super::ShardedVertexTable;
+use crate::cursor::ColumnValues;
+use crate::mvcc_visibility::VisibilityGuard;
 use crate::vertex::{IdKey, PkLookup, VertexRecord};
-use graphdb_core::types::Timestamp;
+use graphdb_core::types::{DataType, Timestamp, VertexId};
+
+/// Decode an ID-index key into the external vertex ID.
+///
+/// Keys are length-checked at insert, so a decode failure surfaces as a
+/// missing row under the existing absence contract.
+fn vertex_id_of(key: IdKey) -> Option<VertexId> {
+    match key {
+        IdKey::Int(i) => VertexId::try_from_int64(i).ok(),
+        IdKey::Text(s) => VertexId::try_from_string(&s).ok(),
+    }
+}
 
 impl ShardedVertexTable {
+    // ── Plain timestamp primitives ──
+    //
+    // These apply the timestamp predicate only and take no visibility guard,
+    // so they can read a version a guard would hide. They stay crate-private
+    // and exist for two callers: the offline/startup paths that run with no
+    // transaction in flight (WAL replay, reshard) and the pending-aware
+    // resolution funnel below, which re-reads at a lowered stamp. Every entry
+    // point that hands row identity or row data to a consumer takes a
+    // [`VisibilityGuard`] instead.
+
+    pub(crate) fn get_by_internal_id(&self, global_id: u32, ts: Timestamp) -> Option<VertexRecord> {
+        let (idx, local_id) = self.decode_id(global_id);
+        let table = self.shards[idx].read();
+        table.get_by_internal_id(local_id, ts).map(|mut record| {
+            record.internal_id = global_id;
+            record
+        })
+    }
+
+    /// Row survival stamps for pending-aware rechecks (shard-decoded).
+    pub(crate) fn row_timestamps(&self, global_id: u32) -> Option<(Timestamp, Option<Timestamp>)> {
+        let (idx, local_id) = self.decode_id(global_id);
+        self.shards[idx].read().row_timestamps(local_id)
+    }
+
+    /// Per-column covering version stamps for pending-aware rechecks.
+    pub(crate) fn row_picked_starts(&self, global_id: u32, ts: Timestamp) -> Vec<Timestamp> {
+        let (idx, local_id) = self.decode_id(global_id);
+        self.shards[idx].read().row_picked_starts(local_id, ts)
+    }
+
+    pub(crate) fn get_external_id(&self, global_id: u32, ts: Timestamp) -> Option<IdKey> {
+        let (idx, local_id) = self.decode_id(global_id);
+        let table = self.shards[idx].read();
+        table.get_external_id(local_id, ts)
+    }
+
+    // ── Guarded reads ──
+
+    /// Resolution stamp for one shard row.
+    ///
+    /// The single funnel every guarded read goes through: it walks from the
+    /// guard's snapshot down to the newest version the reader may observe.
+    /// A creation stamp owned by a foreign uncommitted transaction hides the
+    /// row, a foreign pending deletion is stepped below so the pre-delete
+    /// version is read, and a column whose covering version stamp is foreign
+    /// pending falls back to `stamp - 1`. Every step strictly lowers the
+    /// stamp and stamp `0` is the bottom of the chain, so the walk
+    /// terminates.
+    ///
+    /// `None` means no version is visible to this guard.
+    fn shard_read_stamp(
+        table: &VertexTable,
+        local_id: u32,
+        guard: &VisibilityGuard<'_>,
+    ) -> Option<Timestamp> {
+        let mut cur = guard.snapshot();
+        loop {
+            let (create_ts, delete_ts) = table.row_timestamps(local_id)?;
+            let probe = guard.at(cur);
+            if !probe.is_row_visible(create_ts, delete_ts) {
+                return None;
+            }
+            // The row reads as live because a pending deletion is ignored;
+            // the stored version is the one below that deletion.
+            if let Some(delete_ts) = delete_ts.filter(|del| probe.is_foreign_pending(*del)) {
+                if delete_ts == 0 {
+                    return None;
+                }
+                cur = delete_ts - 1;
+                continue;
+            }
+            let starts = table.row_picked_starts(local_id, cur);
+            match starts
+                .iter()
+                .filter(|stamp| probe.is_foreign_pending(**stamp))
+                .min()
+            {
+                None | Some(0) => return Some(cur),
+                Some(stamp) => cur = *stamp - 1,
+            }
+        }
+    }
+
+    /// Pending-aware full point read, with the fences describing the version
+    /// actually read: creation stamp, per-column covering stamps and the
+    /// resolution stamp. The record cache fences on these.
+    pub(crate) fn resolve_vertex(
+        &self,
+        global_id: u32,
+        guard: &VisibilityGuard<'_>,
+    ) -> Option<(VertexRecord, Timestamp, Vec<Timestamp>, Timestamp)> {
+        let (shard_idx, local_id) = self.decode_id(global_id);
+        let table = self.shards[shard_idx].read();
+        let stamp = Self::shard_read_stamp(&table, local_id, guard)?;
+        let mut record = table.get_projected_by_internal_id(local_id, stamp, None)?;
+        record.internal_id = global_id;
+        let create_ts = table.row_timestamps(local_id)?.0;
+        let starts = table.row_picked_starts(local_id, stamp);
+        Some((record, create_ts, starts, stamp))
+    }
+
+    /// Pending-aware projected point read. Decodes the projection once, at the
+    /// resolved stamp.
+    pub fn resolve_projected(
+        &self,
+        global_id: u32,
+        guard: &VisibilityGuard<'_>,
+        projection: Option<&[String]>,
+    ) -> Option<VertexRecord> {
+        let (shard_idx, local_id) = self.decode_id(global_id);
+        let table = self.shards[shard_idx].read();
+        let stamp = Self::shard_read_stamp(&table, local_id, guard)?;
+        table
+            .get_projected_by_internal_id(local_id, stamp, projection)
+            .map(|mut record| {
+                record.internal_id = global_id;
+                record
+            })
+    }
+
+    /// Batch variant of [`Self::resolve_projected`].
+    ///
+    /// Input ids are grouped by shard, resolved with one lock acquisition per
+    /// shard and decoded in stamp buckets so the column-major batch decode is
+    /// kept. The output is aligned with the input order; rows with no visible
+    /// version yield `None`.
+    pub fn resolve_projected_batch(
+        &self,
+        global_ids: &[u32],
+        guard: &VisibilityGuard<'_>,
+        projection: Option<&[String]>,
+    ) -> Vec<Option<VertexRecord>> {
+        let mut out: Vec<Option<VertexRecord>> = global_ids.iter().map(|_| None).collect();
+        for (shard_idx, group) in self.group_by_shard(global_ids) {
+            if group.is_empty() {
+                continue;
+            }
+            let table = self.shards[shard_idx].read();
+            let mut buckets: HashMap<Timestamp, Vec<(usize, u32)>> = HashMap::new();
+            for (slot, local_id) in group {
+                if let Some(stamp) = Self::shard_read_stamp(&table, local_id, guard) {
+                    buckets.entry(stamp).or_default().push((slot, local_id));
+                }
+            }
+            for (stamp, bucket) in buckets {
+                let locals: Vec<u32> = bucket.iter().map(|&(_, local)| local).collect();
+                let records = table.get_projected_batch(&locals, stamp, projection);
+                for ((slot, _), record) in bucket.into_iter().zip(records) {
+                    out[slot] = record.map(|mut record| {
+                        record.internal_id = self.encode_id(shard_idx, record.internal_id);
+                        record
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// Full cross-shard scan at the guard's snapshot.
+    ///
+    /// Each shard is scanned under its own read lock and the per-shard results
+    /// are concatenated in shard order, so concurrent writes may be observed
+    /// inconsistently across shards. Point lookups stay shard-consistent.
+    ///
+    /// Candidate enumeration unions the live predicate with timestamp-deleted
+    /// slots so rows whose deletion is a foreign pending write are recovered
+    /// through the resolution funnel and decoded below the deletion stamp,
+    /// matching point reads through [`Self::resolve_vertex`].
+    pub fn scan(&self, guard: &VisibilityGuard<'_>) -> Vec<VertexRecord> {
+        use rayon::prelude::*;
+        let snapshot = guard.snapshot();
+        let per_shard: Vec<(usize, Vec<VertexRecord>)> = self
+            .shards
+            .par_iter()
+            .enumerate()
+            .map(|(shard_idx, shard)| {
+                let table = shard.read();
+                let mut records: Vec<VertexRecord> = table
+                    .scan(snapshot)
+                    .filter_map(|mut record| {
+                        let local_id = record.internal_id;
+                        let stamp = Self::shard_read_stamp(&table, local_id, guard)?;
+                        // Only rows whose version chain was walked below the
+                        // snapshot pay for a second decode.
+                        if stamp != snapshot {
+                            record = table.get_projected_by_internal_id(local_id, stamp, None)?;
+                        }
+                        record.internal_id = self.encode_id(shard_idx, local_id);
+                        Some(record)
+                    })
+                    .collect();
+                for local_id in table.deleted_ids_at(snapshot) {
+                    let Some(stamp) = Self::shard_read_stamp(&table, local_id, guard) else {
+                        continue;
+                    };
+                    let Some(mut record) =
+                        table.get_projected_by_internal_id(local_id, stamp, None)
+                    else {
+                        continue;
+                    };
+                    record.internal_id = self.encode_id(shard_idx, local_id);
+                    records.push(record);
+                }
+                records.sort_by_key(|record| record.internal_id);
+                (shard_idx, records)
+            })
+            .collect();
+        // Shards are independent read domains: parallel scan is safe, and
+        // results are reassembled in shard order for stable pagination.
+        let mut ordered = vec![Vec::new(); per_shard.len()];
+        for (shard_idx, records) in per_shard {
+            ordered[shard_idx] = records;
+        }
+        ordered.into_iter().flatten().collect()
+    }
+
+    /// Candidate id enumeration for paginated scans: rows the guard considers
+    /// visible, including rows hidden from the plain predicate by a foreign
+    /// pending delete. Property-level fallback happens at decode, in
+    /// [`Self::scan_columns`].
+    ///
+    /// Shards are read without a global lock, so concurrent writes may be
+    /// observed inconsistently across shards.
+    pub fn live_ids(&self, guard: &VisibilityGuard<'_>) -> Vec<u32> {
+        let snapshot = guard.snapshot();
+        let mut ids = Vec::new();
+        for (shard_idx, shard) in self.shards.iter().enumerate() {
+            let table = shard.read();
+            let mut shard_ids: Vec<u32> = table
+                .live_ids(snapshot)
+                .into_iter()
+                .filter(|&local_id| {
+                    table
+                        .row_timestamps(local_id)
+                        .is_some_and(|(create_ts, delete_ts)| {
+                            guard.is_row_visible(create_ts, delete_ts)
+                        })
+                })
+                .map(|local_id| self.encode_id(shard_idx, local_id))
+                .collect();
+            for local_id in table.deleted_ids_at(snapshot) {
+                if Self::shard_read_stamp(&table, local_id, guard).is_none() {
+                    continue;
+                }
+                shard_ids.push(self.encode_id(shard_idx, local_id));
+            }
+            shard_ids.sort_unstable();
+            ids.extend(shard_ids);
+        }
+        ids
+    }
+
+    /// Column-major batch decode for paginated scans.
+    ///
+    /// Resolves every candidate through [`Self::shard_read_stamp`], decodes
+    /// the requested columns at the resolved stamp (a full decode when `names`
+    /// is empty) and compacts the result. The returned ids, external vertex
+    /// ids and columns are aligned; rows with no visible version are dropped.
+    ///
+    /// When the resolution stamp differs from the snapshot — a foreign
+    /// uncommitted property write covers one of the requested columns — the
+    /// row is decoded at the lowered stamp, so the scan never yields an
+    /// uncommitted value.
+    pub fn scan_columns(
+        &self,
+        global_ids: &[u32],
+        guard: &VisibilityGuard<'_>,
+        names: &[String],
+    ) -> (Vec<u32>, Vec<VertexId>, Vec<(String, ColumnValues)>) {
+        let (resolved_names, types) = self.column_layout(names);
+        let mut merged: Vec<(String, ColumnValues)> = resolved_names
+            .iter()
+            .zip(types.iter())
+            .map(|(name, data_type)| {
+                (
+                    name.clone(),
+                    empty_typed_column(data_type.as_ref(), global_ids.len()),
+                )
+            })
+            .collect();
+
+        let mut vids: Vec<Option<VertexId>> = vec![None; global_ids.len()];
+        for (shard_idx, group) in self.group_by_shard(global_ids) {
+            if group.is_empty() {
+                continue;
+            }
+            let table = self.shards[shard_idx].read();
+            let mut buckets: HashMap<Timestamp, Vec<(usize, u32)>> = HashMap::new();
+            for (slot, local_id) in group {
+                let Some(stamp) = Self::shard_read_stamp(&table, local_id, guard) else {
+                    continue;
+                };
+                let Some(vid) = table.get_external_id_raw(local_id).and_then(vertex_id_of) else {
+                    continue;
+                };
+                vids[slot] = Some(vid);
+                buckets.entry(stamp).or_default().push((slot, local_id));
+            }
+            for (stamp, bucket) in buckets {
+                let locals: Vec<u32> = bucket.iter().map(|&(_, local)| local).collect();
+                for (name, column) in table.get_projected_columns(&locals, stamp, &resolved_names) {
+                    if let Some((_, target)) = merged.iter_mut().find(|(n, _)| *n == name) {
+                        column.scatter(target, &bucket);
+                    }
+                }
+            }
+        }
+
+        // Compact to the surviving rows: the decode was pre-sized to the
+        // candidate count, which includes rows the guard hid.
+        let mut kept_ids = Vec::new();
+        let mut kept_vids = Vec::new();
+        let mut selection = Vec::new();
+        for (slot, vid) in vids.into_iter().enumerate() {
+            let Some(vid) = vid else { continue };
+            kept_ids.push(global_ids[slot]);
+            kept_vids.push(vid);
+            selection.push(slot);
+        }
+        if selection.len() != global_ids.len() {
+            for (_, column) in merged.iter_mut() {
+                column.select(&selection);
+            }
+        }
+
+        // Already-typed merges skip the box-and-retype roundtrip; only
+        // `General` columns (unknown type or cross-shard kind mismatch)
+        // attempt recovery through the declared type.
+        for (index, data_type) in types.into_iter().enumerate() {
+            if !matches!(merged[index].1, ColumnValues::General(_)) {
+                continue;
+            }
+            if let Some(data_type) = data_type {
+                let general = merged[index].1.to_general();
+                if let Some(typed) = ColumnValues::from_general_with_type(general, &data_type) {
+                    merged[index].1 = typed;
+                }
+            }
+        }
+        (kept_ids, kept_vids, merged)
+    }
+
+    /// Group input slots by shard so each shard is locked once per batch.
+    ///
+    /// The result is indexed by shard order; the tuple pairs the output slot
+    /// with the shard-local id.
+    fn group_by_shard(&self, global_ids: &[u32]) -> Vec<(usize, Vec<(usize, u32)>)> {
+        let mut by_shard: Vec<Vec<(usize, u32)>> = vec![Vec::new(); self.layout.num_shards];
+        for (slot, &global_id) in global_ids.iter().enumerate() {
+            let (shard_idx, local_id) = decode_id(global_id, self.layout);
+            by_shard[shard_idx].push((slot, local_id));
+        }
+        by_shard.into_iter().enumerate().collect()
+    }
+
+    /// Column names and declared types for a decode request. An empty request
+    /// means every column of the table.
+    fn column_layout(&self, names: &[String]) -> (Vec<String>, Vec<Option<DataType>>) {
+        let table = self.shards[0].read();
+        let resolved_names: Vec<String> = if names.is_empty() {
+            table
+                .schema()
+                .properties
+                .iter()
+                .map(|p| p.name.clone())
+                .collect()
+        } else {
+            names.to_vec()
+        };
+        let types = resolved_names
+            .iter()
+            .map(|name| table.data_type_of(name))
+            .collect();
+        (resolved_names, types)
+    }
+
     /// Zone-map pruning mask over `ids` (global internal ids).
     ///
     /// `mask[i] == false` means the row's zone-map chunk provably cannot
@@ -20,23 +413,16 @@ impl ShardedVertexTable {
         if ranges.is_empty() {
             return mask;
         }
-        // Group positions by shard so each shard is locked once per batch.
-        let mut by_shard: Vec<Vec<usize>> = vec![Vec::new(); self.num_shards];
-        for (pos, &id) in ids.iter().enumerate() {
-            let (shard, _) = decode_id(id, self.num_shards);
-            by_shard[shard].push(pos);
-        }
-        for (shard_idx, positions) in by_shard.iter().enumerate() {
-            if positions.is_empty() {
+        for (shard_idx, group) in self.group_by_shard(ids) {
+            if group.is_empty() {
                 continue;
             }
             let table = self.shards[shard_idx].read();
-            for &pos in positions {
-                let (_, local_id) = decode_id(ids[pos], self.num_shards);
+            for (slot, local_id) in group {
                 let chunk = local_id as usize / crate::vertex::column_store::ZONE_MAP_CHUNK_ROWS;
                 for range in ranges {
                     if !table.columns.zone_prunes_in(chunk, range) {
-                        mask[pos] = false;
+                        mask[slot] = false;
                         break;
                     }
                 }
@@ -128,30 +514,14 @@ impl ShardedVertexTable {
         crate::stats_reader::TableCardinalitySnapshot {
             live_rows: live as u64,
             allocated_slots: allocated as u64,
-            shard_count: self.num_shards,
+            shard_count: self.layout.num_shards,
         }
     }
 
-    pub fn get_by_internal_id(&self, global_id: u32, ts: Timestamp) -> Option<VertexRecord> {
-        let (idx, local_id) = self.decode_id(global_id);
-        let table = self.shards[idx].read();
-        table.get_by_internal_id(local_id, ts).map(|mut record| {
-            record.internal_id = global_id;
-            record
-        })
-    }
-
-    /// Row survival stamps for pending-aware rechecks (shard-decoded).
-    pub fn row_timestamps(&self, global_id: u32) -> Option<(Timestamp, Option<Timestamp>)> {
-        let (idx, local_id) = self.decode_id(global_id);
-        self.shards[idx].read().row_timestamps(local_id)
-    }
-
-    /// Per-column covering version stamps for pending-aware rechecks.
-    pub fn row_picked_starts(&self, global_id: u32, ts: Timestamp) -> Vec<Timestamp> {
-        let (idx, local_id) = self.decode_id(global_id);
-        self.shards[idx].read().row_picked_starts(local_id, ts)
-    }
+    // ── Identity and sizing ──
+    //
+    // These resolve row identity or counts rather than row content, so they
+    // keep the plain timestamp predicate.
 
     pub fn get_internal_id(&self, external_id: &str, ts: Timestamp) -> Option<u32> {
         self.lookup_pk(external_id, ts).visible_id()
@@ -181,6 +551,26 @@ impl ShardedVertexTable {
             PkLookup::Visible(local_id) => PkLookup::Visible(self.encode_id(idx, local_id)),
             PkLookup::Missing => PkLookup::Missing,
         }
+    }
+
+    pub fn get_internal_id_raw(&self, external_id: &str) -> Option<u32> {
+        let idx = self.shard_index_by_str(external_id);
+        let table = self.shards[idx].read();
+        let local_id = table.get_internal_id_raw(external_id)?;
+        Some(self.encode_id(idx, local_id))
+    }
+
+    pub fn get_internal_id_by_i64_raw(&self, external_id: i64) -> Option<u32> {
+        let idx = self.shard_index_by_i64(external_id);
+        let table = self.shards[idx].read();
+        let local_id = table.get_internal_id_by_i64_raw(external_id)?;
+        Some(self.encode_id(idx, local_id))
+    }
+
+    pub fn get_external_id_raw(&self, global_id: u32) -> Option<IdKey> {
+        let (idx, local_id) = self.decode_id(global_id);
+        let table = self.shards[idx].read();
+        table.get_external_id_raw(local_id)
     }
 
     /// Total allocated vertex slots across all shards, including deleted but
@@ -223,72 +613,11 @@ impl ShardedVertexTable {
         (live, allocated)
     }
 
-    /// Cross-shard scan without a global consistency guarantee.
-    ///
-    /// Each shard is scanned under its own read lock and the per-shard
-    /// results are concatenated in shard order. Concurrent inserts and
-    /// deletes may be observed inconsistently across shards, so the result
-    /// is a shard-inconsistent snapshot suitable for statistics, debugging
-    /// and snapshot-tolerant scans only. The `_shard_inconsistent` suffix
-    /// marks this contract in the name. Point lookups stay shard-consistent.
-    pub fn scan_shard_inconsistent(&self, ts: Timestamp) -> Vec<VertexRecord> {
-        use rayon::prelude::*;
-        let per_shard: Vec<(usize, Vec<VertexRecord>)> = self
-            .shards
-            .par_iter()
-            .enumerate()
-            .map(|(shard_idx, shard)| {
-                let table = shard.read();
-                let records: Vec<VertexRecord> = table
-                    .scan(ts)
-                    .map(|mut record| {
-                        record.internal_id = self.encode_id(shard_idx, record.internal_id);
-                        record
-                    })
-                    .collect();
-                (shard_idx, records)
-            })
-            .collect();
-        // Shards are independent read domains: parallel scan is safe, and
-        // results are reassembled in shard order for stable pagination.
-        let mut ordered = vec![Vec::new(); per_shard.len()];
-        for (shard_idx, records) in per_shard {
-            ordered[shard_idx] = records;
-        }
-        ordered.into_iter().flatten().collect()
-    }
-
-    /// Snapshot-visible live global internal IDs at `ts`, in shard order.
-    ///
-    /// Enumeration and point reads share this one visibility predicate.
-    /// There is no unfiltered variant; sizing callers use
-    /// `approximate_total_count` or `approximate_id_hole_stats` instead.
-    ///
-    /// Shards are read without a global lock, so concurrent writes may be
-    /// observed inconsistently across shards. The `_shard_inconsistent`
-    /// suffix marks this contract in the name.
-    ///
-    /// Mirrors the ordering of the previous `scan_projected` so lazy
-    /// paginated scans yield records in a stable order.
-    pub fn live_ids_shard_inconsistent(&self, ts: Timestamp) -> Vec<u32> {
-        let mut ids = Vec::new();
-        for (shard_idx, shard) in self.shards.iter().enumerate() {
-            let table = shard.read();
-            ids.extend(
-                table
-                    .live_ids(ts)
-                    .into_iter()
-                    .map(|local_id| self.encode_id(shard_idx, local_id)),
-            );
-        }
-        ids
-    }
-
     /// External vertex-id keys of every live row, across all shards.
     ///
     /// Used to rebuild the self-proven vertex-id domain evidence after a
     /// restore (the write-path accumulator is not populated by disk loads).
-    pub fn external_id_keys(&self) -> Vec<crate::vertex::IdKey> {
+    pub fn external_id_keys(&self) -> Vec<IdKey> {
         let mut keys = Vec::new();
         for shard in &self.shards {
             let table = shard.read();
@@ -296,199 +625,11 @@ impl ShardedVertexTable {
         }
         keys
     }
-
-    /// Batch variant of [`get_projected_by_internal_id`].
-    ///
-    /// Input ids are grouped by shard, decoded with one lock acquisition and
-    /// one batch call per shard, then re-encoded to global ids. The output is
-    /// aligned with the input order; invalid ids yield `None`.
-    pub fn get_projected_batch(
-        &self,
-        global_ids: &[u32],
-        ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Vec<Option<VertexRecord>> {
-        let mut groups: Vec<Vec<(usize, u32)>> = vec![Vec::new(); self.num_shards];
-        for (out_idx, &global_id) in global_ids.iter().enumerate() {
-            let (shard_idx, local_id) = self.decode_id(global_id);
-            groups[shard_idx].push((out_idx, local_id));
-        }
-
-        let mut out: Vec<Option<VertexRecord>> = global_ids.iter().map(|_| None).collect();
-        for (shard_idx, group) in groups.into_iter().enumerate() {
-            if group.is_empty() {
-                continue;
-            }
-            let locals: Vec<u32> = group.iter().map(|&(_, local)| local).collect();
-            let table = self.shards[shard_idx].read();
-            let records = table.get_projected_batch(&locals, ts, projection);
-            for ((out_idx, _), record) in group.into_iter().zip(records) {
-                out[out_idx] = record.map(|mut rec| {
-                    rec.internal_id = self.encode_id(shard_idx, rec.internal_id);
-                    rec
-                });
-            }
-        }
-        out
-    }
-
-    pub fn get_projected_by_internal_id(
-        &self,
-        global_id: u32,
-        ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Option<VertexRecord> {
-        let (idx, local_id) = self.decode_id(global_id);
-        let table = self.shards[idx].read();
-        table
-            .get_projected_by_internal_id(local_id, ts, projection)
-            .map(|mut record| {
-                record.internal_id = global_id;
-                record
-            })
-    }
-
-    pub fn get_internal_id_raw(&self, external_id: &str) -> Option<u32> {
-        let idx = self.shard_index_by_str(external_id);
-        let table = self.shards[idx].read();
-        let local_id = table.get_internal_id_raw(external_id)?;
-        Some(self.encode_id(idx, local_id))
-    }
-
-    pub fn get_internal_id_by_i64_raw(&self, external_id: i64) -> Option<u32> {
-        let idx = self.shard_index_by_i64(external_id);
-        let table = self.shards[idx].read();
-        let local_id = table.get_internal_id_by_i64_raw(external_id)?;
-        Some(self.encode_id(idx, local_id))
-    }
-
-    pub fn get_external_id(&self, global_id: u32, ts: Timestamp) -> Option<IdKey> {
-        let (idx, local_id) = self.decode_id(global_id);
-        let table = self.shards[idx].read();
-        table.get_external_id(local_id, ts)
-    }
-
-    pub fn get_external_id_raw(&self, global_id: u32) -> Option<IdKey> {
-        let (idx, local_id) = self.decode_id(global_id);
-        let table = self.shards[idx].read();
-        table.get_external_id_raw(local_id)
-    }
-
-    /// Resolve the external vertex IDs of `global_ids` that are valid at `ts`
-    /// (A1).  Aligned with the input; invalid ids yield `None`.
-    pub fn resolve_valid_ids(
-        &self,
-        global_ids: &[u32],
-        ts: Timestamp,
-    ) -> Vec<Option<graphdb_core::types::VertexId>> {
-        let mut groups: Vec<Vec<(usize, u32)>> = vec![Vec::new(); self.num_shards];
-        for (out_idx, &global_id) in global_ids.iter().enumerate() {
-            let (shard_idx, local_id) = self.decode_id(global_id);
-            groups[shard_idx].push((out_idx, local_id));
-        }
-        let mut out: Vec<Option<graphdb_core::types::VertexId>> =
-            global_ids.iter().map(|_| None).collect();
-        for (shard_idx, group) in groups.into_iter().enumerate() {
-            if group.is_empty() {
-                continue;
-            }
-            let locals: Vec<u32> = group.iter().map(|&(_, local)| local).collect();
-            let table = self.shards[shard_idx].read();
-            let resolved = table.resolve_valid_ids(&locals, ts);
-            for ((out_idx, _), vid) in group.into_iter().zip(resolved) {
-                out[out_idx] = vid;
-            }
-        }
-        out
-    }
-
-    /// Column-major batch decode (A1).  Input global ids are grouped by shard,
-    /// decoded column-at-a-time per shard, then merged back into input order.
-    /// When `names` is empty every column of the table is decoded.
-    pub fn get_projected_columns(
-        &self,
-        global_ids: &[u32],
-        ts: Timestamp,
-        names: &[String],
-    ) -> Vec<(String, crate::cursor::ColumnValues)> {
-        let resolved_names: Vec<String> = if names.is_empty() {
-            let table = self.shards[0].read();
-            table
-                .schema()
-                .properties
-                .iter()
-                .map(|p| p.name.clone())
-                .collect()
-        } else {
-            names.to_vec()
-        };
-        let types: Vec<Option<graphdb_core::types::DataType>> = {
-            let table = self.shards[0].read();
-            resolved_names
-                .iter()
-                .map(|n| table.data_type_of(n))
-                .collect()
-        };
-
-        let mut groups: Vec<Vec<(usize, u32)>> = vec![Vec::new(); self.num_shards];
-        for (out_idx, &global_id) in global_ids.iter().enumerate() {
-            let (shard_idx, local_id) = self.decode_id(global_id);
-            groups[shard_idx].push((out_idx, local_id));
-        }
-
-        let mut merged: Vec<(String, crate::cursor::ColumnValues)> = resolved_names
-            .iter()
-            .zip(types.iter())
-            .map(|(n, data_type)| {
-                (
-                    n.clone(),
-                    empty_typed_column(data_type.as_ref(), global_ids.len()),
-                )
-            })
-            .collect();
-
-        for (shard_idx, group) in groups.into_iter().enumerate() {
-            if group.is_empty() {
-                continue;
-            }
-            let locals: Vec<u32> = group.iter().map(|&(_, local)| local).collect();
-            let table = self.shards[shard_idx].read();
-            let decoded = table.get_projected_columns(&locals, ts, &resolved_names);
-            for (name, column) in decoded {
-                if let Some((_, target)) = merged.iter_mut().find(|(n, _)| n == &name) {
-                    column.scatter(target, &group);
-                }
-            }
-        }
-
-        for (index, data_type) in types.into_iter().enumerate() {
-            // Already-typed merges skip the box-and-retype roundtrip; only
-            // `General` columns (unknown type or cross-shard kind mismatch)
-            // attempt recovery through the declared type.
-            if !matches!(merged[index].1, crate::cursor::ColumnValues::General(_)) {
-                continue;
-            }
-            if let Some(data_type) = data_type {
-                let general = merged[index].1.to_general();
-                if let Some(typed) =
-                    crate::cursor::ColumnValues::from_general_with_type(general, &data_type)
-                {
-                    merged[index].1 = typed;
-                }
-            }
-        }
-        merged
-    }
 }
 
 /// Pre-sized all-null column of the declared type for sharded merges, so
 /// same-kind per-shard decodes scatter directly into a typed target.
-fn empty_typed_column(
-    data_type: Option<&graphdb_core::types::DataType>,
-    len: usize,
-) -> crate::cursor::ColumnValues {
-    use crate::cursor::ColumnValues;
-    use graphdb_core::types::DataType;
+fn empty_typed_column(data_type: Option<&DataType>, len: usize) -> ColumnValues {
     match data_type {
         Some(DataType::BigInt) => ColumnValues::I64 {
             values: vec![0; len],

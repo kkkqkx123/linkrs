@@ -16,39 +16,11 @@ impl GraphStorageContext {
         {
             return None;
         }
-        let gate = self.pending_gate();
+        let guard = self.visibility_guard(ts);
         self.persistent
             .data_store
             .catalog_read_snapshot()
-            .with_vertex_tables(|tables| {
-                tables.get(&label).map(|table| {
-                    table
-                        .scan_shard_inconsistent(ts)
-                        .into_iter()
-                        .filter_map(|record| {
-                            let (create_ts, delete_ts) =
-                                table.row_timestamps(record.internal_id)?;
-                            if !gate.is_row_visible(ts, create_ts, delete_ts) {
-                                return None;
-                            }
-                            let starts = table.row_picked_starts(record.internal_id, ts);
-                            if starts
-                                .iter()
-                                .any(|stamp| gate.is_foreign_pending(ts, *stamp))
-                            {
-                                return Self::resolve_on_table(
-                                    table,
-                                    record.internal_id,
-                                    ts,
-                                    &gate,
-                                )
-                                .map(|(resolved, _, _, _)| resolved);
-                            }
-                            Some(record)
-                        })
-                        .collect()
-                })
-            })
+            .with_vertex_tables(|tables| tables.get(&label).map(|table| table.scan(&guard)))
     }
 
     /// Allocated vertex slots across all tables, including deleted but not

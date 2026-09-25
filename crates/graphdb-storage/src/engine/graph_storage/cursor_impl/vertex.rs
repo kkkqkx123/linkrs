@@ -151,7 +151,11 @@ impl GraphVertexCursor {
     /// the allowlist as its pending IDs; later calls exhaust the cursor.
     /// Point-lookup batch decoding skips invalid IDs, so no pre-filtering
     /// happens here.
-    fn load_next_table(&mut self, tables: &HashMap<LabelId, Arc<ShardedVertexTable>>) {
+    fn load_next_table(
+        &mut self,
+        tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
+        guard: &crate::mvcc_visibility::VisibilityGuard<'_>,
+    ) {
         self.current_table = None;
         self.current_label = None;
         self.pending_ids.clear();
@@ -177,7 +181,7 @@ impl GraphVertexCursor {
             let label_id = self.tags.labels[self.current_table_idx];
             self.current_table_idx += 1;
             if let Some(table) = tables.get(&label_id) {
-                let ids = table.live_ids_shard_inconsistent(self.ts);
+                let ids = table.live_ids(guard);
                 if !ids.is_empty() {
                     self.current_label = Some(label_id);
                     self.pending_ids = ids;
@@ -248,7 +252,10 @@ impl GraphVertexCursor {
         let (gate_vm, gate_own) = self.ctx.gate_inputs();
         let ts = self.ts;
         let result = data_store.with_vertex_tables(|tables| {
-            let gate = crate::mvcc_visibility::PendingGate::new(&gate_vm, gate_own);
+            let guard = crate::mvcc_visibility::VisibilityGuard::new(
+                ts,
+                crate::mvcc_visibility::PendingGate::new(&gate_vm, gate_own),
+            );
             let mut vids: Vec<VertexId> = Vec::new();
             let mut internal_ids: Vec<u32> = Vec::new();
             let mut tag_names: Vec<String> = Vec::new();
@@ -258,7 +265,7 @@ impl GraphVertexCursor {
 
             while internal_ids.len() < batch_size && !self.exhausted {
                 if self.current_table.is_none() {
-                    self.load_next_table(tables);
+                    self.load_next_table(tables, &guard);
                     continue;
                 }
                 if self.pending_idx >= self.pending_ids.len() {
@@ -299,24 +306,35 @@ impl GraphVertexCursor {
                     run
                 };
 
-                let ids_vec: Vec<u32> = ids.to_vec();
-                let resolved = table.resolve_valid_ids(&ids_vec, ts);
-                let mut run_internal: Vec<u32> = Vec::new();
-                let mut run_vids: Vec<VertexId> = Vec::new();
-                for (pos, &id) in ids_vec.iter().enumerate() {
-                    let Some(vid) = resolved[pos] else {
-                        continue;
-                    };
-                    // Pending-aware liveness: hide foreign uncommitted
-                    // creations, ignore foreign pending deletions so the
-                    // pre-delete row stays visible.
-                    let (create_ts, delete_ts) = match table.row_timestamps(id) {
-                        Some(stamps) => stamps,
-                        None => continue,
-                    };
-                    if !gate.is_row_visible(ts, create_ts, delete_ts) {
-                        continue;
-                    }
+                // Zone-map pruning over the candidate window: rows dropped
+                // here are exactly those the pushed predicates would reject
+                // after decoding, so skipping their decode is a pure
+                // optimization with identical results.
+                let candidates: Vec<u32> = if self.predicate.is_empty() {
+                    ids.to_vec()
+                } else {
+                    let ranges = crate::cursor::ScanPredicate::merged_ranges(&self.predicate);
+                    let mask = table.zone_prune_mask(ids, &ranges);
+                    ids.iter()
+                        .zip(mask.iter())
+                        .filter_map(|(&id, &keep)| keep.then_some(id))
+                        .collect()
+                };
+
+                // Guarded decode: a property covered by a foreign uncommitted
+                // write is read at the version below it, so the scan never
+                // yields an uncommitted value. Rows with no visible version are
+                // dropped and the columns stay aligned with the surviving ids.
+                let (mut run_internal, mut run_vids, mut decoded) =
+                    table.scan_columns(&candidates, &guard, &run_names);
+                if run_internal.is_empty() {
+                    continue;
+                }
+
+                // The external-id range and offset skipping are applied to the
+                // surviving rows, in scan order.
+                let mut selection: Vec<usize> = Vec::new();
+                for (row, vid) in run_vids.iter().enumerate() {
                     if let Some(ref range) = self.id_range {
                         match vid.as_int64() {
                             Some(vid) if (range.start..range.end).contains(&vid) => {}
@@ -327,37 +345,21 @@ impl GraphVertexCursor {
                         self.offset_remaining -= 1;
                         continue;
                     }
-                    run_internal.push(id);
-                    run_vids.push(vid);
+                    selection.push(row);
                 }
-
+                if selection.len() != run_internal.len() {
+                    for (_, column) in decoded.iter_mut() {
+                        column.select(&selection);
+                    }
+                    let pruned_ids = std::mem::take(&mut run_internal);
+                    let pruned_vids = std::mem::take(&mut run_vids);
+                    run_internal = selection.iter().map(|&row| pruned_ids[row]).collect();
+                    run_vids = selection.iter().map(|&row| pruned_vids[row]).collect();
+                }
                 let run_rows = run_internal.len();
                 if run_rows == 0 {
                     continue;
                 }
-
-                // Zone-map pruning over the offset-selected candidates: rows
-                // dropped here are exactly those the pushed predicates would
-                // reject after decoding, so skipping their decode is a pure
-                // optimization with identical results.
-                if !self.predicate.is_empty() {
-                    let ranges = crate::cursor::ScanPredicate::merged_ranges(&self.predicate);
-                    let mask = table.zone_prune_mask(&run_internal, &ranges);
-                    if mask.iter().any(|&keep| !keep) {
-                        let mut kept_internal = Vec::with_capacity(run_rows);
-                        let mut kept_vids = Vec::with_capacity(run_rows);
-                        for (row, &keep) in mask.iter().enumerate() {
-                            if keep {
-                                kept_internal.push(run_internal[row]);
-                                kept_vids.push(run_vids[row]);
-                            }
-                        }
-                        run_internal = kept_internal;
-                        run_vids = kept_vids;
-                    }
-                }
-
-                let decoded = table.get_projected_columns(&run_internal, self.ts, &run_names);
 
                 // Merge the run into the batch's column union.
                 let before = internal_ids.len();
@@ -488,12 +490,15 @@ impl GraphVertexCursor {
         let (gate_vm, gate_own) = self.ctx.gate_inputs();
         let ts = self.ts;
         let batch = data_store.with_vertex_tables(|tables| {
-            let gate = crate::mvcc_visibility::PendingGate::new(&gate_vm, gate_own);
+            let guard = crate::mvcc_visibility::VisibilityGuard::new(
+                ts,
+                crate::mvcc_visibility::PendingGate::new(&gate_vm, gate_own),
+            );
             let mut batch = Vec::new();
 
             while batch.len() < batch_size && !self.exhausted {
                 if self.current_table.is_none() {
-                    self.load_next_table(tables);
+                    self.load_next_table(tables, &guard);
                     continue;
                 }
                 if self.pending_idx >= self.pending_ids.len() {
@@ -513,36 +518,14 @@ impl GraphVertexCursor {
                     continue;
                 };
                 let label_id = self.current_label;
-                let records = table.get_projected_batch(ids, ts, self.projection.as_deref());
+                let records =
+                    table.resolve_projected_batch(ids, &guard, self.projection.as_deref());
                 let tag_name = label_id
                     .and_then(|l| names.get(&l))
                     .map(|s| s.as_str())
                     .unwrap_or("unknown");
 
                 for record in records.into_iter().flatten() {
-                    let (create_ts, delete_ts) = match table.row_timestamps(record.internal_id) {
-                        Some(stamps) => stamps,
-                        None => continue,
-                    };
-                    if !gate.is_row_visible(ts, create_ts, delete_ts) {
-                        continue;
-                    }
-                    let starts = table.row_picked_starts(record.internal_id, ts);
-                    let record = if starts.iter().any(|stamp| gate.is_foreign_pending(ts, *stamp))
-                    {
-                        match crate::engine::graph_storage::context::GraphStorageContext::resolve_projected_on_table(
-                            &table,
-                            record.internal_id,
-                            ts,
-                            self.projection.as_deref(),
-                            &gate,
-                        ) {
-                            Some(resolved) => resolved,
-                            None => continue,
-                        }
-                    } else {
-                        record
-                    };
                     // The vertex-id range is applied to the external vertex ID
                     // (the same domain as `PartitionSpec` ranges). Internal IDs
                     // are shard-local and cannot be addressed by a global

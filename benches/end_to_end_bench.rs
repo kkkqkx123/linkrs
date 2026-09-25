@@ -69,8 +69,10 @@ fn bench_data_loading_workflow(c: &mut Criterion) {
                     for k in 1..=epv.min(vertices.saturating_sub(1)) {
                         let dst = (src + k) % vertices;
                         let edge = Edge {
-                            src: VertexId::try_from_string(format!("v{}", src)).expect("valid vertex id"),
-                            dst: VertexId::try_from_string(format!("v{}", dst)).expect("valid vertex id"),
+                            src: VertexId::try_from_string(format!("v{}", src))
+                                .expect("valid vertex id"),
+                            dst: VertexId::try_from_string(format!("v{}", dst))
+                                .expect("valid vertex id"),
                             edge_type: "Link".to_string(),
                             ranking: 0,
                             props: [("weight".to_string(), Value::Double(1.0))]
@@ -107,7 +109,11 @@ fn bench_query_analysis_workflow(c: &mut Criterion) {
 
     group.bench_function("simple_query_1k_data", |b| {
         b.iter(|| {
-            let _ = storage.get_vertex(space, "Node", &VertexId::try_from_string("v0").expect("valid vertex id"));
+            let _ = storage.get_vertex(
+                space,
+                "Node",
+                &VertexId::try_from_string("v0").expect("valid vertex id"),
+            );
         });
     });
 
@@ -138,13 +144,21 @@ fn bench_search_workflow(c: &mut Criterion) {
 
     group.bench_function("fulltext_search", |b| {
         b.iter(|| {
-            let _ = storage.get_vertex(space, "Node", &VertexId::try_from_string("v0").expect("valid vertex id"));
+            let _ = storage.get_vertex(
+                space,
+                "Node",
+                &VertexId::try_from_string("v0").expect("valid vertex id"),
+            );
         });
     });
 
     group.bench_function("vertex_lookup", |b| {
         b.iter(|| {
-            let _ = storage.get_vertex(space, "Node", &VertexId::try_from_string("v50").expect("valid vertex id"));
+            let _ = storage.get_vertex(
+                space,
+                "Node",
+                &VertexId::try_from_string("v50").expect("valid vertex id"),
+            );
         });
     });
 
@@ -204,8 +218,16 @@ fn bench_concurrent_mixed_workload(c: &mut Criterion) {
 
     group.bench_function("concurrent_read", |b| {
         b.iter(|| {
-            let _ = storage.get_vertex(space, "Node", &VertexId::try_from_string("v0").expect("valid vertex id"));
-            let _ = storage.get_vertex(space, "Node", &VertexId::try_from_string("v50").expect("valid vertex id"));
+            let _ = storage.get_vertex(
+                space,
+                "Node",
+                &VertexId::try_from_string("v0").expect("valid vertex id"),
+            );
+            let _ = storage.get_vertex(
+                space,
+                "Node",
+                &VertexId::try_from_string("v50").expect("valid vertex id"),
+            );
         });
     });
 

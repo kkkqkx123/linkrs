@@ -104,7 +104,8 @@ fn setup_data() -> Arc<RwLock<GraphStorage>> {
         for k in 1..=3i64 {
             edges.push(Edge {
                 src: VertexId::try_from_int64(src).expect("valid vertex id"),
-                dst: VertexId::try_from_int64((src + k) % VERTEX_COUNT as i64).expect("valid vertex id"),
+                dst: VertexId::try_from_int64((src + k) % VERTEX_COUNT as i64)
+                    .expect("valid vertex id"),
                 edge_type: EDGE.to_string(),
                 ranking: 0,
                 props: Default::default(),

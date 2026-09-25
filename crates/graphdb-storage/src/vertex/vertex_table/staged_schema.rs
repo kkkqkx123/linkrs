@@ -53,7 +53,7 @@ impl VertexTable {
     }
 
     fn ensure_open(&self) -> StorageResult<()> {
-        if !self.is_open {
+        if !self.is_open.load(std::sync::atomic::Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
         }
         Ok(())
@@ -156,14 +156,14 @@ impl VertexTable {
             PendingVertexSchemaKind::Add(prop) => {
                 self.columns
                     .add_column(prop.name.clone(), prop.data_type.clone(), prop.nullable);
-                if let Some(col) = self.columns.get_column_mut(&prop.name) {
+                if let Some(col) = self.columns.get_column(&prop.name) {
                     col.set_chunk_capacity(self.chunk_capacity);
                 }
                 if matches!(
                     prop.data_type,
                     graphdb_core::DataType::String | graphdb_core::DataType::Blob
                 ) {
-                    if let Some(col) = self.columns.get_column_mut(&prop.name) {
+                    if let Some(col) = self.columns.get_column(&prop.name) {
                         col.set_overflow_threshold(self.string_overflow_threshold);
                     }
                 }
