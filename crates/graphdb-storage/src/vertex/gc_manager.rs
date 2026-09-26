@@ -146,35 +146,35 @@ pub struct VertexGcManager {
     config: VertexGcConfig,
     pool: Arc<StorageThreadPool>,
     running: Arc<AtomicBool>,
-    stats: AtomicU64,
-    total_removed: AtomicU64,
+    stats: Arc<AtomicU64>,
+    total_removed: Arc<AtomicU64>,
     /// Passes that reclaimed nothing because the watermark was pinned
     /// (`safe_ts == 0`) or a stuck snapshot held the cutoff. A rising
     /// count beside growing version chains points at the snapshot holder,
     /// not at GC throughput.
-    blocked_passes: AtomicU64,
+    blocked_passes: Arc<AtomicU64>,
     /// Record-cache label invalidations issued by GC passes that reclaimed
     /// vertex keys. Observed to confirm remap/cache-fence coverage after
     /// churn; a pass that reclaims keys without invalidating is a
     /// correctness bug, not a metric gap.
-    cache_invalidations: AtomicU64,
+    cache_invalidations: Arc<AtomicU64>,
     /// Passes that released cold chunks to contain resident growth while
     /// version chains were pinned by live snapshots. Chains themselves are
     /// never dropped below the watermark; only evictable chunks (no overlay
     /// writes, no live chains) are externalized, so pinned reads stay
     /// correct while memory converges.
-    pressure_mitigations: AtomicU64,
+    pressure_mitigations: Arc<AtomicU64>,
     /// Live snapshot leases by holder id, shared across clones so issuance
     /// on any handle pins every pass. Guarded by a mutex because issuance
     /// is rare (transaction boundaries) while reads take the fast floor
     /// snapshot under the same lock.
     leases: Arc<parking_lot::Mutex<std::collections::HashMap<u64, SnapshotLease>>>,
     /// Leases issued since creation.
-    leases_issued: AtomicU64,
+    leases_issued: Arc<AtomicU64>,
     /// Successful lease renewals since creation.
-    leases_renewed: AtomicU64,
+    leases_renewed: Arc<AtomicU64>,
     /// Leases found expired and reaped since creation.
-    leases_expired: AtomicU64,
+    leases_expired: Arc<AtomicU64>,
     gc_event_sink: Arc<RwLock<Option<GcEventSink>>>,
     /// Record cache to invalidate when a GC pass remaps internal IDs.
     /// Compaction re-densifies the ID space, so cached ID mappings and
@@ -197,15 +197,15 @@ impl VertexGcManager {
             config,
             pool,
             running: Arc::new(AtomicBool::new(false)),
-            stats: AtomicU64::new(0),
-            total_removed: AtomicU64::new(0),
-            blocked_passes: AtomicU64::new(0),
-            cache_invalidations: AtomicU64::new(0),
-            pressure_mitigations: AtomicU64::new(0),
+            stats: Arc::new(AtomicU64::new(0)),
+            total_removed: Arc::new(AtomicU64::new(0)),
+            blocked_passes: Arc::new(AtomicU64::new(0)),
+            cache_invalidations: Arc::new(AtomicU64::new(0)),
+            pressure_mitigations: Arc::new(AtomicU64::new(0)),
             leases: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
-            leases_issued: AtomicU64::new(0),
-            leases_renewed: AtomicU64::new(0),
-            leases_expired: AtomicU64::new(0),
+            leases_issued: Arc::new(AtomicU64::new(0)),
+            leases_renewed: Arc::new(AtomicU64::new(0)),
+            leases_expired: Arc::new(AtomicU64::new(0)),
             gc_event_sink: Arc::new(RwLock::new(None)),
             record_cache: Arc::new(RwLock::new(None)),
         }
@@ -292,10 +292,11 @@ impl VertexGcManager {
     /// `now_ms` is a parameter (not read from the clock) so expiry is
     /// unit-testable without time mocking; production passes
     /// wall-clock time.
-    // Lease issuance is driven by the transaction layer; storage only
-    // reaps expired leases and floors the cutoff. Retained as the
-    // cross-layer interface; exercised by the lease tests below.
-    #[allow(dead_code)]
+    ///
+    /// Cross-layer interface: the transaction layer is the designated
+    /// issuer, storage only reaps expired leases and floors the cutoff.
+    /// An empty lease map pins nothing; expiry and flooring are covered
+    /// by the lease tests below.
     pub fn issue_lease(
         &self,
         holder: u64,
@@ -316,8 +317,6 @@ impl VertexGcManager {
 
     /// Extend `holder`'s lease by `ttl_ms` from `now_ms`. Returns false
     /// when no lease exists (the holder must issue rather than renew).
-    // See the issuance note above: transaction-layer driven.
-    #[allow(dead_code)]
     pub fn renew_lease(&self, holder: u64, ttl_ms: u64, now_ms: u64) -> bool {
         let ttl = ttl_ms.min(self.config.max_lease_ttl_ms).max(1);
         let mut leases = self.leases.lock();
@@ -332,8 +331,6 @@ impl VertexGcManager {
     }
 
     /// Drop `holder`'s lease. Returns false when none existed.
-    // See the issuance note above: transaction-layer driven.
-    #[allow(dead_code)]
     pub fn release_lease(&self, holder: u64) -> bool {
         self.leases.lock().remove(&holder).is_some()
     }
@@ -601,6 +598,10 @@ impl VertexGcManager {
 }
 
 impl Clone for VertexGcManager {
+    /// Clones share every counter and the lease map: the background task
+    /// runs on a clone (`start_background_gc`), so snapshotting counters
+    /// here would leave the originating handle's `pass_count`,
+    /// `total_removed` and backpressure view permanently stale.
     fn clone(&self) -> Self {
         Self {
             data_store: self.data_store.clone(),
@@ -608,15 +609,15 @@ impl Clone for VertexGcManager {
             config: self.config.clone(),
             pool: self.pool.clone(),
             running: self.running.clone(),
-            stats: AtomicU64::new(self.stats.load(Ordering::Acquire)),
-            total_removed: AtomicU64::new(self.total_removed.load(Ordering::Acquire)),
-            blocked_passes: AtomicU64::new(self.blocked_passes.load(Ordering::Acquire)),
-            cache_invalidations: AtomicU64::new(self.cache_invalidations.load(Ordering::Acquire)),
-            pressure_mitigations: AtomicU64::new(self.pressure_mitigations.load(Ordering::Acquire)),
+            stats: self.stats.clone(),
+            total_removed: self.total_removed.clone(),
+            blocked_passes: self.blocked_passes.clone(),
+            cache_invalidations: self.cache_invalidations.clone(),
+            pressure_mitigations: self.pressure_mitigations.clone(),
             leases: self.leases.clone(),
-            leases_issued: AtomicU64::new(self.leases_issued.load(Ordering::Acquire)),
-            leases_renewed: AtomicU64::new(self.leases_renewed.load(Ordering::Acquire)),
-            leases_expired: AtomicU64::new(self.leases_expired.load(Ordering::Acquire)),
+            leases_issued: self.leases_issued.clone(),
+            leases_renewed: self.leases_renewed.clone(),
+            leases_expired: self.leases_expired.clone(),
             gc_event_sink: self.gc_event_sink.clone(),
             record_cache: self.record_cache.clone(),
         }
@@ -742,5 +743,22 @@ mod tests {
         assert_eq!(gc.lease_floor(2_000), Some(300));
         assert_eq!(gc.reap_expired_leases(70_000), 1);
         assert_eq!(gc.lease_floor(70_000), None);
+    }
+
+    #[test]
+    fn test_clone_shares_counters_and_leases_with_background_handle() {
+        // The background task runs on a clone; issuance, renewal and
+        // reap counts on either handle must observe the other, otherwise
+        // the originating handle reports permanently stale observability.
+        let gc = test_manager();
+        let worker = gc.clone();
+        worker.issue_lease(7, 500, 10_000, 1_000);
+        assert_eq!(gc.lease_floor(2_000), Some(500));
+        assert!(worker.renew_lease(7, 10_000, 2_000));
+        assert_eq!(gc.backpressure_snapshot(2_500).leases_issued, 1);
+        assert_eq!(gc.backpressure_snapshot(2_500).leases_renewed, 1);
+        assert_eq!(gc.reap_expired_leases(20_000), 1);
+        assert_eq!(worker.backpressure_snapshot(20_000).leases_expired, 1);
+        assert_eq!(worker.lease_floor(20_000), None);
     }
 }

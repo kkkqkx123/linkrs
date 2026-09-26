@@ -119,8 +119,8 @@ pub const MAX_BACKGROUND_LOAD_CHUNKS: usize = 64;
 
 /// Unified buffer accounting for one column: decoded resident bytes
 /// (including the overflow side store), retained eviction-snapshot bytes,
-/// the overflow subset for breakdown, dirty pages and chunk counts in one
-///口径. The three former paths (chunk residency, overflow store, dirty
+/// the overflow subset for breakdown, dirty pages and chunk counts under a
+/// single unified accounting. The three former paths (chunk residency, overflow store, dirty
 /// pages) plus the process spill directory backing evicted snapshots
 /// share this ledger so eviction quotas and observability observe the
 /// same totals. Spill files are owned by their snapshots and vanish with

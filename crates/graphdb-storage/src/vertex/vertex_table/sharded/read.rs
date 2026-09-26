@@ -152,6 +152,12 @@ impl ShardedVertexTable {
     /// snapshot) contribute no run and never build an iterator. Concurrent
     /// writes may still be observed inconsistently across shards; point
     /// lookups stay shard-consistent.
+    ///
+    /// Eager and materializing: every per-shard run is held at once, so
+    /// large tables should use the paginated path (`live_ids` plus
+    /// `scan_columns`) instead. Predicate pruning is not applied here;
+    /// filtered scans prune through `zone_prune_mask` in the cursor layer
+    /// before decoding.
     pub fn scan(&self, guard: &VisibilityGuard<'_>) -> Vec<VertexRecord> {
         use rayon::prelude::*;
         let snapshot = guard.snapshot();

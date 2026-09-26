@@ -56,6 +56,7 @@ pub async fn begin<
         };
         let options = TransactionOptions {
             read_only: request.read_only,
+            long_read: false,
             timeout: request.timeout_seconds.map(std::time::Duration::from_secs),
             durability: DurabilityLevel::Sync,
             isolation_level,

@@ -343,6 +343,7 @@ impl<
                 proto_options.timeout_ms as u64,
             )),
             read_only: proto_options.read_only,
+            long_read: false,
             durability: DurabilityLevel::Sync,
             isolation_level,
             query_timeout: None,

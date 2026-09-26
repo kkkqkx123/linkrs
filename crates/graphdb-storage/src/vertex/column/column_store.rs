@@ -889,8 +889,8 @@ impl ColumnStore {
         (count, freed, segments)
     }
 
-    /// Unified buffer ledger across columns: per-column ledgers summed in
-    /// one口径 (resident including overflow, retained snapshots, overflow
+    /// Unified buffer ledger across columns: per-column ledgers summed under
+    /// one unified accounting (resident including overflow, retained snapshots, overflow
     /// subset, dirty pages, chunk counts). Eviction quotas and
     /// observability share this instead of three separate tallies.
     pub fn buffer_ledger(&self) -> super::column::BufferLedger {

@@ -120,6 +120,7 @@ impl TransactionConfig {
         TransactionOptions {
             timeout: self.timeout,
             read_only: self.read_only,
+            long_read: false,
             durability: self.durability,
             isolation_level: self.isolation_level,
             query_timeout: self.query_timeout,

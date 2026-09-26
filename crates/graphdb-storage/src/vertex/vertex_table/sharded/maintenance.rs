@@ -366,7 +366,7 @@ impl ShardedVertexTable {
     }
 
     /// Unified buffer ledger across shards, including the overflow subset
-    /// and dirty pages in one口径 for quota and observability.
+    /// and dirty pages under one unified accounting for quota and observability.
     pub fn buffer_ledger(&self) -> crate::vertex::column::BufferLedger {
         let mut acc = crate::vertex::column::BufferLedger::default();
         for shard in &self.shards {
