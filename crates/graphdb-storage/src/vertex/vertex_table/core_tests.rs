@@ -208,7 +208,7 @@ fn test_batch_projected_read() {
     );
 
     // Invalid (deleted) id yields None in its input position.
-    table.delete("v2", 100).unwrap();
+    assert_eq!(table.batch_delete(&["v2"], 100).unwrap(), 1);
     let with_gap = table.get_projected_batch(&[0, 1, 2], 100, None);
     assert!(with_gap[0].is_some());
     assert!(with_gap[1].is_none());
@@ -224,7 +224,7 @@ fn test_delete() {
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
 
-    table.delete("v1", 200).unwrap();
+    assert_eq!(table.batch_delete(&["v1"], 200).unwrap(), 1);
 
     let internal_id = lookup_visible(&table, "v1", 150).unwrap();
     assert!(table.get_by_internal_id(internal_id, 150).is_some());
@@ -262,7 +262,7 @@ fn test_live_ids_at_excludes_timestamp_deleted_rows() {
         .insert("v2", &[("name".to_string(), Value::string("Bob"))], 100)
         .unwrap();
 
-    table.delete("v1", 200).unwrap();
+    assert_eq!(table.batch_delete(&["v1"], 200).unwrap(), 1);
 
     // Snapshot enumeration hides the row deleted at 200.
     assert_eq!(table.live_ids(150), vec![0, 1]);
@@ -580,7 +580,12 @@ fn test_compact_delete_all() {
     assert_eq!(table.scan(100).count(), 5);
 
     for i in 0..5 {
-        table.delete(&format!("v{}", i), 200).unwrap();
+        assert_eq!(
+            table
+                .batch_delete(&[format!("v{}", i).as_str()], 200)
+                .unwrap(),
+            1
+        );
     }
 
     assert_eq!(table.scan(200).count(), 0);
@@ -645,7 +650,7 @@ fn test_compact_multiple_cycles() {
         for i in 0..10 {
             if i % 2 == 0 {
                 table
-                    .delete(&format!("v{}_{}", cycle, i), ts_delete)
+                    .batch_delete(&[format!("v{}_{}", cycle, i).as_str()], ts_delete)
                     .unwrap_or_else(|_| panic!("delete cycle {} should succeed", cycle));
             }
         }
@@ -697,8 +702,8 @@ fn test_compact_id_consistency() {
             .unwrap(),
     ];
 
-    table.delete("v2", 200).unwrap();
-    table.delete("v5", 200).unwrap();
+    assert_eq!(table.batch_delete(&["v2"], 200).unwrap(), 1);
+    assert_eq!(table.batch_delete(&["v5"], 200).unwrap(), 1);
 
     let before_count = table.scan(150).count();
     assert_eq!(before_count, 5);
@@ -760,7 +765,7 @@ fn test_vertex_snapshot_isolation() {
         .update_property(0, "name", &Value::string("Alice Updated"), 200)
         .unwrap();
 
-    table.delete("v1", 300).unwrap();
+    assert_eq!(table.batch_delete(&["v1"], 300).unwrap(), 1);
 
     assert!(table.get_by_internal_id(0, 100).is_some());
     assert!(lookup_visible(&table, "v1", 300).is_none());
@@ -779,7 +784,7 @@ fn test_vertex_multiple_snapshots() {
         .insert("v2", &[("name".to_string(), Value::string("Bob"))], 150)
         .unwrap();
 
-    table.delete("v1", 250).unwrap();
+    assert_eq!(table.batch_delete(&["v1"], 250).unwrap(), 1);
 
     let v1_at_snap1 = table.get_by_internal_id(0, 100);
     assert!(v1_at_snap1.is_some());
@@ -1069,8 +1074,8 @@ fn test_partial_compact_preserves_unmoved_rows() {
             .insert(key, &[("name".to_string(), Value::string(name))], 100)
             .unwrap();
     }
-    table.delete("v1", 200).unwrap();
-    table.delete("v3", 200).unwrap();
+    assert_eq!(table.batch_delete(&["v1"], 200).unwrap(), 1);
+    assert_eq!(table.batch_delete(&["v3"], 200).unwrap(), 1);
 
     let (removed, _mapping, _journal) = table
         .compact_with_cutoff_collect_mapping(300)
@@ -1114,7 +1119,7 @@ fn test_compact_preserves_moved_row_history() {
     table
         .update_property(v0, "name", &Value::string("Alice2"), 200)
         .unwrap();
-    table.delete("tmp", 250).unwrap();
+    assert_eq!(table.batch_delete(&["tmp"], 250).unwrap(), 1);
 
     let (_, mapping, _) = table
         .compact_with_cutoff_collect_mapping(300)

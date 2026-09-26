@@ -186,22 +186,32 @@ impl ShardedVertexTable {
     /// visible at its snapshot.
     ///
     /// Shards are read without a global lock, so concurrent writes may be
-    /// observed inconsistently across shards.
+    /// observed inconsistently across shards. Shards decode in parallel and
+    /// reassemble in shard order, matching [`Self::scan`].
     pub fn live_ids(&self, guard: &VisibilityGuard<'_>) -> Vec<u32> {
+        use rayon::prelude::*;
         let snapshot = guard.snapshot();
-        let mut ids = Vec::new();
-        for (shard_idx, shard) in self.shards.iter().enumerate() {
-            let table = shard.read();
-            let mut shard_ids: Vec<u32> = table
-                .live_ids(snapshot)
-                .into_iter()
-                .filter(|&local_id| Self::shard_row_visible(&table, local_id, guard))
-                .map(|local_id| self.encode_id(shard_idx, local_id))
-                .collect();
-            shard_ids.sort_unstable();
-            ids.extend(shard_ids);
+        let per_shard: Vec<(usize, Vec<u32>)> = self
+            .shards
+            .par_iter()
+            .enumerate()
+            .map(|(shard_idx, shard)| {
+                let table = shard.read();
+                let mut shard_ids: Vec<u32> = table
+                    .live_ids(snapshot)
+                    .into_iter()
+                    .filter(|&local_id| Self::shard_row_visible(&table, local_id, guard))
+                    .map(|local_id| self.encode_id(shard_idx, local_id))
+                    .collect();
+                shard_ids.sort_unstable();
+                (shard_idx, shard_ids)
+            })
+            .collect();
+        let mut ordered = vec![Vec::new(); per_shard.len()];
+        for (shard_idx, shard_ids) in per_shard {
+            ordered[shard_idx] = shard_ids;
         }
-        ids
+        ordered.into_iter().flatten().collect()
     }
 
     /// Column-major batch decode for paginated scans.

@@ -19,6 +19,14 @@ struct TagCache {
     names: HashMap<LabelId, String>,
 }
 
+struct StagedColumnOut<'a> {
+    internal_ids: &'a mut Vec<u32>,
+    vids: &'a mut Vec<VertexId>,
+    tag_names: &'a mut Vec<String>,
+    union_names: &'a mut Vec<String>,
+    columns: &'a mut Vec<ColumnValues>,
+}
+
 pub(crate) struct GraphVertexCursor {
     ctx: Arc<GraphStorageContext>,
     space: String,
@@ -236,12 +244,15 @@ impl GraphVertexCursor {
         &mut self,
         batch_size: usize,
         tag_name: &str,
-        internal_ids: &mut Vec<u32>,
-        vids: &mut Vec<VertexId>,
-        tag_names: &mut Vec<String>,
-        union_names: &mut Vec<String>,
-        columns: &mut Vec<ColumnValues>,
+        out: StagedColumnOut<'_>,
     ) {
+        let StagedColumnOut {
+            internal_ids,
+            vids,
+            tag_names,
+            union_names,
+            columns,
+        } = out;
         let end = (self.staged_idx + (batch_size - internal_ids.len())).min(self.staged_rows.len());
         let mut rows_sel: Vec<usize> = Vec::new();
         for index in self.staged_idx..end {
@@ -398,11 +409,13 @@ impl GraphVertexCursor {
                         self.drain_staged_columns(
                             batch_size,
                             tag_name,
-                            &mut internal_ids,
-                            &mut vids,
-                            &mut tag_names,
-                            &mut union_names,
-                            &mut columns,
+                            StagedColumnOut {
+                                internal_ids: &mut internal_ids,
+                                vids: &mut vids,
+                                tag_names: &mut tag_names,
+                                union_names: &mut union_names,
+                                columns: &mut columns,
+                            },
                         );
                         continue;
                     }

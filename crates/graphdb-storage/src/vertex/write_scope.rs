@@ -44,6 +44,12 @@ use super::id_indexer::IdKey;
 /// growing without bound.
 pub const MAX_WRITE_SCOPE_KEYS: usize = 4096;
 
+type ScopeKey = (LabelId, IdKey);
+type ScopeInsertRow = (u32, Vec<(String, Value)>);
+type ScopeUpdateRow = Vec<(String, Value)>;
+type ScopeIdKey = (LabelId, u32);
+type ScopedInsert = (IdKey, u32, Vec<(String, Value)>);
+
 /// Caller-owned staging area for one write timestamp.
 ///
 /// All state lives in the caller and is passed by mutable borrow; shards and
@@ -51,9 +57,9 @@ pub const MAX_WRITE_SCOPE_KEYS: usize = 4096;
 #[derive(Debug, Default)]
 pub struct WriteScope {
     write_ts: Timestamp,
-    inserts: HashMap<(LabelId, IdKey), (u32, Vec<(String, Value)>)>,
-    updates: HashMap<(LabelId, u32), Vec<(String, Value)>>,
-    deletes: HashSet<(LabelId, u32)>,
+    inserts: HashMap<ScopeKey, ScopeInsertRow>,
+    updates: HashMap<ScopeIdKey, ScopeUpdateRow>,
+    deletes: HashSet<ScopeIdKey>,
 }
 
 impl WriteScope {
@@ -93,9 +99,9 @@ impl WriteScope {
     /// passed the transaction-level bound when they were staged.
     pub(crate) fn from_staged(
         write_ts: Timestamp,
-        inserts: HashMap<(LabelId, IdKey), (u32, Vec<(String, Value)>)>,
-        updates: HashMap<(LabelId, u32), Vec<(String, Value)>>,
-        deletes: HashSet<(LabelId, u32)>,
+        inserts: HashMap<ScopeKey, ScopeInsertRow>,
+        updates: HashMap<ScopeIdKey, ScopeUpdateRow>,
+        deletes: HashSet<ScopeIdKey>,
     ) -> Self {
         Self {
             write_ts,
@@ -181,10 +187,7 @@ impl WriteScope {
     /// applies them, reports the staged key to allocated global id mapping
     /// back to the commit caller, and releases the reservations of rows it
     /// ultimately does not apply.
-    pub fn take_inserts_for_label(
-        &mut self,
-        label: LabelId,
-    ) -> Vec<(IdKey, u32, Vec<(String, Value)>)> {
+    pub fn take_inserts_for_label(&mut self, label: LabelId) -> Vec<ScopedInsert> {
         let keys: Vec<(LabelId, IdKey)> = self
             .inserts
             .keys()

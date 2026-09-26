@@ -157,7 +157,7 @@ impl VertexTable {
         let col_names: Vec<String> = self.columns.column_names();
         let mut selections = Vec::with_capacity(col_names.len());
         for name in &col_names {
-            let mut snapshot = self
+            let snapshot = self
                 .columns
                 .get_column(name)
                 .map(|col| col.clone())
@@ -220,7 +220,7 @@ impl VertexTable {
                     }
                 }
             }
-            Self::append_column_payload(&mut payload, &mut snapshot)?;
+            Self::append_column_payload(&mut payload, &snapshot)?;
             if matches!(
                 snapshot.data_type,
                 graphdb_core::DataType::String | graphdb_core::DataType::Blob

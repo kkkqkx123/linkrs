@@ -86,6 +86,9 @@ pub struct TransactionOptions {
     pub timeout: Option<Duration>,
     /// Whether read-only
     pub read_only: bool,
+    /// Declare a long-lived read: only these hold snapshot leases.
+    /// Short transactions never issue, even under backpressure.
+    pub long_read: bool,
     /// Durability level
     pub durability: DurabilityLevel,
     /// Isolation level
@@ -113,6 +116,12 @@ impl TransactionOptions {
     /// Set to read-only
     pub fn read_only(mut self) -> Self {
         self.read_only = true;
+        self
+    }
+
+    /// Declare a long-lived read holding a snapshot lease.
+    pub fn long_read(mut self) -> Self {
+        self.long_read = true;
         self
     }
 
@@ -303,6 +312,14 @@ pub struct TransactionManagerConfig {
     /// (offer after every write commit); higher values batch the offers.
     /// Evaluated by `TransactionManager::should_auto_checkpoint`.
     pub auto_checkpoint_commit_threshold: u64,
+    /// Default snapshot-lease term for declared long reads. Clamped to the
+    /// storage-side maximum at issuance; renewal reuses the same term.
+    pub default_lease_ttl: Duration,
+    /// Admission thresholds for new long reads polled from the storage
+    /// backpressure snapshot. Short transactions are never gated.
+    pub long_read_max_live_leases: usize,
+    /// Maximum snapshot-pin age before new long reads are refused.
+    pub long_read_max_pin_secs: u64,
 }
 
 impl Default for TransactionManagerConfig {
@@ -319,6 +336,9 @@ impl Default for TransactionManagerConfig {
             group_commit_timeout: Duration::from_secs(30),
             auto_checkpoint_after_commit: true,
             auto_checkpoint_commit_threshold: 1,
+            default_lease_ttl: Duration::from_secs(300),
+            long_read_max_live_leases: 64,
+            long_read_max_pin_secs: 300,
         }
     }
 }

@@ -29,6 +29,7 @@ pub mod conflict;
 pub mod connection;
 pub mod context;
 pub mod error;
+pub mod maintenance;
 pub mod manager;
 pub mod monitor;
 pub mod mutation_journal;
@@ -37,6 +38,7 @@ pub mod mvcc_watermarks;
 pub mod participant;
 pub mod recovery;
 pub mod rollback;
+pub mod snapshot_lease;
 pub mod snapshot_tracker;
 pub mod types;
 pub mod undo_log;
@@ -66,6 +68,7 @@ pub use context::TransactionContext;
 pub use error::{
     RetryableTransactionError, TransactionError, TransactionErrorKind, TransactionResult,
 };
+pub use maintenance::{MigrationCommand, MigrationDrainFence};
 pub use manager::TransactionManager;
 pub use monitor::TransactionMonitor;
 pub use participant::{
@@ -73,6 +76,10 @@ pub use participant::{
     TransactionMutationRecorder,
 };
 pub use rollback::{CreateRemoveEdgeUndoParams, CreateUpdateEdgePropUndoParams, RollbackHelper};
+pub use snapshot_lease::{
+    check_long_read_admission, clamp_lease_ttl, LeaseAdmissionThresholds, LeaseBackpressureView,
+    LongReadLease,
+};
 pub use types::*;
 pub use undo_log::{
     CreateEdgeTypeUndo, CreateVertexTypeUndo, FileBackedUndoLog, InsertEdgeUndo, RemoveEdgeUndo,

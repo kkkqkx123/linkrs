@@ -573,6 +573,76 @@ fn bench_sparse_id_insert_throughput(c: &mut Criterion) {
     group.finish();
 }
 
+/// Point-lookup latency over sharded vertex tables: a fixed stride probe
+/// hits every shard, so the result tracks the routing plus PK-index path
+/// rather than a single hot shard.
+fn bench_vertex_point_lookup(c: &mut Criterion) {
+    let mut group = create_benchmark_group(c, "storage_vertex_point_lookup");
+    for &vertex_count in &[10_000u64, 100_000] {
+        let storage = build_vertices(vertex_count);
+        group.throughput(Throughput::Elements(1000));
+        group.bench_function(BenchmarkId::from_parameter(vertex_count), |b| {
+            b.iter(|| {
+                let mut hits = 0usize;
+                for probe in (0..vertex_count as i64).step_by(97).take(1000) {
+                    let found = storage
+                        .get_vertex(
+                            "bench",
+                            "Node",
+                            &VertexId::try_from_int64(probe).expect("valid vertex id"),
+                        )
+                        .expect("point lookup");
+                    hits += usize::from(found.is_some());
+                }
+                black_box(hits);
+            });
+        });
+    }
+    group.finish();
+}
+
+/// Delete plus reinsert churn: exercises the free-stack reuse path (no
+/// compaction) so regressions in ID recycling show up as throughput loss.
+fn bench_vertex_churn_reuse(c: &mut Criterion) {
+    let mut group = create_benchmark_group(c, "storage_vertex_churn_reuse");
+    group.throughput(Throughput::Elements(10_000));
+    group.bench_function("delete_reinsert_10k", |b| {
+        b.iter_batched(
+            || build_vertices(10_000),
+            |mut storage| {
+                for id in (0..10_000i64).step_by(2) {
+                    storage
+                        .delete_vertex(
+                            "bench",
+                            "Node",
+                            &VertexId::try_from_int64(id).expect("valid vertex id"),
+                        )
+                        .expect("vertex delete");
+                }
+                for id in (0..10_000i64).step_by(2) {
+                    storage
+                        .insert_vertex(
+                            "bench",
+                            Vertex::new(
+                                VertexId::try_from_int64(id).expect("valid vertex id"),
+                                Tag::new(
+                                    "Node".to_string(),
+                                    [("value".to_string(), Value::BigInt(id))]
+                                        .into_iter()
+                                        .collect(),
+                                ),
+                            ),
+                        )
+                        .expect("vertex insert");
+                }
+                black_box(());
+            },
+            criterion::BatchSize::NumIterations(1),
+        );
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_real_vertex_insert,
@@ -586,5 +656,7 @@ criterion_group!(
     bench_scaled_checkpoint,
     bench_scaled_graph_operations,
     bench_sparse_id_insert_throughput,
+    bench_vertex_point_lookup,
+    bench_vertex_churn_reuse,
 );
 criterion_main!(benches);

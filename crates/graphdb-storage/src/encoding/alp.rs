@@ -345,10 +345,6 @@ impl AlpColumn {
         Ok(())
     }
 
-    pub fn len(&self) -> usize {
-        self.row_count
-    }
-
     pub fn exception_rate(&self) -> f64 {
         if self.row_count == 0 {
             return 0.0;

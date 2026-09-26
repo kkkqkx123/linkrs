@@ -106,6 +106,25 @@ pub(super) fn decode_id(global_id: u32, layout: ShardLayout) -> (usize, u32) {
     (shard, local_id)
 }
 
+/// External-key routing scheme version pinned in the table manifest.
+///
+/// Version 1 is the `fxhash` mask scheme below. The version travels with
+/// the persisted data (not the binary): a future routing change takes
+/// effect only in a new redistribution generation, and old generations
+/// keep decoding with their pinned version. Unknown versions refuse the
+/// open with a rebuild directive instead of misrouting.
+pub(super) const ROUTER_VERSION: u8 = 1;
+
+/// External-key shard hash: stability contract.
+///
+/// The shard index routes both writes and reads, and persisted global IDs
+/// embed the routing shard, so this function must return the same value
+/// for the same key for the lifetime of the manifest format. A stronger
+/// mixer would reduce skew on adversarial keys, but changing the output
+/// would silently misroute every persisted row. Any future hash change
+/// must therefore ride the offline `reshard_to` rebuild (which re-routes
+/// by external key) under a new manifest marker, never as an in-place
+/// edit here.
 pub(super) fn fxhash(s: &str) -> u64 {
     let mut hash: u64 = 0;
     for byte in s.bytes() {
@@ -153,5 +172,10 @@ impl ShardedVertexTable {
     /// Versioned shard layout this table encodes global ids with.
     pub fn layout(&self) -> ShardLayout {
         self.layout
+    }
+
+    /// Redistribution generation of this table lineage.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 }

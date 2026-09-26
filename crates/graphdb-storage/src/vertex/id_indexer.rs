@@ -37,6 +37,12 @@ pub const PK_DELTA_ANCHOR_THRESHOLD: usize = 8192;
 const ID_KEY_TYPE_INT: u8 = 0;
 const ID_KEY_TYPE_TEXT: u8 = 1;
 
+/// Count-min sketch width per row backing probe-frequency sampling. Two
+/// rows of this many `u64` counters cost a fixed 32 KiB per index instance
+/// regardless of key count, which is what makes the sampler safe to leave
+/// on in production: bounded memory, no per-key allocation.
+const ACCESS_SKETCH_WIDTH: usize = 2048;
+
 /// Visibility-aware primary-key lookup result.
 ///
 /// Collapses the old two-step read (`get_index` plus a timestamp check in
@@ -66,6 +72,71 @@ impl PkLookup {
 enum IndexDelta {
     Insert { key: IdKey, id: u32 },
     Remove { key: IdKey },
+}
+
+/// Fixed-memory probe-frequency sampler (count-min sketch, two rows).
+///
+/// Records every primary-key probe served by the index and answers
+/// per-key frequency estimates that never undercount: the reported value
+/// is the true count plus hash-collision noise. This is the telemetry the
+/// cold-hot tiering design consumes to decide which keys stay resident —
+/// without it, promotion would be blind. Runtime-only: never serialized,
+/// reset on load, which is correct because it measures serving behavior,
+/// not persisted state.
+#[derive(Debug)]
+struct AccessSketch {
+    rows: [[std::cell::Cell<u64>; ACCESS_SKETCH_WIDTH]; 2],
+    total: std::cell::Cell<u64>,
+}
+
+impl AccessSketch {
+    fn new() -> Self {
+        Self {
+            rows: core::array::from_fn(|_| core::array::from_fn(|_| std::cell::Cell::new(0))),
+            total: std::cell::Cell::new(0),
+        }
+    }
+
+    fn hashes(key: &IdKey) -> [u64; 2] {
+        use std::hash::{Hash, Hasher};
+        let mut first = std::collections::hash_map::DefaultHasher::new();
+        0u8.hash(&mut first);
+        key.hash(&mut first);
+        let mut second = std::collections::hash_map::DefaultHasher::new();
+        1u8.hash(&mut second);
+        key.hash(&mut second);
+        [first.finish(), second.finish()]
+    }
+
+    fn record(&self, key: &IdKey) {
+        let hashes = Self::hashes(key);
+        for (row, hash) in self.rows.iter().zip(hashes) {
+            let cell = &row[hash as usize % ACCESS_SKETCH_WIDTH];
+            cell.set(cell.get().saturating_add(1));
+        }
+        self.total.set(self.total.get().saturating_add(1));
+    }
+
+    /// Background-promotion read-only estimate for one key. Never served
+    /// on the point-lookup path: promotion tasks poll it, probes do not.
+    /// Count-min minimum never undercounts; the excess is hash noise.
+    fn estimate(&self, key: &IdKey) -> u64 {
+        let hashes = Self::hashes(key);
+        self.rows
+            .iter()
+            .zip(hashes)
+            .map(|(row, hash)| row[hash as usize % ACCESS_SKETCH_WIDTH].get())
+            .min()
+            .unwrap_or(0)
+    }
+
+    fn total(&self) -> u64 {
+        self.total.get()
+    }
+
+    fn heap_bytes() -> usize {
+        2 * ACCESS_SKETCH_WIDTH * std::mem::size_of::<u64>()
+    }
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -188,6 +259,26 @@ fn validate_key_shape(key: &IdKey) -> StorageResult<()> {
 /// - ID → Key reverse mapping (via Vec)
 ///
 /// IdManager is the authoritative source for ID management logic.
+/// Per-component memory accounting for one primary-key index shard.
+/// Sums to the value reported by [`IdManager::memory_usage`]; exposed so
+/// operators can see which structure (key heap, map, live set, delta log)
+/// dominates before the shard crosses its memory budget.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IdIndexMemoryBreakdown {
+    pub slot_count: usize,
+    pub live_count: usize,
+    pub free_depth: usize,
+    pub delta_entries: usize,
+    pub delta_heap_bytes: usize,
+    pub keys_heap_bytes: usize,
+    pub map_bytes: usize,
+    pub set_bytes: usize,
+    pub free_bytes: usize,
+    /// Fixed sampler reservation for probe-frequency telemetry.
+    pub sketch_bytes: usize,
+    pub total_bytes: usize,
+}
+
 #[derive(Debug)]
 pub struct IdManager {
     keys: Vec<Option<IdKey>>,
@@ -196,6 +287,11 @@ pub struct IdManager {
     /// Recycled local IDs from deletions, for lazy reuse without global
     /// compaction. Reduces fragmentation by filling holes immediately.
     free_ids: Vec<u32>,
+    /// Cumulative free-stack pops since creation. Observability only: a
+    /// rising reuse rate under churn confirms the free stack absorbs
+    /// deletes; a flat zero beside a growing high-water mark means reuse
+    /// is bypassed and compaction pressure builds instead.
+    reuse_count: u64,
     /// Committed mutations since the last baseline flush, backing the
     /// incremental `id_indexer.delta` file. Cleared on baseline flush;
     /// dropped (with the baseline-invalidated flag set) when compaction
@@ -205,6 +301,10 @@ pub struct IdManager {
     /// The next incremental flush must rewrite the full baseline instead
     /// of appending a delta addressed by stale ids.
     baseline_invalidated: bool,
+    /// Probe-frequency sampler for the cold-hot tiering design. Fixed
+    /// 32 KiB, interior mutability so the `&self` serving paths
+    /// (`lookup`, `get_id`) can record without widening their signatures.
+    access: AccessSketch,
     config: IdIndexerConfig,
 }
 
@@ -220,8 +320,10 @@ impl IdManager {
             key_to_id: HashMap::with_capacity(capacity),
             live_ids: BTreeSet::new(),
             free_ids: Vec::new(),
+            reuse_count: 0,
             delta_log: Vec::new(),
             baseline_invalidated: false,
+            access: AccessSketch::new(),
             config,
         }
     }
@@ -257,6 +359,7 @@ impl IdManager {
     fn take_next_id(&mut self) -> StorageResult<u32> {
         // Lazy ID reuse: recycle a deleted slot before growing the id space.
         if let Some(recycled) = self.free_ids.pop() {
+            self.reuse_count = self.reuse_count.saturating_add(1);
             let idx = recycled as usize;
             if idx >= self.keys.len() {
                 // Recycled idx at the tail (rare after deserialize
@@ -294,6 +397,17 @@ impl IdManager {
     /// Bind a key to a slot obtained from [`Self::take_next_id`], recording
     /// the committed-insert delta entry.
     fn bind_slot(&mut self, key: IdKey, id: u32) {
+        // Reuse audit: a recycled slot must be fully detached (no key, not
+        // live) before a new key claims it; otherwise a dangling reference
+        // to the previous occupant survives the reuse.
+        debug_assert!(
+            matches!(self.keys.get(id as usize), Some(None)),
+            "bind_slot claimed an occupied slot {id}"
+        );
+        debug_assert!(
+            !self.live_ids.contains(&id),
+            "bind_slot claimed a live slot {id}"
+        );
         self.keys[id as usize] = Some(key.clone());
         self.key_to_id.insert(key.clone(), id);
         self.live_ids.insert(id);
@@ -356,8 +470,9 @@ impl IdManager {
 
     /// Visibility-aware lookup: the global committed area gated by the
     /// caller's row-visibility predicate. Collapses the old two-step read
-    /// into one two-state call.
+    /// into one two-state call. Records one probe in the access sampler.
     pub fn lookup(&self, key: &IdKey, is_visible: impl Fn(u32) -> bool) -> PkLookup {
+        self.access.record(key);
         match self.key_to_id.get(key).copied() {
             Some(id) if is_visible(id) => PkLookup::Visible(id),
             _ => PkLookup::Missing,
@@ -365,6 +480,7 @@ impl IdManager {
     }
 
     pub fn get_id(&self, key: &IdKey) -> Option<u32> {
+        self.access.record(key);
         self.key_to_id.get(key).copied()
     }
 
@@ -499,11 +615,96 @@ impl IdManager {
         std::mem::take(&mut self.baseline_invalidated)
     }
 
-    /// Whether the next incremental flush must anchor a new full baseline:
-    /// either compaction moved live rows, or the since-baseline delta grew
-    /// past [`PK_DELTA_ANCHOR_THRESHOLD`]. Consumes the invalidation flag.
-    pub fn should_anchor_baseline(&mut self) -> bool {
-        self.take_baseline_invalidated() || self.delta_log.len() >= PK_DELTA_ANCHOR_THRESHOLD
+    /// Scale-aware anchor threshold: the fixed floor bounds replay cost on
+    /// small tables, while the proportional term keeps the delta a bounded
+    /// fraction of the index on large tables where a fixed count would
+    /// either anchor far too often (write amplification) or far too rarely
+    /// (replay cost and double-stored key memory).
+    pub fn anchor_threshold_for_live(live: usize) -> usize {
+        PK_DELTA_ANCHOR_THRESHOLD.max(live / 4)
+    }
+
+    /// Anchor check against an explicit live size, for flush paths that
+    /// already hold the count. Consumes the invalidation flag.
+    pub fn should_anchor_baseline_for_live(&mut self, live: usize) -> bool {
+        self.take_baseline_invalidated()
+            || self.delta_log.len() >= Self::anchor_threshold_for_live(live)
+    }
+
+    /// Cumulative free-stack reuses since creation (see `reuse_count`).
+    pub fn reuse_count(&self) -> u64 {
+        self.reuse_count
+    }
+
+    /// Non-destructive peek at the compaction-moved-rows flag (see
+    /// `baseline_invalidated`). Observability only: the flush trigger
+    /// policy reads it without consuming, unlike
+    /// [`Self::take_baseline_invalidated`].
+    pub fn baseline_invalidated(&self) -> bool {
+        self.baseline_invalidated
+    }
+
+    /// Total probes recorded since creation.
+    pub fn probe_total(&self) -> u64 {
+        self.access.total()
+    }
+
+    /// Per-key probe estimate for background promotion tasks only.
+    /// Read-only count-min query restored for the tiering branch: never
+    /// called on the point-lookup path, only by promotion scans deciding
+    /// which cold keys earn residency. Never undercounts.
+    pub fn estimated_probes(&self, key: &IdKey) -> u64 {
+        self.access.estimate(key)
+    }
+
+    /// Current free-stack depth: slots awaiting reuse.
+    pub fn free_depth(&self) -> usize {
+        self.free_ids.len()
+    }
+
+    /// Per-component memory accounting backing [`Self::memory_usage`].
+    pub fn memory_breakdown(&self) -> IdIndexMemoryBreakdown {
+        let mut keys_heap_bytes = 0usize;
+        for key_opt in &self.keys {
+            if let Some(IdKey::Text(text)) = key_opt {
+                keys_heap_bytes += text.len();
+            }
+        }
+        let mut delta_heap_bytes = 0usize;
+        for delta in &self.delta_log {
+            match delta {
+                IndexDelta::Insert { key, .. } | IndexDelta::Remove { key } => {
+                    if let IdKey::Text(text) = key {
+                        delta_heap_bytes += text.len();
+                    }
+                }
+            }
+        }
+        let slot_bytes = self.keys.capacity() * std::mem::size_of::<Option<IdKey>>();
+        let map_bytes =
+            self.key_to_id.len() * (std::mem::size_of::<IdKey>() + std::mem::size_of::<u32>());
+        let set_bytes = self.live_ids.len() * (std::mem::size_of::<u32>() + 32);
+        let free_bytes = self.free_ids.capacity() * std::mem::size_of::<u32>();
+        let sketch_bytes = AccessSketch::heap_bytes();
+        IdIndexMemoryBreakdown {
+            slot_count: self.keys.len(),
+            live_count: self.key_to_id.len(),
+            free_depth: self.free_ids.len(),
+            delta_entries: self.delta_log.len(),
+            delta_heap_bytes,
+            keys_heap_bytes,
+            map_bytes,
+            set_bytes,
+            free_bytes,
+            sketch_bytes,
+            total_bytes: slot_bytes
+                + keys_heap_bytes
+                + delta_heap_bytes
+                + map_bytes
+                + set_bytes
+                + free_bytes
+                + sketch_bytes,
+        }
     }
 
     /// Drop the since-baseline delta without persisting it. Baseline-flush
@@ -660,27 +861,7 @@ impl IdManager {
     }
 
     pub fn memory_usage(&self) -> usize {
-        let keys_size = self.keys.capacity() * std::mem::size_of::<Option<IdKey>>();
-        let mut heap_bytes = 0usize;
-        for key_opt in &self.keys {
-            if let Some(IdKey::Text(text)) = key_opt {
-                heap_bytes += text.len();
-            }
-        }
-        for delta in &self.delta_log {
-            match delta {
-                IndexDelta::Insert { key, .. } | IndexDelta::Remove { key } => {
-                    if let IdKey::Text(text) = key {
-                        heap_bytes += text.len();
-                    }
-                }
-            }
-        }
-        let map_estimate =
-            self.key_to_id.len() * (std::mem::size_of::<IdKey>() + std::mem::size_of::<u32>());
-        let set_estimate = self.live_ids.len() * (std::mem::size_of::<u32>() + 32);
-        let free_estimate = self.free_ids.capacity() * std::mem::size_of::<u32>();
-        keys_size + heap_bytes + map_estimate + set_estimate + free_estimate
+        self.memory_breakdown().total_bytes
     }
 
     pub fn memory_size(&self) -> usize {
@@ -880,10 +1061,43 @@ impl IdIndexer {
         self.manager.lock().delta_len()
     }
 
-    /// Whether the next incremental flush must anchor a new full baseline
-    /// (compaction moved rows, or the delta passed its scale threshold).
-    pub fn should_anchor_baseline(&self) -> bool {
-        self.manager.lock().should_anchor_baseline()
+    /// Anchor check against an explicit live size (see
+    /// [`IdManager::should_anchor_baseline_for_live`]).
+    pub fn should_anchor_baseline_for_live(&self, live: usize) -> bool {
+        self.manager.lock().should_anchor_baseline_for_live(live)
+    }
+
+    /// Cumulative free-stack reuses (see [`IdManager::reuse_count`]).
+    pub fn reuse_count(&self) -> u64 {
+        self.manager.lock().reuse_count()
+    }
+
+    /// Compaction-moved-rows flag without consuming it (see
+    /// [`IdManager::baseline_invalidated`]).
+    pub fn baseline_invalidated(&self) -> bool {
+        self.manager.lock().baseline_invalidated()
+    }
+
+    /// Current free-stack depth (see [`IdManager::free_depth`]).
+    pub fn free_depth(&self) -> usize {
+        self.manager.lock().free_depth()
+    }
+
+    /// Per-component memory accounting (see
+    /// [`IdManager::memory_breakdown`]).
+    pub fn memory_breakdown(&self) -> IdIndexMemoryBreakdown {
+        self.manager.lock().memory_breakdown()
+    }
+
+    /// Total probes recorded (see [`IdManager::probe_total`]).
+    pub fn probe_total(&self) -> u64 {
+        self.manager.lock().probe_total()
+    }
+
+    /// Per-key probe estimate for background promotion tasks only (see
+    /// [`IdManager::estimated_probes`]). Never on the point-lookup path.
+    pub fn estimated_probes(&self, key: &IdKey) -> u64 {
+        self.manager.lock().estimated_probes(key)
     }
 
     /// Drop the since-baseline delta (baseline-flush path only).
@@ -1406,8 +1620,8 @@ mod tests {
         indexer.remove(&IdKey::Int(1));
         indexer.compact().unwrap();
         assert_eq!(indexer.delta_len(), 0);
-        assert!(indexer.should_anchor_baseline());
-        assert!(!indexer.should_anchor_baseline());
+        assert!(indexer.should_anchor_baseline_for_live(indexer.len()));
+        assert!(!indexer.should_anchor_baseline_for_live(indexer.len()));
     }
 
     #[test]
@@ -1446,11 +1660,11 @@ mod tests {
     #[test]
     fn test_over_threshold_delta_forces_anchor() {
         let indexer = IdIndexer::new();
-        assert!(!indexer.should_anchor_baseline());
+        assert!(!indexer.should_anchor_baseline_for_live(indexer.len()));
         for i in 0..PK_DELTA_ANCHOR_THRESHOLD as i64 {
             indexer.insert(IdKey::Int(i)).unwrap();
         }
-        assert!(indexer.should_anchor_baseline());
+        assert!(indexer.should_anchor_baseline_for_live(indexer.len()));
     }
 
     #[test]
@@ -1506,6 +1720,120 @@ mod tests {
         indexer.release_reserved(reserved);
         let reused = indexer.reserve_next().unwrap();
         assert_eq!(reused, reserved);
+    }
+
+    #[test]
+    fn test_memory_breakdown_sums_to_usage() {
+        let indexer = IdIndexer::new();
+        for i in 0..8 {
+            indexer.insert(IdKey::Text(format!("vertex-{i}"))).unwrap();
+        }
+        indexer.remove(&IdKey::Text("vertex-0".to_string()));
+        let breakdown = indexer.memory_breakdown();
+        assert_eq!(breakdown.live_count, 7);
+        assert_eq!(breakdown.free_depth, 1);
+        assert_eq!(breakdown.slot_count, 8);
+        assert_eq!(breakdown.delta_entries, indexer.delta_len());
+        assert!(breakdown.keys_heap_bytes > 0);
+        assert!(breakdown.delta_heap_bytes > 0);
+        assert!(breakdown.map_bytes > 0);
+        assert!(breakdown.set_bytes > 0);
+        assert!(
+            breakdown.total_bytes
+                >= breakdown.keys_heap_bytes
+                    + breakdown.delta_heap_bytes
+                    + breakdown.map_bytes
+                    + breakdown.set_bytes
+                    + breakdown.free_bytes
+        );
+        let manager = indexer.manager.lock();
+        assert_eq!(breakdown.total_bytes, manager.memory_usage());
+    }
+
+    #[test]
+    fn test_reuse_count_tracks_free_stack_pops() {
+        let indexer = IdIndexer::new();
+        indexer.insert(IdKey::Int(0)).unwrap();
+        indexer.insert(IdKey::Int(1)).unwrap();
+        assert_eq!(indexer.reuse_count(), 0);
+        indexer.remove(&IdKey::Int(0));
+        indexer.insert(IdKey::Int(2)).unwrap();
+        assert_eq!(indexer.reuse_count(), 1);
+        assert_eq!(indexer.free_depth(), 0);
+        indexer.insert(IdKey::Int(3)).unwrap();
+        assert_eq!(indexer.reuse_count(), 1);
+    }
+
+    #[test]
+    fn test_probe_sampler_records_lookup_totals() {
+        let indexer = IdIndexer::new();
+        indexer.insert(IdKey::Text("hot".to_string())).unwrap();
+        indexer.insert(IdKey::Text("cold".to_string())).unwrap();
+        for _ in 0..100 {
+            assert!(indexer.get_index(&IdKey::Text("hot".to_string())).is_some());
+        }
+        for _ in 0..3 {
+            assert!(indexer
+                .get_index(&IdKey::Text("cold".to_string()))
+                .is_some());
+        }
+        assert_eq!(indexer.probe_total(), 103);
+    }
+
+    #[test]
+    fn test_per_key_estimate_never_undercounts() {
+        let indexer = IdIndexer::new();
+        indexer.insert(IdKey::Text("hot".to_string())).unwrap();
+        indexer.insert(IdKey::Text("cold".to_string())).unwrap();
+        for _ in 0..100 {
+            assert!(indexer.get_index(&IdKey::Text("hot".to_string())).is_some());
+        }
+        for _ in 0..3 {
+            assert!(indexer
+                .get_index(&IdKey::Text("cold".to_string()))
+                .is_some());
+        }
+        let manager = indexer.manager.lock();
+        assert!(manager.estimated_probes(&IdKey::Text("hot".to_string())) >= 100);
+        assert!(manager.estimated_probes(&IdKey::Text("cold".to_string())) >= 3);
+        assert_eq!(
+            manager.estimated_probes(&IdKey::Text("unseen".to_string())),
+            0
+        );
+    }
+
+    #[test]
+    fn test_sketch_bytes_are_fixed_and_accounted() {
+        let indexer = IdIndexer::new();
+        let breakdown = indexer.memory_breakdown();
+        assert_eq!(breakdown.sketch_bytes, 2 * 2048 * 8);
+        assert!(breakdown.total_bytes >= breakdown.sketch_bytes);
+        for i in 0..64 {
+            indexer.insert(IdKey::Int(i)).unwrap();
+        }
+        assert_eq!(indexer.memory_breakdown().sketch_bytes, 2 * 2048 * 8);
+    }
+
+    #[test]
+    fn test_anchor_threshold_scales_with_live_size() {
+        assert_eq!(
+            IdManager::anchor_threshold_for_live(0),
+            PK_DELTA_ANCHOR_THRESHOLD
+        );
+        assert_eq!(
+            IdManager::anchor_threshold_for_live(PK_DELTA_ANCHOR_THRESHOLD * 8),
+            PK_DELTA_ANCHOR_THRESHOLD * 2
+        );
+        let indexer = IdIndexer::new();
+        for i in 0..8 {
+            indexer.insert(IdKey::Int(i)).unwrap();
+        }
+        indexer.clear_index_delta();
+        assert!(!indexer.should_anchor_baseline_for_live(8));
+        for i in 8..(8 + PK_DELTA_ANCHOR_THRESHOLD as i64) {
+            indexer.insert(IdKey::Int(i)).unwrap();
+        }
+        assert!(indexer.should_anchor_baseline_for_live(8));
     }
 
     #[test]

@@ -54,7 +54,13 @@ impl VertexTable {
         // baseline is rewritten in full as the new anchor (superseding any
         // delta); otherwise only the since-baseline delta is persisted
         // alongside the column delta pages under the same checkpoint commit.
-        if self.id_indexer.should_anchor_baseline() {
+        // The threshold scales with the live size so large tables do not
+        // anchor on every flush (write amplification) and small tables do
+        // not replay unbounded deltas.
+        if self
+            .id_indexer
+            .should_anchor_baseline_for_live(self.id_indexer.len())
+        {
             let id_indexer_path = path.join("id_indexer.bin");
             self.flush_id_indexer_baseline(path, &id_indexer_path)?;
         } else if self.id_indexer.delta_len() > 0 {

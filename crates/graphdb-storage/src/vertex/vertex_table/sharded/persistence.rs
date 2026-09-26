@@ -1,3 +1,25 @@
+//! Vertex table crash-recovery contract.
+//!
+//! Durability spans two layers with exactly one commit point:
+//!
+//! 1. Commit: the engine transaction WAL (`InsertVertexRedo` and peers)
+//!    is the durable source of truth for committed but unflushed rows.
+//!    Crash recovery replays it before tables serve reads, so a crash
+//!    between commit and flush loses nothing as long as replay runs.
+//! 2. Checkpoint: full or incremental flush writes shard files first and
+//!    `commit_manifest.json` last. The manifest lists every file the open
+//!    path may trust; files outside it are never read.
+//! 3. Open: a manifest-listed file that is missing or corrupt refuses the
+//!    whole table open instead of running sick. There is deliberately no
+//!    degraded single-shard open: serving a subset of shards would hand
+//!    out global IDs whose siblings silently vanished, which readers
+//!    cannot distinguish from genuine absence.
+//!
+//! Fault-injection coverage for this contract lives in
+//! `crates/graphdb-storage/tests/persistence_recovery.rs`: flush plus
+//! reload, plus corrupt-manifest refusal (a manifest-listed file that is
+//! missing or corrupt must fail the open).
+
 use std::path::{Path, PathBuf};
 
 use super::ShardedVertexTable;
@@ -24,6 +46,22 @@ struct TableManifest {
     num_shards: usize,
     segment_slots_bits: u32,
     total_segments: u32,
+    /// Routing scheme version that encoded the persisted global IDs (see
+    /// `ROUTER_VERSION`). Decoding with any other scheme would misroute
+    /// every row, so unknown versions refuse the open.
+    router_version: u8,
+    /// Redistribution generation of this table lineage. Fresh tables start
+    /// at zero; each offline redistribution bumps it. The commit manifest
+    /// carries the same number so the open path can refuse a checkpoint
+    /// mixed in from another generation instead of mis-decoding it.
+    generation: u64,
+    /// Wall-clock milliseconds of the last full baseline flush, written on
+    /// every full flush and preserved across incremental flushes. Drives
+    /// the baseline-age signal across restarts; missing (old manifests)
+    /// never refuses the open, only warns and falls back to the in-process
+    /// estimate.
+    #[serde(default)]
+    last_full_flush_ms: Option<u64>,
     checksum: u32,
 }
 
@@ -33,21 +71,45 @@ struct TableManifest {
 /// and old on-disk data is never made compatible.
 const MANIFEST_FORMAT_VERSION: u8 = 1;
 
-fn table_manifest_checksum(
+struct TableManifestInput<'a> {
     format_version: u8,
     label: graphdb_core::types::LabelId,
-    label_name: &str,
+    label_name: &'a str,
     num_shards: usize,
     segment_slots_bits: u32,
     total_segments: u32,
-) -> u32 {
+    router_version: u8,
+    generation: u64,
+    last_full_flush_ms: Option<u64>,
+}
+
+fn table_manifest_checksum(input: TableManifestInput<'_>) -> u32 {
     let mut hasher = crc32fast::Hasher::new();
-    hasher.update(&[format_version]);
-    hasher.update(&label.to_le_bytes());
-    hasher.update(label_name.as_bytes());
-    hasher.update(&(num_shards as u64).to_le_bytes());
-    hasher.update(&segment_slots_bits.to_le_bytes());
-    hasher.update(&total_segments.to_le_bytes());
+    hasher.update(&[input.format_version]);
+    hasher.update(&input.label.to_le_bytes());
+    hasher.update(input.label_name.as_bytes());
+    hasher.update(&(input.num_shards as u64).to_le_bytes());
+    hasher.update(&input.segment_slots_bits.to_le_bytes());
+    hasher.update(&input.total_segments.to_le_bytes());
+    hasher.update(&[input.router_version]);
+    hasher.update(&input.generation.to_le_bytes());
+    // Absent timestamps hash as zero so a fresh table and an old manifest
+    // share one checksum shape; old manifests without the field fall back
+    // to the legacy checksum in verification instead of refusing the open.
+    hasher.update(&input.last_full_flush_ms.unwrap_or(0).to_le_bytes());
+    hasher.finalize()
+}
+
+fn legacy_table_manifest_checksum(input: TableManifestInput<'_>) -> u32 {
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(&[input.format_version]);
+    hasher.update(&input.label.to_le_bytes());
+    hasher.update(input.label_name.as_bytes());
+    hasher.update(&(input.num_shards as u64).to_le_bytes());
+    hasher.update(&input.segment_slots_bits.to_le_bytes());
+    hasher.update(&input.total_segments.to_le_bytes());
+    hasher.update(&[input.router_version]);
+    hasher.update(&input.generation.to_le_bytes());
     hasher.finalize()
 }
 
@@ -56,6 +118,7 @@ fn commit_manifest_checksum(
     epoch: u64,
     kind: CommitKind,
     base_epoch: Option<u64>,
+    generation: u64,
     files: &[String],
     written_at_ms: u64,
 ) -> u32 {
@@ -64,6 +127,7 @@ fn commit_manifest_checksum(
     hasher.update(&epoch.to_le_bytes());
     hasher.update(kind.as_str().as_bytes());
     hasher.update(&base_epoch.unwrap_or(u64::MAX).to_le_bytes());
+    hasher.update(&generation.to_le_bytes());
     for file in files {
         hasher.update(file.as_bytes());
         hasher.update(&[0]);
@@ -83,27 +147,57 @@ fn verify_table_manifest(manifest: &TableManifest, path: &Path) -> StorageResult
             MANIFEST_FORMAT_VERSION,
         )));
     }
-    let expected = table_manifest_checksum(
-        manifest.format_version,
-        manifest.label,
-        &manifest.label_name,
-        manifest.num_shards,
-        manifest.segment_slots_bits,
-        manifest.total_segments,
-    );
+    let expected = table_manifest_checksum(TableManifestInput {
+        format_version: manifest.format_version,
+        label: manifest.label,
+        label_name: &manifest.label_name,
+        num_shards: manifest.num_shards,
+        segment_slots_bits: manifest.segment_slots_bits,
+        total_segments: manifest.total_segments,
+        router_version: manifest.router_version,
+        generation: manifest.generation,
+        last_full_flush_ms: manifest.last_full_flush_ms,
+    });
     if expected != manifest.checksum {
-        return Err(graphdb_core::StorageError::deserialize_error(format!(
-            "table manifest checksum mismatch at {}: expected {:#010x}, got {:#010x}",
-            path.display(),
-            expected,
-            manifest.checksum,
-        )));
+        // Old manifests predate the baseline-timestamp field and decode it
+        // as missing: accept them through the legacy checksum instead of
+        // refusing the open. The load path warns and falls back to the
+        // in-process age estimate.
+        let legacy = legacy_table_manifest_checksum(TableManifestInput {
+            format_version: manifest.format_version,
+            label: manifest.label,
+            label_name: &manifest.label_name,
+            num_shards: manifest.num_shards,
+            segment_slots_bits: manifest.segment_slots_bits,
+            total_segments: manifest.total_segments,
+            router_version: manifest.router_version,
+            generation: manifest.generation,
+            last_full_flush_ms: None,
+        });
+        if manifest.last_full_flush_ms.is_some() || legacy != manifest.checksum {
+            return Err(graphdb_core::StorageError::deserialize_error(format!(
+                "table manifest checksum mismatch at {}: expected {:#010x}, got {:#010x}",
+                path.display(),
+                expected,
+                manifest.checksum,
+            )));
+        }
     }
     let layout = super::routing::ShardLayout {
         num_shards: manifest.num_shards,
         segment_slots_bits: manifest.segment_slots_bits,
         total_segments: manifest.total_segments,
     };
+    if manifest.router_version != super::routing::ROUTER_VERSION {
+        return Err(graphdb_core::StorageError::deserialize_error(format!(
+            "unsupported table router version {} at {}, expected {}: \
+             the external-key routing scheme changed; rebuild the table with the \
+             offline redistribution tool instead of opening it in place",
+            manifest.router_version,
+            path.display(),
+            super::routing::ROUTER_VERSION,
+        )));
+    }
     if !layout.is_consistent() {
         return Err(graphdb_core::StorageError::deserialize_error(format!(
             "table manifest at {} pins an inconsistent shard layout \
@@ -133,6 +227,7 @@ fn verify_commit_manifest_content(manifest: &CommitManifest, path: &Path) -> Sto
         manifest.epoch,
         manifest.kind,
         manifest.base_epoch,
+        manifest.generation,
         &manifest.files,
         manifest.written_at_ms,
     );
@@ -169,6 +264,10 @@ pub(crate) struct CommitManifest {
     pub(crate) epoch: u64,
     pub(crate) kind: CommitKind,
     pub(crate) base_epoch: Option<u64>,
+    /// Redistribution generation of the table lineage this checkpoint
+    /// belongs to. Must match the table manifest generation: a checkpoint
+    /// mixed in from another generation would mis-decode global IDs.
+    pub(crate) generation: u64,
     pub(crate) files: Vec<String>,
     pub(crate) written_at_ms: u64,
     pub(crate) checksum: u32,
@@ -186,6 +285,15 @@ pub struct CommitHealthReport {
     pub kind: Option<String>,
     /// Base epoch for incremental checkpoints, if decodable.
     pub base_epoch: Option<u64>,
+    /// Redistribution generation pinned by the commit manifest, if decodable.
+    pub commit_generation: Option<u64>,
+    /// Routing scheme version pinned by the table manifest, if decodable.
+    pub router_version: Option<u8>,
+    /// Redistribution generation pinned by the table manifest, if decodable.
+    pub generation: Option<u64>,
+    /// Lineage defects: unknown router, table/commit generation mismatch,
+    /// or an undecodable table manifest. Empty when the lineage proves.
+    pub lineage_issues: Vec<String>,
     /// Files listed by the manifest.
     pub listed_files: Vec<String>,
     /// Listed files missing from disk.
@@ -200,12 +308,14 @@ pub struct CommitHealthReport {
 
 impl CommitHealthReport {
     /// Whether the directory is safe to open strictly: a decodable manifest
-    /// with no missing files and a verifiable primary-key index.
+    /// with no missing files, a verifiable primary-key index, and a proven
+    /// lineage (known router, matching table and commit generations).
     pub fn is_healthy(&self) -> bool {
         self.manifest_present
             && self.manifest_decodable
             && self.missing_files.is_empty()
             && self.pk_index_ok
+            && self.lineage_issues.is_empty()
     }
 }
 
@@ -227,7 +337,7 @@ impl GlobalCommitHealth {
     }
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -329,17 +439,188 @@ fn cleanup_orphans_tolerant(dir: &Path) {
     }
 }
 
+/// Manifest-pinned identity of one persisted table lineage: the shard
+/// layout global IDs decode with, the routing scheme version that placed
+/// them, and the redistribution generation they belong to. The open path
+/// adopts all three; anything less would mis-decode or mix generations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ManifestLineage {
+    pub(crate) layout: super::routing::ShardLayout,
+    pub(crate) router_version: u8,
+    pub(crate) generation: u64,
+}
+
+/// Staging receipt for one offline redistribution, written beside the
+/// rebuilt checkpoint it describes. Binds the source and target lineage
+/// generations so the adopt step can prove continuity (target is exactly
+/// source plus one) instead of trusting directory placement.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+// Staging/adopt protocol primitive: the online adopt driver consumes the
+// receipt before swapping generations. Retained as the reuse target for
+// that driver; exercised by the staging tests below.
+#[allow(dead_code)]
+pub(crate) struct RedistributionReceipt {
+    pub(crate) source_generation: u64,
+    pub(crate) target_generation: u64,
+    pub(crate) source_shards: usize,
+    pub(crate) target_shards: usize,
+    pub(crate) rows: usize,
+    pub(crate) mappings: usize,
+}
+
+/// Receipt file pinning the lineage handoff of a staged redistribution.
+#[allow(dead_code)]
+const RESHARD_RECEIPT_FILE_NAME: &str = "reshard_receipt.json";
+
 impl ShardedVertexTable {
+    /// Rebuild this table under `new_num_shards` into a staging directory.
+    ///
+    /// Runs the fenced [`ShardedVertexTable::reshard_to`] rebuild, flushes
+    /// the new generation as a full checkpoint into `staging`, and writes a
+    /// receipt binding the source and target generations. The caller swaps
+    /// the staging directory into place (online protocol) or retires the
+    /// old directory (offline runbook) only after
+    /// [`Self::check_staged_redistribution`] proves lineage continuity.
+    /// The source table and its directory stay untouched.
+    // See the receipt-type note: staging entry point for the adopt driver.
+    #[allow(dead_code)]
+    pub fn redistribute_to_staging<P: AsRef<Path>>(
+        &self,
+        staging: P,
+        new_num_shards: usize,
+        compression: CompressionType,
+    ) -> StorageResult<RedistributionReceipt> {
+        let (rebuilt, mapping) = self.reshard_to(new_num_shards)?;
+        rebuilt.flush(&staging, compression)?;
+        let receipt = RedistributionReceipt {
+            source_generation: self.generation,
+            target_generation: rebuilt.generation,
+            source_shards: self.layout.num_shards,
+            target_shards: rebuilt.layout.num_shards,
+            rows: rebuilt.approximate_total_count(),
+            mappings: mapping.len(),
+        };
+        let payload = serde_json::to_vec(&receipt)
+            .map_err(|e| graphdb_core::StorageError::serialize_error(e.to_string()))?;
+        crate::compression::write_shadow_file(
+            staging.as_ref().join(RESHARD_RECEIPT_FILE_NAME),
+            &payload,
+        )?;
+        Ok(receipt)
+    }
+
+    /// Prove a staged redistribution is safe to adopt for a source table at
+    /// `source_generation`: the receipt must exist and decode, its source
+    /// must be the caller, its target must be exactly source plus one, and
+    /// the staged table manifest must pin that same target generation.
+    /// Anything else refuses the adopt instead of swapping in a foreign
+    /// checkpoint.
+    // See the receipt-type note: adoption gate for the adopt driver.
+    #[allow(dead_code)]
+    pub fn check_staged_redistribution<P: AsRef<Path>>(
+        staging: P,
+        source_generation: u64,
+    ) -> StorageResult<RedistributionReceipt> {
+        let staging = staging.as_ref();
+        let receipt_path = staging.join(RESHARD_RECEIPT_FILE_NAME);
+        let payload = std::fs::read(&receipt_path).map_err(|e| {
+            graphdb_core::StorageError::deserialize_error(format!(
+                "staged redistribution at {} has no readable receipt {}: {e}",
+                staging.display(),
+                receipt_path.display(),
+            ))
+        })?;
+        let receipt: RedistributionReceipt = serde_json::from_slice(&payload).map_err(|e| {
+            graphdb_core::StorageError::deserialize_error(format!(
+                "invalid redistribution receipt {}: {e}",
+                receipt_path.display(),
+            ))
+        })?;
+        if receipt.source_generation != source_generation
+            || receipt.target_generation != source_generation.saturating_add(1)
+        {
+            return Err(graphdb_core::StorageError::invalid_operation(format!(
+                "staged redistribution at {} breaks lineage continuity: receipt hands \
+                 generation {} to {}, but the source table is at generation {}",
+                staging.display(),
+                receipt.source_generation,
+                receipt.target_generation,
+                source_generation,
+            )));
+        }
+        let lineage = Self::manifest_layout(staging)?.ok_or_else(|| {
+            graphdb_core::StorageError::deserialize_error(format!(
+                "staged redistribution at {} is missing its table manifest",
+                staging.display(),
+            ))
+        })?;
+        if lineage.generation != receipt.target_generation {
+            return Err(graphdb_core::StorageError::invalid_operation(format!(
+                "staged redistribution at {} mixes generations: receipt promises {} \
+                 but the staged manifest pins {}",
+                staging.display(),
+                receipt.target_generation,
+                lineage.generation,
+            )));
+        }
+        // Continuity alone does not prove the staged files decode: refuse
+        // the adopt when the staged checkpoint itself is unhealthy so a
+        // half-written or tampered staging never swaps into place.
+        let report = Self::inspect_commit_health(staging).map_err(|e| {
+            graphdb_core::StorageError::deserialize_error(format!(
+                "staged redistribution at {} failed health inspection: {e}",
+                staging.display(),
+            ))
+        })?;
+        if !report.is_healthy() {
+            let mut defects = report.lineage_issues.clone();
+            if !report.manifest_present {
+                defects.push("commit manifest missing".to_string());
+            } else if !report.manifest_decodable {
+                defects.push("commit manifest undecodable".to_string());
+            }
+            for missing in &report.missing_files {
+                defects.push(format!("listed file missing: {missing}"));
+            }
+            defects.extend(report.pk_issues.clone());
+            return Err(graphdb_core::StorageError::invalid_operation(format!(
+                "staged redistribution at {} unhealthy, refusing adopt: {}",
+                staging.display(),
+                defects.join("; "),
+            )));
+        }
+        Ok(receipt)
+    }
+}
+
+impl ShardedVertexTable {
+    /// In-memory baseline timestamp as persisted form: `None` while no
+    /// full flush ever ran. Incremental flushes preserve this value so the
+    /// cross-restart age signal only moves on full baselines.
+    fn persisted_baseline_ms(&self) -> Option<u64> {
+        use std::sync::atomic::Ordering;
+        let raw = self.last_full_flush_ms.load(Ordering::Acquire);
+        if raw == 0 {
+            None
+        } else {
+            Some(raw)
+        }
+    }
+
     fn write_table_manifest<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
         let format_version = MANIFEST_FORMAT_VERSION;
-        let checksum = table_manifest_checksum(
+        let last_full_flush_ms = self.persisted_baseline_ms();
+        let checksum = table_manifest_checksum(TableManifestInput {
             format_version,
-            self.label,
-            &self.label_name,
-            self.layout.num_shards,
-            self.layout.segment_slots_bits,
-            self.layout.total_segments,
-        );
+            label: self.label,
+            label_name: &self.label_name,
+            num_shards: self.layout.num_shards,
+            segment_slots_bits: self.layout.segment_slots_bits,
+            total_segments: self.layout.total_segments,
+            router_version: super::routing::ROUTER_VERSION,
+            generation: self.generation,
+            last_full_flush_ms,
+        });
         let manifest = TableManifest {
             format_version,
             label: self.label,
@@ -347,6 +628,9 @@ impl ShardedVertexTable {
             num_shards: self.layout.num_shards,
             segment_slots_bits: self.layout.segment_slots_bits,
             total_segments: self.layout.total_segments,
+            router_version: super::routing::ROUTER_VERSION,
+            generation: self.generation,
+            last_full_flush_ms,
             checksum,
         };
         let payload = serde_json::to_vec(&manifest)
@@ -359,21 +643,25 @@ impl ShardedVertexTable {
 
     /// Shard layout pinned in the table manifest at `path`, if any.
     ///
-    /// Opening a table adopts this layout: the running configuration's
+    /// Opening a table adopts this lineage: the running configuration's
     /// shard count only applies to newly created tables. A missing manifest
     /// yields `None` (the caller keeps its configured layout and the strict
-    /// load below refuses the open); an unknown version or checksum failure
-    /// errors with a rebuild directive instead of auto-migrating.
+    /// load below refuses the open); an unknown version, router, or checksum
+    /// failure errors with a rebuild directive instead of auto-migrating.
     pub(crate) fn manifest_layout<P: AsRef<Path>>(
         path: P,
-    ) -> StorageResult<Option<super::routing::ShardLayout>> {
+    ) -> StorageResult<Option<ManifestLineage>> {
         let Some(manifest) = Self::read_table_manifest(&path)? else {
             return Ok(None);
         };
-        Ok(Some(super::routing::ShardLayout {
-            num_shards: manifest.num_shards,
-            segment_slots_bits: manifest.segment_slots_bits,
-            total_segments: manifest.total_segments,
+        Ok(Some(ManifestLineage {
+            layout: super::routing::ShardLayout {
+                num_shards: manifest.num_shards,
+                segment_slots_bits: manifest.segment_slots_bits,
+                total_segments: manifest.total_segments,
+            },
+            router_version: manifest.router_version,
+            generation: manifest.generation,
         }))
     }
 
@@ -414,6 +702,7 @@ impl ShardedVertexTable {
     }
 
     fn write_commit_manifest<P: AsRef<Path>>(
+        &self,
         path: P,
         epoch: u64,
         kind: CommitKind,
@@ -427,6 +716,7 @@ impl ShardedVertexTable {
             epoch,
             kind,
             base_epoch,
+            self.generation,
             &files,
             written_at_ms,
         );
@@ -435,6 +725,7 @@ impl ShardedVertexTable {
             epoch,
             kind,
             base_epoch,
+            generation: self.generation,
             files,
             written_at_ms,
             checksum,
@@ -469,6 +760,7 @@ impl ShardedVertexTable {
         let mut epoch = None;
         let mut kind = None;
         let mut base_epoch = None;
+        let mut commit_generation = None;
         let mut listed_files = Vec::new();
         let mut missing_files = Vec::new();
         if manifest_present {
@@ -479,6 +771,7 @@ impl ShardedVertexTable {
                         epoch = Some(manifest.epoch);
                         kind = Some(manifest.kind.as_str().to_string());
                         base_epoch = manifest.base_epoch;
+                        commit_generation = Some(manifest.generation);
                         listed_files = manifest.files.clone();
                         for rel in &manifest.files {
                             if !dir.join(rel).exists() {
@@ -488,6 +781,41 @@ impl ShardedVertexTable {
                     }
                 }
             }
+        }
+        let mut router_version = None;
+        let mut generation = None;
+        let mut lineage_issues = Vec::new();
+        match Self::read_table_manifest(dir) {
+            Ok(Some(table)) => {
+                router_version = Some(table.router_version);
+                generation = Some(table.generation);
+                if table.router_version != super::routing::ROUTER_VERSION {
+                    lineage_issues.push(format!(
+                        "unknown table router version {} (expected {})",
+                        table.router_version,
+                        super::routing::ROUTER_VERSION,
+                    ));
+                }
+                match commit_generation {
+                    Some(commit) if commit != table.generation => lineage_issues.push(format!(
+                        "table manifest generation {} differs from commit generation {}",
+                        table.generation, commit,
+                    )),
+                    None if manifest_present => lineage_issues.push(
+                        "commit manifest undecodable: checkpoint lineage unprovable".to_string(),
+                    ),
+                    _ => {}
+                }
+            }
+            Ok(None) => lineage_issues.push(format!(
+                "table manifest missing at {}: refusing open without shard layout pin; \
+                 rebuild the table with the offline redistribution tool",
+                dir.join(TABLE_MANIFEST_FILE_NAME).display(),
+            )),
+            // The strict decode error already names the file and the rebuild
+            // directive (bad JSON, checksum, version, router, or layout), so
+            // forwarding it keeps diagnosis and refusal in agreement.
+            Err(e) => lineage_issues.push(format!("table manifest rejected: {e}")),
         }
         let mut orphan_tmp_files = Vec::new();
         if dir.exists() {
@@ -534,6 +862,10 @@ impl ShardedVertexTable {
             epoch,
             kind,
             base_epoch,
+            commit_generation,
+            router_version,
+            generation,
+            lineage_issues,
             listed_files,
             missing_files,
             orphan_tmp_files,
@@ -581,6 +913,9 @@ impl ShardedVertexTable {
                         }
                         for missing in &report.missing_files {
                             issues.push(format!("{}: listed file missing: {}", name, missing));
+                        }
+                        for lineage in &report.lineage_issues {
+                            issues.push(format!("{}: {}", name, lineage));
                         }
                         for pk_issue in &report.pk_issues {
                             issues.push(format!("{}: {}", name, pk_issue));
@@ -681,10 +1016,33 @@ impl ShardedVertexTable {
                 self.label_name, manifest.label, self.label,
             )));
         }
+        if manifest.generation != self.generation {
+            return Err(graphdb_core::StorageError::invalid_operation(format!(
+                "vertex table '{}' persisted at redistribution generation {} but opened \
+                 as generation {} (manifest {}): checkpoints from another lineage would \
+                 mis-decode global IDs; open the directory with a table adopted from \
+                 its own manifest instead of reusing this instance",
+                self.label_name,
+                manifest.generation,
+                self.generation,
+                path.as_ref().join(TABLE_MANIFEST_FILE_NAME).display(),
+            )));
+        }
         Ok(())
     }
 
     fn verify_commit_manifest(&self, path: &Path, manifest: &CommitManifest) -> StorageResult<()> {
+        if manifest.generation != self.generation {
+            return Err(graphdb_core::StorageError::deserialize_error(format!(
+                "checkpoint epoch {} kind={} belongs to redistribution generation {} but the \
+                 table opens generation {}: refusing a checkpoint mixed in from another \
+                 lineage instead of mis-decoding global IDs",
+                manifest.epoch,
+                manifest.kind.as_str(),
+                manifest.generation,
+                self.generation,
+            )));
+        }
         for rel in &manifest.files {
             let full = path.join(rel);
             if !full.exists() {
@@ -717,6 +1075,7 @@ impl ShardedVertexTable {
     ) -> StorageResult<()> {
         use rayon::prelude::*;
         use std::fs;
+        use std::sync::atomic::Ordering;
         let path = path.as_ref();
         fs::create_dir_all(path)?;
         cleanup_orphans_tolerant(path);
@@ -727,8 +1086,16 @@ impl ShardedVertexTable {
                 let shard_dir = path.join(format!("shard_{}", i));
                 shard.write().flush(&shard_dir, compression)
             })?;
+        // Full flushes pin this completion time in the table manifest so
+        // the baseline-age signal survives restarts. Stored before the
+        // manifest write so the manifest carries this flush, not the
+        // previous one; the commit-point order (files first, manifest
+        // last) is unchanged.
+        if kind == CommitKind::Full {
+            self.last_full_flush_ms.store(now_ms(), Ordering::Release);
+        }
         self.write_table_manifest(path)?;
-        Self::write_commit_manifest(path, epoch, kind, base_epoch)?;
+        self.write_commit_manifest(path, epoch, kind, base_epoch)?;
         Ok(())
     }
 
@@ -744,6 +1111,18 @@ impl ShardedVertexTable {
         let path = path.as_ref();
         fs::create_dir_all(path)?;
         cleanup_orphans_tolerant(path);
+        // Advisory trigger verdict with its reason code: explains whether
+        // this incremental is routine or overdue for a full baseline. The
+        // kind stays incremental here; upgrading to full is the checkpoint
+        // coordinator's call because the epoch chain points at the base.
+        let plan = super::super::flush_trigger::decide(self.flush_signals());
+        log::debug!(
+            "vertex table '{}' incremental flush trigger: kind={:?} reason={} merge_pages={}",
+            self.label_name,
+            plan.kind,
+            plan.reason.as_str(),
+            plan.merge_pages,
+        );
         self.shards
             .par_iter()
             .enumerate()
@@ -762,7 +1141,7 @@ impl ShardedVertexTable {
                 }
             })?;
         self.write_table_manifest(path)?;
-        Self::write_commit_manifest(path, epoch, CommitKind::Incremental, base_epoch)?;
+        self.write_commit_manifest(path, epoch, CommitKind::Incremental, base_epoch)?;
         Ok(())
     }
 
@@ -824,6 +1203,35 @@ impl ShardedVertexTable {
         }
         // Refuse to mis-decode: persisted global IDs embed the shard count.
         self.check_table_manifest(path)?;
+        // Adopt the persisted baseline timestamp so the age signal survives
+        // restarts. Missing timestamps only warn and keep the in-process
+        // estimate; a persisted future value (clock skew) adopts the larger
+        // of the two with a warning, never moves the signal backward.
+        match Self::read_table_manifest(path)?.and_then(|m| m.last_full_flush_ms) {
+            Some(persisted) => {
+                use std::sync::atomic::Ordering;
+                let now = now_ms();
+                let adopted = persisted.max(now);
+                if persisted > now {
+                    log::warn!(
+                        "vertex table '{}' baseline timestamp {} is ahead of the current clock {}; \
+                         adopting the persisted value",
+                        self.label_name,
+                        persisted,
+                        now,
+                    );
+                }
+                if self.last_full_flush_ms.load(Ordering::Acquire) == 0 {
+                    self.last_full_flush_ms.store(adopted, Ordering::Release);
+                }
+            }
+            None => log::warn!(
+                "vertex table '{}' manifest at {} has no baseline timestamp; \
+                 falling back to the in-process age estimate",
+                self.label_name,
+                path.display(),
+            ),
+        }
         match Self::read_commit_manifest(path)? {
             Some(manifest) => {
                 self.verify_commit_manifest(path, &manifest)?;
@@ -1250,6 +1658,601 @@ mod commit_tests {
             err.contains("checksum"),
             "tampered manifest must refuse on checksum: {err}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn table_manifest_pins_router_version_and_generation() {
+        let dir = unique_dir("lineage-pinned");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                21,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        let table_manifest = ShardedVertexTable::read_table_manifest(&dir)
+            .unwrap()
+            .expect("table manifest present");
+        assert_eq!(
+            table_manifest.router_version,
+            super::super::routing::ROUTER_VERSION
+        );
+        assert_eq!(table_manifest.generation, 0);
+        let commit_manifest = ShardedVertexTable::read_commit_manifest(&dir)
+            .unwrap()
+            .expect("commit manifest present");
+        assert_eq!(
+            commit_manifest.generation, table_manifest.generation,
+            "commit and table manifests must pin the same lineage generation"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tampered_router_version_refuses_open() {
+        let dir = unique_dir("lineage-router");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                23,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        let manifest_path = dir.join(TABLE_MANIFEST_FILE_NAME);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["router_version"] = serde_json::Value::from(99u64);
+        manifest["checksum"] =
+            serde_json::Value::from(table_manifest_checksum(TableManifestInput {
+                format_version: manifest["format_version"].as_u64().unwrap() as u8,
+                label: manifest["label"].as_u64().unwrap() as _,
+                label_name: manifest["label_name"].as_str().unwrap(),
+                num_shards: manifest["num_shards"].as_u64().unwrap() as usize,
+                segment_slots_bits: manifest["segment_slots_bits"].as_u64().unwrap() as u32,
+                total_segments: manifest["total_segments"].as_u64().unwrap() as u32,
+                router_version: 99,
+                generation: manifest["generation"].as_u64().unwrap(),
+                last_full_flush_ms: manifest["last_full_flush_ms"].as_u64(),
+            }));
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let err = reloaded.load(&dir).unwrap_err().to_string();
+        assert!(
+            err.contains("router"),
+            "unknown router version must refuse with router cause: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn commit_generation_mismatch_refuses_open() {
+        let dir = unique_dir("lineage-mismatch");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                25,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        let manifest_path = dir.join(COMMIT_MANIFEST_FILE_NAME);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["generation"] = serde_json::Value::from(7u64);
+        let kind = match manifest["kind"].as_str().unwrap() {
+            "full" => CommitKind::Full,
+            "incremental" => CommitKind::Incremental,
+            other => panic!("unexpected commit kind {other}"),
+        };
+        let files: Vec<String> = manifest["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        manifest["checksum"] = serde_json::Value::from(commit_manifest_checksum(
+            manifest["format_version"].as_u64().unwrap() as u8,
+            manifest["epoch"].as_u64().unwrap(),
+            kind,
+            manifest["base_epoch"].as_u64(),
+            7,
+            &files,
+            manifest["written_at_ms"].as_u64().unwrap(),
+        ));
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let err = reloaded.load(&dir).unwrap_err().to_string();
+        assert!(
+            err.contains("generation"),
+            "cross-generation checkpoint must refuse with lineage cause: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn flushed_table_manifest_dir(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = unique_dir(tag);
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                31,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        let manifest_path = dir.join(TABLE_MANIFEST_FILE_NAME);
+        (dir, manifest_path)
+    }
+
+    #[test]
+    fn table_manifest_version_mismatch_refuses_open_and_health() {
+        let (dir, manifest_path) = flushed_table_manifest_dir("table-version");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["format_version"] = serde_json::Value::from(9u64);
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let err = reloaded.load(&dir).unwrap_err().to_string();
+        assert!(
+            err.contains("version"),
+            "unknown table manifest version must refuse: {err}"
+        );
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(
+            report
+                .lineage_issues
+                .iter()
+                .any(|m| m.contains("rejected") && m.contains("version")),
+            "health must locate the version defect: {:?}",
+            report.lineage_issues
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tampered_table_manifest_checksum_refuses_open_and_health() {
+        let (dir, manifest_path) = flushed_table_manifest_dir("table-checksum");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["checksum"] = serde_json::Value::from(0u64);
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let err = reloaded.load(&dir).unwrap_err().to_string();
+        assert!(
+            err.contains("checksum mismatch"),
+            "tampered table manifest must refuse: {err}"
+        );
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(
+            report
+                .lineage_issues
+                .iter()
+                .any(|m| m.contains("rejected") && m.contains("checksum")),
+            "health must locate the checksum defect: {:?}",
+            report.lineage_issues
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_table_manifest_refuses_open_and_health() {
+        let (dir, manifest_path) = flushed_table_manifest_dir("table-missing");
+        std::fs::remove_file(&manifest_path).unwrap();
+        let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let err = reloaded.load(&dir).unwrap_err().to_string();
+        assert!(
+            err.contains("missing table manifest"),
+            "missing table manifest must refuse: {err}"
+        );
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(
+            report
+                .lineage_issues
+                .iter()
+                .any(|m| m.contains("table manifest missing")),
+            "health must report the missing file, not a generic defect: {:?}",
+            report.lineage_issues
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn commit_manifest_version_mismatch_refuses_open_and_health() {
+        let dir = unique_dir("commit-version");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                33,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        let manifest_path = dir.join(COMMIT_MANIFEST_FILE_NAME);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["format_version"] = serde_json::Value::from(9u64);
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let err = reloaded.load(&dir).unwrap_err().to_string();
+        assert!(
+            err.contains("version"),
+            "unknown commit manifest version must refuse: {err}"
+        );
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(
+            report.manifest_present && !report.manifest_decodable,
+            "undecodable commit manifest must stay visible: {report:?}"
+        );
+        assert!(
+            report
+                .lineage_issues
+                .iter()
+                .any(|m| m.contains("undecodable")),
+            "health must flag the unprovable lineage: {:?}",
+            report.lineage_issues
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn staged_redistribution_adopt_checks_lineage() {
+        let staging = unique_dir("reshard-stage");
+        let _ = std::fs::remove_dir_all(&staging);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        for i in 0..10 {
+            table
+                .insert(
+                    &format!("s_{i}"),
+                    &[("name".to_string(), Value::from(format!("s_{i}")))],
+                    10,
+                )
+                .unwrap();
+        }
+        let receipt = table
+            .redistribute_to_staging(&staging, 4, CompressionType::Zstd { level: 0 })
+            .expect("staging succeeds");
+        assert_eq!(receipt.source_generation, 0);
+        assert_eq!(receipt.target_generation, 1);
+        assert_eq!((receipt.source_shards, receipt.target_shards), (2, 4));
+        assert_eq!(receipt.rows, 10);
+        assert_eq!(receipt.mappings, 10);
+        let checked = ShardedVertexTable::check_staged_redistribution(&staging, 0)
+            .expect("lineage continuity proves");
+        assert_eq!(checked, receipt);
+        let adopted = ShardedVertexTable::with_layout(
+            1,
+            "t".to_string(),
+            test_schema(),
+            super::super::routing::ShardLayout::for_new_table(4),
+            1,
+        );
+        adopted.load(&staging).expect("adopted lineage opens");
+        assert_eq!(adopted.approximate_total_count(), 10);
+        let rebuilt_ts = graphdb_core::types::MAX_TIMESTAMP - 1;
+        assert!(adopted.get_internal_id("s_3", rebuilt_ts).is_some());
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+
+    #[test]
+    fn staged_redistribution_refuses_broken_lineage() {
+        let staging = unique_dir("reshard-broken");
+        let _ = std::fs::remove_dir_all(&staging);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+            .unwrap();
+        table
+            .redistribute_to_staging(&staging, 4, CompressionType::Zstd { level: 0 })
+            .expect("staging succeeds");
+        let err = ShardedVertexTable::check_staged_redistribution(&staging, 5)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("lineage continuity"),
+            "wrong source generation must refuse adopt: {err}"
+        );
+        let receipt_path = staging.join(RESHARD_RECEIPT_FILE_NAME);
+        let mut receipt: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&receipt_path).unwrap()).unwrap();
+        receipt["target_generation"] = serde_json::Value::from(9u64);
+        std::fs::write(&receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+        let err = ShardedVertexTable::check_staged_redistribution(&staging, 0)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("lineage continuity"),
+            "tampered target generation must refuse adopt: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+
+    #[test]
+    fn staged_redistribution_refuses_unhealthy_staging() {
+        for (tag, tamper) in [
+            ("missing-manifest", "commit manifest missing"),
+            ("corrupt-pk", "shard_0"),
+        ] {
+            let staging = unique_dir(&format!("reshard-sick-{tag}"));
+            let _ = std::fs::remove_dir_all(&staging);
+            let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+            table
+                .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+                .unwrap();
+            table
+                .redistribute_to_staging(&staging, 4, CompressionType::Zstd { level: 0 })
+                .expect("staging succeeds");
+            if tag == "missing-manifest" {
+                std::fs::remove_file(staging.join(COMMIT_MANIFEST_FILE_NAME)).unwrap();
+            } else {
+                std::fs::write(staging.join("shard_0").join("id_indexer.bin"), b"corrupt").unwrap();
+            }
+            let err = ShardedVertexTable::check_staged_redistribution(&staging, 0)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("unhealthy") && err.contains(tamper),
+                "damaged staging must refuse adopt with located cause: {err}"
+            );
+            let _ = std::fs::remove_dir_all(&staging);
+        }
+    }
+
+    #[test]
+    fn health_report_proves_lineage_on_healthy_checkpoint() {
+        let dir = unique_dir("health-lineage");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                27,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(report.is_healthy());
+        assert_eq!(report.router_version, Some(1));
+        assert_eq!(report.generation, Some(0));
+        assert_eq!(report.commit_generation, Some(0));
+        assert!(report.lineage_issues.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn health_report_flags_generation_mismatch_before_open() {
+        let dir = unique_dir("health-mismatch");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                29,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        let manifest_path = dir.join(COMMIT_MANIFEST_FILE_NAME);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["generation"] = serde_json::Value::from(7u64);
+        let kind = match manifest["kind"].as_str().unwrap() {
+            "full" => CommitKind::Full,
+            "incremental" => CommitKind::Incremental,
+            other => panic!("unexpected commit kind {other}"),
+        };
+        let files: Vec<String> = manifest["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        manifest["checksum"] = serde_json::Value::from(commit_manifest_checksum(
+            manifest["format_version"].as_u64().unwrap() as u8,
+            manifest["epoch"].as_u64().unwrap(),
+            kind,
+            manifest["base_epoch"].as_u64(),
+            7,
+            &files,
+            manifest["written_at_ms"].as_u64().unwrap(),
+        ));
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(!report.is_healthy());
+        assert!(report.manifest_decodable);
+        assert_eq!(report.commit_generation, Some(7));
+        assert!(
+            report.lineage_issues.iter().any(|m| m.contains("differs")),
+            "mismatch must be named before open refuses: {:?}",
+            report.lineage_issues
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn flush_signals_track_delta_and_baseline_age() {
+        let dir = unique_dir("flush-signals");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+            .unwrap();
+        let pending = table.flush_signals();
+        assert!(pending.delta_entries > 0);
+        assert_eq!(pending.millis_since_baseline, u64::MAX);
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                31,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        let anchored = table.flush_signals();
+        assert_eq!(anchored.delta_entries, 0);
+        assert!(anchored.millis_since_baseline < 60_000);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn baseline_timestamp_survives_restart_and_drives_age() {
+        let dir = unique_dir("baseline-ts");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                41,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join(TABLE_MANIFEST_FILE_NAME)).unwrap())
+                .unwrap();
+        assert!(
+            manifest.get("last_full_flush_ms").is_some(),
+            "full flush must persist the baseline timestamp"
+        );
+        let reopened = ShardedVertexTable::with_layout(
+            1,
+            "t".to_string(),
+            test_schema(),
+            super::super::routing::ShardLayout::for_new_table(2),
+            0,
+        );
+        reopened.load(&dir).expect("timestamped manifest opens");
+        let signals = reopened.flush_signals();
+        assert!(
+            signals.millis_since_baseline < 60_000,
+            "restarted age signal must be continuous, got {}",
+            signals.millis_since_baseline
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn manifest_without_timestamp_still_opens() {
+        let dir = unique_dir("baseline-ts-missing");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                43,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        // Strip the timestamp and re-sign with the legacy checksum: an old
+        // manifest must still open with a fallback estimate, not refuse.
+        let manifest_path = dir.join(TABLE_MANIFEST_FILE_NAME);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        manifest
+            .as_object_mut()
+            .unwrap()
+            .remove("last_full_flush_ms");
+        manifest["checksum"] =
+            serde_json::Value::from(legacy_table_manifest_checksum(TableManifestInput {
+                format_version: manifest["format_version"].as_u64().unwrap() as u8,
+                label: manifest["label"].as_u64().unwrap() as graphdb_core::types::LabelId,
+                label_name: manifest["label_name"].as_str().unwrap(),
+                num_shards: manifest["num_shards"].as_u64().unwrap() as usize,
+                segment_slots_bits: manifest["segment_slots_bits"].as_u64().unwrap() as u32,
+                total_segments: manifest["total_segments"].as_u64().unwrap() as u32,
+                router_version: manifest["router_version"].as_u64().unwrap() as u8,
+                generation: manifest["generation"].as_u64().unwrap(),
+                last_full_flush_ms: None,
+            }));
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let reopened = ShardedVertexTable::with_layout(
+            1,
+            "t".to_string(),
+            test_schema(),
+            super::super::routing::ShardLayout::for_new_table(2),
+            0,
+        );
+        reopened
+            .load(&dir)
+            .expect("old manifest opens with fallback");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn flush_plan_advises_baseline_before_first_full_flush() {
+        use crate::vertex::vertex_table::flush_trigger::{FlushKind, FlushReason};
+        let dir = unique_dir("flush-plan");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+            .unwrap();
+        // No baseline has ever been anchored in this process: the unknown
+        // age reads as infinitely old, so the coordinator must escalate.
+        let plan = table.flush_plan();
+        assert_eq!(plan.kind, FlushKind::Full);
+        assert_eq!(plan.reason, FlushReason::BaselineAge);
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                37,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        let settled = table.flush_plan();
+        assert_eq!(settled.kind, FlushKind::Skip);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

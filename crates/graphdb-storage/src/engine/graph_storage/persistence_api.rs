@@ -60,6 +60,7 @@ impl GraphStorage {
                 }
                 let mut issues = report.missing_files.clone();
                 issues.extend(report.pk_issues.clone());
+                issues.extend(report.lineage_issues.clone());
                 if !report.manifest_present || !report.manifest_decodable {
                     issues.push("commit manifest missing or undecodable".to_string());
                 }
@@ -107,7 +108,7 @@ impl GraphStorage {
         if !report.is_healthy() {
             return Err(StorageError::invalid_operation(format!(
                 "reshard health step failed: published checkpoint {} for vertex label {} \
-                 is unhealthy at {}: missing={:?} pk={:?} manifest_present={} \
+                 is unhealthy at {}: missing={:?} pk={:?} lineage={:?} manifest_present={} \
                  manifest_decodable={}. Old snapshots are kept; restore the previous \
                  checkpoint before retrying.",
                 checkpoint_seq,
@@ -115,6 +116,7 @@ impl GraphStorage {
                 table_dir.display(),
                 report.missing_files,
                 report.pk_issues,
+                report.lineage_issues,
                 report.manifest_present,
                 report.manifest_decodable,
             )));

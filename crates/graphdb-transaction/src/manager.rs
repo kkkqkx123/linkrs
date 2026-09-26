@@ -15,6 +15,7 @@ mod checkpoint;
 mod commit;
 mod monitoring;
 mod savepoint;
+mod snapshot_lease;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
@@ -85,6 +86,10 @@ pub struct TransactionManager {
     /// Committed write transactions since the last checkpoint. Compared
     /// against `auto_checkpoint_commit_threshold` by `should_auto_checkpoint`.
     commits_since_checkpoint: AtomicU64,
+    /// Declared long reads holding snapshot leases, keyed by transaction.
+    /// Short transactions never appear here; every termination path
+    /// (commit, abort, timeout) removes the entry.
+    pub(super) long_read_leases: DashMap<TransactionId, crate::snapshot_lease::LongReadLease>,
 }
 
 impl TransactionManager {
@@ -115,6 +120,7 @@ impl TransactionManager {
             write_exclusion_owner: AtomicU64::new(0),
             recovery: RecoveryManager::new(),
             cleaner,
+            long_read_leases: DashMap::new(),
         };
         let commit_stats = Arc::clone(&manager.stats);
         manager.register_commit_callback(Arc::new(move |event| match event {

@@ -247,11 +247,10 @@ impl VertexTable {
                         Some(id) => self.id_indexer.register_reserved(key, id).map(|()| id),
                         None => self.id_indexer.insert(key),
                     };
-                    bound.map(|internal_id| {
+                    bound.inspect(|internal_id| {
                         // Fresh bindings publish their creation stamp on the
                         // same identity latch, exactly like the reuse arm.
-                        stamps.insert(internal_id, ts);
-                        internal_id
+                        stamps.insert(*internal_id, ts);
                     })
                 };
             match identity {
@@ -638,10 +637,6 @@ impl VertexTable {
             ts,
         )?;
         Ok(())
-    }
-
-    pub fn delete(&self, external_id: &str, ts: Timestamp) -> StorageResult<()> {
-        self.delete_by_key(&IdKey::Text(external_id.to_string()), ts)
     }
 
     fn delete_by_key(&self, key: &IdKey, ts: Timestamp) -> StorageResult<()> {

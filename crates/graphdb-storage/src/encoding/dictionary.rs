@@ -230,10 +230,6 @@ impl DictionaryColumn {
         self.encoder.decode(row_idx).map(Value::string)
     }
 
-    pub fn len(&self) -> usize {
-        self.encoder.len()
-    }
-
     pub fn len_entries(&self) -> usize {
         self.encoder.dictionary.len_entries()
     }

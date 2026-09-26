@@ -61,6 +61,9 @@ pub(crate) struct StagedScanMerge {
     pub rows: Vec<StagedRow>,
 }
 
+type StagedProperties = Vec<(String, graphdb_core::Value)>;
+type ComposedStagedRow = Option<(u32, StagedProperties)>;
+
 impl GraphStorageContext {
     /// Filter a property list through an optional projection.
     fn project_properties(
@@ -177,7 +180,7 @@ impl GraphStorageContext {
         };
         let properties = global.as_ref().map(|record| record.properties.clone());
         let global_id = global.as_ref().map(|record| record.internal_id);
-        let composed: Option<Option<(u32, Vec<(String, graphdb_core::Value)>)>> = {
+        let composed: Option<ComposedStagedRow> = {
             let buffer = buffer.lock();
             if buffer.has_pending_delete(label, key) {
                 Some(None)
@@ -198,9 +201,7 @@ impl GraphStorageContext {
         let Some(composed) = composed else {
             return global;
         };
-        let Some((internal_id, properties)) = composed else {
-            return None;
-        };
+        let (internal_id, properties) = composed?;
         Some(VertexRecord {
             internal_id,
             vid: vid_of_key(key)?,

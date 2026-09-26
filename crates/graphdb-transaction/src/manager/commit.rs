@@ -337,6 +337,7 @@ impl TransactionManager {
             );
             self.recovery.record(&descriptor, commit_ts, commit_lsn);
             self.active_transactions.remove(&txn_id);
+            self.release_long_read(txn_id);
             self.emit_commit_event(TransactionEvent::CommitDurableButUnfinalized {
                 txn_id,
                 write_timestamp: context.timestamp(),
@@ -347,6 +348,7 @@ impl TransactionManager {
 
         context.transition_to(TransactionState::Committed)?;
         self.active_transactions.remove(&txn_id);
+        self.release_long_read(txn_id);
         self.drain_context_budget_warnings(&context);
         // Skip boxing the write set when nobody listens: the event is only
         // consumed by observers.
@@ -520,6 +522,7 @@ impl TransactionManager {
 
         context.transition_to(TransactionState::Committed)?;
         self.active_transactions.remove(&txn_id);
+        self.release_long_read(txn_id);
         self.certifier.unregister_reads(txn_id);
         self.drain_context_budget_warnings(&context);
         // The re-drive owned its queue entry via take: mirror the removal

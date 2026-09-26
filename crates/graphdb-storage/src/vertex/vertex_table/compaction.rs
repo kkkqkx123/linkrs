@@ -538,8 +538,8 @@ mod tests {
                 )
                 .unwrap();
         }
-        table.delete("w1", 200).unwrap();
-        table.delete("w3", 200).unwrap();
+        assert_eq!(table.batch_delete(&["w1"], 200).unwrap(), 1);
+        assert_eq!(table.batch_delete(&["w3"], 200).unwrap(), 1);
 
         let (removed, mapping, _) = table.compact_with_cutoff_collect_mapping(200).unwrap();
         assert_eq!(removed.len(), 2);

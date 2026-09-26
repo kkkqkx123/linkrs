@@ -5,8 +5,9 @@ use graphdb_core::StorageResult;
 
 /// Fragmentation ratio threshold above which a shard is considered for
 /// selective compaction. Segments with low fragmentation are skipped to
-/// avoid global remapping.
-pub(super) const SHARD_FRAGMENTATION_THRESHOLD: f64 = 0.25;
+/// avoid global remapping. Crate-visible so the benchmark coverage gate
+/// can pin it: any retune must keep its scan-bench coverage.
+pub(crate) const SHARD_FRAGMENTATION_THRESHOLD: f64 = 0.25;
 
 /// Long-term hole-rate watermark for stable row ids. Aliases the selective
 /// compaction threshold so the watermark policy has one named anchor: below
@@ -53,6 +54,149 @@ impl ShardedVertexTable {
             .iter()
             .map(|shard| shard.write().fold_version_chains(cutoff))
             .sum()
+    }
+
+    /// Aggregate primary-key reuse across shards for observability.
+    ///
+    /// Returns `(cumulative_reuses, free_depth_total)`: how many inserts
+    /// recycled a deleted slot versus growing the id space, and how many
+    /// holes await reuse. A growing high-water mark beside a flat reuse
+    /// count means deletes are not being absorbed and compaction pressure
+    /// builds instead.
+    pub fn pk_reuse_stats(&self) -> (u64, usize) {
+        let mut reuses = 0u64;
+        let mut free_depth = 0usize;
+        for shard in &self.shards {
+            let table = shard.read();
+            reuses = reuses.saturating_add(table.id_indexer.reuse_count());
+            free_depth += table.id_indexer.free_depth();
+        }
+        (reuses, free_depth)
+    }
+
+    /// Aggregate primary-key index heap across shards for budget checks.
+    ///
+    /// Returns `(total_bytes, max_shard_bytes)`: the whole-table resident
+    /// cost and the hottest shard. Operators compare these against the
+    /// deployment budget; the index is fully resident, so a breach calls
+    /// for a persistent-index overflow path, not larger flush thresholds.
+    pub fn pk_memory_stats(&self) -> (usize, usize) {
+        let mut total = 0usize;
+        let mut max_shard = 0usize;
+        for shard in &self.shards {
+            let bytes = shard.read().id_indexer.memory_breakdown().total_bytes;
+            total += bytes;
+            max_shard = max_shard.max(bytes);
+        }
+        (total, max_shard)
+    }
+
+    /// Aggregate per-component primary-key memory accounting across shards.
+    ///
+    /// Sums every breakdown field so patrol logs show which structure (key
+    /// heap, map, live set, delta log, sampler) dominates before a shard
+    /// crosses its memory budget.
+    pub fn pk_memory_breakdown(&self) -> crate::vertex::id_indexer::IdIndexMemoryBreakdown {
+        let mut total = crate::vertex::id_indexer::IdIndexMemoryBreakdown::default();
+        for shard in &self.shards {
+            let breakdown = shard.read().id_indexer.memory_breakdown();
+            total.slot_count += breakdown.slot_count;
+            total.live_count += breakdown.live_count;
+            total.free_depth += breakdown.free_depth;
+            total.delta_entries += breakdown.delta_entries;
+            total.delta_heap_bytes += breakdown.delta_heap_bytes;
+            total.keys_heap_bytes += breakdown.keys_heap_bytes;
+            total.map_bytes += breakdown.map_bytes;
+            total.set_bytes += breakdown.set_bytes;
+            total.free_bytes += breakdown.free_bytes;
+            total.sketch_bytes += breakdown.sketch_bytes;
+            total.total_bytes += breakdown.total_bytes;
+        }
+        total
+    }
+
+    /// Degraded-branch budget gate for the write entry.
+    ///
+    /// Sums the resident primary-key heap and refuses the write when it is
+    /// already over `budget`. Thresholds come from deployment configuration;
+    /// `None` disables the gate (tiering branch or ungated tables).
+    pub fn check_pk_budget(
+        &self,
+        budget: Option<crate::vertex::tiering::PkIndexBudget>,
+    ) -> graphdb_core::StorageResult<()> {
+        let Some(budget) = budget else {
+            return Ok(());
+        };
+        let (total, _) = self.pk_memory_stats();
+        budget.check(total)
+    }
+
+    /// Aggregate primary-key probe traffic across shards for the cold-hot
+    /// tiering design.
+    ///
+    /// Returns `(total_probes, max_shard_probes)`: how many key probes the
+    /// resident index has served and where they concentrate. A skewed
+    /// distribution (small hot set, large total) is the precondition for
+    /// spilling cold keys to a persistent index; uniform traffic means
+    /// tiering would only add a lookup hop with no memory win.
+    pub fn pk_probe_stats(&self) -> (u64, u64) {
+        let mut total = 0u64;
+        let mut max_shard = 0u64;
+        for shard in &self.shards {
+            let probes = shard.read().id_indexer.probe_total();
+            total = total.saturating_add(probes);
+            max_shard = max_shard.max(probes);
+        }
+        (total, max_shard)
+    }
+
+    /// Aggregate flush trigger signals across shards.
+    ///
+    /// Sums delta entries and live rows, ORs the compaction-moved-rows
+    /// flag, and pairs them with the table-wide dirty-page ratio and
+    /// baseline age. Feeds [`super::super::flush_trigger::decide`]; the
+    /// decision is logged with its reason code at each flush so full
+    /// rewrites stay explainable.
+    pub fn flush_signals(&self) -> super::super::flush_trigger::FlushSignals {
+        use std::sync::atomic::Ordering;
+        let mut delta_entries = 0usize;
+        let mut live_rows = 0usize;
+        let mut baseline_invalidated = false;
+        for shard in &self.shards {
+            let table = shard.read();
+            delta_entries += table.id_indexer.delta_len();
+            live_rows += table.id_indexer.len();
+            baseline_invalidated |= table.id_indexer.baseline_invalidated();
+        }
+        let total_pages = self.total_pages();
+        let dirty_page_ratio = if total_pages == 0 {
+            0.0
+        } else {
+            self.total_dirty_pages() as f64 / total_pages as f64
+        };
+        let last_baseline = self.last_full_flush_ms.load(Ordering::Acquire);
+        let millis_since_baseline = if last_baseline == 0 {
+            u64::MAX
+        } else {
+            super::persistence::now_ms().saturating_sub(last_baseline)
+        };
+        super::super::flush_trigger::FlushSignals {
+            delta_entries,
+            live_rows,
+            baseline_invalidated,
+            millis_since_baseline,
+            dirty_page_ratio,
+        }
+    }
+
+    /// Advisory flush verdict for the checkpoint coordinator.
+    ///
+    /// Same signals as the flush-time log, exposed before the coordinator
+    /// commits to a global strategy so a table overdue for a baseline can
+    /// escalate the whole checkpoint to full. Read-only; choosing the flush
+    /// kind stays with the coordinator because the epoch chain is global.
+    pub fn flush_plan(&self) -> super::super::flush_trigger::FlushPlan {
+        super::super::flush_trigger::decide(self.flush_signals())
     }
 
     /// Aggregate version-chain pressure across shards for observability.

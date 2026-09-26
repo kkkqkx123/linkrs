@@ -107,19 +107,6 @@ impl ColumnEncoding {
         }
     }
 
-    pub fn len(&self) -> usize {
-        match self {
-            Self::None => 0,
-            Self::Fsst(col) => col.len(),
-            Self::Dictionary(col) => col.len(),
-            Self::RleInt(col) => col.len(),
-            Self::RleBool(col) => col.len(),
-            Self::BitPacked(col) => col.len(),
-            Self::Alp(col) => col.len(),
-            Self::Constant(col) => col.len(),
-        }
-    }
-
     pub fn memory_usage(&self) -> usize {
         match self {
             Self::None => 0,
@@ -256,7 +243,6 @@ mod tests {
 
         assert_eq!(encoding.encoding_type(), EncodingType::None);
         assert!(!encoding.is_encoded());
-        assert_eq!(encoding.len(), 0);
         assert_eq!(encoding.memory_usage(), 0);
         assert!(encoding.get(0).is_none());
     }
@@ -269,7 +255,6 @@ mod tests {
 
         assert_eq!(encoding.encoding_type(), EncodingType::Fsst);
         assert!(encoding.is_encoded());
-        assert_eq!(encoding.len(), 3);
         assert!(encoding.memory_usage() > 0);
         assert!(encoding.get(0).is_some());
     }
@@ -285,7 +270,6 @@ mod tests {
 
         assert_eq!(encoding.encoding_type(), EncodingType::Dictionary);
         assert!(encoding.is_encoded());
-        assert_eq!(encoding.len(), 3);
         assert!(encoding.get(0).is_some());
     }
 
@@ -300,7 +284,6 @@ mod tests {
 
         assert_eq!(encoding.encoding_type(), EncodingType::Rle);
         assert!(encoding.is_encoded());
-        assert_eq!(encoding.len(), 3);
         assert!(encoding.get(0).is_some());
     }
 
@@ -317,7 +300,6 @@ mod tests {
 
         assert_eq!(encoding.encoding_type(), EncodingType::BitPacking);
         assert!(encoding.is_encoded());
-        assert_eq!(encoding.len(), 3);
         assert!(encoding.get(0).is_some());
     }
 
@@ -330,7 +312,6 @@ mod tests {
 
         assert_eq!(encoding.encoding_type(), EncodingType::Alp);
         assert!(encoding.is_encoded());
-        assert_eq!(encoding.len(), 3);
         assert!(encoding.get(0).is_some());
     }
 

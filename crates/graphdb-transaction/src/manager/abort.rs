@@ -253,6 +253,7 @@ impl TransactionManager {
         self.release_write_lease(context);
         self.certifier.unregister_reads(context.id);
         self.release_statement_snapshot_pin(context);
+        self.release_long_read(context.id);
         self.active_transactions.remove(&context.id);
         if let Err(error) = context.clear_undo_logs() {
             log::warn!(

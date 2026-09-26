@@ -26,10 +26,6 @@ impl ConstantColumn {
         }
     }
 
-    pub fn overrides_len(&self) -> usize {
-        self.overrides.len()
-    }
-
     pub fn should_use(values: &[Option<Value>]) -> bool {
         if values.is_empty() {
             return false;
@@ -50,14 +46,6 @@ impl ConstantColumn {
             return v.clone();
         }
         self.value.clone()
-    }
-
-    pub fn len(&self) -> usize {
-        self.count
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.count == 0
     }
 
     pub fn memory_usage(&self) -> usize {
@@ -139,10 +127,6 @@ impl ConstantColumn {
                 row_idx, self.count
             )))
         }
-    }
-
-    pub fn append(&mut self, value: Option<&Value>) -> StorageResult<()> {
-        self.set(self.count, value)
     }
 
     pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
@@ -328,9 +312,8 @@ mod tests {
     }
 
     #[test]
-    fn test_constant_get_and_len() {
+    fn test_constant_get() {
         let col = ConstantColumn::new(Some(Value::Int(7)), 5);
-        assert_eq!(col.len(), 5);
         assert_eq!(col.get(0), Some(Value::Int(7)));
         assert_eq!(col.get(4), Some(Value::Int(7)));
         assert_eq!(col.get(5), None);
@@ -351,30 +334,35 @@ mod tests {
         assert!(col.overrides.is_empty());
 
         assert!(col.set(2, Some(&Value::Int(1))).is_ok());
-        assert_eq!(col.len(), 3);
+        assert_eq!(col.get(2), Some(Value::Int(1)));
+        assert_eq!(col.get(3), None);
         assert!(col.set(3, Some(&Value::Int(2))).is_ok());
         assert_eq!(col.get(3), Some(Value::Int(2)));
-        assert_eq!(col.overrides_len(), 1);
     }
 
     #[test]
     fn test_constant_overrides_threshold() {
         let mut col = ConstantColumn::new(Some(Value::Int(1)), 0);
         // Fill with constant value
-        for _ in 0..200 {
-            col.append(Some(&Value::Int(1))).unwrap();
+        for i in 0..200 {
+            col.set(i, Some(&Value::Int(1))).unwrap();
         }
         // Introduce many distinct overrides beyond threshold: should
         // eventually trigger fallback to raw (Err) when the sparse
         // representation becomes inefficient.
+        let mut rows = 200usize;
         let mut err = None;
         for i in 0..200 {
             let v = Value::Int(i as i32 + 1000);
             // Alternate between append (new row) and update of existing.
             let res = if i % 2 == 0 {
-                col.set(col.len(), Some(&v))
+                let res = col.set(rows, Some(&v));
+                if res.is_ok() {
+                    rows += 1;
+                }
+                res
             } else {
-                col.set(i % col.len(), Some(&v))
+                col.set(i % rows, Some(&v))
             };
             if res.is_err() {
                 err = Some(i);
@@ -396,11 +384,11 @@ mod tests {
         let mut buf = Vec::new();
         col.serialize_meta(&mut buf).unwrap();
         let restored = ConstantColumn::deserialize_meta(&mut &buf[..]).unwrap();
-        assert_eq!(restored.len(), 4);
         assert_eq!(restored.get(0), Some(Value::Int(1)));
         assert_eq!(restored.get(1), Some(Value::Int(2)));
         assert_eq!(restored.get(2), Some(Value::Int(1)));
         assert_eq!(restored.get(3), Some(Value::Int(3)));
+        assert_eq!(restored.get(4), None);
         // Truncated image without overrides section is rejected.
         let mut old_buf = Vec::new();
         // Manually write truncated image without overrides tail
@@ -419,15 +407,15 @@ mod tests {
         let mut buf = Vec::new();
         col.serialize_meta(&mut buf).unwrap();
         let restored = ConstantColumn::deserialize_meta(&mut &buf[..]).unwrap();
-        assert_eq!(restored.len(), 100);
         assert_eq!(restored.get(0), Some(Value::string("hello")));
         assert_eq!(restored.get(99), Some(Value::string("hello")));
+        assert_eq!(restored.get(100), None);
 
         let null_col = ConstantColumn::new(None, 50);
         let mut buf2 = Vec::new();
         null_col.serialize_meta(&mut buf2).unwrap();
         let restored2 = ConstantColumn::deserialize_meta(&mut &buf2[..]).unwrap();
-        assert_eq!(restored2.len(), 50);
         assert_eq!(restored2.get(0), None);
+        assert_eq!(restored2.get(50), None);
     }
 }

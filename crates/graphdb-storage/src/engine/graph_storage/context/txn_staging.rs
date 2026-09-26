@@ -37,6 +37,10 @@ use crate::vertex::{IdKey, ShardedVertexTable, WriteScope};
 /// still applies inside a single statement.
 pub const MAX_TXN_STAGING_KEYS: usize = 1 << 20;
 
+type StagedKey = (LabelId, IdKey);
+type StagedInsertRow = (u32, Vec<(String, Value)>);
+type StagedUpdateRow = Vec<(String, Value)>;
+
 /// Cross-statement vertex write staging owned by one transaction.
 ///
 /// Staged insert rows carry the reserved global vertex id obtained at
@@ -48,10 +52,10 @@ pub const MAX_TXN_STAGING_KEYS: usize = 1 << 20;
 #[derive(Debug)]
 pub(crate) struct TxnStaging {
     write_ts: Timestamp,
-    inserts: HashMap<(LabelId, IdKey), (u32, Vec<(String, Value)>)>,
-    updates: HashMap<(LabelId, IdKey), Vec<(String, Value)>>,
-    deletes: HashSet<(LabelId, IdKey)>,
-    resolved: HashMap<(LabelId, IdKey), u32>,
+    inserts: HashMap<StagedKey, StagedInsertRow>,
+    updates: HashMap<StagedKey, StagedUpdateRow>,
+    deletes: HashSet<StagedKey>,
+    resolved: HashMap<StagedKey, u32>,
     journal: Vec<UndoOp>,
     index_ops: Vec<StagedIndexOp>,
 }
@@ -92,7 +96,7 @@ pub(crate) struct TxnStagingMark {
 
 impl TxnStagingMark {
     /// Flat form for storage on the operation context.
-    pub(crate) fn to_lengths(&self) -> (usize, usize) {
+    pub(crate) fn to_lengths(self) -> (usize, usize) {
         (self.journal_len, self.index_len)
     }
 

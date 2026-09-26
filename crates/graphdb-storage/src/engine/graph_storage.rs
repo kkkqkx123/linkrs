@@ -201,12 +201,16 @@ impl GraphStorage {
     }
 
     /// Open persistent storage using a fully specified persistence contract.
+    ///
+    /// Recovery errors propagate: a manifest-listed file that is missing
+    /// or corrupt refuses the open instead of serving a partially loaded
+    /// table whose global IDs silently lost siblings.
     pub fn open_with_persistence_config(
         path: PathBuf,
         config: PersistenceConfig,
     ) -> StorageResult<Self> {
         let storage = Self::new_with_persistence(path, config)?;
-        let _ = persistence::initialize_with_recovery(&storage.ctx)?;
+        let _recovery_stats = persistence::initialize_with_recovery(&storage.ctx)?;
         Ok(storage)
     }
 
@@ -224,7 +228,7 @@ impl GraphStorage {
         config.enable_wal = enable_wal;
         config.sync_policy = sync_policy;
         let storage = Self::new_with_persistence(path, config)?;
-        let _ = persistence::initialize_with_recovery(&storage.ctx)?;
+        let _recovery_stats = persistence::initialize_with_recovery(&storage.ctx)?;
         Ok(storage)
     }
 

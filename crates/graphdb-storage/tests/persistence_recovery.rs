@@ -146,6 +146,64 @@ fn test_flush_with_index_metadata() {
     }
 }
 
+/// Collect every `commit_manifest.json` under `dir`: the vertex table
+/// commit points whose listed files the open path must trust.
+fn collect_commit_manifests(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.file_name().and_then(|n| n.to_str()) == Some("commit_manifest.json") {
+                out.push(path);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, &mut out);
+    out
+}
+
+#[test]
+fn test_corrupt_commit_manifest_refuses_open() {
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
+
+    {
+        let mut storage = common::create_persistent_storage(dir);
+        common::setup_basic_schema(&mut storage);
+        common::insert_test_data(&mut storage, "test_space");
+        storage.save_to_disk().unwrap();
+        storage.create_checkpoint().unwrap();
+    }
+
+    let manifests = collect_commit_manifests(dir);
+    assert!(
+        !manifests.is_empty(),
+        "checkpoint should persist at least one vertex commit manifest"
+    );
+    // Corrupt every copy (data dir and checkpoint dirs): whichever copy the
+    // open path trusts is corrupt, so a strict loader must refuse the open.
+    // Copies the loader never reads are harmless to corrupt.
+    for target in &manifests {
+        let mut bytes = std::fs::read(target).expect("commit manifest should be readable");
+        assert!(!bytes.is_empty(), "commit manifest should not be empty");
+        let mid = bytes.len() / 2;
+        bytes[mid] ^= 0xff;
+        std::fs::write(target, &bytes).expect("commit manifest should be writable");
+    }
+
+    let reopened = graphdb_storage::GraphStorage::open(dir.to_path_buf());
+    assert!(
+        reopened.is_err(),
+        "open must refuse a table whose commit manifest is corrupt"
+    );
+}
+
 #[test]
 fn test_flush_and_reload_empty_storage() {
     let temp_dir = common::create_test_workdir();

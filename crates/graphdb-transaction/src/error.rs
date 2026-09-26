@@ -46,6 +46,7 @@ pub enum TransactionErrorKind {
     CheckpointTimeout,
     TransactionBudgetExceeded,
     CommitVetoed,
+    SnapshotExpired,
     Internal,
 }
 
@@ -79,6 +80,7 @@ impl TransactionErrorKind {
             TransactionErrorKind::CheckpointTimeout => "checkpoint_timeout",
             TransactionErrorKind::TransactionBudgetExceeded => "transaction_budget_exceeded",
             TransactionErrorKind::CommitVetoed => "commit_vetoed",
+            TransactionErrorKind::SnapshotExpired => "snapshot_expired",
             TransactionErrorKind::Internal => "internal",
         }
     }
@@ -294,6 +296,16 @@ impl TransactionError {
         )
     }
 
+    pub fn snapshot_expired(holder: super::types::TransactionId, floor_ts: u64) -> Self {
+        Self::new(
+            TransactionErrorKind::SnapshotExpired,
+            format!(
+                "snapshot expired for long read txn={} floor_ts={floor_ts}; retry the read",
+                holder.0,
+            ),
+        )
+    }
+
     pub fn is_timeout(&self) -> bool {
         matches!(
             self.kind,
@@ -308,6 +320,7 @@ impl TransactionError {
             self.kind,
             TransactionErrorKind::WriteTransactionConflict
                 | TransactionErrorKind::SerializationFailed
+                | TransactionErrorKind::SnapshotExpired
         )
     }
 }

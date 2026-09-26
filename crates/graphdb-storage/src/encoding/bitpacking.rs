@@ -200,10 +200,6 @@ impl BitPackedColumn {
         Ok(())
     }
 
-    pub fn len(&self) -> usize {
-        self.row_count
-    }
-
     pub fn memory_usage(&self) -> usize {
         let data_size = self.data.len().div_ceil(8);
         let null_size = self
@@ -325,10 +321,6 @@ impl BitPackedIntColumn {
         });
 
         self.packed.set(row_idx, int_val)
-    }
-
-    pub fn len(&self) -> usize {
-        self.packed.len()
     }
 
     /// Returns true when `value` fits in the existing bit width, allowing

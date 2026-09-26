@@ -278,11 +278,46 @@ impl GraphStorageContext {
                 .map(|(label_id, table)| (*label_id, table.clone()))
                 .collect()
         });
-        let use_incremental = matches!(
+        // Whole-checkpoint flush-kind policy: per-table verdicts plus
+        // reason counts select exactly one global kind. Any table overdue
+        // for a baseline escalates the whole checkpoint to full; the flush
+        // loop below publishes that kind for every table and refuses a
+        // table that flips to full underneath a globally incremental
+        // checkpoint instead of silently upgrading it.
+        let verdicts: Vec<crate::vertex::vertex_table::flush_trigger::FlushPlan> = vertex_tables
+            .iter()
+            .map(|(_, table)| table.flush_plan())
+            .collect();
+        for ((_, table), plan) in vertex_tables.iter().zip(verdicts.iter()) {
+            if plan.kind == crate::vertex::vertex_table::flush_trigger::FlushKind::Full {
+                log::info!(
+                    "vertex table '{}' overdue for a full baseline: reason={}",
+                    table.label_name(),
+                    plan.reason.as_str(),
+                );
+            }
+        }
+        let (verdict_kind, reason_counts) =
+            crate::vertex::vertex_table::flush_trigger::select_whole_db_kind(&verdicts);
+        {
+            let distribution = reason_counts
+                .iter()
+                .map(|(reason, count)| format!("{}={}", reason.as_str(), count))
+                .collect::<Vec<_>>()
+                .join(" ");
+            log::info!(
+                "flush policy selected: whole_db_kind={:?} {distribution}",
+                verdict_kind,
+            );
+        }
+        let mut use_incremental = matches!(
             strategy,
             crate::persistence::dirty_page::CheckpointStrategy::Incremental
         ) && global_dirty_ratio < 0.1
             && global_dirty_ratio > 0.0;
+        if verdict_kind == crate::vertex::vertex_table::flush_trigger::FlushKind::Full {
+            use_incremental = false;
+        }
 
         // Collect dirty pages for incremental meta
         let (all_dirty_pages, total_pages) = {
@@ -299,6 +334,16 @@ impl GraphStorageContext {
             vertex_tables.par_iter().try_for_each(|(label_id, table)| {
                 let table_dir = vertex_dir.join(format!("label_{}", label_id));
                 if use_incremental {
+                    // A table that flipped to a full verdict after policy
+                    // selection must error, never silently upgrade inside a
+                    // globally incremental checkpoint.
+                    let plan = table.flush_plan();
+                    crate::vertex::vertex_table::flush_trigger::check_single_table_kind(
+                        table.label_name(),
+                        plan.kind,
+                        crate::vertex::vertex_table::flush_trigger::FlushKind::Incremental,
+                        plan.reason,
+                    )?;
                     let epoch = self.checkpoint_epoch_hint();
                     let base = self.persistent.persistence.as_ref().and_then(|p| {
                         p.read()
@@ -613,24 +658,28 @@ impl GraphStorageContext {
                                             if let Some(table) =
                                                 vertex_tables.get(&label_id).cloned()
                                             {
-                                                // The persisted layout owns the
+                                                // The persisted lineage owns the
                                                 // identifier decoding: adopt the
-                                                // manifest layout when it differs
-                                                // from the running configuration
-                                                // (which only governs new tables).
-                                                // Layout or version mismatches
-                                                // refuse the open with a rebuild
-                                                // directive instead of mis-decoding.
-                                                if let Some(layout) =
+                                                // manifest layout and generation
+                                                // when they differ from the running
+                                                // configuration (which only governs
+                                                // new tables). Layout, router, or
+                                                // generation mismatches refuse the
+                                                // open with a rebuild directive
+                                                // instead of mis-decoding.
+                                                if let Some(lineage) =
                                                     crate::vertex::vertex_table::ShardedVertexTable::manifest_layout(&path)?
                                                 {
-                                                    if layout != table.layout() {
+                                                    if lineage.layout != table.layout()
+                                                        || lineage.generation != table.generation()
+                                                    {
                                                         let rebuilt = std::sync::Arc::new(
                                                             crate::vertex::vertex_table::ShardedVertexTable::with_layout(
                                                                 label_id,
                                                                 table.label_name().to_string(),
                                                                 table.schema(),
-                                                                layout,
+                                                                lineage.layout,
+                                                                lineage.generation,
                                                             ),
                                                         );
                                                         vertex_tables.insert(label_id, rebuilt);

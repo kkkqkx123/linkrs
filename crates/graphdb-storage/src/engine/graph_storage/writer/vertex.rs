@@ -1109,8 +1109,8 @@ pub(crate) fn batch_insert_vertices(
     // Staging touches no table state, so a row failure only discards the
     // staged rows: no apply happened and no index entry exists yet.
     let mut first_error: Option<StorageError> = None;
-    for pos in 0..staged.len() {
-        if let Some(Err(e)) = staged_marks[pos].take() {
+    for mark in &mut staged_marks {
+        if let Some(Err(e)) = mark.take() {
             if first_error.is_none() {
                 first_error = Some(e);
             }

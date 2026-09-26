@@ -3,6 +3,8 @@ use crate::vertex::{IdKey, PkLookup, WriteScope};
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult, Value};
 
+type ShardStagedInsert = (IdKey, u32, Vec<(String, Value)>);
+
 impl ShardedVertexTable {
     pub fn insert(
         &self,
@@ -33,10 +35,30 @@ impl ShardedVertexTable {
         Ok(self.record_allocation(idx, local_id))
     }
 
-    pub fn delete(&self, external_id: &str, ts: Timestamp) -> StorageResult<()> {
-        let idx = self.shard_index_by_str(external_id);
-        let table = self.shards[idx].read();
-        table.delete(external_id, ts)
+    /// Degraded-branch gated write entry: refuses the insert when the
+    /// resident primary-key heap already exceeds `budget`. `None` behaves
+    /// exactly like the ungated entry above.
+    pub fn insert_with_budget(
+        &self,
+        external_id: &str,
+        properties: &[(String, Value)],
+        ts: Timestamp,
+        budget: Option<crate::vertex::tiering::PkIndexBudget>,
+    ) -> StorageResult<u32> {
+        self.check_pk_budget(budget)?;
+        self.insert(external_id, properties, ts)
+    }
+
+    /// Integer-keyed variant of [`Self::insert_with_budget`].
+    pub fn insert_by_i64_with_budget(
+        &self,
+        external_id: i64,
+        properties: &[(String, Value)],
+        ts: Timestamp,
+        budget: Option<crate::vertex::tiering::PkIndexBudget>,
+    ) -> StorageResult<u32> {
+        self.check_pk_budget(budget)?;
+        self.insert_by_i64(external_id, properties, ts)
     }
 
     pub fn update_property(
@@ -604,8 +626,7 @@ impl ShardedVertexTable {
         mapping: &mut Vec<(IdKey, u32)>,
     ) -> StorageResult<()> {
         let staged = scope.take_inserts_for_label(self.label);
-        let mut by_shard: Vec<Vec<(IdKey, u32, Vec<(String, Value)>)>> =
-            vec![Vec::new(); self.layout.num_shards];
+        let mut by_shard: Vec<Vec<ShardStagedInsert>> = vec![Vec::new(); self.layout.num_shards];
         for (key, reserved, props) in staged {
             let idx = match &key {
                 IdKey::Text(name) => self.shard_index_by_str(name),

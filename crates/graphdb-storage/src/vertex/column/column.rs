@@ -485,11 +485,11 @@ impl Column {
 
     /// Locate the chunk owning `row_idx` inside an already-locked chunk
     /// vector, without re-locking the container.
-    fn chunk_for_row_in<'a>(
-        chunks: &'a [ColumnChunk],
+    fn chunk_for_row_in(
+        chunks: &[ColumnChunk],
         row_idx: usize,
         capacity: usize,
-    ) -> Option<&'a ColumnChunk> {
+    ) -> Option<&ColumnChunk> {
         if chunks.is_empty() {
             return None;
         }
@@ -875,7 +875,7 @@ impl Column {
                 if state.encoding.is_encoded() {
                     return self.restore_string_type(state.encoding.get(local as usize));
                 }
-                return state.raw.as_storage().get(local as usize);
+                state.raw.as_storage().get(local as usize)
             }
             ChunkResidency::Evicted(snapshot) => {
                 // Cold miss served from the compressed snapshot
@@ -885,14 +885,14 @@ impl Column {
                 // decode failure here is unreachable; warn and miss
                 // rather than failing the read.
                 match snapshot.decode_row(row_idx) {
-                    Ok(value) => return value,
+                    Ok(value) => value,
                     Err(e) => {
                         log::warn!(
                             "evicted chunk row {} snapshot decode failed: {}; reading as missing",
                             row_idx,
                             e
                         );
-                        return None;
+                        None
                     }
                 }
             }
@@ -926,10 +926,9 @@ impl Column {
             return false;
         }
         let local = (row_idx - chunk.row_offset) as u32;
-        if matches!(
-            column.data_type,
-            DataType::String | DataType::Blob
-        ) && chunk.read_state().overflow_rows.contains_key(&local) {
+        if matches!(column.data_type, DataType::String | DataType::Blob)
+            && chunk.read_state().overflow_rows.contains_key(&local)
+        {
             return false;
         }
         let state = chunk.read_state();

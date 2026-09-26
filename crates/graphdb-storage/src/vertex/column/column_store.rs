@@ -349,20 +349,12 @@ impl ColumnStore {
         self.get_column(name).map(|c| c.data_type.clone())
     }
 
-    pub fn get_column_by_id(
-        &self,
-        col_id: i32,
-    ) -> Option<parking_lot::MappedRwLockReadGuard<'_, Column>> {
-        let idx = usize::try_from(col_id).ok()?;
-        parking_lot::RwLockReadGuard::try_map(self.columns.read(), |cols| cols.get(idx)).ok()
-    }
-
     /// Run `f` against every column in order, one shared guard at a time.
     /// The guard is released between columns so long scans never pin the
     /// store latch.
-    pub fn for_each_column<R>(&self, mut f: impl FnMut(&Column) -> R) -> Vec<R> {
+    pub fn for_each_column<R>(&self, f: impl FnMut(&Column) -> R) -> Vec<R> {
         let columns = self.columns.read();
-        columns.iter().map(|col| f(col)).collect()
+        columns.iter().map(f).collect()
     }
 
     pub fn set(&self, row_idx: usize, values: &[(String, Value)]) -> StorageResult<()> {

@@ -312,6 +312,45 @@ impl GraphStorageContext {
                             memory_bytes,
                         );
                     }
+                    // Primary-key sampling lands on the same patrol pass as
+                    // chain pressure so hot-key concentration stays visible:
+                    // skewed probes over a small hot set is the precondition
+                    // for spilling cold keys, uniform traffic rules it out.
+                    let (reuses, free_depth) = table.pk_reuse_stats();
+                    let (pk_bytes, hottest_shard_bytes) = table.pk_memory_stats();
+                    let (probes, hottest_shard_probes) = table.pk_probe_stats();
+                    let pk_breakdown = table.pk_memory_breakdown();
+                    // Degraded-branch water-level alarm on the same patrol
+                    // line as probe aggregation: usage relative to the
+                    // deployment budget, 0 budget means ungated.
+                    let pk_budget = self.persistent.config.pk_index_budget_bytes;
+                    let pk_budget_ratio = if pk_budget == 0 {
+                        0.0
+                    } else {
+                        pk_bytes as f64 / pk_budget as f64
+                    };
+                    log::debug!(
+                        "vertex table '{}' pk stats: reuse={} free_depth={} pk_bytes={} hottest_shard_bytes={} probes={} hottest_shard_probes={} slots={} live={} breakdown_free_depth={} delta_entries={} keys_heap={} delta_heap={} map={} live_set={} free_stack={} sketch={} pk_budget={} pk_budget_ratio={:.3}",
+                        table.label_name(),
+                        reuses,
+                        free_depth,
+                        pk_bytes,
+                        hottest_shard_bytes,
+                        probes,
+                        hottest_shard_probes,
+                        pk_breakdown.slot_count,
+                        pk_breakdown.live_count,
+                        pk_breakdown.free_depth,
+                        pk_breakdown.delta_entries,
+                        pk_breakdown.keys_heap_bytes,
+                        pk_breakdown.delta_heap_bytes,
+                        pk_breakdown.map_bytes,
+                        pk_breakdown.set_bytes,
+                        pk_breakdown.free_bytes,
+                        pk_breakdown.sketch_bytes,
+                        pk_budget,
+                        pk_budget_ratio,
+                    );
                 }
                 Ok(folded)
             })?;

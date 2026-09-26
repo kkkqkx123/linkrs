@@ -3,7 +3,8 @@ use parking_lot::RwLock;
 use super::core::{VertexTable, VertexTableConfig};
 use super::sharded::routing::ShardLayout;
 
-mod maintenance;
+pub(crate) mod maintenance;
+pub(crate) mod migration;
 pub(crate) mod persistence;
 mod read;
 pub(crate) mod routing;
@@ -15,6 +16,14 @@ pub struct ShardedVertexTable {
     layout: ShardLayout,
     label: graphdb_core::types::LabelId,
     label_name: String,
+    /// Redistribution generation of this table lineage. Fresh tables are
+    /// generation zero; each offline redistribution bumps it. Persisted in
+    /// the table manifest and pinned in the commit manifest so the open
+    /// path refuses checkpoints mixed in from another generation.
+    generation: u64,
+    /// Wall-clock milliseconds of the last full baseline flush. Feeds the
+    /// flush trigger's baseline-age branch; zero means never flushed.
+    last_full_flush_ms: std::sync::atomic::AtomicU64,
 }
 
 impl ShardedVertexTable {
@@ -37,17 +46,19 @@ impl ShardedVertexTable {
             label_name,
             schema,
             ShardLayout::for_new_table(num_shards),
+            0,
         )
     }
 
     /// Build a table under an explicit versioned layout. New tables use
-    /// [`ShardLayout::for_new_table`]; opened tables use the layout pinned
-    /// in their manifest.
+    /// [`ShardLayout::for_new_table`] with generation zero; opened tables
+    /// use the layout and generation pinned in their manifest.
     pub(crate) fn with_layout(
         label: graphdb_core::types::LabelId,
         label_name: String,
         schema: crate::vertex::VertexSchema,
         layout: ShardLayout,
+        generation: u64,
     ) -> Self {
         let mut shards = Vec::with_capacity(layout.num_shards);
         for _ in 0..layout.num_shards {
@@ -63,6 +74,8 @@ impl ShardedVertexTable {
             layout,
             label,
             label_name,
+            generation,
+            last_full_flush_ms: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -127,6 +140,10 @@ impl ShardedVertexTable {
     /// concurrent writes, and no staged schema change may be pending on any
     /// shard. A pending schema change rejects the rebuild so a half-applied
     /// schema cannot leak into the new shard layout.
+    ///
+    /// The rebuilt table carries the next redistribution generation, so a
+    /// checkpoint flushed from it can never be mistaken for one from the
+    /// source lineage at open.
     pub fn reshard_to(
         &self,
         new_num_shards: usize,
@@ -149,7 +166,13 @@ impl ShardedVertexTable {
             }
         }
         let schema = self.schema();
-        let rebuilt = Self::with_layout(self.label, self.label_name.clone(), schema, target);
+        let rebuilt = Self::with_layout(
+            self.label,
+            self.label_name.clone(),
+            schema,
+            target,
+            self.generation.saturating_add(1),
+        );
         let ts = MAX_TIMESTAMP - 1;
         let mut id_mapping: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
         for key in self.external_id_keys() {
@@ -334,7 +357,7 @@ mod tests {
         let ts = TEST_TS;
         let id = insert_with_name(&table, "bob", ts);
         assert!(table.get_by_internal_id(id, ts).is_some());
-        table.delete("bob", ts).unwrap();
+        assert_eq!(table.batch_delete(&["bob"], ts).unwrap(), 1);
         assert!(table.get_by_internal_id(id, ts).is_none());
     }
 
@@ -453,7 +476,7 @@ mod tests {
         let ts_insert = 100;
         let ts_delete = 200;
         insert_with_name(&table, "gc_test", ts_insert);
-        table.delete("gc_test", ts_delete).unwrap();
+        assert_eq!(table.batch_delete(&["gc_test"], ts_delete).unwrap(), 1);
         let (gc_vertices, gc_versions) = table.gc_detailed(250).unwrap();
 
         let count = gc_vertices + gc_versions;
@@ -484,7 +507,12 @@ mod tests {
         assert_eq!((live, allocated), (100, 100));
 
         for i in 0..30 {
-            table.delete(&format!("v_{}", i), ts_delete).unwrap();
+            assert_eq!(
+                table
+                    .batch_delete(&[format!("v_{}", i).as_str()], ts_delete)
+                    .unwrap(),
+                1
+            );
         }
         // Deleted vertices leave holes: allocated stays at the high-water
         // mark, live only counts vertices not deleted at the cutoff.
@@ -596,7 +624,7 @@ mod tests {
             let id = insert_with_name(&table, &name, ts_insert);
             before.insert(name, id);
         }
-        table.delete("stable_0", ts_delete).unwrap();
+        assert_eq!(table.batch_delete(&["stable_0"], ts_delete).unwrap(), 1);
         let (removed, mapping, _) = table
             .compact_with_cutoff_collect_mapping(ts_delete)
             .unwrap();
@@ -630,7 +658,12 @@ mod tests {
             before.insert(name, id);
         }
         for i in 0..4 {
-            table.delete(&format!("row_{}", i), ts_delete).unwrap();
+            assert_eq!(
+                table
+                    .batch_delete(&[format!("row_{}", i).as_str()], ts_delete)
+                    .unwrap(),
+                1
+            );
         }
         let (removed, mapping, _) = table.compact_with_cutoff_stable_collect(ts_delete).unwrap();
         assert_eq!(removed.len(), 4);
@@ -661,8 +694,8 @@ mod tests {
             let name = format!("hole_{}", i);
             insert_with_name(&table, &name, ts_insert);
         }
-        table.delete("hole_1", ts_delete).unwrap();
-        table.delete("hole_3", ts_delete).unwrap();
+        assert_eq!(table.batch_delete(&["hole_1"], ts_delete).unwrap(), 1);
+        assert_eq!(table.batch_delete(&["hole_3"], ts_delete).unwrap(), 1);
         let (removed, mapping, _) = table.compact_with_cutoff_stable_collect(ts_delete).unwrap();
         assert_eq!(removed.len(), 2);
         assert!(mapping.is_empty());
@@ -692,7 +725,12 @@ mod tests {
                 insert_with_name(&table, &format!("row_{}", i), 100);
             }
             for i in 0..4 {
-                table.delete(&format!("row_{}", i), 200).unwrap();
+                assert_eq!(
+                    table
+                        .batch_delete(&[format!("row_{}", i).as_str()], 200)
+                        .unwrap(),
+                    1
+                );
             }
             table
         };
@@ -741,8 +779,8 @@ mod tests {
             let id = insert_with_name(&table, &name, ts_insert);
             before.insert(name, id);
         }
-        table.delete("gc_1", ts_delete).unwrap();
-        table.delete("gc_3", ts_delete).unwrap();
+        assert_eq!(table.batch_delete(&["gc_1"], ts_delete).unwrap(), 1);
+        assert_eq!(table.batch_delete(&["gc_3"], ts_delete).unwrap(), 1);
         let (reclaimed, _) = table.gc_detailed(ts_delete).unwrap();
         assert_eq!(reclaimed, 2);
         for i in [0, 2, 4] {
@@ -811,7 +849,7 @@ mod tests {
         for i in 0..3 {
             insert_with_name(&table, &format!("incr_{}", i), ts);
         }
-        table.delete("base_0", ts).unwrap();
+        assert_eq!(table.batch_delete(&["base_0"], ts).unwrap(), 1);
         table
             .flush_incremental_with_epoch(
                 &incr,
@@ -924,6 +962,12 @@ mod tests {
         }
         let (rebuilt, mapping) = table.reshard_to(8).expect("reshard succeeds");
         assert_eq!(rebuilt.num_shards(), 8);
+        assert_eq!(table.generation(), 0);
+        assert_eq!(
+            rebuilt.generation(),
+            1,
+            "redistribution must bump the lineage generation"
+        );
         assert_eq!(rebuilt.approximate_total_count(), 20);
         assert_eq!(mapping.len(), 20);
         for i in 0..20 {
@@ -945,7 +989,12 @@ mod tests {
             insert_with_name(&table, &format!("card_{}", i), 100);
         }
         for i in 0..3 {
-            table.delete(&format!("card_{}", i), 200).unwrap();
+            assert_eq!(
+                table
+                    .batch_delete(&[format!("card_{}", i).as_str()], 200)
+                    .unwrap(),
+                1
+            );
         }
         let snapshot = table.table_cardinality_at(250);
         assert_eq!((snapshot.live_rows, snapshot.allocated_slots), (7, 10));
