@@ -94,6 +94,11 @@ impl VertexTimestamp {
         }
     }
 
+    /// Row-liveness probe delegating to the unified [`crate::mvcc_visibility::Visibility::row_live`]
+    /// predicate. This is the table-level birth-death truth; column version
+    /// chains never recheck it. The live sentinel (`MAX_TIMESTAMP`) travels
+    /// as `Some(end)` so the reserved boundary timestamp stays invisible,
+    /// exactly like the interval comparison it replaces.
     pub fn is_valid(&self, index: u32, ts: Timestamp) -> bool {
         let idx = index as usize;
         if idx >= self.start_ts.len() {
@@ -107,7 +112,7 @@ impl VertexTimestamp {
             return false;
         }
 
-        start <= ts && end > ts
+        crate::mvcc_visibility::Visibility::row_live(ts, start, Some(end))
     }
 
     pub fn get_start_ts(&self, index: u32) -> Option<Timestamp> {

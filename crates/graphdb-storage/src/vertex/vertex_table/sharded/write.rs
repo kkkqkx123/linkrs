@@ -35,32 +35,6 @@ impl ShardedVertexTable {
         Ok(self.record_allocation(idx, local_id))
     }
 
-    /// Degraded-branch gated write entry: refuses the insert when the
-    /// resident primary-key heap already exceeds `budget`. `None` behaves
-    /// exactly like the ungated entry above.
-    pub fn insert_with_budget(
-        &self,
-        external_id: &str,
-        properties: &[(String, Value)],
-        ts: Timestamp,
-        budget: Option<crate::vertex::tiering::PkIndexBudget>,
-    ) -> StorageResult<u32> {
-        self.check_pk_budget(budget)?;
-        self.insert(external_id, properties, ts)
-    }
-
-    /// Integer-keyed variant of [`Self::insert_with_budget`].
-    pub fn insert_by_i64_with_budget(
-        &self,
-        external_id: i64,
-        properties: &[(String, Value)],
-        ts: Timestamp,
-        budget: Option<crate::vertex::tiering::PkIndexBudget>,
-    ) -> StorageResult<u32> {
-        self.check_pk_budget(budget)?;
-        self.insert_by_i64(external_id, properties, ts)
-    }
-
     pub fn update_property(
         &self,
         global_id: u32,

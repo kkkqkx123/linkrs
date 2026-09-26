@@ -4,6 +4,20 @@ use graphdb_core::{DataType, StorageError, StorageResult, Value};
 use super::{ensure_bitmap_len, ColumnStorage};
 use bitvec::prelude::*;
 
+/// Maximum `FixedString(n)` byte width stored inline in this column.
+///
+/// Short fixed strings live here as zero-padded `n`-byte slots; wider or
+/// zero-width declarations stay on the variable-width base where the
+/// length-prefixed layout and dictionary encoding fit better.
+pub const FIXED_STRING_INLINE_LIMIT: usize = 32;
+
+/// Maximum `VectorDense(n)` dimension stored as a fixed `n * 4`-byte slot
+/// in this column. Small dense vectors ride the fixed base (no per-row
+/// offsets or length prefix); wider or unsized vectors stay on the
+/// variable-width base. The bound keeps one chunk window bounded
+/// (64 dims = 256 bytes per row).
+pub const VECTOR_DENSE_FIXED_MAX_DIM: usize = 64;
+
 /// Column storage for fixed-width (primitive) types.
 ///
 /// Values are stored in a flat `Vec<u8>` with direct offset calculation:
@@ -41,6 +55,14 @@ impl ColumnStorage for FixedWidthColumn {
             return None;
         }
 
+        if let DataType::FixedString(limit) = &self.data_type {
+            return read_fixed_string(&self.data, row_idx * self.element_size, *limit);
+        }
+
+        if let DataType::VectorDense(dim) = &self.data_type {
+            return read_fixed_vector(&self.data, row_idx * self.element_size, *dim);
+        }
+
         let offset = row_idx * self.element_size;
         if offset + self.element_size > self.data.len() {
             return None;
@@ -57,6 +79,52 @@ impl ColumnStorage for FixedWidthColumn {
             .map(|b| row_idx < b.len() && b[row_idx])
             .unwrap_or(false);
 
+        // Fixed-string bounds are checked before growing the buffer so a
+        // rejected write leaves no zeroed slot behind (same observable
+        // behavior as the variable-width path).
+        if let DataType::FixedString(limit) = &self.data_type {
+            if let Some(v) = value {
+                let byte_len = match v {
+                    Value::FixedString(s) => Some(s.len()),
+                    Value::String(s) => Some(s.len()),
+                    _ => None,
+                };
+                match byte_len {
+                    Some(len) if len > *limit => {
+                        return Err(StorageError::invalid_input(format!(
+                            "FixedString({}) cannot hold {} bytes",
+                            limit, len
+                        )));
+                    }
+                    Some(_) => {}
+                    None => {
+                        return Err(StorageError::type_mismatch(v.data_type(), v.data_type()));
+                    }
+                }
+            }
+        }
+
+        // Fixed-dense-vector dimension is checked before growing the buffer
+        // so a rejected write leaves no zeroed slot behind.
+        if let DataType::VectorDense(dim) = &self.data_type {
+            if let Some(v) = value {
+                match v {
+                    Value::Vector(vec) => {
+                        let actual = vec.dimension();
+                        if actual != *dim {
+                            return Err(StorageError::invalid_input(format!(
+                                "VectorDense({}) cannot hold dimension {}",
+                                dim, actual
+                            )));
+                        }
+                    }
+                    _ => {
+                        return Err(StorageError::type_mismatch(v.data_type(), v.data_type()));
+                    }
+                }
+            }
+        }
+
         let offset = row_idx * self.element_size;
         if offset + self.element_size > self.data.len() {
             self.data.resize(offset + self.element_size, 0);
@@ -64,7 +132,13 @@ impl ColumnStorage for FixedWidthColumn {
 
         match value {
             Some(v) => {
-                write_fixed_value(&mut self.data, offset, self.element_size, v)?;
+                if let DataType::FixedString(limit) = &self.data_type {
+                    write_fixed_string(&mut self.data, offset, *limit, v)?;
+                } else if let DataType::VectorDense(dim) = &self.data_type {
+                    write_fixed_vector(&mut self.data, offset, *dim, v)?;
+                } else {
+                    write_fixed_value(&mut self.data, offset, self.element_size, v)?;
+                }
                 if let Some(ref mut bitmap) = self.null_bitmap {
                     ensure_bitmap_len(bitmap, row_idx + 1);
                     bitmap.set(row_idx, false);
@@ -211,8 +285,141 @@ pub fn element_size(data_type: &DataType) -> usize {
         DataType::Time => 8,
         DataType::DateTime => 28,
         DataType::Uuid => 16,
+        DataType::FixedString(n) if *n >= 1 && *n <= FIXED_STRING_INLINE_LIMIT => *n,
+        DataType::VectorDense(dim)
+            if *dim >= 1 && *dim <= VECTOR_DENSE_FIXED_MAX_DIM =>
+        {
+            *dim * std::mem::size_of::<f32>()
+        }
         _ => 0,
     }
+}
+
+/// Read one fixed-dense-vector slot as little-endian `f32` components.
+pub(crate) fn read_fixed_vector(data: &[u8], offset: usize, dim: usize) -> Option<Value> {
+    if dim == 0 {
+        return None;
+    }
+    let bytes = dim.checked_mul(std::mem::size_of::<f32>())?;
+    if offset + bytes > data.len() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(dim);
+    for i in 0..dim {
+        let chunk: [u8; 4] = data[offset + i * 4..offset + (i + 1) * 4]
+            .try_into()
+            .ok()?;
+        out.push(f32::from_le_bytes(chunk));
+    }
+    Some(Value::Vector(
+        graphdb_core::value::VectorValue::dense(out),
+    ))
+}
+
+/// Write one fixed-dense-vector slot as little-endian `f32` components.
+///
+/// Only dense vectors of exactly `dim` components are accepted; sparse
+/// vectors and dimension mismatches are rejected with the same shape as
+/// the variable-width path.
+pub(crate) fn write_fixed_vector(
+    data: &mut [u8],
+    offset: usize,
+    dim: usize,
+    value: &Value,
+) -> StorageResult<()> {
+    let dense: &[f32] = match value {
+        Value::Vector(vec) => match vec.as_dense() {
+            Some(dense) => dense,
+            None => {
+                return Err(StorageError::invalid_input(format!(
+                    "VectorDense({}) cannot hold a sparse vector",
+                    dim
+                )));
+            }
+        },
+        _ => {
+            return Err(StorageError::type_mismatch(
+                value.data_type(),
+                value.data_type(),
+            ));
+        }
+    };
+    if dense.len() != dim {
+        return Err(StorageError::invalid_input(format!(
+            "VectorDense({}) cannot hold dimension {}",
+            dim,
+            dense.len()
+        )));
+    }
+    let bytes = dim * std::mem::size_of::<f32>();
+    if offset + bytes > data.len() {
+        return Err(StorageError::invalid_input(format!(
+            "Column data buffer too small: offset={}, limit={}, data_len={}",
+            offset,
+            bytes,
+            data.len()
+        )));
+    }
+    for (i, component) in dense.iter().enumerate() {
+        data[offset + i * 4..offset + (i + 1) * 4].copy_from_slice(&component.to_le_bytes());
+    }
+    Ok(())
+}
+
+/// Read one zero-padded inline fixed-string slot.
+pub(crate) fn read_fixed_string(data: &[u8], offset: usize, limit: usize) -> Option<Value> {
+    if limit == 0 || offset + limit > data.len() {
+        return None;
+    }
+    let mut end = offset + limit;
+    while end > offset && data[end - 1] == 0 {
+        end -= 1;
+    }
+    String::from_utf8(data[offset..end].to_vec())
+        .ok()
+        .map(Value::FixedString)
+}
+
+/// Write one zero-padded inline fixed-string slot.
+///
+/// Accepts `String` as well as `FixedString` because primary-key mirrors
+/// materialize text ids as `Value::String` regardless of the column
+/// declaration. Byte length beyond `limit` is rejected with the same
+/// message as the variable-width path.
+pub(crate) fn write_fixed_string(
+    data: &mut [u8],
+    offset: usize,
+    limit: usize,
+    value: &Value,
+) -> StorageResult<()> {
+    let bytes: &[u8] = match value {
+        Value::FixedString(s) => s.as_bytes(),
+        Value::String(s) => s.as_bytes(),
+        _ => {
+            return Err(StorageError::type_mismatch(
+                value.data_type(),
+                value.data_type(),
+            ));
+        }
+    };
+    if bytes.len() > limit {
+        return Err(StorageError::invalid_input(format!(
+            "FixedString({}) cannot hold {} bytes",
+            limit,
+            bytes.len()
+        )));
+    }
+    if offset + limit > data.len() {
+        return Err(StorageError::invalid_input(format!(
+            "Column data buffer too small: offset={}, limit={}, data_len={}",
+            offset,
+            limit,
+            data.len()
+        )));
+    }
+    data[offset..offset + bytes.len()].copy_from_slice(bytes);
+    data[offset + bytes.len()..offset + limit].fill(0);
+    Ok(())
 }
 
 pub(crate) fn write_fixed_value(

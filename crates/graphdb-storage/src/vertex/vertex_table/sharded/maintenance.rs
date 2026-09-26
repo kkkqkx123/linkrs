@@ -74,12 +74,22 @@ impl ShardedVertexTable {
         (reuses, free_depth)
     }
 
-    /// Aggregate primary-key index heap across shards for budget checks.
+    /// Worst index-level hole ratio across shards (see
+    /// [`crate::vertex::id_indexer::IdManager::hole_ratio`]): fast
+    /// pre-check beside the reuse counters so patrol logs show whether
+    /// ordered reuse keeps holes tail-adjacent instead of scattering them.
+    pub fn index_hole_ratio(&self) -> f64 {
+        let mut worst = 0.0f64;
+        for shard in &self.shards {
+            worst = worst.max(shard.read().id_indexer.hole_ratio());
+        }
+        worst
+    }
+
+    /// Aggregate primary-key index heap across shards.
     ///
     /// Returns `(total_bytes, max_shard_bytes)`: the whole-table resident
-    /// cost and the hottest shard. Operators compare these against the
-    /// deployment budget; the index is fully resident, so a breach calls
-    /// for a persistent-index overflow path, not larger flush thresholds.
+    /// cost and the hottest shard.
     pub fn pk_memory_stats(&self) -> (usize, usize) {
         let mut total = 0usize;
         let mut max_shard = 0usize;
@@ -94,8 +104,7 @@ impl ShardedVertexTable {
     /// Aggregate per-component primary-key memory accounting across shards.
     ///
     /// Sums every breakdown field so patrol logs show which structure (key
-    /// heap, map, live set, delta log, sampler) dominates before a shard
-    /// crosses its memory budget.
+    /// heap, map, live set, delta log) dominates.
     pub fn pk_memory_breakdown(&self) -> crate::vertex::id_indexer::IdIndexMemoryBreakdown {
         let mut total = crate::vertex::id_indexer::IdIndexMemoryBreakdown::default();
         for shard in &self.shards {
@@ -109,45 +118,9 @@ impl ShardedVertexTable {
             total.map_bytes += breakdown.map_bytes;
             total.set_bytes += breakdown.set_bytes;
             total.free_bytes += breakdown.free_bytes;
-            total.sketch_bytes += breakdown.sketch_bytes;
             total.total_bytes += breakdown.total_bytes;
         }
         total
-    }
-
-    /// Degraded-branch budget gate for the write entry.
-    ///
-    /// Sums the resident primary-key heap and refuses the write when it is
-    /// already over `budget`. Thresholds come from deployment configuration;
-    /// `None` disables the gate (tiering branch or ungated tables).
-    pub fn check_pk_budget(
-        &self,
-        budget: Option<crate::vertex::tiering::PkIndexBudget>,
-    ) -> graphdb_core::StorageResult<()> {
-        let Some(budget) = budget else {
-            return Ok(());
-        };
-        let (total, _) = self.pk_memory_stats();
-        budget.check(total)
-    }
-
-    /// Aggregate primary-key probe traffic across shards for the cold-hot
-    /// tiering design.
-    ///
-    /// Returns `(total_probes, max_shard_probes)`: how many key probes the
-    /// resident index has served and where they concentrate. A skewed
-    /// distribution (small hot set, large total) is the precondition for
-    /// spilling cold keys to a persistent index; uniform traffic means
-    /// tiering would only add a lookup hop with no memory win.
-    pub fn pk_probe_stats(&self) -> (u64, u64) {
-        let mut total = 0u64;
-        let mut max_shard = 0u64;
-        for shard in &self.shards {
-            let probes = shard.read().id_indexer.probe_total();
-            total = total.saturating_add(probes);
-            max_shard = max_shard.max(probes);
-        }
-        (total, max_shard)
     }
 
     /// Aggregate flush trigger signals across shards.
@@ -370,25 +343,43 @@ impl ShardedVertexTable {
     }
 
     /// Eviction observability: `(resident_chunks, evicted_chunks,
-    /// evicted_bytes, resident_bytes)` across shards.
+    /// evicted_bytes, resident_bytes)` across shards, all from the unified
+    /// buffer ledger (resident includes the overflow side store).
     pub fn eviction_stats(&self) -> (usize, usize, usize, usize) {
-        let mut resident_chunks = 0usize;
-        let mut evicted_chunks = 0usize;
-        let mut evicted_bytes = 0usize;
-        let mut resident_bytes = 0usize;
+        let mut acc = crate::vertex::column::BufferLedger::default();
         for shard in &self.shards {
             let table = shard.read();
-            resident_chunks += table.columns.resident_chunk_count();
-            evicted_chunks += table.columns.evicted_chunk_count();
-            evicted_bytes += table.columns.evicted_bytes();
-            resident_bytes += table.columns.resident_memory_usage();
+            let ledger = table.columns.buffer_ledger();
+            acc.resident_bytes += ledger.resident_bytes;
+            acc.evicted_bytes += ledger.evicted_bytes;
+            acc.overflow_bytes += ledger.overflow_bytes;
+            acc.dirty_pages += ledger.dirty_pages;
+            acc.resident_chunks += ledger.resident_chunks;
+            acc.evicted_chunks += ledger.evicted_chunks;
         }
         (
-            resident_chunks,
-            evicted_chunks,
-            evicted_bytes,
-            resident_bytes,
+            acc.resident_chunks,
+            acc.evicted_chunks,
+            acc.evicted_bytes,
+            acc.resident_bytes,
         )
+    }
+
+    /// Unified buffer ledger across shards, including the overflow subset
+    /// and dirty pages in one口径 for quota and observability.
+    pub fn buffer_ledger(&self) -> crate::vertex::column::BufferLedger {
+        let mut acc = crate::vertex::column::BufferLedger::default();
+        for shard in &self.shards {
+            let table = shard.read();
+            let ledger = table.columns.buffer_ledger();
+            acc.resident_bytes += ledger.resident_bytes;
+            acc.evicted_bytes += ledger.evicted_bytes;
+            acc.overflow_bytes += ledger.overflow_bytes;
+            acc.dirty_pages += ledger.dirty_pages;
+            acc.resident_chunks += ledger.resident_chunks;
+            acc.evicted_chunks += ledger.evicted_chunks;
+        }
+        acc
     }
 
     pub fn version_history_ref(

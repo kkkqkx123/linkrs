@@ -94,7 +94,9 @@ impl VertexTable {
     /// Per-row version-chain length above which `gc` emits a pressure
     /// warning. Chains grow without bound while the GC watermark is pinned,
     /// so crossing this threshold points at a stuck snapshot, not a hot row.
-    const VERSION_CHAIN_PRESSURE_WARN_LEN: usize = 1024;
+    /// Shared with the GC manager, which triggers bounded cold-chunk
+    /// eviction at the same threshold instead of only warning.
+    pub(crate) const VERSION_CHAIN_PRESSURE_WARN_LEN: usize = 1024;
 
     pub fn with_config(
         label: LabelId,
@@ -393,6 +395,16 @@ impl VertexTable {
         self.get_projected_by_internal_id(internal_id, ts, None)
     }
 
+    /// Single row-liveness entry for plain timestamp reads.
+    ///
+    /// Row life and death resolve here only: every content-serving read
+    /// checks liveness exactly once through this entry and column version
+    /// chains never recheck it. Pending-aware paths use the guard form
+    /// instead; the two share the unified interval semantics.
+    pub fn is_row_live_at(&self, internal_id: u32, ts: Timestamp) -> bool {
+        self.timestamps.read().is_valid(internal_id, ts)
+    }
+
     /// Row survival stamps for pending-aware rechecks.
     ///
     /// Returns `(create_ts, delete_ts)` with `None` for a live row. `None`
@@ -415,17 +427,16 @@ impl VertexTable {
 
     /// Snapshot-visible live IDs at `ts` in allocation order.
     ///
-    /// Enumeration and point reads share this one visibility predicate:
-    /// rows invisible at `ts` (including timestamp-deleted rows awaiting
-    /// watermark-gated GC) are excluded. There is no unfiltered variant;
-    /// sizing callers use `total_count` or `id_hole_stats` instead.
-    /// Used by lazy paginated scans.
+    /// Enumeration and point reads share the single liveness entry
+    /// ([`Self::is_row_live_at`]): rows invisible at `ts` (including
+    /// timestamp-deleted rows awaiting watermark-gated GC) are excluded.
+    /// There is no unfiltered variant; sizing callers use `total_count` or
+    /// `id_hole_stats` instead. Used by lazy paginated scans.
     pub fn live_ids(&self, ts: Timestamp) -> Vec<u32> {
-        let stamps = self.timestamps.read();
         self.id_indexer
             .live_ids()
             .into_iter()
-            .filter(|&id| stamps.is_valid(id, ts))
+            .filter(|&id| self.is_row_live_at(id, ts))
             .collect()
     }
 
@@ -444,10 +455,9 @@ impl VertexTable {
             return internal_ids.iter().map(|_| None).collect();
         }
 
-        let stamps = self.timestamps.read();
         let mut positions: Vec<(usize, u32)> = Vec::with_capacity(internal_ids.len());
         for (pos, &id) in internal_ids.iter().enumerate() {
-            if stamps.is_valid(id, ts) {
+            if self.is_row_live_at(id, ts) {
                 positions.push((pos, id));
             }
         }
@@ -530,9 +540,12 @@ impl VertexTable {
             return None;
         }
 
-        if !self.timestamps.read().is_valid(internal_id, ts) {
+        // Single liveness gate: column decodes below assume a live row and
+        // never recheck the timestamp interval.
+        if !self.is_row_live_at(internal_id, ts) {
             return None;
         }
+        debug_assert!(self.is_row_live_at(internal_id, ts));
 
         let external_id = self.id_indexer.get_key(internal_id)?;
         let props = projection.map_or_else(
@@ -601,7 +614,7 @@ impl VertexTable {
             return Err(StorageError::storage_not_open());
         }
 
-        if !self.timestamps.read().is_valid(internal_id, ts) {
+        if !self.is_row_live_at(internal_id, ts) {
             return Err(StorageError::vertex_not_found());
         }
 
@@ -724,6 +737,7 @@ impl VertexTable {
         Ok(deleted_count)
     }
 
+    /// Naked identity read for GC and offline tools only: no liveness check.
     pub fn get_internal_id_by_i64_raw(&self, external_id: i64) -> Option<u32> {
         if !self.is_open.load(Ordering::Acquire) {
             return None;
@@ -733,6 +747,7 @@ impl VertexTable {
 
     /// Lookup internal ID from external string without timestamp check.
     /// Returns Some(internal_id) even for deleted vertices.
+    /// Naked identity read for GC and offline tools only.
     pub fn get_internal_id_raw(&self, external_id: &str) -> Option<u32> {
         if !self.is_open.load(Ordering::Acquire) {
             return None;
@@ -742,9 +757,7 @@ impl VertexTable {
     }
 
     pub fn get_external_id(&self, internal_id: u32, ts: Timestamp) -> Option<IdKey> {
-        if !self.is_open.load(Ordering::Acquire)
-            || !self.timestamps.read().is_valid(internal_id, ts)
-        {
+        if !self.is_open.load(Ordering::Acquire) || !self.is_row_live_at(internal_id, ts) {
             return None;
         }
         self.id_indexer.get_key(internal_id)
@@ -752,6 +765,7 @@ impl VertexTable {
 
     /// Lookup external ID from internal ID without timestamp check.
     /// Returns the external ID even for deleted vertices.
+    /// Naked identity read for GC and offline tools only.
     pub fn get_external_id_raw(&self, internal_id: u32) -> Option<IdKey> {
         if !self.is_open.load(Ordering::Acquire) {
             return None;

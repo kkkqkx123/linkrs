@@ -37,12 +37,6 @@ pub const PK_DELTA_ANCHOR_THRESHOLD: usize = 8192;
 const ID_KEY_TYPE_INT: u8 = 0;
 const ID_KEY_TYPE_TEXT: u8 = 1;
 
-/// Count-min sketch width per row backing probe-frequency sampling. Two
-/// rows of this many `u64` counters cost a fixed 32 KiB per index instance
-/// regardless of key count, which is what makes the sampler safe to leave
-/// on in production: bounded memory, no per-key allocation.
-const ACCESS_SKETCH_WIDTH: usize = 2048;
-
 /// Visibility-aware primary-key lookup result.
 ///
 /// Collapses the old two-step read (`get_index` plus a timestamp check in
@@ -72,71 +66,6 @@ impl PkLookup {
 enum IndexDelta {
     Insert { key: IdKey, id: u32 },
     Remove { key: IdKey },
-}
-
-/// Fixed-memory probe-frequency sampler (count-min sketch, two rows).
-///
-/// Records every primary-key probe served by the index and answers
-/// per-key frequency estimates that never undercount: the reported value
-/// is the true count plus hash-collision noise. This is the telemetry the
-/// cold-hot tiering design consumes to decide which keys stay resident —
-/// without it, promotion would be blind. Runtime-only: never serialized,
-/// reset on load, which is correct because it measures serving behavior,
-/// not persisted state.
-#[derive(Debug)]
-struct AccessSketch {
-    rows: [[std::cell::Cell<u64>; ACCESS_SKETCH_WIDTH]; 2],
-    total: std::cell::Cell<u64>,
-}
-
-impl AccessSketch {
-    fn new() -> Self {
-        Self {
-            rows: core::array::from_fn(|_| core::array::from_fn(|_| std::cell::Cell::new(0))),
-            total: std::cell::Cell::new(0),
-        }
-    }
-
-    fn hashes(key: &IdKey) -> [u64; 2] {
-        use std::hash::{Hash, Hasher};
-        let mut first = std::collections::hash_map::DefaultHasher::new();
-        0u8.hash(&mut first);
-        key.hash(&mut first);
-        let mut second = std::collections::hash_map::DefaultHasher::new();
-        1u8.hash(&mut second);
-        key.hash(&mut second);
-        [first.finish(), second.finish()]
-    }
-
-    fn record(&self, key: &IdKey) {
-        let hashes = Self::hashes(key);
-        for (row, hash) in self.rows.iter().zip(hashes) {
-            let cell = &row[hash as usize % ACCESS_SKETCH_WIDTH];
-            cell.set(cell.get().saturating_add(1));
-        }
-        self.total.set(self.total.get().saturating_add(1));
-    }
-
-    /// Background-promotion read-only estimate for one key. Never served
-    /// on the point-lookup path: promotion tasks poll it, probes do not.
-    /// Count-min minimum never undercounts; the excess is hash noise.
-    fn estimate(&self, key: &IdKey) -> u64 {
-        let hashes = Self::hashes(key);
-        self.rows
-            .iter()
-            .zip(hashes)
-            .map(|(row, hash)| row[hash as usize % ACCESS_SKETCH_WIDTH].get())
-            .min()
-            .unwrap_or(0)
-    }
-
-    fn total(&self) -> u64 {
-        self.total.get()
-    }
-
-    fn heap_bytes() -> usize {
-        2 * ACCESS_SKETCH_WIDTH * std::mem::size_of::<u64>()
-    }
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -274,38 +203,41 @@ pub struct IdIndexMemoryBreakdown {
     pub map_bytes: usize,
     pub set_bytes: usize,
     pub free_bytes: usize,
-    /// Fixed sampler reservation for probe-frequency telemetry.
-    pub sketch_bytes: usize,
     pub total_bytes: usize,
+}
+
+/// Hash segments for the primary-key map. Probes hash to one segment and
+/// hold only that segment; inserts hold the key's segment plus the short
+/// shared allocation critical section. Lock order is always segments in
+/// increasing index order, then the shared core, never the reverse.
+pub const ID_STRIPE_COUNT: usize = 16;
+
+fn stripe_index(key: &IdKey) -> usize {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    (hasher.finish() as usize) % ID_STRIPE_COUNT
+}
+
+/// Shared allocation state behind the striped key map: slot table, live
+/// set, free stack, delta log and config. Guarded by one short critical
+/// section; keyed writes hold their stripe plus this core, probes hold
+/// only their stripe.
+#[derive(Debug)]
+struct SharedCore {
+    keys: Vec<Option<IdKey>>,
+    live_ids: BTreeSet<u32>,
+    free_ids: Vec<u32>,
+    reuse_count: u64,
+    delta_log: Vec<IndexDelta>,
+    baseline_invalidated: bool,
+    config: IdIndexerConfig,
 }
 
 #[derive(Debug)]
 pub struct IdManager {
-    keys: Vec<Option<IdKey>>,
-    key_to_id: HashMap<IdKey, u32>,
-    live_ids: BTreeSet<u32>,
-    /// Recycled local IDs from deletions, for lazy reuse without global
-    /// compaction. Reduces fragmentation by filling holes immediately.
-    free_ids: Vec<u32>,
-    /// Cumulative free-stack pops since creation. Observability only: a
-    /// rising reuse rate under churn confirms the free stack absorbs
-    /// deletes; a flat zero beside a growing high-water mark means reuse
-    /// is bypassed and compaction pressure builds instead.
-    reuse_count: u64,
-    /// Committed mutations since the last baseline flush, backing the
-    /// incremental `id_indexer.delta` file. Cleared on baseline flush;
-    /// dropped (with the baseline-invalidated flag set) when compaction
-    /// re-densifies ids, forcing the next flush to anchor a new baseline.
-    delta_log: Vec<IndexDelta>,
-    /// Set when compaction moved live rows after the last baseline flush.
-    /// The next incremental flush must rewrite the full baseline instead
-    /// of appending a delta addressed by stale ids.
-    baseline_invalidated: bool,
-    /// Probe-frequency sampler for the cold-hot tiering design. Fixed
-    /// 32 KiB, interior mutability so the `&self` serving paths
-    /// (`lookup`, `get_id`) can record without widening their signatures.
-    access: AccessSketch,
-    config: IdIndexerConfig,
+    stripes: Vec<Mutex<HashMap<IdKey, u32>>>,
+    core: Mutex<SharedCore>,
 }
 
 impl IdManager {
@@ -315,40 +247,55 @@ impl IdManager {
 
     pub fn with_config(config: IdIndexerConfig) -> Self {
         let capacity = config.initial_capacity.min(config.max_capacity);
+        let per_stripe = capacity.div_ceil(ID_STRIPE_COUNT).max(1);
+        let mut stripes = Vec::with_capacity(ID_STRIPE_COUNT);
+        for _ in 0..ID_STRIPE_COUNT {
+            stripes.push(Mutex::new(HashMap::with_capacity(per_stripe)));
+        }
         Self {
-            keys: Vec::with_capacity(capacity),
-            key_to_id: HashMap::with_capacity(capacity),
-            live_ids: BTreeSet::new(),
-            free_ids: Vec::new(),
-            reuse_count: 0,
-            delta_log: Vec::new(),
-            baseline_invalidated: false,
-            access: AccessSketch::new(),
-            config,
+            stripes,
+            core: Mutex::new(SharedCore {
+                keys: Vec::with_capacity(capacity),
+                live_ids: BTreeSet::new(),
+                free_ids: Vec::new(),
+                reuse_count: 0,
+                delta_log: Vec::new(),
+                baseline_invalidated: false,
+                config,
+            }),
         }
     }
 
     /// Pre-allocate capacity for `additional` more entries in both the Vec and HashMap.
     /// This avoids repeated rehashing during batch inserts.
-    pub fn reserve(&mut self, additional: usize) {
-        let target = self.keys.len().saturating_add(additional);
-        if target > self.keys.capacity() {
-            let new_cap = target.min(self.config.max_capacity);
-            let grow = new_cap.saturating_sub(self.keys.capacity());
-            if grow > 0 {
-                self.keys.reserve(grow);
+    pub fn reserve(&self, additional: usize) {
+        {
+            let mut core = self.core.lock();
+            let target = core.keys.len().saturating_add(additional);
+            if target > core.keys.capacity() {
+                let new_cap = target.min(core.config.max_capacity);
+                let grow = new_cap.saturating_sub(core.keys.capacity());
+                if grow > 0 {
+                    core.keys.reserve(grow);
+                }
             }
         }
-        self.key_to_id.reserve(additional);
+        let per_stripe = additional.div_ceil(ID_STRIPE_COUNT).max(1);
+        for stripe in &self.stripes {
+            stripe.lock().reserve(per_stripe);
+        }
     }
 
-    pub fn insert(&mut self, key: IdKey) -> StorageResult<u32> {
+    pub fn insert(&self, key: IdKey) -> StorageResult<u32> {
         validate_key_shape(&key)?;
-        if self.key_to_id.contains_key(&key) {
+        let stripe = stripe_index(&key);
+        let mut map = self.stripes[stripe].lock();
+        if map.contains_key(&key) {
             return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
         }
-        let id = self.take_next_id()?;
-        self.bind_slot(key, id);
+        let mut core = self.core.lock();
+        let id = Self::take_next_id_locked(&mut core)?;
+        Self::bind_slot_locked(&mut core, &mut map, key, id);
         Ok(id)
     }
 
@@ -356,86 +303,110 @@ impl IdManager {
     /// stack and growing the high-water mark otherwise. The slot stays
     /// unbound (`keys` reports `None`) for the caller to bind later or
     /// return through [`Self::release_reserved`].
-    fn take_next_id(&mut self) -> StorageResult<u32> {
+    ///
+    /// Reuse is ordered: the largest free id (closest to the high-water
+    /// mark) is claimed first, so recycled slots refill the allocation
+    /// tail instead of scattering holes across the id space. Sequential
+    /// scans stay dense under delete-plus-reinsert churn; the free stack
+    /// itself keeps insertion order and only the claim is ordered.
+    fn take_next_id_locked(core: &mut SharedCore) -> StorageResult<u32> {
         // Lazy ID reuse: recycle a deleted slot before growing the id space.
-        if let Some(recycled) = self.free_ids.pop() {
-            self.reuse_count = self.reuse_count.saturating_add(1);
+        if !core.free_ids.is_empty() {
+            let mut best = 0usize;
+            for (i, id) in core.free_ids.iter().enumerate() {
+                if *id > core.free_ids[best] {
+                    best = i;
+                }
+            }
+            let recycled = core.free_ids.swap_remove(best);
+            core.reuse_count = core.reuse_count.saturating_add(1);
             let idx = recycled as usize;
-            if idx >= self.keys.len() {
+            if idx >= core.keys.len() {
                 // Recycled idx at the tail (rare after deserialize
                 // rebuilding): extend so the slot exists unbound.
-                while self.keys.len() <= idx {
-                    self.keys.push(None);
+                while core.keys.len() <= idx {
+                    core.keys.push(None);
                 }
             } else {
-                debug_assert!(self.keys[idx].is_none());
+                debug_assert!(core.keys[idx].is_none());
             }
             return Ok(recycled);
         }
 
-        if self.keys.len() >= self.config.max_capacity {
+        if core.keys.len() >= core.config.max_capacity {
             return Err(StorageError::capacity_exceeded());
         }
 
-        if self.keys.len() >= self.keys.capacity() {
-            let current_capacity = self.keys.capacity();
-            if current_capacity >= self.config.max_capacity {
+        if core.keys.len() >= core.keys.capacity() {
+            let current_capacity = core.keys.capacity();
+            if current_capacity >= core.config.max_capacity {
                 return Err(StorageError::capacity_exceeded());
             }
 
-            let new_capacity = ((current_capacity as f64 * self.config.growth_factor) as usize)
-                .min(self.config.max_capacity)
+            let new_capacity = ((current_capacity as f64 * core.config.growth_factor) as usize)
+                .min(core.config.max_capacity)
                 .max(current_capacity + 1);
-            self.keys.reserve(new_capacity - current_capacity);
+            core.keys.reserve(new_capacity - current_capacity);
         }
 
-        let index = self.keys.len() as u32;
-        self.keys.push(None);
+        let index = core.keys.len() as u32;
+        core.keys.push(None);
         Ok(index)
     }
 
-    /// Bind a key to a slot obtained from [`Self::take_next_id`], recording
-    /// the committed-insert delta entry.
-    fn bind_slot(&mut self, key: IdKey, id: u32) {
+    /// Bind a key to a slot obtained from [`Self::take_next_id_locked`],
+    /// recording the committed-insert delta entry. Caller holds the key's
+    /// stripe plus the core, in stripe-before-core order.
+    fn bind_slot_locked(
+        core: &mut SharedCore,
+        map: &mut HashMap<IdKey, u32>,
+        key: IdKey,
+        id: u32,
+    ) {
         // Reuse audit: a recycled slot must be fully detached (no key, not
         // live) before a new key claims it; otherwise a dangling reference
         // to the previous occupant survives the reuse.
         debug_assert!(
-            matches!(self.keys.get(id as usize), Some(None)),
+            matches!(core.keys.get(id as usize), Some(None)),
             "bind_slot claimed an occupied slot {id}"
         );
         debug_assert!(
-            !self.live_ids.contains(&id),
+            !core.live_ids.contains(&id),
             "bind_slot claimed a live slot {id}"
         );
-        self.keys[id as usize] = Some(key.clone());
-        self.key_to_id.insert(key.clone(), id);
-        self.live_ids.insert(id);
-        self.delta_log.push(IndexDelta::Insert { key, id });
+        core.keys[id as usize] = Some(key.clone());
+        map.insert(key.clone(), id);
+        core.live_ids.insert(id);
+        core.delta_log.push(IndexDelta::Insert { key, id });
     }
 
     /// Reserve a local id for a not-yet-committed row without binding any
     /// external key: nothing is visible to lookups, `live_ids`, or the delta
     /// log until [`Self::register_reserved`] binds the key at commit apply.
-    pub fn reserve_next(&mut self) -> StorageResult<u32> {
-        self.take_next_id()
+    /// Core-only: no stripe is held.
+    pub fn reserve_next(&self) -> StorageResult<u32> {
+        let mut core = self.core.lock();
+        Self::take_next_id_locked(&mut core)
     }
 
     /// Bind an external key to a previously reserved id at commit apply.
     /// Fails when the key is already bound or the id is not a currently
     /// unbound slot, so a stale or foreign reservation cannot clobber live
-    /// mappings.
-    pub fn register_reserved(&mut self, key: IdKey, id: u32) -> StorageResult<()> {
+    /// mappings. Stripe before core.
+    pub fn register_reserved(&self, key: IdKey, id: u32) -> StorageResult<()> {
         validate_key_shape(&key)?;
-        if self.key_to_id.contains_key(&key) {
+        let stripe = stripe_index(&key);
+        let mut map = self.stripes[stripe].lock();
+        if map.contains_key(&key) {
             return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
         }
-        if !matches!(self.keys.get(id as usize), Some(None)) {
+        let mut core = self.core.lock();
+        if !matches!(core.keys.get(id as usize), Some(None)) {
             return Err(StorageError::invalid_operation(format!(
                 "reserved id {id} does not name an unbound slot"
             )));
         }
-        self.bind_slot(key, id);
+        Self::bind_slot_locked(&mut core, &mut map, key, id);
         Ok(())
     }
 
@@ -444,9 +415,11 @@ impl IdManager {
     /// already consumed by a bind; releasing a double reservation would
     /// only add a duplicate free-stack entry the next pop turns into a
     /// no-op bind conflict, so callers keep single ownership.
-    pub fn release_reserved(&mut self, id: u32) {
-        if matches!(self.keys.get(id as usize), Some(None)) {
-            self.free_ids.push(id);
+    /// Core-only: no stripe is held.
+    pub fn release_reserved(&self, id: u32) {
+        let mut core = self.core.lock();
+        if matches!(core.keys.get(id as usize), Some(None)) {
+            core.free_ids.push(id);
         }
     }
 
@@ -454,14 +427,15 @@ impl IdManager {
     /// while its slot is still unbound. Only frees-and-reclaims a still
     /// pending release; any other unbound state (another row's live
     /// reservation or a never-released hole) reports false and the caller
-    /// must reserve a fresh id instead.
-    pub fn try_reclaim(&mut self, id: u32) -> bool {
-        if !matches!(self.keys.get(id as usize), Some(None)) {
+    /// must reserve a fresh id instead. Core-only.
+    pub fn try_reclaim(&self, id: u32) -> bool {
+        let mut core = self.core.lock();
+        if !matches!(core.keys.get(id as usize), Some(None)) {
             return false;
         }
-        match self.free_ids.iter().rposition(|free| *free == id) {
+        match core.free_ids.iter().rposition(|free| *free == id) {
             Some(pos) => {
-                self.free_ids.swap_remove(pos);
+                core.free_ids.swap_remove(pos);
                 true
             }
             None => false,
@@ -470,81 +444,95 @@ impl IdManager {
 
     /// Visibility-aware lookup: the global committed area gated by the
     /// caller's row-visibility predicate. Collapses the old two-step read
-    /// into one two-state call. Records one probe in the access sampler.
+    /// into one two-state call. Stripe-only: probes on different segments
+    /// proceed concurrently without touching the shared core.
     pub fn lookup(&self, key: &IdKey, is_visible: impl Fn(u32) -> bool) -> PkLookup {
-        self.access.record(key);
-        match self.key_to_id.get(key).copied() {
+        let stripe = stripe_index(key);
+        match self.stripes[stripe].lock().get(key).copied() {
             Some(id) if is_visible(id) => PkLookup::Visible(id),
             _ => PkLookup::Missing,
         }
     }
 
+    /// Stripe-only probe without visibility filtering.
     pub fn get_id(&self, key: &IdKey) -> Option<u32> {
-        self.access.record(key);
-        self.key_to_id.get(key).copied()
+        let stripe = stripe_index(key);
+        self.stripes[stripe].lock().get(key).copied()
     }
 
+    /// Core-only reverse lookup.
     pub fn get_key(&self, index: u32) -> Option<IdKey> {
-        self.keys.get(index as usize)?.as_ref().cloned()
+        self.core.lock().keys.get(index as usize)?.as_ref().cloned()
     }
 
     pub fn len(&self) -> usize {
-        self.key_to_id.len()
+        self.core.lock().live_ids.len()
     }
 
     /// High-water mark of the local id space (holes from deletions
     /// included). Deleted slots are recycled through the free stack on
     /// insert, so live row IDs stay stable until a watermark-gated
-    /// compaction re-densifies them.
+    /// compaction re-densifies them. Core-only.
     pub fn next_index(&self) -> u32 {
-        self.keys.len() as u32
+        self.core.lock().keys.len() as u32
     }
 
-    pub fn remove(&mut self, key: &IdKey) -> Option<u32> {
-        self.key_to_id.remove(key).inspect(|&idx| {
-            if (idx as usize) < self.keys.len() {
-                self.keys[idx as usize] = None;
-            }
-            self.live_ids.remove(&idx);
-            self.free_ids.push(idx);
-            self.delta_log.push(IndexDelta::Remove { key: key.clone() });
-        })
+    /// Stripe before core: unbind the key from its segment, then clear the
+    /// slot and recycle the id under the shared core.
+    pub fn remove(&self, key: &IdKey) -> Option<u32> {
+        let stripe = stripe_index(key);
+        let mut map = self.stripes[stripe].lock();
+        let idx = map.remove(key)?;
+        let mut core = self.core.lock();
+        if (idx as usize) < core.keys.len() {
+            core.keys[idx as usize] = None;
+        }
+        core.live_ids.remove(&idx);
+        core.free_ids.push(idx);
+        core.delta_log.push(IndexDelta::Remove { key: key.clone() });
+        Some(idx)
     }
 
+    /// Stripes in index order; core is not needed for the live mappings.
     pub fn iter(&self) -> Vec<(IdKey, u32)> {
-        self.key_to_id
-            .iter()
-            .map(|(key, &idx)| (key.clone(), idx))
-            .collect()
+        let mut out = Vec::new();
+        for stripe in &self.stripes {
+            out.extend(stripe.lock().iter().map(|(key, &idx)| (key.clone(), idx)));
+        }
+        out
     }
 
     /// Index-level live IDs in ascending order (see `IdIndexer::live_ids`).
+    /// Core-only snapshot of the live set.
     pub fn live_ids(&self) -> Vec<u32> {
-        self.live_ids.iter().copied().collect()
+        self.core.lock().live_ids.iter().copied().collect()
     }
 
-    pub fn compact(&mut self) -> StorageResult<HashMap<u32, u32>> {
+    /// All stripes in index order, then the core. Exclusive path only
+    /// (compaction runs barriered); point probes block while it holds the
+    /// segments.
+    pub fn compact(&self) -> StorageResult<HashMap<u32, u32>> {
         let mapping = self.compute_compact_mapping();
         if mapping.is_empty() {
             // Already dense; still clear free list if it had stale entries.
             // Ids did not move, so the since-baseline delta stays valid.
-            self.free_ids.clear();
+            self.core.lock().free_ids.clear();
             return Ok(HashMap::new());
         }
 
-        let entries: Vec<(u32, IdKey)> = self
-            .key_to_id
-            .iter()
-            .map(|(key, &idx)| (idx, key.clone()))
-            .collect();
-        let mut entries = entries;
+        let mut guards: Vec<_> = self.stripes.iter().map(|s| s.lock()).collect();
+        let mut core = self.core.lock();
+        let mut entries: Vec<(u32, IdKey)> = Vec::new();
+        for map in guards.iter() {
+            entries.extend(map.iter().map(|(key, &idx)| (idx, key.clone())));
+        }
         entries.sort_by_key(|(old_id, _)| *old_id);
-        self.rebuild_with_mapping(&entries)?;
-        self.free_ids.clear();
+        Self::rebuild_with_mapping_locked(&mut core, &mut guards, &entries)?;
+        core.free_ids.clear();
         // Live rows moved: delta entries addressed by old ids are stale.
         // Drop them and force the next flush to anchor a new baseline.
-        self.delta_log.clear();
-        self.baseline_invalidated = true;
+        core.delta_log.clear();
+        core.baseline_invalidated = true;
 
         Ok(mapping)
     }
@@ -555,9 +543,10 @@ impl IdManager {
     /// old-to-new mapping for rows that move; unmoved rows are absent.
     /// The compaction coordinator calls this first so replacements for the
     /// timestamp and column structures can be built before any mutation,
-    /// keeping the three structures atomically consistent.
+    /// keeping the three structures atomically consistent. Core-only.
     pub fn compute_compact_mapping(&self) -> HashMap<u32, u32> {
-        let mut olds: Vec<u32> = self.key_to_id.values().copied().collect();
+        let core = self.core.lock();
+        let mut olds: Vec<u32> = core.live_ids.iter().copied().collect();
         if olds.is_empty() {
             return HashMap::new();
         }
@@ -572,47 +561,53 @@ impl IdManager {
         mapping
     }
 
-    fn rebuild_with_mapping(&mut self, entries: &[(u32, IdKey)]) -> StorageResult<()> {
+    fn rebuild_with_mapping_locked(
+        core: &mut SharedCore,
+        guards: &mut [parking_lot::MutexGuard<'_, HashMap<IdKey, u32>>],
+        entries: &[(u32, IdKey)],
+    ) -> StorageResult<()> {
         let mut new_keys = vec![None; entries.len()];
         for (new_id, (_, key)) in entries.iter().enumerate() {
             new_keys[new_id] = Some(key.clone());
         }
-
-        let mut new_key_to_id = HashMap::with_capacity(entries.len());
-        for (new_id, (_, key)) in entries.iter().enumerate() {
-            new_key_to_id.insert(key.clone(), new_id as u32);
+        for map in guards.iter_mut() {
+            map.clear();
         }
-
-        self.keys = new_keys;
-        self.key_to_id = new_key_to_id;
-        self.live_ids = (0..entries.len() as u32).collect();
-        self.free_ids.clear();
-
+        for (new_id, (_, key)) in entries.iter().enumerate() {
+            let stripe = stripe_index(key);
+            guards[stripe].insert(key.clone(), new_id as u32);
+        }
+        core.keys = new_keys;
+        core.live_ids = (0..entries.len() as u32).collect();
+        core.free_ids.clear();
         Ok(())
     }
 
-    pub fn set_at(&mut self, index: u32, key: IdKey) {
-        if self.key_to_id.contains_key(&key) {
+    pub fn set_at(&self, index: u32, key: IdKey) {
+        let stripe = stripe_index(&key);
+        let mut map = self.stripes[stripe].lock();
+        if map.contains_key(&key) {
             return;
         }
-        while self.keys.len() <= index as usize {
-            self.keys.push(None);
+        let mut core = self.core.lock();
+        while core.keys.len() <= index as usize {
+            core.keys.push(None);
         }
-        self.keys[index as usize] = Some(key.clone());
-        self.key_to_id.insert(key, index);
-        self.live_ids.insert(index);
+        core.keys[index as usize] = Some(key.clone());
+        map.insert(key, index);
+        core.live_ids.insert(index);
     }
 
-    /// Committed mutations since the last baseline flush.
+    /// Committed mutations since the last baseline flush. Core-only.
     pub fn delta_len(&self) -> usize {
-        self.delta_log.len()
+        self.core.lock().delta_log.len()
     }
 
     /// Whether compaction moved live rows since the last baseline flush.
     /// Consumes the flag: the next incremental flush anchors a new full
-    /// baseline when this returns true.
-    pub fn take_baseline_invalidated(&mut self) -> bool {
-        std::mem::take(&mut self.baseline_invalidated)
+    /// baseline when this returns true. Core-only.
+    pub fn take_baseline_invalidated(&self) -> bool {
+        std::mem::take(&mut self.core.lock().baseline_invalidated)
     }
 
     /// Scale-aware anchor threshold: the fixed floor bounds replay cost on
@@ -625,53 +620,67 @@ impl IdManager {
     }
 
     /// Anchor check against an explicit live size, for flush paths that
-    /// already hold the count. Consumes the invalidation flag.
-    pub fn should_anchor_baseline_for_live(&mut self, live: usize) -> bool {
-        self.take_baseline_invalidated()
-            || self.delta_log.len() >= Self::anchor_threshold_for_live(live)
+    /// already hold the count. Consumes the invalidation flag. Core-only.
+    pub fn should_anchor_baseline_for_live(&self, live: usize) -> bool {
+        let mut core = self.core.lock();
+        let invalidated = std::mem::take(&mut core.baseline_invalidated);
+        invalidated || core.delta_log.len() >= Self::anchor_threshold_for_live(live)
     }
 
     /// Cumulative free-stack reuses since creation (see `reuse_count`).
+    /// Core-only.
     pub fn reuse_count(&self) -> u64 {
-        self.reuse_count
+        self.core.lock().reuse_count
     }
 
     /// Non-destructive peek at the compaction-moved-rows flag (see
     /// `baseline_invalidated`). Observability only: the flush trigger
     /// policy reads it without consuming, unlike
-    /// [`Self::take_baseline_invalidated`].
+    /// [`Self::take_baseline_invalidated`]. Core-only.
     pub fn baseline_invalidated(&self) -> bool {
-        self.baseline_invalidated
+        self.core.lock().baseline_invalidated
     }
 
-    /// Total probes recorded since creation.
-    pub fn probe_total(&self) -> u64 {
-        self.access.total()
-    }
-
-    /// Per-key probe estimate for background promotion tasks only.
-    /// Read-only count-min query restored for the tiering branch: never
-    /// called on the point-lookup path, only by promotion scans deciding
-    /// which cold keys earn residency. Never undercounts.
-    pub fn estimated_probes(&self, key: &IdKey) -> u64 {
-        self.access.estimate(key)
-    }
-
-    /// Current free-stack depth: slots awaiting reuse.
+    /// Current free-stack depth: slots awaiting reuse. Core-only.
     pub fn free_depth(&self) -> usize {
-        self.free_ids.len()
+        self.core.lock().free_ids.len()
+    }
+
+    /// Index-level hole ratio `1 - bound / allocated` over the raw id
+    /// space, ignoring timestamp visibility. Fast pre-check for the
+    /// hole-rate watermark: when this is below the watermark, the
+    /// snapshot-aware ratio cannot be above it, so maintenance can skip
+    /// the timestamp scan. Ordered reuse keeps this low by refilling
+    /// tail-adjacent holes first. Core-only.
+    pub fn hole_ratio(&self) -> f64 {
+        let core = self.core.lock();
+        let allocated = core.keys.len();
+        if allocated == 0 {
+            return 0.0;
+        }
+        let bound = core.live_ids.len();
+        if bound >= allocated {
+            return 0.0;
+        }
+        1.0 - (bound as f64 / allocated as f64)
     }
 
     /// Per-component memory accounting backing [`Self::memory_usage`].
+    /// Stripes in index order, then the core.
     pub fn memory_breakdown(&self) -> IdIndexMemoryBreakdown {
+        let mut guards = Vec::with_capacity(ID_STRIPE_COUNT);
+        for stripe in &self.stripes {
+            guards.push(stripe.lock());
+        }
+        let core = self.core.lock();
         let mut keys_heap_bytes = 0usize;
-        for key_opt in &self.keys {
+        for key_opt in &core.keys {
             if let Some(IdKey::Text(text)) = key_opt {
                 keys_heap_bytes += text.len();
             }
         }
         let mut delta_heap_bytes = 0usize;
-        for delta in &self.delta_log {
+        for delta in &core.delta_log {
             match delta {
                 IndexDelta::Insert { key, .. } | IndexDelta::Remove { key } => {
                     if let IdKey::Text(text) = key {
@@ -680,38 +689,37 @@ impl IdManager {
                 }
             }
         }
-        let slot_bytes = self.keys.capacity() * std::mem::size_of::<Option<IdKey>>();
-        let map_bytes =
-            self.key_to_id.len() * (std::mem::size_of::<IdKey>() + std::mem::size_of::<u32>());
-        let set_bytes = self.live_ids.len() * (std::mem::size_of::<u32>() + 32);
-        let free_bytes = self.free_ids.capacity() * std::mem::size_of::<u32>();
-        let sketch_bytes = AccessSketch::heap_bytes();
+        let live: usize = guards.iter().map(|m| m.len()).sum();
+        let slot_bytes = core.keys.capacity() * std::mem::size_of::<Option<IdKey>>();
+        let map_bytes = live * (std::mem::size_of::<IdKey>() + std::mem::size_of::<u32>());
+        let set_bytes = core.live_ids.len() * (std::mem::size_of::<u32>() + 32);
+        let free_bytes = core.free_ids.capacity() * std::mem::size_of::<u32>();
         IdIndexMemoryBreakdown {
-            slot_count: self.keys.len(),
-            live_count: self.key_to_id.len(),
-            free_depth: self.free_ids.len(),
-            delta_entries: self.delta_log.len(),
+            slot_count: core.keys.len(),
+            live_count: live,
+            free_depth: core.free_ids.len(),
+            delta_entries: core.delta_log.len(),
             delta_heap_bytes,
             keys_heap_bytes,
             map_bytes,
             set_bytes,
             free_bytes,
-            sketch_bytes,
             total_bytes: slot_bytes
                 + keys_heap_bytes
                 + delta_heap_bytes
                 + map_bytes
                 + set_bytes
-                + free_bytes
-                + sketch_bytes,
+                + free_bytes,
         }
     }
 
     /// Drop the since-baseline delta without persisting it. Baseline-flush
     /// path only: the fresh full snapshot supersedes every delta entry.
-    pub fn clear_index_delta(&mut self) {
-        self.delta_log.clear();
-        self.baseline_invalidated = false;
+    /// Core-only.
+    pub fn clear_index_delta(&self) {
+        let mut core = self.core.lock();
+        core.delta_log.clear();
+        core.baseline_invalidated = false;
     }
 
     /// Serialize the since-baseline delta for `id_indexer.delta`.
@@ -719,11 +727,13 @@ impl IdManager {
     /// Entry encoding reuses the key bytes ([`IdKey::write_to`]): `count:u32`
     /// followed by per-entry `op:u8` (`0` insert with `id:u32`, `1` remove)
     /// plus `key_len:u32` and key bytes. No new key format is introduced.
+    /// Core-only snapshot of the delta log.
     pub fn serialize_delta(&self) -> Vec<u8> {
+        let core = self.core.lock();
         let mut buf = Vec::new();
-        buf.extend_from_slice(&(self.delta_log.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&(core.delta_log.len() as u32).to_le_bytes());
         let mut key_buf = Vec::new();
-        for delta in &self.delta_log {
+        for delta in &core.delta_log {
             match delta {
                 IndexDelta::Insert { key, id } => {
                     buf.push(0u8);
@@ -818,13 +828,16 @@ impl IdManager {
     /// Apply decoded delta entries onto the loaded baseline without
     /// recording them again (replay must not extend the live delta log).
     /// Insert restores the exact baseline id; remove drops the key and
-    /// recycles its id.
-    pub fn apply_delta_entries(&mut self, entries: &[(u8, u32, IdKey)]) -> StorageResult<()> {
+    /// recycles its id. All stripes in index order, then the core.
+    pub fn apply_delta_entries(&self, entries: &[(u8, u32, IdKey)]) -> StorageResult<()> {
+        let mut guards: Vec<_> = self.stripes.iter().map(|s| s.lock()).collect();
+        let mut core = self.core.lock();
         for (op, id, key) in entries {
             match op {
                 0 => {
                     validate_key_shape(key)?;
-                    if let Some(existing) = self.key_to_id.get(key).copied() {
+                    let stripe = stripe_index(key);
+                    if let Some(existing) = guards[stripe].get(key).copied() {
                         if existing != *id {
                             return Err(StorageError::deserialize_error(format!(
                                 "pk delta insert diverges for {:?}: baseline {} vs delta {}",
@@ -833,20 +846,21 @@ impl IdManager {
                         }
                         continue;
                     }
-                    while self.keys.len() <= *id as usize {
-                        self.keys.push(None);
+                    while core.keys.len() <= *id as usize {
+                        core.keys.push(None);
                     }
-                    self.keys[*id as usize] = Some(key.clone());
-                    self.key_to_id.insert(key.clone(), *id);
-                    self.live_ids.insert(*id);
+                    core.keys[*id as usize] = Some(key.clone());
+                    guards[stripe].insert(key.clone(), *id);
+                    core.live_ids.insert(*id);
                 }
                 1 => {
-                    if let Some(idx) = self.key_to_id.remove(key) {
-                        if (idx as usize) < self.keys.len() {
-                            self.keys[idx as usize] = None;
+                    let stripe = stripe_index(key);
+                    if let Some(idx) = guards[stripe].remove(key) {
+                        if (idx as usize) < core.keys.len() {
+                            core.keys[idx as usize] = None;
                         }
-                        self.live_ids.remove(&idx);
-                        self.free_ids.push(idx);
+                        core.live_ids.remove(&idx);
+                        core.free_ids.push(idx);
                     }
                 }
                 _ => {
@@ -877,12 +891,13 @@ impl IdManager {
     ///   - key_len: u32
     ///   - key_bytes: [u8; key_len]
     pub fn serialize(&self) -> Vec<u8> {
+        let core = self.core.lock();
         let mut buf = Vec::new();
-        let count = self.key_to_id.len() as u32;
+        let count = core.live_ids.len() as u32;
         buf.extend_from_slice(&count.to_le_bytes());
 
         let mut key_buf = Vec::new();
-        for (idx, key_opt) in self.keys.iter().enumerate() {
+        for (idx, key_opt) in core.keys.iter().enumerate() {
             if let Some(key) = key_opt {
                 buf.extend_from_slice(&(idx as u32).to_le_bytes());
                 key.write_to(&mut key_buf);
@@ -916,7 +931,7 @@ impl IdManager {
             )));
         }
 
-        let mut manager = Self::with_config(IdIndexerConfig::default());
+        let manager = Self::with_config(IdIndexerConfig::default());
         manager.reserve(count);
 
         for _ in 0..count {
@@ -947,12 +962,15 @@ impl IdManager {
 
         // Rebuild free list for holes left by non-dense persisted ids
         // (e.g., after deletions that left gaps).
-        manager.free_ids = manager
-            .keys
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, k)| if k.is_none() { Some(idx as u32) } else { None })
-            .collect();
+        {
+            let mut core = manager.core.lock();
+            core.free_ids = core
+                .keys
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, k)| if k.is_none() { Some(idx as u32) } else { None })
+                .collect();
+        }
 
         Ok(manager)
     }
@@ -964,14 +982,17 @@ impl Default for IdManager {
     }
 }
 
-/// ID indexer wrapper for simple, single-threaded ID management.
+/// ID indexer wrapper with striped key segments.
 ///
-/// Although this struct is cloneable (contains Arc), actual concurrent access
-/// is serialized through the internal `parking_lot::Mutex`. All operations
-/// are effectively single-threaded at the method level.
+/// Cloned handles share the same striped maps plus the shared allocation
+/// core. Probes hash to one segment and hold only that segment; keyed
+/// writes hold the key's segment plus the short shared core in
+/// stripe-before-core order; global operations take all segments in index
+/// order then the core. The incremental log still appends in commit order
+/// under the core.
 #[derive(Debug, Clone)]
 pub struct IdIndexer {
-    manager: Arc<Mutex<IdManager>>,
+    manager: Arc<IdManager>,
 }
 
 impl IdIndexer {
@@ -985,129 +1006,116 @@ impl IdIndexer {
 
     pub fn with_config(config: IdIndexerConfig) -> Self {
         Self {
-            manager: Arc::new(Mutex::new(IdManager::with_config(config.clone()))),
+            manager: Arc::new(IdManager::with_config(config.clone())),
         }
     }
 
     pub fn insert(&self, key: IdKey) -> StorageResult<u32> {
-        let mut manager = self.manager.lock();
-        manager.insert(key)
+        self.manager.insert(key)
     }
 
     /// Reserve a local id without binding a key (see
     /// [`IdManager::reserve_next`]).
     pub fn reserve_next(&self) -> StorageResult<u32> {
-        self.manager.lock().reserve_next()
+        self.manager.reserve_next()
     }
 
     /// Bind a key to a reserved id at commit apply (see
     /// [`IdManager::register_reserved`]).
     pub fn register_reserved(&self, key: IdKey, id: u32) -> StorageResult<()> {
-        self.manager.lock().register_reserved(key, id)
+        self.manager.register_reserved(key, id)
     }
 
     /// Return an unbound reserved id to the free stack (see
     /// [`IdManager::release_reserved`]).
     pub fn release_reserved(&self, id: u32) {
-        self.manager.lock().release_reserved(id);
+        self.manager.release_reserved(id);
     }
 
     /// Claim back a released reservation whose slot is still unbound (see
     /// [`IdManager::try_reclaim`]).
     pub fn try_reclaim(&self, id: u32) -> bool {
-        self.manager.lock().try_reclaim(id)
+        self.manager.try_reclaim(id)
     }
 
     /// Pre-allocate capacity for `additional` more entries.
     /// Call before batch inserts to avoid repeated rehashing.
     pub fn reserve(&self, additional: usize) {
-        let mut manager = self.manager.lock();
-        manager.reserve(additional);
+        self.manager.reserve(additional);
     }
 
     pub fn get_index(&self, key: &IdKey) -> Option<u32> {
-        let manager = self.manager.lock();
-        manager.get_id(key)
+        self.manager.get_id(key)
     }
 
     pub fn get_key(&self, index: u32) -> Option<IdKey> {
-        let manager = self.manager.lock();
-        manager.get_key(index)
+        self.manager.get_key(index)
     }
 
     pub fn len(&self) -> usize {
-        let manager = self.manager.lock();
-        manager.len()
+        self.manager.len()
     }
 
     /// Next free local id (see [`IdManager::next_index`]).
     pub fn next_index(&self) -> u32 {
-        let manager = self.manager.lock();
-        manager.next_index()
+        self.manager.next_index()
     }
 
     pub fn remove(&self, key: &IdKey) -> Option<u32> {
-        let mut manager = self.manager.lock();
-        manager.remove(key)
+        self.manager.remove(key)
     }
 
     /// Visibility-aware two-state lookup.
     pub fn lookup(&self, key: &IdKey, is_visible: impl Fn(u32) -> bool) -> PkLookup {
-        self.manager.lock().lookup(key, is_visible)
+        self.manager.lookup(key, is_visible)
     }
 
     /// Committed mutations since the last baseline flush.
     pub fn delta_len(&self) -> usize {
-        self.manager.lock().delta_len()
+        self.manager.delta_len()
     }
 
     /// Anchor check against an explicit live size (see
     /// [`IdManager::should_anchor_baseline_for_live`]).
     pub fn should_anchor_baseline_for_live(&self, live: usize) -> bool {
-        self.manager.lock().should_anchor_baseline_for_live(live)
+        self.manager.should_anchor_baseline_for_live(live)
     }
 
     /// Cumulative free-stack reuses (see [`IdManager::reuse_count`]).
     pub fn reuse_count(&self) -> u64 {
-        self.manager.lock().reuse_count()
+        self.manager.reuse_count()
     }
 
     /// Compaction-moved-rows flag without consuming it (see
     /// [`IdManager::baseline_invalidated`]).
     pub fn baseline_invalidated(&self) -> bool {
-        self.manager.lock().baseline_invalidated()
+        self.manager.baseline_invalidated()
     }
 
     /// Current free-stack depth (see [`IdManager::free_depth`]).
     pub fn free_depth(&self) -> usize {
-        self.manager.lock().free_depth()
+        self.manager.free_depth()
+    }
+
+    /// Index-level hole ratio (see [`IdManager::hole_ratio`]).
+    pub fn hole_ratio(&self) -> f64 {
+        self.manager.hole_ratio()
     }
 
     /// Per-component memory accounting (see
     /// [`IdManager::memory_breakdown`]).
     pub fn memory_breakdown(&self) -> IdIndexMemoryBreakdown {
-        self.manager.lock().memory_breakdown()
-    }
-
-    /// Total probes recorded (see [`IdManager::probe_total`]).
-    pub fn probe_total(&self) -> u64 {
-        self.manager.lock().probe_total()
-    }
-
-    /// Per-key probe estimate for background promotion tasks only (see
-    /// [`IdManager::estimated_probes`]). Never on the point-lookup path.
-    pub fn estimated_probes(&self, key: &IdKey) -> u64 {
-        self.manager.lock().estimated_probes(key)
+        self.manager.memory_breakdown()
     }
 
     /// Drop the since-baseline delta (baseline-flush path only).
     pub fn clear_index_delta(&self) {
-        self.manager.lock().clear_index_delta()
+        self.manager.clear_index_delta()
     }
 
     /// Serialize the since-baseline delta for `id_indexer.delta`.
     pub fn serialize_delta(&self) -> Vec<u8> {
-        self.manager.lock().serialize_delta()
+        self.manager.serialize_delta()
     }
 
     /// Decode delta entries from `id_indexer.delta` bytes.
@@ -1117,12 +1125,11 @@ impl IdIndexer {
 
     /// Apply decoded delta entries onto the loaded baseline.
     pub fn apply_delta_entries(&self, entries: &[(u8, u32, IdKey)]) -> StorageResult<()> {
-        self.manager.lock().apply_delta_entries(entries)
+        self.manager.apply_delta_entries(entries)
     }
 
     pub fn iter(&self) -> Vec<(IdKey, u32)> {
-        let manager = self.manager.lock();
-        manager.iter()
+        self.manager.iter()
     }
 
     /// Index-level live IDs in ascending order, without timestamp filtering.
@@ -1132,30 +1139,27 @@ impl IdIndexer {
     /// GC, and lazy-reused slots rejoin on insert. Snapshot visibility must
     /// be checked separately via the row timestamps.
     pub fn live_ids(&self) -> Vec<u32> {
-        self.manager.lock().live_ids()
+        self.manager.live_ids()
     }
 
     pub fn memory_size(&self) -> usize {
-        let manager = self.manager.lock();
-        manager.memory_size() + std::mem::size_of::<Self>()
+        self.manager.memory_size() + std::mem::size_of::<Self>()
     }
 
     pub fn compact(&self) -> StorageResult<HashMap<u32, u32>> {
-        let mut manager = self.manager.lock();
-        manager.compact()
+        self.manager.compact()
     }
 
     /// Pure dense-mapping preview without mutating the index. The
     /// compaction coordinator computes this before building any
     /// replacement structures so failures leave all state untouched.
     pub fn compute_compact_mapping(&self) -> HashMap<u32, u32> {
-        self.manager.lock().compute_compact_mapping()
+        self.manager.compute_compact_mapping()
     }
 
     /// Serialize the index to bytes for persistence.
     pub fn serialize(&self) -> Vec<u8> {
-        let manager = self.manager.lock();
-        manager.serialize()
+        self.manager.serialize()
     }
 
     /// Byte snapshot for compaction journaling: captured before any remap
@@ -1166,9 +1170,25 @@ impl IdIndexer {
 
     /// Restore a snapshot captured by [`Self::snapshot_bytes`], discarding
     /// any partial remap applied since. Used only for compaction rollback.
+    /// All stripes in index order, then the core.
     pub fn restore_snapshot(&self, bytes: &[u8]) -> StorageResult<()> {
-        let manager = IdManager::deserialize(bytes)?;
-        *self.manager.lock() = manager;
+        let fresh = IdManager::deserialize(bytes)?;
+        let mut guards: Vec<_> = self.manager.stripes.iter().map(|s| s.lock()).collect();
+        let mut core = self.manager.core.lock();
+        let fresh_guards: Vec<_> = fresh.stripes.iter().map(|s| s.lock()).collect();
+        let fresh_core = fresh.core.lock();
+        for (dst, src) in guards.iter_mut().zip(fresh_guards.iter()) {
+            **dst = (**src).clone();
+        }
+        *core = SharedCore {
+            keys: fresh_core.keys.clone(),
+            live_ids: fresh_core.live_ids.clone(),
+            free_ids: fresh_core.free_ids.clone(),
+            reuse_count: fresh_core.reuse_count,
+            delta_log: fresh_core.delta_log.clone(),
+            baseline_invalidated: fresh_core.baseline_invalidated,
+            config: fresh_core.config.clone(),
+        };
         Ok(())
     }
 
@@ -1176,7 +1196,7 @@ impl IdIndexer {
     pub fn deserialize(data: &[u8]) -> StorageResult<Self> {
         let manager = IdManager::deserialize(data)?;
         Ok(Self {
-            manager: Arc::new(Mutex::new(manager)),
+            manager: Arc::new(manager),
         })
     }
 }
@@ -1746,8 +1766,7 @@ mod tests {
                     + breakdown.set_bytes
                     + breakdown.free_bytes
         );
-        let manager = indexer.manager.lock();
-        assert_eq!(breakdown.total_bytes, manager.memory_usage());
+        assert_eq!(breakdown.total_bytes, indexer.manager.memory_usage());
     }
 
     #[test]
@@ -1765,53 +1784,22 @@ mod tests {
     }
 
     #[test]
-    fn test_probe_sampler_records_lookup_totals() {
+    fn test_reuse_claims_largest_hole_first() {
         let indexer = IdIndexer::new();
-        indexer.insert(IdKey::Text("hot".to_string())).unwrap();
-        indexer.insert(IdKey::Text("cold".to_string())).unwrap();
-        for _ in 0..100 {
-            assert!(indexer.get_index(&IdKey::Text("hot".to_string())).is_some());
-        }
-        for _ in 0..3 {
-            assert!(indexer
-                .get_index(&IdKey::Text("cold".to_string()))
-                .is_some());
-        }
-        assert_eq!(indexer.probe_total(), 103);
-    }
-
-    #[test]
-    fn test_per_key_estimate_never_undercounts() {
-        let indexer = IdIndexer::new();
-        indexer.insert(IdKey::Text("hot".to_string())).unwrap();
-        indexer.insert(IdKey::Text("cold".to_string())).unwrap();
-        for _ in 0..100 {
-            assert!(indexer.get_index(&IdKey::Text("hot".to_string())).is_some());
-        }
-        for _ in 0..3 {
-            assert!(indexer
-                .get_index(&IdKey::Text("cold".to_string()))
-                .is_some());
-        }
-        let manager = indexer.manager.lock();
-        assert!(manager.estimated_probes(&IdKey::Text("hot".to_string())) >= 100);
-        assert!(manager.estimated_probes(&IdKey::Text("cold".to_string())) >= 3);
-        assert_eq!(
-            manager.estimated_probes(&IdKey::Text("unseen".to_string())),
-            0
-        );
-    }
-
-    #[test]
-    fn test_sketch_bytes_are_fixed_and_accounted() {
-        let indexer = IdIndexer::new();
-        let breakdown = indexer.memory_breakdown();
-        assert_eq!(breakdown.sketch_bytes, 2 * 2048 * 8);
-        assert!(breakdown.total_bytes >= breakdown.sketch_bytes);
-        for i in 0..64 {
+        for i in 0..4 {
             indexer.insert(IdKey::Int(i)).unwrap();
         }
-        assert_eq!(indexer.memory_breakdown().sketch_bytes, 2 * 2048 * 8);
+        // Free in ascending order so stack order alone would reclaim the
+        // smallest hole first; ordered reuse must refill the tail instead.
+        indexer.remove(&IdKey::Int(1));
+        indexer.remove(&IdKey::Int(3));
+        assert!((indexer.hole_ratio() - 0.5).abs() < f64::EPSILON);
+        let first = indexer.insert(IdKey::Int(10)).unwrap();
+        assert_eq!(first, 3);
+        let second = indexer.insert(IdKey::Int(11)).unwrap();
+        assert_eq!(second, 1);
+        assert_eq!(indexer.free_depth(), 0);
+        assert_eq!(indexer.hole_ratio(), 0.0);
     }
 
     #[test]

@@ -146,18 +146,24 @@ impl ShardedVertexTable {
 
     /// Full cross-shard scan at the guard's snapshot.
     ///
-    /// Each shard is scanned under its own read lock and the per-shard results
-    /// are concatenated in shard order, so concurrent writes may be observed
-    /// inconsistently across shards. Point lookups stay shard-consistent.
+    /// Each shard is scanned under its own read lock; per-shard runs are
+    /// already sorted by global id and merged here with a k-way heap into
+    /// one globally ordered stream. Empty shards (no live rows at the
+    /// snapshot) contribute no run and never build an iterator. Concurrent
+    /// writes may still be observed inconsistently across shards; point
+    /// lookups stay shard-consistent.
     pub fn scan(&self, guard: &VisibilityGuard<'_>) -> Vec<VertexRecord> {
         use rayon::prelude::*;
         let snapshot = guard.snapshot();
-        let per_shard: Vec<(usize, Vec<VertexRecord>)> = self
+        let per_shard: Vec<Vec<VertexRecord>> = self
             .shards
             .par_iter()
             .enumerate()
             .map(|(shard_idx, shard)| {
                 let table = shard.read();
+                if table.total_count() == 0 {
+                    return Vec::new();
+                }
                 let mut records: Vec<VertexRecord> = table
                     .scan(snapshot)
                     .filter_map(|mut record| {
@@ -170,33 +176,33 @@ impl ShardedVertexTable {
                     })
                     .collect();
                 records.sort_by_key(|record| record.internal_id);
-                (shard_idx, records)
+                records
             })
             .collect();
         // Shards are independent read domains: parallel scan is safe, and
-        // results are reassembled in shard order for stable pagination.
-        let mut ordered = vec![Vec::new(); per_shard.len()];
-        for (shard_idx, records) in per_shard {
-            ordered[shard_idx] = records;
-        }
-        ordered.into_iter().flatten().collect()
+        // the sorted per-shard runs merge into global id order for stable
+        // pagination without caller-side fan-out.
+        Self::merge_sorted_records(per_shard)
     }
 
     /// Candidate id enumeration for paginated scans: rows the guard considers
-    /// visible at its snapshot.
+    /// visible at its snapshot, in global id order.
     ///
     /// Shards are read without a global lock, so concurrent writes may be
     /// observed inconsistently across shards. Shards decode in parallel and
-    /// reassemble in shard order, matching [`Self::scan`].
+    /// merge in global id order, matching [`Self::scan`].
     pub fn live_ids(&self, guard: &VisibilityGuard<'_>) -> Vec<u32> {
         use rayon::prelude::*;
         let snapshot = guard.snapshot();
-        let per_shard: Vec<(usize, Vec<u32>)> = self
+        let per_shard: Vec<Vec<u32>> = self
             .shards
             .par_iter()
             .enumerate()
             .map(|(shard_idx, shard)| {
                 let table = shard.read();
+                if table.total_count() == 0 {
+                    return Vec::new();
+                }
                 let mut shard_ids: Vec<u32> = table
                     .live_ids(snapshot)
                     .into_iter()
@@ -204,14 +210,10 @@ impl ShardedVertexTable {
                     .map(|local_id| self.encode_id(shard_idx, local_id))
                     .collect();
                 shard_ids.sort_unstable();
-                (shard_idx, shard_ids)
+                shard_ids
             })
             .collect();
-        let mut ordered = vec![Vec::new(); per_shard.len()];
-        for (shard_idx, shard_ids) in per_shard {
-            ordered[shard_idx] = shard_ids;
-        }
-        ordered.into_iter().flatten().collect()
+        Self::merge_sorted_ids(per_shard)
     }
 
     /// Column-major batch decode for paginated scans.
@@ -342,6 +344,8 @@ impl ShardedVertexTable {
     /// before decoding. Unknown columns and chunks without bounds keep the
     /// id (conservative). Complex equality probes first prune on the
     /// per-chunk length summary, then fall back to whole-value ordering.
+    /// A shard whose merged aggregate bounds already miss a range skips
+    /// every row without per-chunk work.
     pub fn zone_prune_mask(
         &self,
         ids: &[u32],
@@ -356,6 +360,12 @@ impl ShardedVertexTable {
                 continue;
             }
             let table = self.shards[shard_idx].read();
+            if Self::shard_wholly_pruned(&table, ranges) {
+                for (slot, _) in group {
+                    mask[slot] = false;
+                }
+                continue;
+            }
             for (slot, local_id) in group {
                 let chunk = local_id as usize / crate::vertex::column_store::ZONE_MAP_CHUNK_ROWS;
                 for range in ranges {
@@ -367,6 +377,82 @@ impl ShardedVertexTable {
             }
         }
         mask
+    }
+
+    /// Whether no row of one shard can match `ranges` from merged aggregate
+    /// bounds alone. True only when a range's column has recorded bounds on
+    /// this shard and the merged interval misses the range; unknown columns
+    /// or bound-less shards stay conservative.
+    fn shard_wholly_pruned(
+        table: &VertexTable,
+        ranges: &[crate::cursor::PredicateRange],
+    ) -> bool {
+        for range in ranges {
+            let Some(bounds) = table.columns.aggregate_zone_bounds(&range.column) else {
+                continue;
+            };
+            let (Some(min), Some(max)) = (bounds.min.as_ref(), bounds.max.as_ref()) else {
+                continue;
+            };
+            if !range.overlaps(min, max) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// K-way heap merge of sorted id runs into global id order. Each input
+    /// run is already sorted; the heap holds one head per non-empty run.
+    fn merge_sorted_ids(mut runs: Vec<Vec<u32>>) -> Vec<u32> {
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+        let total: usize = runs.iter().map(|r| r.len()).sum();
+        let mut heap: BinaryHeap<(Reverse<u32>, usize, usize)> = BinaryHeap::new();
+        for (run_idx, run) in runs.iter().enumerate() {
+            if let Some(&first) = run.first() {
+                heap.push((Reverse(first), run_idx, 0));
+            }
+        }
+        let mut out = Vec::with_capacity(total);
+        while let Some((Reverse(value), run_idx, pos)) = heap.pop() {
+            out.push(value);
+            let next = pos + 1;
+            if next < runs[run_idx].len() {
+                heap.push((Reverse(runs[run_idx][next]), run_idx, next));
+            }
+        }
+        // Release per-shard buffers eagerly; the merged order is the only
+        // retained allocation.
+        runs.clear();
+        out
+    }
+
+    /// K-way heap merge of sorted record runs into global id order.
+    fn merge_sorted_records(runs: Vec<Vec<VertexRecord>>) -> Vec<VertexRecord> {
+        use std::cmp::Reverse;
+        use std::collections::{BinaryHeap, VecDeque};
+        let total: usize = runs.iter().map(|r| r.len()).sum();
+        let mut queues: Vec<VecDeque<VertexRecord>> = runs
+            .into_iter()
+            .map(VecDeque::from)
+            .collect();
+        let mut heap: BinaryHeap<(Reverse<u32>, usize)> = BinaryHeap::new();
+        for (run_idx, queue) in queues.iter().enumerate() {
+            if let Some(first) = queue.front() {
+                heap.push((Reverse(first.internal_id), run_idx));
+            }
+        }
+        let mut out = Vec::with_capacity(total);
+        while let Some((_, run_idx)) = heap.pop() {
+            let Some(record) = queues[run_idx].pop_front() else {
+                continue;
+            };
+            if let Some(next) = queues[run_idx].front() {
+                heap.push((Reverse(next.internal_id), run_idx));
+            }
+            out.push(record);
+        }
+        out
     }
 
     /// Aggregate optimizer-facing statistics for one property column across

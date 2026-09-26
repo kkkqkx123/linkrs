@@ -70,6 +70,11 @@ impl ColumnStorage for VariableWidthColumn {
         ) {
             if bytes.len().is_multiple_of(std::mem::size_of::<f32>()) {
                 let dim = bytes.len() / std::mem::size_of::<f32>();
+                if let DataType::VectorDense(expected) = &self.data_type {
+                    if *expected > 0 && dim != *expected {
+                        return None;
+                    }
+                }
                 let mut data = Vec::with_capacity(dim);
                 for i in 0..dim {
                     let chunk: [u8; 4] = bytes[i * 4..(i + 1) * 4].try_into().ok()?;
@@ -133,6 +138,22 @@ impl ColumnStorage for VariableWidthColumn {
                         return Err(StorageError::invalid_input(format!(
                             "FixedString({}) cannot hold {} bytes",
                             limit, len
+                        )));
+                    }
+                }
+            }
+        }
+        // Wide or unsized dense vectors stay on this base with an explicit
+        // dimension check so a wrong-dimension write fails before appending
+        // payload instead of persisting a corrupt length prefix.
+        if let DataType::VectorDense(dim) = &self.data_type {
+            if *dim > 0 {
+                if let Some(Value::Vector(vec)) = value {
+                    let actual = vec.dimension();
+                    if actual != *dim {
+                        return Err(StorageError::invalid_input(format!(
+                            "VectorDense({}) cannot hold dimension {}",
+                            dim, actual
                         )));
                     }
                 }

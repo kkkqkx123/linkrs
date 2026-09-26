@@ -295,11 +295,6 @@ pub struct PropertyGraphConfig {
     /// Safety margin subtracted from the GC watermark timestamp.
     /// Higher values are more conservative (keep more history).
     pub gc_safety_margin: Timestamp,
-    /// Degraded-branch primary-key heap budget in bytes (0 = unset).
-    /// From deployment configuration, never hardcoded: the write entry
-    /// refuses over-limit inserts and patrol logs the usage ratio beside
-    /// probe aggregation on the same line.
-    pub pk_index_budget_bytes: u64,
 }
 
 impl Default for PropertyGraphConfig {
@@ -313,7 +308,6 @@ impl Default for PropertyGraphConfig {
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
             gc_safety_margin: 1,
-            pk_index_budget_bytes: 0,
         }
     }
 }
@@ -337,7 +331,6 @@ impl PropertyGraphConfig {
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
             gc_safety_margin: 1,
-            pk_index_budget_bytes: 0,
         }
     }
 
@@ -355,7 +348,6 @@ impl PropertyGraphConfig {
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
             gc_safety_margin: 1,
-            pk_index_budget_bytes: 0,
         }
     }
 
@@ -377,7 +369,6 @@ impl PropertyGraphConfig {
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
             gc_safety_margin: 1,
-            pk_index_budget_bytes: 0,
         }
     }
 
@@ -407,7 +398,6 @@ impl PropertyGraphConfig {
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
             gc_safety_margin: 1,
-            pk_index_budget_bytes: 0,
         }
     }
 

@@ -91,7 +91,9 @@ impl VertexTable {
         self.load_columns(&columns_path)?;
         // Restore persisted eviction state from mmap sidecars. Derived
         // cache only: failures keep chunks resident without failing load.
-        self.columns.load_evict_snapshots(path);
+        // Discard counts are observable via the warn above; the manifest
+        // pin (sharded layer) already pruned tampered sidecars.
+        let _ = self.columns.load_evict_snapshots(path);
 
         let timestamps_path = path.join("timestamps.bin");
         self.load_timestamps(&timestamps_path)?;

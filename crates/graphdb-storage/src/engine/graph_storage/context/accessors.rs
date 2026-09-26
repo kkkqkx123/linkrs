@@ -571,6 +571,7 @@ impl GraphStorageContext {
         if let Some(ref gc) = self.runtime.vertex_gc_manager {
             let _total = gc.total_removed();
             let _passes = gc.pass_count();
+            let _mitigations = gc.pressure_mitigations();
         }
         snapshot
     }

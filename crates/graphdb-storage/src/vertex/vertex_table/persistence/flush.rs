@@ -38,6 +38,11 @@ impl VertexTable {
         // per-column snapshot is promoted.
         let selections = self.flush_columns(&columns_path)?;
 
+        // Persist evicted chunks into mmap sidecars before the in-memory
+        // re-encode below promotes them: the pin must capture the
+        // pre-flush eviction state so reload restores it. Sidecars stay
+        // derived caches pinned in the commit manifest, never authoritative.
+        self.columns.flush_evict_snapshots(path)?;
         // Apply encoding to in-memory columns so data stays compressed after flush.
         // This moves compression from "flush-time only" to "post-flush in-memory",
         // reducing memory footprint for the lifetime of the column store.
@@ -59,9 +64,6 @@ impl VertexTable {
 
         let timestamps_path = path.join("timestamps.bin");
         self.flush_timestamps(&timestamps_path)?;
-        // Persist evicted chunks into mmap sidecars so reload restores the
-        // eviction state instead of decoding everything onto the heap.
-        self.columns.flush_evict_snapshots(path)?;
         // Successful full flush clears dirty tracking (data now persisted).
         self.clear_dirty();
 

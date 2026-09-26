@@ -88,26 +88,6 @@ mod bench_coverage_tests {
             reason: "transaction-side lease terms and admission thresholds under the stuck-watermark load",
         },
         CoverageEntry {
-            threshold: "TIERING_MIN_PROBES",
-            bench_fn: Some("bench_vertex_point_lookup"),
-            reason: "gate evidence floor rides point-lookup probe traffic",
-        },
-        CoverageEntry {
-            threshold: "TIERING_SKEW_THRESHOLD",
-            bench_fn: Some("bench_vertex_point_lookup"),
-            reason: "concentration signal read from point-lookup probe skew",
-        },
-        CoverageEntry {
-            threshold: "TIERING_HOT_SHARE_THRESHOLD",
-            bench_fn: Some("bench_vertex_point_lookup"),
-            reason: "hot-share cutoff scored against point-lookup probe distribution",
-        },
-        CoverageEntry {
-            threshold: "pk_index_budget_bytes",
-            bench_fn: None,
-            reason: "unset (0) by default with zero serving-path effect; over-limit refusal is covered by tiering unit tests",
-        },
-        CoverageEntry {
             threshold: "DEFAULT_DRAIN_TIMEOUT_MS",
             bench_fn: None,
             reason: "online-migration drain bound; overrun rollback is covered by migration session unit tests with no steady-state bench signal",
@@ -136,7 +116,6 @@ mod bench_coverage_tests {
         ),
         ("residency_eviction", &["bench_scaled_cursor_scan"]),
         ("point_lookup", &["bench_vertex_point_lookup"]),
-        ("tiering_gate", &["bench_vertex_point_lookup"]),
         ("lease_policy", &["bench_vertex_churn_reuse"]),
     ];
 
@@ -163,11 +142,7 @@ mod bench_coverage_tests {
         let _ = crate::vertex::column::EVICTION_SEGMENT_BYTES;
         let _ = crate::vertex::column::MAX_BACKGROUND_LOAD_CHUNKS;
         let _ = crate::vertex::gc_manager::VertexGcConfig::default().max_lease_ttl_ms;
-        let _ = crate::vertex::tiering::TIERING_MIN_PROBES;
-        let _ = crate::vertex::tiering::TIERING_SKEW_THRESHOLD;
-        let _ = crate::vertex::tiering::TIERING_HOT_SHARE_THRESHOLD;
         let _ = crate::vertex::vertex_table::sharded::migration::DEFAULT_DRAIN_TIMEOUT_MS;
-        let _ = crate::engine::config::PropertyGraphConfig::default().pk_index_budget_bytes;
         let _ = graphdb_transaction::TransactionManagerConfig::default().default_lease_ttl;
         let _ = graphdb_transaction::TransactionManagerConfig::default().long_read_max_live_leases;
         let _ = graphdb_transaction::TransactionManagerConfig::default().long_read_max_pin_secs;

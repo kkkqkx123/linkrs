@@ -107,6 +107,9 @@ pub struct SnapshotBackpressure {
     pub leases_expired: u64,
     /// Passes that reclaimed nothing because the watermark was pinned.
     pub blocked_passes: u64,
+    /// Passes that triggered version-chain pressure mitigation (cold-chunk
+    /// eviction while the watermark was pinned by live snapshots).
+    pub pressure_mitigations: u64,
 }
 
 fn wall_now_ms() -> u64 {
@@ -155,6 +158,12 @@ pub struct VertexGcManager {
     /// churn; a pass that reclaims keys without invalidating is a
     /// correctness bug, not a metric gap.
     cache_invalidations: AtomicU64,
+    /// Passes that released cold chunks to contain resident growth while
+    /// version chains were pinned by live snapshots. Chains themselves are
+    /// never dropped below the watermark; only evictable chunks (no overlay
+    /// writes, no live chains) are externalized, so pinned reads stay
+    /// correct while memory converges.
+    pressure_mitigations: AtomicU64,
     /// Live snapshot leases by holder id, shared across clones so issuance
     /// on any handle pins every pass. Guarded by a mutex because issuance
     /// is rare (transaction boundaries) while reads take the fast floor
@@ -192,6 +201,7 @@ impl VertexGcManager {
             total_removed: AtomicU64::new(0),
             blocked_passes: AtomicU64::new(0),
             cache_invalidations: AtomicU64::new(0),
+            pressure_mitigations: AtomicU64::new(0),
             leases: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             leases_issued: AtomicU64::new(0),
             leases_renewed: AtomicU64::new(0),
@@ -382,6 +392,7 @@ impl VertexGcManager {
             leases_renewed: self.leases_renewed.load(Ordering::Acquire),
             leases_expired: self.leases_expired.load(Ordering::Acquire),
             blocked_passes: self.blocked_passes.load(Ordering::Acquire),
+            pressure_mitigations: self.pressure_mitigations.load(Ordering::Acquire),
         }
     }
 
@@ -483,6 +494,37 @@ impl VertexGcManager {
             }
         }
 
+        // Active mitigation for pinned-snapshot version pressure: chains
+        // cannot fold below live snapshots, so release evictable cold
+        // chunks to contain resident growth while the watermark is pinned.
+        // Only chunks without overlay writes or live chains are released;
+        // the pinned chains themselves are retained, so snapshot reads stay
+        // correct. Bounded to one eviction segment per pass.
+        let pressured_max_chain = self.data_store.with_vertex_tables(|tables| {
+            tables
+                .values()
+                .map(|table| table.version_chain_pressure().1)
+                .max()
+                .unwrap_or(0)
+        });
+        if pressured_max_chain
+            > crate::vertex::vertex_table::core::VertexTable::VERSION_CHAIN_PRESSURE_WARN_LEN
+        {
+            Self::evict_cold_chunks(
+                &self.data_store,
+                crate::vertex::column::EVICTION_SEGMENT_BYTES,
+            );
+            let mitigations = self
+                .pressure_mitigations
+                .fetch_add(1, Ordering::Release)
+                .saturating_add(1);
+            log::warn!(
+                "GC mitigating version-chain pressure: max_chain_len={} mitigations={}",
+                pressured_max_chain,
+                mitigations,
+            );
+        }
+
         // Watermark-triggered chunk eviction on the same background pass:
         // under High/Critical process pressure, release cold encoded column
         // chunks oldest-first so memory converges with the working set.
@@ -550,6 +592,12 @@ impl VertexGcManager {
     pub fn pass_count(&self) -> u64 {
         self.stats.load(Ordering::Acquire)
     }
+
+    /// Passes that released cold chunks to contain resident growth while
+    /// version chains were pinned by live snapshots.
+    pub fn pressure_mitigations(&self) -> u64 {
+        self.pressure_mitigations.load(Ordering::Acquire)
+    }
 }
 
 impl Clone for VertexGcManager {
@@ -564,6 +612,7 @@ impl Clone for VertexGcManager {
             total_removed: AtomicU64::new(self.total_removed.load(Ordering::Acquire)),
             blocked_passes: AtomicU64::new(self.blocked_passes.load(Ordering::Acquire)),
             cache_invalidations: AtomicU64::new(self.cache_invalidations.load(Ordering::Acquire)),
+            pressure_mitigations: AtomicU64::new(self.pressure_mitigations.load(Ordering::Acquire)),
             leases: self.leases.clone(),
             leases_issued: AtomicU64::new(self.leases_issued.load(Ordering::Acquire)),
             leases_renewed: AtomicU64::new(self.leases_renewed.load(Ordering::Acquire)),
@@ -610,6 +659,16 @@ mod tests {
         assert!(!is_snapshot_stuck(0));
         assert!(!is_snapshot_stuck(STUCK_SNAPSHOT_AGE_SECS));
         assert!(is_snapshot_stuck(STUCK_SNAPSHOT_AGE_SECS + 1));
+    }
+
+    #[test]
+    fn test_pressure_mitigation_starts_at_zero_and_clones() {
+        use crate::vertex::vertex_table::core::VertexTable;
+        assert_eq!(VertexTable::VERSION_CHAIN_PRESSURE_WARN_LEN, 1024);
+        let gc = test_manager();
+        assert_eq!(gc.pressure_mitigations(), 0);
+        assert_eq!(gc.backpressure_snapshot(0).pressure_mitigations, 0);
+        assert_eq!(gc.clone().pressure_mitigations(), 0);
     }
 
     fn test_manager() -> VertexGcManager {

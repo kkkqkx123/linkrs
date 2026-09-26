@@ -12,7 +12,6 @@
 pub mod column;
 pub mod gc_manager;
 pub mod id_indexer;
-pub mod tiering;
 pub mod vertex_table;
 pub mod vertex_timestamp;
 pub mod write_scope;

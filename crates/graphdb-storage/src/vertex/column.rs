@@ -5,19 +5,18 @@
 //!
 //! The storage is split into two variants:
 //! - `FixedWidthColumn`: For fixed-length scalar types (Bool, SmallInt, Int,
-//!   BigInt, Float, Double, Date, Time, DateTime, Uuid)
-//! - `VariableWidthColumn`: For everything else (String, FixedString, Blob,
-//!   Geography, Vector family, Json/JsonB, Interval, Decimal family, Union,
-//!   containers, nested composites and graph values), stored as
-//!   length-prefixed payloads; complex values use an opaque postcard encoding
-//!   for the raw base. Per-chunk encodings selected at flush time (dictionary
-//!   for low-cardinality strings including FixedString, FSST for long strings,
-//!   plus RLE/BitPacking/ALP/Constant where applicable), zone maps and HLL
-//!   statistics apply on top of the base layout. FixedString stays on the
-//!   variable-width base: the fixed length is a schema-level constraint, and
-//!   moving it to a padded fixed-width layout would change the persisted
-//!   format for little scan benefit once dictionary encoding covers the
-//!   low-cardinality cases.
+//!   BigInt, Float, Double, Date, Time, DateTime, Uuid) plus short
+//!   `FixedString(n)` declarations (zero-padded `n`-byte slots) and small
+//!   `VectorDense(n)` declarations (fixed `n * 4`-byte little-endian slots).
+//! - `VariableWidthColumn`: For everything else (String, wide or zero-width
+//!   FixedString, Blob, Geography, wide or unsized vectors, Json/JsonB,
+//!   Interval, Decimal family, Union, containers, nested composites and
+//!   graph values), stored as length-prefixed payloads; complex values use
+//!   an opaque postcard encoding for the raw base. Per-chunk encodings
+//!   selected at flush time (dictionary for low-cardinality strings
+//!   including wide FixedString, FSST for long strings, plus
+//!   RLE/BitPacking/ALP/Constant where applicable), zone maps and HLL
+//!   statistics apply on top of the base layout.
 //! - `Column`: Public wrapper that selects the appropriate variant at construction time
 
 pub mod chunk;
@@ -37,9 +36,13 @@ pub mod zone_map;
 mod tests;
 
 pub use chunk::{ChunkFlushView, ColumnChunk};
-pub use column::{Column, ColumnStorage, EVICTION_SEGMENT_BYTES, MAX_BACKGROUND_LOAD_CHUNKS};
+pub use column::{
+    BufferLedger, Column, ColumnStorage, EVICTION_SEGMENT_BYTES, MAX_BACKGROUND_LOAD_CHUNKS,
+};
 pub use column_store::ColumnStore;
-pub use fixed_width::element_size;
+pub use fixed_width::{
+    element_size, FIXED_STRING_INLINE_LIMIT, VECTOR_DENSE_FIXED_MAX_DIM,
+};
 pub use zone_map::{
     compare_values, complex_key_fp, complex_leaf_range, complex_len, ZONE_MAP_CHUNK_ROWS,
 };
@@ -48,11 +51,19 @@ use graphdb_core::DataType;
 
 /// Returns true if the data type is variable-length.
 ///
-/// Only the ten fixed-width scalar types return false. Every other type,
-/// including FixedString, the Decimal family, Union and any future type,
+/// The ten fixed-width scalar types plus short `FixedString(n)`
+/// declarations and small `VectorDense(n)` declarations return false.
+/// Every other type, including wide or zero-width FixedString, wide or
+/// unsized vectors, the Decimal family, Union and any future type,
 /// returns true so no column can ever be built as a zero-step
 /// FixedWidthColumn (element_size 0 would corrupt offsets).
 pub fn is_variable_length_type(data_type: &DataType) -> bool {
+    if let DataType::FixedString(n) = data_type {
+        return *n == 0 || *n > FIXED_STRING_INLINE_LIMIT;
+    }
+    if let DataType::VectorDense(dim) = data_type {
+        return *dim == 0 || *dim > VECTOR_DENSE_FIXED_MAX_DIM;
+    }
     !matches!(
         data_type,
         DataType::Bool

@@ -17,9 +17,26 @@ use graphdb_transaction::{TimestampSlot, VersionManager};
 /// `delete_ts` is `None` for live rows and `Some(ts)` for tombstoned rows
 /// (where `ts` is the deletion timestamp; rows are visible while
 /// `snapshot < delete_ts`).
+///
+/// Row-liveness invariant: table-level timestamps own row life and death;
+/// column version chains own value history only and never decide liveness.
+/// Every row-content read checks liveness exactly once through this predicate
+/// (or its pending-aware guard form) and column reads assume a live row.
 pub struct Visibility;
 
 impl Visibility {
+    /// Single row-liveness entry for plain timestamp reads. Table timestamp
+    /// maps and sharded guards both route through this shape so the
+    /// interval semantics cannot drift between layers.
+    #[inline]
+    pub fn row_live(
+        snapshot: Timestamp,
+        create_ts: Timestamp,
+        delete_ts: Option<Timestamp>,
+    ) -> bool {
+        Self::is_visible(snapshot, create_ts, delete_ts)
+    }
+
     #[inline]
     pub fn is_visible(
         snapshot: Timestamp,
@@ -70,6 +87,10 @@ impl Visibility {
 }
 
 /// Pending-aware visibility gate for operation-layer point lookups.
+///
+/// Row life and death stay owned by the table timestamp map; this gate only
+/// adds concurrency fencing on top of the unified interval predicate so a
+/// foreign uncommitted stamp cannot leak into a snapshot read.
 ///
 /// The plain [`Visibility`] predicates compare timestamps only, so an
 /// optimistic write transaction running behind a concurrent uncommitted write

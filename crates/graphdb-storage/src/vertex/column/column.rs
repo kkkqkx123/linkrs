@@ -78,8 +78,8 @@ impl ColumnInner {
 ///
 /// | `DataType` | Storage variant |
 /// |---|---|
-/// | Bool, SmallInt, Int, BigInt, Float, Double, Date, Time, DateTime, Uuid | `FixedWidthColumn` |
-/// | All other types (String, FixedString, Blob, Geography, Vector family, Json/JsonB, Interval, Decimal family, Union, containers, composites, graph values) | `VariableWidthColumn` (length-prefixed base; per-chunk encodings such as dictionary/FSST plus zone maps and HLL stats apply on top) |
+/// | Bool, SmallInt, Int, BigInt, Float, Double, Date, Time, DateTime, Uuid, short `FixedString(n)`, small `VectorDense(n)` | `FixedWidthColumn` (short fixed strings as zero-padded `n`-byte slots; small dense vectors as fixed `n * 4`-byte slots) |
+/// | All other types (String, wide or zero-width FixedString, Blob, Geography, wide or unsized vectors, Json/JsonB, Interval, Decimal family, Union, containers, composites, graph values) | `VariableWidthColumn` (length-prefixed base; per-chunk encodings such as dictionary/FSST plus zone maps and HLL stats apply on top) |
 ///
 /// # MVCC
 ///
@@ -116,6 +116,33 @@ pub const EVICTION_SEGMENT_BYTES: u64 = 16 * 1024 * 1024;
 /// Background load quota: at most this many evicted chunks are promoted per
 /// batch-load call; over-quota scans continue with the remainder.
 pub const MAX_BACKGROUND_LOAD_CHUNKS: usize = 64;
+
+/// Unified buffer accounting for one column: decoded resident bytes
+/// (including the overflow side store), retained eviction-snapshot bytes,
+/// the overflow subset for breakdown, dirty pages and chunk counts in one
+///口径. The three former paths (chunk residency, overflow store, dirty
+/// pages) plus the process spill directory backing evicted snapshots
+/// share this ledger so eviction quotas and observability observe the
+/// same totals. Spill files are owned by their snapshots and vanish with
+/// the last dropped reference; `clear` drops chunks, overflow and dirty
+/// marks together, leaving no cross-process residue except
+/// crash-orphaned spill directories reaped by
+/// `cleanup_stale_spill_dirs`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BufferLedger {
+    pub resident_bytes: usize,
+    pub evicted_bytes: usize,
+    pub overflow_bytes: usize,
+    pub dirty_pages: usize,
+    pub resident_chunks: usize,
+    pub evicted_chunks: usize,
+}
+
+impl BufferLedger {
+    pub fn total_bytes(&self) -> usize {
+        self.resident_bytes.saturating_add(self.evicted_bytes)
+    }
+}
 
 /// A column of one shard: metadata plus a latch-guarded chunk vector.
 ///
@@ -1239,12 +1266,21 @@ impl Column {
                     } else {
                         let start = new_data.len();
                         new_data.resize(start + elem_size, 0);
-                        let _ = super::fixed_width::write_fixed_value(
-                            &mut new_data,
-                            start,
-                            elem_size,
-                            &v,
-                        );
+                        if let DataType::FixedString(limit) = &self.data_type {
+                            let _ = super::fixed_width::write_fixed_string(
+                                &mut new_data,
+                                start,
+                                *limit,
+                                &v,
+                            );
+                        } else {
+                            let _ = super::fixed_width::write_fixed_value(
+                                &mut new_data,
+                                start,
+                                elem_size,
+                                &v,
+                            );
+                        }
                     }
                 }
                 None => {
@@ -1707,9 +1743,45 @@ impl Column {
         Ok((loaded, remaining))
     }
 
+    /// Unified buffer ledger for this column in one pass: resident bytes
+    /// (decoded heap including the overflow side store), retained
+    /// eviction-snapshot bytes, the overflow subset, dirty pages and chunk
+    /// counts. One chunks read plus one overflow lock; eviction quotas
+    /// and observability share these totals instead of three separate
+    /// tallies.
+    pub fn buffer_ledger(&self) -> BufferLedger {
+        let chunks = self.chunks.read();
+        let mut resident_chunks = 0usize;
+        let mut evicted_chunks = 0usize;
+        let mut evicted_bytes = 0usize;
+        let mut dirty_pages = 0usize;
+        for chunk in chunks.iter() {
+            let state = chunk.read_state();
+            if state.residency.is_resident() {
+                resident_chunks += 1;
+            } else {
+                evicted_chunks += 1;
+            }
+            if let Some(snapshot) = state.residency.evicted_snapshot() {
+                evicted_bytes += snapshot.compressed_bytes();
+            }
+            dirty_pages += state.dirty_pages.len();
+        }
+        let overflow_bytes = self.overflow_store.lock().memory_usage();
+        let resident_bytes = self.memory_usage().saturating_sub(evicted_bytes);
+        BufferLedger {
+            resident_bytes,
+            evicted_bytes,
+            overflow_bytes,
+            dirty_pages,
+            resident_chunks,
+            evicted_chunks,
+        }
+    }
+
     /// Resident decoded bytes (excludes retained eviction snapshots).
     pub fn resident_memory_usage(&self) -> usize {
-        self.memory_usage().saturating_sub(self.evicted_bytes())
+        self.buffer_ledger().resident_bytes
     }
 
     /// Chunk indexes whose overlay load makes them recode candidates.
@@ -1813,30 +1885,17 @@ impl Column {
     /// live (heap or spill files). Used for eviction observability; spilled
     /// bytes no longer count toward heap memory.
     pub fn evicted_bytes(&self) -> usize {
-        let chunks = self.chunks.read();
-        chunks
-            .iter()
-            .filter_map(|chunk| chunk.read_state().residency.evicted_snapshot().cloned())
-            .map(|snapshot| snapshot.compressed_bytes())
-            .sum()
+        self.buffer_ledger().evicted_bytes
     }
 
     /// Chunks with decoded data in memory.
     pub fn resident_chunk_count(&self) -> usize {
-        let chunks = self.chunks.read();
-        chunks
-            .iter()
-            .filter(|chunk| chunk.read_state().residency.is_resident())
-            .count()
+        self.buffer_ledger().resident_chunks
     }
 
     /// Chunks released with only the snapshot retained.
     pub fn evicted_chunk_count(&self) -> usize {
-        let chunks = self.chunks.read();
-        chunks
-            .iter()
-            .filter(|chunk| chunk.read_state().residency.is_evicted())
-            .count()
+        self.buffer_ledger().evicted_chunks
     }
 
     /// Base value for encoding inputs and persisted buffers: overflow rows

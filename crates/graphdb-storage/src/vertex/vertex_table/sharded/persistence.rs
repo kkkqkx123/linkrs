@@ -120,6 +120,7 @@ fn commit_manifest_checksum(
     base_epoch: Option<u64>,
     generation: u64,
     files: &[String],
+    sidecars: &[SnapshotSidecarRecord],
     written_at_ms: u64,
 ) -> u32 {
     let mut hasher = crc32fast::Hasher::new();
@@ -131,6 +132,12 @@ fn commit_manifest_checksum(
     for file in files {
         hasher.update(file.as_bytes());
         hasher.update(&[0]);
+    }
+    for sidecar in sidecars {
+        hasher.update(sidecar.file.as_bytes());
+        hasher.update(&[0]);
+        hasher.update(&sidecar.bytes.to_le_bytes());
+        hasher.update(&sidecar.checksum.to_le_bytes());
     }
     hasher.update(&written_at_ms.to_le_bytes());
     hasher.finalize()
@@ -229,6 +236,7 @@ fn verify_commit_manifest_content(manifest: &CommitManifest, path: &Path) -> Sto
         manifest.base_epoch,
         manifest.generation,
         &manifest.files,
+        &manifest.sidecars,
         manifest.written_at_ms,
     );
     if expected != manifest.checksum {
@@ -258,6 +266,21 @@ impl CommitKind {
     }
 }
 
+/// One checkpoint sidecar pinned in the commit manifest: a derived
+/// `{column}.snapshot` eviction cache beside the authoritative pages.
+/// Sidecars are verifiable but discardable: a missing or corrupt sidecar
+/// keeps chunks resident and never refuses the open, while the manifest
+/// pin lets reload tell a pruned sidecar from a tampered one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct SnapshotSidecarRecord {
+    /// Manifest-relative path (`shard_0/name.snapshot`).
+    pub(crate) file: String,
+    /// File bytes at flush time.
+    pub(crate) bytes: u64,
+    /// CRC32 over the file bytes at flush time.
+    pub(crate) checksum: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CommitManifest {
     pub(crate) format_version: u8,
@@ -269,6 +292,11 @@ pub(crate) struct CommitManifest {
     /// mixed in from another generation would mis-decode global IDs.
     pub(crate) generation: u64,
     pub(crate) files: Vec<String>,
+    /// Derived eviction sidecars pinned for verification only. Absent in
+    /// old manifests (decoded as empty); never part of the strict file
+    /// set, so a missing or corrupt sidecar never refuses the open.
+    #[serde(default)]
+    pub(crate) sidecars: Vec<SnapshotSidecarRecord>,
     pub(crate) written_at_ms: u64,
     pub(crate) checksum: u32,
 }
@@ -304,18 +332,30 @@ pub struct CommitHealthReport {
     pub pk_index_ok: bool,
     /// Per-shard primary-key decode issues, empty when healthy.
     pub pk_issues: Vec<String>,
+    /// Sidecars pinned by the manifest.
+    pub sidecars: Vec<String>,
+    /// Discardable sidecar defects (missing, checksum mismatch, or corrupt
+    /// frames). Never block `is_healthy`: reload drops the sidecar and
+    /// keeps the chunks resident.
+    pub sidecar_issues: Vec<String>,
 }
 
 impl CommitHealthReport {
     /// Whether the directory is safe to open strictly: a decodable manifest
     /// with no missing files, a verifiable primary-key index, and a proven
     /// lineage (known router, matching table and commit generations).
+    /// Sidecar defects never block health: they are discardable caches.
     pub fn is_healthy(&self) -> bool {
         self.manifest_present
             && self.manifest_decodable
             && self.missing_files.is_empty()
             && self.pk_index_ok
             && self.lineage_issues.is_empty()
+    }
+
+    /// Discardable sidecar defects observable without failing the open.
+    pub fn sidecar_discards(&self) -> usize {
+        self.sidecar_issues.len()
     }
 }
 
@@ -328,6 +368,53 @@ pub struct GlobalCommitHealth {
     pub chain_ok: bool,
     /// Human-readable issues, empty when healthy.
     pub issues: Vec<String>,
+}
+
+/// Damage classification for the graded open path. Fatal defects refuse
+/// every open mode (table manifest, commit manifest, lineage); isolatable
+/// defects refuse the strict open but load healthy shards in repair mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CorruptionClass {
+    Fatal,
+    Isolatable,
+}
+
+impl CorruptionClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fatal => "fatal",
+            Self::Isolatable => "isolatable",
+        }
+    }
+}
+
+/// One shard-level damage record for offline repair tooling. Carries the
+/// machine-readable classification plus file location so scripts parse
+/// fields instead of matching log text.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ShardDamage {
+    pub shard: usize,
+    pub file: String,
+    pub class: CorruptionClass,
+    pub reason: String,
+}
+
+/// Offline repair-mode open report. Healthy shards are loaded and
+/// diagnosable; damaged shards are skipped. The handle is diagnostic
+/// read-only: callers must not serve writes from a partially opened table.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RepairReport {
+    pub healthy_shards: Vec<usize>,
+    pub damaged_shards: Vec<ShardDamage>,
+    /// Epoch pinned by the manifest when lineage proved, if any.
+    pub epoch: Option<u64>,
+}
+
+impl RepairReport {
+    pub fn is_complete(&self) -> bool {
+        self.damaged_shards.is_empty()
+    }
 }
 
 impl GlobalCommitHealth {
@@ -389,6 +476,94 @@ fn collect_committed_files(dir: &Path) -> StorageResult<Vec<String>> {
     }
     out.sort();
     Ok(out)
+}
+
+/// CRC32 over one sidecar file's bytes, with its length. `None` when the
+/// file cannot be read; the caller records no pin instead of failing the
+/// checkpoint over a derived cache.
+fn sidecar_file_fingerprint(path: &Path) -> Option<(u64, u32)> {
+    let bytes = std::fs::read(path).ok()?;
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(&bytes);
+    Some((bytes.len() as u64, hasher.finalize()))
+}
+
+/// Inventory every `{column}.snapshot` sidecar under the table directory
+/// as manifest-relative records. Runs after the per-shard sidecar flush
+/// and before the commit manifest write, so the manifest always points at
+/// sidecars that exist; post-manifest orphan sweep drops only unpinned
+/// sidecars. Unreadable sidecars are skipped (derived cache, never fatal).
+fn collect_sidecar_records(dir: &Path) -> Vec<SnapshotSidecarRecord> {
+    let mut out = Vec::new();
+    for index in 0..usize::MAX {
+        let shard_dir = dir.join(format!("shard_{}", index));
+        if !shard_dir.exists() {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&shard_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            if !name.ends_with(".snapshot") {
+                continue;
+            }
+            let Some((bytes, checksum)) = sidecar_file_fingerprint(&path) else {
+                continue;
+            };
+            out.push(SnapshotSidecarRecord {
+                file: format!("shard_{}/{}", index, name),
+                bytes,
+                checksum,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.file.cmp(&b.file));
+    out
+}
+
+/// Remove sidecar files that the committed manifest does not pin. Runs
+/// after the manifest commit so a crash between sidecar flush and manifest
+/// write never deletes a sidecar the previous manifest still pins; only
+/// sidecars absent from the new manifest (dropped columns, fully resident
+/// tables) are swept. Tolerant: delete failures only warn.
+fn sweep_unpinned_sidecars(dir: &Path, pinned: &[SnapshotSidecarRecord]) {
+    use std::collections::HashSet;
+    let live: HashSet<&str> = pinned.iter().map(|r| r.file.as_str()).collect();
+    for index in 0..usize::MAX {
+        let shard_dir = dir.join(format!("shard_{}", index));
+        if !shard_dir.exists() {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&shard_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            if !name.ends_with(".snapshot") {
+                continue;
+            }
+            let rel = format!("shard_{}/{}", index, name);
+            if live.contains(rel.as_str()) {
+                continue;
+            }
+            if let Err(e) = std::fs::remove_file(&path) {
+                log::warn!(
+                    "orphan sidecar cleanup: cannot remove {}: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+    }
 }
 
 /// Remove staging and shadow leftovers. Tolerant by design: a failed delete
@@ -709,6 +884,10 @@ impl ShardedVertexTable {
         base_epoch: Option<u64>,
     ) -> StorageResult<()> {
         let files = collect_committed_files(path.as_ref())?;
+        // Sidecars flush before this call (full) or already sit beside the
+        // baseline (incremental); inventory runs last so the pin only names
+        // sidecars that exist on disk at the commit point.
+        let sidecars = collect_sidecar_records(path.as_ref());
         let format_version = MANIFEST_FORMAT_VERSION;
         let written_at_ms = now_ms();
         let checksum = commit_manifest_checksum(
@@ -718,6 +897,7 @@ impl ShardedVertexTable {
             base_epoch,
             self.generation,
             &files,
+            &sidecars,
             written_at_ms,
         );
         let manifest = CommitManifest {
@@ -727,12 +907,18 @@ impl ShardedVertexTable {
             base_epoch,
             generation: self.generation,
             files,
+            sidecars: sidecars.clone(),
             written_at_ms,
             checksum,
         };
         let payload = serde_json::to_vec(&manifest)
             .map_err(|e| graphdb_core::StorageError::serialize_error(e.to_string()))?;
-        crate::compression::write_shadow_file(commit_manifest_path(path.as_ref()), &payload)
+        crate::compression::write_shadow_file(commit_manifest_path(path.as_ref()), &payload)?;
+        // Expired sidecars (dropped columns, fully resident tables) leave
+        // only after the new manifest commits, so a crash never orphans a
+        // sidecar the previous manifest still pins.
+        sweep_unpinned_sidecars(path.as_ref(), &sidecars);
+        Ok(())
     }
 
     /// Delete temp/staging leftovers without failing. Orphan files and
@@ -763,6 +949,7 @@ impl ShardedVertexTable {
         let mut commit_generation = None;
         let mut listed_files = Vec::new();
         let mut missing_files = Vec::new();
+        let mut pinned_sidecars: Vec<SnapshotSidecarRecord> = Vec::new();
         if manifest_present {
             if let Ok(payload) = std::fs::read(&manifest_path) {
                 if let Ok(manifest) = serde_json::from_slice::<CommitManifest>(&payload) {
@@ -778,6 +965,7 @@ impl ShardedVertexTable {
                                 missing_files.push(rel.clone());
                             }
                         }
+                        pinned_sidecars = manifest.sidecars.clone();
                     }
                 }
             }
@@ -856,6 +1044,60 @@ impl ShardedVertexTable {
         }
         pk_issues.sort();
         let pk_index_ok = pk_issues.is_empty();
+        // Sidecar verification is discardable-only: a missing, checksum
+        // mismatched, or unparseable sidecar is reported but never blocks
+        // health. Reload drops that sidecar and keeps chunks resident.
+        let mut sidecars: Vec<String> = pinned_sidecars.iter().map(|r| r.file.clone()).collect();
+        sidecars.sort();
+        let mut sidecar_issues = Vec::new();
+        for record in &pinned_sidecars {
+            let full = dir.join(&record.file);
+            let bytes = std::fs::read(&full);
+            match bytes {
+                Err(_) => {
+                    sidecar_issues.push(format!("sidecar missing (discardable): {}", record.file))
+                }
+                Ok(payload) => {
+                    let mut hasher = crc32fast::Hasher::new();
+                    hasher.update(&payload);
+                    if payload.len() as u64 != record.bytes || hasher.finalize() != record.checksum
+                    {
+                        sidecar_issues.push(format!(
+                            "sidecar checksum mismatch (discardable): {}",
+                            record.file
+                        ));
+                        continue;
+                    }
+                    if crate::vertex::column::chunk_residency::open_snapshot_sidecar(&full).is_err()
+                    {
+                        sidecar_issues
+                            .push(format!("sidecar corrupt (discardable): {}", record.file));
+                    }
+                }
+            }
+        }
+        // Unpinned sidecars on disk (crash window or dropped columns) are
+        // swept on the next checkpoint; report but never fail health.
+        for index in 0..usize::MAX {
+            let shard_dir = dir.join(format!("shard_{}", index));
+            if !shard_dir.exists() {
+                break;
+            }
+            let Ok(entries) = std::fs::read_dir(&shard_dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !name.ends_with(".snapshot") {
+                    continue;
+                }
+                let rel = format!("shard_{}/{}", index, name);
+                if !sidecars.contains(&rel) {
+                    sidecar_issues.push(format!("sidecar unpinned (swept on flush): {}", rel));
+                }
+            }
+        }
+        sidecar_issues.sort();
         Ok(CommitHealthReport {
             manifest_present,
             manifest_decodable,
@@ -871,6 +1113,8 @@ impl ShardedVertexTable {
             orphan_tmp_files,
             pk_index_ok,
             pk_issues,
+            sidecars,
+            sidecar_issues,
         })
     }
 
@@ -1047,7 +1291,8 @@ impl ShardedVertexTable {
             let full = path.join(rel);
             if !full.exists() {
                 return Err(graphdb_core::StorageError::deserialize_error(format!(
-                    "checkpoint epoch {} kind={} incomplete: manifest-listed file missing: {}",
+                    "class={} checkpoint epoch {} kind={} incomplete: manifest-listed file missing: file={}",
+                    CorruptionClass::Fatal.as_str(),
                     manifest.epoch,
                     manifest.kind.as_str(),
                     full.display(),
@@ -1055,6 +1300,62 @@ impl ShardedVertexTable {
             }
         }
         Ok(())
+    }
+
+    /// Test-only force-encode plus evict for one column across shards.
+    /// Uses per-column shared guards (released between columns) so no
+    /// mapped guard outlives its shard latch.
+    #[cfg(test)]
+    pub(crate) fn force_encode_evict_for_test(&self, column: &str) {
+        for shard in &self.shards {
+            let table = shard.read();
+            table.columns.for_each_column(|col| {
+                if col.name == column {
+                    let _ = col
+                        .apply_encoding_to_chunks(crate::encoding::EncodingType::Dictionary, 255);
+                    let _ = col.evict_chunk(0);
+                }
+            });
+        }
+    }
+
+    /// Verify pinned sidecars against disk and prune tampered ones before
+    /// any shard loads. A missing sidecar needs no action (kept resident);
+    /// a present sidecar whose bytes or checksum differ from the pin, or
+    /// whose frames fail to parse, is deleted as a discardable cache and
+    /// counted. Only `.snapshot` files are ever removed, never
+    /// authoritative pages, and failures only warn. Returns pruned count.
+    fn prune_tampered_sidecars(dir: &Path, manifest: &CommitManifest) -> usize {
+        let mut pruned = 0usize;
+        for record in &manifest.sidecars {
+            let full = dir.join(&record.file);
+            if !full.exists() {
+                continue;
+            }
+            let valid = match std::fs::read(&full) {
+                Ok(payload) => {
+                    let mut hasher = crc32fast::Hasher::new();
+                    hasher.update(&payload);
+                    payload.len() as u64 == record.bytes
+                        && hasher.finalize() == record.checksum
+                        && crate::vertex::column::chunk_residency::open_snapshot_sidecar(&full)
+                            .is_ok()
+                }
+                Err(_) => false,
+            };
+            if !valid {
+                log::warn!(
+                    "pruning tampered snapshot sidecar {}: discarding cache, keeping chunks resident",
+                    full.display(),
+                );
+                if std::fs::remove_file(&full).is_ok() {
+                    pruned += 1;
+                } else {
+                    log::warn!("cannot prune tampered snapshot sidecar {}", full.display(),);
+                }
+            }
+        }
+        pruned
     }
 
     pub fn flush<P: AsRef<Path>>(
@@ -1235,11 +1536,27 @@ impl ShardedVertexTable {
         match Self::read_commit_manifest(path)? {
             Some(manifest) => {
                 self.verify_commit_manifest(path, &manifest)?;
+                // Manifest-pinned sidecar verification runs before any shard
+                // loads: a missing sidecar is simply absent (kept resident),
+                // a checksum-mismatched or unparseable sidecar is pruned as
+                // a discardable cache so a tampered-but-valid sidecar can
+                // never serve stale values. Pruning only deletes derived
+                // `.snapshot` files, never authoritative pages, and never
+                // fails the open.
+                let pruned = Self::prune_tampered_sidecars(path, &manifest);
+                if pruned > 0 {
+                    log::warn!(
+                        "vertex table '{}' discarded {} tampered snapshot sidecars; keeping chunks resident",
+                        self.label_name,
+                        pruned,
+                    );
+                }
                 for (i, shard) in self.shards.iter().enumerate() {
                     let shard_dir = path.join(format!("shard_{}", i));
                     if !shard_dir.exists() {
                         return Err(graphdb_core::StorageError::deserialize_error(format!(
-                            "checkpoint epoch {} incomplete: shard directory missing: {}",
+                            "class={} checkpoint epoch {} incomplete: shard directory missing: file={}",
+                            CorruptionClass::Isolatable.as_str(),
                             manifest.epoch,
                             shard_dir.display(),
                         )));
@@ -1247,7 +1564,8 @@ impl ShardedVertexTable {
                     let mut table = shard.write();
                     table.load(&shard_dir).map_err(|e| {
                         graphdb_core::StorageError::deserialize_error(format!(
-                            "checkpoint epoch {} shard {} corrupt at {}: {}",
+                            "class={} checkpoint epoch {} shard {} corrupt at file={}: {}",
+                            CorruptionClass::Isolatable.as_str(),
                             manifest.epoch,
                             i,
                             shard_dir.display(),
@@ -1258,11 +1576,86 @@ impl ShardedVertexTable {
                 Ok(())
             }
             None => Err(graphdb_core::StorageError::deserialize_error(format!(
-                "vertex table '{}' missing commit manifest at {}: refusing open without checkpoint pin",
+                "class={} vertex table '{}' missing commit manifest at file={}: refusing open without checkpoint pin",
+                CorruptionClass::Fatal.as_str(),
                 self.label_name,
                 path.join(COMMIT_MANIFEST_FILE_NAME).display(),
             ))),
         }
+    }
+
+    /// Offline repair-mode open: fatal defects (table/commit manifest,
+    /// lineage) still refuse with `class=fatal`; per-shard data defects
+    /// load healthy shards read-only and report damaged ones with
+    /// `class=isolatable` plus file location for script parsing.
+    ///
+    /// Reuses the strict manifest decoding and per-shard `load` entry, not
+    /// a separate parser. The returned handle holds only healthy shards;
+    /// callers must treat it as diagnostic read-only and never serve
+    /// writes from it. Sidecar defects never appear here: they are pruned
+    /// as discardable caches on the strict path.
+    pub fn load_for_repair<P: AsRef<Path>>(&self, path: P) -> StorageResult<RepairReport> {
+        let dir = path.as_ref();
+        self.check_table_manifest(path.as_ref()).map_err(|e| {
+            graphdb_core::StorageError::deserialize_error(format!(
+                "class={} {}",
+                CorruptionClass::Fatal.as_str(),
+                e.message()
+            ))
+        })?;
+        let manifest = Self::read_commit_manifest(dir)?.ok_or_else(|| {
+            graphdb_core::StorageError::deserialize_error(format!(
+                "class={} vertex table '{}' missing commit manifest at file={}",
+                CorruptionClass::Fatal.as_str(),
+                self.label_name,
+                dir.join(COMMIT_MANIFEST_FILE_NAME).display(),
+            ))
+        })?;
+        // Repair mode proves lineage only (fatal); missing or corrupt
+        // per-shard files become isolatable shard damages below instead of
+        // refusing the whole open.
+        if manifest.generation != self.generation {
+            return Err(graphdb_core::StorageError::deserialize_error(format!(
+                "class={} checkpoint epoch {} kind={} belongs to redistribution generation {} but the table opens generation {}",
+                CorruptionClass::Fatal.as_str(),
+                manifest.epoch,
+                manifest.kind.as_str(),
+                manifest.generation,
+                self.generation,
+            )));
+        }
+        let _ = Self::prune_tampered_sidecars(dir, &manifest);
+        let mut healthy_shards = Vec::new();
+        let mut damaged_shards = Vec::new();
+        for (i, shard) in self.shards.iter().enumerate() {
+            let shard_dir = dir.join(format!("shard_{}", i));
+            if !shard_dir.exists() {
+                damaged_shards.push(ShardDamage {
+                    shard: i,
+                    file: shard_dir.display().to_string(),
+                    class: CorruptionClass::Isolatable,
+                    reason: format!(
+                        "checkpoint epoch {} shard directory missing",
+                        manifest.epoch
+                    ),
+                });
+                continue;
+            }
+            match shard.write().load(&shard_dir) {
+                Ok(()) => healthy_shards.push(i),
+                Err(e) => damaged_shards.push(ShardDamage {
+                    shard: i,
+                    file: shard_dir.display().to_string(),
+                    class: CorruptionClass::Isolatable,
+                    reason: format!("checkpoint epoch {} shard corrupt: {}", manifest.epoch, e),
+                }),
+            }
+        }
+        Ok(RepairReport {
+            healthy_shards,
+            damaged_shards,
+            epoch: Some(manifest.epoch),
+        })
     }
 
     pub fn apply_delta_pages<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
@@ -1771,6 +2164,9 @@ mod commit_tests {
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect();
+        let sidecars: Vec<SnapshotSidecarRecord> =
+            serde_json::from_value(manifest.get("sidecars").cloned().unwrap_or_default())
+                .unwrap_or_default();
         manifest["checksum"] = serde_json::Value::from(commit_manifest_checksum(
             manifest["format_version"].as_u64().unwrap() as u8,
             manifest["epoch"].as_u64().unwrap(),
@@ -1778,6 +2174,7 @@ mod commit_tests {
             manifest["base_epoch"].as_u64(),
             7,
             &files,
+            &sidecars,
             manifest["written_at_ms"].as_u64().unwrap(),
         ));
         std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
@@ -2087,6 +2484,9 @@ mod commit_tests {
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect();
+        let sidecars: Vec<SnapshotSidecarRecord> =
+            serde_json::from_value(manifest.get("sidecars").cloned().unwrap_or_default())
+                .unwrap_or_default();
         manifest["checksum"] = serde_json::Value::from(commit_manifest_checksum(
             manifest["format_version"].as_u64().unwrap() as u8,
             manifest["epoch"].as_u64().unwrap(),
@@ -2094,6 +2494,7 @@ mod commit_tests {
             manifest["base_epoch"].as_u64(),
             7,
             &files,
+            &sidecars,
             manifest["written_at_ms"].as_u64().unwrap(),
         ));
         std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
@@ -2471,7 +2872,142 @@ mod commit_tests {
         reloaded.load(&dir).unwrap();
         assert!(reloaded.get_internal_id("v1", ts).is_some());
         let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        // Unpinned junk is discardable: healthy for strict open, visible as
+        // a sidecar issue for observability.
         assert!(report.is_healthy());
+        assert!(!report.sidecar_issues.is_empty());
+        assert_eq!(report.sidecar_discards(), report.sidecar_issues.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pinned_sidecar_corruption_still_opens_with_discard() {
+        let dir = unique_dir("snap-pinned");
+        let _ = std::fs::remove_dir_all(&dir);
+        let schema = crate::vertex::VertexSchema {
+            label_id: 1,
+            label_name: "person".to_string(),
+            properties: vec![
+                crate::types::StoragePropertyDef::new("name".to_string(), DataType::String),
+                crate::types::StoragePropertyDef::new("group".to_string(), DataType::String),
+            ],
+            primary_key_index: 0,
+            schema_version: 1,
+        };
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), schema, 1);
+        let ts: Timestamp = 10;
+        for i in 0..5000 {
+            let id = format!("v{i:05}");
+            table
+                .insert(
+                    &id,
+                    &[
+                        ("name".to_string(), Value::from(id.clone())),
+                        ("group".to_string(), Value::from("same")),
+                    ],
+                    ts,
+                )
+                .unwrap();
+        }
+        // First flush encodes in-memory chunks; eviction needs encoded
+        // chunks, so force-encode the low-cardinality column and evict it
+        // directly, then flush again to pin.
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                46,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        table.force_encode_evict_for_test("group");
+        let _ = table.evict_cold_chunks(u64::MAX);
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                47,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        let manifest = ShardedVertexTable::read_commit_manifest(&dir)
+            .unwrap()
+            .expect("commit manifest present");
+        assert!(
+            !manifest.sidecars.is_empty(),
+            "evicted flush must pin sidecars"
+        );
+        // Corrupt the first pinned sidecar: strict open must still succeed
+        // with resident fallback, and health must flag the discard.
+        let victim = dir.join(&manifest.sidecars[0].file);
+        std::fs::write(&victim, b"tampered").unwrap();
+        let reload_schema = crate::vertex::VertexSchema {
+            label_id: 1,
+            label_name: "person".to_string(),
+            properties: vec![
+                crate::types::StoragePropertyDef::new("name".to_string(), DataType::String),
+                crate::types::StoragePropertyDef::new("group".to_string(), DataType::String),
+            ],
+            primary_key_index: 0,
+            schema_version: 1,
+        };
+        let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), reload_schema, 1);
+        reloaded.load(&dir).unwrap();
+        assert!(reloaded.get_internal_id("v00042", ts).is_some());
+        let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
+        assert!(report.is_healthy());
+        assert!(!report.sidecar_issues.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn repair_mode_isolates_single_shard_damage() {
+        let dir = unique_dir("repair-isolate");
+        let _ = std::fs::remove_dir_all(&dir);
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let ts: Timestamp = 10;
+        table
+            .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+            .unwrap();
+        table
+            .flush_with_epoch(
+                &dir,
+                CompressionType::Zstd { level: 0 },
+                47,
+                CommitKind::Full,
+                None,
+            )
+            .unwrap();
+        // Corrupt one shard's authoritative pages: strict open refuses with
+        // a machine-readable isolatable class, repair opens the healthy
+        // shard and reports the damaged one.
+        std::fs::write(dir.join("shard_0").join("columns.bin"), b"corrupt").unwrap();
+        let strict = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let err = strict.load(&dir).unwrap_err().to_string();
+        assert!(
+            err.contains("class=isolatable") && err.contains("shard"),
+            "strict shard failure must carry machine-readable class and shard: {err}"
+        );
+        let probe = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let report = probe.load_for_repair(&dir).unwrap();
+        assert_eq!(report.healthy_shards, vec![1]);
+        assert_eq!(report.damaged_shards.len(), 1);
+        assert_eq!(report.damaged_shards[0].shard, 0);
+        assert_eq!(
+            report.damaged_shards[0].class,
+            super::CorruptionClass::Isolatable
+        );
+        assert!(!report.is_complete());
+        // Fatal defects still refuse repair mode with class=fatal.
+        std::fs::remove_file(dir.join(COMMIT_MANIFEST_FILE_NAME)).unwrap();
+        let fatal_probe = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let err = fatal_probe.load_for_repair(&dir).unwrap_err().to_string();
+        assert!(
+            err.contains("class=fatal"),
+            "missing manifest must refuse repair with fatal class: {err}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

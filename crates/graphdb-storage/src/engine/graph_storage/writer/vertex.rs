@@ -921,6 +921,32 @@ fn stage_vertex_row(
     })
 }
 
+/// Prefix-commit error for auto-batched inserts: `committed` rows of
+/// `total` are durable in earlier chunks with independent timestamps; the
+/// caller resumes after `committed` or rolls the prefix back through the
+/// batch delete path. The single-batch limit stays as backpressure: chunks
+/// never exceed [`crate::vertex::MAX_WRITE_SCOPE_KEYS`] rows.
+pub(crate) fn batch_prefix_error(
+    committed: usize,
+    total: usize,
+    cause: &StorageError,
+) -> StorageError {
+    StorageError::db_error(format!(
+        "batch prefix committed {}/{} at chunk boundary: {}",
+        committed, total, cause
+    ))
+}
+
+/// Parse [`batch_prefix_error`] back into `(committed, total)`. `None`
+/// means the error is not a prefix commit (single-batch failure).
+pub(crate) fn batch_prefix_committed(error: &StorageError) -> Option<(usize, usize)> {
+    let message = error.message();
+    let rest = message.strip_prefix("batch prefix committed ")?;
+    let (counts, _) = rest.split_once(" at chunk boundary: ")?;
+    let (committed, total) = counts.split_once('/')?;
+    Some((committed.parse().ok()?, total.parse().ok()?))
+}
+
 pub(crate) fn batch_insert_vertices(
     ctx: &GraphStorageContext,
     space: &str,
@@ -945,6 +971,17 @@ pub(crate) fn batch_insert_vertices(
                 vertex.tag.name
             )));
         }
+    }
+
+    // Over-limit batches auto-split instead of rejecting: the single-batch
+    // limit stays as backpressure, but the entry chunks the input. Online
+    // writes share one timestamp across chunks (transaction atomicity);
+    // offline writes commit one timestamp per chunk (prefix commits).
+    if vertices.len() > crate::vertex::MAX_WRITE_SCOPE_KEYS {
+        if ctx.is_online_write() {
+            return batch_insert_vertices_online_chunked(ctx, space, vertices);
+        }
+        return batch_insert_vertices_offline_chunked(ctx, space, vertices);
     }
 
     // Pre-count vertices per label and reserve capacity to avoid rehashing
@@ -1282,4 +1319,288 @@ pub(crate) fn batch_insert_vertices(
     ctx.commit_write_timestamp_ordered(ts)?;
 
     Ok(ids)
+}
+
+/// Offline auto-batch: one timestamp per chunk, prefix commits.
+/// Each chunk runs the single-batch path (which redoes batch-wide prep per
+/// chunk, so later chunks observe earlier prefix commits). A chunk failure
+/// keeps earlier prefix commits and returns their count for resume or
+/// prefix rollback through the batch delete path. Small-batch semantics
+/// are unchanged: chunks never exceed the single-batch limit.
+fn batch_insert_vertices_offline_chunked(
+    ctx: &GraphStorageContext,
+    space: &str,
+    vertices: Vec<Vertex>,
+) -> StorageResult<Vec<VertexId>> {
+    let total = vertices.len();
+    let chunk = crate::vertex::MAX_WRITE_SCOPE_KEYS;
+    let mut ids = Vec::with_capacity(total);
+    let mut committed = 0usize;
+    for window in vertices.chunks(chunk) {
+        match batch_insert_vertices(ctx, space, window.to_vec()) {
+            Ok(mut chunk_ids) => {
+                committed += chunk_ids.len();
+                ids.append(&mut chunk_ids);
+            }
+            Err(cause) => {
+                // Nested prefix errors already carry their committed count;
+                // add this level's prefix on top.
+                if let Some((nested_committed, _)) = batch_prefix_committed(&cause) {
+                    committed += nested_committed;
+                }
+                return Err(batch_prefix_error(committed, total, &cause));
+            }
+        }
+    }
+    Ok(ids)
+}
+
+#[cfg(test)]
+mod batch_prefix_tests {
+    use super::*;
+
+    #[test]
+    fn prefix_error_roundtrips_committed_count() {
+        let cause = StorageError::capacity_exceeded();
+        let err = batch_prefix_error(4096, 10000, &cause);
+        assert_eq!(batch_prefix_committed(&err), Some((4096, 10000)));
+        assert!(batch_prefix_committed(&cause).is_none());
+    }
+
+    #[test]
+    fn single_batch_limit_stays_as_backpressure() {
+        // The per-request bound is unchanged; over-limit entries auto-split
+        // instead of rejecting, so the constant must stay finite and small.
+        assert_eq!(crate::vertex::MAX_WRITE_SCOPE_KEYS, 4096);
+    }
+}
+
+/// Online auto-batch: one timestamp for the whole statement, one scope per
+/// chunk absorbed sequentially into the transaction buffer. Cross-chunk
+/// primary-key duplicates fail like same-scope duplicates (no extra
+/// allocation escapes); a failure unwinds the buffer to the statement mark
+/// with nothing applied, preserving transaction atomicity.
+fn batch_insert_vertices_online_chunked(
+    ctx: &GraphStorageContext,
+    space: &str,
+    vertices: Vec<Vertex>,
+) -> StorageResult<Vec<VertexId>> {
+    use std::collections::HashSet;
+    let space_info = ctx
+        .schema_manager()
+        .get_space(space)?
+        .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
+    let tags = ctx.schema_manager().list_tags(space)?;
+    let mut tag_map: HashMap<&str, &TagInfo> = HashMap::with_capacity(tags.len());
+    for tag in &tags {
+        tag_map.insert(tag.tag_name.as_str(), tag);
+    }
+    for vertex in &vertices {
+        if !tag_map.contains_key(vertex.tag.name.as_str()) {
+            return Err(StorageError::not_found(format!(
+                "Tag {} not found",
+                vertex.tag.name
+            )));
+        }
+    }
+    {
+        let mut per_label: HashMap<LabelId, usize> = HashMap::new();
+        for vertex in &vertices {
+            if let Some(info) = tag_map.get(vertex.tag.name.as_str()) {
+                *per_label.entry(info.tag_id).or_insert(0) += 1;
+            }
+        }
+        for (label_id, count) in &per_label {
+            ctx.reserve_vertex_capacity(*label_id, *count);
+        }
+    }
+    let mut serial_state = SerialBatchState::new();
+    for tag in tags.iter() {
+        for prop_def in tag.properties.iter().filter(|p| p.serial) {
+            let needs_scan = vertices.iter().any(|v| {
+                v.tag.name == tag.tag_name && v.tag.properties.keys().any(|k| k == &prop_def.name)
+            });
+            if needs_scan {
+                if let Some(scan) = scan_vertex_serial_column(ctx, tag.tag_id, &prop_def.name) {
+                    serial_state.add_present(tag.tag_id, &prop_def.name, scan);
+                }
+            }
+        }
+    }
+    let tag_indexes = ctx
+        .index_metadata_manager()
+        .list_tag_indexes(space_info.space_id)?;
+    let ts = ctx.get_write_timestamp()?;
+    let (buffer, mark) = match ctx.txn_staging_mark(ts) {
+        Ok(mark) => mark,
+        Err(error) => {
+            ctx.abort_write_timestamp(ts);
+            return Err(error);
+        }
+    };
+    // Caller-side cross-chunk dedup: storage still validates per-chunk
+    // single-batch semantics, but the batch entry rejects a repeated key
+    // up front so two chunks never stage the same key under one timestamp.
+    let mut seen: HashSet<(LabelId, IdKey)> = HashSet::with_capacity(vertices.len());
+    let mut batch_ctx = PrecheckedBatchContext {
+        tag_map: &tag_map,
+        tag_indexes: &tag_indexes,
+        serial_state: &mut serial_state,
+        vid_type: &space_info.vid_type,
+    };
+    let chunk = crate::vertex::MAX_WRITE_SCOPE_KEYS;
+    let mut staged_all: Vec<StagedVertexRow> = Vec::with_capacity(vertices.len());
+    for window in vertices.chunks(chunk) {
+        let mut scope = crate::vertex::WriteScope::new(ts);
+        let mut staged: Vec<StagedVertexRow> = Vec::with_capacity(window.len());
+        for vertex in window {
+            match stage_vertex_row(ctx, space_info.space_id, &mut batch_ctx, vertex, ts) {
+                Ok(row) => {
+                    let dup_key = (row.label_id, row.key.clone());
+                    if !seen.insert(dup_key) {
+                        ctx.rollback_staging_to(&buffer, mark);
+                        ctx.abort_write_timestamp(ts);
+                        return Err(StorageError::vertex_already_exists(format!(
+                            "duplicate key in batched write scope: {:?}",
+                            row.key
+                        )));
+                    }
+                    staged.push(row);
+                }
+                Err(e) => {
+                    ctx.rollback_staging_to(&buffer, mark);
+                    ctx.abort_write_timestamp(ts);
+                    return Err(e);
+                }
+            }
+        }
+        // Buffer this chunk's rows without touching global state, mirroring
+        // the single-batch Phase B grouping.
+        let mut label_order: Vec<LabelId> = Vec::new();
+        let mut by_label: HashMap<LabelId, Vec<usize>> = HashMap::new();
+        for (pos, row) in staged.iter().enumerate() {
+            by_label
+                .entry(row.label_id)
+                .or_insert_with(|| {
+                    label_order.push(row.label_id);
+                    Vec::new()
+                })
+                .push(pos);
+        }
+        let tables: Vec<(LabelId, std::sync::Arc<crate::vertex::ShardedVertexTable>)> =
+            match ctx.data_store().with_vertex_tables(|tables| {
+                label_order
+                    .iter()
+                    .map(|label_id| {
+                        tables
+                            .get(label_id)
+                            .cloned()
+                            .map(|t| (*label_id, t))
+                            .ok_or_else(|| {
+                                StorageError::label_not_found(format!("vertex label {}", label_id))
+                            })
+                    })
+                    .collect::<StorageResult<Vec<_>>>()
+            }) {
+                Ok(tables) => tables,
+                Err(e) => {
+                    ctx.rollback_staging_to(&buffer, mark);
+                    ctx.abort_write_timestamp(ts);
+                    return Err(e);
+                }
+            };
+        let mut marks: Vec<Option<StorageResult<()>>> = (0..staged.len()).map(|_| None).collect();
+        for (label_id, table) in &tables {
+            let positions = &by_label[label_id];
+            let mut str_order = Vec::new();
+            let mut i64_order = Vec::new();
+            for &pos in positions {
+                match staged[pos].key {
+                    IdKey::Text(_) => str_order.push(pos),
+                    IdKey::Int(_) => i64_order.push(pos),
+                }
+            }
+            if !str_order.is_empty() {
+                let rows: Vec<(&str, &[(String, Value)])> = str_order
+                    .iter()
+                    .map(|&pos| {
+                        let IdKey::Text(ref s) = staged[pos].key else {
+                            unreachable!("str_order only holds text keys");
+                        };
+                        (s.as_str(), staged[pos].props.as_slice())
+                    })
+                    .collect();
+                for (slot, result) in str_order
+                    .iter()
+                    .zip(table.insert_batch_str_with_scope(&rows, ts, &mut scope))
+                {
+                    marks[*slot] = Some(result);
+                }
+            }
+            if !i64_order.is_empty() {
+                let rows: Vec<(i64, &[(String, Value)])> = i64_order
+                    .iter()
+                    .map(|&pos| {
+                        let IdKey::Int(n) = staged[pos].key else {
+                            unreachable!("i64_order only holds int keys");
+                        };
+                        (n, staged[pos].props.as_slice())
+                    })
+                    .collect();
+                for (slot, result) in i64_order
+                    .iter()
+                    .zip(table.insert_batch_i64_with_scope(&rows, ts, &mut scope))
+                {
+                    marks[*slot] = Some(result);
+                }
+            }
+        }
+        let mut first_error: Option<StorageError> = None;
+        for mark_slot in &mut marks {
+            if let Some(Err(e)) = mark_slot.take() {
+                if first_error.is_none() {
+                    first_error = Some(e);
+                }
+            }
+        }
+        if let Some(e) = first_error {
+            scope.clear();
+            ctx.rollback_staging_to(&buffer, mark);
+            ctx.abort_write_timestamp(ts);
+            return Err(e);
+        }
+        if let Err(error) = ctx.absorb_write_scope(&mut scope, ts) {
+            ctx.rollback_staging_to(&buffer, mark);
+            ctx.abort_write_timestamp(ts);
+            return Err(error);
+        }
+        for row in staged.iter() {
+            if let Err(error) = super::index_maintenance::check_vertex_unique_indexes(
+                ctx,
+                ctx.index_metadata_manager(),
+                space_info.space_id,
+                &row.vertex_id,
+                &row.tag_name,
+                &row.props,
+            )
+            .and_then(|()| record_vertex_insert(ctx, row.vid, Some(row.redo_entry.clone())))
+            .and_then(|()| {
+                ctx.stage_vertex_index_op(
+                    ts,
+                    StagedIndexOp::Insert {
+                        space_id: space_info.space_id,
+                        vid: row.vertex_id.clone(),
+                        tag: row.tag_name.clone(),
+                        properties: row.props.clone(),
+                    },
+                )
+            }) {
+                ctx.rollback_staging_to(&buffer, mark);
+                ctx.abort_write_timestamp(ts);
+                return Err(error);
+            }
+        }
+        staged_all.extend(staged);
+    }
+    Ok(staged_all.into_iter().map(|row| row.vid).collect())
 }

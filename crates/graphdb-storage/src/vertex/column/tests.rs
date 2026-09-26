@@ -649,12 +649,8 @@ mod tests {
                 Value::array(vec![Value::Double(1.0), Value::Double(2.0)]),
             ),
             (
-                DataType::FixedString(8),
-                Value::FixedString("abcdef".to_string()),
-            ),
-            (
-                DataType::VectorDense(2),
-                Value::Vector(graphdb_core::value::VectorValue::dense(vec![1.0, 2.0])),
+                DataType::VectorDense(128),
+                Value::Vector(graphdb_core::value::VectorValue::dense(vec![1.0; 128])),
             ),
         ] {
             let col = Column::new("c".to_string(), 0, data_type.clone(), true);
@@ -669,11 +665,79 @@ mod tests {
     }
 
     #[test]
+    fn test_short_fixed_string_uses_inline_fixed_column() {
+        // Short declarations ride the fixed-width base as zero-padded
+        // slots; wide and zero-width declarations stay variable-width.
+        assert!(!crate::vertex::column::is_variable_length_type(
+            &DataType::FixedString(4)
+        ));
+        assert_eq!(
+            crate::vertex::column::element_size(&DataType::FixedString(4)),
+            4
+        );
+        assert!(crate::vertex::column::is_variable_length_type(
+            &DataType::FixedString(64)
+        ));
+        assert!(crate::vertex::column::is_variable_length_type(
+            &DataType::FixedString(0)
+        ));
+        let col = Column::new("code".to_string(), 0, DataType::FixedString(4), true);
+        col.set(0, Some(&Value::FixedString("ab".to_string())))
+            .unwrap();
+        assert!(matches!(
+            col.chunks.read()[0].read_state().raw,
+            crate::vertex::column::column::ColumnInner::Fixed(_)
+        ));
+        assert_eq!(col.get(0), Some(Value::FixedString("ab".to_string())));
+        // Primary-key mirrors arrive as plain strings; short columns accept
+        // them with the same byte-limit check as the variable-width path.
+        col.set(1, Some(&Value::string("cd"))).unwrap();
+        assert_eq!(col.get(1), Some(Value::FixedString("cd".to_string())));
+        let err = col
+            .set(2, Some(&Value::FixedString("abcde".to_string())))
+            .unwrap_err();
+        assert!(err.to_string().contains("cannot hold"));
+        assert_eq!(col.get(2), None);
+    }
+
+    #[test]
+    fn test_small_dense_vector_uses_fixed_column() {
+        // Small dense declarations ride the fixed base as `dim * 4`-byte
+        // slots; wide and unsized declarations stay variable-width.
+        assert!(!crate::vertex::column::is_variable_length_type(
+            &DataType::VectorDense(2)
+        ));
+        assert_eq!(
+            crate::vertex::column::element_size(&DataType::VectorDense(2)),
+            8
+        );
+        assert!(crate::vertex::column::is_variable_length_type(
+            &DataType::VectorDense(128)
+        ));
+        assert!(crate::vertex::column::is_variable_length_type(
+            &DataType::VectorDense(0)
+        ));
+        let col = Column::new("emb".to_string(), 0, DataType::VectorDense(2), true);
+        let value = Value::Vector(graphdb_core::value::VectorValue::dense(vec![1.0, 2.0]));
+        col.set(0, Some(&value)).unwrap();
+        assert!(matches!(
+            col.chunks.read()[0].read_state().raw,
+            crate::vertex::column::column::ColumnInner::Fixed(_)
+        ));
+        assert_eq!(col.get(0), Some(value));
+        let bad = Value::Vector(graphdb_core::value::VectorValue::dense(vec![1.0, 2.0, 3.0]));
+        assert!(col.set(1, Some(&bad)).is_err());
+        assert_eq!(col.get(1), None);
+    }
+
+    #[test]
     fn test_extended_types_never_use_zero_step_fixed_column() {
-        // FixedString, Decimal family and Union have no fixed element size;
-        // they must route to variable-width storage.
+        // Decimal family and Union have no fixed element size; they must
+        // route to variable-width storage. Wide and zero-width FixedString
+        // declarations join them; short ones ride the inline fixed base.
         for data_type in [
-            DataType::FixedString(4),
+            DataType::FixedString(0),
+            DataType::FixedString(64),
             DataType::Decimal128,
             DataType::Decimal {
                 precision: 10,

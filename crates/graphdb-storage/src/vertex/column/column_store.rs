@@ -673,7 +673,7 @@ impl ColumnStore {
     }
 
     pub fn total_dirty_pages(&self) -> usize {
-        self.columns.read().iter().map(|c| c.dirty_count()).sum()
+        self.buffer_ledger().dirty_pages
     }
 
     /// Evict cold column chunks oldest-first until `budget` bytes are
@@ -811,11 +811,14 @@ impl ColumnStore {
     /// Re-evict chunks persisted by [`Self::flush_evict_snapshots`] from
     /// memory-mapped sidecars. A missing or corrupt sidecar only warns and
     /// keeps the affected chunks resident; the open never fails over a
-    /// derived cache.
-    pub fn load_evict_snapshots(&self, dir: &std::path::Path) {
+    /// derived cache. Returns `(restored_chunks, discarded_sidecars)` so the
+    /// table load can surface discardable-cache drops as observable state.
+    pub fn load_evict_snapshots(&self, dir: &std::path::Path) -> (usize, usize) {
         use super::chunk_residency::open_snapshot_sidecar;
 
         let columns = self.columns.read();
+        let mut restored = 0usize;
+        let mut discarded = 0usize;
         for col in columns.iter() {
             let path = dir.join(format!("{}.snapshot", col.name));
             if !path.exists() {
@@ -824,14 +827,41 @@ impl ColumnStore {
             let mapped = match open_snapshot_sidecar(&path) {
                 Ok(mapped) => mapped,
                 Err(e) => {
-                    log::warn!("ignoring corrupt snapshot sidecar for {}: {}", col.name, e);
+                    log::warn!(
+                        "discarding corrupt snapshot sidecar for {} at {}: {}; keeping chunks resident",
+                        col.name,
+                        path.display(),
+                        e
+                    );
+                    discarded += 1;
                     continue;
                 }
             };
             for record in mapped.chunks {
-                col.restore_mapped_chunk(record, &mapped.map);
+                if col.restore_mapped_chunk(record, &mapped.map) {
+                    restored += 1;
+                } else {
+                    // Window mismatch against the checkpoint pages: the
+                    // sidecar names rows the column no longer holds. Keep
+                    // resident and count the drop instead of failing open.
+                    log::warn!(
+                        "discarding mismatched snapshot sidecar window for {} at {}: keeping chunks resident",
+                        col.name,
+                        path.display(),
+                    );
+                    discarded += 1;
+                }
             }
         }
+        if discarded > 0 {
+            log::warn!(
+                "snapshot sidecar discards: restored={} discarded={} dir={}",
+                restored,
+                discarded,
+                dir.display(),
+            );
+        }
+        (restored, discarded)
     }
 
     /// Quota-segmented eviction across columns for background tasks.
@@ -859,36 +889,48 @@ impl ColumnStore {
         (count, freed, segments)
     }
 
+    /// Unified buffer ledger across columns: per-column ledgers summed in
+    /// one口径 (resident including overflow, retained snapshots, overflow
+    /// subset, dirty pages, chunk counts). Eviction quotas and
+    /// observability share this instead of three separate tallies.
+    pub fn buffer_ledger(&self) -> super::column::BufferLedger {
+        let columns = self.columns.read();
+        let mut acc = super::column::BufferLedger::default();
+        for col in columns.iter() {
+            let ledger = col.buffer_ledger();
+            acc.resident_bytes += ledger.resident_bytes;
+            acc.evicted_bytes += ledger.evicted_bytes;
+            acc.overflow_bytes += ledger.overflow_bytes;
+            acc.dirty_pages += ledger.dirty_pages;
+            acc.resident_chunks += ledger.resident_chunks;
+            acc.evicted_chunks += ledger.evicted_chunks;
+        }
+        acc
+    }
+
     /// Resident decoded bytes across columns.
     pub fn resident_memory_usage(&self) -> usize {
-        self.columns
-            .read()
-            .iter()
-            .map(|c| c.resident_memory_usage())
-            .sum()
+        self.buffer_ledger().resident_bytes
     }
 
     /// Compressed snapshot bytes retained for evicted chunks.
     pub fn evicted_bytes(&self) -> usize {
-        self.columns.read().iter().map(|c| c.evicted_bytes()).sum()
+        self.buffer_ledger().evicted_bytes
+    }
+
+    /// Overflow side-store bytes across columns (subset of resident).
+    pub fn overflow_bytes(&self) -> usize {
+        self.buffer_ledger().overflow_bytes
     }
 
     /// Chunks with decoded data in memory.
     pub fn resident_chunk_count(&self) -> usize {
-        self.columns
-            .read()
-            .iter()
-            .map(|c| c.resident_chunk_count())
-            .sum()
+        self.buffer_ledger().resident_chunks
     }
 
     /// Chunks released with only the snapshot retained.
     pub fn evicted_chunk_count(&self) -> usize {
-        self.columns
-            .read()
-            .iter()
-            .map(|c| c.evicted_chunk_count())
-            .sum()
+        self.buffer_ledger().evicted_chunks
     }
 
     pub fn mark_row_dirty(&self, row_idx: usize) {
