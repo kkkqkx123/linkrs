@@ -78,7 +78,9 @@ impl std::fmt::Display for PointId {
 }
 
 /// Declared schema of an indexed payload field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 pub enum PayloadSchemaType {
     Keyword,
     Integer,
@@ -113,7 +115,7 @@ impl PayloadSchemaType {
 // ---------------------------------------------------------------------------
 
 /// Geographic point (`lat`, `lon` in degrees).
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct GeoPoint {
     pub lat: f64,
     pub lon: f64,
@@ -126,7 +128,7 @@ impl GeoPoint {
 }
 
 /// Radius filter around a geographic center.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct GeoRadius {
     pub center: GeoPoint,
     /// Radius in meters.
@@ -140,7 +142,7 @@ impl GeoRadius {
 }
 
 /// Lat/lon bounding-box filter.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct GeoBoundingBox {
     pub top_left: GeoPoint,
     pub bottom_right: GeoPoint,
@@ -156,7 +158,7 @@ impl GeoBoundingBox {
 }
 
 /// Range bound on the number of values an array field holds.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct ValuesCountCondition {
     pub gt: Option<u64>,
     pub gte: Option<u64>,
@@ -202,7 +204,8 @@ impl Default for ValuesCountCondition {
 }
 
 /// Top-level payload filter with Qdrant-style clause groups.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[schema(no_recursion)]
 pub struct VectorFilter {
     pub must: Option<Vec<FilterCondition>>,
     pub must_not: Option<Vec<FilterCondition>>,
@@ -232,14 +235,16 @@ impl VectorFilter {
 }
 
 /// `should` clause with an explicit minimum match count.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[schema(no_recursion)]
 pub struct MinShouldCondition {
     pub conditions: Vec<FilterCondition>,
     pub min_count: usize,
 }
 
 /// A single filter condition: field plus its predicate.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[schema(no_recursion)]
 pub struct FilterCondition {
     pub field: String,
     pub condition: ConditionType,
@@ -305,7 +310,8 @@ impl FilterCondition {
 }
 
 /// Predicate of a [`FilterCondition`].
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[schema(no_recursion)]
 pub enum ConditionType {
     /// Match a scalar field value.
     Match {
@@ -334,7 +340,7 @@ pub enum ConditionType {
 }
 
 /// Numeric range bounds; absent bounds are open.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct RangeCondition {
     pub gt: Option<f64>,
     pub gte: Option<f64>,
@@ -380,7 +386,7 @@ impl Default for RangeCondition {
 }
 
 /// Returned-payload projection for search results.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct PayloadSelector {
     pub include: Option<Vec<String>>,
     pub exclude: Option<Vec<String>>,

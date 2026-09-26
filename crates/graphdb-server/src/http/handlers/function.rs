@@ -12,6 +12,16 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
+#[utoipa::path(
+    post,
+    path = "/v1/functions",
+    tag = "Function",
+    request_body = RegisterFunctionRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Function registered"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Register a custom function
 pub async fn register<
     S: StorageClient
@@ -56,6 +66,15 @@ pub async fn register<
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/functions",
+    tag = "Function",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Function list"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// List all functions
 pub async fn list<
     S: StorageClient
@@ -88,6 +107,17 @@ pub async fn list<
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/functions/{name}",
+    tag = "Function",
+    params(("name" = String, Path, description = "Function name")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Function details"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Obtain function details
 pub async fn info<
     S: StorageClient
@@ -134,6 +164,17 @@ pub async fn info<
     })))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/functions/{name}",
+    tag = "Function",
+    params(("name" = String, Path, description = "Function name")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Function unregistered"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Logout function
 pub async fn unregister<
     S: StorageClient
@@ -174,7 +215,7 @@ pub async fn unregister<
 }
 
 /// Registration function request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct RegisterFunctionRequest {
     pub name: String,
     #[serde(rename = "type")]
@@ -187,7 +228,7 @@ pub struct RegisterFunctionRequest {
 }
 
 /// Function information
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct FunctionInfo {
     name: String,
     function_type: String,

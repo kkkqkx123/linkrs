@@ -6,14 +6,14 @@ pub mod metadata;
 pub mod schema;
 
 /// Standard API response wrapper
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ApiResponse<T> {
     pub success: bool,
     pub data: Option<T>,
     pub error: Option<ApiError>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ApiError {
     pub code: String,
     pub message: String,
@@ -41,7 +41,7 @@ impl<T> ApiResponse<T> {
 }
 
 /// Pagination parameters
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
 pub struct PaginationParams {
     #[serde(default = "default_limit")]
     pub limit: usize,
@@ -58,7 +58,7 @@ fn default_offset() -> usize {
 }
 
 /// Paginated response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct PaginatedResponse<T> {
     pub items: Vec<T>,
     pub total: i64,

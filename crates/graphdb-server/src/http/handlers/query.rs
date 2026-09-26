@@ -13,6 +13,16 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
+#[utoipa::path(
+    post,
+    path = "/v1/query",
+    tag = "Query",
+    request_body = QueryRequest,
+    responses(
+        (status = 200, body = QueryResponse, description = "Query executed"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn execute<
     S: StorageClient
         + StorageSchemaContextOps
@@ -81,6 +91,16 @@ pub async fn execute<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/query/batch",
+    tag = "Query",
+    request_body = BatchQueryRequest,
+    responses(
+        (status = 200, body = BatchQueryResponse, description = "Batch queries executed"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn execute_batch<
     S: StorageClient
         + StorageSchemaContextOps
@@ -112,6 +132,16 @@ pub async fn execute_batch<
     Ok(JsonResponse(BatchQueryResponse { results }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/query/validate",
+    tag = "Query",
+    request_body = QueryRequest,
+    responses(
+        (status = 200, body = ValidateResponse, description = "Query validation result"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn validate<
     S: StorageClient
         + StorageSchemaContextOps

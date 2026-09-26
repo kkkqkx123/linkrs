@@ -16,20 +16,30 @@ use crate::storage::{
 };
 
 /// Streaming results data items
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct StreamDataItem {
     pub row: serde_json::Value,
     pub index: usize,
 }
 
 /// Streaming results metadata
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct StreamMetadata {
     pub rows_returned: usize,
     pub execution_time_ms: u64,
     pub columns: Vec<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/query/stream",
+    tag = "Stream",
+    request_body = StreamQueryRequest,
+    responses(
+        (status = 200, description = "Query result event stream", content_type = "text/event-stream"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Execute the query and stream the results
 pub async fn execute_stream<
     S: StorageClient

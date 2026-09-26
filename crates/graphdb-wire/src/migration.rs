@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct MigrationPlanQuery {
     pub from_version: Option<u64>,
     pub to_version: Option<u64>,
@@ -17,23 +17,23 @@ impl MigrationPlanQuery {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MigrationExecuteRequest {
     pub plan_json: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MigrationRollbackRequest {
     pub plan_json: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MigrationPlanResponse {
     pub plan: serde_json::Value,
     pub plan_json: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MigrationExecuteResponse {
     pub success: bool,
     pub steps_completed: usize,
@@ -41,7 +41,7 @@ pub struct MigrationExecuteResponse {
     pub errors: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MigrationStatusResponse {
     pub space: Option<String>,
     pub label: Option<String>,
@@ -51,7 +51,7 @@ pub struct MigrationStatusResponse {
     pub history_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MigrationHistoryEntry {
     pub id: u64,
     pub space: String,
@@ -70,7 +70,7 @@ pub struct MigrationHistoryEntry {
     pub file_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MigrationHistoryResponse {
     pub space: String,
     pub label: String,

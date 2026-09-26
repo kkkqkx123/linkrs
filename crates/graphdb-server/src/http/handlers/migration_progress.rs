@@ -131,11 +131,24 @@ fn migration_event_to_sse(event: MigrationEvent) -> Event {
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::ToSchema)]
 pub struct MigrationProgressQuery {
     pub is_edge: Option<bool>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/migration/stream/{space}/{label}",
+    tag = "Migration",
+    params(
+        ("space" = String, Path, description = "Space name"),
+        ("label" = String, Path, description = "Tag or edge type name"),
+        ("is_edge" = Option<bool>, Query, description = "Whether the label is an edge type")
+    ),
+    responses(
+        (status = 200, description = "Migration progress event stream", content_type = "text/event-stream")
+    )
+)]
 /// SSE endpoint to stream migration progress for a given space/label.
 ///
 /// Example: GET /v1/migration/stream/{space}/{label}?is_edge=false

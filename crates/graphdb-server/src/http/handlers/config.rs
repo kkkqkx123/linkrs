@@ -12,6 +12,15 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
+#[utoipa::path(
+    get,
+    path = "/v1/config",
+    tag = "Config",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Current configuration"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Get current configuration
 pub async fn get<
     S: StorageClient
@@ -77,6 +86,16 @@ pub async fn get<
     })))
 }
 
+#[utoipa::path(
+    put,
+    path = "/v1/config",
+    tag = "Config",
+    request_body = serde_json::Value,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Configuration update receipt"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Update configuration (hot update)
 pub async fn update<
     S: StorageClient
@@ -117,6 +136,19 @@ pub async fn update<
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/config/{section}/{key}",
+    tag = "Config",
+    params(
+        ("section" = String, Path, description = "Configuration section"),
+        ("key" = String, Path, description = "Configuration key")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Configuration item"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Getting Configuration Items
 pub async fn get_key<
     S: StorageClient
@@ -141,6 +173,20 @@ pub async fn get_key<
     })))
 }
 
+#[utoipa::path(
+    put,
+    path = "/v1/config/{section}/{key}",
+    tag = "Config",
+    params(
+        ("section" = String, Path, description = "Configuration section"),
+        ("key" = String, Path, description = "Configuration key")
+    ),
+    request_body = UpdateConfigRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Configuration item updated"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Updating Configuration Items
 pub async fn update_key<
     S: StorageClient
@@ -171,6 +217,19 @@ pub async fn update_key<
     })))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/config/{section}/{key}",
+    tag = "Config",
+    params(
+        ("section" = String, Path, description = "Configuration section"),
+        ("key" = String, Path, description = "Configuration key")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Configuration reset to default"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Reset configuration items to default values
 pub async fn reset_key<
     S: StorageClient
@@ -197,7 +256,7 @@ pub async fn reset_key<
 }
 
 /// Update Configuration Request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct UpdateConfigRequest {
     pub value: serde_json::Value,
 }

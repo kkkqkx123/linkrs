@@ -11,6 +11,16 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
+#[utoipa::path(
+    post,
+    path = "/v1/auth/login",
+    tag = "Auth",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, body = LoginResponse, description = "Login succeeded"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn login<
     S: StorageClient
         + StorageSchemaContextOps
@@ -48,6 +58,16 @@ pub async fn login<
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/auth/logout",
+    tag = "Auth",
+    request_body = LogoutRequest,
+    responses(
+        (status = 204, description = "Logout succeeded"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn logout<
     S: StorageClient
         + StorageSchemaContextOps

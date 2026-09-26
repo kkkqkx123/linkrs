@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Query request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct QueryRequest {
     pub query: String,
     pub session_id: i64,
@@ -31,20 +31,20 @@ pub struct QueryRequest {
 
 /// Batch query request: multiple auto-commit DML statements executed inside a
 /// single shared auto-commit batch window.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BatchQueryRequest {
     pub session_id: i64,
     pub statements: Vec<String>,
 }
 
 /// Batch query response: one [`QueryResponse`] per input statement, in order.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BatchQueryResponse {
     pub results: Vec<QueryResponse>,
 }
 
 /// Query response (structured)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct QueryResponse {
     pub success: bool,
     #[serde(default)]
@@ -56,7 +56,7 @@ pub struct QueryResponse {
 }
 
 /// Query data
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct QueryData {
     #[serde(default)]
     pub columns: Vec<String>,
@@ -67,7 +67,7 @@ pub struct QueryData {
 }
 
 /// Query metadata
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct QueryMetadata {
     #[serde(default)]
     pub execution_time_ms: u64,
@@ -80,7 +80,7 @@ pub struct QueryMetadata {
 }
 
 /// Query error.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct QueryError {
     pub code: String,
     pub message: String,
@@ -89,14 +89,14 @@ pub struct QueryError {
 }
 
 /// Verify the response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ValidateResponse {
     pub valid: bool,
     pub message: String,
 }
 
 /// Streaming query request (SSE `/stream` endpoint).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct StreamQueryRequest {
     pub query: String,
     pub session_id: i64,

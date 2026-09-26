@@ -4,11 +4,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Query history item
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct HistoryItem {
     pub id: String,
     pub session_id: String,
     pub query: String,
+    #[schema(value_type = String)]
     pub executed_at: DateTime<Utc>,
     pub execution_time_ms: i64,
     pub rows_returned: i64,
@@ -17,7 +18,7 @@ pub struct HistoryItem {
 }
 
 /// Request to add history item
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct AddHistoryRequest {
     pub query: String,
     pub execution_time_ms: i64,
@@ -27,18 +28,19 @@ pub struct AddHistoryRequest {
 }
 
 /// Query favorite item
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FavoriteItem {
     pub id: String,
     pub session_id: String,
     pub name: String,
     pub query: String,
     pub description: Option<String>,
+    #[schema(value_type = String)]
     pub created_at: DateTime<Utc>,
 }
 
 /// Request to add favorite
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct AddFavoriteRequest {
     pub name: String,
     pub query: String,
@@ -46,7 +48,7 @@ pub struct AddFavoriteRequest {
 }
 
 /// Request to update favorite
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct UpdateFavoriteRequest {
     pub name: Option<String>,
     pub query: Option<String>,
@@ -54,13 +56,13 @@ pub struct UpdateFavoriteRequest {
 }
 
 /// Favorite list response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct FavoriteListResponse {
     pub items: Vec<FavoriteItem>,
 }
 
 /// History list response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct HistoryListResponse {
     pub items: Vec<HistoryItem>,
     pub total: i64,

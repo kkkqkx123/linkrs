@@ -9,14 +9,14 @@ use serde::{Deserialize, Serialize};
 // ── Auth ──────────────────────────────────────────────────────────────────
 
 /// Login request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
 }
 
 /// Login response
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LoginResponse {
     pub session_id: i64,
     pub username: String,
@@ -25,7 +25,7 @@ pub struct LoginResponse {
 }
 
 /// Logout request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LogoutRequest {
     pub session_id: i64,
 }
@@ -33,14 +33,14 @@ pub struct LogoutRequest {
 // ── Session ───────────────────────────────────────────────────────────────
 
 /// Create session request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateSessionRequest {
     pub username: String,
     pub client_ip: String,
 }
 
 /// Session response
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SessionResponse {
     pub session_id: i64,
     pub username: String,
@@ -51,7 +51,7 @@ pub struct SessionResponse {
 // ── Transaction ───────────────────────────────────────────────────────────
 
 /// Begin transaction request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BeginTransactionRequest {
     #[serde(default)]
     pub read_only: bool,
@@ -69,14 +69,14 @@ pub struct BeginTransactionRequest {
 }
 
 /// Transaction response
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TransactionResponse {
     pub transaction_id: u64,
     pub status: String,
 }
 
 /// Transaction action request (commit/rollback body).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TransactionActionRequest {
     pub session_id: i64,
 }
@@ -84,7 +84,7 @@ pub struct TransactionActionRequest {
 // ── Config ────────────────────────────────────────────────────────────────
 
 /// Update config request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UpdateConfigRequest {
     pub section: String,
     pub key: String,
@@ -92,7 +92,7 @@ pub struct UpdateConfigRequest {
 }
 
 /// Server configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ServerConfig {
     pub version: String,
     #[serde(default)]
@@ -100,7 +100,7 @@ pub struct ServerConfig {
 }
 
 /// Configuration section
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ConfigSection {
     pub name: String,
     #[serde(default)]
@@ -110,7 +110,7 @@ pub struct ConfigSection {
 }
 
 /// Configuration item
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ConfigItem {
     pub key: String,
     pub value: serde_json::Value,
@@ -125,7 +125,7 @@ pub struct ConfigItem {
 // ── Statistics ────────────────────────────────────────────────────────────
 
 /// Statistics for a session
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SessionStatistics {
     pub total_queries: u64,
     pub total_changes: u64,
@@ -133,7 +133,7 @@ pub struct SessionStatistics {
 }
 
 /// Query type statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct QueryTypeStatistics {
     pub match_queries: u64,
     pub create_queries: u64,
@@ -147,7 +147,7 @@ pub struct QueryTypeStatistics {
 }
 
 /// Query statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct QueryStatistics {
     pub total_queries: u64,
     #[serde(default)]
@@ -156,7 +156,7 @@ pub struct QueryStatistics {
 }
 
 /// Information about a slow query
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SlowQueryInfo {
     pub trace_id: String,
     pub session_id: i64,
@@ -166,7 +166,7 @@ pub struct SlowQueryInfo {
 }
 
 /// Database statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DatabaseStatistics {
     pub space_count: i64,
     pub total_vertices: i64,

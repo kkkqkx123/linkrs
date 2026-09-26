@@ -17,7 +17,7 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ImportForm {
     pub space: String,
     pub format: String,
@@ -26,7 +26,7 @@ pub struct ImportForm {
     pub batch_size: Option<usize>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ImportResponse {
     pub success: bool,
     pub message: String,
@@ -34,7 +34,7 @@ pub struct ImportResponse {
     pub rows_failed: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ImportStatusResponse {
     pub job_id: String,
     pub status: String,
@@ -260,6 +260,15 @@ fn parse_statements(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/import",
+    tag = "Import",
+    responses(
+        (status = 200, body = ImportResponse, description = "File imported"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn import_file<
     S: StorageClient
         + StorageSchemaContextOps
@@ -383,6 +392,16 @@ pub async fn import_file<
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/import/{id}",
+    tag = "Import",
+    params(("id" = String, Path, description = "Import job id")),
+    responses(
+        (status = 200, body = ImportStatusResponse, description = "Import job status"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn import_status<
     S: StorageClient
         + StorageSchemaContextOps

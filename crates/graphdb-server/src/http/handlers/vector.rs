@@ -12,7 +12,7 @@ use graphdb_sync::vector_sync::SearchOptions;
 use vector_search::{DistanceMetric, VectorFilter};
 
 /// Vector index creation request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateVectorIndexRequest {
     pub space_id: u64,
     pub tag_name: String,
@@ -38,7 +38,7 @@ fn default_distance() -> DistanceMetric {
 }
 
 /// Vector index information
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct VectorIndexInfo {
     pub name: String,
     pub space_id: u64,
@@ -50,7 +50,7 @@ pub struct VectorIndexInfo {
 }
 
 /// Vector search request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct VectorSearchRequest {
     pub space_id: u64,
     pub tag_name: String,
@@ -74,14 +74,14 @@ fn default_limit() -> usize {
 }
 
 /// Vector search result
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct VectorSearchResponse {
     pub results: Vec<VectorSearchResult>,
     pub count: usize,
 }
 
 /// Single vector search result
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct VectorSearchResult {
     pub id: String,
     pub score: f32,
@@ -90,14 +90,14 @@ pub struct VectorSearchResult {
 }
 
 /// List of vector indexes response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ListVectorIndexesResponse {
     pub indexes: Vec<String>,
     pub count: usize,
 }
 
 /// Vector index details response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct VectorIndexDetailsResponse {
     pub collection_name: String,
     pub status: String,
@@ -108,6 +108,16 @@ pub struct VectorIndexDetailsResponse {
     pub distance: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/vector/indexes",
+    tag = "Vector",
+    request_body = CreateVectorIndexRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Vector index created"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Create a vector index
 pub async fn create_index<
     S: StorageClient
@@ -236,6 +246,20 @@ pub async fn create_index<
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/vector/indexes/{space_id}/{tag_name}/{field_name}",
+    tag = "Vector",
+    params(
+        ("space_id" = u64, Path, description = "Space id"),
+        ("tag_name" = String, Path, description = "Tag name"),
+        ("field_name" = String, Path, description = "Vector field name")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Vector index dropped"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Drop a vector index
 pub async fn drop_index<
     S: StorageClient
@@ -270,6 +294,21 @@ pub async fn drop_index<
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/vector/indexes/{space_id}/{tag_name}/{field_name}",
+    tag = "Vector",
+    params(
+        ("space_id" = u64, Path, description = "Space id"),
+        ("tag_name" = String, Path, description = "Tag name"),
+        ("field_name" = String, Path, description = "Vector field name")
+    ),
+    responses(
+        (status = 200, body = VectorIndexDetailsResponse, description = "Vector index details"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Get vector index info
 pub async fn get_index_info<
     S: StorageClient
@@ -308,6 +347,15 @@ pub async fn get_index_info<
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/vector/indexes",
+    tag = "Vector",
+    responses(
+        (status = 200, body = ListVectorIndexesResponse, description = "Vector index list"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// List all vector indexes
 pub async fn list_indexes<
     S: StorageClient
@@ -335,6 +383,16 @@ pub async fn list_indexes<
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/vector/search",
+    tag = "Vector",
+    request_body = VectorSearchRequest,
+    responses(
+        (status = 200, body = VectorSearchResponse, description = "Vector search results"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Search vectors
 pub async fn search<
     S: StorageClient
@@ -418,6 +476,21 @@ pub async fn search<
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/vector/{space_id}/{tag_name}/{field_name}/{point_id}",
+    tag = "Vector",
+    params(
+        ("space_id" = u64, Path, description = "Space id"),
+        ("tag_name" = String, Path, description = "Tag name"),
+        ("field_name" = String, Path, description = "Vector field name"),
+        ("point_id" = String, Path, description = "Vector point id")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Vector point"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Get vector point by ID
 pub async fn get_vector<
     S: StorageClient
@@ -464,6 +537,20 @@ pub async fn get_vector<
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/vector/{space_id}/{tag_name}/{field_name}/count",
+    tag = "Vector",
+    params(
+        ("space_id" = u64, Path, description = "Space id"),
+        ("tag_name" = String, Path, description = "Tag name"),
+        ("field_name" = String, Path, description = "Vector field name")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Vector point count"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Get vector index count
 pub async fn count<
     S: StorageClient
@@ -501,7 +588,7 @@ pub async fn count<
 }
 
 /// Set payload request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct SetPayloadRequest {
     pub space_id: u64,
     pub tag_name: String,
@@ -511,7 +598,7 @@ pub struct SetPayloadRequest {
 }
 
 /// Delete payload request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct DeletePayloadRequest {
     pub space_id: u64,
     pub tag_name: String,
@@ -521,7 +608,7 @@ pub struct DeletePayloadRequest {
 }
 
 /// Scroll request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ScrollRequest {
     pub space_id: u64,
     pub tag_name: String,
@@ -534,12 +621,22 @@ pub struct ScrollRequest {
 }
 
 /// Scroll response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ScrollResponse {
     pub points: Vec<VectorSearchResult>,
     pub next_offset: Option<String>,
 }
 
+#[utoipa::path(
+    put,
+    path = "/v1/vector/payload",
+    tag = "Vector",
+    request_body = SetPayloadRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Payload set"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Set payload for vector points
 pub async fn set_payload<
     S: StorageClient
@@ -582,6 +679,16 @@ pub async fn set_payload<
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/v1/vector/payload/fields",
+    tag = "Vector",
+    request_body = SetPayloadRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Payload fields merged"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Merge fields into payload for vector points
 pub async fn set_payload_fields<
     S: StorageClient
@@ -624,6 +731,16 @@ pub async fn set_payload_fields<
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/vector/payload/delete",
+    tag = "Vector",
+    request_body = DeletePayloadRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Payload keys deleted"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Delete payload keys from vector points
 pub async fn delete_payload<
     S: StorageClient
@@ -666,6 +783,16 @@ pub async fn delete_payload<
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/vector/scroll",
+    tag = "Vector",
+    request_body = ScrollRequest,
+    responses(
+        (status = 200, body = ScrollResponse, description = "Scrolled vector points"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Paginated scroll over vector points
 pub async fn scroll<
     S: StorageClient

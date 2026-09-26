@@ -90,6 +90,15 @@ pub fn create_routes<
 // ==================== Space Handlers ====================
 
 /// List all spaces
+#[utoipa::path(
+    get,
+    path = "/api/v1/schema/spaces",
+    tag = "WebSchema",
+    responses(
+        (status = 200, description = "Space list", body = ApiResponse<serde_json::Value>),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn list_spaces<
     S: StorageClient
         + StorageSchemaContextOps
@@ -134,6 +143,17 @@ async fn list_spaces<
 }
 
 /// Get space details
+#[utoipa::path(
+    get,
+    path = "/api/v1/schema/spaces/{name}/details",
+    tag = "WebSchema",
+    params(("name" = String, Path, description = "Space name")),
+    responses(
+        (status = 200, description = "Space detail", body = ApiResponse<SpaceDetail>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn get_space_details<
     S: StorageClient
         + StorageSchemaContextOps
@@ -192,6 +212,17 @@ async fn get_space_details<
 }
 
 /// Get space statistics
+#[utoipa::path(
+    get,
+    path = "/api/v1/schema/spaces/{name}/statistics",
+    tag = "WebSchema",
+    params(("name" = String, Path, description = "Space name")),
+    responses(
+        (status = 200, description = "Space statistics", body = ApiResponse<SpaceStatistics>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn get_space_statistics<
     S: StorageClient
         + StorageSchemaContextOps
@@ -243,6 +274,17 @@ async fn get_space_statistics<
 // ==================== Tag Handlers ====================
 
 /// List all tags in a space
+#[utoipa::path(
+    get,
+    path = "/api/v1/schema/spaces/{name}/tags",
+    tag = "WebSchema",
+    params(("name" = String, Path, description = "Space name")),
+    responses(
+        (status = 200, description = "Tag list", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn list_tags<
     S: StorageClient
         + StorageSchemaContextOps
@@ -294,6 +336,18 @@ async fn list_tags<
 }
 
 /// Create a new tag
+#[utoipa::path(
+    post,
+    path = "/api/v1/schema/spaces/{name}/tags",
+    tag = "WebSchema",
+    params(("name" = String, Path, description = "Space name")),
+    request_body = serde_json::Value,
+    responses(
+        (status = 200, description = "Tag created", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn create_tag<
     S: StorageClient
         + StorageSchemaContextOps
@@ -365,6 +419,20 @@ async fn create_tag<
 }
 
 /// Get tag details
+#[utoipa::path(
+    get,
+    path = "/api/v1/schema/spaces/{name}/tags/{tag_name}",
+    tag = "WebSchema",
+    params(
+        ("name" = String, Path, description = "Space name"),
+        ("tag_name" = String, Path, description = "Tag name")
+    ),
+    responses(
+        (status = 200, description = "Tag detail", body = ApiResponse<TagDetail>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn get_tag<
     S: StorageClient
         + StorageSchemaContextOps
@@ -418,6 +486,21 @@ async fn get_tag<
 }
 
 /// Update tag
+#[utoipa::path(
+    put,
+    path = "/api/v1/schema/spaces/{name}/tags/{tag_name}",
+    tag = "WebSchema",
+    params(
+        ("name" = String, Path, description = "Space name"),
+        ("tag_name" = String, Path, description = "Tag name")
+    ),
+    request_body = UpdateTagRequest,
+    responses(
+        (status = 200, description = "Tag updated", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn update_tag<
     S: StorageClient
         + StorageSchemaContextOps
@@ -478,6 +561,20 @@ async fn update_tag<
 }
 
 /// Delete tag
+#[utoipa::path(
+    delete,
+    path = "/api/v1/schema/spaces/{name}/tags/{tag_name}",
+    tag = "WebSchema",
+    params(
+        ("name" = String, Path, description = "Space name"),
+        ("tag_name" = String, Path, description = "Tag name")
+    ),
+    responses(
+        (status = 200, description = "Tag deleted", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn delete_tag<
     S: StorageClient
         + StorageSchemaContextOps
@@ -517,6 +614,17 @@ async fn delete_tag<
 // ==================== Edge Type Handlers ====================
 
 /// List all edge types in a space
+#[utoipa::path(
+    get,
+    path = "/api/v1/schema/spaces/{name}/edge-types",
+    tag = "WebSchema",
+    params(("name" = String, Path, description = "Space name")),
+    responses(
+        (status = 200, description = "Edge type list", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn list_edge_types<
     S: StorageClient
         + StorageSchemaContextOps
@@ -568,6 +676,18 @@ async fn list_edge_types<
 }
 
 /// Create a new edge type
+#[utoipa::path(
+    post,
+    path = "/api/v1/schema/spaces/{name}/edge-types",
+    tag = "WebSchema",
+    params(("name" = String, Path, description = "Space name")),
+    request_body = serde_json::Value,
+    responses(
+        (status = 200, description = "Edge type created", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn create_edge_type<
     S: StorageClient
         + StorageSchemaContextOps
@@ -638,6 +758,20 @@ async fn create_edge_type<
 }
 
 /// Get edge type details
+#[utoipa::path(
+    get,
+    path = "/api/v1/schema/spaces/{name}/edge-types/{edge_name}",
+    tag = "WebSchema",
+    params(
+        ("name" = String, Path, description = "Space name"),
+        ("edge_name" = String, Path, description = "Edge type name")
+    ),
+    responses(
+        (status = 200, description = "Edge type detail", body = ApiResponse<EdgeTypeDetail>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn get_edge_type<
     S: StorageClient
         + StorageSchemaContextOps
@@ -691,6 +825,21 @@ async fn get_edge_type<
 }
 
 /// Update edge type
+#[utoipa::path(
+    put,
+    path = "/api/v1/schema/spaces/{name}/edge-types/{edge_name}",
+    tag = "WebSchema",
+    params(
+        ("name" = String, Path, description = "Space name"),
+        ("edge_name" = String, Path, description = "Edge type name")
+    ),
+    request_body = UpdateEdgeTypeRequest,
+    responses(
+        (status = 200, description = "Edge type updated", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn update_edge_type<
     S: StorageClient
         + StorageSchemaContextOps
@@ -751,6 +900,20 @@ async fn update_edge_type<
 }
 
 /// Delete edge type
+#[utoipa::path(
+    delete,
+    path = "/api/v1/schema/spaces/{name}/edge-types/{edge_name}",
+    tag = "WebSchema",
+    params(
+        ("name" = String, Path, description = "Space name"),
+        ("edge_name" = String, Path, description = "Edge type name")
+    ),
+    responses(
+        (status = 200, description = "Edge type deleted", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn delete_edge_type<
     S: StorageClient
         + StorageSchemaContextOps
@@ -790,6 +953,17 @@ async fn delete_edge_type<
 // ==================== Index Handlers ====================
 
 /// List all indexes in a space
+#[utoipa::path(
+    get,
+    path = "/api/v1/schema/spaces/{name}/indexes",
+    tag = "WebSchema",
+    params(("name" = String, Path, description = "Space name")),
+    responses(
+        (status = 200, description = "Index list", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn list_indexes<
     S: StorageClient
         + StorageSchemaContextOps
@@ -843,6 +1017,18 @@ async fn list_indexes<
 }
 
 /// Create a new index
+#[utoipa::path(
+    post,
+    path = "/api/v1/schema/spaces/{name}/indexes",
+    tag = "WebSchema",
+    params(("name" = String, Path, description = "Space name")),
+    request_body = CreateIndexRequest,
+    responses(
+        (status = 200, description = "Index created", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn create_index<
     S: StorageClient
         + StorageSchemaContextOps
@@ -899,6 +1085,20 @@ async fn create_index<
 }
 
 /// Get index details
+#[utoipa::path(
+    get,
+    path = "/api/v1/schema/spaces/{name}/indexes/{index_name}",
+    tag = "WebSchema",
+    params(
+        ("name" = String, Path, description = "Space name"),
+        ("index_name" = String, Path, description = "Index name")
+    ),
+    responses(
+        (status = 200, description = "Index detail", body = ApiResponse<IndexInfo>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn get_index<
     S: StorageClient
         + StorageSchemaContextOps
@@ -944,6 +1144,20 @@ async fn get_index<
 }
 
 /// Delete index
+#[utoipa::path(
+    delete,
+    path = "/api/v1/schema/spaces/{name}/indexes/{index_name}",
+    tag = "WebSchema",
+    params(
+        ("name" = String, Path, description = "Space name"),
+        ("index_name" = String, Path, description = "Index name")
+    ),
+    responses(
+        (status = 200, description = "Index deleted", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn delete_index<
     S: StorageClient
         + StorageSchemaContextOps
@@ -981,6 +1195,20 @@ async fn delete_index<
 }
 
 /// Rebuild index
+#[utoipa::path(
+    post,
+    path = "/api/v1/schema/spaces/{name}/indexes/{index_name}/rebuild",
+    tag = "WebSchema",
+    params(
+        ("name" = String, Path, description = "Space name"),
+        ("index_name" = String, Path, description = "Index name")
+    ),
+    responses(
+        (status = 200, description = "Index rebuilt", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn rebuild_index<
     S: StorageClient
         + StorageSchemaContextOps

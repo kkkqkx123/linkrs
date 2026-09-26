@@ -50,6 +50,16 @@ pub fn create_routes<
 }
 
 /// Add a query history item
+#[utoipa::path(
+    post,
+    path = "/api/v1/queries/history",
+    tag = "WebHistory",
+    request_body = AddHistoryRequest,
+    responses(
+        (status = 200, description = "History item recorded", body = ApiResponse<serde_json::Value>),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn add_history<
     S: StorageClient
         + StorageSchemaContextOps
@@ -83,6 +93,16 @@ async fn add_history<
 }
 
 /// List query history
+#[utoipa::path(
+    get,
+    path = "/api/v1/queries/history",
+    tag = "WebHistory",
+    params(PaginationParams),
+    responses(
+        (status = 200, description = "History page", body = ApiResponse<HistoryListResponse>),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn list_history<
     S: StorageClient
         + StorageSchemaContextOps
@@ -111,6 +131,17 @@ async fn list_history<
 }
 
 /// Delete a history item
+#[utoipa::path(
+    delete,
+    path = "/api/v1/queries/history/{id}",
+    tag = "WebHistory",
+    params(("id" = String, Path, description = "History item id")),
+    responses(
+        (status = 200, description = "History item deleted", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn delete_history<
     S: StorageClient
         + StorageSchemaContextOps
@@ -137,6 +168,15 @@ async fn delete_history<
 }
 
 /// Clear all history
+#[utoipa::path(
+    delete,
+    path = "/api/v1/queries/history/clear",
+    tag = "WebHistory",
+    responses(
+        (status = 200, description = "History cleared", body = ApiResponse<serde_json::Value>),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn clear_history<
     S: StorageClient
         + StorageSchemaContextOps
@@ -162,6 +202,16 @@ async fn clear_history<
 }
 
 /// Add a favorite
+#[utoipa::path(
+    post,
+    path = "/api/v1/queries/favorites",
+    tag = "WebHistory",
+    request_body = AddFavoriteRequest,
+    responses(
+        (status = 200, description = "Favorite recorded", body = ApiResponse<serde_json::Value>),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn add_favorite<
     S: StorageClient
         + StorageSchemaContextOps
@@ -194,6 +244,15 @@ async fn add_favorite<
 }
 
 /// List all favorites
+#[utoipa::path(
+    get,
+    path = "/api/v1/queries/favorites",
+    tag = "WebHistory",
+    responses(
+        (status = 200, description = "Favorite list", body = ApiResponse<FavoriteListResponse>),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn list_favorites<
     S: StorageClient
         + StorageSchemaContextOps
@@ -216,6 +275,17 @@ async fn list_favorites<
 }
 
 /// Get a favorite by ID
+#[utoipa::path(
+    get,
+    path = "/api/v1/queries/favorites/{id}",
+    tag = "WebHistory",
+    params(("id" = String, Path, description = "Favorite id")),
+    responses(
+        (status = 200, description = "Favorite detail", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn get_favorite<
     S: StorageClient
         + StorageSchemaContextOps
@@ -245,6 +315,18 @@ async fn get_favorite<
 }
 
 /// Update a favorite
+#[utoipa::path(
+    put,
+    path = "/api/v1/queries/favorites/{id}",
+    tag = "WebHistory",
+    params(("id" = String, Path, description = "Favorite id")),
+    request_body = UpdateFavoriteRequest,
+    responses(
+        (status = 200, description = "Favorite updated", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn update_favorite<
     S: StorageClient
         + StorageSchemaContextOps
@@ -277,6 +359,17 @@ async fn update_favorite<
 }
 
 /// Delete a favorite
+#[utoipa::path(
+    delete,
+    path = "/api/v1/queries/favorites/{id}",
+    tag = "WebHistory",
+    params(("id" = String, Path, description = "Favorite id")),
+    responses(
+        (status = 200, description = "Favorite deleted", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn delete_favorite<
     S: StorageClient
         + StorageSchemaContextOps
@@ -303,6 +396,15 @@ async fn delete_favorite<
 }
 
 /// Clear all favorites
+#[utoipa::path(
+    delete,
+    path = "/api/v1/queries/favorites/clear",
+    tag = "WebHistory",
+    responses(
+        (status = 200, description = "Favorites cleared", body = ApiResponse<serde_json::Value>),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn clear_favorites<
     S: StorageClient
         + StorageSchemaContextOps

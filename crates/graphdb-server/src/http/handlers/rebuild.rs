@@ -23,7 +23,7 @@ use crate::storage::{
 };
 
 /// One async rebuild task.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct RebuildTaskRecord {
     pub rebuild_id: String,
     /// `fulltext` or `vector`.
@@ -157,6 +157,17 @@ where
 
 // ── Fulltext ──────────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    post,
+    path = "/v1/fulltext/indexes/rebuild",
+    tag = "Fulltext",
+    request_body = graphdb_wire::fulltext::RebuildFulltextIndexRequest,
+    responses(
+        (status = 200, body = graphdb_wire::fulltext::RebuildFulltextIndexResponse, description = "Fulltext rebuild started"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Start an async fulltext index rebuild.
 #[cfg(feature = "fulltext")]
 pub async fn rebuild_fulltext<
@@ -229,6 +240,17 @@ pub async fn rebuild_fulltext<
     ))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/fulltext/rebuilds/{id}",
+    tag = "Fulltext",
+    params(("id" = String, Path, description = "Rebuild task id")),
+    responses(
+        (status = 200, body = graphdb_wire::fulltext::FulltextRebuildStatusResponse, description = "Fulltext rebuild status"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Poll a fulltext rebuild task, merging live driver progress while running.
 #[cfg(feature = "fulltext")]
 pub async fn fulltext_rebuild_status<
@@ -284,6 +306,16 @@ pub async fn fulltext_rebuild_status<
     Ok(JsonResponse(response))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/fulltext/indexes/clear",
+    tag = "Fulltext",
+    request_body = graphdb_wire::fulltext::ClearFulltextIndexRequest,
+    responses(
+        (status = 200, body = graphdb_wire::fulltext::ClearFulltextIndexResponse, description = "Fulltext index cleared"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Synchronously clear a fulltext index. Destructive: requires `force=true`.
 #[cfg(feature = "fulltext")]
 pub async fn clear_fulltext<
@@ -334,6 +366,15 @@ pub async fn clear_fulltext<
     ))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/fulltext/indexes/inconsistent",
+    tag = "Fulltext",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Inconsistent fulltext indexes"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// List fulltext indexes whose engine is in the `Inconsistent` state.
 ///
 /// These indexes reject writes and need operator attention: trigger the
@@ -368,6 +409,17 @@ pub async fn inconsistent_fulltext<
 
 // ── Vector ────────────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    post,
+    path = "/v1/vector/indexes/rebuild",
+    tag = "Vector",
+    request_body = graphdb_wire::vector::RebuildVectorIndexRequest,
+    responses(
+        (status = 200, body = graphdb_wire::vector::RebuildVectorIndexResponse, description = "Vector rebuild started"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Start an async vector index rebuild.
 #[cfg(feature = "vector")]
 pub async fn rebuild_vector<
@@ -440,6 +492,17 @@ pub async fn rebuild_vector<
     ))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/vector/rebuilds/{id}",
+    tag = "Vector",
+    params(("id" = String, Path, description = "Rebuild task id")),
+    responses(
+        (status = 200, body = graphdb_wire::vector::VectorRebuildStatusResponse, description = "Vector rebuild status"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Poll a vector rebuild task, merging live driver progress while running.
 #[cfg(feature = "vector")]
 pub async fn vector_rebuild_status<
@@ -495,6 +558,16 @@ pub async fn vector_rebuild_status<
     Ok(JsonResponse(response))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/vector/indexes/clear",
+    tag = "Vector",
+    request_body = graphdb_wire::vector::ClearVectorIndexRequest,
+    responses(
+        (status = 200, body = graphdb_wire::vector::ClearVectorIndexResponse, description = "Vector index cleared"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Synchronously clear a vector index. Destructive: requires `force=true`.
 #[cfg(feature = "vector")]
 pub async fn clear_vector<

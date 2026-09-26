@@ -40,11 +40,25 @@ pub fn create_routes<
 }
 
 /// Get vertex details
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
 pub struct GetVertexParams {
     pub space: String,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/graph/vertices/{vid}",
+    tag = "WebGraph",
+    params(
+        ("vid" = String, Path, description = "Vertex id"),
+        GetVertexParams
+    ),
+    responses(
+        (status = 200, description = "Vertex detail", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn get_vertex<
     S: StorageClient
         + StorageSchemaContextOps
@@ -85,7 +99,7 @@ async fn get_vertex<
 }
 
 /// Get edge details
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
 pub struct GetEdgeParams {
     pub space: String,
     pub src: String,
@@ -95,6 +109,17 @@ pub struct GetEdgeParams {
     pub rank: i64,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/graph/edges",
+    tag = "WebGraph",
+    params(GetEdgeParams),
+    responses(
+        (status = 200, description = "Edge detail", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn get_edge<
     S: StorageClient
         + StorageSchemaContextOps
@@ -134,7 +159,7 @@ async fn get_edge<
 }
 
 /// Get neighbors of a vertex
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
 pub struct GetNeighborsParams {
     pub space: String,
     /// Direction: OUT, IN, or BOTH
@@ -148,6 +173,19 @@ fn default_direction() -> String {
     "BOTH".to_string()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/graph/vertices/{vid}/neighbors",
+    tag = "WebGraph",
+    params(
+        ("vid" = String, Path, description = "Vertex id"),
+        GetNeighborsParams
+    ),
+    responses(
+        (status = 200, description = "Neighbor list", body = ApiResponse<serde_json::Value>),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn get_neighbors<
     S: StorageClient
         + StorageSchemaContextOps

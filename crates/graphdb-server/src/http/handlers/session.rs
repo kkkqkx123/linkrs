@@ -10,6 +10,16 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
+#[utoipa::path(
+    post,
+    path = "/v1/sessions",
+    tag = "Session",
+    request_body = CreateSessionRequest,
+    responses(
+        (status = 200, body = SessionResponse, description = "Session created"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn create<
     S: StorageClient
         + StorageSchemaContextOps
@@ -39,6 +49,17 @@ pub async fn create<
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/sessions/{id}",
+    tag = "Session",
+    params(("id" = i64, Path, description = "Session id")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Session details"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn get_session<
     S: StorageClient
         + StorageSchemaContextOps
@@ -66,6 +87,16 @@ pub async fn get_session<
     })))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/sessions/{id}",
+    tag = "Session",
+    params(("id" = i64, Path, description = "Session id")),
+    responses(
+        (status = 204, description = "Session deleted"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn delete_session<
     S: StorageClient
         + StorageSchemaContextOps

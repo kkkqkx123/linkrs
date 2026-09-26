@@ -11,3 +11,4 @@ homepage.workspace = true
 graphdb-core = { path = "../graphdb-core" }
 serde.workspace = true
 serde_json.workspace = true
+utoipa = { workspace = true }

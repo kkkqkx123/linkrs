@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Fulltext search request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FulltextSearchRequest {
     /// Index name to search
     pub index_name: String,
@@ -24,7 +24,7 @@ pub struct FulltextSearchRequest {
 }
 
 /// Fulltext search response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FulltextSearchResponse {
     /// Search results
     pub results: Vec<FulltextSearchResult>,
@@ -35,7 +35,7 @@ pub struct FulltextSearchResponse {
 }
 
 /// One scored hit of a [`FulltextSearchResponse`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FulltextSearchResult {
     /// Document ID
     pub doc_id: String,
@@ -47,7 +47,7 @@ pub struct FulltextSearchResult {
 }
 
 /// Highlight information for a matched field.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct HighlightResult {
     /// Field name that matched
     pub field: String,
@@ -56,7 +56,7 @@ pub struct HighlightResult {
 }
 
 /// Create a fulltext index request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateFulltextIndexRequest {
     /// Index name
     pub index_name: String,
@@ -70,7 +70,7 @@ pub struct CreateFulltextIndexRequest {
 }
 
 /// Fulltext field definition for index creation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FulltextFieldDef {
     /// Field name
     pub field_name: String,
@@ -83,7 +83,7 @@ pub struct FulltextFieldDef {
 }
 
 /// Drop fulltext index request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DropFulltextIndexRequest {
     /// Index name to drop
     pub index_name: String,
@@ -93,7 +93,7 @@ pub struct DropFulltextIndexRequest {
 }
 
 /// Fulltext index information.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FulltextIndexInfo {
     /// Index name
     pub index_name: String,
@@ -110,7 +110,7 @@ pub struct FulltextIndexInfo {
 }
 
 /// List fulltext indexes response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ListFulltextIndexesResponse {
     /// All fulltext indexes
     pub indexes: Vec<FulltextIndexInfo>,
@@ -120,7 +120,7 @@ pub struct ListFulltextIndexesResponse {
 ///
 /// The rebuild runs asynchronously: the handler returns a rebuild id
 /// immediately and the caller polls the rebuild status endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RebuildFulltextIndexRequest {
     /// Space (namespace) ID
     pub space_id: u64,
@@ -131,7 +131,7 @@ pub struct RebuildFulltextIndexRequest {
 }
 
 /// Rebuild a fulltext index response (accepted async task).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RebuildFulltextIndexResponse {
     /// Async rebuild task id for status polling
     pub rebuild_id: String,
@@ -146,7 +146,7 @@ pub struct RebuildFulltextIndexResponse {
 }
 
 /// Fulltext rebuild task status.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FulltextRebuildStatusResponse {
     /// Async rebuild task id
     pub rebuild_id: String,
@@ -176,7 +176,7 @@ pub struct FulltextRebuildStatusResponse {
 ///
 /// Explicit destructive operation: drops all indexed documents without
 /// backfill. Requires `force = true`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ClearFulltextIndexRequest {
     /// Space (namespace) ID
     pub space_id: u64,
@@ -189,7 +189,7 @@ pub struct ClearFulltextIndexRequest {
 }
 
 /// Clear a fulltext index response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ClearFulltextIndexResponse {
     /// Always true on success
     pub ok: bool,

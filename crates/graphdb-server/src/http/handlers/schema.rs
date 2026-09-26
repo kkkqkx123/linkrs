@@ -16,6 +16,16 @@ use graphdb_migration::{generate_edge_plan_with_expand, generate_vertex_plan_wit
 
 // ==================== Space related ====================
 
+#[utoipa::path(
+    post,
+    path = "/v1/schema/spaces",
+    tag = "Schema",
+    request_body = CreateSpaceRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Space created"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Creating a graph space
 pub async fn create_space<
     S: StorageClient
@@ -53,6 +63,16 @@ pub async fn create_space<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/schema/spaces/{name}",
+    tag = "Schema",
+    params(("name" = String, Path, description = "Space name")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Space details"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Getting the graph space
 pub async fn get_space<
     S: StorageClient
@@ -85,6 +105,16 @@ pub async fn get_space<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/schema/spaces/{name}",
+    tag = "Schema",
+    params(("name" = String, Path, description = "Space name")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Space deleted"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Deletion of map space
 pub async fn drop_space<
     S: StorageClient
@@ -115,6 +145,15 @@ pub async fn drop_space<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/schema/spaces",
+    tag = "Schema",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Space list"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// List all graph spaces
 pub async fn list_spaces<
     S: StorageClient
@@ -157,6 +196,17 @@ pub async fn list_spaces<
 
 // ==================== Tag related ====================
 
+#[utoipa::path(
+    post,
+    path = "/v1/schema/spaces/{name}/tags",
+    tag = "Schema",
+    params(("name" = String, Path, description = "Space name")),
+    request_body = CreateTagRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Tag created"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Creating Tags
 pub async fn create_tag<
     S: StorageClient
@@ -205,6 +255,16 @@ pub async fn create_tag<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/schema/spaces/{name}/tags",
+    tag = "Schema",
+    params(("name" = String, Path, description = "Space name")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Tag list"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// List all tags
 pub async fn list_tags<
     S: StorageClient
@@ -229,6 +289,17 @@ pub async fn list_tags<
 
 // ==================== Edge Type related ====================
 
+#[utoipa::path(
+    post,
+    path = "/v1/schema/spaces/{name}/edge-types",
+    tag = "Schema",
+    params(("name" = String, Path, description = "Space name")),
+    request_body = CreateEdgeTypeRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Edge type created"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Creating Edge Types
 pub async fn create_edge_type<
     S: StorageClient
@@ -277,6 +348,16 @@ pub async fn create_edge_type<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/schema/spaces/{name}/edge-types",
+    tag = "Schema",
+    params(("name" = String, Path, description = "Space name")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Edge type list"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// List all edge types
 pub async fn list_edge_types<
     S: StorageClient
@@ -312,7 +393,7 @@ fn parse_data_type(type_str: &str) -> DataType {
 
 use serde::Serialize;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ChangeInfo {
     pub change_type: String,
     pub description: String,
@@ -336,6 +417,20 @@ fn parse_is_edge_param(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/schema/versions/{space}/{label}",
+    tag = "Schema",
+    params(
+        ("space" = String, Path, description = "Space name"),
+        ("label" = String, Path, description = "Tag or edge type name"),
+        ("is_edge" = Option<bool>, Query, description = "Whether the label is an edge type")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Schema version history"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Get version history for a label (vertex tag or edge type)
 pub async fn get_version_history<
     S: StorageClient
@@ -413,6 +508,22 @@ pub async fn get_version_history<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/schema/changes/{space}/{label}/{from_version}/{to_version}",
+    tag = "Schema",
+    params(
+        ("space" = String, Path, description = "Space name"),
+        ("label" = String, Path, description = "Tag or edge type name"),
+        ("from_version" = u64, Path, description = "Start schema version"),
+        ("to_version" = u64, Path, description = "End schema version"),
+        ("is_edge" = Option<bool>, Query, description = "Whether the label is an edge type")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Schema changes between versions"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Get schema changes between two versions
 pub async fn get_schema_changes<
     S: StorageClient
@@ -477,6 +588,22 @@ pub async fn get_schema_changes<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/schema/breaking-changes/{space}/{label}/{from_version}/{to_version}",
+    tag = "Schema",
+    params(
+        ("space" = String, Path, description = "Space name"),
+        ("label" = String, Path, description = "Tag or edge type name"),
+        ("from_version" = u64, Path, description = "Start schema version"),
+        ("to_version" = u64, Path, description = "End schema version"),
+        ("is_edge" = Option<bool>, Query, description = "Whether the label is an edge type")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Breaking change report"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Detect breaking changes between two versions
 pub async fn detect_breaking_changes<
     S: StorageClient
@@ -557,7 +684,7 @@ pub async fn detect_breaking_changes<
 
 // ==================== Migration ====================
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::ToSchema)]
 pub struct MigrationPlanQuery {
     pub from_version: Option<u64>,
     pub to_version: Option<u64>,
@@ -565,16 +692,33 @@ pub struct MigrationPlanQuery {
     pub expand_contract: Option<bool>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::ToSchema)]
 pub struct MigrationExecuteRequest {
     pub plan_json: String,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::ToSchema)]
 pub struct MigrationRollbackRequest {
     pub plan_json: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/migration/plan/{space}/{label}",
+    tag = "Migration",
+    params(
+        ("space" = String, Path, description = "Space name"),
+        ("label" = String, Path, description = "Tag or edge type name"),
+        ("from_version" = Option<u64>, Query, description = "Start schema version"),
+        ("to_version" = Option<u64>, Query, description = "End schema version"),
+        ("is_edge" = Option<bool>, Query, description = "Whether the label is an edge type"),
+        ("expand_contract" = Option<bool>, Query, description = "Use expand-contract plan")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Migration plan"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn create_migration_plan<
     S: StorageClient
         + StorageSchemaContextOps
@@ -653,6 +797,16 @@ pub async fn create_migration_plan<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/migration/execute",
+    tag = "Migration",
+    request_body = MigrationExecuteRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Migration execution report"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn execute_migration<
     S: StorageClient
         + StorageSchemaContextOps
@@ -707,6 +861,16 @@ pub async fn execute_migration<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/migration/rollback",
+    tag = "Migration",
+    request_body = MigrationRollbackRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Migration rollback report"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn rollback_migration<
     S: StorageClient
         + StorageSchemaContextOps
@@ -742,6 +906,16 @@ pub async fn rollback_migration<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/migration/dry-run",
+    tag = "Migration",
+    request_body = MigrationExecuteRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Migration dry-run preview"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn dry_run_migration<
     S: StorageClient
         + StorageSchemaContextOps
@@ -779,6 +953,20 @@ pub async fn dry_run_migration<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/migration/history/{space}/{label}",
+    tag = "Migration",
+    params(
+        ("space" = String, Path, description = "Space name"),
+        ("label" = String, Path, description = "Tag or edge type name"),
+        ("is_edge" = Option<bool>, Query, description = "Whether the label is an edge type")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Migration history"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn migration_history<
     S: StorageClient
         + StorageSchemaContextOps
@@ -817,6 +1005,20 @@ pub async fn migration_history<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/migration/status/{space}/{label}",
+    tag = "Migration",
+    params(
+        ("space" = String, Path, description = "Space name"),
+        ("label" = String, Path, description = "Tag or edge type name"),
+        ("is_edge" = Option<bool>, Query, description = "Whether the label is an edge type")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Migration status"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn migration_status<
     S: StorageClient
         + StorageSchemaContextOps

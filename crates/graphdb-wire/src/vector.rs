@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 pub use graphdb_core::vector::{Payload, PayloadSchemaType, PayloadSelector, VectorFilter};
 
 /// Vector search request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct VectorSearchRequest {
     pub collection: String,
     pub vector: Vec<f32>,
@@ -27,25 +27,26 @@ pub struct VectorSearchRequest {
 }
 
 /// Vector search response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct VectorSearchResponse {
     pub results: Vec<VectorSearchResult>,
 }
 
 /// One scored hit of a [`VectorSearchResponse`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct VectorSearchResult {
     pub id: String,
     /// "Higher is better" similarity score, normalized across backends.
     pub score: f32,
     #[serde(default)]
+    #[schema(value_type = utoipa::openapi::Object)]
     pub payload: Option<Payload>,
     #[serde(default)]
     pub vector: Option<Vec<f32>>,
 }
 
 /// Create a payload field index on a collection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreatePayloadIndexRequest {
     pub collection: String,
     pub field: String,
@@ -53,21 +54,21 @@ pub struct CreatePayloadIndexRequest {
 }
 
 /// Delete the payload field index on a collection's field.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DeletePayloadIndexRequest {
     pub collection: String,
     pub field: String,
 }
 
 /// One declared payload index of [`ListPayloadIndexesResponse`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PayloadIndexInfo {
     pub field: String,
     pub schema_type: PayloadSchemaType,
 }
 
 /// All declared payload indexes of one collection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ListPayloadIndexesResponse {
     pub collection: String,
     pub indexes: Vec<PayloadIndexInfo>,
@@ -77,7 +78,7 @@ pub struct ListPayloadIndexesResponse {
 ///
 /// The rebuild runs asynchronously: the handler returns a rebuild id
 /// immediately and the caller polls the rebuild status endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RebuildVectorIndexRequest {
     /// Space (namespace) ID
     pub space_id: u64,
@@ -88,7 +89,7 @@ pub struct RebuildVectorIndexRequest {
 }
 
 /// Rebuild a vector index response (accepted async task).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RebuildVectorIndexResponse {
     /// Async rebuild task id for status polling
     pub rebuild_id: String,
@@ -103,7 +104,7 @@ pub struct RebuildVectorIndexResponse {
 }
 
 /// Vector rebuild task status.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct VectorRebuildStatusResponse {
     /// Async rebuild task id
     pub rebuild_id: String,
@@ -133,7 +134,7 @@ pub struct VectorRebuildStatusResponse {
 ///
 /// Explicit destructive operation: drops all indexed points without
 /// backfill. Requires `force = true`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ClearVectorIndexRequest {
     /// Space (namespace) ID
     pub space_id: u64,
@@ -146,7 +147,7 @@ pub struct ClearVectorIndexRequest {
 }
 
 /// Clear a vector index response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ClearVectorIndexResponse {
     /// Always true on success
     pub ok: bool,

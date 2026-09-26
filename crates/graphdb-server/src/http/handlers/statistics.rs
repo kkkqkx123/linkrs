@@ -14,6 +14,17 @@ use crate::storage::{
 };
 use graphdb_metrics::MetricType;
 
+#[utoipa::path(
+    get,
+    path = "/v1/statistics/sessions/{id}",
+    tag = "Statistics",
+    params(("id" = i64, Path, description = "Session id")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Session statistics"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Obtaining session statistics
 pub async fn session<
     S: StorageClient
@@ -70,6 +81,19 @@ pub async fn session<
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/statistics/queries",
+    tag = "Statistics",
+    params(
+        ("from" = Option<String>, Query, description = "Start of the query time window"),
+        ("to" = Option<String>, Query, description = "End of the query time window")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Query statistics"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Obtain query statistics
 pub async fn queries<
     S: StorageClient
@@ -155,6 +179,15 @@ pub async fn queries<
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/statistics/database",
+    tag = "Statistics",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Database statistics"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Obtain database statistics
 pub async fn database<
     S: StorageClient
@@ -291,6 +324,15 @@ pub async fn database<
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/statistics/system",
+    tag = "Statistics",
+    responses(
+        (status = 200, body = serde_json::Value, description = "System resource usage"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Obtaining information about the use of system resources
 pub async fn system<
     S: StorageClient
@@ -328,6 +370,15 @@ pub async fn system<
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/statistics/search",
+    tag = "Statistics",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Search statistics"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Obtain search statistics
 pub async fn search<
     S: StorageClient
@@ -479,6 +530,15 @@ fn get_cpu_usage() -> f64 {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/statistics/freeze",
+    tag = "Statistics",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Background freeze statistics"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Get background freeze statistics
 pub async fn freeze_stats<
     S: StorageClient
@@ -519,6 +579,15 @@ pub async fn freeze_stats<
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/statistics/freeze",
+    tag = "Statistics",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Background freeze triggered"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Trigger background freeze manually
 pub async fn trigger_freeze<
     S: StorageClient
@@ -558,7 +627,7 @@ pub async fn trigger_freeze<
 }
 
 /// Query statistical parameters
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct QueryStatsParams {
     #[serde(default)]
     pub from: Option<String>,
@@ -566,6 +635,15 @@ pub struct QueryStatsParams {
     pub to: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/statistics/migration",
+    tag = "Statistics",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Migration statistics"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Migration statistics
 pub async fn migration<
     S: StorageClient

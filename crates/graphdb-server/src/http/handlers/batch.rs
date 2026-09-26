@@ -15,6 +15,16 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
+#[utoipa::path(
+    post,
+    path = "/v1/batch",
+    tag = "Batch",
+    request_body = CreateBatchRequest,
+    responses(
+        (status = 200, body = CreateBatchResponse, description = "Batch task created"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Create batch tasks
 pub async fn create<
     S: StorageClient
@@ -44,6 +54,17 @@ pub async fn create<
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/batch/{id}",
+    tag = "Batch",
+    params(("id" = String, Path, description = "Batch task id")),
+    responses(
+        (status = 200, body = BatchStatusResponse, description = "Batch task status"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Obtaining the status of batch tasks
 pub async fn status<
     S: StorageClient
@@ -75,6 +96,18 @@ pub async fn status<
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/batch/{id}/items",
+    tag = "Batch",
+    params(("id" = String, Path, description = "Batch task id")),
+    request_body = AddBatchItemsRequest,
+    responses(
+        (status = 200, body = AddBatchItemsResponse, description = "Items accepted"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Add multiple items in batches
 pub async fn add_items<
     S: StorageClient
@@ -111,6 +144,17 @@ pub async fn add_items<
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/batch/{id}/execute",
+    tag = "Batch",
+    params(("id" = String, Path, description = "Batch task id")),
+    responses(
+        (status = 200, body = ExecuteBatchResponse, description = "Batch task executed"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Perform batch tasks
 pub async fn execute<
     S: StorageClient
@@ -173,6 +217,16 @@ pub async fn execute<
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/batch/{id}/cancel",
+    tag = "Batch",
+    params(("id" = String, Path, description = "Batch task id")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Batch task cancelled"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Cancel the batch task.
 pub async fn cancel<
     S: StorageClient
@@ -201,6 +255,17 @@ pub async fn cancel<
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/batch/{id}",
+    tag = "Batch",
+    params(("id" = String, Path, description = "Batch task id")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Batch task deleted"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Delete batch tasks.
 pub async fn delete<
     S: StorageClient

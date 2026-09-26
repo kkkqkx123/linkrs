@@ -24,7 +24,7 @@ pub type CollectionName = String;
 /// `None` cannot fork behavior between engines.
 pub const DEFAULT_WITH_PAYLOAD: bool = true;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub enum DistanceMetric {
     #[default]
     Cosine,

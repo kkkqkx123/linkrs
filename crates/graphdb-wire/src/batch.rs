@@ -13,7 +13,7 @@ use std::fmt;
 pub type BatchId = String;
 
 /// Batch Task Status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BatchStatus {
     /// Created
@@ -42,7 +42,7 @@ impl fmt::Display for BatchStatus {
 }
 
 /// Batch task type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BatchType {
     /// Vertex batch insertion
@@ -65,7 +65,7 @@ impl fmt::Display for BatchType {
 }
 
 /// Batch item type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BatchItemType {
     /// Vertex item
@@ -85,7 +85,7 @@ impl fmt::Display for BatchItemType {
 }
 
 /// Batch data
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "type")]
 pub enum BatchItem {
     #[serde(rename = "vertex")]
@@ -95,7 +95,7 @@ pub enum BatchItem {
 }
 
 /// Vertex data
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct VertexData {
     /// Vertex ID
     pub vid: serde_json::Value,
@@ -107,7 +107,7 @@ pub struct VertexData {
 }
 
 /// Edge data
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EdgeData {
     /// Edge type
     pub edge_type: String,
@@ -121,7 +121,7 @@ pub struct EdgeData {
 }
 
 /// Create batch task request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateBatchRequest {
     /// Space ID
     pub space_id: u64,
@@ -137,7 +137,7 @@ fn default_batch_size() -> usize {
 }
 
 /// Create batch task response
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateBatchResponse {
     /// Batch task ID
     pub batch_id: BatchId,
@@ -148,14 +148,14 @@ pub struct CreateBatchResponse {
 }
 
 /// Add batch items request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AddBatchItemsRequest {
     /// Batch item list
     pub items: Vec<BatchItem>,
 }
 
 /// Add batch items response
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AddBatchItemsResponse {
     /// Number accepted
     pub accepted: usize,
@@ -168,7 +168,7 @@ pub struct AddBatchItemsResponse {
 }
 
 /// Execute batch task response
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExecuteBatchResponse {
     /// Batch task ID
     pub batch_id: BatchId,
@@ -182,7 +182,7 @@ pub struct ExecuteBatchResponse {
 }
 
 /// Batch results data
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BatchResultData {
     /// Number of vertices inserted
     pub vertices_inserted: usize,
@@ -194,7 +194,7 @@ pub struct BatchResultData {
 }
 
 /// Batch error data
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BatchErrorData {
     /// Index where the error occurred
     pub index: usize,
@@ -205,7 +205,7 @@ pub struct BatchErrorData {
 }
 
 /// Batch task status response
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BatchStatusResponse {
     /// Batch task ID
     pub batch_id: BatchId,
@@ -220,7 +220,7 @@ pub struct BatchStatusResponse {
 }
 
 /// Progress of batch tasks
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BatchProgress {
     /// Total quantity
     pub total: usize,

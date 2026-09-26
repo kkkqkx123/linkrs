@@ -11,7 +11,7 @@ use crate::storage::{
 };
 
 /// Sync status response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct SyncStatusResponse {
     pub is_running: bool,
     pub dlq_size: usize,
@@ -26,6 +26,15 @@ pub struct SyncStatusResponse {
     pub outbox_persist_operations: u64,
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/sync/status",
+    tag = "Sync",
+    responses(
+        (status = 200, body = SyncStatusResponse, description = "Sync status"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Get sync status
 pub async fn status<
     S: StorageClient
@@ -75,6 +84,15 @@ pub async fn status<
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/sync/outbox/retry",
+    tag = "Sync",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Outbox delivery retried"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Retry delivery of pending durable outbox entries.
 pub async fn retry_outbox<
     S: StorageClient
@@ -101,6 +119,15 @@ pub async fn retry_outbox<
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/sync/outbox/diagnostics",
+    tag = "Sync",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Outbox diagnostics"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Diagnostics query for outbox frontiers and degraded state.
 pub async fn diagnostics<
     S: StorageClient
@@ -124,7 +151,7 @@ pub async fn diagnostics<
     Ok(JsonResponse(serde_json::json!(diag)))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct DeadLetterQuery {
     pub target: Option<String>,
     pub index_id: Option<u64>,
@@ -133,6 +160,22 @@ pub struct DeadLetterQuery {
     pub offset: Option<usize>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/sync/outbox/dead_letters",
+    tag = "Sync",
+    params(
+        ("target" = Option<String>, Query, description = "Sync target filter"),
+        ("index_id" = Option<u64>, Query, description = "Index id filter"),
+        ("generation" = Option<u64>, Query, description = "Generation filter"),
+        ("limit" = Option<usize>, Query, description = "Maximum rows returned"),
+        ("offset" = Option<usize>, Query, description = "Rows to skip")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Dead letter entries"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn dead_letters<
     S: StorageClient
         + StorageSchemaContextOps
@@ -167,7 +210,7 @@ pub async fn dead_letters<
     Ok(JsonResponse(serde_json::json!({ "dead_letters": rows })))
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
 pub struct RequeueRequest {
     pub target: Option<String>,
     pub index_id: Option<u64>,
@@ -176,6 +219,16 @@ pub struct RequeueRequest {
     pub event_ids: Option<Vec<i64>>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/sync/outbox/requeue",
+    tag = "Sync",
+    request_body = RequeueRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Dead letters requeued"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn requeue<
     S: StorageClient
         + StorageSchemaContextOps
@@ -221,13 +274,27 @@ pub async fn requeue<
     Ok(JsonResponse(serde_json::json!({ "requeued": requeued })))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct DegradedQuery {
     pub target: Option<String>,
     pub index_id: Option<u64>,
     pub generation: Option<u64>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/sync/outbox/degraded_ranges",
+    tag = "Sync",
+    params(
+        ("target" = Option<String>, Query, description = "Sync target filter"),
+        ("index_id" = Option<u64>, Query, description = "Index id filter"),
+        ("generation" = Option<u64>, Query, description = "Generation filter")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Degraded ranges"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn degraded_ranges<
     S: StorageClient
         + StorageSchemaContextOps
@@ -256,7 +323,7 @@ pub async fn degraded_ranges<
     Ok(JsonResponse(serde_json::json!({ "degraded_ranges": rows })))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ClearDegradedRequest {
     pub target: String,
     pub index_id: u64,
@@ -265,6 +332,16 @@ pub struct ClearDegradedRequest {
     pub end_lsn: u64,
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/sync/outbox/degraded/clear",
+    tag = "Sync",
+    request_body = ClearDegradedRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Degraded range cleared"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn degraded_clear<
     S: StorageClient
         + StorageSchemaContextOps
@@ -296,12 +373,22 @@ pub async fn degraded_clear<
     Ok(JsonResponse(serde_json::json!({ "cleared": cleared })))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct RetentionRunRequest {
     pub grace_lsn_distance: Option<u64>,
     pub max_age_ms: Option<u64>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/sync/outbox/retention/run",
+    tag = "Sync",
+    request_body = RetentionRunRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Retention pass completed"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn retention_run<
     S: StorageClient
         + StorageSchemaContextOps
@@ -331,6 +418,15 @@ pub async fn retention_run<
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/sync/outbox/retention/status",
+    tag = "Sync",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Retention watermark"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn retention_status<
     S: StorageClient
         + StorageSchemaContextOps

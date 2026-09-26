@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Space detail response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct SpaceDetail {
     pub id: u64,
     pub name: String,
@@ -16,7 +16,7 @@ pub struct SpaceDetail {
 }
 
 /// Space statistics
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct SpaceStatistics {
     pub tag_count: i64,
     pub edge_type_count: i64,
@@ -26,7 +26,7 @@ pub struct SpaceStatistics {
 }
 
 /// Tag summary
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct TagSummary {
     pub id: i64,
     pub name: String,
@@ -36,7 +36,7 @@ pub struct TagSummary {
 }
 
 /// Tag detail
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct TagDetail {
     pub id: i64,
     pub name: String,
@@ -46,7 +46,7 @@ pub struct TagDetail {
 }
 
 /// Edge type summary
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct EdgeTypeSummary {
     pub id: i64,
     pub name: String,
@@ -56,7 +56,7 @@ pub struct EdgeTypeSummary {
 }
 
 /// Edge type detail
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct EdgeTypeDetail {
     pub id: i64,
     pub name: String,
@@ -66,7 +66,7 @@ pub struct EdgeTypeDetail {
 }
 
 /// Property definition
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PropertyDef {
     pub name: String,
     pub data_type: String,
@@ -75,7 +75,7 @@ pub struct PropertyDef {
 }
 
 /// Index information
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct IndexInfo {
     pub id: i64,
     pub name: String,
@@ -87,7 +87,7 @@ pub struct IndexInfo {
 }
 
 /// Create index request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateIndexRequest {
     pub name: String,
     pub index_type: String,
@@ -98,14 +98,14 @@ pub struct CreateIndexRequest {
 }
 
 /// Update tag request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct UpdateTagRequest {
     pub add_properties: Option<Vec<PropertyDef>>,
     pub drop_properties: Option<Vec<String>>,
 }
 
 /// Update edge type request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct UpdateEdgeTypeRequest {
     pub add_properties: Option<Vec<PropertyDef>>,
     pub drop_properties: Option<Vec<String>>,

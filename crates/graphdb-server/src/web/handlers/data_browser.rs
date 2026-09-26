@@ -72,7 +72,7 @@ pub fn create_routes<
 }
 
 /// Filter parameters for data browsing
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct DataFilterParams {
     #[serde(flatten)]
     pub pagination: PaginationParams,
@@ -85,6 +85,24 @@ pub struct DataFilterParams {
 }
 
 /// List vertices by tag
+#[utoipa::path(
+    get,
+    path = "/api/v1/data/spaces/{name}/tags/{tag_name}/vertices",
+    tag = "WebData",
+    params(
+        ("name" = String, Path, description = "Space name"),
+        ("tag_name" = String, Path, description = "Tag name"),
+        ("limit" = usize, Query, description = "Page size"),
+        ("offset" = usize, Query, description = "Page offset"),
+        ("filter" = Option<String>, Query, description = "Property filter expression"),
+        ("sort_by" = Option<String>, Query, description = "Sort field"),
+        ("sort_order" = Option<String>, Query, description = "Sort order")
+    ),
+    responses(
+        (status = 200, description = "Vertex page", body = ApiResponse<PaginatedResponse<serde_json::Value>>),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn list_vertices_by_tag<
     S: StorageClient
         + StorageSchemaContextOps
@@ -172,6 +190,24 @@ async fn list_vertices_by_tag<
 }
 
 /// List edges by type
+#[utoipa::path(
+    get,
+    path = "/api/v1/data/spaces/{name}/edge-types/{edge_name}/edges",
+    tag = "WebData",
+    params(
+        ("name" = String, Path, description = "Space name"),
+        ("edge_name" = String, Path, description = "Edge type name"),
+        ("limit" = usize, Query, description = "Page size"),
+        ("offset" = usize, Query, description = "Page offset"),
+        ("filter" = Option<String>, Query, description = "Property filter expression"),
+        ("sort_by" = Option<String>, Query, description = "Sort field"),
+        ("sort_order" = Option<String>, Query, description = "Sort order")
+    ),
+    responses(
+        (status = 200, description = "Edge page", body = ApiResponse<PaginatedResponse<serde_json::Value>>),
+        (status = 500, description = "Internal error")
+    )
+)]
 async fn list_edges_by_type<
     S: StorageClient
         + StorageSchemaContextOps

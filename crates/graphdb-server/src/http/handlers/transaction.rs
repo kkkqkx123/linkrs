@@ -14,6 +14,16 @@ use crate::storage::{
 use graphdb_api::api_core::{SavepointId, TransactionHandle};
 use graphdb_transaction::{DurabilityLevel, IsolationLevel, TransactionOptions};
 
+#[utoipa::path(
+    post,
+    path = "/v1/transactions",
+    tag = "Transaction",
+    request_body = BeginTransactionRequest,
+    responses(
+        (status = 200, body = TransactionResponse, description = "Transaction started"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Start a transaction
 pub async fn begin<
     S: StorageClient
@@ -93,6 +103,16 @@ pub async fn begin<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/transactions/{id}/commit",
+    tag = "Transaction",
+    params(("id" = u64, Path, description = "Transaction id")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Transaction committed"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Submit the transaction
 pub async fn commit<
     S: StorageClient
@@ -134,6 +154,16 @@ pub async fn commit<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/transactions/{id}/rollback",
+    tag = "Transaction",
+    params(("id" = u64, Path, description = "Transaction id")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Transaction rolled back"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Roll back a transaction
 pub async fn rollback<
     S: StorageClient
@@ -179,18 +209,29 @@ pub async fn rollback<
 /// Savepoint endpoints
 /// ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateSavepointRequest {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct SavepointResponse {
     pub savepoint_id: u64,
     pub transaction_id: u64,
     pub name: Option<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/transactions/{id}/savepoints",
+    tag = "Transaction",
+    params(("id" = u64, Path, description = "Transaction id")),
+    request_body = CreateSavepointRequest,
+    responses(
+        (status = 200, body = SavepointResponse, description = "Savepoint created"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Create a savepoint within a transaction
 pub async fn create_savepoint<
     S: StorageClient
@@ -238,6 +279,16 @@ pub async fn create_savepoint<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/transactions/{id}/savepoints",
+    tag = "Transaction",
+    params(("id" = u64, Path, description = "Transaction id")),
+    responses(
+        (status = 200, body = Vec<serde_json::Value>, description = "Savepoint list"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// List all savepoints for a transaction
 pub async fn get_savepoints<
     S: StorageClient
@@ -291,6 +342,19 @@ pub async fn get_savepoints<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/transactions/{id}/savepoints/{sid}/rollback",
+    tag = "Transaction",
+    params(
+        ("id" = u64, Path, description = "Transaction id"),
+        ("sid" = u64, Path, description = "Savepoint id")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Rolled back to savepoint"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Roll back to savepoint
 pub async fn rollback_to_savepoint<
     S: StorageClient
@@ -342,6 +406,19 @@ pub async fn rollback_to_savepoint<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/transactions/{id}/savepoints/{sid}",
+    tag = "Transaction",
+    params(
+        ("id" = u64, Path, description = "Transaction id"),
+        ("sid" = u64, Path, description = "Savepoint id")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Savepoint released"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Release (delete) a savepoint
 pub async fn release_savepoint<
     S: StorageClient
@@ -389,6 +466,15 @@ pub async fn release_savepoint<
     Ok(JsonResponse(result?))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/transactions",
+    tag = "Transaction",
+    responses(
+        (status = 200, body = Vec<serde_json::Value>, description = "Active transaction list"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// List transactions, including transactions waiting for recovery cleanup.
 pub async fn list_transactions<
     S: StorageClient
@@ -425,6 +511,15 @@ pub async fn list_transactions<
     Ok(JsonResponse(transactions))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/transactions/metrics",
+    tag = "Transaction",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Transaction outcome and resource gauges"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Return transaction outcome and resource gauges.
 pub async fn metrics<
     S: StorageClient
@@ -465,6 +560,16 @@ pub async fn metrics<
     })))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/transactions/{id}/kill",
+    tag = "Transaction",
+    params(("id" = u64, Path, description = "Transaction id")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Transaction killed"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Kill a transaction after validating its owner header.
 pub async fn kill_transaction<
     S: StorageClient
@@ -494,6 +599,16 @@ pub async fn kill_transaction<
     })))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/transactions/{id}/outbox/retry",
+    tag = "Transaction",
+    params(("id" = u64, Path, description = "Transaction id")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Outbox projection retried"),
+        (status = 500, description = "Internal error")
+    )
+)]
 /// Retry outbox projection for a specific transaction's pending intents.
 pub async fn retry_transaction_outbox<
     S: StorageClient

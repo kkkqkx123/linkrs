@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Space information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SpaceInfo {
     pub id: u64,
     pub name: String,
@@ -20,7 +20,7 @@ pub struct SpaceInfo {
 }
 
 /// Tag information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TagInfo {
     pub name: String,
     #[serde(default)]
@@ -28,7 +28,7 @@ pub struct TagInfo {
 }
 
 /// Edge type information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EdgeTypeInfo {
     pub name: String,
     #[serde(default)]
@@ -36,7 +36,7 @@ pub struct EdgeTypeInfo {
 }
 
 /// Field information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FieldInfo {
     pub name: String,
     pub data_type: String,
@@ -46,7 +46,7 @@ pub struct FieldInfo {
 }
 
 /// Property definition (create tag / edge type request payload).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PropertyDef {
     pub name: String,
     /// Core `DataType` wire name (see module docs).
@@ -79,7 +79,7 @@ impl PropertyDef {
 }
 
 /// Create space request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateSpaceRequest {
     pub name: String,
     #[serde(default)]
@@ -89,7 +89,7 @@ pub struct CreateSpaceRequest {
 }
 
 /// Create tag request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateTagRequest {
     pub name: String,
     #[serde(default)]
@@ -97,7 +97,7 @@ pub struct CreateTagRequest {
 }
 
 /// Create edge type request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateEdgeTypeRequest {
     pub name: String,
     #[serde(default)]

@@ -227,11 +227,26 @@ pub fn create_router<
         .with_state(state);
 
     // Add web management routes if web_router is provided
-    if let Some(wr) = web_router {
+    let mut router = if let Some(wr) = web_router {
         router.nest("/api", wr)
     } else {
         router
+    };
+
+    // Debug-only self-hosted OpenAPI document; excluded from the contract.
+    if cfg!(debug_assertions) {
+        router = router.route("/api-docs/openapi.json", get(serve_openapi));
     }
+
+    router
+}
+
+/// Serve the aggregated OpenAPI document in debug builds.
+async fn serve_openapi() -> ([(&'static str, &'static str); 1], String) {
+    (
+        [("Content-Type", "application/json")],
+        super::openapi::openapi_json(),
+    )
 }
 
 /// Conditionally add fulltext rebuild/clear routes

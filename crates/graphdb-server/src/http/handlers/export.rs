@@ -13,7 +13,7 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ExportQuery {
     pub space: Option<String>,
     pub format: Option<String>,
@@ -21,6 +21,21 @@ pub struct ExportQuery {
     pub all: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/export",
+    tag = "Export",
+    params(
+        ("space" = Option<String>, Query, description = "Space to export"),
+        ("format" = Option<String>, Query, description = "Export format: csv, json or jsonl"),
+        ("query" = Option<String>, Query, description = "Query selecting rows to export"),
+        ("all" = Option<String>, Query, description = "Export all data when set")
+    ),
+    responses(
+        (status = 200, description = "Export file download"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn export_data<
     S: StorageClient
         + StorageSchemaContextOps
