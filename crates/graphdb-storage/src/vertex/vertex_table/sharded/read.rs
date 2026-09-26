@@ -383,10 +383,7 @@ impl ShardedVertexTable {
     /// bounds alone. True only when a range's column has recorded bounds on
     /// this shard and the merged interval misses the range; unknown columns
     /// or bound-less shards stay conservative.
-    fn shard_wholly_pruned(
-        table: &VertexTable,
-        ranges: &[crate::cursor::PredicateRange],
-    ) -> bool {
+    fn shard_wholly_pruned(table: &VertexTable, ranges: &[crate::cursor::PredicateRange]) -> bool {
         for range in ranges {
             let Some(bounds) = table.columns.aggregate_zone_bounds(&range.column) else {
                 continue;
@@ -432,10 +429,8 @@ impl ShardedVertexTable {
         use std::cmp::Reverse;
         use std::collections::{BinaryHeap, VecDeque};
         let total: usize = runs.iter().map(|r| r.len()).sum();
-        let mut queues: Vec<VecDeque<VertexRecord>> = runs
-            .into_iter()
-            .map(VecDeque::from)
-            .collect();
+        let mut queues: Vec<VecDeque<VertexRecord>> =
+            runs.into_iter().map(VecDeque::from).collect();
         let mut heap: BinaryHeap<(Reverse<u32>, usize)> = BinaryHeap::new();
         for (run_idx, queue) in queues.iter().enumerate() {
             if let Some(first) = queue.front() {

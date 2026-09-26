@@ -286,9 +286,7 @@ pub fn element_size(data_type: &DataType) -> usize {
         DataType::DateTime => 28,
         DataType::Uuid => 16,
         DataType::FixedString(n) if *n >= 1 && *n <= FIXED_STRING_INLINE_LIMIT => *n,
-        DataType::VectorDense(dim)
-            if *dim >= 1 && *dim <= VECTOR_DENSE_FIXED_MAX_DIM =>
-        {
+        DataType::VectorDense(dim) if *dim >= 1 && *dim <= VECTOR_DENSE_FIXED_MAX_DIM => {
             *dim * std::mem::size_of::<f32>()
         }
         _ => 0,
@@ -306,14 +304,10 @@ pub(crate) fn read_fixed_vector(data: &[u8], offset: usize, dim: usize) -> Optio
     }
     let mut out = Vec::with_capacity(dim);
     for i in 0..dim {
-        let chunk: [u8; 4] = data[offset + i * 4..offset + (i + 1) * 4]
-            .try_into()
-            .ok()?;
+        let chunk: [u8; 4] = data[offset + i * 4..offset + (i + 1) * 4].try_into().ok()?;
         out.push(f32::from_le_bytes(chunk));
     }
-    Some(Value::Vector(
-        graphdb_core::value::VectorValue::dense(out),
-    ))
+    Some(Value::Vector(graphdb_core::value::VectorValue::dense(out)))
 }
 
 /// Write one fixed-dense-vector slot as little-endian `f32` components.
