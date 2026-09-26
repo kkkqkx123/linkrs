@@ -22,15 +22,6 @@ pub(super) struct PrecheckedBatchContext<'a> {
     pub(super) vid_type: &'a DataType,
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct InsertedVertexTag {
-    pub(super) label_id: LabelId,
-    pub(super) vid: VertexId,
-    pub(super) vertex_id: Value,
-    pub(super) tag_name: String,
-    pub(super) redo_entry: graphdb_transaction::wal::TransactionWalEntry,
-}
-
 #[derive(Debug)]
 pub(super) struct InsertedEdgeRecord {
     pub(super) edge_label_id: LabelId,

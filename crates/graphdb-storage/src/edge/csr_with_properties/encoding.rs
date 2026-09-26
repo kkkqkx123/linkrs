@@ -99,8 +99,8 @@ impl CsrWithProperties {
 
     /// Apply one encoding to a single property column.
     ///
-    /// Chunked columns take the chunk-local path so point updates keep
-    /// decoding only the affected chunk; plain columns dispatch by type.
+    /// Property columns are chunk-backed, so the encoding is applied per
+    /// chunk and point updates keep decoding only the affected chunk.
     /// Empty columns are a no-op. Unknown columns are an explicit error.
     pub fn apply_encoding_to_column(
         &mut self,
@@ -117,34 +117,7 @@ impl CsrWithProperties {
         if col.is_empty() {
             return Ok(());
         }
-        if col.has_chunks() {
-            col.apply_encoding_to_chunks(encoding_type, fsst_max_symbols)?;
-            if let Some(schema) = self.property_schema.get_mut(idx) {
-                schema.encoding_type = col.encoding_type();
-            }
-            return Ok(());
-        }
-        match encoding_type {
-            crate::encoding::EncodingType::Fsst => {
-                col.apply_fsst_encoding(fsst_max_symbols)?;
-            }
-            crate::encoding::EncodingType::Dictionary => {
-                col.apply_dictionary_encoding()?;
-            }
-            crate::encoding::EncodingType::Rle => {
-                col.apply_rle_encoding()?;
-            }
-            crate::encoding::EncodingType::BitPacking => {
-                col.apply_bitpacking_encoding()?;
-            }
-            crate::encoding::EncodingType::Alp => {
-                col.apply_alp_encoding()?;
-            }
-            crate::encoding::EncodingType::Constant => {
-                col.apply_constant_encoding()?;
-            }
-            crate::encoding::EncodingType::None => {}
-        }
+        col.apply_encoding_to_chunks(encoding_type, fsst_max_symbols)?;
         if let Some(schema) = self.property_schema.get_mut(idx) {
             schema.encoding_type = col.encoding_type();
         }

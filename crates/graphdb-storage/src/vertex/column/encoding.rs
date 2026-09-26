@@ -7,18 +7,20 @@ use graphdb_core::NullBitmap;
 use super::Column;
 
 // ---------------------------------------------------------------------------
-// Column encoding methods
+// Column encoding views
 // ---------------------------------------------------------------------------
 
 impl Column {
+    /// Column-level view of the active encoding scheme: the first chunk (in
+    /// row order) that carries one, including its pre-evict scheme when the
+    /// chunk itself is evicted. `None` when no chunk is encoded.
     pub fn encoding_type(&self) -> EncodingType {
-        self.encoding.read().encoding_type()
-    }
-
-    /// Owned snapshot of the column-level encoding marker for persistence
-    /// serialization.
-    pub fn encoding_snapshot(&self) -> ColumnEncoding {
-        self.encoding.read().clone()
+        let chunks = self.chunks.read();
+        chunks
+            .iter()
+            .map(|chunk| chunk.evicted_encoding())
+            .find(|scheme| *scheme != EncodingType::None)
+            .unwrap_or(EncodingType::None)
     }
 
     pub fn set_stats(&self, stats: ColumnStats) {
@@ -28,189 +30,34 @@ impl Column {
         self.rebuild_zone_maps();
     }
 
-    pub fn apply_fsst_encoding(&self, max_symbols: usize) -> StorageResult<()> {
-        if self.data_type != DataType::String
-            && self.data_type != DataType::Json
-            && !matches!(self.data_type, DataType::FixedString(_))
-        {
-            return Err(StorageError::not_supported(format!(
-                "FSST encoding does not support type {:?}",
-                self.data_type
-            )));
+    /// Build one chunk-local encoding from the chunk's base values.
+    ///
+    /// The values are the overlay-merged, overflow-placeholder-substituted
+    /// slice produced by the caller; nothing is read back from the column.
+    pub(super) fn build_chunk_encoding(
+        data_type: &DataType,
+        values: &[Option<Value>],
+        encoding_type: EncodingType,
+        fsst_max_symbols: usize,
+    ) -> StorageResult<ColumnEncoding> {
+        match encoding_type {
+            EncodingType::Fsst => build_fsst(data_type, values, fsst_max_symbols),
+            EncodingType::Dictionary => build_dictionary(data_type, values),
+            EncodingType::Rle => build_rle(data_type, values),
+            EncodingType::BitPacking => build_bitpacked(data_type, values),
+            EncodingType::Alp => build_alp(data_type, values),
+            EncodingType::Constant => build_constant(values),
+            EncodingType::None => Ok(ColumnEncoding::None),
         }
-
-        let mut strings: Vec<Option<String>> = Vec::with_capacity(self.len());
-        for i in 0..self.len() {
-            if self.is_null(i) {
-                strings.push(None);
-            } else {
-                match self.get(i) {
-                    Some(Value::String(s)) => strings.push(Some(s.to_string())),
-                    Some(Value::FixedString(s)) => strings.push(Some(s)),
-                    Some(Value::Json(j)) => strings.push(Some(j.as_str().to_string())),
-                    _ => strings.push(None),
-                }
-            }
-        }
-
-        let string_refs: Vec<Option<&str>> = strings.iter().map(|s| s.as_deref()).collect();
-        let non_null: Vec<&str> = string_refs.iter().filter_map(|s| *s).collect();
-
-        if non_null.is_empty() {
-            return Ok(());
-        }
-
-        let encoder = FsstEncoder::train(&non_null, max_symbols);
-
-        let mut encoded_data = Vec::with_capacity(self.len());
-        let mut null_bitmap = NullBitmap::with_capacity(self.len());
-
-        for s in &string_refs {
-            match s {
-                Some(val) => {
-                    encoded_data.push(encoder.encode(val));
-                    null_bitmap.push(false);
-                }
-                None => {
-                    encoded_data.push(Vec::new());
-                    null_bitmap.push(true);
-                }
-            }
-        }
-
-        let fsst_col = FsstColumn {
-            encoder,
-            encoded_data,
-            null_bitmap,
-            updates_since_rebuild: 0,
-        };
-
-        *self.encoding.write() = ColumnEncoding::Fsst(fsst_col);
-
-        Ok(())
-    }
-
-    pub fn apply_dictionary_encoding(&self) -> StorageResult<()> {
-        if self.data_type != DataType::String && !matches!(self.data_type, DataType::FixedString(_))
-        {
-            return Err(StorageError::not_supported(
-                "Dictionary encoding only supports String and FixedString types".to_string(),
-            ));
-        }
-
-        use crate::encoding::DictionaryColumn;
-
-        let mut dict_col = DictionaryColumn::new();
-        for i in 0..self.len() {
-            let value = self.get(i);
-            dict_col.set(i, value.as_ref())?;
-        }
-
-        *self.encoding.write() = ColumnEncoding::Dictionary(dict_col);
-
-        Ok(())
-    }
-
-    pub fn apply_rle_encoding(&self) -> StorageResult<()> {
-        use crate::encoding::{RleBoolColumn, RleIntColumn};
-
-        match self.data_type {
-            DataType::Bool => {
-                let mut rle_col = RleBoolColumn::new();
-                for i in 0..self.len() {
-                    let value = self.get(i);
-                    rle_col.append(value.as_ref())?;
-                }
-                *self.encoding.write() = ColumnEncoding::RleBool(rle_col);
-            }
-            DataType::SmallInt | DataType::Int | DataType::BigInt => {
-                let mut rle_col = RleIntColumn::new();
-                for i in 0..self.len() {
-                    let value = self.get(i);
-                    rle_col.append(value.as_ref())?;
-                }
-                *self.encoding.write() = ColumnEncoding::RleInt(rle_col);
-            }
-            _ => {
-                return Err(StorageError::not_supported(format!(
-                    "RLE encoding not supported for {:?}",
-                    self.data_type
-                )));
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn apply_bitpacking_encoding(&self) -> StorageResult<()> {
-        use crate::encoding::BitPackedIntColumn;
-
-        match self.data_type {
-            DataType::SmallInt | DataType::Int | DataType::BigInt => {
-                let mut values: Vec<Option<Value>> = Vec::with_capacity(self.len());
-                for i in 0..self.len() {
-                    values.push(self.get(i));
-                }
-                let bp_col = BitPackedIntColumn::analyze(&values, self.data_type.clone())?;
-                *self.encoding.write() = ColumnEncoding::BitPacked(bp_col);
-            }
-            _ => {
-                return Err(StorageError::not_supported(format!(
-                    "BitPacking encoding not supported for {:?}",
-                    self.data_type
-                )));
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn apply_constant_encoding(&self) -> StorageResult<()> {
-        use crate::encoding::ConstantColumn;
-
-        let mut values: Vec<Option<Value>> = Vec::with_capacity(self.len());
-        for i in 0..self.len() {
-            values.push(self.get(i));
-        }
-        if !ConstantColumn::should_use(&values) {
-            return Err(StorageError::invalid_operation(
-                "Constant encoding requires all values to be identical".to_string(),
-            ));
-        }
-        let first = values.first().cloned().unwrap_or(None);
-        let col = ConstantColumn::new(first, self.len());
-        *self.encoding.write() = ColumnEncoding::Constant(col);
-        Ok(())
-    }
-
-    pub fn apply_alp_encoding(&self) -> StorageResult<()> {
-        use crate::encoding::AlpColumn;
-
-        match self.data_type {
-            DataType::Float | DataType::Double => {
-                let mut values: Vec<Option<Value>> = Vec::with_capacity(self.len());
-                for i in 0..self.len() {
-                    values.push(self.get(i));
-                }
-                let alp_col = AlpColumn::analyze_values(&values, self.data_type.clone())?;
-                *self.encoding.write() = ColumnEncoding::Alp(alp_col);
-            }
-            _ => {
-                return Err(StorageError::not_supported(format!(
-                    "ALP encoding not supported for {:?}",
-                    self.data_type
-                )));
-            }
-        }
-
-        Ok(())
     }
 
     /// Compute statistics for the bytes that this column will persist.
     ///
-    /// Encoded columns persist their encoding metadata, while unencoded
-    /// columns persist the raw buffers. Keeping the size calculation here
-    /// makes flush-time statistics reflect the actual column format.
+    /// Encoded columns persist their per-chunk encoding metadata, while
+    /// unencoded columns persist the raw buffers. Keeping the size
+    /// calculation here makes flush-time statistics reflect the actual
+    /// column format. Persistence itself serializes chunk vectors directly;
+    /// this stats-only path may materialize flush buffers to size them.
     ///
     /// Aggregation is streaming: rows are visited once without materializing
     /// a value vector or a distinct hash set (HLL-backed estimate).
@@ -231,11 +78,21 @@ impl Column {
                     .unwrap_or(0),
             ) as u64;
 
-        let enc = self.encoding.read().clone();
-        let compressed_size = if enc.is_encoded() {
-            let mut metadata = Vec::new();
-            enc.serialize_meta(&mut metadata)?;
-            metadata.len() as u64
+        // Compressed footprint is the sum of the per-chunk encoding
+        // metadata that the chunked record form persists.
+        let mut encoded_metadata = 0u64;
+        let mut any_encoded = false;
+        for chunk in self.chunks.read().iter() {
+            let state = chunk.read_state();
+            if state.encoding.is_encoded() {
+                any_encoded = true;
+                let mut metadata = Vec::new();
+                state.encoding.serialize_meta(&mut metadata)?;
+                encoded_metadata = encoded_metadata.saturating_add(metadata.len() as u64);
+            }
+        }
+        let compressed_size = if any_encoded {
+            encoded_metadata
         } else {
             raw_size
         };
@@ -310,9 +167,10 @@ impl Column {
             // Refresh the owning chunk's profile by window match; a missing
             // window (concurrent-free exclusive load only) skips silently.
             let chunks = self.chunks.read();
-            if let Some(chunk) = chunks.iter().find(|chunk| {
-                chunk.row_offset == start && chunk.row_count == count_rows
-            }) {
+            if let Some(chunk) = chunks
+                .iter()
+                .find(|chunk| chunk.row_offset == start && chunk.row_count == count_rows)
+            {
                 let enc_bytes = chunk.read_state().encoding.memory_usage() as u64;
                 chunk.refresh_encoding_meta(count, all_null, min, max, enc_bytes, raw_size);
             }
@@ -323,5 +181,162 @@ impl Column {
     /// flush), if any. Complements the always-fresh zone maps with counts.
     pub fn stats(&self) -> Option<crate::column_stats::ColumnStats> {
         self.stats.read().clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Encoding builders (chunk-local encodings over a caller-supplied value slice)
+// ---------------------------------------------------------------------------
+
+fn string_view(value: &Value) -> Option<&str> {
+    match value {
+        Value::String(s) => Some(s.as_str()),
+        Value::FixedString(s) => Some(s.as_str()),
+        Value::Json(j) => Some(j.as_str()),
+        _ => None,
+    }
+}
+
+fn build_fsst(
+    data_type: &DataType,
+    values: &[Option<Value>],
+    max_symbols: usize,
+) -> StorageResult<ColumnEncoding> {
+    if data_type != &DataType::String
+        && data_type != &DataType::Json
+        && !matches!(data_type, DataType::FixedString(_))
+    {
+        return Err(StorageError::not_supported(format!(
+            "FSST encoding does not support type {:?}",
+            data_type
+        )));
+    }
+
+    let refs: Vec<Option<&str>> = values
+        .iter()
+        .map(|v| v.as_ref().and_then(string_view))
+        .collect();
+    let non_null: Vec<&str> = refs.iter().filter_map(|s| *s).collect();
+    if non_null.is_empty() {
+        return Ok(ColumnEncoding::None);
+    }
+
+    let encoder = FsstEncoder::train(&non_null, max_symbols);
+    let mut encoded_data = Vec::with_capacity(values.len());
+    let mut null_bitmap = NullBitmap::with_capacity(values.len());
+    for s in &refs {
+        match s {
+            Some(val) => {
+                encoded_data.push(encoder.encode(val));
+                null_bitmap.push(false);
+            }
+            None => {
+                encoded_data.push(Vec::new());
+                null_bitmap.push(true);
+            }
+        }
+    }
+
+    Ok(ColumnEncoding::Fsst(FsstColumn {
+        encoder,
+        encoded_data,
+        null_bitmap,
+        updates_since_rebuild: 0,
+    }))
+}
+
+fn build_dictionary(
+    data_type: &DataType,
+    values: &[Option<Value>],
+) -> StorageResult<ColumnEncoding> {
+    if data_type != &DataType::String && !matches!(data_type, DataType::FixedString(_)) {
+        return Err(StorageError::not_supported(
+            "Dictionary encoding only supports String and FixedString types".to_string(),
+        ));
+    }
+
+    use crate::encoding::DictionaryColumn;
+
+    let mut dict_col = DictionaryColumn::new();
+    for (row, value) in values.iter().enumerate() {
+        dict_col.set(row, value.as_ref())?;
+    }
+
+    Ok(ColumnEncoding::Dictionary(dict_col))
+}
+
+fn build_rle(data_type: &DataType, values: &[Option<Value>]) -> StorageResult<ColumnEncoding> {
+    use crate::encoding::{RleBoolColumn, RleIntColumn};
+
+    match data_type {
+        DataType::Bool => {
+            let mut rle_col = RleBoolColumn::new();
+            for value in values {
+                rle_col.append(value.as_ref())?;
+            }
+            Ok(ColumnEncoding::RleBool(rle_col))
+        }
+        DataType::SmallInt | DataType::Int | DataType::BigInt => {
+            let mut rle_col = RleIntColumn::new();
+            for value in values {
+                rle_col.append(value.as_ref())?;
+            }
+            Ok(ColumnEncoding::RleInt(rle_col))
+        }
+        _ => Err(StorageError::not_supported(format!(
+            "RLE encoding not supported for {:?}",
+            data_type
+        ))),
+    }
+}
+
+fn build_bitpacked(
+    data_type: &DataType,
+    values: &[Option<Value>],
+) -> StorageResult<ColumnEncoding> {
+    use crate::encoding::BitPackedIntColumn;
+
+    match data_type {
+        DataType::SmallInt | DataType::Int | DataType::BigInt => {
+            let owned: Vec<Option<Value>> = values.to_vec();
+            let bp_col = BitPackedIntColumn::analyze(&owned, data_type.clone())?;
+            Ok(ColumnEncoding::BitPacked(bp_col))
+        }
+        _ => Err(StorageError::not_supported(format!(
+            "BitPacking encoding not supported for {:?}",
+            data_type
+        ))),
+    }
+}
+
+fn build_constant(values: &[Option<Value>]) -> StorageResult<ColumnEncoding> {
+    use crate::encoding::ConstantColumn;
+
+    let owned: Vec<Option<Value>> = values.to_vec();
+    if !ConstantColumn::should_use(&owned) {
+        return Err(StorageError::invalid_operation(
+            "Constant encoding requires all values to be identical".to_string(),
+        ));
+    }
+    let first = owned.first().cloned().unwrap_or(None);
+    Ok(ColumnEncoding::Constant(ConstantColumn::new(
+        first,
+        values.len(),
+    )))
+}
+
+fn build_alp(data_type: &DataType, values: &[Option<Value>]) -> StorageResult<ColumnEncoding> {
+    use crate::encoding::AlpColumn;
+
+    match data_type {
+        DataType::Float | DataType::Double => {
+            let owned: Vec<Option<Value>> = values.to_vec();
+            let alp_col = AlpColumn::analyze_values(&owned, data_type.clone())?;
+            Ok(ColumnEncoding::Alp(alp_col))
+        }
+        _ => Err(StorageError::not_supported(format!(
+            "ALP encoding not supported for {:?}",
+            data_type
+        ))),
     }
 }

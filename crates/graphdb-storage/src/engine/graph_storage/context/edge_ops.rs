@@ -40,6 +40,7 @@ fn endpoint_to_external(
 }
 
 struct EdgeLabelLookupCtx<'a> {
+    graph: &'a GraphStorageContext,
     vertex_tables: &'a HashMap<LabelId, Arc<ShardedVertexTable>>,
     src_id: &'a VertexId,
     src_label: LabelId,
@@ -75,14 +76,24 @@ impl GraphStorageContext {
                     )
                     .ok_or(StorageError::vertex_not_found())?;
                     let actual_src_label = if params.src_label == 0 {
-                        helpers::resolve_internal_id_label(vertex_tables, &params.src_id, params.ts)
-                            .ok_or(StorageError::vertex_not_found())?
+                        helpers::resolve_internal_id_label(
+                            self,
+                            vertex_tables,
+                            &params.src_id,
+                            params.ts,
+                        )
+                        .ok_or(StorageError::vertex_not_found())?
                     } else {
                         params.src_label
                     };
                     let actual_dst_label = if params.dst_label == 0 {
-                        helpers::resolve_internal_id_label(vertex_tables, &params.dst_id, params.ts)
-                            .ok_or(StorageError::vertex_not_found())?
+                        helpers::resolve_internal_id_label(
+                            self,
+                            vertex_tables,
+                            &params.dst_id,
+                            params.ts,
+                        )
+                        .ok_or(StorageError::vertex_not_found())?
                     } else {
                         params.dst_label
                     };
@@ -166,6 +177,7 @@ impl GraphStorageContext {
                         .ok_or(StorageError::vertex_not_found())?;
                         let actual_src_label = if params.src_label == 0 {
                             helpers::resolve_internal_id_label(
+                                self,
                                 vertex_tables,
                                 &edge.src_id,
                                 params.ts,
@@ -176,6 +188,7 @@ impl GraphStorageContext {
                         };
                         let actual_dst_label = if params.dst_label == 0 {
                             helpers::resolve_internal_id_label(
+                                self,
                                 vertex_tables,
                                 &edge.dst_id,
                                 params.ts,
@@ -287,6 +300,7 @@ impl GraphStorageContext {
                     )
                     .or_else(|| {
                         helpers::resolve_internal_id_any(
+                            self,
                             vertex_tables,
                             params.src_label,
                             edge.src_id,
@@ -301,6 +315,7 @@ impl GraphStorageContext {
                     )
                     .or_else(|| {
                         helpers::resolve_internal_id_any(
+                            self,
                             vertex_tables,
                             params.dst_label,
                             edge.dst_id,
@@ -312,14 +327,24 @@ impl GraphStorageContext {
                         continue;
                     };
                     let actual_src_label = if params.src_label == 0 {
-                        helpers::resolve_internal_id_label(vertex_tables, &edge.src_id, params.ts)
-                            .unwrap_or(params.src_label)
+                        helpers::resolve_internal_id_label(
+                            self,
+                            vertex_tables,
+                            &edge.src_id,
+                            params.ts,
+                        )
+                        .unwrap_or(params.src_label)
                     } else {
                         params.src_label
                     };
                     let actual_dst_label = if params.dst_label == 0 {
-                        helpers::resolve_internal_id_label(vertex_tables, &edge.dst_id, params.ts)
-                            .unwrap_or(params.dst_label)
+                        helpers::resolve_internal_id_label(
+                            self,
+                            vertex_tables,
+                            &edge.dst_id,
+                            params.ts,
+                        )
+                        .unwrap_or(params.dst_label)
                     } else {
                         params.dst_label
                     };
@@ -368,13 +393,13 @@ impl GraphStorageContext {
 
     fn resolve_edge_table_key(ctx: EdgeLabelLookupCtx) -> EdgeTableKey {
         let actual_src_label = if ctx.src_label == 0 {
-            helpers::resolve_internal_id_label(ctx.vertex_tables, ctx.src_id, ctx.ts)
+            helpers::resolve_internal_id_label(ctx.graph, ctx.vertex_tables, ctx.src_id, ctx.ts)
                 .unwrap_or(ctx.src_label)
         } else {
             ctx.src_label
         };
         let actual_dst_label = if ctx.dst_label == 0 {
-            helpers::resolve_internal_id_label(ctx.vertex_tables, ctx.dst_id, ctx.ts)
+            helpers::resolve_internal_id_label(ctx.graph, ctx.vertex_tables, ctx.dst_id, ctx.ts)
                 .unwrap_or(ctx.dst_label)
         } else {
             ctx.dst_label
@@ -404,6 +429,7 @@ impl GraphStorageContext {
                     ts,
                 )?;
                 let key = Self::resolve_edge_table_key(EdgeLabelLookupCtx {
+                    graph: self,
                     vertex_tables,
                     src_id: &params.src_id,
                     src_label: params.src_label,
@@ -482,6 +508,7 @@ impl GraphStorageContext {
                     ts,
                 )?;
                 let key = Self::resolve_edge_table_key(EdgeLabelLookupCtx {
+                    graph: self,
                     vertex_tables,
                     src_id: &params.src_id,
                     src_label: params.src_label,
@@ -538,7 +565,12 @@ impl GraphStorageContext {
                     ts,
                 )
                 .or_else(|| {
-                    helpers::resolve_internal_id_any(vertex_tables, params.src_label, params.src_id)
+                    helpers::resolve_internal_id_any(
+                        self,
+                        vertex_tables,
+                        params.src_label,
+                        params.src_id,
+                    )
                 })?;
                 let dst_internal = helpers::resolve_internal_id(
                     self,
@@ -548,9 +580,15 @@ impl GraphStorageContext {
                     ts,
                 )
                 .or_else(|| {
-                    helpers::resolve_internal_id_any(vertex_tables, params.dst_label, params.dst_id)
+                    helpers::resolve_internal_id_any(
+                        self,
+                        vertex_tables,
+                        params.dst_label,
+                        params.dst_id,
+                    )
                 })?;
                 let key = Self::resolve_edge_table_key(EdgeLabelLookupCtx {
+                    graph: self,
                     vertex_tables,
                     src_id: &params.src_id,
                     src_label: params.src_label,
@@ -604,7 +642,12 @@ impl GraphStorageContext {
                     ts,
                 )
                 .or_else(|| {
-                    helpers::resolve_internal_id_any(vertex_tables, params.src_label, params.src_id)
+                    helpers::resolve_internal_id_any(
+                        self,
+                        vertex_tables,
+                        params.src_label,
+                        params.src_id,
+                    )
                 })?;
                 let dst_internal = helpers::resolve_internal_id(
                     self,
@@ -614,9 +657,15 @@ impl GraphStorageContext {
                     ts,
                 )
                 .or_else(|| {
-                    helpers::resolve_internal_id_any(vertex_tables, params.dst_label, params.dst_id)
+                    helpers::resolve_internal_id_any(
+                        self,
+                        vertex_tables,
+                        params.dst_label,
+                        params.dst_id,
+                    )
                 })?;
                 let key = Self::resolve_edge_table_key(EdgeLabelLookupCtx {
+                    graph: self,
                     vertex_tables,
                     src_id: &params.src_id,
                     src_label: params.src_label,
@@ -681,7 +730,7 @@ impl GraphStorageContext {
                     let src_internal =
                         helpers::resolve_internal_id(self, vertex_tables, src_label, src_id, ts)?;
                     let actual_src = if src_label == 0 {
-                        helpers::resolve_internal_id_label(vertex_tables, &src_id, ts)
+                        helpers::resolve_internal_id_label(self, vertex_tables, &src_id, ts)
                             .unwrap_or(src_label)
                     } else {
                         src_label
@@ -733,7 +782,7 @@ impl GraphStorageContext {
                     let dst_internal =
                         helpers::resolve_internal_id(self, vertex_tables, dst_label, dst_id, ts)?;
                     let actual_dst = if dst_label == 0 {
-                        helpers::resolve_internal_id_label(vertex_tables, &dst_id, ts)
+                        helpers::resolve_internal_id_label(self, vertex_tables, &dst_id, ts)
                             .unwrap_or(dst_label)
                     } else {
                         dst_label
@@ -775,7 +824,7 @@ impl GraphStorageContext {
                     let src_internal =
                         helpers::resolve_internal_id(self, vertex_tables, src_label, src_id, ts)?;
                     let actual_src = if src_label == 0 {
-                        helpers::resolve_internal_id_label(vertex_tables, &src_id, ts)
+                        helpers::resolve_internal_id_label(self, vertex_tables, &src_id, ts)
                             .unwrap_or(src_label)
                     } else {
                         src_label
@@ -821,7 +870,7 @@ impl GraphStorageContext {
                     let dst_internal =
                         helpers::resolve_internal_id(self, vertex_tables, dst_label, dst_id, ts)?;
                     let actual_dst = if dst_label == 0 {
-                        helpers::resolve_internal_id_label(vertex_tables, &dst_id, ts)
+                        helpers::resolve_internal_id_label(self, vertex_tables, &dst_id, ts)
                             .unwrap_or(dst_label)
                     } else {
                         dst_label
@@ -868,7 +917,7 @@ impl GraphStorageContext {
                     let src_internal =
                         helpers::resolve_internal_id(self, vertex_tables, src_label, src_id, ts)?;
                     let actual_src = if src_label == 0 {
-                        helpers::resolve_internal_id_label(vertex_tables, &src_id, ts)
+                        helpers::resolve_internal_id_label(self, vertex_tables, &src_id, ts)
                             .unwrap_or(src_label)
                     } else {
                         src_label
@@ -923,7 +972,7 @@ impl GraphStorageContext {
                     let dst_internal =
                         helpers::resolve_internal_id(self, vertex_tables, dst_label, dst_id, ts)?;
                     let actual_dst = if dst_label == 0 {
-                        helpers::resolve_internal_id_label(vertex_tables, &dst_id, ts)
+                        helpers::resolve_internal_id_label(self, vertex_tables, &dst_id, ts)
                             .unwrap_or(dst_label)
                     } else {
                         dst_label

@@ -32,13 +32,106 @@ impl GraphStorage {
         Ok(summary)
     }
 
+    /// Pre-switch baseline probe for an offline reshard: flushes the rebuilt
+    /// table into a scratch directory beside the live vertex store, strictly
+    /// health-checks the written checkpoint, and always removes the probe.
+    /// Runs while the old table is still authoritative, so a rebuild that
+    /// cannot durably flush a healthy baseline fails the reshard before any
+    /// catalog switch. An engine without persistent paths has no on-disk
+    /// baseline to protect, so the probe is a no-op there.
+    fn probe_rebuilt_vertex_baseline(
+        &self,
+        rebuilt: &ShardedVertexTable,
+        label: LabelId,
+    ) -> StorageResult<()> {
+        let Some(paths) = self.ctx.storage_paths() else {
+            return Ok(());
+        };
+        let probe_dir = paths
+            .vertices_dir()
+            .join(format!("label_{label}.reshard_probe.tmp"));
+        let _ = std::fs::remove_dir_all(&probe_dir);
+        let verdict = rebuilt
+            .flush(&probe_dir, self.ctx.flush_compression())
+            .and_then(|()| {
+                let report = ShardedVertexTable::inspect_commit_health(&probe_dir)?;
+                if report.is_healthy() {
+                    return Ok(());
+                }
+                let mut issues = report.missing_files.clone();
+                issues.extend(report.pk_issues.clone());
+                if !report.manifest_present || !report.manifest_decodable {
+                    issues.push("commit manifest missing or undecodable".to_string());
+                }
+                Err(StorageError::invalid_operation(format!(
+                    "reshard probe step failed: rebuilt baseline for vertex label {} \
+                     is unhealthy at {}: {:?}",
+                    label,
+                    probe_dir.display(),
+                    issues
+                )))
+            });
+        // The probe is scratch content either way; a removal failure only
+        // leaves orphans that the tolerant orphan cleanup clears later.
+        let _ = std::fs::remove_dir_all(&probe_dir);
+        verdict
+    }
+
+    /// Strict health check of the freshly published checkpoint baseline for
+    /// one reshard label, run before old snapshots retire. Inspects the
+    /// label's vertex directory inside the published checkpoint itself;
+    /// failure refuses the reshard after naming the health step, keeping the
+    /// retirement of recoverable history for a verified baseline.
+    fn verify_resharded_baseline(&self, label: LabelId, checkpoint_seq: u64) -> StorageResult<()> {
+        let persistence = self.ctx.persistence().as_ref().ok_or_else(|| {
+            StorageError::invalid_operation(
+                "reshard health step failed: no persistence coordinator for the checkpoint",
+            )
+        })?;
+        let table_dir = persistence
+            .read()
+            .checkpoint_dir()
+            .join(format!("checkpoint_{checkpoint_seq}"))
+            .join("data")
+            .join("vertices")
+            .join(format!("label_{label}"));
+        let report = ShardedVertexTable::inspect_commit_health(&table_dir).map_err(|e| {
+            StorageError::db_error(format!(
+                "reshard health step failed: cannot inspect the published vertex baseline \
+                 for label {} at {}: {}",
+                label,
+                table_dir.display(),
+                e
+            ))
+        })?;
+        if !report.is_healthy() {
+            return Err(StorageError::invalid_operation(format!(
+                "reshard health step failed: published checkpoint {} for vertex label {} \
+                 is unhealthy at {}: missing={:?} pk={:?} manifest_present={} \
+                 manifest_decodable={}. Old snapshots are kept; restore the previous \
+                 checkpoint before retrying.",
+                checkpoint_seq,
+                label,
+                table_dir.display(),
+                report.missing_files,
+                report.pk_issues,
+                report.manifest_present,
+                report.manifest_decodable,
+            )));
+        }
+        Ok(())
+    }
+
     /// Offline redistribution of one vertex label to a new shard count.
     ///
-    /// The edge-free adjustment outlet for the shard-count change: rebuilds
-    /// every live row into a fresh table and swaps it into the catalog, then
-    /// checkpoints the rebuilt table as the new baseline and retires the old
-    /// checkpoint directory; online shard count changes stay rejected by the
-    /// table manifest.
+    /// The edge-free adjustment outlet for the shard-count change, run as
+    /// five ordered steps: rebuild every live row into a fresh table, probe
+    /// the rebuilt baseline on disk and health-check it, switch the catalog,
+    /// force the checkpoint that makes the new state the durable baseline,
+    /// verify the published baseline, then retire old snapshots. Any failure
+    /// before the switch keeps the old table authoritative and names the
+    /// failing step; online shard count changes stay rejected by the table
+    /// manifest.
     ///
     /// The tool holds the offline maintenance barrier itself, so no concurrent
     /// writes can tear the rebuild-swap sequence. Vertex IDs are rehashed and
@@ -89,6 +182,9 @@ impl GraphStorage {
         })?;
         let rows = rebuilt.approximate_total_count();
         let shards = rebuilt.num_shards();
+        // Persist and check the rebuilt baseline before switching anything:
+        // a rebuild that cannot flush healthy refuses the reshard here.
+        self.probe_rebuilt_vertex_baseline(&rebuilt, label)?;
         self.ctx.data_store().with_vertex_tables_mut(|tables| {
             tables.insert(label, Arc::new(rebuilt));
             Ok::<(), StorageError>(())
@@ -96,12 +192,26 @@ impl GraphStorage {
         self.ctx.invalidate_vertex_cache(label);
         self.ctx.mark_vertex_modified(label);
         self.ctx.bump_layout_version();
+        // Forced checkpoint fence: the swapped state must reach a durable
+        // baseline before this call reports success.
+        let stats = self.create_checkpoint()?.ok_or_else(|| {
+            StorageError::invalid_operation(format!(
+                "reshard finalize step failed: vertex label {} was rebuilt to {} shards \
+                 but no checkpoint baseline was written: refusing success; the next open \
+                 still sees the old baseline",
+                label, shards,
+            ))
+        })?;
+        // Check the published baseline before retiring old snapshots.
+        self.verify_resharded_baseline(label, stats.checkpoint_id)?;
         log::info!(
-            "Resharded vertex label {} to {} shards, {} rows carried over",
+            "Resharded vertex label {} to {} shards, {} rows carried over, checkpoint {} published",
             label,
             shards,
-            rows
+            rows,
+            stats.checkpoint_id
         );
+        self.cleanup_snapshots()?;
         Ok(rows)
     }
 
@@ -133,6 +243,9 @@ impl GraphStorage {
         })?;
         let rows = rebuilt.approximate_total_count();
         let shards = rebuilt.num_shards();
+        // Persist and check the rebuilt baseline before switching anything:
+        // a rebuild that cannot flush healthy refuses the reshard here.
+        self.probe_rebuilt_vertex_baseline(&rebuilt, label)?;
         self.ctx.data_store().with_vertex_tables_mut(|tables| {
             tables.insert(label, Arc::new(rebuilt));
             Ok::<(), StorageError>(())
@@ -178,7 +291,7 @@ impl GraphStorage {
 
         // Forced checkpoint fence: the translated state must reach a durable
         // baseline before this call reports success.
-        self.create_checkpoint()?.ok_or_else(|| {
+        let stats = self.create_checkpoint()?.ok_or_else(|| {
             StorageError::db_error(format!(
                 "reshard of vertex label {} to {} shards translated {} edge partition(s) \
                  but no checkpoint baseline was written: refusing success; the next open \
@@ -188,19 +301,17 @@ impl GraphStorage {
                 remapped.iter().filter(|(_, did)| *did).count(),
             ))
         })?;
-        let vertices_dir = self.ctx.work_dir().as_ref().map(|dir| {
-            crate::engine::paths::StoragePaths::new(dir.clone()).vertices_dir()
-        });
-        if let Some(vertices_dir) = vertices_dir {
-            let summary = self.offline_inspect_vertex_store(&vertices_dir)?;
-            log::info!(
-                "Resharded vertex label {} to {} shards with edge translation: {} rows, summary: {}",
-                label,
-                shards,
-                rows,
-                summary
-            );
-        }
+        // Check the published baseline before retiring old snapshots.
+        self.verify_resharded_baseline(label, stats.checkpoint_id)?;
+        log::info!(
+            "Resharded vertex label {} to {} shards with edge translation: {} rows, \
+             {} edge partition(s) translated, checkpoint {} published",
+            label,
+            shards,
+            rows,
+            remapped.iter().filter(|(_, did)| *did).count(),
+            stats.checkpoint_id,
+        );
         self.cleanup_snapshots()?;
         Ok(rows)
     }

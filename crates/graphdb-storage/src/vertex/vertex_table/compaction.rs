@@ -254,7 +254,7 @@ impl CompactionCoordinator {
             let applied = table.id_indexer.compact()?;
             debug_assert_eq!(applied, self.id_mapping);
             self.journal.record(CompactionStep::Timestamp);
-        *table.timestamps.write() = new_timestamps;
+            *table.timestamps.write() = new_timestamps;
             self.journal.record(CompactionStep::Column);
             table.columns = new_columns;
         } else {
@@ -321,7 +321,7 @@ impl CompactionCoordinator {
         table: &VertexTable,
         old_live_ids: &[u32],
     ) -> StorageResult<super::super::ColumnStore> {
-        let mut new_columns = super::super::ColumnStore::with_capacity(table.id_indexer.len());
+        let new_columns = super::super::ColumnStore::with_capacity(table.id_indexer.len());
         for prop in &table.schema.properties {
             new_columns.add_column(prop.name.clone(), prop.data_type.clone(), prop.nullable);
         }

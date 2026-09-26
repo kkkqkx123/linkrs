@@ -1,6 +1,7 @@
-/// Columns file record-layout version. Development builds keep this at 1;
-/// there is no backward compatibility with any other layout.
-pub const COLUMNS_FORMAT_VERSION: u8 = 1;
+/// Columns file record-layout version. There is no backward compatibility
+/// with any other layout: directories written under a different version are
+/// rejected at open and must be rebuilt.
+pub const COLUMNS_FORMAT_VERSION: u8 = 2;
 
 /// Pick one encoding for a column by profiling each chunk independently
 /// (streaming, no column-wide value vector) and voting for the most common

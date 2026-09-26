@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::context::TransactionContext;
 use crate::types::{DurabilityLevel, TransactionConfig, TransactionId, TransactionState};
-use crate::undo_log::{InsertVertexUndo, UndoLogEntry};
+use crate::undo_log::{InsertEdgeUndo, UndoLogEntry};
 use crate::undo_log::{UndoLogResult, UndoTarget};
 use crate::TransactionErrorKind;
 use graphdb_core::types::{
@@ -28,15 +28,6 @@ impl UndoTarget for MockUndoTarget {
     fn delete_edge(&self, _edge_ctx: EdgeDeletionContext) -> UndoLogResult<()> {
         Ok(())
     }
-    fn undo_update_vertex_property(
-        &self,
-        _vertex: VertexIdentifier,
-        _col_id: ColumnId,
-        _value: graphdb_core::Value,
-        _ts: Timestamp,
-    ) -> UndoLogResult<()> {
-        Ok(())
-    }
     fn undo_update_edge_property(
         &self,
         _edge_id: EdgeIdentifier,
@@ -44,9 +35,6 @@ impl UndoTarget for MockUndoTarget {
         _value: graphdb_core::Value,
         _ts: Timestamp,
     ) -> UndoLogResult<()> {
-        Ok(())
-    }
-    fn revert_delete_vertex(&self, _vertex: VertexIdentifier, _ts: Timestamp) -> UndoLogResult<()> {
         Ok(())
     }
     fn revert_delete_edge(&self, _edge_ctx: EdgeDeletionContext) -> UndoLogResult<()> {
@@ -434,17 +422,25 @@ fn test_savepoint_rollback_preserves_prefix_state() {
 
     let ctx = TransactionContext::new(txn_id, 1, config);
 
-    ctx.add_undo_log(UndoLogEntry::InsertVertex(InsertVertexUndo {
-        v_label: 1,
-        vid: crate::VertexId::try_from_int64(1).expect("test vertex id"),
+    ctx.add_undo_log(UndoLogEntry::InsertEdge(InsertEdgeUndo {
+        src_label: 1,
+        dst_label: 2,
+        edge_label: 3,
+        rank: 0,
+        src_vid: crate::VertexId::try_from_int64(1).expect("test vertex id"),
+        dst_vid: crate::VertexId::try_from_int64(2).expect("test vertex id"),
     }))
     .expect("Failed to append undo log");
 
     let sp1 = ctx.create_savepoint(Some("sp1".to_string()), 0);
 
-    ctx.add_undo_log(UndoLogEntry::InsertVertex(InsertVertexUndo {
-        v_label: 1,
-        vid: crate::VertexId::try_from_int64(2).expect("test vertex id"),
+    ctx.add_undo_log(UndoLogEntry::InsertEdge(InsertEdgeUndo {
+        src_label: 1,
+        dst_label: 2,
+        edge_label: 3,
+        rank: 1,
+        src_vid: crate::VertexId::try_from_int64(3).expect("test vertex id"),
+        dst_vid: crate::VertexId::try_from_int64(4).expect("test vertex id"),
     }))
     .expect("Failed to append undo log");
 

@@ -229,9 +229,9 @@ impl ColumnStore {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             columns: parking_lot::RwLock::new(Vec::with_capacity(capacity)),
-            name_to_index: parking_lot::RwLock::new(
-                std::collections::HashMap::with_capacity(capacity),
-            ),
+            name_to_index: parking_lot::RwLock::new(std::collections::HashMap::with_capacity(
+                capacity,
+            )),
         }
     }
 
@@ -339,10 +339,7 @@ impl ColumnStore {
     /// Shared access to one column. The returned guard derefs to `Column`,
     /// so point-path call sites work unchanged; the guard must not be held
     /// across structural store operations.
-    pub fn get_column(
-        &self,
-        name: &str,
-    ) -> Option<parking_lot::MappedRwLockReadGuard<'_, Column>> {
+    pub fn get_column(&self, name: &str) -> Option<parking_lot::MappedRwLockReadGuard<'_, Column>> {
         let idx = *self.name_to_index.read().get(name)?;
         parking_lot::RwLockReadGuard::try_map(self.columns.read(), |cols| cols.get(idx)).ok()
     }
@@ -358,11 +355,6 @@ impl ColumnStore {
     ) -> Option<parking_lot::MappedRwLockReadGuard<'_, Column>> {
         let idx = usize::try_from(col_id).ok()?;
         parking_lot::RwLockReadGuard::try_map(self.columns.read(), |cols| cols.get(idx)).ok()
-    }
-
-    /// Number of columns in iteration order.
-    pub fn column_len(&self) -> usize {
-        self.columns.read().len()
     }
 
     /// Run `f` against every column in order, one shared guard at a time.
@@ -426,9 +418,9 @@ impl ColumnStore {
 
     /// Start timestamps of the per-column versions covering `query_ts`.
     ///
-    /// Internal companion of [`ColumnStore::get_at_ts`] for pending-aware
-    /// point lookups: when any covering stamp belongs to a foreign
-    /// uncommitted write the caller re-reads at `stamp - 1`.
+    /// Internal companion of [`ColumnStore::get_at_ts`] for record cache
+    /// fences: the stamps travel with a cached record and a hit is accepted
+    /// only when they still match live storage.
     pub fn picked_starts_at(&self, row_idx: usize, query_ts: Timestamp) -> Vec<Timestamp> {
         self.for_each_column(|col| col.start_ts_at(row_idx, query_ts))
     }
@@ -738,11 +730,7 @@ impl ColumnStore {
                 let chunks = col.chunks.read();
                 let mut out = Vec::new();
                 for chunk in chunks.iter() {
-                    let snapshot = chunk
-                        .read_state()
-                        .residency
-                        .evicted_snapshot()
-                        .cloned();
+                    let snapshot = chunk.read_state().residency.evicted_snapshot().cloned();
                     let Some(snapshot) = snapshot else {
                         continue;
                     };
@@ -915,22 +903,6 @@ impl ColumnStore {
         let columns = self.columns.read();
         for col in columns.iter() {
             col.mark_dirty(row_idx);
-        }
-    }
-
-    pub fn load_column_from_raw(
-        &self,
-        name: &str,
-        data: Vec<u8>,
-        offsets: Vec<u64>,
-        null_bitmap_raw: Option<Vec<u8>>,
-        bitmap_bit_len: usize,
-    ) -> StorageResult<()> {
-        if let Some(col) = self.get_column(name) {
-            col.load_data_from_raw(data, offsets, null_bitmap_raw, bitmap_bit_len);
-            Ok(())
-        } else {
-            Err(StorageError::column_not_found(name.to_string()))
         }
     }
 

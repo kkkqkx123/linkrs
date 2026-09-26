@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use super::super::core::VertexTable;
 use super::routing::decode_id;
 use super::ShardedVertexTable;
@@ -24,11 +22,9 @@ impl ShardedVertexTable {
     //
     // These apply the timestamp predicate only and take no visibility guard,
     // so they can read a version a guard would hide. They stay crate-private
-    // and exist for two callers: the offline/startup paths that run with no
-    // transaction in flight (WAL replay, reshard) and the pending-aware
-    // resolution funnel below, which re-reads at a lowered stamp. Every entry
-    // point that hands row identity or row data to a consumer takes a
-    // [`VisibilityGuard`] instead.
+    // and exist for the offline/startup paths that run with no transaction in
+    // flight (WAL replay, reshard). Every entry point that hands row identity
+    // or row data to a consumer takes a [`VisibilityGuard`] instead.
 
     pub(crate) fn get_by_internal_id(&self, global_id: u32, ts: Timestamp) -> Option<VertexRecord> {
         let (idx, local_id) = self.decode_id(global_id);
@@ -39,13 +35,13 @@ impl ShardedVertexTable {
         })
     }
 
-    /// Row survival stamps for pending-aware rechecks (shard-decoded).
+    /// Row survival stamps for visibility rechecks (shard-decoded).
     pub(crate) fn row_timestamps(&self, global_id: u32) -> Option<(Timestamp, Option<Timestamp>)> {
         let (idx, local_id) = self.decode_id(global_id);
         self.shards[idx].read().row_timestamps(local_id)
     }
 
-    /// Per-column covering version stamps for pending-aware rechecks.
+    /// Per-column covering version stamps for visibility rechecks.
     pub(crate) fn row_picked_starts(&self, global_id: u32, ts: Timestamp) -> Vec<Timestamp> {
         let (idx, local_id) = self.decode_id(global_id);
         self.shards[idx].read().row_picked_starts(local_id, ts)
@@ -59,54 +55,23 @@ impl ShardedVertexTable {
 
     // ── Guarded reads ──
 
-    /// Resolution stamp for one shard row.
+    /// Whether one shard row is live for `guard` at its snapshot.
     ///
-    /// The single funnel every guarded read goes through: it walks from the
-    /// guard's snapshot down to the newest version the reader may observe.
-    /// A creation stamp owned by a foreign uncommitted transaction hides the
-    /// row, a foreign pending deletion is stepped below so the pre-delete
-    /// version is read, and a column whose covering version stamp is foreign
-    /// pending falls back to `stamp - 1`. Every step strictly lowers the
-    /// stamp and stamp `0` is the bottom of the chain, so the walk
-    /// terminates.
-    ///
-    /// `None` means no version is visible to this guard.
-    fn shard_read_stamp(
-        table: &VertexTable,
-        local_id: u32,
-        guard: &VisibilityGuard<'_>,
-    ) -> Option<Timestamp> {
-        let mut cur = guard.snapshot();
-        loop {
-            let (create_ts, delete_ts) = table.row_timestamps(local_id)?;
-            let probe = guard.at(cur);
-            if !probe.is_row_visible(create_ts, delete_ts) {
-                return None;
-            }
-            // The row reads as live because a pending deletion is ignored;
-            // the stored version is the one below that deletion.
-            if let Some(delete_ts) = delete_ts.filter(|del| probe.is_foreign_pending(*del)) {
-                if delete_ts == 0 {
-                    return None;
-                }
-                cur = delete_ts - 1;
-                continue;
-            }
-            let starts = table.row_picked_starts(local_id, cur);
-            match starts
-                .iter()
-                .filter(|stamp| probe.is_foreign_pending(**stamp))
-                .min()
-            {
-                None | Some(0) => return Some(cur),
-                Some(stamp) => cur = *stamp - 1,
-            }
-        }
+    /// Vertex rows reach the main table only at their transaction's commit
+    /// application (or through offline paths with no transaction in flight),
+    /// so the guard's liveness check at the snapshot is the full resolution:
+    /// there is no uncommitted version chain to walk below. The pending
+    /// check also covers a writer interleaving between the identity read and
+    /// the segment read, so point reads need no stamp revalidation loop.
+    fn shard_row_visible(table: &VertexTable, local_id: u32, guard: &VisibilityGuard<'_>) -> bool {
+        table
+            .row_timestamps(local_id)
+            .is_some_and(|(create_ts, delete_ts)| guard.is_row_visible(create_ts, delete_ts))
     }
 
-    /// Pending-aware full point read, with the fences describing the version
-    /// actually read: creation stamp, per-column covering stamps and the
-    /// resolution stamp. The record cache fences on these.
+    /// Guarded full point read, with the fences describing the version read:
+    /// creation stamp, per-column covering stamps and the read stamp. The
+    /// record cache fences on these.
     pub(crate) fn resolve_vertex(
         &self,
         global_id: u32,
@@ -114,16 +79,18 @@ impl ShardedVertexTable {
     ) -> Option<(VertexRecord, Timestamp, Vec<Timestamp>, Timestamp)> {
         let (shard_idx, local_id) = self.decode_id(global_id);
         let table = self.shards[shard_idx].read();
-        let stamp = Self::shard_read_stamp(&table, local_id, guard)?;
-        let mut record = table.get_projected_by_internal_id(local_id, stamp, None)?;
+        let (create_ts, delete_ts) = table.row_timestamps(local_id)?;
+        if !guard.is_row_visible(create_ts, delete_ts) {
+            return None;
+        }
+        let snapshot = guard.snapshot();
+        let mut record = table.get_projected_by_internal_id(local_id, snapshot, None)?;
         record.internal_id = global_id;
-        let create_ts = table.row_timestamps(local_id)?.0;
-        let starts = table.row_picked_starts(local_id, stamp);
-        Some((record, create_ts, starts, stamp))
+        let starts = table.row_picked_starts(local_id, snapshot);
+        Some((record, create_ts, starts, snapshot))
     }
 
-    /// Pending-aware projected point read. Decodes the projection once, at the
-    /// resolved stamp.
+    /// Guarded projected point read. Decodes the projection at the snapshot.
     pub fn resolve_projected(
         &self,
         global_id: u32,
@@ -132,9 +99,11 @@ impl ShardedVertexTable {
     ) -> Option<VertexRecord> {
         let (shard_idx, local_id) = self.decode_id(global_id);
         let table = self.shards[shard_idx].read();
-        let stamp = Self::shard_read_stamp(&table, local_id, guard)?;
+        if !Self::shard_row_visible(&table, local_id, guard) {
+            return None;
+        }
         table
-            .get_projected_by_internal_id(local_id, stamp, projection)
+            .get_projected_by_internal_id(local_id, guard.snapshot(), projection)
             .map(|mut record| {
                 record.internal_id = global_id;
                 record
@@ -144,36 +113,32 @@ impl ShardedVertexTable {
     /// Batch variant of [`Self::resolve_projected`].
     ///
     /// Input ids are grouped by shard, resolved with one lock acquisition per
-    /// shard and decoded in stamp buckets so the column-major batch decode is
-    /// kept. The output is aligned with the input order; rows with no visible
-    /// version yield `None`.
+    /// shard and decoded in one column-major batch. The output is aligned with
+    /// the input order; rows with no visible version yield `None`.
     pub fn resolve_projected_batch(
         &self,
         global_ids: &[u32],
         guard: &VisibilityGuard<'_>,
         projection: Option<&[String]>,
     ) -> Vec<Option<VertexRecord>> {
+        let snapshot = guard.snapshot();
         let mut out: Vec<Option<VertexRecord>> = global_ids.iter().map(|_| None).collect();
         for (shard_idx, group) in self.group_by_shard(global_ids) {
             if group.is_empty() {
                 continue;
             }
             let table = self.shards[shard_idx].read();
-            let mut buckets: HashMap<Timestamp, Vec<(usize, u32)>> = HashMap::new();
-            for (slot, local_id) in group {
-                if let Some(stamp) = Self::shard_read_stamp(&table, local_id, guard) {
-                    buckets.entry(stamp).or_default().push((slot, local_id));
-                }
-            }
-            for (stamp, bucket) in buckets {
-                let locals: Vec<u32> = bucket.iter().map(|&(_, local)| local).collect();
-                let records = table.get_projected_batch(&locals, stamp, projection);
-                for ((slot, _), record) in bucket.into_iter().zip(records) {
-                    out[slot] = record.map(|mut record| {
-                        record.internal_id = self.encode_id(shard_idx, record.internal_id);
-                        record
-                    });
-                }
+            let visible: Vec<(usize, u32)> = group
+                .into_iter()
+                .filter(|&(_, local_id)| Self::shard_row_visible(&table, local_id, guard))
+                .collect();
+            let locals: Vec<u32> = visible.iter().map(|&(_, local)| local).collect();
+            let records = table.get_projected_batch(&locals, snapshot, projection);
+            for ((slot, _), record) in visible.into_iter().zip(records) {
+                out[slot] = record.map(|mut record| {
+                    record.internal_id = self.encode_id(shard_idx, record.internal_id);
+                    record
+                });
             }
         }
         out
@@ -184,11 +149,6 @@ impl ShardedVertexTable {
     /// Each shard is scanned under its own read lock and the per-shard results
     /// are concatenated in shard order, so concurrent writes may be observed
     /// inconsistently across shards. Point lookups stay shard-consistent.
-    ///
-    /// Candidate enumeration unions the live predicate with timestamp-deleted
-    /// slots so rows whose deletion is a foreign pending write are recovered
-    /// through the resolution funnel and decoded below the deletion stamp,
-    /// matching point reads through [`Self::resolve_vertex`].
     pub fn scan(&self, guard: &VisibilityGuard<'_>) -> Vec<VertexRecord> {
         use rayon::prelude::*;
         let snapshot = guard.snapshot();
@@ -202,28 +162,13 @@ impl ShardedVertexTable {
                     .scan(snapshot)
                     .filter_map(|mut record| {
                         let local_id = record.internal_id;
-                        let stamp = Self::shard_read_stamp(&table, local_id, guard)?;
-                        // Only rows whose version chain was walked below the
-                        // snapshot pay for a second decode.
-                        if stamp != snapshot {
-                            record = table.get_projected_by_internal_id(local_id, stamp, None)?;
+                        if !Self::shard_row_visible(&table, local_id, guard) {
+                            return None;
                         }
                         record.internal_id = self.encode_id(shard_idx, local_id);
                         Some(record)
                     })
                     .collect();
-                for local_id in table.deleted_ids_at(snapshot) {
-                    let Some(stamp) = Self::shard_read_stamp(&table, local_id, guard) else {
-                        continue;
-                    };
-                    let Some(mut record) =
-                        table.get_projected_by_internal_id(local_id, stamp, None)
-                    else {
-                        continue;
-                    };
-                    record.internal_id = self.encode_id(shard_idx, local_id);
-                    records.push(record);
-                }
                 records.sort_by_key(|record| record.internal_id);
                 (shard_idx, records)
             })
@@ -238,9 +183,7 @@ impl ShardedVertexTable {
     }
 
     /// Candidate id enumeration for paginated scans: rows the guard considers
-    /// visible, including rows hidden from the plain predicate by a foreign
-    /// pending delete. Property-level fallback happens at decode, in
-    /// [`Self::scan_columns`].
+    /// visible at its snapshot.
     ///
     /// Shards are read without a global lock, so concurrent writes may be
     /// observed inconsistently across shards.
@@ -252,21 +195,9 @@ impl ShardedVertexTable {
             let mut shard_ids: Vec<u32> = table
                 .live_ids(snapshot)
                 .into_iter()
-                .filter(|&local_id| {
-                    table
-                        .row_timestamps(local_id)
-                        .is_some_and(|(create_ts, delete_ts)| {
-                            guard.is_row_visible(create_ts, delete_ts)
-                        })
-                })
+                .filter(|&local_id| Self::shard_row_visible(&table, local_id, guard))
                 .map(|local_id| self.encode_id(shard_idx, local_id))
                 .collect();
-            for local_id in table.deleted_ids_at(snapshot) {
-                if Self::shard_read_stamp(&table, local_id, guard).is_none() {
-                    continue;
-                }
-                shard_ids.push(self.encode_id(shard_idx, local_id));
-            }
             shard_ids.sort_unstable();
             ids.extend(shard_ids);
         }
@@ -275,21 +206,17 @@ impl ShardedVertexTable {
 
     /// Column-major batch decode for paginated scans.
     ///
-    /// Resolves every candidate through [`Self::shard_read_stamp`], decodes
-    /// the requested columns at the resolved stamp (a full decode when `names`
-    /// is empty) and compacts the result. The returned ids, external vertex
-    /// ids and columns are aligned; rows with no visible version are dropped.
-    ///
-    /// When the resolution stamp differs from the snapshot — a foreign
-    /// uncommitted property write covers one of the requested columns — the
-    /// row is decoded at the lowered stamp, so the scan never yields an
-    /// uncommitted value.
+    /// Filters candidates by guard visibility, decodes the requested columns
+    /// at the snapshot (a full decode when `names` is empty) and compacts the
+    /// result. The returned ids, external vertex ids and columns are aligned;
+    /// rows with no visible version are dropped.
     pub fn scan_columns(
         &self,
         global_ids: &[u32],
         guard: &VisibilityGuard<'_>,
         names: &[String],
     ) -> (Vec<u32>, Vec<VertexId>, Vec<(String, ColumnValues)>) {
+        let snapshot = guard.snapshot();
         let (resolved_names, types) = self.column_layout(names);
         let mut merged: Vec<(String, ColumnValues)> = resolved_names
             .iter()
@@ -308,23 +235,24 @@ impl ShardedVertexTable {
                 continue;
             }
             let table = self.shards[shard_idx].read();
-            let mut buckets: HashMap<Timestamp, Vec<(usize, u32)>> = HashMap::new();
+            let mut visible: Vec<(usize, u32)> = Vec::new();
             for (slot, local_id) in group {
-                let Some(stamp) = Self::shard_read_stamp(&table, local_id, guard) else {
+                if !Self::shard_row_visible(&table, local_id, guard) {
                     continue;
-                };
+                }
                 let Some(vid) = table.get_external_id_raw(local_id).and_then(vertex_id_of) else {
                     continue;
                 };
                 vids[slot] = Some(vid);
-                buckets.entry(stamp).or_default().push((slot, local_id));
+                visible.push((slot, local_id));
             }
-            for (stamp, bucket) in buckets {
-                let locals: Vec<u32> = bucket.iter().map(|&(_, local)| local).collect();
-                for (name, column) in table.get_projected_columns(&locals, stamp, &resolved_names) {
-                    if let Some((_, target)) = merged.iter_mut().find(|(n, _)| *n == name) {
-                        column.scatter(target, &bucket);
-                    }
+            if visible.is_empty() {
+                continue;
+            }
+            let locals: Vec<u32> = visible.iter().map(|&(_, local)| local).collect();
+            for (name, column) in table.get_projected_columns(&locals, snapshot, &resolved_names) {
+                if let Some((_, target)) = merged.iter_mut().find(|(n, _)| *n == name) {
+                    column.scatter(target, &visible);
                 }
             }
         }

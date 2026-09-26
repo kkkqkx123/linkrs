@@ -23,15 +23,15 @@ struct TableManifest {
     label_name: String,
     num_shards: usize,
     segment_slots_bits: u32,
+    total_segments: u32,
     checksum: u32,
 }
 
-/// Persistent layout version of both manifests. Version 2 pins the full
-/// shard layout (shard count plus segment slot width) that global internal
-/// IDs are encoded with. Version 1 manifests carry only the shard count and
-/// are rejected with a rebuild directive; there is no automatic migration
-/// and unknown versions are rejected the same way.
-const MANIFEST_FORMAT_VERSION: u8 = 2;
+/// Persistent layout version of both manifests. Stays at 1 through the
+/// development phase: any manifest whose version differs from this constant
+/// is rejected with a rebuild directive; there is no automatic migration
+/// and old on-disk data is never made compatible.
+const MANIFEST_FORMAT_VERSION: u8 = 1;
 
 fn table_manifest_checksum(
     format_version: u8,
@@ -39,6 +39,7 @@ fn table_manifest_checksum(
     label_name: &str,
     num_shards: usize,
     segment_slots_bits: u32,
+    total_segments: u32,
 ) -> u32 {
     let mut hasher = crc32fast::Hasher::new();
     hasher.update(&[format_version]);
@@ -46,6 +47,7 @@ fn table_manifest_checksum(
     hasher.update(label_name.as_bytes());
     hasher.update(&(num_shards as u64).to_le_bytes());
     hasher.update(&segment_slots_bits.to_le_bytes());
+    hasher.update(&total_segments.to_le_bytes());
     hasher.finalize()
 }
 
@@ -87,6 +89,7 @@ fn verify_table_manifest(manifest: &TableManifest, path: &Path) -> StorageResult
         &manifest.label_name,
         manifest.num_shards,
         manifest.segment_slots_bits,
+        manifest.total_segments,
     );
     if expected != manifest.checksum {
         return Err(graphdb_core::StorageError::deserialize_error(format!(
@@ -94,6 +97,23 @@ fn verify_table_manifest(manifest: &TableManifest, path: &Path) -> StorageResult
             path.display(),
             expected,
             manifest.checksum,
+        )));
+    }
+    let layout = super::routing::ShardLayout {
+        num_shards: manifest.num_shards,
+        segment_slots_bits: manifest.segment_slots_bits,
+        total_segments: manifest.total_segments,
+    };
+    if !layout.is_consistent() {
+        return Err(graphdb_core::StorageError::deserialize_error(format!(
+            "table manifest at {} pins an inconsistent shard layout \
+             (num_shards={}, segment_slots_bits={}, total_segments={}): \
+             rebuild the table with the offline redistribution tool \
+             instead of opening it in place",
+            path.display(),
+            manifest.num_shards,
+            manifest.segment_slots_bits,
+            manifest.total_segments,
         )));
     }
     Ok(())
@@ -318,6 +338,7 @@ impl ShardedVertexTable {
             &self.label_name,
             self.layout.num_shards,
             self.layout.segment_slots_bits,
+            self.layout.total_segments,
         );
         let manifest = TableManifest {
             format_version,
@@ -325,6 +346,7 @@ impl ShardedVertexTable {
             label_name: self.label_name.clone(),
             num_shards: self.layout.num_shards,
             segment_slots_bits: self.layout.segment_slots_bits,
+            total_segments: self.layout.total_segments,
             checksum,
         };
         let payload = serde_json::to_vec(&manifest)
@@ -351,6 +373,7 @@ impl ShardedVertexTable {
         Ok(Some(super::routing::ShardLayout {
             num_shards: manifest.num_shards,
             segment_slots_bits: manifest.segment_slots_bits,
+            total_segments: manifest.total_segments,
         }))
     }
 
@@ -632,18 +655,21 @@ impl ShardedVertexTable {
         };
         if manifest.num_shards != self.layout.num_shards
             || manifest.segment_slots_bits != self.layout.segment_slots_bits
+            || manifest.total_segments != self.layout.total_segments
         {
             return Err(graphdb_core::StorageError::invalid_operation(format!(
-                "vertex table '{}' persisted with layout (num_shards={}, segment_slots_bits={}) \
-                 but opened with layout (num_shards={}, segment_slots_bits={}) \
+                "vertex table '{}' persisted with layout (num_shards={}, segment_slots_bits={}, total_segments={}) \
+                 but opened with layout (num_shards={}, segment_slots_bits={}, total_segments={}) \
                  (manifest {}): global internal IDs embed the shard layout and would \
                  mis-decode; reopen with vertex_table_shards={} or migrate the data with \
                  the offline redistribution tool",
                 self.label_name,
                 manifest.num_shards,
                 manifest.segment_slots_bits,
+                manifest.total_segments,
                 self.layout.num_shards,
                 self.layout.segment_slots_bits,
+                self.layout.total_segments,
                 path.as_ref().join(TABLE_MANIFEST_FILE_NAME).display(),
                 manifest.num_shards,
             )));

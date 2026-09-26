@@ -252,7 +252,9 @@ impl VertexTable {
     }
 
     /// Serialize one prepared column snapshot into the columns payload.
-    /// Layout matches the historical per-column record exactly.
+    /// Layout: name, chunk count, then one record per chunk carrying either
+    /// its encoding (plus compression metadata) or its raw buffers, followed
+    /// by the chunk overlay. Overflow and statistics trail all records.
     fn append_column_payload(
         payload: &mut Vec<u8>,
         col: &crate::vertex::column::Column,
@@ -261,100 +263,55 @@ impl VertexTable {
         payload.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
         payload.extend_from_slice(name_bytes);
 
-        // The encoded record form describes each chunk by its encoding only;
-        // a chunk without one would contribute no base bytes. Segment first,
-        // then let the actual layout pick the record form.
-        if col.encoding_type() != EncodingType::None && !col.has_chunks() {
-            col.materialize_chunks();
-        }
-        let encoded_layout = col.encoding_type() != EncodingType::None && col.all_chunks_encoded();
-        if encoded_layout {
-            payload.push(1u8);
-            payload.push(1u8);
-            let chunk_count = col.chunk_count().max(1) as u32;
-            payload.extend_from_slice(&chunk_count.to_le_bytes());
-            for ci in 0..col.chunk_count().max(1) {
-                let chunk = col.chunk_flush_view(ci);
-                let (row_offset, row_count) = match &chunk {
-                    Some(c) => (c.row_offset as u32, c.row_count as u32),
-                    None => (0u32, col.len() as u32),
-                };
-                payload.extend_from_slice(&row_offset.to_le_bytes());
-                payload.extend_from_slice(&row_count.to_le_bytes());
-                // Compression metadata.
-                let mut meta_buf = Vec::new();
-                if let Some(c) = &chunk {
-                    c.encoding_meta.serialize(&mut meta_buf)?;
+        let views = col.chunk_flush_views();
+        payload.extend_from_slice(&(views.len() as u32).to_le_bytes());
+        for view in &views {
+            payload.extend_from_slice(&(view.row_offset as u32).to_le_bytes());
+            payload.extend_from_slice(&(view.row_count as u32).to_le_bytes());
+            if view.raw_form {
+                payload.push(0u8);
+                payload.extend_from_slice(&(view.raw_data.len() as u32).to_le_bytes());
+                payload.extend_from_slice(&view.raw_data);
+                payload.extend_from_slice(&(view.raw_offsets.len() as u32).to_le_bytes());
+                for &off in &view.raw_offsets {
+                    payload.extend_from_slice(&off.to_le_bytes());
                 }
+                match &view.raw_bitmap {
+                    Some(bitmap) => {
+                        payload.push(1u8);
+                        let bitmap_bytes = bitmap.as_raw_slice();
+                        payload.extend_from_slice(&(bitmap.len() as u32).to_le_bytes());
+                        payload.extend_from_slice(&(bitmap_bytes.len() as u32).to_le_bytes());
+                        payload.extend_from_slice(bitmap_bytes);
+                    }
+                    None => payload.push(0u8),
+                }
+            } else {
+                payload.push(1u8);
+                let mut meta_buf = Vec::new();
+                view.encoding_meta.serialize(&mut meta_buf)?;
                 payload.extend_from_slice(&(meta_buf.len() as u32).to_le_bytes());
                 payload.extend_from_slice(&meta_buf);
-                // Full encoding metadata for this chunk.
                 let mut enc_buf = Vec::new();
-                if let Some(c) = &chunk {
-                    c.encoding.serialize_meta(&mut enc_buf)?;
-                } else {
-                    col.encoding_snapshot().serialize_meta(&mut enc_buf)?;
-                }
+                view.encoding.serialize_meta(&mut enc_buf)?;
                 payload.extend_from_slice(&(enc_buf.len() as u32).to_le_bytes());
                 payload.extend_from_slice(&enc_buf);
-                // Overlay entries.
-                let overlay_entries: Vec<(u32, Option<graphdb_core::Value>)> = chunk
-                    .map(|c| c.overlay)
-                    .unwrap_or_default();
-                let overlay_bytes = postcard::to_allocvec(&overlay_entries)
-                    .map_err(|e| StorageError::serialize_error(e.to_string()))?;
-                payload.extend_from_slice(&(overlay_bytes.len() as u32).to_le_bytes());
-                payload.extend_from_slice(&overlay_bytes);
             }
-
-            // Overflow sidecar presence flag (same semantics as raw).
-            let overflow_present = (col.has_overflow()
-                && matches!(
-                    col.data_type,
-                    graphdb_core::DataType::String | graphdb_core::DataType::Blob
-                )) as u8;
-            payload.push(overflow_present);
-
-            Self::write_stats_with_fallback(payload, col);
-        } else {
-            payload.push(0u8);
-            let (data, offsets, bitmap) = col.get_flush_data();
-
-            let row_count = offsets
-                .len()
-                .max(if data.is_empty() { 0 } else { col.len() });
-            payload.extend_from_slice(&(row_count as u32).to_le_bytes());
-
-            payload.extend_from_slice(&(data.len() as u32).to_le_bytes());
-            payload.extend_from_slice(&data);
-
-            let offsets_count = offsets.len() as u32;
-            payload.extend_from_slice(&offsets_count.to_le_bytes());
-            for &off in &offsets {
-                payload.extend_from_slice(&off.to_le_bytes());
-            }
-
-            if let Some(bitmap) = bitmap {
-                payload.push(1u8);
-                let bitmap_bytes = bitmap.as_raw_slice();
-                let bitmap_bit_len = bitmap.len() as u32;
-                payload.extend_from_slice(&bitmap_bit_len.to_le_bytes());
-                payload.extend_from_slice(&(bitmap_bytes.len() as u32).to_le_bytes());
-                payload.extend_from_slice(bitmap_bytes);
-            } else {
-                payload.push(0u8);
-            }
-
-            // Overflow sidecar presence flag.
-            let overflow_present = (col.has_overflow()
-                && matches!(
-                    col.data_type,
-                    graphdb_core::DataType::String | graphdb_core::DataType::Blob
-                )) as u8;
-            payload.push(overflow_present);
-
-            Self::write_stats_with_fallback(payload, col);
+            let overlay_bytes = postcard::to_allocvec(&view.overlay)
+                .map_err(|e| StorageError::serialize_error(e.to_string()))?;
+            payload.extend_from_slice(&(overlay_bytes.len() as u32).to_le_bytes());
+            payload.extend_from_slice(&overlay_bytes);
         }
+
+        // Overflow sidecar presence flag.
+        let overflow_present = (col.has_overflow()
+            && matches!(
+                col.data_type,
+                graphdb_core::DataType::String | graphdb_core::DataType::Blob
+            )) as u8;
+        payload.push(overflow_present);
+
+        Self::write_stats_with_fallback(payload, col);
         Ok(())
     }
 

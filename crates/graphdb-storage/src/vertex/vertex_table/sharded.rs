@@ -130,10 +130,7 @@ impl ShardedVertexTable {
     pub fn reshard_to(
         &self,
         new_num_shards: usize,
-    ) -> graphdb_core::StorageResult<(
-        Self,
-        std::collections::HashMap<u32, u32>,
-    )> {
+    ) -> graphdb_core::StorageResult<(Self, std::collections::HashMap<u32, u32>)> {
         use graphdb_core::types::MAX_TIMESTAMP;
         let target = ShardLayout::for_new_table(new_num_shards);
         if target == self.layout {
@@ -177,9 +174,7 @@ impl ShardedVertexTable {
                 }
             };
             let new_global = match &key {
-                crate::vertex::IdKey::Text(name) => {
-                    rebuilt.insert(name, &record.properties, ts)?
-                }
+                crate::vertex::IdKey::Text(name) => rebuilt.insert(name, &record.properties, ts)?,
                 crate::vertex::IdKey::Int(n) => {
                     rebuilt.insert_by_i64(*n, &record.properties, ts)?
                 }
@@ -192,7 +187,7 @@ impl ShardedVertexTable {
 
 #[cfg(test)]
 mod tests {
-    use super::routing::{decode_id, encode_id, ShardLayout, SEGMENT_SLOTS};
+    use super::routing::{decode_id, encode_id, ShardLayout};
     use super::*;
     use graphdb_core::types::MAX_TIMESTAMP;
     const TEST_TS: Timestamp = MAX_TIMESTAMP - 1;
@@ -248,7 +243,7 @@ mod tests {
         let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
         let ts = TEST_TS;
         let mut ids = Vec::new();
-        let n = SEGMENT_SLOTS as usize + 32;
+        let n = table.layout().segment_slots() as usize + 32;
         for i in 0..n {
             let id = insert_with_name(&table, &format!("s_{}", i), ts);
             ids.push(id);
@@ -273,7 +268,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("sharded_load_{}", std::process::id()));
         let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
         let ts = TEST_TS;
-        for i in 0..SEGMENT_SLOTS + 100 {
+        let slots = table.layout().segment_slots();
+        for i in 0..slots + 100 {
             insert_with_name(&table, &format!("v_{}", i), ts);
         }
         table
@@ -283,7 +279,7 @@ mod tests {
         let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
         reloaded.load(&dir).unwrap();
 
-        for i in 0..SEGMENT_SLOTS + 100 {
+        for i in 0..slots + 100 {
             assert!(reloaded.get_internal_id(&format!("v_{}", i), ts).is_some());
         }
 
@@ -312,12 +308,6 @@ mod tests {
             .unwrap();
         let record = table.get_by_internal_id(id, ts).unwrap();
         assert_eq!(record.properties.len(), 2);
-    }
-
-    #[test]
-    fn test_table_level_snapshot_pin_counts() {
-        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 8);
-        assert_eq!(table.active_snapshot_count(), 0);
     }
 
     fn insert_with_name(table: &ShardedVertexTable, name: &str, ts: Timestamp) -> u32 {
@@ -455,102 +445,6 @@ mod tests {
         let manager = graphdb_transaction::VersionManager::new();
         let results = table.scan(&scan_guard(ts, &manager));
         assert_eq!(results.len(), 150);
-    }
-
-    /// A column-major scan must not surface a property value written by a
-    /// foreign uncommitted transaction: the row is decoded at the version
-    /// below the pending stamp.
-    #[test]
-    fn test_scan_columns_hides_foreign_pending_property_write() {
-        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
-        let manager = graphdb_transaction::VersionManager::new();
-        let insert_ts = manager.acquire_insert_timestamp().expect("insert stamp");
-        let id = table
-            .insert(
-                "dave",
-                &[
-                    ("name".to_string(), Value::from("dave")),
-                    ("age".to_string(), Value::Int(30)),
-                ],
-                insert_ts,
-            )
-            .expect("insert");
-        manager.commit_ordered(insert_ts).expect("commit insert");
-
-        let pending_ts = manager.acquire_insert_timestamp().expect("pending stamp");
-        table
-            .update_property(id, "age", &Value::Int(99), pending_ts)
-            .expect("pending update");
-
-        let guard = crate::mvcc_visibility::VisibilityGuard::new(
-            pending_ts,
-            crate::mvcc_visibility::PendingGate::new(&manager, None),
-        );
-        let age = ["age".to_string()];
-        let (ids, vids, columns) = table.scan_columns(&[id], &guard, &age);
-        assert_eq!(ids, vec![id]);
-        assert_eq!(vids.len(), 1);
-        assert_eq!(columns[0].1.value_at(0), Some(Value::Int(30)));
-
-        // The row-major decode applies the same fallback.
-        let records = table.resolve_projected_batch(&[id], &guard, Some(&age));
-        let record = records[0].as_ref().expect("visible record");
-        assert_eq!(
-            record
-                .properties
-                .iter()
-                .find(|(name, _)| name == "age")
-                .expect("age column")
-                .1,
-            Value::Int(30)
-        );
-
-        // Once the writer commits, the same snapshot observes the new value.
-        manager.commit_ordered(pending_ts).expect("commit pending");
-        let committed = crate::mvcc_visibility::VisibilityGuard::new(
-            pending_ts,
-            crate::mvcc_visibility::PendingGate::new(&manager, None),
-        );
-        let (_, _, columns) = table.scan_columns(&[id], &committed, &age);
-        assert_eq!(columns[0].1.value_at(0), Some(Value::Int(99)));
-    }
-
-    #[test]
-    fn test_scan_recovers_foreign_pending_delete() {
-        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
-        let manager = graphdb_transaction::VersionManager::new();
-        let insert_ts = manager.acquire_insert_timestamp().expect("insert stamp");
-        let id = insert_with_name(&table, "erin", insert_ts);
-        manager.commit_ordered(insert_ts).expect("commit insert");
-
-        let pending_ts = manager.acquire_insert_timestamp().expect("pending stamp");
-        table
-            .delete_by_internal_id(id, pending_ts)
-            .expect("pending delete");
-        let guard = crate::mvcc_visibility::VisibilityGuard::new(
-            pending_ts,
-            crate::mvcc_visibility::PendingGate::new(&manager, None),
-        );
-
-        let records = table.scan(&guard);
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].internal_id, id);
-
-        let ids = table.live_ids(&guard);
-        assert_eq!(ids, vec![id]);
-
-        let resolved = table
-            .resolve_projected(id, &guard, None)
-            .expect("point read sees pre-delete version");
-        assert_eq!(resolved.internal_id, id);
-
-        manager.commit_ordered(pending_ts).expect("commit delete");
-        let committed = crate::mvcc_visibility::VisibilityGuard::new(
-            pending_ts,
-            crate::mvcc_visibility::PendingGate::new(&manager, None),
-        );
-        assert!(table.scan(&committed).is_empty());
-        assert!(table.live_ids(&committed).is_empty());
     }
 
     #[test]

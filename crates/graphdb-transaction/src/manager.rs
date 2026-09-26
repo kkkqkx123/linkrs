@@ -1470,27 +1470,11 @@ mod tests {
             fn delete_edge(&self, _edge_ctx: EdgeDeletionContext) -> UndoLogResult<()> {
                 Ok(())
             }
-            fn undo_update_vertex_property(
-                &self,
-                _vertex: VertexIdentifier,
-                _col_id: ColumnId,
-                _value: graphdb_core::Value,
-                _ts: crate::Timestamp,
-            ) -> UndoLogResult<()> {
-                Ok(())
-            }
             fn undo_update_edge_property(
                 &self,
                 _edge_id: EdgeIdentifier,
                 _col_id: ColumnId,
                 _value: graphdb_core::Value,
-                _ts: crate::Timestamp,
-            ) -> UndoLogResult<()> {
-                Ok(())
-            }
-            fn revert_delete_vertex(
-                &self,
-                _vertex: VertexIdentifier,
                 _ts: crate::Timestamp,
             ) -> UndoLogResult<()> {
                 Ok(())

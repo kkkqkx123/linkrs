@@ -21,11 +21,10 @@
 //! acquiring the identity latch.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
-use parking_lot::RwLock;
-
+use super::super::vertex_timestamp::IdentityLatch;
 use super::super::{
     primary_key_mirror_value, ColumnStore, IdIndexer, IdKey, LabelId, PkLookup, Timestamp,
     VertexId, VertexRecord, VertexSchema, VertexTimestamp,
@@ -66,7 +65,7 @@ pub struct VertexTable {
     /// table allocate each key exactly once. The data step runs after the
     /// guard is released. `IdIndexer` serializes its own map internally;
     /// this latch orders the map-plus-timestamp pair.
-    pub(super) timestamps: RwLock<VertexTimestamp>,
+    pub(super) timestamps: IdentityLatch,
     pub(super) is_open: AtomicBool,
     /// Cache for property name → index mapping to avoid O(n) schema lookups.
     /// Invalidated whenever schema changes.
@@ -103,7 +102,7 @@ impl VertexTable {
         schema: VertexSchema,
         config: VertexTableConfig,
     ) -> Self {
-        let mut columns = ColumnStore::with_capacity(schema.properties.len());
+        let columns = ColumnStore::with_capacity(schema.properties.len());
 
         for prop in &schema.properties {
             columns.add_column(prop.name.clone(), prop.data_type.clone(), prop.nullable);
@@ -137,7 +136,7 @@ impl VertexTable {
             schema,
             id_indexer: IdIndexer::with_capacity(config.initial_capacity),
             columns,
-            timestamps: RwLock::new(VertexTimestamp::with_capacity(config.initial_capacity)),
+            timestamps: IdentityLatch::new(VertexTimestamp::with_capacity(config.initial_capacity)),
             is_open: AtomicBool::new(true),
             property_index_cache,
             version_history,
@@ -201,42 +200,71 @@ impl VertexTable {
     }
 
     /// Apply one prepared insert: identity step (duplicate check, id
-    /// allocation, timestamp publish) under the identity latch, then the
-    /// data step on the column segments. A data-step failure rolls the
-    /// identity step back so no allocated id escapes.
+    /// allocation or reserved-id binding, timestamp publish) under the
+    /// identity latch, then the data step on the column segments. A
+    /// data-step failure rolls the identity step back so no allocated id
+    /// escapes. `reserved` declares a local id obtained earlier from
+    /// [`Self::reserve_identity`] for this key; the commit binds the key to
+    /// that exact id, and a mismatch with an existing (tombstoned) binding
+    /// is rejected so rows already referenced by other structures cannot
+    /// silently change identity.
     pub fn apply_insert(
         &self,
         key: IdKey,
         converted: &[(String, Value)],
         ts: Timestamp,
+        reserved: Option<u32>,
     ) -> StorageResult<u32> {
         if !self.is_open.load(Ordering::Acquire) {
+            if let Some(id) = reserved {
+                self.id_indexer.release_reserved(id);
+            }
             return Err(StorageError::storage_not_open());
         }
 
         // Identity step: the timestamp write guard is the identity latch.
         let internal_id = {
             let mut stamps = self.timestamps.write();
-            if self.id_indexer.contains(&key) {
-                let internal_id = self
-                    .id_indexer
-                    .get_index(&key)
-                    .ok_or(StorageError::vertex_not_found())?;
-
-                if stamps.is_valid(internal_id, ts) {
-                    return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
+            let identity: StorageResult<u32> =
+                if let Some(existing) = self.id_indexer.get_index(&key) {
+                    if stamps.is_valid(existing, ts) {
+                        Err(StorageError::vertex_already_exists(format!("{:?}", key)))
+                    } else if matches!(reserved, Some(id) if id != existing) {
+                        // Re-insert after deletion reuses the allocated id,
+                        // so a reservation naming a different slot cannot be
+                        // honored: reject rather than silently bind
+                        // elsewhere and mis-link rows already referencing it.
+                        Err(StorageError::vertex_already_exists(format!("{:?}", key)))
+                    } else {
+                        // Re-open the closed lifetime window at `ts`: the
+                        // recycled slot's stamps are overwritten by a plain
+                        // insert (id reuse), not by any delete-revert entry.
+                        stamps.insert(existing, ts);
+                        Ok(existing)
+                    }
+                } else {
+                    let bound = match reserved {
+                        Some(id) => self.id_indexer.register_reserved(key, id).map(|()| id),
+                        None => self.id_indexer.insert(key),
+                    };
+                    bound.map(|internal_id| {
+                        // Fresh bindings publish their creation stamp on the
+                        // same identity latch, exactly like the reuse arm.
+                        stamps.insert(internal_id, ts);
+                        internal_id
+                    })
+                };
+            match identity {
+                Ok(internal_id) => internal_id,
+                Err(error) => {
+                    // A declared reservation is unbound whenever the identity
+                    // step fails: the divergence and duplicate arms never
+                    // bind, and a failed register leaves the slot unbound.
+                    if let Some(id) = reserved {
+                        self.id_indexer.release_reserved(id);
+                    }
+                    return Err(error);
                 }
-
-                // Re-insert after deletion: the vertex id stays allocated, so
-                // re-open its lifetime window at `ts` (revert_remove alone would
-                // require ts <= deletion ts and is only valid for transaction
-                // rollbacks, not for a plain INSERT after DELETE).
-                stamps.insert(internal_id, ts);
-                internal_id
-            } else {
-                let internal_id = self.id_indexer.insert(key)?;
-                stamps.insert(internal_id, ts);
-                internal_id
             }
         };
 
@@ -261,21 +289,6 @@ impl VertexTable {
         self.timestamps.write().invalidate_slot(internal_id);
     }
 
-    /// Scoped lookup forwards to the plain global plus timestamp check.
-    ///
-    /// Staged rows are applied immediately with timestamp ordering, so the
-    /// global check already observes the caller's own writes at its write
-    /// timestamp; outside scopes stay hidden through the pending gate at the
-    /// operation layer. The scope is only read, never retained.
-    pub fn lookup_internal_id_scoped(
-        &self,
-        key: &IdKey,
-        ts: Timestamp,
-        _scope: &super::super::WriteScope,
-    ) -> PkLookup {
-        self.lookup_internal_id(key, ts)
-    }
-
     fn insert_by_key(
         &self,
         key: IdKey,
@@ -283,7 +296,40 @@ impl VertexTable {
         ts: Timestamp,
     ) -> StorageResult<u32> {
         let converted = self.prepare_insert(&key, properties)?;
-        self.apply_insert(key, &converted, ts)
+        self.apply_insert(key, &converted, ts, None)
+    }
+
+    /// Reserve a local id for a not-yet-committed row of this key. A key
+    /// that is already bound (live or tombstoned awaiting GC) reports its
+    /// existing id, matching the reuse semantics of
+    /// [`Self::apply_insert`]; otherwise an unbound slot is taken from the
+    /// id manager. Nothing is visible to lookups, scans, or the delta log
+    /// until the id is registered by the commit apply, and
+    /// [`Self::release_reserved_identity`] returns an unused reservation.
+    pub fn reserve_identity(&self, key: &IdKey) -> StorageResult<u32> {
+        if !self.is_open.load(Ordering::Acquire) {
+            return Err(StorageError::storage_not_open());
+        }
+        Self::validate_key_shape(key)?;
+        if let Some(existing) = self.id_indexer.get_index(key) {
+            return Ok(existing);
+        }
+        self.id_indexer.reserve_next()
+    }
+
+    /// Return a reserved local id to the free stack. A no-op when the id
+    /// was already bound (or is a live row id), so release only has to
+    /// guard against leaking unbound reservations.
+    pub fn release_reserved_identity(&self, internal_id: u32) {
+        self.id_indexer.release_reserved(internal_id);
+    }
+
+    /// Cancel a previous release of a reserved local id: pulls the id back
+    /// out of the id manager's free stack while its slot is still an
+    /// unbound pending release. False means the slot is no longer a
+    /// reclaimable release and the caller must reserve a fresh id.
+    pub fn try_reclaim_reserved_identity(&self, internal_id: u32) -> bool {
+        self.id_indexer.try_reclaim(internal_id)
     }
 
     fn validate_key_shape(key: &IdKey) -> StorageResult<()> {
@@ -303,17 +349,6 @@ impl VertexTable {
         }
     }
 
-    /// Read-lock duplicate probe for the insert fast path: whether `key`
-    /// already names a row visible at `ts`. A hit lets the sharded insert
-    /// return the duplicate error without an exclusive section; misses and
-    /// timestamp-deleted keys still go through the write-locked atomic
-    /// path, which rechecks before allocating.
-    pub(crate) fn is_duplicate(&self, key: &IdKey, ts: Timestamp) -> bool {
-        self.id_indexer
-            .get_index(key)
-            .is_some_and(|id| self.timestamps.read().is_valid(id, ts))
-    }
-
     /// Visibility-aware primary-key lookup. Collapses the old `get_index`
     /// plus timestamp-recheck pair into one call so cursor layers need no
     /// secondary filtering.
@@ -322,8 +357,7 @@ impl VertexTable {
             return PkLookup::Missing;
         }
         let stamps = self.timestamps.read();
-        self.id_indexer
-            .lookup(key, |id| stamps.is_valid(id, ts))
+        self.id_indexer.lookup(key, |id| stamps.is_valid(id, ts))
     }
 
     /// Enforce the primary key mirror invariant on one write.
@@ -370,12 +404,12 @@ impl VertexTable {
         Some((create_ts, stamps.get_end_ts(internal_id)))
     }
 
-    /// Per-column covering version stamps for pending-aware rechecks.
+    /// Per-column covering version stamps for cache fences.
     ///
     /// Companion of the column values read by
-    /// [`VertexTable::get_projected_by_internal_id`]: when any covering stamp
-    /// belongs to a foreign uncommitted write the caller re-reads at
-    /// `stamp - 1`.
+    /// [`VertexTable::get_projected_by_internal_id`]: the caller seeds the
+    /// record cache with these stamps and revalidates a hit by comparing
+    /// them against live storage.
     pub fn row_picked_starts(&self, internal_id: u32, ts: Timestamp) -> Vec<Timestamp> {
         self.columns.picked_starts_at(internal_id as usize, ts)
     }
@@ -394,15 +428,6 @@ impl VertexTable {
             .into_iter()
             .filter(|&id| stamps.is_valid(id, ts))
             .collect()
-    }
-
-    /// Timestamp-deleted slot ids at `ts`, in allocation order.
-    ///
-    /// Plain predicate only, no pending awareness. Guarded shard scans union
-    /// this with the live enumeration so rows hidden by a foreign pending
-    /// delete are recovered through the resolution funnel instead of lost.
-    pub(crate) fn deleted_ids_at(&self, ts: Timestamp) -> Vec<u32> {
-        self.timestamps.read().iter_deleted(ts).collect()
     }
 
     /// Batch variant of [`get_projected_by_internal_id`].
@@ -535,21 +560,11 @@ impl VertexTable {
         })
     }
 
-    pub fn update_property(
-        &self,
-        internal_id: u32,
-        col_name: &str,
-        value: &Value,
-        ts: Timestamp,
-    ) -> StorageResult<()> {
-        if !self.is_open.load(Ordering::Acquire) {
-            return Err(StorageError::storage_not_open());
-        }
-
-        if !self.timestamps.read().is_valid(internal_id, ts) {
-            return Err(StorageError::vertex_not_found());
-        }
-
+    /// Read-only validation and normalization for one property update:
+    /// primary-key mirror rejection, column existence and type checks.
+    /// Staging paths call this before buffering so an invalid column fails
+    /// with no global write.
+    pub fn prepare_update(&self, col_name: &str, value: &Value) -> StorageResult<Value> {
         if self
             .schema
             .properties
@@ -569,25 +584,17 @@ impl VertexTable {
             .ok_or_else(|| StorageError::column_not_found(col_name.to_string()))?;
         let prop_def = &self.schema.properties[*prop_idx];
 
-        let converted_value = if value.data_type() != prop_def.data_type {
-            value.try_cast_to(&prop_def.data_type)?
+        if value.data_type() != prop_def.data_type {
+            value.try_cast_to(&prop_def.data_type)
         } else {
-            value.clone()
-        };
-
-        self.columns.set_property_versioned(
-            internal_id as usize,
-            col_name,
-            Some(&converted_value),
-            ts,
-        )?;
-        Ok(())
+            Ok(value.clone())
+        }
     }
 
-    pub fn update_property_by_id(
+    pub fn update_property(
         &self,
         internal_id: u32,
-        col_id: i32,
+        col_name: &str,
         value: &Value,
         ts: Timestamp,
     ) -> StorageResult<()> {
@@ -599,45 +606,42 @@ impl VertexTable {
             return Err(StorageError::vertex_not_found());
         }
 
-        if let Some(col) = self.columns.get_column_by_id(col_id) {
-            if self
-                .schema
-                .properties
-                .get(self.schema.primary_key_index)
-                .is_some_and(|pk| pk.name == col.name)
-            {
-                return Err(StorageError::invalid_operation(format!(
-                    "Primary key column '{}' mirrors the vertex id and cannot be updated; delete and re-insert the vertex instead",
-                    col.name
-                )));
+        // The primary key column mirrors the row's own key: restating the
+        // mirror changes nothing and is a no-op (a delete-then-insert folded
+        // into a whole-row update always carries it), while a divergent
+        // value would fork the key from its mirror and is rejected.
+        if let Some(pk_def) = self.schema.properties.get(self.schema.primary_key_index) {
+            if pk_def.name == col_name {
+                let key = self
+                    .id_indexer
+                    .get_key(internal_id)
+                    .ok_or_else(StorageError::vertex_not_found)?;
+                let mirror = primary_key_mirror_value(&pk_def.data_type, &key)?
+                    .try_cast_to(&pk_def.data_type)?;
+                let provided = value.try_cast_to(&pk_def.data_type)?;
+                if provided != mirror {
+                    return Err(StorageError::invalid_operation(format!(
+                        "Primary key column '{}' must mirror the vertex id: got {:?}, expected {:?}",
+                        col_name, provided, mirror
+                    )));
+                }
+                return Ok(());
             }
         }
 
-        let col = self
-            .columns
-            .get_column_by_id(col_id)
-            .ok_or_else(|| StorageError::column_not_found(format!("col_id={}", col_id)))?;
+        let converted_value = self.prepare_update(col_name, value)?;
 
-        let converted_value = if value.data_type() != col.data_type {
-            value.try_cast_to(&col.data_type)?
-        } else {
-            value.clone()
-        };
-
-        let col = self
-            .columns
-            .get_column_by_id(col_id)
-            .ok_or_else(|| StorageError::column_not_found(format!("col_id={}", col_id)))?;
-        col.set_versioned(internal_id as usize, Some(&converted_value), ts)?;
+        self.columns.set_property_versioned(
+            internal_id as usize,
+            col_name,
+            Some(&converted_value),
+            ts,
+        )?;
         Ok(())
     }
 
     pub fn delete(&self, external_id: &str, ts: Timestamp) -> StorageResult<()> {
         self.delete_by_key(&IdKey::Text(external_id.to_string()), ts)
-    }
-
-    pub fn delete_by_i64(&self, external_id: i64, ts: Timestamp) -> StorageResult<()> {
-        self.delete_by_key(&IdKey::Int(external_id), ts)
     }
 
     fn delete_by_key(&self, key: &IdKey, ts: Timestamp) -> StorageResult<()> {
@@ -675,20 +679,6 @@ impl VertexTable {
         self.apply_delete(internal_id, ts)
     }
 
-    pub fn revert_delete(&self, internal_id: u32, ts: Timestamp) -> StorageResult<()> {
-        if !self.is_open.load(Ordering::Acquire) {
-            return Err(StorageError::storage_not_open());
-        }
-
-        if !self.timestamps.write().revert_remove(internal_id, ts) {
-            return Err(StorageError::invalid_operation(format!(
-                "Cannot revert deletion of vertex {}: invalid timestamp",
-                internal_id
-            )));
-        }
-        Ok(())
-    }
-
     /// Batch delete multiple vertices by external ID.
     /// Returns count of successfully deleted vertices.
     pub fn batch_delete(&self, external_ids: &[&str], ts: Timestamp) -> StorageResult<usize> {
@@ -716,11 +706,7 @@ impl VertexTable {
 
     /// Batch delete multiple vertices by i64 external ID.
     /// Returns count of successfully deleted vertices.
-    pub fn batch_delete_i64(
-        &self,
-        external_ids: &[i64],
-        ts: Timestamp,
-    ) -> StorageResult<usize> {
+    pub fn batch_delete_i64(&self, external_ids: &[i64], ts: Timestamp) -> StorageResult<usize> {
         if !self.is_open.load(Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
         }

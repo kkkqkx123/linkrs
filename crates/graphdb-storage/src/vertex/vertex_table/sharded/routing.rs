@@ -11,6 +11,9 @@ pub(super) const MAX_SHARDS: usize = 256;
 /// their manifest instead of this constant.
 pub const DEFAULT_SEGMENT_SLOTS_BITS: u32 = 14;
 
+/// Width in bits of the global internal ID space.
+const GLOBAL_ID_BITS: u32 = 32;
+
 /// Versioned shard layout pinning the parameters of the global internal ID
 /// encoding. Persisted in the table manifest and loaded at open; the
 /// encode/decode arithmetic takes its parameters from here, never from
@@ -21,15 +24,21 @@ pub struct ShardLayout {
     pub num_shards: usize,
     /// Base-2 logarithm of the slots per ID segment.
     pub segment_slots_bits: u32,
+    /// Total segments addressable by global IDs under this layout: the ID
+    /// bits above the slot field. Persisted (not re-derived) so future
+    /// layouts can evolve the ID width without silently re-deriving it.
+    pub total_segments: u32,
 }
 
 impl ShardLayout {
     /// Layout for a new table: shard count clamped to the supported range
     /// and rounded to a power of two, default segment width.
     pub fn for_new_table(num_shards: usize) -> Self {
+        let segment_slots_bits = DEFAULT_SEGMENT_SLOTS_BITS;
         Self {
             num_shards: num_shards.clamp(1, MAX_SHARDS).next_power_of_two(),
-            segment_slots_bits: DEFAULT_SEGMENT_SLOTS_BITS,
+            segment_slots_bits,
+            total_segments: 1u32 << (GLOBAL_ID_BITS - segment_slots_bits),
         }
     }
 
@@ -41,6 +50,17 @@ impl ShardLayout {
     /// Slot mask within one segment.
     pub fn segment_slots_mask(&self) -> u32 {
         self.segment_slots() - 1
+    }
+
+    /// Whether the persisted parameters describe one coherent ID encoding:
+    /// a slot width inside the ID space and a segment total matching the
+    /// bits the encoding actually addresses.
+    pub fn is_consistent(&self) -> bool {
+        self.segment_slots_bits >= 1
+            && self.segment_slots_bits < GLOBAL_ID_BITS
+            && self.total_segments == 1u32 << (GLOBAL_ID_BITS - self.segment_slots_bits)
+            && self.num_shards.is_power_of_two()
+            && self.num_shards <= MAX_SHARDS
     }
 }
 
@@ -68,15 +88,13 @@ pub(super) fn default_num_shards() -> usize {
 // of the previous shard-in-low-bits encoding. K=14 (16384 slots) trades a
 // slightly larger ID tail for fewer segments and lower fragmentation rate;
 // combined with lazy ID recycling, the effective reclaimed space stays high.
-pub(super) const SEGMENT_SLOTS_BITS: u32 = 14;
-pub(super) const SEGMENT_SLOTS: u32 = 1 << SEGMENT_SLOTS_BITS;
-pub(super) const SEGMENT_SLOTS_MASK: u32 = SEGMENT_SLOTS - 1;
-
 pub(super) fn encode_id(shard: usize, local_id: u32, layout: ShardLayout) -> u32 {
     debug_assert!(shard < layout.num_shards);
-    debug_assert!(local_id <= u32::MAX / layout.num_shards as u32);
-    let segment =
-        shard as u32 + (local_id >> layout.segment_slots_bits) * layout.num_shards as u32;
+    let segment = shard as u32 + (local_id >> layout.segment_slots_bits) * layout.num_shards as u32;
+    debug_assert!(
+        segment < layout.total_segments,
+        "local_id {local_id} in shard {shard} exceeds the segment address space"
+    );
     (segment << layout.segment_slots_bits) | (local_id & layout.segment_slots_mask())
 }
 

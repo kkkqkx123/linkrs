@@ -48,13 +48,20 @@ impl GraphStorageContext {
         }
 
         // ID-index hits are mapping-revalidated; the record itself is
-        // pending-aware through `read_record`.
+        // pending-aware through `read_record`. A key with no internal id can
+        // still be a staged insert of this transaction.
         let internal_id = self.persistent.data_store.with_vertex_tables(|tables| {
             let table = tables.get(&label)?;
             self.resolve_internal_id_rechecked(table, label, ExternalRef::Str(external_id), ts)
-        })?;
-
-        self.read_record(label, internal_id, Some(projection), ts)
+        });
+        match internal_id {
+            Some(internal_id) => self.read_record(label, internal_id, Some(projection), ts),
+            None => self.staged_insert_record(
+                label,
+                &crate::vertex::IdKey::Text(external_id.to_string()),
+                Some(projection),
+            ),
+        }
     }
 
     pub fn get_vertex_by_i64_projected(
@@ -73,9 +80,15 @@ impl GraphStorageContext {
         let internal_id = self.persistent.data_store.with_vertex_tables(|tables| {
             let table = tables.get(&label)?;
             self.resolve_internal_id_rechecked(table, label, ExternalRef::I64(external_id), ts)
-        })?;
-
-        self.read_record(label, internal_id, Some(projection), ts)
+        });
+        match internal_id {
+            Some(internal_id) => self.read_record(label, internal_id, Some(projection), ts),
+            None => self.staged_insert_record(
+                label,
+                &crate::vertex::IdKey::Int(external_id),
+                Some(projection),
+            ),
+        }
     }
 
     pub fn get_vertex_by_i64(
@@ -137,40 +150,5 @@ impl GraphStorageContext {
                     crate::vertex::IdKey::Text(s) => VertexId::try_from_string(&s).ok(),
                 }
             })
-    }
-
-    /// Scoped primary-key probe: the caller's buffer wins, otherwise the
-    /// global committed area. Outside scopes never observe the buffer, so
-    /// uncommitted keys stay invisible off-scope while the owning scope reads
-    /// its own writes.
-    pub fn lookup_pk_scoped(
-        &self,
-        label: LabelId,
-        external_id: &str,
-        ts: Timestamp,
-        scope: &crate::vertex::WriteScope,
-    ) -> crate::vertex::PkLookup {
-        self.persistent.data_store.with_vertex_tables(|tables| {
-            tables
-                .get(&label)
-                .map(|table| table.lookup_pk_with_scope(external_id, ts, scope))
-                .unwrap_or(crate::vertex::PkLookup::Missing)
-        })
-    }
-
-    /// Integer-keyed scoped probe. Same contract as [`Self::lookup_pk_scoped`].
-    pub fn lookup_pk_by_i64_scoped(
-        &self,
-        label: LabelId,
-        external_id: i64,
-        ts: Timestamp,
-        scope: &crate::vertex::WriteScope,
-    ) -> crate::vertex::PkLookup {
-        self.persistent.data_store.with_vertex_tables(|tables| {
-            tables
-                .get(&label)
-                .map(|table| table.lookup_pk_by_i64_with_scope(external_id, ts, scope))
-                .unwrap_or(crate::vertex::PkLookup::Missing)
-        })
     }
 }

@@ -7,8 +7,7 @@ use graphdb_core::types::{ColumnId, LabelId, Timestamp, VertexId};
 use graphdb_core::StorageError;
 
 pub use crate::undo_log::{
-    CreateEdgeTypeUndo, CreateVertexTypeUndo, InsertEdgeUndo, InsertVertexUndo, RelatedEdgeInfo,
-    RemoveEdgeUndo, RemoveVertexUndo, UpdateEdgePropUndo, UpdateVertexPropUndo,
+    CreateEdgeTypeUndo, CreateVertexTypeUndo, InsertEdgeUndo, RemoveEdgeUndo, UpdateEdgePropUndo,
 };
 
 /// Undo log context trait
@@ -76,13 +75,6 @@ pub struct CreateUpdateEdgePropUndoParams {
     pub old_value: graphdb_core::Value,
 }
 
-/// Parameters for create_remove_vertex_undo operation
-pub struct CreateRemoveVertexUndoParams {
-    pub label: LabelId,
-    pub vid: u64,
-    pub related_edges: Vec<(LabelId, LabelId, LabelId, Vec<RelatedEdgeInfo>)>,
-}
-
 /// Parameters for create_remove_edge_undo operation
 pub struct CreateRemoveEdgeUndoParams {
     pub src_label: LabelId,
@@ -94,28 +86,6 @@ pub struct CreateRemoveEdgeUndoParams {
 }
 
 impl RollbackHelper {
-    /// Reserved for future use: insert vertex undo creation
-    pub fn create_insert_vertex_undo(label: LabelId, vid: u64) -> UndoLogEntry {
-        UndoLogEntry::InsertVertex(InsertVertexUndo {
-            v_label: label,
-            vid: VertexId::from_u64(vid),
-        })
-    }
-
-    pub fn create_update_vertex_prop_undo(
-        label: LabelId,
-        vid: u64,
-        col_id: ColumnId,
-        old_value: graphdb_core::Value,
-    ) -> UndoLogEntry {
-        UndoLogEntry::UpdateVertexProp(UpdateVertexPropUndo {
-            v_label: label,
-            vid: VertexId::from_u64(vid),
-            col_id,
-            old_value,
-        })
-    }
-
     pub fn create_update_edge_prop_undo(params: CreateUpdateEdgePropUndoParams) -> UndoLogEntry {
         UndoLogEntry::UpdateEdgeProp(UpdateEdgePropUndo {
             src_label: params.src_label,
@@ -126,14 +96,6 @@ impl RollbackHelper {
             rank: params.rank,
             col_id: params.col_id,
             old_value: params.old_value,
-        })
-    }
-
-    pub fn create_remove_vertex_undo(params: CreateRemoveVertexUndoParams) -> UndoLogEntry {
-        UndoLogEntry::RemoveVertex(RemoveVertexUndo {
-            v_label: params.label,
-            vid: VertexId::from_u64(params.vid),
-            related_edges: params.related_edges,
         })
     }
 
@@ -211,7 +173,16 @@ mod tests {
         assert_eq!(ctx.logs.borrow().len(), 0);
         ctx.logs
             .borrow_mut()
-            .add(RollbackHelper::create_insert_vertex_undo(1, 100))
+            .add(RollbackHelper::create_remove_edge_undo(
+                CreateRemoveEdgeUndoParams {
+                    src_label: 1,
+                    src_vid: 100,
+                    dst_label: 2,
+                    dst_vid: 200,
+                    edge_label: 3,
+                    rank: 0,
+                },
+            ))
             .expect("Failed to append undo log");
         assert_eq!(ctx.logs.borrow().len(), 1);
 
@@ -221,9 +192,6 @@ mod tests {
 
     #[test]
     fn test_rollback_helper() {
-        let undo = RollbackHelper::create_insert_vertex_undo(1, 100);
-        assert!(undo.description().contains("InsertVertexUndo"));
-
         let undo = RollbackHelper::create_remove_edge_undo(CreateRemoveEdgeUndoParams {
             src_label: 1,
             src_vid: 100,
@@ -234,12 +202,16 @@ mod tests {
         });
         assert!(undo.description().contains("RemoveEdgeUndo"));
 
-        let undo = RollbackHelper::create_update_vertex_prop_undo(
-            1,
-            100,
-            ColumnId(0),
-            graphdb_core::Value::BigInt(42),
-        );
-        assert!(undo.description().contains("UpdateVertexPropUndo"));
+        let undo = RollbackHelper::create_update_edge_prop_undo(CreateUpdateEdgePropUndoParams {
+            src_label: 1,
+            src_vid: 100,
+            dst_label: 2,
+            dst_vid: 200,
+            edge_label: 3,
+            rank: 0,
+            col_id: ColumnId(0),
+            old_value: graphdb_core::Value::BigInt(42),
+        });
+        assert!(undo.description().contains("UpdateEdgePropUndo"));
     }
 }

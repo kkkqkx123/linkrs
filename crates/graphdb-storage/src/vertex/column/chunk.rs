@@ -21,6 +21,8 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use bitvec::order::Lsb0;
+use bitvec::vec::BitVec;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::encoding::{ChunkEncodingMeta, ColumnEncoding, EncodingType};
@@ -29,6 +31,7 @@ use crate::vertex::column::chunk_residency::{next_tick, ChunkResidency};
 use crate::vertex::column::column::ColumnInner;
 use crate::vertex::column::mvcc::{RowVisibility, VersionEntry};
 use crate::vertex::column::overflow::OverflowHandle;
+use crate::vertex::latch_order::{Guard, RANK_SEGMENT};
 use graphdb_core::{DataType, Value};
 
 // ---------------------------------------------------------------------------
@@ -145,14 +148,22 @@ impl ColumnChunk {
 
     /// Shared payload access.
     #[inline]
-    pub fn read_state(&self) -> RwLockReadGuard<'_, ChunkState> {
-        self.state.read()
+    pub fn read_state(&self) -> Guard<RwLockReadGuard<'_, ChunkState>> {
+        Guard::claim(
+            self.state.read(),
+            RANK_SEGMENT,
+            "column segment latch (read)",
+        )
     }
 
     /// Exclusive payload access.
     #[inline]
-    pub fn write_state(&self) -> RwLockWriteGuard<'_, ChunkState> {
-        self.state.write()
+    pub fn write_state(&self) -> Guard<RwLockWriteGuard<'_, ChunkState>> {
+        Guard::claim(
+            self.state.write(),
+            RANK_SEGMENT,
+            "column segment latch (write)",
+        )
     }
 
     /// Stamp recency for eviction ordering. Lock-free so shared-reference
@@ -171,8 +182,10 @@ impl ColumnChunk {
     }
 
     /// Whether this chunk may be evicted: resident, encoded, with no
-    /// unmerged overlay writes and no live version-chain entries. Raw and
-    /// dirty-overlay chunks stay resident.
+    /// unmerged overlay writes and no live version-chain entries. Raw chunks
+    /// stay resident until the flush encoding pass decides their scheme, so
+    /// eviction never preempts encoding and promotion restores the encoded
+    /// form directly.
     pub fn is_evictable(&self) -> bool {
         let state = self.read_state();
         matches!(state.residency, ChunkResidency::Resident)
@@ -233,13 +246,6 @@ impl ColumnChunk {
         state.updates_since_encode = state
             .updates_since_encode
             .max(state.overlay.capacity() as u64);
-    }
-
-    /// Drop the overlay after a successful flush and reset the hot counter.
-    pub fn clear_overlay_after_flush(&self) {
-        let mut state = self.write_state();
-        state.overlay.clear();
-        state.updates_since_encode = 0;
     }
 
     /// Whether this chunk should be re-encoded on the next flush.
@@ -317,6 +323,9 @@ impl std::fmt::Debug for ColumnChunk {
 
 /// Chunk-consistent flush descriptor: window plus cloned payload metadata
 /// for persistence serialization, taken under one segment read latch.
+/// Raw chunks carry their owned buffers (`raw_form` with data, offsets and
+/// null bitmap); encoded chunks carry the encoding instead and leave the
+/// raw fields empty.
 #[derive(Debug, Clone)]
 pub struct ChunkFlushView {
     pub row_offset: usize,
@@ -324,6 +333,10 @@ pub struct ChunkFlushView {
     pub encoding_meta: ChunkEncodingMeta,
     pub encoding: ColumnEncoding,
     pub overlay: Vec<(u32, Option<Value>)>,
+    pub raw_form: bool,
+    pub raw_data: Vec<u8>,
+    pub raw_offsets: Vec<u64>,
+    pub raw_bitmap: Option<BitVec<u8, Lsb0>>,
 }
 
 #[cfg(test)]
@@ -337,7 +350,10 @@ mod tests {
         assert_eq!(chunk.row_count, 100);
         assert_eq!(chunk.read_state().raw.as_storage().len(), 100);
         // Fresh fixed buffers are zero-filled and non-null.
-        assert_eq!(chunk.read_state().raw.as_storage().get(0), Some(Value::Int(0)));
+        assert_eq!(
+            chunk.read_state().raw.as_storage().get(0),
+            Some(Value::Int(0))
+        );
     }
 
     #[test]

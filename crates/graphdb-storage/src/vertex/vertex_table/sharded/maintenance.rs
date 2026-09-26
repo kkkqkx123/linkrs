@@ -184,7 +184,7 @@ impl ShardedVertexTable {
             if freed >= max_bytes {
                 break;
             }
-            let mut table = shard.write();
+            let table = shard.write();
             let (n, bytes) = table
                 .columns
                 .evict_cold_chunks(max_bytes.saturating_sub(freed));
@@ -214,7 +214,7 @@ impl ShardedVertexTable {
             if freed >= max_bytes {
                 break;
             }
-            let mut table = shard.write();
+            let table = shard.write();
             let (n, bytes, segs) = table
                 .columns
                 .evict_cold_chunks_with_quota(max_bytes.saturating_sub(freed), task_quota);
@@ -274,13 +274,5 @@ impl ShardedVertexTable {
             total += shard.read().used_memory_size();
         }
         total
-    }
-
-    #[allow(dead_code)]
-    pub fn active_snapshot_count(&self) -> usize {
-        // Snapshots are global to VersionManager; tables never pin.
-        // Always zero by design. Use the GC coordinator diagnostics
-        // active count for the pass-wide value.
-        0
     }
 }

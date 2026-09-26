@@ -828,18 +828,6 @@ impl graphdb_transaction::UndoTarget for GraphStorage {
         graphdb_core::types::UndoTarget::restore_edge(&*self.ctx, edge, properties, ts)
     }
 
-    fn undo_update_vertex_property(
-        &self,
-        vertex: graphdb_core::types::VertexIdentifier,
-        col_id: graphdb_core::types::ColumnId,
-        value: graphdb_core::Value,
-        ts: graphdb_transaction::wal::Timestamp,
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_core::types::UndoTarget::undo_update_vertex_property(
-            &*self.ctx, vertex, col_id, value, ts,
-        )
-    }
-
     fn undo_update_edge_property(
         &self,
         edge_id: graphdb_core::types::EdgeIdentifier,
@@ -850,14 +838,6 @@ impl graphdb_transaction::UndoTarget for GraphStorage {
         graphdb_core::types::UndoTarget::undo_update_edge_property(
             &*self.ctx, edge_id, col_id, value, ts,
         )
-    }
-
-    fn revert_delete_vertex(
-        &self,
-        vertex: graphdb_core::types::VertexIdentifier,
-        ts: graphdb_transaction::wal::Timestamp,
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_core::types::UndoTarget::revert_delete_vertex(&*self.ctx, vertex, ts)
     }
 
     fn revert_delete_edge(

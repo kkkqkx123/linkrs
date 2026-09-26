@@ -442,7 +442,8 @@ impl Column {
     pub fn rebuild_zone_maps_exact(&self) {
         self.zone.write().maps.clear();
         self.zone.write().complex.clear();
-        self.zone_stale_writes.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.zone_stale_writes
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         let total = self.len();
         for row_idx in 0..total {
             let value = self.get(row_idx);
@@ -456,7 +457,8 @@ impl Column {
 
     /// Whether accumulated versioned writes make an exact rebuild worthwhile.
     pub fn zone_needs_exact_rebuild(&self) -> bool {
-        self.zone_stale_writes.load(std::sync::atomic::Ordering::Relaxed)
+        self.zone_stale_writes
+            .load(std::sync::atomic::Ordering::Relaxed)
             >= ZONE_STALE_REBUILD_THRESHOLD
     }
 

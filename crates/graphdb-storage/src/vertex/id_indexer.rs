@@ -245,27 +245,28 @@ impl IdManager {
         if self.key_to_id.contains_key(&key) {
             return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
         }
+        let id = self.take_next_id()?;
+        self.bind_slot(key, id);
+        Ok(id)
+    }
 
+    /// Acquire an unbound local id, preferring a deleted slot from the free
+    /// stack and growing the high-water mark otherwise. The slot stays
+    /// unbound (`keys` reports `None`) for the caller to bind later or
+    /// return through [`Self::release_reserved`].
+    fn take_next_id(&mut self) -> StorageResult<u32> {
         // Lazy ID reuse: recycle a deleted slot before growing the id space.
         if let Some(recycled) = self.free_ids.pop() {
             let idx = recycled as usize;
-            // Ensure keys vector is large enough (should be, since recycled
-            // came from a previous hole within the vector).
-            if idx < self.keys.len() {
-                debug_assert!(self.keys[idx].is_none());
-                self.keys[idx] = Some(key.clone());
-            } else {
-                // Fallback: extend if recycled idx is at tail (rare after
-                // deserialize rebuilding).
+            if idx >= self.keys.len() {
+                // Recycled idx at the tail (rare after deserialize
+                // rebuilding): extend so the slot exists unbound.
                 while self.keys.len() <= idx {
                     self.keys.push(None);
                 }
-                self.keys[idx] = Some(key.clone());
+            } else {
+                debug_assert!(self.keys[idx].is_none());
             }
-            self.key_to_id.insert(key.clone(), recycled);
-            self.live_ids.insert(recycled);
-            self.delta_log
-                .push(IndexDelta::Insert { key, id: recycled });
             return Ok(recycled);
         }
 
@@ -286,12 +287,71 @@ impl IdManager {
         }
 
         let index = self.keys.len() as u32;
-        self.keys.push(Some(key.clone()));
-        self.key_to_id.insert(key.clone(), index);
-        self.live_ids.insert(index);
-        self.delta_log.push(IndexDelta::Insert { key, id: index });
-
+        self.keys.push(None);
         Ok(index)
+    }
+
+    /// Bind a key to a slot obtained from [`Self::take_next_id`], recording
+    /// the committed-insert delta entry.
+    fn bind_slot(&mut self, key: IdKey, id: u32) {
+        self.keys[id as usize] = Some(key.clone());
+        self.key_to_id.insert(key.clone(), id);
+        self.live_ids.insert(id);
+        self.delta_log.push(IndexDelta::Insert { key, id });
+    }
+
+    /// Reserve a local id for a not-yet-committed row without binding any
+    /// external key: nothing is visible to lookups, `live_ids`, or the delta
+    /// log until [`Self::register_reserved`] binds the key at commit apply.
+    pub fn reserve_next(&mut self) -> StorageResult<u32> {
+        self.take_next_id()
+    }
+
+    /// Bind an external key to a previously reserved id at commit apply.
+    /// Fails when the key is already bound or the id is not a currently
+    /// unbound slot, so a stale or foreign reservation cannot clobber live
+    /// mappings.
+    pub fn register_reserved(&mut self, key: IdKey, id: u32) -> StorageResult<()> {
+        validate_key_shape(&key)?;
+        if self.key_to_id.contains_key(&key) {
+            return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
+        }
+        if !matches!(self.keys.get(id as usize), Some(None)) {
+            return Err(StorageError::invalid_operation(format!(
+                "reserved id {id} does not name an unbound slot"
+            )));
+        }
+        self.bind_slot(key, id);
+        Ok(())
+    }
+
+    /// Return an unbound reserved id to the free stack. Bound ids are a
+    /// no-op, making release safe to call on slots whose reservation was
+    /// already consumed by a bind; releasing a double reservation would
+    /// only add a duplicate free-stack entry the next pop turns into a
+    /// no-op bind conflict, so callers keep single ownership.
+    pub fn release_reserved(&mut self, id: u32) {
+        if matches!(self.keys.get(id as usize), Some(None)) {
+            self.free_ids.push(id);
+        }
+    }
+
+    /// Cancel a previous release: pull the id back out of the free stack
+    /// while its slot is still unbound. Only frees-and-reclaims a still
+    /// pending release; any other unbound state (another row's live
+    /// reservation or a never-released hole) reports false and the caller
+    /// must reserve a fresh id instead.
+    pub fn try_reclaim(&mut self, id: u32) -> bool {
+        if !matches!(self.keys.get(id as usize), Some(None)) {
+            return false;
+        }
+        match self.free_ids.iter().rposition(|free| *free == id) {
+            Some(pos) => {
+                self.free_ids.swap_remove(pos);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Visibility-aware lookup: the global committed area gated by the
@@ -310,10 +370,6 @@ impl IdManager {
 
     pub fn get_key(&self, index: u32) -> Option<IdKey> {
         self.keys.get(index as usize)?.as_ref().cloned()
-    }
-
-    pub fn contains(&self, key: &IdKey) -> bool {
-        self.key_to_id.contains_key(key)
     }
 
     pub fn len(&self) -> usize {
@@ -757,6 +813,30 @@ impl IdIndexer {
         manager.insert(key)
     }
 
+    /// Reserve a local id without binding a key (see
+    /// [`IdManager::reserve_next`]).
+    pub fn reserve_next(&self) -> StorageResult<u32> {
+        self.manager.lock().reserve_next()
+    }
+
+    /// Bind a key to a reserved id at commit apply (see
+    /// [`IdManager::register_reserved`]).
+    pub fn register_reserved(&self, key: IdKey, id: u32) -> StorageResult<()> {
+        self.manager.lock().register_reserved(key, id)
+    }
+
+    /// Return an unbound reserved id to the free stack (see
+    /// [`IdManager::release_reserved`]).
+    pub fn release_reserved(&self, id: u32) {
+        self.manager.lock().release_reserved(id);
+    }
+
+    /// Claim back a released reservation whose slot is still unbound (see
+    /// [`IdManager::try_reclaim`]).
+    pub fn try_reclaim(&self, id: u32) -> bool {
+        self.manager.lock().try_reclaim(id)
+    }
+
     /// Pre-allocate capacity for `additional` more entries.
     /// Call before batch inserts to avoid repeated rehashing.
     pub fn reserve(&self, additional: usize) {
@@ -772,11 +852,6 @@ impl IdIndexer {
     pub fn get_key(&self, index: u32) -> Option<IdKey> {
         let manager = self.manager.lock();
         manager.get_key(index)
-    }
-
-    pub fn contains(&self, key: &IdKey) -> bool {
-        let manager = self.manager.lock();
-        manager.contains(key)
     }
 
     pub fn len(&self) -> usize {
@@ -1376,5 +1451,80 @@ mod tests {
             indexer.insert(IdKey::Int(i)).unwrap();
         }
         assert!(indexer.should_anchor_baseline());
+    }
+
+    #[test]
+    fn test_reserve_is_invisible_until_registered() {
+        let indexer = IdIndexer::new();
+        let id = indexer.reserve_next().unwrap();
+        assert_eq!(id, 0);
+        assert_eq!(indexer.len(), 0);
+        assert!(indexer.live_ids().is_empty());
+        assert_eq!(indexer.delta_len(), 0);
+        assert_eq!(indexer.get_key(id), None);
+        // The high-water mark grows so concurrent inserts skip the slot.
+        let other = indexer.insert(IdKey::Int(7)).unwrap();
+        assert_eq!(other, 1);
+        indexer.register_reserved(IdKey::Int(7), 0).unwrap_err();
+        indexer.register_reserved(IdKey::Int(5), id).unwrap();
+        assert_eq!(indexer.get_index(&IdKey::Int(5)), Some(0));
+        assert_eq!(indexer.live_ids(), vec![0, 1]);
+        assert_eq!(indexer.delta_len(), 2);
+    }
+
+    #[test]
+    fn test_reserve_reuses_free_stack_hole() {
+        let indexer = IdIndexer::new();
+        indexer.insert(IdKey::Int(0)).unwrap();
+        let hole = indexer.insert(IdKey::Int(1)).unwrap();
+        indexer.remove(&IdKey::Int(1));
+        let reserved = indexer.reserve_next().unwrap();
+        assert_eq!(reserved, hole);
+        indexer.register_reserved(IdKey::Int(2), reserved).unwrap();
+        assert_eq!(indexer.get_index(&IdKey::Int(2)), Some(hole));
+    }
+
+    #[test]
+    fn test_register_reserved_rejects_bound_or_foreign_slot() {
+        let indexer = IdIndexer::new();
+        let bound = indexer.insert(IdKey::Int(0)).unwrap();
+        assert!(indexer.register_reserved(IdKey::Int(9), bound).is_err());
+        assert!(indexer.register_reserved(IdKey::Int(0), 4).is_err());
+        // A key already bound cannot claim any slot.
+        let free = indexer.reserve_next().unwrap();
+        assert!(indexer.register_reserved(IdKey::Int(0), free).is_err());
+        assert_eq!(indexer.get_key(free), None);
+    }
+
+    #[test]
+    fn test_release_reserved_returns_only_unbound_slots() {
+        let indexer = IdIndexer::new();
+        let reserved = indexer.reserve_next().unwrap();
+        let bound = indexer.insert(IdKey::Int(1)).unwrap();
+        // Releasing a bound id is a no-op; releasing the reservation frees it.
+        indexer.release_reserved(bound);
+        indexer.release_reserved(reserved);
+        let reused = indexer.reserve_next().unwrap();
+        assert_eq!(reused, reserved);
+    }
+
+    #[test]
+    fn test_try_reclaim_cancels_a_release() {
+        let indexer = IdIndexer::new();
+        let reserved = indexer.reserve_next().unwrap();
+        indexer.release_reserved(reserved);
+        assert!(indexer.try_reclaim(reserved));
+        // Reclaimed: the slot is held out of the free stack again, so the
+        // next reservation grows elsewhere.
+        let fresh = indexer.reserve_next().unwrap();
+        assert_ne!(fresh, reserved);
+        // A bound slot cannot be reclaimed.
+        let bound = indexer.insert(IdKey::Int(1)).unwrap();
+        assert!(!indexer.try_reclaim(bound));
+        // An unbound slot that was never released reclaims as a no-op.
+        let hole = indexer.reserve_next().unwrap();
+        indexer.release_reserved(hole);
+        indexer.reserve_next().unwrap();
+        assert!(!indexer.try_reclaim(hole));
     }
 }

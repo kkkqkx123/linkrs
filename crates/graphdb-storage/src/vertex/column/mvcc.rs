@@ -30,14 +30,12 @@ pub struct VersionEntry {
 #[derive(Debug, Clone, Default)]
 pub struct RowVisibility {
     create_ts: Vec<Timestamp>,
-    len: usize,
 }
 
 impl RowVisibility {
     pub fn new() -> Self {
         Self {
             create_ts: Vec::new(),
-            len: 0,
         }
     }
 
@@ -45,9 +43,6 @@ impl RowVisibility {
     pub fn mark_created(&mut self, row_idx: usize, ts: Timestamp) {
         self.ensure_len(row_idx + 1);
         self.create_ts[row_idx] = ts;
-        if row_idx + 1 > self.len {
-            self.len = row_idx + 1;
-        }
     }
 
     pub fn create_ts(&self) -> &[Timestamp] {
@@ -58,50 +53,18 @@ impl RowVisibility {
         if self.create_ts.len() < n {
             self.create_ts.resize(n, 0);
         }
-        if self.len < n {
-            self.len = n;
-        }
-    }
-
-    pub fn reserve(&mut self, additional: usize) {
-        self.create_ts.reserve(additional);
-    }
-
-    pub fn resize(&mut self, new_len: usize) {
-        self.create_ts.resize(new_len, 0);
-        self.len = new_len;
     }
 
     /// Keep the first `keep` entries, dropping the tail.
     pub fn truncate(&mut self, keep: usize) {
         self.create_ts.truncate(keep);
-        self.len = self.len.min(keep);
     }
 
     /// Split off entries at `at`, returning the tail as a new slice.
     pub fn split_off(&mut self, at: usize) -> Self {
-        let tail = self.create_ts.split_off(at);
-        let tail_len = tail.len();
-        self.len = self.len.min(at);
         Self {
-            create_ts: tail,
-            len: tail_len,
+            create_ts: self.create_ts.split_off(at),
         }
-    }
-
-    /// Append a tail slice produced by [`Self::split_off`].
-    pub fn extend_tail(&mut self, tail: Self) {
-        self.create_ts.extend(tail.create_ts);
-        self.len += tail.len;
-    }
-
-    pub fn clear(&mut self) {
-        self.create_ts.clear();
-        self.len = 0;
-    }
-
-    pub fn len(&self) -> usize {
-        self.len
     }
 
     pub fn memory_usage(&self) -> usize {
@@ -157,9 +120,7 @@ impl Column {
             let chunk = chunks.get(row_idx / capacity.max(1));
             let old_create = chunk
                 .map(|chunk| {
-                    if row_idx >= chunk.row_offset
-                        && row_idx < chunk.row_offset + chunk.row_count
-                    {
+                    if row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count {
                         chunk
                             .read_state()
                             .visibility
@@ -178,7 +139,11 @@ impl Column {
             let (current, cur_null) = if covered && old_create < ts {
                 let current = self.get_in(&chunks, row_idx);
                 let cur_null = chunk.is_some_and(|chunk| {
-                    chunk.read_state().raw.as_storage().is_null(row_idx - chunk.row_offset)
+                    chunk
+                        .read_state()
+                        .raw
+                        .as_storage()
+                        .is_null(row_idx - chunk.row_offset)
                 });
                 (current, cur_null)
             } else {
@@ -308,9 +273,8 @@ impl Column {
     /// Internal companion of [`Column::get_at_ts`]: returns the stamp the
     /// value read was written at (the current `create_ts` when the current
     /// value covers `query_ts`, otherwise the covering before-image's
-    /// `start_ts`, else 0 when no version covers it). Pending-aware point
-    /// lookups use it to detect a value written by a foreign uncommitted
-    /// transaction and fall back to `stamp - 1`.
+    /// `start_ts`, else 0 when no version covers it). Callers keep it as a
+    /// record cache fence alongside the value.
     pub fn start_ts_at(&self, row_idx: usize, query_ts: Timestamp) -> Timestamp {
         let chunks = self.chunks.read();
         let capacity = self.chunk_capacity();

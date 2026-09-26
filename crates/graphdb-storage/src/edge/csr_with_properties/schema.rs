@@ -119,7 +119,7 @@ impl CsrWithProperties {
         let schema =
             PropertySchema::new(name.clone(), prop_id, data_type.clone()).nullable(nullable);
         self.property_schema.push(schema);
-        let mut col = Column::new(name.clone(), prop_id, data_type, nullable);
+        let col = Column::new(name.clone(), prop_id, data_type, nullable);
         let rows = self.visibility.len();
         if rows > 0 {
             col.resize(rows);

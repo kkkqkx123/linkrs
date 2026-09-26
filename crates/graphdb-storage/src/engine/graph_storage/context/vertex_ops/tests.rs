@@ -1,3 +1,34 @@
+/// Insert through the staging scope and apply it, mirroring what the
+/// writer layer does around a write timestamp.
+fn stage_and_apply(
+    ctx: &crate::engine::graph_storage::context::GraphStorageContext,
+    label: graphdb_core::types::LabelId,
+    name: &str,
+    props: &[(String, graphdb_core::Value)],
+    ts: graphdb_core::types::Timestamp,
+) {
+    let mut scope = crate::vertex::WriteScope::new(ts);
+    ctx.insert_vertex_with_scope(label, name, props, ts, &mut scope)
+        .expect("stage insert");
+    ctx.commit_write_scope(label, &mut scope, ts)
+        .expect("apply insert");
+}
+
+/// Integer-keyed variant of [`stage_and_apply`].
+fn stage_and_apply_i64(
+    ctx: &crate::engine::graph_storage::context::GraphStorageContext,
+    label: graphdb_core::types::LabelId,
+    external_id: i64,
+    props: &[(String, graphdb_core::Value)],
+    ts: graphdb_core::types::Timestamp,
+) {
+    let mut scope = crate::vertex::WriteScope::new(ts);
+    ctx.insert_vertex_by_i64_with_scope(label, external_id, props, ts, &mut scope)
+        .expect("stage insert");
+    ctx.commit_write_scope(label, &mut scope, ts)
+        .expect("apply insert");
+}
+
 mod revalidation_tests {
     use super::super::super::GraphStorageContext;
     use crate::engine::cache_manager::VertexSeed;
@@ -29,7 +60,8 @@ mod revalidation_tests {
         value: &str,
         ts: Timestamp,
     ) {
-        ctx.insert_vertex(
+        super::stage_and_apply(
+            ctx,
             label,
             name,
             &[
@@ -37,8 +69,7 @@ mod revalidation_tests {
                 ("value".to_string(), Value::string(value)),
             ],
             ts,
-        )
-        .expect("insert vertex");
+        );
     }
 
     /// Acquire a real write timestamp from the version manager. Tests must
@@ -306,7 +337,8 @@ mod pending_visibility_tests {
         let vm = ctx.persistent.version_manager.clone();
         let start = vm.acquire_insert_timestamp().expect("start txn");
 
-        ctx.insert_vertex(
+        super::stage_and_apply(
+            &ctx,
             label,
             "alice",
             &[
@@ -314,8 +346,7 @@ mod pending_visibility_tests {
                 ("value".to_string(), Value::string("A")),
             ],
             start,
-        )
-        .expect("insert own write");
+        );
 
         let bound = bound_writer(&ctx, 1, start, start);
         let record = bound
@@ -348,7 +379,8 @@ mod pending_visibility_tests {
         let (ctx, label) = setup_ctx();
         let vm = ctx.persistent.version_manager.clone();
         let first = vm.acquire_insert_timestamp().expect("first txn");
-        ctx.insert_vertex(
+        super::stage_and_apply(
+            &ctx,
             label,
             "alice",
             &[
@@ -356,8 +388,7 @@ mod pending_visibility_tests {
                 ("value".to_string(), Value::string("A")),
             ],
             first,
-        )
-        .expect("first txn writes");
+        );
 
         let second = vm.acquire_insert_timestamp().expect("second txn");
         let bound_second = bound_writer(&ctx, 2, second, second);
@@ -429,7 +460,8 @@ mod pending_visibility_tests {
 
         let vm = ctx.persistent.version_manager.clone();
         let start = vm.acquire_insert_timestamp().expect("start txn");
-        ctx.insert_vertex_by_i64(
+        super::stage_and_apply_i64(
+            &ctx,
             src_label,
             1,
             &[
@@ -437,9 +469,9 @@ mod pending_visibility_tests {
                 ("value".to_string(), Value::string("A")),
             ],
             start,
-        )
-        .expect("src vertex");
-        ctx.insert_vertex_by_i64(
+        );
+        super::stage_and_apply_i64(
+            &ctx,
             dst_label,
             2,
             &[
@@ -447,8 +479,7 @@ mod pending_visibility_tests {
                 ("value".to_string(), Value::string("B")),
             ],
             start,
-        )
-        .expect("dst vertex");
+        );
         ctx.insert_edge(InsertEdgeParams {
             edge_label,
             src_label,
@@ -501,7 +532,8 @@ mod pending_visibility_tests {
         let (ctx, label) = setup_ctx();
         let vm = ctx.persistent.version_manager.clone();
         let first = vm.acquire_insert_timestamp().expect("first txn");
-        ctx.insert_vertex(
+        super::stage_and_apply(
+            &ctx,
             label,
             "alice",
             &[
@@ -509,8 +541,7 @@ mod pending_visibility_tests {
                 ("value".to_string(), Value::string("A")),
             ],
             first,
-        )
-        .expect("first txn writes");
+        );
 
         let second = vm.acquire_insert_timestamp().expect("second txn");
         let bound_second = bound_writer(&ctx, 2, second, second);

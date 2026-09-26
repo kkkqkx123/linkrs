@@ -72,16 +72,12 @@ pub use participant::{
     TransactionAbortDescriptor, TransactionCommitDescriptor, TransactionCommitSink,
     TransactionMutationRecorder,
 };
-pub use rollback::{
-    CreateRemoveEdgeUndoParams, CreateRemoveVertexUndoParams, CreateUpdateEdgePropUndoParams,
-    RollbackHelper,
-};
+pub use rollback::{CreateRemoveEdgeUndoParams, CreateUpdateEdgePropUndoParams, RollbackHelper};
 pub use types::*;
 pub use undo_log::{
-    CreateEdgeTypeUndo, CreateVertexTypeUndo, FileBackedUndoLog, InsertEdgeUndo, InsertVertexUndo,
-    RelatedEdgeInfo, RemoveEdgeUndo, RemoveVertexUndo, RestoreEdgeUndo, UndoLogConfig,
-    UndoLogEntry, UndoLogError, UndoLogManager, UndoLogResult, UndoTarget, UpdateEdgePropUndo,
-    UpdateVertexPropUndo,
+    CreateEdgeTypeUndo, CreateVertexTypeUndo, FileBackedUndoLog, InsertEdgeUndo, RemoveEdgeUndo,
+    RestoreEdgeUndo, UndoLogConfig, UndoLogEntry, UndoLogError, UndoLogManager, UndoLogResult,
+    UndoTarget, UpdateEdgePropUndo,
 };
 pub use wal::{
     dry_replay, ColumnId, CreateEdgeTypeRedo, CreateVertexTypeRedo, DeleteEdgeRedo,

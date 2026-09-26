@@ -284,6 +284,11 @@ fn test_group_window_unregisters_lazily_registered_snapshots() {
     setup_person_tag(&mut storage);
 
     let window = storage.begin_auto_commit_group().unwrap();
+    let before = storage
+        .ctx
+        .version_manager()
+        .snapshot_tracker()
+        .active_count();
     for i in 0..20 {
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let vertex = Vertex::new(
@@ -304,13 +309,15 @@ fn test_group_window_unregisters_lazily_registered_snapshots() {
     }
     window.finalize_group().unwrap();
 
-    let active = storage.ctx.data_store().with_vertex_tables(|tables| {
-        tables
-            .values()
-            .map(|table| table.active_snapshot_count())
-            .sum::<usize>()
-    });
-    assert_eq!(active, 0, "group window leaked vertex snapshots");
+    assert_eq!(
+        storage
+            .ctx
+            .version_manager()
+            .snapshot_tracker()
+            .active_count(),
+        before,
+        "group window leaked snapshots into the global tracker"
+    );
 }
 
 #[test]

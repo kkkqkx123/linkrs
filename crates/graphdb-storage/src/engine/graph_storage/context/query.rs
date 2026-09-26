@@ -20,7 +20,23 @@ impl GraphStorageContext {
         self.persistent
             .data_store
             .catalog_read_snapshot()
-            .with_vertex_tables(|tables| tables.get(&label).map(|table| table.scan(&guard)))
+            .with_vertex_tables(|tables| {
+                let table = tables.get(&label)?;
+                let merge = self.staged_scan_merge(label, table, &guard);
+                let mut records = table.scan(&guard);
+                records.retain(|record| !merge.dropped_ids.contains(&record.internal_id));
+                records.extend(
+                    merge
+                        .rows
+                        .into_iter()
+                        .map(|row| crate::vertex::VertexRecord {
+                            internal_id: row.id,
+                            vid: row.vid,
+                            properties: row.properties,
+                        }),
+                );
+                Some(records)
+            })
     }
 
     /// Allocated vertex slots across all tables, including deleted but not

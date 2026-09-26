@@ -92,28 +92,6 @@ impl UndoTarget for GraphStorageContext {
         Ok(())
     }
 
-    fn undo_update_vertex_property(
-        &self,
-        vertex: VertexIdentifier,
-        col_id: ColumnId,
-        value: graphdb_core::Value,
-        ts: Timestamp,
-    ) -> UndoLogResult<()> {
-        self.data_store()
-            .with_vertex_tables_mut_result(|vertex_tables| {
-                TransactionOps::update_vertex_property_undo(
-                    vertex_tables,
-                    vertex.label,
-                    vertex.vid,
-                    col_id,
-                    value,
-                    ts,
-                )
-            })?;
-        self.mark_vertex_modified(vertex.label);
-        Ok(())
-    }
-
     fn undo_update_edge_property(
         &self,
         edge_id: EdgeIdentifier,
@@ -140,15 +118,6 @@ impl UndoTarget for GraphStorageContext {
             })
             .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
         self.mark_edge_modified(edge_id.edge_label);
-        Ok(())
-    }
-
-    fn revert_delete_vertex(&self, vertex: VertexIdentifier, ts: Timestamp) -> UndoLogResult<()> {
-        self.data_store()
-            .with_vertex_tables_mut_result(|vertex_tables| {
-                TransactionOps::revert_delete_vertex(vertex_tables, vertex.label, vertex.vid, ts)
-            })?;
-        self.mark_vertex_modified(vertex.label);
         Ok(())
     }
 

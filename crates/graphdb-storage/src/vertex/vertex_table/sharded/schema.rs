@@ -88,7 +88,10 @@ impl ShardedVertexTable {
     /// never fails on already-clean shards.
     fn abort_staged_on_all_shards(&self) {
         for shard in &self.shards {
-            if shard.read().has_pending_schema_change() {
+            // Bind the check so the read guard is released before the write:
+            // parking_lot locks are not reentrant.
+            let pending = shard.read().has_pending_schema_change();
+            if pending {
                 let _ = shard.write().abort_pending_schema_change();
             }
         }
@@ -100,7 +103,10 @@ impl ShardedVertexTable {
     /// residual column behind.
     pub fn prepare_add_property_staged(&self, prop: StoragePropertyDef) -> StorageResult<()> {
         for shard in &self.shards {
-            if let Err(error) = shard.write().prepare_add_property_staged(prop.clone()) {
+            // Bind the result so the write guard drops before any abort
+            // re-locks this shard.
+            let result = shard.write().prepare_add_property_staged(prop.clone());
+            if let Err(error) = result {
                 self.abort_staged_on_all_shards();
                 return Err(error);
             }
@@ -111,7 +117,8 @@ impl ShardedVertexTable {
     /// Staged drop-column fan-out with the same abort compensation.
     pub fn prepare_remove_property_staged(&self, prop_name: &str) -> StorageResult<()> {
         for shard in &self.shards {
-            if let Err(error) = shard.write().prepare_remove_property_staged(prop_name) {
+            let result = shard.write().prepare_remove_property_staged(prop_name);
+            if let Err(error) = result {
                 self.abort_staged_on_all_shards();
                 return Err(error);
             }
@@ -126,10 +133,10 @@ impl ShardedVertexTable {
         new_name: &str,
     ) -> StorageResult<()> {
         for shard in &self.shards {
-            if let Err(error) = shard
+            let result = shard
                 .write()
-                .prepare_rename_property_staged(old_name, new_name)
-            {
+                .prepare_rename_property_staged(old_name, new_name);
+            if let Err(error) = result {
                 self.abort_staged_on_all_shards();
                 return Err(error);
             }
@@ -140,7 +147,8 @@ impl ShardedVertexTable {
     /// Fill the staged change on every shard, aborting everywhere on failure.
     pub fn fill_pending_schema_change(&self) -> StorageResult<()> {
         for shard in &self.shards {
-            if let Err(error) = shard.write().fill_pending_schema_change() {
+            let result = shard.write().fill_pending_schema_change();
+            if let Err(error) = result {
                 self.abort_staged_on_all_shards();
                 return Err(error);
             }
@@ -151,7 +159,8 @@ impl ShardedVertexTable {
     /// Publish the staged change on every shard, aborting everywhere on failure.
     pub fn publish_pending_schema_change(&self) -> StorageResult<()> {
         for shard in &self.shards {
-            if let Err(error) = shard.write().publish_pending_schema_change() {
+            let result = shard.write().publish_pending_schema_change();
+            if let Err(error) = result {
                 self.abort_staged_on_all_shards();
                 return Err(error);
             }

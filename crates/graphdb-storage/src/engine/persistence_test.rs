@@ -30,13 +30,18 @@ mod tests {
             )
             .unwrap();
 
+        let mut scope = crate::vertex::WriteScope::new(100);
         graph
-            .insert_vertex(
+            .insert_vertex_with_scope(
                 person_label,
                 "alice",
                 &[("name".to_string(), Value::string("alice"))],
                 100,
+                &mut scope,
             )
+            .unwrap();
+        graph
+            .commit_write_scope(person_label, &mut scope, 100)
             .unwrap();
 
         // Flush to custom dir

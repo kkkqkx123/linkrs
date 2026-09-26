@@ -417,6 +417,8 @@ impl StorageOperationContextOps for MockStorage {
             auto_commit: true,
             mutation_recorder: None,
             auto_commit_group_start: None,
+            auto_commit_staging_start: None,
+            auto_commit_wal_start: 0,
         }))
     }
 
@@ -435,6 +437,8 @@ impl StorageOperationContextOps for MockStorage {
             auto_commit: true,
             mutation_recorder: None,
             auto_commit_group_start: None,
+            auto_commit_staging_start: None,
+            auto_commit_wal_start: 0,
         }))
     }
 
@@ -521,17 +525,6 @@ impl UndoTarget for MockStorage {
             .map_err(|e| graphdb_transaction::undo_log::UndoLogError::UndoFailed(e.to_string()))
     }
 
-    fn undo_update_vertex_property(
-        &self,
-        vertex: graphdb_core::types::VertexIdentifier,
-        col_id: graphdb_core::types::ColumnId,
-        value: graphdb_core::Value,
-        ts: graphdb_transaction::wal::Timestamp,
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        self.graph
-            .undo_update_vertex_property(vertex, col_id, value, ts)
-    }
-
     fn undo_update_edge_property(
         &self,
         edge_id: graphdb_core::types::EdgeIdentifier,
@@ -541,14 +534,6 @@ impl UndoTarget for MockStorage {
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph
             .undo_update_edge_property(edge_id, col_id, value, ts)
-    }
-
-    fn revert_delete_vertex(
-        &self,
-        vertex: graphdb_core::types::VertexIdentifier,
-        ts: graphdb_transaction::wal::Timestamp,
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        self.graph.revert_delete_vertex(vertex, ts)
     }
 
     fn revert_delete_edge(
@@ -759,6 +744,8 @@ mod snapshot_tests {
             auto_commit: false,
             mutation_recorder: None,
             auto_commit_group_start: None,
+            auto_commit_staging_start: None,
+            auto_commit_wal_start: 0,
         });
         let handle = bound
             .snapshot_handle()

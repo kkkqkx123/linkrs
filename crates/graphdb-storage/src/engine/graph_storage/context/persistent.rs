@@ -65,6 +65,11 @@ pub(crate) struct GraphStoragePersistent {
             Vec<graphdb_transaction::wal::TransactionWalEntry>,
         >,
     >,
+    /// Transaction-level vertex write staging, same lifecycle anchor as
+    /// `staged_wal` (created on first stage, dropped at commit publish or
+    /// rollback together with the staged WAL).
+    pub(crate) txn_staging:
+        Arc<dashmap::DashMap<graphdb_core::types::TransactionId, Arc<Mutex<super::TxnStaging>>>>,
     /// Monotonic physical layout version for stale-plan detection.
     pub(crate) layout_version: LayoutVersion,
     /// Self-proven vertex-id domains keyed by label (see
@@ -189,6 +194,7 @@ impl GraphStoragePersistent {
             next_auto_transaction_id: Arc::new(AtomicU64::new(1 << 62)),
             auto_commit_write_gate: super::autocommit::AutoCommitWriteGate::new(),
             staged_wal: Arc::new(dashmap::DashMap::new()),
+            txn_staging: Arc::new(dashmap::DashMap::new()),
             layout_version: LayoutVersion::new(),
             vertex_id_domains: Arc::new(RwLock::new(std::collections::HashMap::new())),
             serial_allocator: crate::engine::graph_storage::serial::SerialAllocator::new(),
@@ -289,6 +295,7 @@ impl GraphStoragePersistent {
             next_auto_transaction_id: Arc::new(AtomicU64::new(1 << 62)),
             auto_commit_write_gate: super::autocommit::AutoCommitWriteGate::new(),
             staged_wal: Arc::new(dashmap::DashMap::new()),
+            txn_staging: Arc::new(dashmap::DashMap::new()),
             layout_version: LayoutVersion::new(),
             vertex_id_domains: Arc::new(RwLock::new(std::collections::HashMap::new())),
             serial_allocator: crate::engine::graph_storage::serial::SerialAllocator::new(),

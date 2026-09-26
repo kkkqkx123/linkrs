@@ -5,7 +5,7 @@ use crate::column_stats::ColumnStats;
 use crate::encoding::ColumnEncoding;
 use crate::stats::HyperLogLog;
 
-use super::chunk::{ColumnChunk, DEFAULT_CHUNK_ROWS};
+use super::chunk::{ChunkState, ColumnChunk, DEFAULT_CHUNK_ROWS};
 use super::fixed_width::FixedWidthColumn;
 use super::overflow::{OverflowHandle, OverflowStore, DEFAULT_OVERFLOW_THRESHOLD};
 use super::variable_width::VariableWidthColumn;
@@ -56,14 +56,14 @@ pub enum ColumnInner {
 }
 
 impl ColumnInner {
-    pub(super) fn as_storage(&self) -> &dyn ColumnStorage {
+    pub(crate) fn as_storage(&self) -> &dyn ColumnStorage {
         match self {
             ColumnInner::Fixed(c) => c,
             ColumnInner::Variable(c) => c,
         }
     }
 
-    pub(super) fn as_storage_mut(&mut self) -> &mut dyn ColumnStorage {
+    pub(crate) fn as_storage_mut(&mut self) -> &mut dyn ColumnStorage {
         match self {
             ColumnInner::Fixed(c) => c,
             ColumnInner::Variable(c) => c,
@@ -121,19 +121,15 @@ pub const MAX_BACKGROUND_LOAD_CHUNKS: usize = 64;
 ///
 /// Plain fields are either immutable after creation (`name`, `col_id`,
 /// `data_type`, `nullable`) or mutated only by exclusive operations running
-/// under the shard write lock (`encoding`, `stats`). Everything a point
-/// operation touches is either per-chunk state behind the segment latch or
-/// one of the short shared critical sections below.
+/// under the shard write lock (`stats`). Everything a point operation
+/// touches is either per-chunk state behind the segment latch or one of the
+/// short shared critical sections below.
 #[derive(Debug)]
 pub struct Column {
     pub name: String,
     pub col_id: i32,
     pub data_type: DataType,
     pub nullable: bool,
-    /// Column-level encoding scheme marker mirroring (a subset of) the
-    /// first chunk's encoding. Written only by exclusive encode/load/clear
-    /// paths; point paths read it shared.
-    pub(super) encoding: RwLock<ColumnEncoding>,
     /// Column statistics refreshed by exclusive analyze/encode passes.
     pub(super) stats: RwLock<Option<ColumnStats>>,
     /// Versioned writes since the last exact zone rebuild. Feeds the
@@ -148,10 +144,12 @@ pub struct Column {
     /// `usize::MAX` disables overflow routing (inline storage).
     pub(super) overflow_threshold: AtomicUsize,
     /// In-memory HLL estimator maintained incrementally on writes. Short
-    /// critical section shared across segments.
+    /// critical section shared across segments on purpose: the sketch is
+    /// tiny and merge-on-read would cost more than one brief lock.
     pub(super) hll: Mutex<Option<HyperLogLog>>,
     /// Zone-map state shared across segments (zone granularity is
-    /// independent of segment capacity).
+    /// independent of segment capacity, so one map serves all segments
+    /// without per-chunk duplication).
     pub(super) zone: RwLock<super::zone_map::ZoneMaps>,
     /// Large-string overflow area for this column. Append-only in the point
     /// path; rebuilds happen under the shard write lock.
@@ -174,7 +172,6 @@ impl Clone for Column {
             col_id: self.col_id,
             data_type: self.data_type.clone(),
             nullable: self.nullable,
-            encoding: RwLock::new(self.encoding.read().clone()),
             stats: RwLock::new(self.stats.read().clone()),
             zone_stale_writes: AtomicU64::new(self.zone_stale_writes.load(Ordering::Relaxed)),
             chunk_capacity: AtomicUsize::new(self.chunk_capacity.load(Ordering::Relaxed)),
@@ -195,7 +192,6 @@ impl Column {
             col_id,
             data_type,
             nullable,
-            encoding: RwLock::new(ColumnEncoding::None),
             stats: RwLock::new(None),
             zone_stale_writes: AtomicU64::new(0),
             chunk_capacity: AtomicUsize::new(DEFAULT_CHUNK_ROWS),
@@ -236,14 +232,6 @@ impl Column {
     /// The base is collected without holding the chunk's write latch, then
     /// merged with whatever overlay entries landed meanwhile before the
     /// overlay clears, so a concurrent point write can never be lost.
-    pub(super) fn decode_chunk_into_raw(&self, idx: usize) {
-        let chunks = self.chunks.read();
-        Self::decode_locked(self, &chunks, idx);
-    }
-
-    /// [`Self::decode_chunk_into_raw`] against an already-locked chunk
-    /// vector. Never re-locks the container: row reads go through `chunks`
-    /// directly, keeping container-before-member order.
     pub(super) fn decode_locked(&self, chunks: &[ColumnChunk], idx: usize) {
         let Some(chunk) = chunks.get(idx) else {
             return;
@@ -447,7 +435,7 @@ impl Column {
     /// aggregation stays a plain union.
     #[inline]
     pub fn mark_dirty(&self, row_idx: usize) {
-        let page_id = crate::persistence::dirty_page::DirtyPageTracker::row_to_page(row_idx);
+        let page_id = crate::persistence::dirty_page::row_to_page(row_idx);
         self.total_dirty_pages
             .fetch_max(page_id + 1, Ordering::Relaxed);
         let chunks = self.chunks.read();
@@ -561,39 +549,6 @@ impl Column {
         Ok(())
     }
 
-    /// Whether any chunk carries its own encoding.
-    fn any_chunk_encoded(&self) -> bool {
-        let chunks = self.chunks.read();
-        chunks
-            .iter()
-            .any(|c| c.read_state().encoding.is_encoded())
-    }
-
-    /// Whether segmentation is active and every chunk carries its own
-    /// encoding. The per-chunk record form can only describe encoded chunks,
-    /// so persistence uses this to choose between an encoding record and a
-    /// full raw dump.
-    pub(crate) fn all_chunks_encoded(&self) -> bool {
-        let chunks = self.chunks.read();
-        !chunks.is_empty()
-            && chunks
-                .iter()
-                .all(|c| c.read_state().encoding.is_encoded())
-    }
-
-    /// Grow a chunk's MVCC side state to its window without shrinking.
-    /// Fresh and grown windows read back as current-from-zero until written.
-    pub(super) fn ensure_segment_meta(chunk: &ColumnChunk) {
-        let mut state = chunk.write_state();
-        let count = chunk.row_count;
-        state.visibility.ensure_len(count);
-        if let Some(chains) = state.version_chains.as_mut() {
-            if chains.len() < count {
-                chains.resize(count, Vec::new());
-            }
-        }
-    }
-
     /// Core value write with the segment write latch already held.
     ///
     /// Never touches the chunk container: coverage growth and promotion are
@@ -604,14 +559,13 @@ impl Column {
     pub(super) fn write_core(
         &self,
         chunk: &ColumnChunk,
-        state: &mut parking_lot::RwLockWriteGuard<'_, crate::vertex::column::chunk::ChunkState>,
+        state: &mut ChunkState,
         row_idx: usize,
         value: Option<&Value>,
         use_chunk_layer: bool,
     ) -> StorageResult<bool> {
         use crate::vertex::column::chunk_encoding::UpdateDecision;
-        let in_window =
-            row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count;
+        let in_window = row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count;
         if !in_window {
             return Err(StorageError::invalid_input(format!(
                 "column {} has no chunk covering row {}",
@@ -643,10 +597,7 @@ impl Column {
                         Some(v) if v.is_null() => None,
                         other => other,
                     };
-                    state
-                        .raw
-                        .as_storage_mut()
-                        .set(local as usize, normalized)?;
+                    state.raw.as_storage_mut().set(local as usize, normalized)?;
                     return Ok(false);
                 }
             }
@@ -675,10 +626,7 @@ impl Column {
                 if normalized.is_none() && !self.nullable {
                     return Err(StorageError::null_value_not_allowed(self.name.clone()));
                 }
-                state
-                    .raw
-                    .as_storage_mut()
-                    .set(local as usize, normalized)?;
+                state.raw.as_storage_mut().set(local as usize, normalized)?;
                 return Ok(true);
             }
             // Nullability still enforced even for overlay writes.
@@ -699,22 +647,18 @@ impl Column {
         if normalized.is_none() && !self.nullable {
             return Err(StorageError::null_value_not_allowed(self.name.clone()));
         }
-        state
-            .raw
-            .as_storage_mut()
-            .set(local as usize, normalized)?;
+        state.raw.as_storage_mut().set(local as usize, normalized)?;
         Ok(false)
     }
 
     /// Whether the chunk layer routes this write (overlay or in-place chunk
-    /// encoding). Chunk encodings are authoritative once chunking is active;
-    /// the column-level encoding is only a compatibility marker.
+    /// encoding). Chunk encodings are authoritative once present, and an
+    /// evicted chunk still counts: promotion on the write path restores its
+    /// encoding, so the write must stay on the chunk-layer route.
     pub(super) fn chunk_layer_routes(&self, chunks: &[ColumnChunk]) -> bool {
-        !chunks.is_empty()
-            && (self.encoding.read().is_encoded()
-                || chunks
-                    .iter()
-                    .any(|c| c.read_state().encoding.is_encoded()))
+        chunks
+            .iter()
+            .any(|c| c.evicted_encoding() != crate::encoding::EncodingType::None)
     }
 
     /// Point-write protocol: grow coverage, promote the owner, then run the
@@ -723,7 +667,7 @@ impl Column {
     pub(super) fn with_resident_chunk<T>(
         &self,
         row_idx: usize,
-        f: impl FnOnce(&ColumnChunk, &mut parking_lot::RwLockWriteGuard<'_, crate::vertex::column::chunk::ChunkState>) -> StorageResult<T>,
+        f: impl FnOnce(&ColumnChunk, &mut ChunkState) -> StorageResult<T>,
     ) -> StorageResult<T> {
         let chunk_idx = self.ensure_coverage(row_idx);
         // Overlay writes to an evicted chunk load it first so point-write
@@ -792,34 +736,6 @@ impl Column {
         })?;
         let _ = absorbed;
         self.observe_write(row_idx, value);
-        Ok(())
-    }
-
-    /// Write `value` into the column, handling the encoded and raw paths.
-    /// Does not touch the MVCC metadata.
-    pub(super) fn write_value(
-        &self,
-        row_idx: usize,
-        value: Option<&Value>,
-    ) -> StorageResult<()> {
-        let use_chunk_layer = self.chunk_layer_routes(&self.chunks.read());
-        let absorbed = self.with_resident_chunk(row_idx, |chunk, state| {
-            // Fresh coverage has no side state yet; size it to the window.
-            state.visibility.ensure_len(chunk.row_count);
-            if let Some(chains) = state.version_chains.as_mut() {
-                if chains.len() < chunk.row_count {
-                    chains.resize(chunk.row_count, Vec::new());
-                }
-            }
-            self.write_core(chunk, state, row_idx, value, use_chunk_layer)
-        })?;
-        self.observe_write(row_idx, value);
-        self.mark_dirty(row_idx);
-        if absorbed {
-            if let Some(chunk_idx) = self.chunk_index_for_row(row_idx) {
-                let _ = self.maybe_merge_hot_chunk(chunk_idx);
-            }
-        }
         Ok(())
     }
 
@@ -998,27 +914,66 @@ impl Column {
 
     pub fn is_null(&self, row_idx: usize) -> bool {
         let chunks = self.chunks.read();
-        let capacity = self.chunk_capacity();
-        chunks
-            .get(row_idx / capacity.max(1))
-            .filter(|chunk| {
-                row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count
-            })
-            .is_some_and(|chunk| {
-                chunk
-                    .read_state()
-                    .raw
-                    .as_storage()
-                    .is_null(row_idx - chunk.row_offset)
-            })
+        Self::is_null_in(self, &chunks, row_idx)
+    }
+
+    fn is_null_in(column: &Column, chunks: &[ColumnChunk], row_idx: usize) -> bool {
+        let capacity = column.chunk_capacity();
+        let Some(chunk) = chunks.get(row_idx / capacity.max(1)) else {
+            return false;
+        };
+        if row_idx < chunk.row_offset || row_idx >= chunk.row_offset + chunk.row_count {
+            return false;
+        }
+        let local = (row_idx - chunk.row_offset) as u32;
+        if matches!(
+            column.data_type,
+            DataType::String | DataType::Blob
+        ) && chunk.read_state().overflow_rows.contains_key(&local) {
+            return false;
+        }
+        let state = chunk.read_state();
+        if let Some(hit) = state.overlay.get(local) {
+            return hit.is_none();
+        }
+        if state.residency.is_evicted() {
+            match state
+                .residency
+                .evicted_snapshot()
+                .map(|snapshot| snapshot.decode_row(row_idx))
+            {
+                Some(Ok(value)) => return value.is_none(),
+                Some(Err(_)) => return false,
+                None => return false,
+            }
+        }
+        if state.encoding.is_encoded() {
+            return state.encoding.get(local as usize).is_none();
+        }
+        state.raw.as_storage().is_null(local as usize)
     }
 
     pub fn null_count(&self) -> usize {
         let chunks = self.chunks.read();
-        chunks
-            .iter()
-            .map(|chunk| chunk.read_state().raw.as_storage().null_count())
-            .sum()
+        let mut total = 0usize;
+        for chunk in chunks.iter() {
+            let state = chunk.read_state();
+            let fast_raw = !state.encoding.is_encoded()
+                && state.residency.is_resident()
+                && state.overlay.len() == 0
+                && state.overflow_rows.is_empty();
+            drop(state);
+            if fast_raw {
+                total += chunk.read_state().raw.as_storage().null_count();
+                continue;
+            }
+            for offset in 0..chunk.row_count {
+                if Self::is_null_in(self, &chunks, chunk.row_offset + offset) {
+                    total += 1;
+                }
+            }
+        }
+        total
     }
 
     pub fn len(&self) -> usize {
@@ -1074,7 +1029,6 @@ impl Column {
     /// Reset the column to empty. Exclusive-only: it replaces windows and
     /// shared summaries while point operations route by them.
     pub fn clear(&self) {
-        *self.encoding.write() = ColumnEncoding::None;
         self.zone_stale_writes.store(0, Ordering::Relaxed);
         self.zone.write().maps.clear();
         self.zone.write().complex.clear();
@@ -1162,7 +1116,9 @@ impl Column {
                     if let Some(chains) = state.version_chains.as_mut() {
                         chains.truncate(keep);
                     }
-                    state.overflow_rows.retain(|local, _| (*local as usize) < keep);
+                    state
+                        .overflow_rows
+                        .retain(|local, _| (*local as usize) < keep);
                 }
             }
         }
@@ -1180,7 +1136,9 @@ impl Column {
                     chains.truncate(count);
                 }
             }
-            state.overflow_rows.retain(|local, _| (*local as usize) < count);
+            state
+                .overflow_rows
+                .retain(|local, _| (*local as usize) < count);
         }
         drop(chunks);
         self.total_dirty_pages.fetch_max(
@@ -1189,134 +1147,20 @@ impl Column {
         );
     }
 
-    /// Load a raw column record, splitting the buffers into capacity-aligned
-    /// chunks owned by this column. Layout matches the historical raw record
-    /// exactly, so previously flushed directories load without migration.
-    ///
-    /// Exclusive-only (load path): it replaces the whole chunk vector.
-    pub fn load_data_from_raw(
-        &self,
-        data: Vec<u8>,
-        offsets: Vec<u64>,
-        null_bitmap_raw: Option<Vec<u8>>,
-        bitmap_bit_len: usize,
-    ) {
-        let capacity = self.chunk_capacity().max(1);
-        let is_var = super::is_variable_length_type(&self.data_type);
-        let total_rows = if is_var {
-            offsets.len()
-        } else {
-            let elem = super::element_size(&self.data_type).max(1);
-            data.len() / elem
-        };
-        let bits: Vec<bool> = null_bitmap_raw
-            .as_ref()
-            .map(|raw| {
-                let mut bv = BitVec::<u8, Lsb0>::from_vec(raw.clone());
-                bv.resize(bitmap_bit_len, false);
-                bv.iter().by_vals().collect()
-            })
-            .unwrap_or_default();
-        let has_bitmap = self.nullable;
-        let mut chunks = Vec::new();
-        let n = total_rows.div_ceil(capacity).max(1);
-        for ci in 0..n {
-            let start = ci * capacity;
-            if start >= total_rows {
-                break;
-            }
-            let end = (start + capacity).min(total_rows);
-            let mut chunk = ColumnChunk::new(start, 0, &self.data_type, self.nullable);
-            chunk.row_count = end - start;
-            if is_var {
-                let mut chunk_data = Vec::new();
-                let mut chunk_offsets: Vec<u64> = Vec::new();
-                for row in start..end {
-                    let off = offsets.get(row).copied().unwrap_or(u64::MAX);
-                    if off == u64::MAX || off as usize + 8 > data.len() {
-                        chunk_offsets.push(u64::MAX);
-                        continue;
-                    }
-                    let off = off as usize;
-                    let len_bytes: [u8; 8] = data[off..off + 8].try_into().unwrap_or([0u8; 8]);
-                    let len = u64::from_le_bytes(len_bytes) as usize;
-                    if off + 8 + len > data.len() {
-                        chunk_offsets.push(u64::MAX);
-                        continue;
-                    }
-                    chunk_offsets.push(chunk_data.len() as u64);
-                    chunk_data.extend_from_slice(&data[off..off + 8 + len]);
-                }
-                let chunk_bits: Vec<u8> = {
-                    let mut bv = BitVec::<u8, Lsb0>::new();
-                    for row in start..end {
-                        bv.push(bits.get(row).copied().unwrap_or(false));
-                    }
-                    bv.into_vec()
-                };
-                chunk
-                    .write_state()
-                    .raw
-                    .as_storage_mut()
-                    .load_data_from_raw(
-                        chunk_data,
-                        chunk_offsets,
-                        has_bitmap.then_some(chunk_bits),
-                        end - start,
-                    );
-            } else {
-                let elem = super::element_size(&self.data_type).max(1);
-                let chunk_data = data[start * elem..end.min(data.len() / elem) * elem].to_vec();
-                let chunk_bits: Vec<u8> = {
-                    let mut bv = BitVec::<u8, Lsb0>::new();
-                    for row in start..end {
-                        bv.push(bits.get(row).copied().unwrap_or(false));
-                    }
-                    bv.into_vec()
-                };
-                chunk
-                    .write_state()
-                    .raw
-                    .as_storage_mut()
-                    .load_data_from_raw(
-                        chunk_data,
-                        Vec::new(),
-                        has_bitmap.then_some(chunk_bits),
-                        end - start,
-                    );
-            }
-            chunks.push(chunk);
-        }
-        *self.chunks.write() = chunks;
-        // MVCC metadata is intentionally left untouched: a freshly-loaded
-        // column starts with empty metadata (rows read as "current"), and
-        // in-memory decode paths must preserve existing version chains.
-        self.clear_dirty();
-        self.total_dirty_pages.fetch_max(
-            self.len()
-                .div_ceil(crate::persistence::dirty_page::ROWS_PER_PAGE),
-            Ordering::Relaxed,
-        );
-        // Rebuild per-chunk profiles and zone maps from the restored content,
-        // matching the historical sidecar-assisted load state.
-        self.rebuild_chunk_profiles();
-    }
-
     /// Raw base value for encoding inputs and persisted buffers: overflow
     /// rows contribute their inline placeholder (the payload travels in the
     /// sidecar), all other rows read from their owning chunk.
-    fn raw_base_value(&self, row_idx: usize) -> Option<Value> {
-        let chunks = self.chunks.read();
-        self.raw_base_value_in(&chunks, row_idx)
-    }
-
-    /// [`Self::raw_base_value`] against an already-locked chunk vector.
-    pub(super) fn raw_base_value_in(&self, chunks: &[ColumnChunk], row_idx: usize) -> Option<Value> {
+    ///
+    /// Resolves against an already-locked chunk vector.
+    pub(super) fn raw_base_value_in(
+        &self,
+        chunks: &[ColumnChunk],
+        row_idx: usize,
+    ) -> Option<Value> {
         if matches!(self.data_type, DataType::String | DataType::Blob) {
             let capacity = self.chunk_capacity();
             if let Some(chunk) = chunks.get(row_idx / capacity.max(1)) {
-                if row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count
-                {
+                if row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count {
                     let local = (row_idx - chunk.row_offset) as u32;
                     if chunk.read_state().overflow_rows.contains_key(&local) {
                         return chunk
@@ -1334,12 +1178,15 @@ impl Column {
     /// Base value for encoding inputs and persisted buffers: overflow rows
     /// contribute their inline placeholder (the payload travels in the
     /// sidecar). Point reads use `get`, which serves the side store.
-    pub(super) fn encoding_base_value_in(&self, chunks: &[ColumnChunk], row_idx: usize) -> Option<Value> {
+    pub(super) fn encoding_base_value_in(
+        &self,
+        chunks: &[ColumnChunk],
+        row_idx: usize,
+    ) -> Option<Value> {
         if matches!(self.data_type, DataType::String | DataType::Blob) {
             let capacity = self.chunk_capacity();
             if let Some(chunk) = chunks.get(row_idx / capacity.max(1)) {
-                if row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count
-                {
+                if row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count {
                     let local = (row_idx - chunk.row_offset) as u32;
                     if chunk.read_state().overflow_rows.contains_key(&local) {
                         return match self.data_type {
@@ -1353,70 +1200,20 @@ impl Column {
         self.get_in(chunks, row_idx)
     }
 
-    pub fn get_flush_data(&self) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>) {
-        // Fast path: concatenate owned chunk buffers. Only when every chunk
-        // is resident and raw; evicted chunks (whose live encoding reads as
-        // None) fall through to the row-wise path that serves snapshots.
-        let chunks = self.chunks.read();
-        let all_raw_resident = !self.encoding.read().is_encoded()
-            && !chunks.is_empty()
-            && chunks.iter().all(|c| {
-                let state = c.read_state();
-                !state.encoding.is_encoded() && state.residency.is_resident()
-            });
-        if all_raw_resident {
-            let mut data = Vec::new();
-            let mut offsets = Vec::new();
-            let mut bitmap = self.nullable.then(BitVec::<u8, Lsb0>::new);
-            let is_var = super::is_variable_length_type(&self.data_type);
-            if is_var {
-                for chunk in chunks.iter() {
-                    let state = chunk.read_state();
-                    let (chunk_data, chunk_offsets, _) = state.raw.as_storage().get_flush_data();
-                    let base = data.len() as u64;
-                    for off in chunk_offsets {
-                        offsets.push(if off == u64::MAX {
-                            u64::MAX
-                        } else {
-                            base + off
-                        });
-                    }
-                    data.extend_from_slice(&chunk_data);
-                    if let Some(bm) = bitmap.as_mut() {
-                        if let Some(chunk_bits) = state.raw.as_storage().null_bitmap() {
-                            bm.extend(chunk_bits.iter().by_vals());
-                        }
-                    }
-                }
-            } else {
-                for chunk in chunks.iter() {
-                    let state = chunk.read_state();
-                    let (chunk_data, _, _) = state.raw.as_storage().get_flush_data();
-                    data.extend_from_slice(&chunk_data);
-                    if let Some(bm) = bitmap.as_mut() {
-                        if let Some(chunk_bits) = state.raw.as_storage().null_bitmap() {
-                            bm.extend(chunk_bits.iter().by_vals());
-                        }
-                    }
-                }
-            }
-            return (data, offsets, bitmap);
-        }
-
-        let row_count = Self::column_len(&chunks);
-        let mut new_data = Vec::new();
-        let mut new_offsets = Vec::new();
-        let mut new_bitmap = self.nullable.then(|| BitVec::with_capacity(row_count));
-
+    /// Encode row values into raw flush buffers for this column's type:
+    /// `(data, offsets, null bitmap)`. The bitmap is produced only for
+    /// nullable columns. Rows are streamed so peak memory stays O(row).
+    fn values_into_buffers(
+        &self,
+        values: impl Iterator<Item = Option<Value>>,
+    ) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>) {
         let is_var = super::is_variable_length_type(&self.data_type);
         let elem_size = super::element_size(&self.data_type);
+        let mut new_data = Vec::new();
+        let mut new_offsets = Vec::new();
+        let mut new_bitmap = self.nullable.then(|| BitVec::with_capacity(1024));
 
-        // Stream row by row without materializing a full Vec<Option<Value>>:
-        // each row is resolved (overlay/chunk-encoding merged, overflow rows
-        // as inline placeholders) and encoded directly into the output
-        // buffers, so flush peak memory stays O(row) instead of O(column).
-        for row in 0..row_count {
-            let value: Option<Value> = self.raw_base_value_in(&chunks, row);
+        for value in values {
             match value {
                 Some(v) => {
                     if let Some(ref mut bm) = new_bitmap {
@@ -1463,6 +1260,62 @@ impl Column {
         }
 
         (new_data, new_offsets, new_bitmap)
+    }
+
+    pub fn get_flush_data(&self) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>) {
+        // Fast path: concatenate owned chunk buffers. Only when every chunk
+        // is resident and raw; evicted chunks (whose live encoding reads as
+        // None) fall through to the row-wise path that serves snapshots.
+        let chunks = self.chunks.read();
+        let all_raw_resident = !chunks.is_empty()
+            && chunks.iter().all(|c| {
+                let state = c.read_state();
+                !state.encoding.is_encoded() && state.residency.is_resident()
+            });
+        if all_raw_resident {
+            let mut data = Vec::new();
+            let mut offsets = Vec::new();
+            let mut bitmap = self.nullable.then(BitVec::<u8, Lsb0>::new);
+            let is_var = super::is_variable_length_type(&self.data_type);
+            if is_var {
+                for chunk in chunks.iter() {
+                    let state = chunk.read_state();
+                    let (chunk_data, chunk_offsets, _) = state.raw.as_storage().get_flush_data();
+                    let base = data.len() as u64;
+                    for off in chunk_offsets {
+                        offsets.push(if off == u64::MAX {
+                            u64::MAX
+                        } else {
+                            base + off
+                        });
+                    }
+                    data.extend_from_slice(&chunk_data);
+                    if let Some(bm) = bitmap.as_mut() {
+                        if let Some(chunk_bits) = state.raw.as_storage().null_bitmap() {
+                            bm.extend(chunk_bits.iter().by_vals());
+                        }
+                    }
+                }
+            } else {
+                for chunk in chunks.iter() {
+                    let state = chunk.read_state();
+                    let (chunk_data, _, _) = state.raw.as_storage().get_flush_data();
+                    data.extend_from_slice(&chunk_data);
+                    if let Some(bm) = bitmap.as_mut() {
+                        if let Some(chunk_bits) = state.raw.as_storage().null_bitmap() {
+                            bm.extend(chunk_bits.iter().by_vals());
+                        }
+                    }
+                }
+            }
+            return (data, offsets, bitmap);
+        }
+
+        let row_count = Self::column_len(&chunks);
+        // Row-wise path: overlay/encoded bases and evicted snapshots all
+        // resolve through the row reader, overflow rows as inline
+        // placeholders.
+        self.values_into_buffers((0..row_count).map(|row| self.raw_base_value_in(&chunks, row)))
     }
 
     // -----------------------------------------------------------------------
@@ -1589,8 +1442,7 @@ impl Column {
             }
         }
         // Restore the pre-evict encoding from the same values so promotion
-        // never leaves a raw chunk under a stale column-level mirror: mixed
-        // raw/encoded states would misroute reads through the mirror.
+        // returns the chunk to its encoded form instead of a raw copy.
         // Profiles (min/max/raw size) come from the snapshot; counts and
         // the compressed size reflect the fresh encoding.
         if snapshot.encoding != crate::encoding::EncodingType::None {
@@ -1608,13 +1460,7 @@ impl Column {
                     }
                 })
                 .collect();
-            let encoded = Self::encode_slice(
-                &values,
-                &data_type,
-                nullable,
-                snapshot.encoding,
-                255,
-            );
+            let encoded = Self::encode_slice(&values, &data_type, snapshot.encoding, 255);
             if encoded.is_encoded() {
                 let num_values = values.iter().filter(|v| v.is_some()).count() as u32;
                 let mut fresh_state = fresh.write_state();
@@ -1782,11 +1628,7 @@ impl Column {
             let order: Vec<(u64, usize)> = {
                 let chunks = self.chunks.read();
                 let mut order: Vec<(u64, usize)> = (0..chunks.len())
-                    .filter(|&idx| {
-                        chunks
-                            .get(idx)
-                            .is_some_and(|chunk| chunk.is_evictable())
-                    })
+                    .filter(|&idx| chunks.get(idx).is_some_and(|chunk| chunk.is_evictable()))
                     .map(|idx| (chunks[idx].last_access.load(Ordering::Relaxed), idx))
                     .collect();
                 order.sort_unstable();
@@ -2053,7 +1895,9 @@ impl Column {
         order.sort_by_key(|&i| live_rows[i]);
         let sorted_payloads: Vec<Vec<u8>> =
             order.iter().map(|&i| live_payloads[i].clone()).collect();
-        self.overflow_store.lock().rebuild_from_live(&sorted_payloads);
+        self.overflow_store
+            .lock()
+            .rebuild_from_live(&sorted_payloads);
         // Rebuild preserves row order, so entry ids follow the sorted rows.
         let mut sorted_rows: Vec<usize> = live_rows;
         sorted_rows.sort_unstable();
@@ -2170,43 +2014,19 @@ impl Column {
         Ok(())
     }
 
-    /// Restore a column-level encoding after load without touching raw data.
-    /// Exclusive-only (load path).
-    pub(crate) fn restore_encoding(&self, encoding: ColumnEncoding) {
-        *self.encoding.write() = encoding;
-    }
-
     /// Encode one row slice into a chunk-local encoding of the given type.
+    /// A failed or infeasible build yields `None` (the chunk stays raw).
     fn encode_slice(
         values: &[Option<Value>],
         data_type: &DataType,
-        nullable: bool,
         encoding_type: crate::encoding::EncodingType,
         fsst_max_symbols: usize,
     ) -> ColumnEncoding {
-        use crate::encoding::EncodingType as ET;
         if values.is_empty() {
             return ColumnEncoding::None;
         }
-        let mut tmp = Column::new("slice".to_string(), 0, data_type.clone(), nullable);
-        for (off, v) in values.iter().enumerate() {
-            tmp.resize(off + 1);
-            let _ = tmp.write_value_without_dirty(off, v.as_ref());
-        }
-        let applied = match encoding_type {
-            ET::Fsst => tmp.apply_fsst_encoding(fsst_max_symbols).is_ok(),
-            ET::Dictionary => tmp.apply_dictionary_encoding().is_ok(),
-            ET::Rle => tmp.apply_rle_encoding().is_ok(),
-            ET::BitPacking => tmp.apply_bitpacking_encoding().is_ok(),
-            ET::Alp => tmp.apply_alp_encoding().is_ok(),
-            ET::Constant => tmp.apply_constant_encoding().is_ok(),
-            ET::None => false,
-        };
-        if applied {
-            tmp.encoding.read().clone()
-        } else {
-            ColumnEncoding::None
-        }
+        Self::build_chunk_encoding(data_type, values, encoding_type, fsst_max_symbols)
+            .unwrap_or(ColumnEncoding::None)
     }
 
     /// Enforce the chunk window invariant: windows are contiguous from row
@@ -2306,24 +2126,50 @@ impl Column {
     /// Per-chunk flush view: window plus cloned payload descriptors for
     /// persistence serialization. The clones are taken under one segment
     /// read latch each so the serialized record is chunk-consistent.
-    pub(crate) fn chunk_flush_view(
-        &self,
-        idx: usize,
-    ) -> Option<super::ChunkFlushView> {
+    /// Evicted chunks (possible only when flush-time promotion failed) are
+    /// materialized row-wise from their snapshot into raw buffers.
+    pub(crate) fn chunk_flush_view(&self, idx: usize) -> Option<super::ChunkFlushView> {
         let chunks = self.chunks.read();
         let chunk = chunks.get(idx)?;
         let state = chunk.read_state();
+        let raw_form = !state.encoding.is_encoded();
+        let (raw_data, raw_offsets, raw_bitmap) = if !raw_form {
+            (Vec::new(), Vec::new(), None)
+        } else if state.residency.is_evicted() {
+            let (data, offsets, bitmap) = self.values_into_buffers(
+                (chunk.row_offset..chunk.row_offset + chunk.row_count)
+                    .map(|row| self.raw_base_value_in(&chunks, row)),
+            );
+            (data, offsets, bitmap)
+        } else {
+            state.raw.as_storage().get_flush_data()
+        };
+        let overlay: Vec<(u32, Option<Value>)> = if state.residency.is_evicted() {
+            // Evicted windows carry no live overlay (writes promote first),
+            // and the materialized buffers above already merged any values.
+            Vec::new()
+        } else {
+            state.overlay.iter().map(|(k, v)| (*k, v.clone())).collect()
+        };
         Some(super::ChunkFlushView {
             row_offset: chunk.row_offset,
             row_count: chunk.row_count,
             encoding_meta: state.encoding_meta.clone(),
             encoding: state.encoding.clone(),
-            overlay: state
-                .overlay
-                .iter()
-                .map(|(k, v)| (*k, v.clone()))
-                .collect(),
+            overlay,
+            raw_form,
+            raw_data,
+            raw_offsets,
+            raw_bitmap,
         })
+    }
+
+    /// Every chunk's flush view, in row order.
+    pub(crate) fn chunk_flush_views(&self) -> Vec<super::ChunkFlushView> {
+        let count = self.chunks.read().len();
+        (0..count)
+            .filter_map(|idx| self.chunk_flush_view(idx))
+            .collect()
     }
 
     /// Per-chunk encoding metadata: (chunk_idx, encoding type, row count).
@@ -2331,9 +2177,6 @@ impl Column {
     /// profiles keep describing the flushed layout.
     pub fn chunk_encoding_metadata(&self) -> Vec<(usize, crate::encoding::EncodingType, usize)> {
         let chunks = self.chunks.read();
-        if chunks.is_empty() {
-            return vec![(0, self.encoding.read().encoding_type(), self.len())];
-        }
         chunks
             .iter()
             .enumerate()
@@ -2381,12 +2224,11 @@ impl Column {
         true
     }
 
-    /// Apply one selected encoding to this column.
+    /// Apply one selected encoding to this column, chunk by chunk.
     ///
-    /// Single-column form of the store-level dispatch: chunked columns go
-    /// through the per-chunk path, unchunked columns through the matching
-    /// column-level encoder. Empty columns are a no-op. Exclusive-only
-    /// (flush/encode path): it rewrites chunk payloads wholesale.
+    /// Each resident chunk selects and stores its own encoding so point
+    /// updates only decode the affected chunk. Exclusive-only (flush/encode
+    /// path): it rewrites chunk payloads wholesale.
     pub fn apply_selected_encoding(
         &self,
         encoding_type: crate::encoding::EncodingType,
@@ -2395,47 +2237,7 @@ impl Column {
         if self.is_empty() {
             return Ok(());
         }
-
-        // Chunk-level path: each resident chunk selects and stores its own
-        // encoding so point updates only decode the affected chunk.
-        if self.has_chunks() {
-            return self.apply_encoding_to_chunks(encoding_type, fsst_max_symbols);
-        }
-
-        match encoding_type {
-            crate::encoding::EncodingType::Fsst => {
-                if self.data_type != DataType::String
-                    && self.data_type != DataType::Json
-                    && !matches!(self.data_type, DataType::FixedString(_))
-                {
-                    return Err(StorageError::not_supported(format!(
-                        "FSST encoding does not support type {:?}",
-                        self.data_type
-                    )));
-                }
-                self.apply_fsst_encoding(fsst_max_symbols)?;
-            }
-            crate::encoding::EncodingType::Dictionary => {
-                self.apply_dictionary_encoding()?;
-            }
-            crate::encoding::EncodingType::Rle => {
-                self.apply_rle_encoding()?;
-            }
-            crate::encoding::EncodingType::BitPacking => {
-                self.apply_bitpacking_encoding()?;
-            }
-            crate::encoding::EncodingType::Alp => {
-                self.apply_alp_encoding()?;
-            }
-            crate::encoding::EncodingType::Constant => {
-                self.apply_constant_encoding()?;
-            }
-            crate::encoding::EncodingType::None => {}
-        }
-        // Encodings are built from placeholder base values; overflow rows
-        // keep snapshot from the side store, so mappings are preserved.
-
-        Ok(())
+        self.apply_encoding_to_chunks(encoding_type, fsst_max_symbols)
     }
 
     /// Apply an encoding type independently per chunk.
@@ -2449,7 +2251,10 @@ impl Column {
         encoding_type: crate::encoding::EncodingType,
         fsst_max_symbols: usize,
     ) -> StorageResult<()> {
-        if self.chunks.read().is_empty() {
+        // Bind the check so the read guard drops before materialize_chunks:
+        // parking_lot locks are not reentrant.
+        let empty = self.chunks.read().is_empty();
+        if empty {
             self.materialize_chunks();
         }
         if self.chunks.read().is_empty() {
@@ -2510,13 +2315,7 @@ impl Column {
                 continue;
             }
             // Encode this chunk slice in isolation (chunk-local indexes).
-            let encoded = Self::encode_slice(
-                &values,
-                &self.data_type,
-                self.nullable,
-                selected,
-                fsst_max_symbols,
-            );
+            let encoded = Self::encode_slice(&values, &self.data_type, selected, fsst_max_symbols);
             if encoded.is_encoded() {
                 let num_values = values.iter().filter(|v| v.is_some()).count() as u32;
                 let mut state = chunk.write_state();
@@ -2528,12 +2327,6 @@ impl Column {
                 state.encoding_meta.all_null = num_values == 0;
                 state.encoding_meta.compressed_size = state.encoding.memory_usage() as u64;
             }
-        }
-        // Mirror the first chunk as the column-level encoding so
-        // single-buffer readers observe the active scheme.
-        let chunks = self.chunks.read();
-        if let Some(first) = chunks.first() {
-            *self.encoding.write() = first.read_state().encoding.clone();
         }
         Ok(())
     }

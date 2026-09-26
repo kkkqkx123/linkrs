@@ -9,7 +9,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::edge::UpdateEdgePropertyByKeyParams;
-use graphdb_core::types::{ColumnId, LabelId, Timestamp, VertexId};
+use graphdb_core::types::{LabelId, Timestamp, VertexId};
 use graphdb_core::Value;
 use graphdb_transaction::undo_log::{UndoLogError, UndoLogResult};
 
@@ -180,32 +180,6 @@ impl TransactionOps {
         Ok(())
     }
 
-    pub fn revert_delete_vertex(
-        vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
-        label: LabelId,
-        vid: VertexId,
-        ts: Timestamp,
-    ) -> UndoLogResult<()> {
-        let table = vertex_tables
-            .get(&label)
-            .ok_or(UndoLogError::LabelNotFound(label))?;
-
-        let internal_id = if let Some(int_id) = vid.as_int64() {
-            table.get_internal_id_by_i64_raw(int_id)
-        } else if let Some(str_id) = vid.as_str() {
-            table.get_internal_id_raw(str_id)
-        } else {
-            None
-        }
-        .ok_or(UndoLogError::VertexNotFound(vid))?;
-
-        table
-            .revert_delete(internal_id, ts)
-            .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
-
-        Ok(())
-    }
-
     pub fn update_vertex_property_by_vid(
         vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         label: LabelId,
@@ -229,27 +203,6 @@ impl TransactionOps {
 
         table
             .update_property(internal_id, prop_name, value, ts)
-            .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
-        Ok(())
-    }
-
-    pub fn update_vertex_property_undo(
-        vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
-        label: LabelId,
-        vid: VertexId,
-        col_id: ColumnId,
-        old_value: Value,
-        ts: Timestamp,
-    ) -> UndoLogResult<()> {
-        let table = vertex_tables
-            .get(&label)
-            .ok_or(UndoLogError::LabelNotFound(label))?;
-
-        let internal_id =
-            Self::resolve_vertex_id(table, vid, ts).ok_or(UndoLogError::VertexNotFound(vid))?;
-
-        table
-            .update_property_by_id(internal_id, col_id.0 as i32, &old_value, ts)
             .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
         Ok(())
     }

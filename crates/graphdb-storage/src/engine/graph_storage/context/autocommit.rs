@@ -183,6 +183,10 @@ pub struct AutoCommitBatchWindow {
     pub(crate) group: AtomicBool,
     /// Shared before-image undo log for group mode (one segment per statement).
     pub(crate) group_undo: Option<Arc<Mutex<UndoLogManager>>>,
+    /// One transaction id shared by every statement of a group window: the
+    /// group's staging buffer and staged WAL are keyed by it, and the group
+    /// commit point applies and flushes them together.
+    pub(crate) group_transaction_id: Mutex<Option<graphdb_core::types::TransactionId>>,
     /// Accumulated statement write sets for group mode. Each grouped
     /// statement pushes its write set at finalize; the group commit point
     /// merges and publishes them so later transactions certify against the
@@ -216,11 +220,34 @@ impl AutoCommitBatchWindow {
             }
         };
 
-        let transaction_id = graphdb_core::types::TransactionId::new(
-            base.persistent
-                .next_auto_transaction_id
-                .fetch_add(1, Ordering::SeqCst),
-        );
+        let transaction_id = if is_group {
+            let mut shared = self.group_transaction_id.lock();
+            if shared.is_none() {
+                *shared = Some(graphdb_core::types::TransactionId::new(
+                    base.persistent
+                        .next_auto_transaction_id
+                        .fetch_add(1, Ordering::SeqCst),
+                ));
+            }
+            *shared.as_ref().expect("group transaction id is set above")
+        } else {
+            graphdb_core::types::TransactionId::new(
+                base.persistent
+                    .next_auto_transaction_id
+                    .fetch_add(1, Ordering::SeqCst),
+            )
+        };
+        // Grouped statements share one staging buffer and one staged WAL,
+        // so the statement boundary is a (journal, index, wal-length) mark
+        // used to rewind exactly this statement on failure.
+        let (staging_start, wal_start) = if is_group {
+            (
+                Some(base.peek_txn_staging_mark(transaction_id).unwrap_or((0, 0))),
+                base.staged_wal_len_for(transaction_id),
+            )
+        } else {
+            (None, 0)
+        };
         let undo_log = if is_group {
             Arc::clone(
                 self.group_undo
@@ -249,6 +276,8 @@ impl AutoCommitBatchWindow {
                 write_set: write_set.clone(),
             })),
             auto_commit_group_start: group_undo_start,
+            auto_commit_staging_start: staging_start,
+            auto_commit_wal_start: wal_start,
         };
 
         self.statement_count.fetch_add(1, Ordering::SeqCst);
@@ -299,7 +328,21 @@ impl AutoCommitBatchWindow {
     /// and the accumulated window write set is published for later
     /// certification.
     pub fn finalize_group(&self) -> StorageResult<()> {
-        // 1) Durability: one sync covering every no-wait appended statement.
+        // 0) Commit apply: the group's staged vertex rows install into the
+        // main tables, then the accumulated WAL redo is appended as one
+        // transaction (no fsync yet). A failure here aborts the whole group.
+        let group_txid = *self.group_transaction_id.lock();
+        if let Some(txid) = group_txid {
+            if let Err(error) = self.base_ctx.apply_txn_staging(txid) {
+                let _ = self.rollback_group();
+                return Err(error);
+            }
+            if let Err(error) = self.base_ctx.commit_staged_writes_grouped(txid, &[]) {
+                let _ = self.rollback_group();
+                return Err(error);
+            }
+        }
+        // 1) Durability: one sync covering the appended group redo.
         if let Some(persistence) = self.base_ctx.persistent.persistence.as_ref() {
             if let Some(wal) = persistence.read().wal_manager() {
                 wal.read().sync()?;
@@ -355,6 +398,12 @@ impl AutoCommitBatchWindow {
             if let Some(ts) = *self.first_ts.lock() {
                 self.base_ctx.abort_write_timestamp(ts);
             }
+        }
+        // Drop the group's staged WAL and discard the staging buffer,
+        // releasing every reservation it held: the rows were never applied.
+        if let Some(txid) = *self.group_transaction_id.lock() {
+            self.base_ctx.drop_staged_wal_for(txid);
+            self.base_ctx.discard_txn_staging_for(txid);
         }
         self.group_write_sets.lock().clear();
         self.unregister_snapshots();

@@ -1259,14 +1259,14 @@ fn test_concurrent_final_review_no_false_abort() {
 fn test_abort_without_sink_executes_undo_against_target() {
     use std::sync::atomic::AtomicUsize;
 
-    use crate::undo_log::{InsertVertexUndo, UndoLogEntry, UndoLogResult, UndoTarget};
+    use crate::undo_log::{InsertEdgeUndo, UndoLogEntry, UndoLogResult, UndoTarget};
     use graphdb_core::types::{
         ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, Timestamp, VertexId,
         VertexIdentifier,
     };
 
     struct CountingTarget {
-        deleted_vertices: AtomicUsize,
+        deleted_edges: AtomicUsize,
     }
 
     impl UndoTarget for CountingTarget {
@@ -1277,20 +1277,11 @@ fn test_abort_without_sink_executes_undo_against_target() {
             Ok(())
         }
         fn delete_vertex(&self, _vertex: VertexIdentifier, _ts: Timestamp) -> UndoLogResult<()> {
-            self.deleted_vertices
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         }
         fn delete_edge(&self, _edge_ctx: EdgeDeletionContext) -> UndoLogResult<()> {
-            Ok(())
-        }
-        fn undo_update_vertex_property(
-            &self,
-            _vertex: VertexIdentifier,
-            _col_id: ColumnId,
-            _value: graphdb_core::Value,
-            _ts: Timestamp,
-        ) -> UndoLogResult<()> {
+            self.deleted_edges
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         }
         fn undo_update_edge_property(
@@ -1298,13 +1289,6 @@ fn test_abort_without_sink_executes_undo_against_target() {
             _edge_id: EdgeIdentifier,
             _col_id: ColumnId,
             _value: graphdb_core::Value,
-            _ts: Timestamp,
-        ) -> UndoLogResult<()> {
-            Ok(())
-        }
-        fn revert_delete_vertex(
-            &self,
-            _vertex: VertexIdentifier,
             _ts: Timestamp,
         ) -> UndoLogResult<()> {
             Ok(())
@@ -1367,14 +1351,18 @@ fn test_abort_without_sink_executes_undo_against_target() {
         .expect("transaction should begin");
     let context = manager.get_context(txn_id).expect("context should exist");
     context
-        .add_undo_log(UndoLogEntry::InsertVertex(InsertVertexUndo {
-            v_label: 1,
-            vid: VertexId::try_from_int64(9).expect("test vertex id"),
+        .add_undo_log(UndoLogEntry::InsertEdge(InsertEdgeUndo {
+            src_label: 1,
+            dst_label: 2,
+            edge_label: 3,
+            rank: 0,
+            src_vid: VertexId::try_from_int64(9).expect("test vertex id"),
+            dst_vid: VertexId::try_from_int64(10).expect("test vertex id"),
         }))
         .expect("undo log append should succeed");
 
     let mut target = CountingTarget {
-        deleted_vertices: AtomicUsize::new(0),
+        deleted_edges: AtomicUsize::new(0),
     };
     manager
         .abort_transaction_with_undo(txn_id, &mut target)
@@ -1382,10 +1370,10 @@ fn test_abort_without_sink_executes_undo_against_target() {
 
     assert_eq!(
         target
-            .deleted_vertices
+            .deleted_edges
             .load(std::sync::atomic::Ordering::SeqCst),
         1,
-        "the inserted vertex must be rolled back exactly once"
+        "the inserted edge must be rolled back exactly once"
     );
     assert_eq!(context.undo_log_len(), 0);
     assert_eq!(context.state(), TransactionState::Aborted);

@@ -362,27 +362,39 @@ mod tests {
             vec!["started"]
         );
 
-        ctx.insert_vertex_by_i64(
-            person_label,
-            1001,
-            &[
-                ("id".to_string(), Value::BigInt(1001)),
-                ("full_name".to_string(), Value::string("Alice")),
-            ],
-            4,
-        )
-        .expect("Vertex insert should succeed after property replay");
+        {
+            let mut scope = crate::vertex::WriteScope::new(4);
+            ctx.insert_vertex_by_i64_with_scope(
+                person_label,
+                1001,
+                &[
+                    ("id".to_string(), Value::BigInt(1001)),
+                    ("full_name".to_string(), Value::string("Alice")),
+                ],
+                4,
+                &mut scope,
+            )
+            .expect("Vertex stage should succeed after property replay");
+            ctx.commit_write_scope(person_label, &mut scope, 4)
+                .expect("Vertex apply should succeed after property replay");
+        }
 
-        ctx.insert_vertex_by_i64(
-            city_label,
-            2001,
-            &[
-                ("id".to_string(), Value::BigInt(2001)),
-                ("name".to_string(), Value::string("Shanghai")),
-            ],
-            4,
-        )
-        .expect("City vertex insert should succeed");
+        {
+            let mut scope = crate::vertex::WriteScope::new(4);
+            ctx.insert_vertex_by_i64_with_scope(
+                city_label,
+                2001,
+                &[
+                    ("id".to_string(), Value::BigInt(2001)),
+                    ("name".to_string(), Value::string("Shanghai")),
+                ],
+                4,
+                &mut scope,
+            )
+            .expect("City stage should succeed");
+            ctx.commit_write_scope(city_label, &mut scope, 4)
+                .expect("City apply should succeed");
+        }
 
         let vertex = ctx
             .get_vertex_by_i64(person_label, 1001, 5)

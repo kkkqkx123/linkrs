@@ -8,7 +8,7 @@ mod tests {
 
     #[test]
     fn test_column_basic() {
-        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        let col = Column::new("age".to_string(), 0, DataType::Int, true);
 
         col.set(0, Some(&Value::Int(25))).unwrap();
         col.set(1, Some(&Value::Int(30))).unwrap();
@@ -22,7 +22,7 @@ mod tests {
 
     #[test]
     fn test_column_string() {
-        let mut col = Column::new("name".to_string(), 0, DataType::String, false);
+        let col = Column::new("name".to_string(), 0, DataType::String, false);
 
         col.set(0, Some(&Value::string("Alice"))).unwrap();
         col.set(1, Some(&Value::string("Bob"))).unwrap();
@@ -34,7 +34,7 @@ mod tests {
 
     #[test]
     fn test_column_store_batch_reads() {
-        let mut store = ColumnStore::new();
+        let store = ColumnStore::new();
 
         store.add_column("name".to_string(), DataType::String, false);
         store.add_column("age".to_string(), DataType::Int, true);
@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn test_column_store() {
-        let mut store = ColumnStore::new();
+        let store = ColumnStore::new();
 
         store.add_column("name".to_string(), DataType::String, false);
         store.add_column("age".to_string(), DataType::Int, true);
@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn test_column_store_remove_and_rename() {
-        let mut store = ColumnStore::new();
+        let store = ColumnStore::new();
 
         store.add_column("name".to_string(), DataType::String, false);
         store.add_column("age".to_string(), DataType::Int, true);
@@ -158,14 +158,14 @@ mod tests {
 
     #[test]
     fn test_fixed_width_multiple_types() {
-        let mut col = Column::new("mixed".to_string(), 0, DataType::BigInt, false);
+        let col = Column::new("mixed".to_string(), 0, DataType::BigInt, false);
         col.set(0, Some(&Value::BigInt(100))).unwrap();
         col.set(1, Some(&Value::BigInt(200))).unwrap();
         assert_eq!(col.get(0), Some(Value::BigInt(100)));
         assert_eq!(col.get(1), Some(Value::BigInt(200)));
         assert_eq!(col.len(), 2);
 
-        let mut col2 = Column::new("flag".to_string(), 1, DataType::Bool, true);
+        let col2 = Column::new("flag".to_string(), 1, DataType::Bool, true);
         col2.set(0, Some(&Value::Bool(true))).unwrap();
         col2.set(1, Some(&Value::Bool(false))).unwrap();
         col2.set(2, None).unwrap();
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_flush_and_reload_fixed() {
-        let mut col = Column::new("val".to_string(), 0, DataType::Int, true);
+        let col = Column::new("val".to_string(), 0, DataType::Int, true);
         col.set(0, Some(&Value::Int(10))).unwrap();
         col.set(1, Some(&Value::Int(20))).unwrap();
         col.set(2, None).unwrap();
@@ -184,8 +184,19 @@ mod tests {
         let (data, offsets, bitmap) = col.get_flush_data();
         assert!(offsets.is_empty());
 
-        let mut restored = Column::new("val".to_string(), 0, DataType::Int, true);
-        restored.load_data_from_raw(data, Vec::new(), bitmap.map(|b| b.into_vec()), col.len());
+        let restored = Column::new("val".to_string(), 0, DataType::Int, true);
+        let chunk = ColumnChunk::new(0, 3, &DataType::Int, true);
+        {
+            let mut state = chunk.write_state();
+            state.raw.as_storage_mut().load_data_from_raw(
+                data,
+                Vec::new(),
+                bitmap.map(|b| b.into_vec()),
+                3,
+            );
+            state.visibility.ensure_len(3);
+        }
+        restored.set_chunks(vec![chunk]);
 
         assert_eq!(restored.get(0), Some(Value::Int(10)));
         assert_eq!(restored.get(1), Some(Value::Int(20)));
@@ -195,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_flush_and_reload_variable() {
-        let mut col = Column::new("name".to_string(), 0, DataType::String, true);
+        let col = Column::new("name".to_string(), 0, DataType::String, true);
         col.set(0, Some(&Value::string("Hello"))).unwrap();
         col.set(1, Some(&Value::string("World"))).unwrap();
         col.set(2, None).unwrap();
@@ -203,8 +214,19 @@ mod tests {
         let (data, offsets, bitmap) = col.get_flush_data();
         assert!(!offsets.is_empty());
 
-        let mut restored = Column::new("name".to_string(), 0, DataType::String, true);
-        restored.load_data_from_raw(data, offsets, bitmap.map(|b| b.into_vec()), 3);
+        let restored = Column::new("name".to_string(), 0, DataType::String, true);
+        let chunk = ColumnChunk::new(0, 3, &DataType::String, true);
+        {
+            let mut state = chunk.write_state();
+            state.raw.as_storage_mut().load_data_from_raw(
+                data,
+                offsets,
+                bitmap.map(|b| b.into_vec()),
+                3,
+            );
+            state.visibility.ensure_len(3);
+        }
+        restored.set_chunks(vec![chunk]);
 
         assert_eq!(restored.get(0), Some(Value::string("Hello")));
         assert_eq!(restored.get(1), Some(Value::string("World")));
@@ -217,7 +239,7 @@ mod tests {
     /// Test: Verify large property values (>256 bytes) are handled correctly
     #[test]
     fn test_column_set_large_string_property() {
-        let mut col = Column::new("description".to_string(), 0, DataType::String, false);
+        let col = Column::new("description".to_string(), 0, DataType::String, false);
 
         // Create a string larger than typical storage boundaries
         let large_value = "a".repeat(1000);
@@ -233,7 +255,7 @@ mod tests {
     /// Test: Verify updating single property doesn't affect others
     #[test]
     fn test_column_store_update_single_property_preserves_others() {
-        let mut store = ColumnStore::new();
+        let store = ColumnStore::new();
         store.add_column("name".to_string(), DataType::String, false);
         store.add_column("age".to_string(), DataType::Int, false);
         store.add_column("city".to_string(), DataType::String, false);
@@ -280,7 +302,7 @@ mod tests {
     /// Test: Verify very large property values can be stored and retrieved
     #[test]
     fn test_column_large_string_roundtrip() {
-        let mut col = Column::new("data".to_string(), 0, DataType::String, false);
+        let col = Column::new("data".to_string(), 0, DataType::String, false);
 
         // Test different sizes around potential boundaries
         let sizes = [255, 256, 257, 1000, 10000];
@@ -299,7 +321,7 @@ mod tests {
     /// Test: Verify string column with mixed null and non-null values
     #[test]
     fn test_column_string_with_nulls() {
-        let mut col = Column::new("text".to_string(), 0, DataType::String, true);
+        let col = Column::new("text".to_string(), 0, DataType::String, true);
 
         col.set(0, Some(&Value::string("hello"))).unwrap();
         col.set(1, None).unwrap();
@@ -317,7 +339,7 @@ mod tests {
     /// bitmap through set / re-set / resize operations.
     #[test]
     fn test_null_count_counter_tracks_bitmap() {
-        let mut col = Column::new("text".to_string(), 0, DataType::String, true);
+        let col = Column::new("text".to_string(), 0, DataType::String, true);
 
         col.set(0, Some(&Value::string("a"))).unwrap();
         col.set(1, None).unwrap();
@@ -348,13 +370,13 @@ mod tests {
     /// Test: Verify integer column type conversions and boundaries
     #[test]
     fn test_column_integer_types_boundaries() {
-        let mut col_small = Column::new("small".to_string(), 0, DataType::SmallInt, false);
+        let col_small = Column::new("small".to_string(), 0, DataType::SmallInt, false);
         col_small.set(0, Some(&Value::SmallInt(i16::MAX))).unwrap();
         col_small.set(1, Some(&Value::SmallInt(i16::MIN))).unwrap();
         assert_eq!(col_small.get(0), Some(Value::SmallInt(i16::MAX)));
         assert_eq!(col_small.get(1), Some(Value::SmallInt(i16::MIN)));
 
-        let mut col_big = Column::new("big".to_string(), 0, DataType::BigInt, false);
+        let col_big = Column::new("big".to_string(), 0, DataType::BigInt, false);
         col_big.set(0, Some(&Value::BigInt(i64::MAX))).unwrap();
         col_big.set(1, Some(&Value::BigInt(i64::MIN))).unwrap();
         assert_eq!(col_big.get(0), Some(Value::BigInt(i64::MAX)));
@@ -364,12 +386,12 @@ mod tests {
     /// Test: Verify float/double precision preservation
     #[test]
     fn test_column_float_precision() {
-        let mut col_f = Column::new("float_val".to_string(), 0, DataType::Float, false);
+        let col_f = Column::new("float_val".to_string(), 0, DataType::Float, false);
         let f_value = 1.5_f32;
         col_f.set(0, Some(&Value::Float(f_value))).unwrap();
         assert_eq!(col_f.get(0), Some(Value::Float(f_value)));
 
-        let mut col_d = Column::new("double_val".to_string(), 0, DataType::Double, false);
+        let col_d = Column::new("double_val".to_string(), 0, DataType::Double, false);
         let d_value = std::f64::consts::PI;
         col_d.set(0, Some(&Value::Double(d_value))).unwrap();
         assert_eq!(col_d.get(0), Some(Value::Double(d_value)));
@@ -378,7 +400,7 @@ mod tests {
     /// Test: Verify column resize operation maintains data integrity
     #[test]
     fn test_column_resize_maintains_data() {
-        let mut col = Column::new("num".to_string(), 0, DataType::Int, false);
+        let col = Column::new("num".to_string(), 0, DataType::Int, false);
         col.set(0, Some(&Value::Int(10))).unwrap();
         col.set(1, Some(&Value::Int(20))).unwrap();
         col.set(2, Some(&Value::Int(30))).unwrap();
@@ -398,7 +420,7 @@ mod tests {
     /// Test: Column with repetitive integer values (RLE compression eligible)
     #[test]
     fn test_column_repetitive_integer_values() {
-        let mut col = Column::new("status".to_string(), 0, DataType::Int, false);
+        let col = Column::new("status".to_string(), 0, DataType::Int, false);
 
         // Insert repetitive values that could benefit from RLE
         for i in 0..100 {
@@ -424,7 +446,7 @@ mod tests {
     /// Test: String column with low cardinality (Dictionary compression eligible)
     #[test]
     fn test_column_low_cardinality_strings() {
-        let mut col = Column::new("category".to_string(), 0, DataType::String, false);
+        let col = Column::new("category".to_string(), 0, DataType::String, false);
 
         let categories = ["A", "B", "C", "A", "B", "C"];
 
@@ -443,7 +465,7 @@ mod tests {
     /// Test: Numeric column suitable for bitpacking
     #[test]
     fn test_column_small_range_integers() {
-        let mut col = Column::new("priority".to_string(), 0, DataType::Int, false);
+        let col = Column::new("priority".to_string(), 0, DataType::Int, false);
 
         // Insert values with small range [0-15] - good for bitpacking
         for i in 0..256 {
@@ -461,7 +483,7 @@ mod tests {
     /// Test: Long string column suitable for FSST compression
     #[test]
     fn test_column_long_strings_compression() {
-        let mut col = Column::new("description".to_string(), 0, DataType::String, false);
+        let col = Column::new("description".to_string(), 0, DataType::String, false);
 
         let long_strings = [
             "The quick brown fox jumps over the lazy dog",
@@ -485,7 +507,7 @@ mod tests {
     /// Test: i64 boundary values
     #[test]
     fn test_column_i64_boundaries() {
-        let mut col = Column::new("bigint_val".to_string(), 0, DataType::BigInt, false);
+        let col = Column::new("bigint_val".to_string(), 0, DataType::BigInt, false);
 
         // Test MAX and MIN values
         col.set(0, Some(&Value::BigInt(i64::MAX))).unwrap();
@@ -500,7 +522,7 @@ mod tests {
     /// Test: Empty string handling
     #[test]
     fn test_column_empty_string() {
-        let mut col = Column::new("text".to_string(), 0, DataType::String, false);
+        let col = Column::new("text".to_string(), 0, DataType::String, false);
 
         // Test empty string
         col.set(0, Some(&Value::string(""))).unwrap();
@@ -513,7 +535,7 @@ mod tests {
     /// Test: Special characters in strings
     #[test]
     fn test_column_special_characters() {
-        let mut col = Column::new("special".to_string(), 0, DataType::String, false);
+        let col = Column::new("special".to_string(), 0, DataType::String, false);
 
         let special_strings = [
             "\n\t\r",     // Whitespace
@@ -531,7 +553,7 @@ mod tests {
     /// Test: Float special values
     #[test]
     fn test_column_float_special_values() {
-        let mut col = Column::new("float_val".to_string(), 0, DataType::Float, false);
+        let col = Column::new("float_val".to_string(), 0, DataType::Float, false);
 
         // Test normal, zero, negative
         col.set(0, Some(&Value::Float(0.0))).unwrap();
@@ -547,7 +569,7 @@ mod tests {
 
     #[test]
     fn test_versioned_writes_keep_before_images() {
-        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        let col = Column::new("age".to_string(), 0, DataType::Int, true);
 
         // Insert at ts=10, then two updates at increasing timestamps.
         col.set_versioned(0, Some(&Value::Int(1)), 10).unwrap();
@@ -578,7 +600,7 @@ mod tests {
 
     #[test]
     fn test_versioned_null_and_string_types() {
-        let mut col = Column::new("name".to_string(), 0, DataType::String, true);
+        let col = Column::new("name".to_string(), 0, DataType::String, true);
 
         col.set_versioned(0, Some(&Value::string("alice")), 10)
             .unwrap();
@@ -594,7 +616,7 @@ mod tests {
 
     #[test]
     fn test_versioned_write_at_or_before_start_is_noop_range() {
-        let mut col = Column::new("v".to_string(), 0, DataType::BigInt, true);
+        let col = Column::new("v".to_string(), 0, DataType::BigInt, true);
         col.set_versioned(0, Some(&Value::BigInt(7)), 100).unwrap();
         // Rollback-style write reusing the same timestamp must not create a
         // zero-length version range.
@@ -635,7 +657,7 @@ mod tests {
                 Value::Vector(graphdb_core::value::VectorValue::dense(vec![1.0, 2.0])),
             ),
         ] {
-            let mut col = Column::new("c".to_string(), 0, data_type.clone(), true);
+            let col = Column::new("c".to_string(), 0, data_type.clone(), true);
             assert!(crate::vertex::column::is_variable_length_type(&data_type));
             col.set_versioned(0, Some(&value), 10).unwrap();
             assert_eq!(col.get_at_ts(0, 10), Some(value.clone()));
@@ -667,7 +689,7 @@ mod tests {
                 data_type
             );
             assert_eq!(crate::vertex::column::element_size(&data_type), 0);
-            let mut col = Column::new("c".to_string(), 0, data_type, true);
+            let col = Column::new("c".to_string(), 0, data_type, true);
             col.reserve(1);
             assert!(matches!(
                 col.chunks.read()[0].read_state().raw,
@@ -678,7 +700,7 @@ mod tests {
 
     #[test]
     fn test_clear_page_dirty_only_clears_requested_page() {
-        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        let col = Column::new("age".to_string(), 0, DataType::Int, true);
         let page_rows = crate::persistence::dirty_page::ROWS_PER_PAGE;
 
         col.set(page_rows - 1, Some(&Value::Int(1))).unwrap();
@@ -697,7 +719,7 @@ mod tests {
 
     #[test]
     fn test_column_store_clear_pages_keeps_other_pages_dirty() {
-        let mut store = ColumnStore::new();
+        let store = ColumnStore::new();
         store.add_column("name".to_string(), DataType::String, false);
         store.add_column("age".to_string(), DataType::Int, true);
 
@@ -715,8 +737,7 @@ mod tests {
         assert!(pages.iter().all(|p| p.page_id == 0));
 
         store.clear_pages(&[("name".to_string(), 0)]);
-        let remaining = store
-            .for_each_column(|col| (col.name.clone(), col.dirty_pages()));
+        let remaining = store.for_each_column(|col| (col.name.clone(), col.dirty_pages()));
         assert_eq!(
             remaining,
             vec![
@@ -728,7 +749,7 @@ mod tests {
 
     #[test]
     fn test_column_chunk_materialize_and_read() {
-        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        let col = Column::new("age".to_string(), 0, DataType::Int, true);
         col.set_chunk_capacity(4);
         for i in 0..10 {
             col.set(i, Some(&Value::Int(i as i32))).unwrap();
@@ -746,7 +767,7 @@ mod tests {
 
     #[test]
     fn test_column_chunk_layer_read() {
-        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        let col = Column::new("age".to_string(), 0, DataType::Int, true);
         col.set_chunk_capacity(4);
         for i in 0..8 {
             col.set(i, Some(&Value::Int(i as i32))).unwrap();
@@ -759,7 +780,7 @@ mod tests {
 
     #[test]
     fn test_column_chunk_encoding_roundtrip() {
-        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        let col = Column::new("age".to_string(), 0, DataType::Int, true);
         col.set_chunk_capacity(4);
         for i in 0..8 {
             col.set(i, Some(&Value::Int((i % 4) as i32))).unwrap();
@@ -782,7 +803,7 @@ mod tests {
 
     #[test]
     fn test_column_chunk_constant_inplace_rules() {
-        let mut col = Column::new("s".to_string(), 0, DataType::String, true);
+        let col = Column::new("s".to_string(), 0, DataType::String, true);
         col.set_chunk_capacity(8);
         for i in 0..8 {
             col.set(i, Some(&Value::string("same"))).unwrap();
@@ -805,7 +826,7 @@ mod tests {
 
     #[test]
     fn test_column_store_collect_dirty_pages() {
-        let mut store = ColumnStore::new();
+        let store = ColumnStore::new();
         store.add_column("age".to_string(), DataType::Int, true);
         let col = store.get_column("age").unwrap();
         col.set_chunk_capacity(4);
@@ -823,7 +844,7 @@ mod tests {
     fn test_gc_versions_boundary_at_cutoff() {
         // Entries ending exactly at the cutoff are no longer visible to any
         // snapshot at/after it, so they are reclaimed; newer entries survive.
-        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        let col = Column::new("age".to_string(), 0, DataType::Int, true);
         col.set_versioned(0, Some(&Value::Int(1)), 10).unwrap();
         col.set_versioned(0, Some(&Value::Int(2)), 20).unwrap();
         col.set_versioned(0, Some(&Value::Int(3)), 30).unwrap();
@@ -846,7 +867,7 @@ mod tests {
     fn test_gc_versions_at_max_keeps_single_baseline() {
         // With no active snapshot the watermark is MAX: every before-image is
         // unreachable, but one baseline entry is conservatively retained.
-        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        let col = Column::new("age".to_string(), 0, DataType::Int, true);
         col.set_versioned(0, Some(&Value::Int(1)), 10).unwrap();
         col.set_versioned(0, Some(&Value::Int(2)), 20).unwrap();
         col.set_versioned(0, Some(&Value::Int(3)), 30).unwrap();
@@ -862,11 +883,11 @@ mod tests {
     fn test_clone_row_state_preserves_history() {
         // Row moves during vertex compaction must carry creation time and
         // before-images so snapshot reads stay intact after the remap.
-        let mut src = Column::new("age".to_string(), 0, DataType::Int, true);
+        let src = Column::new("age".to_string(), 0, DataType::Int, true);
         src.set_versioned(0, Some(&Value::Int(1)), 10).unwrap();
         src.set_versioned(0, Some(&Value::Int(2)), 20).unwrap();
 
-        let mut dst = Column::new("age".to_string(), 0, DataType::Int, true);
+        let dst = Column::new("age".to_string(), 0, DataType::Int, true);
         dst.set(5, Some(&Value::Int(2))).unwrap();
         dst.clone_row_state_from(&src, 0, 5);
 
@@ -878,10 +899,10 @@ mod tests {
     #[test]
     fn test_clone_row_state_never_written_row() {
         // Cloning a row that was never written must not fabricate history.
-        let mut src = Column::new("age".to_string(), 0, DataType::Int, true);
+        let src = Column::new("age".to_string(), 0, DataType::Int, true);
         src.set_versioned(0, Some(&Value::Int(1)), 10).unwrap();
 
-        let mut dst = Column::new("age".to_string(), 0, DataType::Int, true);
+        let dst = Column::new("age".to_string(), 0, DataType::Int, true);
         dst.clone_row_state_from(&src, 7, 3);
 
         assert_eq!(dst.version_chain_len(3), 0);
@@ -890,13 +911,14 @@ mod tests {
 
     #[test]
     fn test_fixed_string_dictionary_roundtrip_preserves_type() {
-        let mut col = Column::new("code".to_string(), 0, DataType::FixedString(4), true);
+        let col = Column::new("code".to_string(), 0, DataType::FixedString(4), true);
         let values = ["ab", "cd", "ab", "ef"];
         for (i, s) in values.iter().enumerate() {
             col.set(i, Some(&Value::FixedString(s.to_string())))
                 .unwrap();
         }
-        col.apply_dictionary_encoding().unwrap();
+        col.apply_encoding_to_chunks(crate::encoding::EncodingType::Dictionary, 255)
+            .unwrap();
         assert_eq!(
             col.encoding_type(),
             crate::encoding::EncodingType::Dictionary
@@ -908,7 +930,7 @@ mod tests {
 
     #[test]
     fn test_fixed_string_chunk_dictionary_preserves_type() {
-        let mut col = Column::new("code".to_string(), 0, DataType::FixedString(4), true);
+        let col = Column::new("code".to_string(), 0, DataType::FixedString(4), true);
         col.set_chunk_capacity(4);
         for i in 0..8 {
             col.set(i, Some(&Value::FixedString(format!("v{}", i % 2))))
@@ -940,7 +962,7 @@ mod tests {
     }
 
     fn encoded_two_chunk_column() -> Column {
-        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        let col = Column::new("age".to_string(), 0, DataType::Int, true);
         col.set_chunk_capacity(4);
         for i in 0..8 {
             col.set(i, Some(&Value::Int((i % 4) as i32))).unwrap();
@@ -956,7 +978,7 @@ mod tests {
 
     #[test]
     fn test_evicted_point_and_batch_reads_match_resident() {
-        let mut col = encoded_two_chunk_column();
+        let col = encoded_two_chunk_column();
         let (evicted, freed) = col.evict_cold_chunks(u64::MAX);
         assert_eq!(evicted, 2);
         assert!(freed > 0);
@@ -980,7 +1002,7 @@ mod tests {
 
     #[test]
     fn test_overlay_chunks_never_evict() {
-        let mut col = encoded_two_chunk_column();
+        let col = encoded_two_chunk_column();
         // Out-of-width update lands in the overlay: chunk 0 goes dirty.
         col.set(1, Some(&Value::Int(1000))).unwrap();
         assert_eq!(col.get(1), Some(Value::Int(1000)));
@@ -994,7 +1016,7 @@ mod tests {
 
     #[test]
     fn test_write_before_load_preserves_point_write_semantics() {
-        let mut col = encoded_two_chunk_column();
+        let col = encoded_two_chunk_column();
         col.evict_cold_chunks(u64::MAX);
         assert_eq!(col.evicted_chunk_count(), 2);
         col.set(3, Some(&Value::Int(42))).unwrap();
@@ -1005,7 +1027,7 @@ mod tests {
 
     #[test]
     fn test_resident_accounting_splits_snapshot_bytes() {
-        let mut col = encoded_two_chunk_column();
+        let col = encoded_two_chunk_column();
         let resident_before = col.resident_memory_usage();
         col.evict_cold_chunks(u64::MAX);
         assert!(col.resident_memory_usage() < resident_before);
@@ -1019,7 +1041,7 @@ mod tests {
     fn test_evict_double_confirm_abandons_chunk_written_during_selection() {
         // Selection sees two evictable chunks; a write landing before the
         // free rechecks evictability inside `evict_chunk` and abandons it.
-        let mut col = encoded_two_chunk_column();
+        let col = encoded_two_chunk_column();
         assert!(col.chunk_evictable(0));
         assert!(col.chunk_evictable(1));
         col.set(1, Some(&Value::Int(1000))).unwrap();
@@ -1033,9 +1055,9 @@ mod tests {
 
     #[test]
     fn test_quota_segments_large_eviction_without_changing_totals() {
-        let mut full = encoded_two_chunk_column();
+        let full = encoded_two_chunk_column();
         let (full_evicted, full_freed) = full.evict_cold_chunks(u64::MAX);
-        let mut segmented = encoded_two_chunk_column();
+        let segmented = encoded_two_chunk_column();
         let (seg_evicted, seg_freed, segments) =
             segmented.evict_cold_chunks_with_quota(u64::MAX, 1);
         assert_eq!((seg_evicted, seg_freed), (full_evicted, full_freed));
@@ -1051,7 +1073,7 @@ mod tests {
         // Working set larger than the per-segment quota: evict everything,
         // then reload in quota-capped segments; results match resident and
         // statistics stay usable after swap-out.
-        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+        let col = Column::new("age".to_string(), 0, DataType::Int, true);
         col.set_chunk_capacity(4);
         let rows = 64usize;
         for i in 0..rows {
@@ -1086,7 +1108,7 @@ mod tests {
 
     #[test]
     fn fixed_string_over_length_is_rejected() {
-        let mut col = Column::new("code".to_string(), 0, DataType::FixedString(3), false);
+        let col = Column::new("code".to_string(), 0, DataType::FixedString(3), false);
         assert!(col
             .set(0, Some(&Value::FixedString("abc".to_string())))
             .is_ok());
@@ -1100,7 +1122,7 @@ mod tests {
     fn complex_length_summary_prunes_equality() {
         use crate::cursor::PredicateRange;
         use crate::cursor::ScanPredicate;
-        let mut col = Column::new(
+        let col = Column::new(
             "tags".to_string(),
             0,
             DataType::List(Box::new(DataType::Int)),
@@ -1134,7 +1156,7 @@ mod tests {
             include_upper: true,
         };
         assert_eq!(range.equality_len(), Some(5));
-        let mut store = ColumnStore::new();
+        let store = ColumnStore::new();
         store.add_column(
             "tags".to_string(),
             DataType::List(Box::new(DataType::Int)),
@@ -1173,7 +1195,7 @@ mod tests {
     #[test]
     fn overlay_half_full_triggers_early_merge_signal() {
         use crate::encoding::EncodingType;
-        let mut col = Column::new("v".to_string(), 0, DataType::Int, true);
+        let col = Column::new("v".to_string(), 0, DataType::Int, true);
         for i in 0..8 {
             col.set(i, Some(&Value::Int(i as i32))).unwrap();
         }
@@ -1198,7 +1220,7 @@ mod tests {
     }
 
     fn store_with_list_rows(rows: Vec<Value>) -> ColumnStore {
-        let mut store = ColumnStore::new();
+        let store = ColumnStore::new();
         store.add_column(
             "v".to_string(),
             DataType::List(Box::new(DataType::Int)),
@@ -1242,7 +1264,7 @@ mod tests {
         use std::collections::HashMap;
         let mut fields = HashMap::new();
         fields.insert(Value::string("a"), Value::Int(1));
-        let mut store = ColumnStore::new();
+        let store = ColumnStore::new();
         store.add_column(
             "v".to_string(),
             DataType::Map(Box::new(DataType::Int)),
@@ -1261,7 +1283,7 @@ mod tests {
     fn nested_struct_equality_prunes_key_mismatch() {
         use crate::vertex::column::zone_map::complex_key_fp;
         use std::sync::Arc;
-        let mut store = ColumnStore::new();
+        let store = ColumnStore::new();
         store.add_column(
             "v".to_string(),
             DataType::Struct(Arc::new(StructTypeInfo {
@@ -1298,7 +1320,7 @@ mod tests {
 
     #[test]
     fn nested_json_equality_prunes_disjoint_leaves() {
-        let mut store = ColumnStore::new();
+        let store = ColumnStore::new();
         store.add_column("v".to_string(), DataType::Json, true);
         let present = Value::Json(Box::new(
             graphdb_core::value::json::Json::parse(r#"{"n":1}"#).unwrap(),
@@ -1331,7 +1353,7 @@ mod tests {
     #[test]
     fn evict_snapshots_persist_and_reload_mapped() {
         use crate::encoding::EncodingType;
-        let mut store = ColumnStore::new();
+        let store = ColumnStore::new();
         store.add_column("v".to_string(), DataType::Int, true);
         let col = store.get_column("v").expect("column exists");
         col.set_chunk_capacity(512);
@@ -1365,7 +1387,7 @@ mod tests {
     #[test]
     fn corrupt_snapshot_sidecar_keeps_chunks_resident() {
         use crate::encoding::EncodingType;
-        let mut store = ColumnStore::new();
+        let store = ColumnStore::new();
         store.add_column("v".to_string(), DataType::Int, true);
         let col = store.get_column("v").expect("column exists");
         col.set_chunk_capacity(512);
@@ -1391,9 +1413,9 @@ mod tests {
     }
 
     #[test]
-    fn per_chunk_selection_leaves_a_raw_chunk_under_an_encoded_mirror() {
+    fn per_chunk_selection_leaves_a_raw_chunk_under_an_encoded_column() {
         use crate::encoding::EncodingType;
-        let mut col = Column::new("v".to_string(), 0, DataType::Double, true);
+        let col = Column::new("v".to_string(), 0, DataType::Double, true);
         col.set_chunk_capacity(8);
         for i in 0..16usize {
             let value = if i == 8 {
@@ -1408,7 +1430,8 @@ mod tests {
             .unwrap();
 
         // The leading null makes chunk 1 fall back to raw storage while the
-        // column-level mirror still reports the scheme of chunk 0.
+        // derived column-level encoding still reports the first encoded
+        // chunk's scheme.
         let schemes: Vec<_> = col
             .chunk_encoding_metadata()
             .into_iter()
@@ -1430,7 +1453,7 @@ mod tests {
     #[test]
     fn chunk_owned_storage_counts_every_byte_once_and_evicts_payload() {
         use crate::encoding::EncodingType;
-        let mut col = Column::new("v".to_string(), 0, DataType::Int, true);
+        let col = Column::new("v".to_string(), 0, DataType::Int, true);
         col.set_chunk_capacity(512);
         for i in 0..2000 {
             col.set(i, Some(&Value::Int(i as i32))).unwrap();
@@ -1472,9 +1495,9 @@ mod tests {
     }
 
     #[test]
-    fn raw_chunk_under_encoded_mirror_keeps_raw_values_authoritative() {
+    fn raw_chunk_under_encoded_column_keeps_raw_values_authoritative() {
         use crate::encoding::EncodingType;
-        let mut col = Column::new("v".to_string(), 0, DataType::Double, true);
+        let col = Column::new("v".to_string(), 0, DataType::Double, true);
         col.set_chunk_capacity(8);
         for i in 0..16usize {
             let value = if i == 8 {

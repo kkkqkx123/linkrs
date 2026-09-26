@@ -9,7 +9,7 @@ pub use file_backed::{FileBackedUndoLog, UndoLogConfig};
 
 use super::wal::{ColumnId, LabelId, Timestamp, VertexId};
 use graphdb_core::types::{
-    EdgeDeletionContext, EdgeDeletionContextParams, EdgeIdentifier, EdgeKey, VertexIdentifier,
+    EdgeDeletionContext, EdgeDeletionContextParams, EdgeIdentifier, EdgeKey,
 };
 
 /// Undo log error
@@ -55,23 +55,6 @@ impl CreateEdgeTypeUndo {
             "CreateEdgeTypeUndo(src={}, dst={}, edge={})",
             self.src_type, self.dst_type, self.edge_type
         )
-    }
-}
-
-/// Undo log for insert vertex operation
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct InsertVertexUndo {
-    pub v_label: LabelId,
-    pub vid: VertexId,
-}
-
-impl InsertVertexUndo {
-    pub fn undo<T: UndoTarget + ?Sized>(&self, graph: &T, ts: Timestamp) -> UndoLogResult<()> {
-        graph.delete_vertex(VertexIdentifier::new(self.v_label, self.vid), ts)
-    }
-
-    pub fn description(&self) -> String {
-        format!("InsertVertexUndo(label={}, vid={})", self.v_label, self.vid)
     }
 }
 
@@ -143,33 +126,6 @@ impl InsertEdgeUndo {
     }
 }
 
-/// Undo log for update vertex property operation
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct UpdateVertexPropUndo {
-    pub v_label: LabelId,
-    pub vid: VertexId,
-    pub col_id: ColumnId,
-    pub old_value: graphdb_core::Value,
-}
-
-impl UpdateVertexPropUndo {
-    pub fn undo<T: UndoTarget + ?Sized>(&self, graph: &T, ts: Timestamp) -> UndoLogResult<()> {
-        graph.undo_update_vertex_property(
-            VertexIdentifier::new(self.v_label, self.vid),
-            self.col_id,
-            self.old_value.clone(),
-            ts,
-        )
-    }
-
-    pub fn description(&self) -> String {
-        format!(
-            "UpdateVertexPropUndo(label={}, vid={}, col={})",
-            self.v_label, self.vid, self.col_id
-        )
-    }
-}
-
 /// Undo log for update edge property operation
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UpdateEdgePropUndo {
@@ -204,53 +160,6 @@ impl UpdateEdgePropUndo {
         format!(
             "UpdateEdgePropUndo(src={}, dst={}, edge={}, col={})",
             self.src_label, self.dst_label, self.edge_label, self.col_id
-        )
-    }
-}
-
-/// Related edge information for remove vertex undo
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct RelatedEdgeInfo {
-    pub src_vid: VertexId,
-    pub dst_vid: VertexId,
-    pub rank: i64,
-}
-
-/// Undo log for remove vertex operation
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct RemoveVertexUndo {
-    pub v_label: LabelId,
-    pub vid: VertexId,
-    pub related_edges: Vec<(LabelId, LabelId, LabelId, Vec<RelatedEdgeInfo>)>,
-}
-
-impl RemoveVertexUndo {
-    pub fn undo<T: UndoTarget + ?Sized>(&self, graph: &T, ts: Timestamp) -> UndoLogResult<()> {
-        graph.revert_delete_vertex(VertexIdentifier::new(self.v_label, self.vid), ts)?;
-
-        for (src_label, dst_label, edge_label, edges) in &self.related_edges {
-            for edge in edges {
-                graph.revert_delete_edge(EdgeDeletionContext::new(EdgeDeletionContextParams {
-                    src_label: *src_label,
-                    src_vid: edge.src_vid,
-                    dst_label: *dst_label,
-                    dst_vid: edge.dst_vid,
-                    edge_label: *edge_label,
-                    rank: edge.rank,
-                    timestamp: ts,
-                }))?;
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn description(&self) -> String {
-        format!(
-            "RemoveVertexUndo(label={}, vid={}, edges={})",
-            self.v_label,
-            self.vid,
-            self.related_edges.len()
         )
     }
 }
@@ -295,12 +204,9 @@ impl RemoveEdgeUndo {
 pub enum UndoLogEntry {
     CreateVertexType(CreateVertexTypeUndo),
     CreateEdgeType(CreateEdgeTypeUndo),
-    InsertVertex(InsertVertexUndo),
     InsertEdge(InsertEdgeUndo),
     RestoreEdge(RestoreEdgeUndo),
-    UpdateVertexProp(UpdateVertexPropUndo),
     UpdateEdgeProp(UpdateEdgePropUndo),
-    RemoveVertex(RemoveVertexUndo),
     RemoveEdge(RemoveEdgeUndo),
 }
 
@@ -309,12 +215,9 @@ impl UndoLogEntry {
         match self {
             UndoLogEntry::CreateVertexType(u) => u.undo(graph, ts),
             UndoLogEntry::CreateEdgeType(u) => u.undo(graph, ts),
-            UndoLogEntry::InsertVertex(u) => u.undo(graph, ts),
             UndoLogEntry::InsertEdge(u) => u.undo(graph, ts),
             UndoLogEntry::RestoreEdge(u) => u.undo(graph, ts),
-            UndoLogEntry::UpdateVertexProp(u) => u.undo(graph, ts),
             UndoLogEntry::UpdateEdgeProp(u) => u.undo(graph, ts),
-            UndoLogEntry::RemoveVertex(u) => u.undo(graph, ts),
             UndoLogEntry::RemoveEdge(u) => u.undo(graph, ts),
         }
     }
@@ -323,12 +226,9 @@ impl UndoLogEntry {
         match self {
             UndoLogEntry::CreateVertexType(u) => u.description(),
             UndoLogEntry::CreateEdgeType(u) => u.description(),
-            UndoLogEntry::InsertVertex(u) => u.description(),
             UndoLogEntry::InsertEdge(u) => u.description(),
             UndoLogEntry::RestoreEdge(u) => u.description(),
-            UndoLogEntry::UpdateVertexProp(u) => u.description(),
             UndoLogEntry::UpdateEdgeProp(u) => u.description(),
-            UndoLogEntry::RemoveVertex(u) => u.description(),
             UndoLogEntry::RemoveEdge(u) => u.description(),
         }
     }
@@ -382,13 +282,6 @@ impl UndoLogManager {
         self.storage.add(log)
     }
 
-    pub fn add_insert_vertex(&mut self, label: LabelId, vid: VertexId) -> UndoLogResult<()> {
-        self.add(UndoLogEntry::InsertVertex(InsertVertexUndo {
-            v_label: label,
-            vid,
-        }))
-    }
-
     pub fn add_insert_edge(&mut self, params: AddInsertEdgeParams) -> UndoLogResult<()> {
         self.add(UndoLogEntry::InsertEdge(InsertEdgeUndo {
             src_label: params.src_label,
@@ -397,21 +290,6 @@ impl UndoLogManager {
             rank: params.rank,
             src_vid: params.src_vid,
             dst_vid: params.dst_vid,
-        }))
-    }
-
-    pub fn add_update_vertex_prop(
-        &mut self,
-        label: LabelId,
-        vid: VertexId,
-        col_id: ColumnId,
-        old_value: graphdb_core::Value,
-    ) -> UndoLogResult<()> {
-        self.add(UndoLogEntry::UpdateVertexProp(UpdateVertexPropUndo {
-            v_label: label,
-            vid,
-            col_id,
-            old_value,
         }))
     }
 
@@ -471,6 +349,7 @@ impl Default for UndoLogManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use graphdb_core::types::VertexIdentifier;
 
     struct MockUndoTarget;
 
@@ -491,29 +370,11 @@ mod tests {
             Ok(())
         }
 
-        fn undo_update_vertex_property(
-            &self,
-            _vertex: VertexIdentifier,
-            _col_id: ColumnId,
-            _value: graphdb_core::Value,
-            _ts: Timestamp,
-        ) -> UndoLogResult<()> {
-            Ok(())
-        }
-
         fn undo_update_edge_property(
             &self,
             _edge_id: EdgeIdentifier,
             _col_id: ColumnId,
             _value: graphdb_core::Value,
-            _ts: Timestamp,
-        ) -> UndoLogResult<()> {
-            Ok(())
-        }
-
-        fn revert_delete_vertex(
-            &self,
-            _vertex: VertexIdentifier,
             _ts: Timestamp,
         ) -> UndoLogResult<()> {
             Ok(())
@@ -575,23 +436,23 @@ mod tests {
         }
     }
 
+    fn edge_params(src: i64, dst: i64) -> AddInsertEdgeParams {
+        AddInsertEdgeParams {
+            src_label: 1,
+            dst_label: 2,
+            edge_label: 3,
+            rank: 0,
+            src_vid: VertexId::try_from_int64(src).expect("test vertex id"),
+            dst_vid: VertexId::try_from_int64(dst).expect("test vertex id"),
+        }
+    }
+
     #[test]
     fn test_undo_log_manager() {
         let mut manager = UndoLogManager::new();
 
-        manager
-            .add_insert_vertex(1, VertexId::try_from_int64(100).expect("test vertex id"))
-            .expect("Failed to append undo log");
-        manager
-            .add_insert_edge(AddInsertEdgeParams {
-                src_label: 1,
-                dst_label: 2,
-                edge_label: 3,
-                rank: 0,
-                src_vid: VertexId::try_from_int64(100).expect("test vertex id"),
-                dst_vid: VertexId::try_from_int64(200).expect("test vertex id"),
-            })
-            .expect("Failed to append undo log");
+        manager.add_insert_edge(edge_params(100, 200)).expect("ok");
+        manager.add_insert_edge(edge_params(300, 400)).expect("ok");
 
         assert_eq!(manager.len(), 2);
 
@@ -604,15 +465,9 @@ mod tests {
     #[test]
     fn test_execute_undo_from_index_keeps_prefix() {
         let mut manager = UndoLogManager::new();
-        manager
-            .add_insert_vertex(1, VertexId::try_from_int64(1).expect("test vertex id"))
-            .expect("Failed to append undo log");
-        manager
-            .add_insert_vertex(1, VertexId::try_from_int64(2).expect("test vertex id"))
-            .expect("Failed to append undo log");
-        manager
-            .add_insert_vertex(1, VertexId::try_from_int64(3).expect("test vertex id"))
-            .expect("Failed to append undo log");
+        manager.add_insert_edge(edge_params(1, 2)).expect("ok");
+        manager.add_insert_edge(edge_params(3, 4)).expect("ok");
+        manager.add_insert_edge(edge_params(5, 6)).expect("ok");
 
         let target = MockUndoTarget;
         manager
@@ -629,17 +484,6 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_vertex_undo() {
-        let undo = InsertVertexUndo {
-            v_label: 1,
-            vid: VertexId::try_from_int64(100).expect("test vertex id"),
-        };
-
-        let target = MockUndoTarget;
-        undo.undo(&target, 1).expect("Undo failed");
-    }
-
-    #[test]
     fn test_insert_edge_undo() {
         let undo = InsertEdgeUndo {
             src_label: 1,
@@ -648,19 +492,6 @@ mod tests {
             rank: 0,
             src_vid: VertexId::try_from_int64(100).expect("test vertex id"),
             dst_vid: VertexId::try_from_int64(200).expect("test vertex id"),
-        };
-
-        let target = MockUndoTarget;
-        undo.undo(&target, 1).expect("Undo failed");
-    }
-
-    #[test]
-    fn test_update_vertex_prop_undo() {
-        let undo = UpdateVertexPropUndo {
-            v_label: 1,
-            vid: VertexId::try_from_int64(100).expect("test vertex id"),
-            col_id: ColumnId(0),
-            old_value: graphdb_core::Value::BigInt(42),
         };
 
         let target = MockUndoTarget;
@@ -685,28 +516,6 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_vertex_undo() {
-        let undo = RemoveVertexUndo {
-            v_label: 1,
-            vid: VertexId::try_from_int64(100).expect("test vertex id"),
-            related_edges: vec![(
-                1,
-                2,
-                3,
-                vec![RelatedEdgeInfo {
-                    src_vid: VertexId::try_from_int64(100).expect("test vertex id"),
-                    dst_vid: VertexId::try_from_int64(200).expect("test vertex id"),
-                    rank: 0,
-                }],
-            )],
-        };
-
-        let target = MockUndoTarget;
-        undo.undo(&target, 1).expect("Undo failed");
-        assert!(undo.description().contains("edges=1"));
-    }
-
-    #[test]
     fn test_remove_edge_undo() {
         let undo = RemoveEdgeUndo {
             src_label: 1,
@@ -725,15 +534,9 @@ mod tests {
     fn test_undo_order_is_lifo() {
         let mut manager = UndoLogManager::new();
 
-        manager
-            .add_insert_vertex(1, VertexId::try_from_int64(100).expect("test vertex id"))
-            .expect("Failed to append undo log");
-        manager
-            .add_insert_vertex(1, VertexId::try_from_int64(200).expect("test vertex id"))
-            .expect("Failed to append undo log");
-        manager
-            .add_insert_vertex(1, VertexId::try_from_int64(300).expect("test vertex id"))
-            .expect("Failed to append undo log");
+        manager.add_insert_edge(edge_params(100, 101)).expect("ok");
+        manager.add_insert_edge(edge_params(200, 201)).expect("ok");
+        manager.add_insert_edge(edge_params(300, 301)).expect("ok");
 
         assert_eq!(manager.len(), 3);
 
@@ -747,19 +550,8 @@ mod tests {
     fn test_undo_log_manager_clear() {
         let mut manager = UndoLogManager::new();
 
-        manager
-            .add_insert_vertex(1, VertexId::try_from_int64(100).expect("test vertex id"))
-            .expect("Failed to append undo log");
-        manager
-            .add_insert_edge(AddInsertEdgeParams {
-                src_label: 1,
-                dst_label: 2,
-                edge_label: 3,
-                rank: 0,
-                src_vid: VertexId::try_from_int64(100).expect("test vertex id"),
-                dst_vid: VertexId::try_from_int64(200).expect("test vertex id"),
-            })
-            .expect("Failed to append undo log");
+        manager.add_insert_edge(edge_params(100, 200)).expect("ok");
+        manager.add_insert_edge(edge_params(300, 400)).expect("ok");
 
         assert_eq!(manager.len(), 2);
 
@@ -784,13 +576,17 @@ mod tests {
 
     #[test]
     fn test_undo_log_entry_enum() {
-        let entry = UndoLogEntry::InsertVertex(InsertVertexUndo {
-            v_label: 1,
-            vid: VertexId::try_from_int64(100).expect("test vertex id"),
+        let entry = UndoLogEntry::InsertEdge(InsertEdgeUndo {
+            src_label: 1,
+            dst_label: 2,
+            edge_label: 3,
+            rank: 0,
+            src_vid: VertexId::try_from_int64(100).expect("test vertex id"),
+            dst_vid: VertexId::try_from_int64(200).expect("test vertex id"),
         });
 
         let target = MockUndoTarget;
         entry.undo(&target, 1).expect("Undo failed");
-        assert!(entry.description().contains("InsertVertexUndo"));
+        assert!(entry.description().contains("InsertEdgeUndo"));
     }
 }

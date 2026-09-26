@@ -1,5 +1,5 @@
 use super::ShardedVertexTable;
-use crate::vertex::{IdKey, PkLookup, WriteScope, MAX_WRITE_SCOPE_KEYS};
+use crate::vertex::{IdKey, PkLookup, WriteScope};
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult, Value};
 
@@ -39,12 +39,6 @@ impl ShardedVertexTable {
         table.delete(external_id, ts)
     }
 
-    pub fn delete_by_i64(&self, external_id: i64, ts: Timestamp) -> StorageResult<()> {
-        let idx = self.shard_index_by_i64(external_id);
-        let table = self.shards[idx].read();
-        table.delete_by_i64(external_id, ts)
-    }
-
     pub fn update_property(
         &self,
         global_id: u32,
@@ -63,27 +57,10 @@ impl ShardedVertexTable {
         table.delete_by_internal_id(local_id, ts)
     }
 
-    pub fn revert_delete(&self, global_id: u32, ts: Timestamp) -> StorageResult<()> {
-        let (idx, local_id) = self.decode_id(global_id);
-        let table = self.shards[idx].read();
-        table.revert_delete(local_id, ts)
-    }
-
-    pub fn update_property_by_id(
-        &self,
-        global_id: u32,
-        col_id: i32,
-        value: &Value,
-        ts: Timestamp,
-    ) -> StorageResult<()> {
-        let (idx, local_id) = self.decode_id(global_id);
-        let table = self.shards[idx].read();
-        table.update_property_by_id(local_id, col_id, value, ts)
-    }
-
     pub fn batch_delete(&self, external_ids: &[&str], ts: Timestamp) -> StorageResult<usize> {
         // Route ids to their owning shard and delete each shard's batch under
-        // a single lock, instead of locking per id.
+        // one shared guard: each row's tombstone runs the identity-then-
+        // segment point path, so no shard write lock is needed.
         let mut by_shard: Vec<Vec<&str>> = vec![Vec::new(); self.layout.num_shards];
         for id in external_ids {
             by_shard[self.shard_index_by_str(id)].push(id);
@@ -91,7 +68,7 @@ impl ShardedVertexTable {
         let mut total = 0;
         for (idx, ids) in by_shard.iter().enumerate() {
             if !ids.is_empty() {
-                total += self.shards[idx].write().batch_delete(ids, ts)?;
+                total += self.shards[idx].read().batch_delete(ids, ts)?;
             }
         }
         Ok(total)
@@ -105,15 +82,19 @@ impl ShardedVertexTable {
         let mut total = 0;
         for (idx, ids) in by_shard.iter().enumerate() {
             if !ids.is_empty() {
-                total += self.shards[idx].write().batch_delete_i64(ids, ts)?;
+                total += self.shards[idx].read().batch_delete_i64(ids, ts)?;
             }
         }
         Ok(total)
     }
 
     pub fn reserve_id_capacity(&self, additional: usize) {
+        // Every component serializes internally (id indexer mutex, identity
+        // latch for timestamps, tail-only growth under the segment channel),
+        // so the shared guard is enough and the reservation stays
+        // concurrent with point paths on the same shard.
         for shard in &self.shards {
-            shard.write().reserve_id_capacity(additional);
+            shard.read().reserve_id_capacity(additional);
         }
     }
 
@@ -218,7 +199,8 @@ impl ShardedVertexTable {
     ///
     /// Rows are first routed to their owning shards without taking any lock
     /// (the routing step), then each non-empty shard group is applied under
-    /// a single write-lock hold in input order (the merge step). Results are
+    /// a single shared-guard hold in input order (the merge step), each row
+    /// running its own identity-then-segment point path. Results are
     /// aligned with the input: every row is attempted even after earlier
     /// failures, so the caller rolls back every `Ok` entry when any `Err`
     /// is present. Duplicate keys fail per row exactly as [`insert`] does.
@@ -284,13 +266,66 @@ impl ShardedVertexTable {
             .collect()
     }
 
+    /// Read-only validation and normalization for a staged update column
+    /// set: primary-key rejection, column existence and type casts. Shard 0
+    /// is the schema authority, so any shard answers identically.
+    pub fn prepare_vertex_update(
+        &self,
+        columns: &[(String, Value)],
+    ) -> StorageResult<Vec<(String, Value)>> {
+        let table = self.shards[0].read();
+        columns
+            .iter()
+            .map(|(name, value)| Ok((name.clone(), table.prepare_update(name, value)?)))
+            .collect()
+    }
+
+    /// Reserve the global vertex id one staged row will commit under.
+    ///
+    /// A key already bound in its shard (live or tombstoned awaiting GC)
+    /// reports the existing id, mirroring the re-insert reuse of
+    /// [`VertexTable::apply_insert`]; otherwise the owning shard takes an
+    /// unbound local slot and nothing is visible to lookups, scans or the
+    /// delta log until the commit apply binds the key to the returned id.
+    /// Callers stage inserts before commit and must hand an unused
+    /// reservation back through [`Self::release_reserved_vertex`].
+    ///
+    /// [`VertexTable::apply_insert`]: crate::vertex::VertexTable::apply_insert
+    pub fn reserve_vertex_id(&self, key: &IdKey) -> StorageResult<u32> {
+        let idx = match key {
+            IdKey::Text(name) => self.shard_index_by_str(name),
+            IdKey::Int(n) => self.shard_index_by_i64(*n),
+        };
+        let local_id = self.shards[idx].read().reserve_identity(key)?;
+        Ok(self.record_allocation(idx, local_id))
+    }
+
+    /// Return a reserved global vertex id to its shard's free stack. A
+    /// no-op when the id was already bound or already recycled, so release
+    /// paths only need single ownership of the reservation.
+    pub fn release_reserved_vertex(&self, global_id: u32) {
+        let (idx, local_id) = self.decode_id(global_id);
+        self.shards[idx].read().release_reserved_identity(local_id);
+    }
+
+    /// Cancel a previous release of a reserved global vertex id, pulling it
+    /// back out of the owning shard's free stack. False means the id is no
+    /// longer a reclaimable release and the caller must reserve a fresh one.
+    pub fn try_reclaim_reserved_vertex(&self, global_id: u32) -> bool {
+        let (idx, local_id) = self.decode_id(global_id);
+        self.shards[idx]
+            .read()
+            .try_reclaim_reserved_identity(local_id)
+    }
+
     /// Scoped insert staging the caller-owned row.
     ///
-    /// Validates and normalizes the row under the shard read guard and
-    /// buffers it in the scope; global state is untouched until the commit
-    /// hook applies it. Same-scope duplicates and over-capacity rows fail
-    /// here without allocating. The scope is a single-request staging area
-    /// bound to `ts`, not a transaction write set; timestamp mismatches are
+    /// Validates and normalizes the row under the shard read guard,
+    /// reserves the row's global id and buffers it in the scope; the id
+    /// stays unbound until the commit hook applies it. Same-scope
+    /// duplicates and over-capacity rows fail here without leaving a
+    /// reservation behind. The scope is a single-request staging area bound
+    /// to `ts`, not a transaction write set; timestamp mismatches are
     /// rejected.
     pub fn insert_with_scope(
         &self,
@@ -301,12 +336,15 @@ impl ShardedVertexTable {
     ) -> StorageResult<()> {
         scope.ensure_same_write_ts(ts)?;
         let key = IdKey::Text(external_id.to_string());
-        if scope.contains(self.label, &key) {
-            return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
-        }
         let idx = self.shard_index_by_str(external_id);
-        let prepared = self.shards[idx].read().prepare_insert(&key, properties)?;
-        scope.stage_insert(self.label, key, prepared)?;
+        let table = self.shards[idx].read();
+        let prepared = table.prepare_insert(&key, properties)?;
+        let reserved = table.reserve_identity(&key)?;
+        let reserved_global = self.record_allocation(idx, reserved);
+        if let Err(error) = scope.stage_insert(self.label, key, reserved_global, prepared) {
+            table.release_reserved_identity(reserved);
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -323,12 +361,15 @@ impl ShardedVertexTable {
     ) -> StorageResult<()> {
         scope.ensure_same_write_ts(ts)?;
         let key = IdKey::Int(external_id);
-        if scope.contains(self.label, &key) {
-            return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
-        }
         let idx = self.shard_index_by_i64(external_id);
-        let prepared = self.shards[idx].read().prepare_insert(&key, properties)?;
-        scope.stage_insert(self.label, key, prepared)?;
+        let table = self.shards[idx].read();
+        let prepared = table.prepare_insert(&key, properties)?;
+        let reserved = table.reserve_identity(&key)?;
+        let reserved_global = self.record_allocation(idx, reserved);
+        if let Err(error) = scope.stage_insert(self.label, key, reserved_global, prepared) {
+            table.release_reserved_identity(reserved);
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -411,35 +452,6 @@ impl ShardedVertexTable {
             self.label,
             global_id,
             vec![(col_name.to_string(), value.clone())],
-        )?;
-        Ok(())
-    }
-
-    /// Column-id variant of [`Self::update_property_with_scope`].
-    ///
-    /// [`Self::update_property_with_scope`]: Self::update_property_with_scope
-    pub fn update_property_by_id_with_scope(
-        &self,
-        global_id: u32,
-        col_id: i32,
-        value: &Value,
-        ts: Timestamp,
-        scope: &mut WriteScope,
-    ) -> StorageResult<()> {
-        scope.ensure_same_write_ts(ts)?;
-        let (idx, local_id) = self.decode_id(global_id);
-        let table = self.shards[idx].read();
-        table
-            .get_external_id(local_id, ts)
-            .ok_or(StorageError::vertex_not_found())?;
-        let col = table
-            .columns
-            .get_column_by_id(col_id)
-            .ok_or_else(|| StorageError::column_not_found(format!("col_id={}", col_id)))?;
-        scope.stage_update(
-            self.label,
-            global_id,
-            vec![(col.name.clone(), value.clone())],
         )?;
         Ok(())
     }
@@ -560,27 +572,30 @@ impl ShardedVertexTable {
         let mut applied: Vec<(usize, u32)> = Vec::new();
         let mut mapping: Vec<(IdKey, u32)> = Vec::new();
         let result = self.apply_staged_inserts(scope, ts, &mut applied, &mut mapping);
-        if result.is_err() {
+        if let Err(error) = result {
             self.undo_applied_inserts(&applied);
-            scope.rollback_label(self.label);
-            return result.map(|_| mapping);
+            self.rollback_write_scope(scope, ts);
+            return Err(error);
         }
         if let Err(error) = self.apply_staged_updates(scope, ts) {
             self.undo_applied_inserts(&applied);
-            scope.rollback_label(self.label);
+            self.rollback_write_scope(scope, ts);
             return Err(error);
         }
         if let Err(error) = self.apply_staged_deletes(scope, ts) {
             self.undo_applied_inserts(&applied);
-            scope.rollback_label(self.label);
+            self.rollback_write_scope(scope, ts);
             return Err(error);
         }
-        let _ = scope.commit_label(self.label);
+        scope.commit_label(self.label);
         Ok(mapping)
     }
 
-    /// Apply the label's staged inserts grouped by shard. Rows applied
-    /// before a failure are collected in `applied` for the caller to undo.
+    /// Apply the label's staged inserts grouped by shard. Every row commits
+    /// under the global id reserved at staging time, so the reported
+    /// mapping echoes the declared ids. Rows applied before a failure are
+    /// collected in `applied` for the caller to undo; the failed row and
+    /// every later row have their unbound reservations released here.
     fn apply_staged_inserts(
         &self,
         scope: &mut WriteScope,
@@ -589,37 +604,54 @@ impl ShardedVertexTable {
         mapping: &mut Vec<(IdKey, u32)>,
     ) -> StorageResult<()> {
         let staged = scope.take_inserts_for_label(self.label);
-        let mut by_shard: Vec<Vec<(IdKey, Vec<(String, Value)>)>> =
+        let mut by_shard: Vec<Vec<(IdKey, u32, Vec<(String, Value)>)>> =
             vec![Vec::new(); self.layout.num_shards];
-        for (key, props) in staged {
+        for (key, reserved, props) in staged {
             let idx = match &key {
                 IdKey::Text(name) => self.shard_index_by_str(name),
                 IdKey::Int(n) => self.shard_index_by_i64(*n),
             };
-            by_shard[idx].push((key, props));
+            by_shard[idx].push((key, reserved, props));
         }
-        for (shard_idx, group) in by_shard.into_iter().enumerate() {
+        for (shard_idx, group) in by_shard.iter().enumerate() {
             if group.is_empty() {
                 continue;
             }
             let table = self.shards[shard_idx].read();
-            for (key, props) in group {
-                let local_id = table.apply_insert(key.clone(), &props, ts)?;
+            let mut pos = 0usize;
+            let mut failure: Option<StorageError> = None;
+            while pos < group.len() {
+                let (key, reserved, props) = &group[pos];
+                let (_, local_id) = self.decode_id(*reserved);
+                if let Err(error) = table.apply_insert(key.clone(), props, ts, Some(local_id)) {
+                    failure = Some(error);
+                    break;
+                }
                 applied.push((shard_idx, local_id));
-                let global_id = self.encode_id(shard_idx, local_id);
-                scope.bind_applied(self.label, &key, global_id);
-                mapping.push((key, global_id));
+                mapping.push((key.clone(), *reserved));
+                pos += 1;
+            }
+            drop(table);
+            if let Some(error) = failure {
+                // The failed row's reservation is already settled inside
+                // `apply_insert` (released or recycled through its own
+                // undo); only rows that never entered the table remain.
+                for (_, reserved, _) in &group[pos + 1..] {
+                    self.release_reserved_vertex(*reserved);
+                }
+                for later in &by_shard[shard_idx + 1..] {
+                    for (_, reserved, _) in later {
+                        self.release_reserved_vertex(*reserved);
+                    }
+                }
+                return Err(error);
             }
         }
         Ok(())
     }
 
     /// Apply the label's staged updates after the inserts.
-    fn apply_staged_updates(
-        &self,
-        scope: &mut WriteScope,
-        ts: Timestamp,
-    ) -> StorageResult<()> {
+    fn apply_staged_updates(&self, scope: &mut WriteScope, ts: Timestamp) -> StorageResult<()> {
         let staged = scope.take_updates_for_label(self.label);
         for (global_id, props) in staged {
             let (idx, local_id) = self.decode_id(global_id);
@@ -632,11 +664,7 @@ impl ShardedVertexTable {
     }
 
     /// Apply the label's staged deletes after inserts and updates.
-    fn apply_staged_deletes(
-        &self,
-        scope: &mut WriteScope,
-        ts: Timestamp,
-    ) -> StorageResult<()> {
+    fn apply_staged_deletes(&self, scope: &mut WriteScope, ts: Timestamp) -> StorageResult<()> {
         let staged = scope.take_deletes_for_label(self.label);
         for global_id in staged {
             let (idx, local_id) = self.decode_id(global_id);
@@ -655,67 +683,27 @@ impl ShardedVertexTable {
         }
     }
 
-    /// Rollback hook for one label table: discard the label's staged rows.
-    /// Nothing was applied for entries still staged, so no global write
-    /// happens here; rows a committed apply already installed are removed
-    /// by the caller through [`Self::undo_applied_inserts`]-equivalent table
-    /// undo before this call.
+    /// Rollback hook for one label table: discard the label's staged rows
+    /// and release every reservation they carried. Nothing was applied for
+    /// entries still staged, so no global write happens here; rows a
+    /// committed apply already installed are removed by the caller through
+    /// [`Self::undo_applied_ids`]-equivalent table undo before this call.
     pub fn rollback_write_scope(&self, scope: &mut WriteScope, _ts: Timestamp) {
-        scope.rollback_label(self.label);
-    }
-
-    /// Scoped primary-key lookup: the caller's applied binding wins,
-    /// otherwise the global committed area. Staged-but-unapplied keys
-    /// resolve as missing (their id is allocated at apply time); outside
-    /// scopes never see the buffer, so the two-state [`PkLookup`] contract
-    /// is unchanged.
-    pub fn lookup_pk_with_scope(
-        &self,
-        external_id: &str,
-        ts: Timestamp,
-        scope: &WriteScope,
-    ) -> PkLookup {
-        let key = IdKey::Text(external_id.to_string());
-        if let Some(binding) = scope.lookup(self.label, &key) {
-            return match binding.global_id {
-                Some(global_id) => PkLookup::Visible(global_id),
-                None => PkLookup::Missing,
-            };
-        }
-        let idx = self.shard_index_by_str(external_id);
-        match self.shards[idx]
-            .read()
-            .lookup_internal_id_scoped(&key, ts, scope)
-        {
-            PkLookup::Visible(local_id) => PkLookup::Visible(self.encode_id(idx, local_id)),
-            PkLookup::Missing => PkLookup::Missing,
+        for reserved in scope.rollback_label(self.label) {
+            self.release_reserved_vertex(reserved);
         }
     }
 
-    /// Integer-keyed scoped lookup. Same contract as
-    /// [`Self::lookup_pk_with_scope`].
-    ///
-    /// [`Self::lookup_pk_with_scope`]: Self::lookup_pk_with_scope
-    pub fn lookup_pk_by_i64_with_scope(
-        &self,
-        external_id: i64,
-        ts: Timestamp,
-        scope: &WriteScope,
-    ) -> PkLookup {
-        let key = IdKey::Int(external_id);
-        if let Some(binding) = scope.lookup(self.label, &key) {
-            return match binding.global_id {
-                Some(global_id) => PkLookup::Visible(global_id),
-                None => PkLookup::Missing,
-            };
-        }
-        let idx = self.shard_index_by_i64(external_id);
-        match self.shards[idx]
-            .read()
-            .lookup_internal_id_scoped(&key, ts, scope)
-        {
-            PkLookup::Visible(local_id) => PkLookup::Visible(self.encode_id(idx, local_id)),
-            PkLookup::Missing => PkLookup::Missing,
+    /// Undo rows this caller already committed through a previous
+    /// [`Self::commit_write_scope`] apply, addressed by their allocated
+    /// global ids. Used by write entries that must fail a whole request
+    /// after the table apply succeeded (secondary index maintenance,
+    /// mutation recording): each key is dropped and its timestamp slot
+    /// invalidated, matching the in-apply failure undo.
+    pub fn undo_applied_ids(&self, global_ids: &[u32]) {
+        for &global_id in global_ids {
+            let (idx, local_id) = self.decode_id(global_id);
+            self.shards[idx].read().undo_apply_insert(local_id);
         }
     }
 }
@@ -816,13 +804,35 @@ mod scoped_tests {
     }
 
     #[test]
+    fn reserved_ids_recycle_through_release_and_bind_at_commit() {
+        let table = ShardedVertexTable::with_config(7, "scoped".to_string(), test_schema(), 4);
+        let ts: Timestamp = 100;
+        let key = IdKey::Text("x".to_string());
+        let first = table.reserve_vertex_id(&key).unwrap();
+        table.release_reserved_vertex(first);
+        let second = table.reserve_vertex_id(&key).unwrap();
+        assert_eq!(second, first, "released reservation is reused");
+        let mut scope = WriteScope::new(ts);
+        scope
+            .stage_insert(7, key.clone(), second, props("x"))
+            .unwrap();
+        let applied = table.commit_write_scope(&mut scope, ts).unwrap();
+        assert_eq!(applied, vec![(key.clone(), second)]);
+        assert_eq!(table.get_internal_id("x", ts), Some(second));
+        // Releasing a bound id is a no-op: the live row keeps its slot and
+        // re-reserving a bound key reports the existing id.
+        table.release_reserved_vertex(second);
+        assert_eq!(table.reserve_vertex_id(&key).unwrap(), second);
+    }
+
+    #[test]
     fn over_limit_scoped_write_is_rejected_before_global_mutation() {
         let table = ShardedVertexTable::with_config(7, "scoped".to_string(), test_schema(), 4);
         let ts: Timestamp = 100;
         let mut scope = WriteScope::new(ts);
-        for index in 0..MAX_WRITE_SCOPE_KEYS {
+        for index in 0..crate::vertex::MAX_WRITE_SCOPE_KEYS {
             scope
-                .record(7, IdKey::Int(index as i64), index as u32)
+                .stage_insert(7, IdKey::Int(index as i64), index as u32, props("x"))
                 .expect("prefill within capacity");
         }
         assert!(table
@@ -885,9 +895,9 @@ mod scoped_tests {
         let table = ShardedVertexTable::with_config(7, "scoped".to_string(), test_schema(), 4);
         let ts: Timestamp = 100;
         let mut scope = WriteScope::new(ts);
-        for index in 0..MAX_WRITE_SCOPE_KEYS {
+        for index in 0..crate::vertex::MAX_WRITE_SCOPE_KEYS {
             scope
-                .record(7, IdKey::Int(index as i64), index as u32)
+                .stage_insert(7, IdKey::Int(index as i64), index as u32, props("x"))
                 .expect("prefill within capacity");
         }
         let holder = props("overflow");
@@ -952,7 +962,10 @@ mod scoped_tests {
             .unwrap();
         // Staged update is invisible until the commit apply.
         assert_eq!(
-            table.get_by_internal_id(global, ts + 1).expect("row").properties,
+            table
+                .get_by_internal_id(global, ts + 1)
+                .expect("row")
+                .properties,
             vec![
                 ("name".to_string(), Value::from("row")),
                 ("age".to_string(), Value::from(1)),
@@ -960,7 +973,10 @@ mod scoped_tests {
         );
         table.commit_write_scope(&mut scope, ts + 1).unwrap();
         assert_eq!(
-            table.get_by_internal_id(global, ts + 1).expect("row").properties,
+            table
+                .get_by_internal_id(global, ts + 1)
+                .expect("row")
+                .properties,
             vec![
                 ("name".to_string(), Value::from("row")),
                 ("age".to_string(), Value::from(2)),

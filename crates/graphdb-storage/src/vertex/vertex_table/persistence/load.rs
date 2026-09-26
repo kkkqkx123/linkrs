@@ -96,7 +96,8 @@ impl VertexTable {
         let timestamps_path = path.join("timestamps.bin");
         self.load_timestamps(&timestamps_path)?;
 
-        self.is_open.store(true, std::sync::atomic::Ordering::Release);
+        self.is_open
+            .store(true, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 
@@ -292,8 +293,10 @@ impl VertexTable {
         cursor.read_exact(&mut ver)?;
         if ver[0] != COLUMNS_FORMAT_VERSION {
             return Err(StorageError::deserialize_error(format!(
-                "unsupported columns format version {}",
-                ver[0]
+                "unsupported columns format version {} (expected {}): this data \
+                 directory was written by an incompatible layout and cannot be \
+                 opened; rebuild it by flushing from a compatible source",
+                ver[0], COLUMNS_FORMAT_VERSION
             )));
         }
 
@@ -310,99 +313,19 @@ impl VertexTable {
             let name = String::from_utf8(name_bytes)
                 .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
 
-            let mut has_encoding_bytes = [0u8; 1];
-            cursor.read_exact(&mut has_encoding_bytes)?;
-            let has_encoding = has_encoding_bytes[0] == 1;
-
-            if has_encoding {
-                let overflow_present = self.load_column_chunked(&name, &mut cursor)?;
-                if overflow_present {
-                    Self::load_overflow_sidecar(&mut self.columns, dir.as_deref(), &name);
-                }
-                // Chunk records carry encoding bodies and overlays, but the
-                // derived per-chunk profiles (zone min/max, sizes) are
-                // recomputed from the restored state so later selection and
-                // update checks observe fresh metadata.
-                if let Some(col) = self.columns.get_column(&name) {
-                    if col.has_chunks() {
-                        col.rebuild_chunk_profiles();
-                    }
-                }
-            } else {
-                let mut row_count_bytes = [0u8; 4];
-                cursor.read_exact(&mut row_count_bytes)?;
-                let _row_count = u32::from_le_bytes(row_count_bytes) as usize;
-
-                let mut data_len_bytes = [0u8; 4];
-                cursor.read_exact(&mut data_len_bytes)?;
-                let data_len = u32::from_le_bytes(data_len_bytes) as usize;
-
-                let mut data = vec![0u8; data_len];
-                cursor.read_exact(&mut data)?;
-
-                let mut offsets_count_bytes = [0u8; 4];
-                cursor.read_exact(&mut offsets_count_bytes)?;
-                let offsets_count = u32::from_le_bytes(offsets_count_bytes) as usize;
-
-                let mut offsets = Vec::with_capacity(offsets_count);
-                for _ in 0..offsets_count {
-                    let mut off_bytes = [0u8; 8];
-                    cursor.read_exact(&mut off_bytes)?;
-                    offsets.push(u64::from_le_bytes(off_bytes));
-                }
-
-                let mut has_bitmap_bytes = [0u8; 1];
-                cursor.read_exact(&mut has_bitmap_bytes)?;
-                let has_bitmap = has_bitmap_bytes[0] == 1;
-
-                let (null_bitmap_raw, bitmap_bit_len) = if has_bitmap {
-                    let mut bitmap_bit_len_bytes = [0u8; 4];
-                    cursor.read_exact(&mut bitmap_bit_len_bytes)?;
-                    let bitmap_bit_len = u32::from_le_bytes(bitmap_bit_len_bytes) as usize;
-
-                    let mut bitmap_bytes_len_bytes = [0u8; 4];
-                    cursor.read_exact(&mut bitmap_bytes_len_bytes)?;
-                    let bitmap_bytes_len = u32::from_le_bytes(bitmap_bytes_len_bytes) as usize;
-
-                    let mut bitmap_bytes = vec![0u8; bitmap_bytes_len];
-                    cursor.read_exact(&mut bitmap_bytes)?;
-
-                    (Some(bitmap_bytes), bitmap_bit_len)
-                } else {
-                    (None, 0)
-                };
-
-                self.columns.load_column_from_raw(
-                    &name,
-                    data,
-                    offsets,
-                    null_bitmap_raw,
-                    bitmap_bit_len,
-                )?;
-
-                // Raw records carry an overflow sidecar flag.
-                let mut flag = [0u8; 1];
-                cursor.read_exact(&mut flag)?;
-                let overflow_present = flag[0] != 0;
-
-                let mut has_stats_bytes = [0u8; 1];
-                cursor.read_exact(&mut has_stats_bytes)?;
-                if has_stats_bytes[0] == 1 {
-                    let mut stats_len_bytes = [0u8; 4];
-                    cursor.read_exact(&mut stats_len_bytes)?;
-                    let stats_len = u32::from_le_bytes(stats_len_bytes) as usize;
-                    let mut stats_bytes = vec![0u8; stats_len];
-                    cursor.read_exact(&mut stats_bytes)?;
-                    let stats =
-                        crate::column_stats::ColumnStats::deserialize_meta(&mut &stats_bytes[..])?;
-                    if let Some(col) = self.columns.get_column(&name) {
-                        col.set_stats(stats);
-                    }
-                }
-
-                if overflow_present {
-                    Self::load_overflow_sidecar(&mut self.columns, dir.as_deref(), &name);
-                }
+            // One unified chunked record per column: each chunk carries
+            // either its raw buffers or its encoding, followed by its
+            // overlay; overflow and stats trail all records.
+            let overflow_present = self.load_column_chunked(&name, &mut cursor)?;
+            // Records carry payloads and overlays, but the derived per-chunk
+            // profiles (zone min/max, sizes) are recomputed from the restored
+            // state so later selection and update checks observe fresh
+            // metadata.
+            if let Some(col) = self.columns.get_column(&name) {
+                col.rebuild_chunk_profiles();
+            }
+            if overflow_present {
+                Self::load_overflow_sidecar(&mut self.columns, dir.as_deref(), &name);
             }
         }
 
@@ -417,112 +340,112 @@ impl VertexTable {
         Ok(())
     }
 
-    /// Decode one chunked encoded-column record.
     /// Load one chunked column record. Returns whether an overflow sidecar
     /// must be restored afterwards (the caller owns the flush directory).
     fn load_column_chunked(&mut self, name: &str, cursor: &mut &[u8]) -> StorageResult<bool> {
         use crate::vertex::column::ColumnChunk;
         use graphdb_core::Value;
 
-        let mut flag = [0u8; 1];
-        cursor.read_exact(&mut flag)?;
-        if flag[0] != 1 {
-            return Err(StorageError::deserialize_error(format!(
-                "unsupported chunked column marker {}",
-                flag[0]
-            )));
-        }
-
-        let mut count_bytes = [0u8; 4];
-        cursor.read_exact(&mut count_bytes)?;
-        let chunk_count = u32::from_le_bytes(count_bytes) as usize;
-
-        struct ChunkRec {
-            row_offset: usize,
-            row_count: usize,
-            meta: crate::encoding::ChunkEncodingMeta,
-            encoding: crate::encoding::ColumnEncoding,
-            overlay: Vec<(u32, Option<Value>)>,
-        }
-        let mut recs = Vec::with_capacity(chunk_count);
-        for _ in 0..chunk_count {
-            let mut u32b = [0u8; 4];
-            cursor.read_exact(&mut u32b)?;
-            let row_offset = u32::from_le_bytes(u32b) as usize;
-            cursor.read_exact(&mut u32b)?;
-            let row_count = u32::from_le_bytes(u32b) as usize;
-            cursor.read_exact(&mut u32b)?;
-            let meta_len = u32::from_le_bytes(u32b) as usize;
-            let meta_bytes = take_bytes(cursor, meta_len as u32, "chunk meta")?;
-            let meta = if meta_bytes.is_empty() {
-                crate::encoding::ChunkEncodingMeta::default()
-            } else {
-                crate::encoding::ChunkEncodingMeta::deserialize(&mut &meta_bytes[..])?
-            };
-            cursor.read_exact(&mut u32b)?;
-            let enc_len = u32::from_le_bytes(u32b) as usize;
-            let enc_bytes = take_bytes(cursor, enc_len as u32, "chunk encoding")?;
-            if enc_bytes.is_empty() {
-                return Err(StorageError::deserialize_error(
-                    "empty chunk encoding".to_string(),
-                ));
-            }
-            let encoding_type = EncodingType::from_u8(enc_bytes[0]);
-            let mut enc_cursor = &enc_bytes[1..];
-            let chunk_data_type = self
-                .columns
-                .get_column(name)
-                .map(|c| c.data_type.clone())
-                .unwrap_or(graphdb_core::DataType::Int);
-            let encoding = Self::decode_encoding(encoding_type, &mut enc_cursor, &chunk_data_type)?;
-            cursor.read_exact(&mut u32b)?;
-            let overlay_len = u32::from_le_bytes(u32b) as usize;
-            let overlay_bytes = take_bytes(cursor, overlay_len as u32, "chunk overlay")?;
-            let overlay: Vec<(u32, Option<Value>)> = if overlay_bytes.is_empty() {
-                Vec::new()
-            } else {
-                postcard::from_bytes(&overlay_bytes)
-                    .map_err(|e| StorageError::deserialize_error(e.to_string()))?
-            };
-            recs.push(ChunkRec {
-                row_offset,
-                row_count,
-                meta,
-                encoding,
-                overlay,
-            });
-        }
-
-        // Rebuild column state from chunk records. Encoded chunks serve
-        // their encoding directly; their owned raw buffers stay empty.
         let col = self
             .columns
             .get_column(name)
             .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
         let data_type = col.data_type.clone();
         let nullable = col.nullable;
-        let mut chunks = Vec::with_capacity(recs.len());
-        for rec in &recs {
-            let chunk = ColumnChunk::new(rec.row_offset, rec.row_count, &data_type, nullable);
+
+        let mut u32b = [0u8; 4];
+        cursor.read_exact(&mut u32b)?;
+        let chunk_count = u32::from_le_bytes(u32b) as usize;
+
+        let mut chunks = Vec::with_capacity(chunk_count);
+        for _ in 0..chunk_count {
+            cursor.read_exact(&mut u32b)?;
+            let row_offset = u32::from_le_bytes(u32b) as usize;
+            cursor.read_exact(&mut u32b)?;
+            let row_count = u32::from_le_bytes(u32b) as usize;
+            let mut form = [0u8; 1];
+            cursor.read_exact(&mut form)?;
+
+            let chunk = ColumnChunk::new(row_offset, row_count, &data_type, nullable);
             let mut state = chunk.write_state();
-            state.encoding = rec.encoding.clone();
-            state.encoding_meta = rec.meta.clone();
-            for (local, v) in &rec.overlay {
-                state.overlay.put(*local, v.clone());
+            match form[0] {
+                0 => {
+                    cursor.read_exact(&mut u32b)?;
+                    let data_len = u32::from_le_bytes(u32b) as usize;
+                    let data = take_bytes(cursor, data_len as u32, "chunk raw data")?;
+                    cursor.read_exact(&mut u32b)?;
+                    let offsets_count = u32::from_le_bytes(u32b) as usize;
+                    let mut offsets = Vec::with_capacity(offsets_count);
+                    for _ in 0..offsets_count {
+                        let mut off_bytes = [0u8; 8];
+                        cursor.read_exact(&mut off_bytes)?;
+                        offsets.push(u64::from_le_bytes(off_bytes));
+                    }
+                    let mut bitmap_flag = [0u8; 1];
+                    cursor.read_exact(&mut bitmap_flag)?;
+                    let (bitmap_raw, bit_len) = if bitmap_flag[0] == 1 {
+                        cursor.read_exact(&mut u32b)?;
+                        let bit_len = u32::from_le_bytes(u32b) as usize;
+                        cursor.read_exact(&mut u32b)?;
+                        let bytes_len = u32::from_le_bytes(u32b) as usize;
+                        let bytes = take_bytes(cursor, bytes_len as u32, "chunk null bitmap")?;
+                        (Some(bytes), bit_len)
+                    } else {
+                        (None, 0)
+                    };
+                    state
+                        .raw
+                        .as_storage_mut()
+                        .load_data_from_raw(data, offsets, bitmap_raw, bit_len);
+                }
+                1 => {
+                    cursor.read_exact(&mut u32b)?;
+                    let meta_len = u32::from_le_bytes(u32b) as usize;
+                    let meta_bytes = take_bytes(cursor, meta_len as u32, "chunk meta")?;
+                    state.encoding_meta = if meta_bytes.is_empty() {
+                        crate::encoding::ChunkEncodingMeta::default()
+                    } else {
+                        crate::encoding::ChunkEncodingMeta::deserialize(&mut &meta_bytes[..])?
+                    };
+                    cursor.read_exact(&mut u32b)?;
+                    let enc_len = u32::from_le_bytes(u32b) as usize;
+                    let enc_bytes = take_bytes(cursor, enc_len as u32, "chunk encoding")?;
+                    if enc_bytes.is_empty() {
+                        return Err(StorageError::deserialize_error(
+                            "empty chunk encoding".to_string(),
+                        ));
+                    }
+                    let encoding_type = EncodingType::from_u8(enc_bytes[0]);
+                    let mut enc_cursor = &enc_bytes[1..];
+                    state.encoding =
+                        Self::decode_encoding(encoding_type, &mut enc_cursor, &data_type)?;
+                }
+                other => {
+                    return Err(StorageError::deserialize_error(format!(
+                        "unsupported chunk form {}",
+                        other
+                    )));
+                }
+            }
+            cursor.read_exact(&mut u32b)?;
+            let overlay_len = u32::from_le_bytes(u32b) as usize;
+            let overlay_bytes = take_bytes(cursor, overlay_len as u32, "chunk overlay")?;
+            if !overlay_bytes.is_empty() {
+                let overlay: Vec<(u32, Option<Value>)> = postcard::from_bytes(&overlay_bytes)
+                    .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
+                for (local, v) in overlay {
+                    state.overlay.put(local, v);
+                }
             }
             state.updates_since_encode = state.overlay.len() as u64;
             // Restored windows carry no per-row MVCC deltas (checkpoints
             // persist current values), but the state slices must still span
             // the window so later splits and truncates stay in bounds.
-            state.visibility.ensure_len(rec.row_count);
+            state.visibility.ensure_len(row_count);
             drop(state);
             chunks.push(chunk);
         }
-        let first_encoding = recs.first().map(|r| r.encoding.clone());
         col.set_chunks(chunks);
-        if let Some(enc) = first_encoding {
-            col.restore_encoding(enc);
-        }
         // Overflow flag sits between the chunk records and the stats suffix.
         let mut flag = [0u8; 1];
         cursor.read_exact(&mut flag)?;
@@ -659,7 +582,8 @@ impl VertexTable {
 
         self.timestamps.write().load(&timestamps);
 
-        self.is_open.store(true, std::sync::atomic::Ordering::Release);
+        self.is_open
+            .store(true, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 }

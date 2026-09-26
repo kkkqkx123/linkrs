@@ -71,6 +71,8 @@ impl GraphStorageContext {
             auto_commit: true,
             mutation_recorder: None,
             auto_commit_group_start: None,
+            auto_commit_staging_start: None,
+            auto_commit_wal_start: 0,
         }));
         Ok(bound)
     }
@@ -106,6 +108,8 @@ impl GraphStorageContext {
                 write_set: write_set.clone(),
             })),
             auto_commit_group_start: None,
+            auto_commit_staging_start: None,
+            auto_commit_wal_start: 0,
         };
 
         bound.operation_context = Some(Arc::new(context));
@@ -140,6 +144,7 @@ impl GraphStorageContext {
             group: std::sync::atomic::AtomicBool::new(false),
             group_undo: None,
             group_write_sets: parking_lot::Mutex::new(Vec::new()),
+            group_transaction_id: parking_lot::Mutex::new(None),
         }))
     }
 
@@ -165,6 +170,7 @@ impl GraphStorageContext {
                 graphdb_transaction::UndoLogManager::new(),
             ))),
             group_write_sets: parking_lot::Mutex::new(Vec::new()),
+            group_transaction_id: parking_lot::Mutex::new(None),
         }))
     }
 
@@ -231,16 +237,26 @@ impl GraphStorageContext {
         }
 
         // Group mode: per-statement finalize — certify against recently
-        // committed write sets, then no-wait WAL append or segment
-        // rollback. The statement write set is accumulated into the window
-        // for publication at `finalize_group`. Do NOT commit/abort the write
-        // timestamp, release the gate, or unregister snapshots — those are
-        // deferred to `finalize_group`.
+        // committed write sets; on failure rewind only this statement's
+        // staging segment and WAL tail. The group's vertex apply and WAL
+        // flush happen once at `finalize_group`. Do NOT commit/abort the
+        // write timestamp, release the gate, or unregister snapshots —
+        // those are deferred to `finalize_group`.
         if let Some(window) = &self.auto_commit_window {
             if window.is_grouped() {
                 let timestamp = operation.write_timestamp.ok_or_else(|| {
                     StorageError::db_error("Group operation has no write timestamp")
                 })?;
+                let rewind = |ctx: &Self| {
+                    if let Some(txid) = operation.transaction_id {
+                        let staging_start = operation.auto_commit_staging_start.unwrap_or((0, 0));
+                        ctx.rewind_grouped_statement(
+                            txid,
+                            staging_start,
+                            operation.auto_commit_wal_start,
+                        );
+                    }
+                };
                 if committed {
                     if let Some(conflict) = self.auto_commit_conflict(operation) {
                         if let Some(undo) = &self.auto_commit_undo {
@@ -251,14 +267,9 @@ impl GraphStorageContext {
                                 log::error!("Group statement rollback failed: {}", error);
                             }
                         }
-                        if let Some(txid) = operation.transaction_id {
-                            self.abort_staged_writes(txid);
-                        }
+                        rewind(self);
                         self.maybe_run_index_gc();
                         return Err(conflict);
-                    }
-                    if let Some(txid) = operation.transaction_id {
-                        self.commit_staged_writes_grouped(txid, &[])?;
                     }
                     if let Some(write_set) = self.auto_commit_write_set.as_ref() {
                         let set = write_set.lock().clone();
@@ -274,9 +285,7 @@ impl GraphStorageContext {
                             log::error!("Group statement rollback failed: {}", error);
                         }
                     }
-                    if let Some(txid) = operation.transaction_id {
-                        self.abort_staged_writes(txid);
-                    }
+                    rewind(self);
                 }
                 self.maybe_run_index_gc();
                 return Ok(());
@@ -301,10 +310,31 @@ impl GraphStorageContext {
                     lease.release();
                 }
                 if let Some(transaction_id) = transaction_id {
-                    self.persistent.staged_wal.remove(&transaction_id);
+                    self.abort_staged_writes(transaction_id);
                 }
                 self.maybe_run_index_gc();
                 return Err(conflict);
+            }
+            // Commit point: staged vertex rows are installed after the
+            // conflict certification and before the timestamp publishes
+            // visibility. A failing apply leaves nothing installed; the
+            // statement then unwinds like any other conflict.
+            if let Some(transaction_id) = transaction_id {
+                if let Err(error) = self.apply_txn_staging(transaction_id) {
+                    if let Some(undo) = &self.auto_commit_undo {
+                        let mut log = undo.lock();
+                        if let Err(undo_error) = log.execute_undo(self, timestamp) {
+                            log::error!("Auto-commit rollback failed: {}", undo_error);
+                        }
+                    }
+                    self.abort_write_timestamp(timestamp);
+                    if let Some(lease) = &self.write_gate_lease {
+                        lease.release();
+                    }
+                    self.abort_staged_writes(transaction_id);
+                    self.maybe_run_index_gc();
+                    return Err(error);
+                }
             }
             // Commit-ordered visibility: the conflict window below is
             // indexed by the same commit timestamp that advances the
@@ -325,6 +355,9 @@ impl GraphStorageContext {
         }
         if let Some(transaction_id) = transaction_id {
             self.persistent.staged_wal.remove(&transaction_id);
+            // After a successful apply the buffer is already gone; this is
+            // the release point for the failed-statement buffer.
+            self.discard_txn_staging_for(transaction_id);
         }
         self.maybe_run_index_gc();
         Ok(())
@@ -708,6 +741,12 @@ impl GraphStorageContext {
         self.persistent.layout.work_dir()
     }
 
+    /// Compression used for baseline flushes, so offline tools write probe
+    /// and checkpoint content identically to the regular flush path.
+    pub(crate) fn flush_compression(&self) -> crate::compression::CompressionType {
+        self.persistent.config.flush_config.compression
+    }
+
     pub(crate) fn storage_paths(&self) -> Option<crate::engine::paths::StoragePaths> {
         self.persistent.layout.storage_paths()
     }
@@ -820,6 +859,21 @@ impl GraphStorageContext {
         intents: &[graphdb_core::wal::OutboxIntent],
         durability: graphdb_core::types::DurabilityLevel,
     ) -> graphdb_core::StorageResult<graphdb_core::types::CommitLsn> {
+        // Explicit-transaction commit point: staged vertex rows are applied
+        // before the WAL append, and the WAL durability plus barrier is the
+        // publication. A durability failure undoes the applied rows (the
+        // aborted timestamp keeps any index residue invisible). Auto-commit
+        // statements certify in `finalize_operation` after this call, so
+        // their apply is deferred there.
+        let defer_apply = self
+            .operation_context
+            .as_ref()
+            .is_some_and(|operation| operation.auto_commit);
+        let applied = if defer_apply {
+            Vec::new()
+        } else {
+            self.apply_txn_staging(transaction_id)?
+        };
         let entries = self
             .persistent
             .staged_wal
@@ -830,12 +884,18 @@ impl GraphStorageContext {
             let wal_manager = persistence.read().wal_manager().ok_or_else(|| {
                 graphdb_core::StorageError::wal_error("WAL manager is not initialized".to_string())
             })?;
-            let result = wal_manager.read().append_transaction_with_durability(
+            let result = match wal_manager.read().append_transaction_with_durability(
                 transaction_id,
                 entries,
                 intents,
                 durability,
-            )?;
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    self.undo_applied_staging(&applied);
+                    return Err(error);
+                }
+            };
             result
         } else {
             graphdb_core::types::CommitLsn::ZERO
@@ -848,10 +908,10 @@ impl GraphStorageContext {
         Ok(commit_lsn)
     }
 
-    /// Append staged WAL with `DurabilityLevel::None` (no fsync). Barriers
-    /// are deferred to the group commit point (`finalize_group`). Write-scope
-    /// commit shares the writer hook; this grouped variant is the same
-    /// durability point without an extra scope step.
+    /// Flush the group's accumulated WAL redo with `DurabilityLevel::None`
+    /// (no fsync): called once at the group commit point after the staged
+    /// vertex rows are applied. Barriers are deferred to the group sync in
+    /// `finalize_group`.
     pub(crate) fn commit_staged_writes_grouped(
         &self,
         transaction_id: graphdb_core::types::TransactionId,
@@ -884,15 +944,33 @@ impl GraphStorageContext {
     }
 
     pub(crate) fn abort_staged_writes(&self, transaction_id: graphdb_core::types::TransactionId) {
-        // Write-scope rollback hook point: vertex scopes discard in the
-        // writer/sync failure branches ahead of the timestamp abort; the
-        // undo log then removes already applied rows. This only drops WAL.
+        // Abort point for a whole statement transaction: drop the staged
+        // WAL redo and discard the staging buffer, releasing every
+        // reservation it held (nothing was applied for staged-only rows).
         self.persistent.staged_wal.remove(&transaction_id);
+        self.discard_txn_staging_for(transaction_id);
     }
 
     /// Number of staged-WAL entries held for in-flight transactions.
     pub(crate) fn staged_wal_len(&self) -> usize {
         self.persistent.staged_wal.len()
+    }
+
+    /// Staged-WAL entries accumulated for one transaction.
+    pub(crate) fn staged_wal_len_for(
+        &self,
+        transaction_id: graphdb_core::types::TransactionId,
+    ) -> usize {
+        self.persistent
+            .staged_wal
+            .get(&transaction_id)
+            .map(|entries| entries.len())
+            .unwrap_or(0)
+    }
+
+    /// Drop one transaction's staged WAL redo without touching the buffer.
+    pub(crate) fn drop_staged_wal_for(&self, transaction_id: graphdb_core::types::TransactionId) {
+        self.persistent.staged_wal.remove(&transaction_id);
     }
 
     /// Whether this context is bound inside a group-mode

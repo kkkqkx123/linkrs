@@ -3,7 +3,43 @@
 //! MVCC timestamp tracking for vertices.
 //! Tracks creation and deletion timestamps for each vertex.
 
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+use super::latch_order::{Guard, RANK_IDENTITY};
 use super::{Timestamp, INVALID_TIMESTAMP, MAX_TIMESTAMP};
+
+/// Identity-domain latch: the MVCC timestamp map behind the identity rank
+/// of the table latch order. Guards deref to [`VertexTimestamp`]; acquiring
+/// this latch while a segment latch is held violates identity-before-segments
+/// and panics in debug builds.
+#[derive(Debug)]
+pub struct IdentityLatch {
+    inner: RwLock<VertexTimestamp>,
+}
+
+impl IdentityLatch {
+    pub fn new(initial: VertexTimestamp) -> Self {
+        Self {
+            inner: RwLock::new(initial),
+        }
+    }
+
+    pub fn read(&self) -> Guard<RwLockReadGuard<'_, VertexTimestamp>> {
+        Guard::claim(
+            self.inner.read(),
+            RANK_IDENTITY,
+            "vertex identity latch (read)",
+        )
+    }
+
+    pub fn write(&self) -> Guard<RwLockWriteGuard<'_, VertexTimestamp>> {
+        Guard::claim(
+            self.inner.write(),
+            RANK_IDENTITY,
+            "vertex identity latch (write)",
+        )
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct VertexTimestamp {
@@ -45,15 +81,6 @@ impl VertexTimestamp {
         if idx < self.end_ts.len() {
             self.end_ts[idx] = ts;
         }
-    }
-
-    pub fn revert_remove(&mut self, index: u32, ts: Timestamp) -> bool {
-        let idx = index as usize;
-        if idx < self.end_ts.len() && self.end_ts[idx] != MAX_TIMESTAMP && ts <= self.end_ts[idx] {
-            self.end_ts[idx] = MAX_TIMESTAMP;
-            return true;
-        }
-        false
     }
 
     /// Invalidate one slot after its key left the index through stable
@@ -181,7 +208,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_and_revert() {
+    fn test_delete() {
         let mut vts = VertexTimestamp::new();
 
         vts.insert(0, 100);
@@ -190,11 +217,6 @@ mod tests {
         assert!(vts.get_end_ts(0).is_some());
         assert!(vts.is_valid(0, 150));
         assert!(!vts.is_valid(0, 250));
-
-        vts.revert_remove(0, 200);
-        assert!(vts.get_end_ts(0).is_none());
-        assert!(vts.is_valid(0, 150));
-        assert!(vts.is_valid(0, 250));
     }
 
     // ==================== Priority Tests ====================
@@ -233,45 +255,6 @@ mod tests {
         }
     }
 
-    /// Test: Verify revert_remove restores visibility correctly
-    #[test]
-    fn test_revert_remove_restores_full_visibility() {
-        let mut vts = VertexTimestamp::new();
-
-        vts.insert(0, 100);
-        vts.remove(0, 200);
-
-        // Verify it's deleted
-        assert!(!vts.is_valid(0, 250));
-
-        // Revert the deletion
-        assert!(vts.revert_remove(0, 200));
-
-        // Verify it's visible again for all future timestamps up to MAX_TIMESTAMP-1
-        assert!(vts.is_valid(0, 200));
-        assert!(vts.is_valid(0, 1000));
-        assert!(vts.is_valid(0, Timestamp::MAX - 2));
-    }
-
-    /// Test: Verify revert_remove with incorrect timestamp
-    #[test]
-    fn test_revert_remove_with_wrong_timestamp() {
-        let mut vts = VertexTimestamp::new();
-
-        vts.insert(0, 100);
-        vts.remove(0, 200);
-
-        // Try to revert with wrong timestamp (too late)
-        let result = vts.revert_remove(0, 300);
-        assert!(
-            !result,
-            "Revert should fail if timestamp > deletion timestamp"
-        );
-
-        // Verify vertex is still deleted
-        assert!(!vts.is_valid(0, 250));
-    }
-
     /// Test: invalidated slots leave deletion scans and free the id for reuse.
     #[test]
     fn test_invalidate_slot_drops_from_deleted_scan() {
@@ -306,14 +289,15 @@ mod tests {
         vts.remove(0, 200);
         assert!(!vts.is_valid(0, 250));
 
-        // Revert and try again
-        vts.revert_remove(0, 200);
-        assert!(vts.is_valid(0, 250));
+        // Recycled id: re-insert overwrites both stamps.
+        vts.insert(0, 300);
+        assert!(!vts.is_valid(0, 250));
+        assert!(vts.is_valid(0, 350));
 
         // Delete again with higher timestamp
-        vts.remove(0, 300);
-        assert!(vts.is_valid(0, 250));
-        assert!(!vts.is_valid(0, 350));
+        vts.remove(0, 400);
+        assert!(vts.is_valid(0, 350));
+        assert!(!vts.is_valid(0, 450));
     }
 
     /// Test: Verify start and end timestamp getters

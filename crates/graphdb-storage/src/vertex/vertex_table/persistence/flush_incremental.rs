@@ -85,6 +85,10 @@ impl VertexTable {
         let delta_dir = path.join("columns_pages");
         std::fs::create_dir_all(&delta_dir)?;
 
+        // Row pages divide chunk windows evenly, so every page belongs to
+        // exactly one chunk and dirty marks owned per chunk aggregate as a
+        // plain union here. Files stay page-granular for small deltas while
+        // full checkpoints persist whole chunk vectors.
         // Build set of dirty page ids for fast lookup (row-page granularity).
         let dirty_set: HashSet<u64> = dirty_pages.iter().map(|p| p.page_id).collect();
 

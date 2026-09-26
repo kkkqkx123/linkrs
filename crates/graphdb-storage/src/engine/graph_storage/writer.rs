@@ -2,7 +2,7 @@ mod batch;
 mod constraints;
 mod data;
 mod edge;
-mod index_maintenance;
+pub(crate) mod index_maintenance;
 mod vertex;
 
 pub(crate) use batch::{batch_delete_edges, batch_insert_edges};

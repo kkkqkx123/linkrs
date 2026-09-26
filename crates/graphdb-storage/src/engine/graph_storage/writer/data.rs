@@ -9,6 +9,7 @@ use graphdb_core::wal::redo::{DeleteEdgeRedo, InsertEdgeRedo, InsertVertexRedo};
 use graphdb_core::wal::types::WalOpType;
 use graphdb_core::{StorageError, StorageResult, Value};
 
+use super::super::context::txn_staging::StagedIndexOp;
 use super::super::context::GraphStorageContext;
 use super::super::ops::{endpoint_label_id, route_vertex_id, tag_label_id, RoutedVertexId};
 use super::super::reader;
@@ -62,37 +63,149 @@ pub(crate) fn insert_vertex_data(
         properties: props.clone(),
     };
     let redo_entry = ctx.append_wal_redo(WalOpType::InsertVertex, ts, &redo)?;
-    let result = match route_vertex_id(&vid)? {
-        RoutedVertexId::Int(id_int) => ctx.insert_vertex_by_i64(label_id, id_int, &props, ts),
-        RoutedVertexId::Text(id_str) => ctx.insert_vertex(label_id, &id_str, &props, ts),
-    };
-    let final_result = match result {
-        Ok(_) => {
-            super::index_maintenance::update_vertex_indexes(
-                ctx,
-                ctx.index_metadata_manager(),
-                space_info.space_id,
-                &info.vertex_id,
-                &info.tag_name,
-                &props,
-                ts,
-            )?;
-            super::vertex::record_vertex_insert(ctx, label_id, vid, Some(redo_entry))?;
-            Ok(true)
+
+    // Staging scope path shared with `insert_vertex`: stage, apply, then
+    // indexes and the transaction record before the timestamp publishes.
+    // A duplicate key surfaces from the apply-time primary-key recheck; the
+    // IF-NOT-EXISTS contract maps it to `false`, with nothing applied.
+    let mut scope = crate::vertex::WriteScope::new(ts);
+    let key = match route_vertex_id(&vid)? {
+        RoutedVertexId::Int(id_int) => {
+            ctx.insert_vertex_by_i64_with_scope(label_id, id_int, &props, ts, &mut scope)?;
+            crate::vertex::IdKey::Int(id_int)
         }
-        Err(ref e)
-            if e.kind() == graphdb_core::error::storage::StorageErrorKind::VertexAlreadyExists =>
-        {
-            Ok(false)
+        RoutedVertexId::Text(id_str) => {
+            ctx.insert_vertex_with_scope(label_id, &id_str, &props, ts, &mut scope)?;
+            crate::vertex::IdKey::Text(id_str)
         }
-        Err(e) => Err(e),
     };
-    if final_result.is_ok() {
-        ctx.commit_write_timestamp_ordered(ts)?;
-    } else {
-        ctx.abort_write_timestamp(ts);
+
+    // Online: the row is held in the transaction staging buffer and applied
+    // at the commit point. IF-NOT-EXISTS against a row already visible to
+    // this statement is a false with nothing staged.
+    if ctx.is_online_write() {
+        let exists = match &key {
+            crate::vertex::IdKey::Int(id_int) => {
+                ctx.get_vertex_by_i64(label_id, *id_int, ts).is_some()
+            }
+            crate::vertex::IdKey::Text(id_str) => ctx.get_vertex(label_id, id_str, ts).is_some(),
+        };
+        if exists {
+            let dropped = scope.rollback_label(label_id);
+            ctx.release_staged_reservations(
+                &dropped
+                    .into_iter()
+                    .map(|id| (label_id, id))
+                    .collect::<Vec<_>>(),
+            );
+            ctx.commit_write_timestamp_ordered(ts)?;
+            return Ok(false);
+        }
+        let (buffer, mark) = match ctx.txn_staging_mark(ts) {
+            Ok(mark) => mark,
+            Err(error) => {
+                ctx.abort_write_timestamp(ts);
+                return Err(error);
+            }
+        };
+        let outcome = ctx
+            .absorb_write_scope(&mut scope, ts)
+            .and_then(|()| super::vertex::record_vertex_insert(ctx, vid, Some(redo_entry)))
+            .and_then(|()| {
+                ctx.stage_vertex_index_op(
+                    ts,
+                    StagedIndexOp::Insert {
+                        space_id: space_info.space_id,
+                        vid: info.vertex_id.clone(),
+                        tag: info.tag_name.clone(),
+                        properties: props,
+                    },
+                )
+            });
+        if let Err(error) = outcome {
+            ctx.rollback_staging_to(&buffer, mark);
+            ctx.abort_write_timestamp(ts);
+            return Err(error);
+        }
+        return Ok(true);
     }
-    final_result
+
+    let internal_id = match ctx.commit_write_scope(label_id, &mut scope, ts) {
+        Ok(mapping) => match mapping.into_iter().find(|(k, _)| *k == key) {
+            Some((_, global_id)) => global_id,
+            None => {
+                scope.clear();
+                ctx.abort_write_timestamp(ts);
+                return Err(StorageError::db_error(format!(
+                    "commit apply lost staged vertex {:?}",
+                    vid
+                )));
+            }
+        },
+        Err(error)
+            if error.kind()
+                == graphdb_core::error::storage::StorageErrorKind::VertexAlreadyExists =>
+        {
+            scope.clear();
+            ctx.commit_write_timestamp_ordered(ts)?;
+            return Ok(false);
+        }
+        Err(error) => {
+            scope.clear();
+            ctx.abort_write_timestamp(ts);
+            return Err(error);
+        }
+    };
+    debug_assert!(scope.is_empty());
+
+    if let Err(error) = super::index_maintenance::update_vertex_indexes(
+        ctx,
+        ctx.index_metadata_manager(),
+        space_info.space_id,
+        &info.vertex_id,
+        &info.tag_name,
+        &props,
+        ts,
+    ) {
+        let _ = super::index_maintenance::delete_vertex_indexes(
+            ctx,
+            ctx.index_metadata_manager(),
+            space_info.space_id,
+            &info.vertex_id,
+            &info.tag_name,
+            ts,
+        );
+        ctx.undo_applied_scope_inserts(label_id, &[internal_id]);
+        ctx.abort_write_timestamp(ts);
+        return Err(error);
+    }
+    if let Err(error) = super::vertex::record_vertex_insert(ctx, vid, Some(redo_entry)) {
+        let _ = super::index_maintenance::delete_vertex_indexes(
+            ctx,
+            ctx.index_metadata_manager(),
+            space_info.space_id,
+            &info.vertex_id,
+            &info.tag_name,
+            ts,
+        );
+        ctx.undo_applied_scope_inserts(label_id, &[internal_id]);
+        ctx.abort_write_timestamp(ts);
+        return Err(error);
+    }
+    match &key {
+        crate::vertex::IdKey::Int(id_int) => {
+            ctx.cache_inserted_vertex_id(label_id, &id_int.to_string(), internal_id, ts);
+            ctx.mark_vertex_modified(label_id);
+            ctx.observe_vertex_id_i64(label_id, *id_int);
+        }
+        crate::vertex::IdKey::Text(id_str) => {
+            ctx.cache_inserted_vertex_id(label_id, id_str, internal_id, ts);
+            ctx.mark_vertex_modified(label_id);
+            ctx.observe_vertex_id_string(label_id);
+        }
+    }
+    ctx.commit_write_timestamp_ordered(ts)?;
+    Ok(true)
 }
 
 pub(crate) fn insert_edge_data(
@@ -408,38 +521,77 @@ pub(crate) fn update_data(
             _ => info.value.clone(),
         };
 
-        match &routed {
+        // Online: the property update buffers in the transaction staging
+        // hold; a statement failure unwinds it back to the mark.
+        let online = ctx.is_online_write();
+        let staging = if online {
+            match ctx.txn_staging_mark(ts) {
+                Ok(mark) => Some(mark),
+                Err(error) => {
+                    ctx.abort_write_timestamp(ts);
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
+        let unwind = |error: StorageError| -> StorageError {
+            if let Some((buffer, mark)) = &staging {
+                ctx.rollback_staging_to(buffer, *mark);
+            }
+            ctx.abort_write_timestamp(ts);
+            error
+        };
+
+        let update_result = match &routed {
             super::super::ops::RoutedVertexId::Int(id_int) => {
-                ctx.update_vertex_property_by_i64(label_id, *id_int, prop, &value, ts)?;
+                ctx.update_vertex_property_by_i64(label_id, *id_int, prop, &value, ts)
             }
             super::super::ops::RoutedVertexId::Text(id_str) => {
-                ctx.update_vertex_property(label_id, id_str, prop, &value, ts)?;
+                ctx.update_vertex_property(label_id, id_str, prop, &value, ts)
             }
+        };
+        if let Err(error) = update_result {
+            return Err(unwind(error));
         }
-        let old_value = current_record.as_ref().and_then(|record| {
-            record
-                .properties
-                .iter()
-                .find(|(name, _)| name == prop)
-                .map(|(_, value)| value)
-        });
-        super::vertex::record_vertex_property_update(ctx, label_id, vid, prop, old_value, None)?;
+        if let Err(error) = super::vertex::record_vertex_property_update(ctx, vid, None) {
+            return Err(unwind(error));
+        }
 
         let mut merged_props: HashMap<String, Value> = current_record
             .as_ref()
             .map(|record| record.properties.iter().cloned().collect())
             .unwrap_or_default();
         merged_props.insert(prop.clone(), value);
+        let merged: Vec<(String, Value)> = merged_props.into_iter().collect();
 
-        super::index_maintenance::refresh_vertex_indexes(
+        if online {
+            // Index refresh replays at commit apply, after the new bytes land.
+            if let Err(error) = ctx.stage_vertex_index_op(
+                ts,
+                StagedIndexOp::Update {
+                    space_id,
+                    vid: Value::from(vid),
+                    tag: label.clone(),
+                    properties: merged,
+                },
+            ) {
+                return Err(unwind(error));
+            }
+            return Ok(true);
+        }
+
+        if let Err(error) = super::index_maintenance::refresh_vertex_indexes(
             ctx,
             ctx.index_metadata_manager(),
             space_info.space_id,
             &Value::from(vid),
             label,
-            &merged_props.into_iter().collect::<Vec<_>>(),
+            &merged,
             ts,
-        )?;
+        ) {
+            return Err(unwind(error));
+        }
         ctx.commit_write_timestamp_ordered(ts)?;
         Ok(true)
     } else {

@@ -204,11 +204,7 @@ impl<'a> PendingGate<'a> {
 /// snapshot. This type binds the two once: every predicate it exposes is
 /// evaluated at its own [`Self::snapshot`], and the storage entry points that
 /// yield rows or columns take it instead of a bare timestamp. A read path
-/// therefore cannot omit the pending recheck by accident.
-///
-/// The pending-aware resolution walks *below* the snapshot to read the version
-/// that predates a foreign uncommitted write; [`Self::at`] derives the lowered
-/// guard for that walk while keeping the same gate.
+/// therefore cannot omit the liveness recheck by accident.
 pub struct VisibilityGuard<'a> {
     snapshot: Timestamp,
     gate: PendingGate<'a>,
@@ -227,14 +223,6 @@ impl<'a> VisibilityGuard<'a> {
         self.snapshot
     }
 
-    /// The same gate evaluated at a lowered snapshot.
-    pub(crate) fn at(&self, snapshot: Timestamp) -> Self {
-        Self {
-            snapshot,
-            gate: self.gate,
-        }
-    }
-
     /// Row liveness at this guard's snapshot.
     #[inline]
     pub(crate) fn is_row_visible(
@@ -244,12 +232,6 @@ impl<'a> VisibilityGuard<'a> {
     ) -> bool {
         self.gate
             .is_row_visible(self.snapshot, create_ts, delete_ts)
-    }
-
-    /// Whether `stamp` names a foreign uncommitted write at this snapshot.
-    #[inline]
-    pub(crate) fn is_foreign_pending(&self, stamp: Timestamp) -> bool {
-        self.gate.is_foreign_pending(self.snapshot, stamp)
     }
 }
 

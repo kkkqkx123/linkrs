@@ -16,6 +16,99 @@ pub mod vertex_table;
 pub mod vertex_timestamp;
 pub mod write_scope;
 
+/// Debug-build latch-order assertions for the vertex table latches.
+///
+/// The in-table order is identity before column segments: a claim of a
+/// lower rank may be held while acquiring a higher one, never the reverse.
+/// Claims form a per-thread stack checked at acquisition time; release
+/// builds compile the checks away.
+pub(crate) mod latch_order {
+    pub(crate) const RANK_IDENTITY: u8 = 1;
+    pub(crate) const RANK_SEGMENT: u8 = 2;
+
+    #[cfg(debug_assertions)]
+    thread_local! {
+        static HELD: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// RAII wrapper forwarding lock-guard access while claiming `rank`
+    /// for the duration of the hold.
+    pub(crate) struct Guard<G> {
+        inner: G,
+        #[cfg(debug_assertions)]
+        rank: u8,
+    }
+
+    impl<G> Guard<G> {
+        pub(crate) fn claim(inner: G, rank: u8, site: &'static str) -> Self {
+            acquire(rank, site);
+            Self {
+                inner,
+                #[cfg(debug_assertions)]
+                rank,
+            }
+        }
+    }
+
+    impl<G: std::ops::Deref> std::ops::Deref for Guard<G> {
+        type Target = G::Target;
+
+        #[inline]
+        fn deref(&self) -> &Self::Target {
+            &self.inner
+        }
+    }
+
+    impl<G: std::ops::DerefMut> std::ops::DerefMut for Guard<G> {
+        #[inline]
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.inner
+        }
+    }
+
+    impl<G> Drop for Guard<G> {
+        #[inline]
+        fn drop(&mut self) {
+            #[cfg(debug_assertions)]
+            release(self.rank);
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn acquire(rank: u8, site: &'static str) {
+        HELD.with(|held| {
+            let mut held = held.borrow_mut();
+            if let Some(&top) = held.last() {
+                assert!(
+                    rank >= top,
+                    "latch order violation: acquiring {site} (rank {rank}) while holding a higher-ranked latch (top rank {top})"
+                );
+            }
+            held.push(rank);
+        });
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[inline]
+    fn acquire(_rank: u8, _site: &'static str) {}
+
+    #[cfg(debug_assertions)]
+    fn release(rank: u8) {
+        HELD.with(|held| {
+            let popped = held.borrow_mut().pop();
+            debug_assert_eq!(
+                popped,
+                Some(rank),
+                "latch claims must release in LIFO order"
+            );
+        });
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[inline]
+    fn release(_rank: u8) {}
+}
+
 // Alias: external code uses `crate::vertex::column_store::*`.
 pub use column as column_store;
 

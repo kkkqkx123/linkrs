@@ -193,6 +193,8 @@ impl StorageSchemaOps for GraphStorage {
             auto_commit: false,
             mutation_recorder: None,
             auto_commit_group_start: None,
+            auto_commit_staging_start: None,
+            auto_commit_wal_start: 0,
         });
         let vertices = reader::scan_vertices(&snapshot_ctx, space)?;
         let result = index_manager::rebuild_tag_index(
@@ -242,6 +244,8 @@ impl StorageSchemaOps for GraphStorage {
             auto_commit: false,
             mutation_recorder: None,
             auto_commit_group_start: None,
+            auto_commit_staging_start: None,
+            auto_commit_wal_start: 0,
         });
         let edges = reader::scan_all_edges(&snapshot_ctx, space)?;
         let result = index_manager::rebuild_edge_index(

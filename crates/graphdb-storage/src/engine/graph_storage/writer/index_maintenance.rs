@@ -18,7 +18,7 @@ pub(super) fn tag_index_names(
         .collect())
 }
 
-pub(super) fn update_vertex_indexes(
+pub(crate) fn update_vertex_indexes(
     ctx: &GraphStorageContext,
     index_metadata_manager: &graphdb_core::metadata::IndexManager,
     space_id: u64,
@@ -65,9 +65,54 @@ pub(super) fn update_vertex_indexes_with_list(
         // generation publish per statement, which would defeat delta
         // accumulation during batch loads with unique indexes.
         if index.is_unique {
-            let index_data = ctx.index_data_manager();
-            for (_prop_name, prop_value) in &indexed_props {
-                let existing = index_data
+            check_vertex_unique_indexes_with_list(
+                ctx,
+                std::slice::from_ref(index),
+                space_id,
+                vertex_id,
+                tag_name,
+                props,
+            )?;
+        }
+        ctx.update_vertex_indexes_mvcc(space_id, vertex_id, &index.name, props, ts)?;
+    }
+    Ok(())
+}
+
+/// Statement-time pending-aware unique-constraint probe: checks the write's
+/// indexed values against published and pending index entries without
+/// writing anything. Online writes defer the index mutation to commit
+/// replay but must still reject a visible duplicate at the statement.
+pub(super) fn check_vertex_unique_indexes(
+    ctx: &GraphStorageContext,
+    index_metadata_manager: &graphdb_core::metadata::IndexManager,
+    space_id: u64,
+    vertex_id: &Value,
+    tag_name: &str,
+    props: &[(String, Value)],
+) -> StorageResult<()> {
+    let indexes = index_metadata_manager.list_tag_indexes(space_id)?;
+    check_vertex_unique_indexes_with_list(ctx, &indexes, space_id, vertex_id, tag_name, props)
+}
+
+fn check_vertex_unique_indexes_with_list(
+    ctx: &GraphStorageContext,
+    indexes: &[Index],
+    space_id: u64,
+    vertex_id: &Value,
+    tag_name: &str,
+    props: &[(String, Value)],
+) -> StorageResult<()> {
+    for index in indexes {
+        if !index.is_unique || index.schema_name != tag_name {
+            continue;
+        }
+        for field in &index.fields {
+            if let Some((_prop_name, prop_value)) =
+                props.iter().find(|(name, _)| *name == field.name)
+            {
+                let existing = ctx
+                    .index_data_manager()
                     .read()
                     .lookup_tag_index_pending_aware(space_id, index, prop_value)?;
                 if !existing.is_empty() && !existing.contains(vertex_id) {
@@ -78,12 +123,11 @@ pub(super) fn update_vertex_indexes_with_list(
                 }
             }
         }
-        ctx.update_vertex_indexes_mvcc(space_id, vertex_id, &index.name, props, ts)?;
     }
     Ok(())
 }
 
-pub(super) fn refresh_vertex_indexes(
+pub(crate) fn refresh_vertex_indexes(
     ctx: &GraphStorageContext,
     index_metadata_manager: &graphdb_core::metadata::IndexManager,
     space_id: u64,
@@ -109,7 +153,7 @@ pub(super) fn refresh_vertex_indexes(
     )
 }
 
-pub(super) fn delete_vertex_indexes(
+pub(crate) fn delete_vertex_indexes(
     ctx: &GraphStorageContext,
     index_metadata_manager: &graphdb_core::metadata::IndexManager,
     space_id: u64,

@@ -13,7 +13,7 @@ use graphdb_core::value::uuid::UuidValue;
 use graphdb_core::value::List;
 use graphdb_core::Value;
 use graphdb_transaction::undo_log::{
-    UndoLogEntry, UndoLogError, UndoLogResult, UndoTarget, UpdateEdgePropUndo, UpdateVertexPropUndo,
+    UndoLogEntry, UndoLogError, UndoLogResult, UndoTarget, UpdateEdgePropUndo,
 };
 use graphdb_transaction::wal::{ColumnId, LabelId, Timestamp, VertexId};
 use std::collections::HashMap;
@@ -55,17 +55,6 @@ impl UndoTarget for RecordingUndoTarget {
         Ok(())
     }
 
-    fn undo_update_vertex_property(
-        &self,
-        _vertex: VertexIdentifier,
-        _col_id: ColumnId,
-        value: Value,
-        _ts: Timestamp,
-    ) -> UndoLogResult<()> {
-        self.restored.lock().expect("poisoned").push(value);
-        Ok(())
-    }
-
     fn undo_update_edge_property(
         &self,
         _edge_id: EdgeIdentifier,
@@ -74,10 +63,6 @@ impl UndoTarget for RecordingUndoTarget {
         _ts: Timestamp,
     ) -> UndoLogResult<()> {
         self.restored.lock().expect("poisoned").push(value);
-        Ok(())
-    }
-
-    fn revert_delete_vertex(&self, _vertex: VertexIdentifier, _ts: Timestamp) -> UndoLogResult<()> {
         Ok(())
     }
 
@@ -183,15 +168,6 @@ fn sample_values() -> Vec<Value> {
     ]
 }
 
-fn vertex_undo(value: Value) -> UndoLogEntry {
-    UndoLogEntry::UpdateVertexProp(UpdateVertexPropUndo {
-        v_label: 1u32,
-        vid: VertexId::try_from_int64(42).expect("test vertex id"),
-        col_id: ColumnId(0),
-        old_value: value,
-    })
-}
-
 fn edge_undo(value: Value) -> UndoLogEntry {
     UndoLogEntry::UpdateEdgeProp(UpdateEdgePropUndo {
         src_label: 1u32,
@@ -212,23 +188,16 @@ fn undo_roundtrip_restores_original_value() {
 
     for value in sample_values() {
         let target = Arc::clone(&target);
-        for entry in [vertex_undo(value.clone()), edge_undo(value.clone())] {
-            let encoded = postcard::to_allocvec(&entry).expect("encode undo entry");
-            let decoded: UndoLogEntry = postcard::from_bytes(&encoded).expect("decode undo entry");
-            decoded.undo(&*target, 99).expect("undo should succeed");
-        }
+        let entry = edge_undo(value.clone());
+        let encoded = postcard::to_allocvec(&entry).expect("encode undo entry");
+        let decoded: UndoLogEntry = postcard::from_bytes(&encoded).expect("decode undo entry");
+        decoded.undo(&*target, 99).expect("undo should succeed");
     }
 
     let restored = target.restored();
     let expected: Vec<Value> = sample_values();
-    // Each sample value is restored twice (vertex + edge), in order.
-    let mut flattened = Vec::new();
-    for value in &expected {
-        flattened.push(value.clone());
-        flattened.push(value.clone());
-    }
-    assert_eq!(restored.len(), flattened.len());
-    for (restored, original) in restored.iter().zip(flattened.iter()) {
+    assert_eq!(restored.len(), expected.len());
+    for (restored, original) in restored.iter().zip(expected.iter()) {
         assert_eq!(
             restored, original,
             "undo must restore the original value, got: {:?}",
@@ -243,11 +212,11 @@ fn undo_entry_old_value_is_never_silently_null() {
         if value.is_null() {
             continue;
         }
-        let entry = vertex_undo(value.clone());
+        let entry = edge_undo(value.clone());
         let decoded: UndoLogEntry =
             postcard::from_bytes(&postcard::to_allocvec(&entry).expect("encode")).expect("decode");
-        let UndoLogEntry::UpdateVertexProp(undo) = decoded else {
-            panic!("expected UpdateVertexProp");
+        let UndoLogEntry::UpdateEdgeProp(undo) = decoded else {
+            panic!("expected UpdateEdgeProp");
         };
         assert!(
             !undo.old_value.is_null(),
@@ -262,16 +231,6 @@ fn failing_undo_returns_error() {
     struct FailingTarget;
 
     impl UndoTarget for FailingTarget {
-        fn undo_update_vertex_property(
-            &self,
-            _vertex: VertexIdentifier,
-            _col_id: ColumnId,
-            _value: Value,
-            _ts: Timestamp,
-        ) -> UndoLogResult<()> {
-            Err(UndoLogError::UndoFailed("simulated failure".to_string()))
-        }
-
         fn undo_update_edge_property(
             &self,
             _edge_id: EdgeIdentifier,
@@ -294,13 +253,6 @@ fn failing_undo_returns_error() {
         fn delete_edge(
             &self,
             _edge_ctx: graphdb_core::types::EdgeDeletionContext,
-        ) -> UndoLogResult<()> {
-            Ok(())
-        }
-        fn revert_delete_vertex(
-            &self,
-            _vertex: VertexIdentifier,
-            _ts: Timestamp,
         ) -> UndoLogResult<()> {
             Ok(())
         }
@@ -357,6 +309,6 @@ fn failing_undo_returns_error() {
         }
     }
 
-    let entry = vertex_undo(Value::vector(vec![9.0]));
+    let entry = edge_undo(Value::vector(vec![9.0]));
     assert!(entry.undo(&FailingTarget, 1).is_err());
 }

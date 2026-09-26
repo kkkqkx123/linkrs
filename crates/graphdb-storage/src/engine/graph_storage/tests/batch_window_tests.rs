@@ -68,6 +68,11 @@ fn test_batch_window_unregisters_lazily_registered_snapshots() {
     setup_person_tag(&mut storage);
 
     let window = storage.begin_auto_commit_batch().unwrap();
+    let before = storage
+        .ctx
+        .version_manager()
+        .snapshot_tracker()
+        .active_count();
     for i in 0..20 {
         let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
         let vertex = Vertex::new(
@@ -88,16 +93,18 @@ fn test_batch_window_unregisters_lazily_registered_snapshots() {
     }
     storage.finalize_auto_commit_batch(&window).unwrap();
 
-    // Every snapshot registered lazily by the window's statements must be
-    // released at window finalize; otherwise the table's GC watermark is
-    // pinned forever (version data can never be reclaimed).
-    let active = storage.ctx.data_store().with_vertex_tables(|tables| {
-        tables
-            .values()
-            .map(|table| table.active_snapshot_count())
-            .sum::<usize>()
-    });
-    assert_eq!(active, 0, "batch window leaked vertex snapshots");
+    // Every snapshot the window's statements registered must be released at
+    // window finalize; otherwise the GC watermark is pinned forever (version
+    // data can never be reclaimed). The global tracker is the ledger.
+    assert_eq!(
+        storage
+            .ctx
+            .version_manager()
+            .snapshot_tracker()
+            .active_count(),
+        before,
+        "batch window leaked snapshots into the global tracker"
+    );
 }
 
 #[test]

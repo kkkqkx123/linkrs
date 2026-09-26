@@ -118,7 +118,7 @@ fn create_test_schema() -> VertexSchema {
 #[test]
 fn test_insert_and_get() {
     let schema = create_test_schema();
-    let mut table = new_table(0, "person", schema);
+    let table = new_table(0, "person", schema);
 
     let internal_id = table
         .insert(
@@ -142,7 +142,7 @@ fn test_insert_and_get() {
 #[test]
 fn test_batch_projected_read() {
     let schema = create_test_schema();
-    let mut table = new_table(0, "person", schema);
+    let table = new_table(0, "person", schema);
 
     table
         .insert(
@@ -218,7 +218,7 @@ fn test_batch_projected_read() {
 #[test]
 fn test_delete() {
     let schema = create_test_schema();
-    let mut table = new_table(0, "person", schema);
+    let table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -234,7 +234,7 @@ fn test_delete() {
 #[test]
 fn test_iterator() {
     let schema = create_test_schema();
-    let mut table = new_table(0, "person", schema);
+    let table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -253,7 +253,7 @@ fn test_iterator() {
 #[test]
 fn test_live_ids_at_excludes_timestamp_deleted_rows() {
     let schema = create_test_schema();
-    let mut table = new_table(0, "person", schema);
+    let table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -324,7 +324,7 @@ fn test_rename_and_remove_property() {
 #[test]
 fn test_batch_insert() {
     let schema = create_test_schema();
-    let mut table = new_table(0, "person", schema);
+    let table = new_table(0, "person", schema);
 
     let vertices = vec![
         (
@@ -376,7 +376,7 @@ fn test_batch_insert() {
 #[test]
 fn test_batch_delete() {
     let schema = create_test_schema();
-    let mut table = new_table(0, "person", schema);
+    let table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -750,7 +750,7 @@ fn test_compact_id_consistency() {
 #[test]
 fn test_vertex_snapshot_isolation() {
     let schema = create_test_schema();
-    let mut table = new_table(0, "person", schema);
+    let table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -769,7 +769,7 @@ fn test_vertex_snapshot_isolation() {
 #[test]
 fn test_vertex_multiple_snapshots() {
     let schema = create_test_schema();
-    let mut table = new_table(0, "person", schema);
+    let table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -793,7 +793,7 @@ fn test_vertex_multiple_snapshots() {
 #[test]
 fn test_vertex_gc_placeholder() {
     let schema = create_test_schema();
-    let mut table = new_table(0, "person", schema);
+    let table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -810,7 +810,7 @@ fn test_vertex_gc_placeholder() {
 #[test]
 fn test_vertex_mvcc_table_ops() {
     let schema = create_test_schema();
-    let mut table = new_table(0, "person", schema);
+    let table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -825,7 +825,7 @@ fn test_vertex_mvcc_table_ops() {
 #[test]
 fn test_repeatable_read_property_updates() {
     let schema = create_test_schema();
-    let mut table = new_table(0, "person", schema);
+    let table = new_table(0, "person", schema);
 
     table
         .insert(
@@ -864,7 +864,7 @@ fn test_repeatable_read_property_updates() {
 #[test]
 fn test_property_version_gc_does_not_break_visible_snapshots() {
     let schema = create_test_schema();
-    let mut table = new_table(0, "person", schema);
+    let table = new_table(0, "person", schema);
 
     table
         .insert(

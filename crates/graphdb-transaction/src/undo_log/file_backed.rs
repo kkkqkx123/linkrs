@@ -379,7 +379,6 @@ impl Drop for FileBackedUndoLog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::undo_log::UpdateVertexPropUndo;
     use crate::wal::{LabelId, VertexId};
     use graphdb_core::types::{
         ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, UndoLogError, VertexIdentifier,
@@ -443,18 +442,6 @@ mod tests {
             self.record(format!("delete_edge:{edge_ctx:?}"))
         }
 
-        fn undo_update_vertex_property(
-            &self,
-            vertex: VertexIdentifier,
-            col_id: ColumnId,
-            value: graphdb_core::Value,
-            ts: Timestamp,
-        ) -> UndoLogResult<()> {
-            self.record(format!(
-                "undo_update_vertex_property:{vertex:?}:{col_id:?}:{value:?}:{ts}"
-            ))
-        }
-
         fn undo_update_edge_property(
             &self,
             edge_id: EdgeIdentifier,
@@ -465,14 +452,6 @@ mod tests {
             self.record(format!(
                 "undo_update_edge_property:{edge_id:?}:{col_id:?}:{value:?}:{ts}"
             ))
-        }
-
-        fn revert_delete_vertex(
-            &self,
-            vertex: VertexIdentifier,
-            ts: Timestamp,
-        ) -> UndoLogResult<()> {
-            self.record(format!("revert_delete_vertex:{vertex:?}:{ts}"))
         }
 
         fn revert_delete_edge(&self, edge_ctx: EdgeDeletionContext) -> UndoLogResult<()> {
@@ -542,9 +521,13 @@ mod tests {
     }
 
     fn make_entry(id: i64) -> UndoLogEntry {
-        UndoLogEntry::InsertVertex(crate::undo_log::InsertVertexUndo {
-            v_label: 1,
-            vid: VertexId::try_from_int64(id).expect("test vertex id"),
+        UndoLogEntry::InsertEdge(crate::undo_log::InsertEdgeUndo {
+            src_label: 1,
+            dst_label: 2,
+            edge_label: 3,
+            rank: id,
+            src_vid: VertexId::try_from_int64(id).expect("test vertex id"),
+            dst_vid: VertexId::try_from_int64(0).expect("test vertex id"),
         })
     }
 
@@ -574,12 +557,18 @@ mod tests {
             memory_overflow_threshold: 1,
         };
         let mut log = FileBackedUndoLog::new(config);
-        log.add(UndoLogEntry::UpdateVertexProp(UpdateVertexPropUndo {
-            v_label: 7,
-            vid: VertexId::try_from_int64(99).expect("test vertex id"),
-            col_id: ColumnId(4),
-            old_value: graphdb_core::Value::BigInt(42),
-        }))
+        log.add(UndoLogEntry::UpdateEdgeProp(
+            crate::undo_log::UpdateEdgePropUndo {
+                src_label: 7,
+                src_vid: VertexId::try_from_int64(99).expect("test vertex id"),
+                dst_label: 2,
+                dst_vid: VertexId::try_from_int64(1).expect("test vertex id"),
+                edge_label: 3,
+                rank: 0,
+                col_id: ColumnId(4),
+                old_value: graphdb_core::Value::BigInt(42),
+            },
+        ))
         .expect("Failed to append undo log");
 
         let target = MockUndoTarget::new();
@@ -611,13 +600,13 @@ mod tests {
             .expect("Failed to pop preserved undo log")
             .expect("Expected the failed entry to remain");
         match entry {
-            UndoLogEntry::InsertVertex(undo) => {
+            UndoLogEntry::InsertEdge(undo) => {
                 assert_eq!(
-                    undo.vid,
+                    undo.src_vid,
                     VertexId::try_from_int64(2).expect("test vertex id")
                 );
             }
-            _ => panic!("Expected InsertVertex"),
+            _ => panic!("Expected InsertEdge"),
         }
     }
 
@@ -728,16 +717,16 @@ mod tests {
                 .expect("Failed to pop undo log")
                 .expect("Expected an undo entry");
             match &entry {
-                UndoLogEntry::InsertVertex(u) => {
+                UndoLogEntry::InsertEdge(u) => {
                     assert_eq!(
-                        u.vid,
+                        u.src_vid,
                         VertexId::try_from_int64(expected_id).expect("test vertex id"),
                         "Expected entry {}, got {}",
                         expected_id,
-                        u.vid
+                        u.src_vid
                     );
                 }
-                _ => panic!("Expected InsertVertex"),
+                _ => panic!("Expected InsertEdge"),
             }
         }
         assert!(log.is_empty());

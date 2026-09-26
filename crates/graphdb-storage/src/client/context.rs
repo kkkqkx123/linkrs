@@ -17,6 +17,13 @@ pub struct StorageOperationContext {
     /// mode only). Used by `finalize_operation` to roll back only the failed
     /// statement's segment when a shared undo log is in use.
     pub auto_commit_group_start: Option<usize>,
+    /// Staging buffer journal and index lengths at the start of this
+    /// statement (group mode only). Used by `finalize_operation` to roll the
+    /// shared transaction buffer back to the statement start.
+    pub auto_commit_staging_start: Option<(usize, usize)>,
+    /// Shared staged-WAL length at the start of this statement (group mode
+    /// only). Used to truncate the group's WAL redo back to the statement.
+    pub auto_commit_wal_start: usize,
 }
 
 impl PartialEq for StorageOperationContext {
@@ -41,6 +48,8 @@ impl Clone for StorageOperationContext {
             auto_commit: self.auto_commit,
             mutation_recorder: self.mutation_recorder.clone(),
             auto_commit_group_start: self.auto_commit_group_start,
+            auto_commit_staging_start: self.auto_commit_staging_start,
+            auto_commit_wal_start: self.auto_commit_wal_start,
         }
     }
 }
@@ -61,6 +70,8 @@ impl StorageOperationContext {
             auto_commit,
             mutation_recorder: None,
             auto_commit_group_start: None,
+            auto_commit_staging_start: None,
+            auto_commit_wal_start: 0,
         }
     }
 

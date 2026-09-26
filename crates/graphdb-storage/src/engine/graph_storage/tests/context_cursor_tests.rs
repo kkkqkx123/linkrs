@@ -31,6 +31,12 @@ fn bound_operation_contexts_are_isolated_across_concurrent_handles() {
             ),
         )
         .expect("Failed to insert vertex at timestamp 10");
+    // The bound context is a real transaction under the staging contract:
+    // the write lands only when the transaction commits.
+    drop(writer);
+    storage
+        .commit_staged_writes(TransactionId::from(1), &[])
+        .expect("Failed to commit staged insert");
 
     let barrier = Arc::new(Barrier::new(8));
     let handles: Vec<_> = (0..8)
@@ -95,6 +101,12 @@ fn cursor_keeps_the_read_timestamp_from_its_bound_handle() {
             ),
         )
         .expect("Failed to insert initial vertex");
+    // Commit the initial transaction so the row exists in the main table
+    // before the pinned reader takes its snapshot.
+    drop(initial_writer);
+    storage
+        .commit_staged_writes(TransactionId::from(1), &[])
+        .expect("Failed to commit staged insert");
 
     let reader =
         storage.bind_operation_context(StorageOperationContext::transaction_with_timestamps(
@@ -189,17 +201,13 @@ fn test_read_operation_context_pins_and_releases_statement_snapshot() {
     let read_ts = op_ctx.read_timestamp;
     assert!(read_ts > 0, "read context must pin a snapshot timestamp");
 
-    // Snapshot truth lives in the global tracker: tables carry no pin.
-    let pinned = storage
+    // Snapshot truth lives in the global tracker: the statement must leave
+    // no per-table or global pin behind after finalize.
+    let before = storage
         .ctx
-        .data_store()
-        .with_vertex_tables(|tables| {
-            Ok::<usize, graphdb_core::StorageError>(
-                tables.values().map(|t| t.active_snapshot_count()).sum(),
-            )
-        })
-        .unwrap();
-    assert_eq!(pinned, 0, "tables must carry no snapshot pin");
+        .version_manager()
+        .snapshot_tracker()
+        .active_count();
 
     // Reads resolve without any table-level registration.
     let vertex = bound
@@ -215,18 +223,17 @@ fn test_read_operation_context_pins_and_releases_statement_snapshot() {
         Value::string("Alice")
     );
 
-    // Finalize keeps the table pin-free.
+    // Finalize leaves the global tracker exactly as it was.
     bound.finalize_operation(true).unwrap();
-    let after = storage
-        .ctx
-        .data_store()
-        .with_vertex_tables(|tables| {
-            Ok::<usize, graphdb_core::StorageError>(
-                tables.values().map(|t| t.active_snapshot_count()).sum(),
-            )
-        })
-        .unwrap();
-    assert_eq!(after, 0, "finalize must leave tables pin-free");
+    assert_eq!(
+        storage
+            .ctx
+            .version_manager()
+            .snapshot_tracker()
+            .active_count(),
+        before,
+        "read statement must not leak a snapshot into the global tracker"
+    );
 }
 
 #[test]

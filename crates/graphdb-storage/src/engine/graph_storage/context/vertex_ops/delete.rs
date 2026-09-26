@@ -2,6 +2,8 @@ use graphdb_core::types::{LabelId, Timestamp};
 use graphdb_core::{StorageError, StorageResult};
 use std::sync::atomic::Ordering;
 
+use crate::vertex::IdKey;
+
 use super::super::GraphStorageContext;
 
 impl GraphStorageContext {
@@ -15,19 +17,26 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
+        // Online: the tombstone lives in the transaction buffer until the
+        // commit apply; reads inside the transaction see it through the
+        // read facade.
+        if self.is_online_write() {
+            return self.stage_vertex_delete(label, &IdKey::Text(external_id.to_string()), ts);
+        }
+
         // Caller-owned staging scope: the delete is buffered and applied at
         // the commit hook inside this call, so a failed request leaves no
         // global write behind. The table handle is cloned out of the catalog
         // first so staging and commit never nest catalog locks.
         let mut scope = crate::vertex::WriteScope::new(ts);
-        let table = self
-            .persistent
-            .data_store
-            .with_vertex_tables(|vertex_tables| {
-                vertex_tables.get(&label).cloned().ok_or_else(|| {
-                    StorageError::label_not_found(format!("vertex label {}", label))
-                })
-            })?;
+        let table =
+            self.persistent
+                .data_store
+                .with_vertex_tables(|vertex_tables| {
+                    vertex_tables.get(&label).cloned().ok_or_else(|| {
+                        StorageError::label_not_found(format!("vertex label {}", label))
+                    })
+                })?;
         let internal_id = table.get_internal_id(external_id, ts);
         table
             .delete_with_scope(external_id, ts, &mut scope)
@@ -62,16 +71,20 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
+        if self.is_online_write() {
+            return self.stage_vertex_delete(label, &IdKey::Int(external_id), ts);
+        }
+
         let external_id_str = external_id.to_string();
         let mut scope = crate::vertex::WriteScope::new(ts);
-        let table = self
-            .persistent
-            .data_store
-            .with_vertex_tables(|vertex_tables| {
-                vertex_tables.get(&label).cloned().ok_or_else(|| {
-                    StorageError::label_not_found(format!("vertex label {}", label))
-                })
-            })?;
+        let table =
+            self.persistent
+                .data_store
+                .with_vertex_tables(|vertex_tables| {
+                    vertex_tables.get(&label).cloned().ok_or_else(|| {
+                        StorageError::label_not_found(format!("vertex label {}", label))
+                    })
+                })?;
         let internal_id = table.get_internal_id_by_i64(external_id, ts);
         table
             .delete_by_i64_with_scope(external_id, ts, &mut scope)
@@ -106,15 +119,27 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
+        if self.is_online_write() {
+            let mut count = 0usize;
+            for external_id in external_ids {
+                match self.stage_vertex_delete(label, &IdKey::Text((*external_id).to_string()), ts)
+                {
+                    Ok(()) => count += 1,
+                    Err(error) => log::warn!("batch_delete skipped vertex: {}", error),
+                }
+            }
+            return Ok(count);
+        }
+
         let mut scope = crate::vertex::WriteScope::new(ts);
-        let table = self
-            .persistent
-            .data_store
-            .with_vertex_tables(|vertex_tables| {
-                vertex_tables.get(&label).cloned().ok_or_else(|| {
-                    StorageError::label_not_found(format!("vertex label {}", label))
-                })
-            })?;
+        let table =
+            self.persistent
+                .data_store
+                .with_vertex_tables(|vertex_tables| {
+                    vertex_tables.get(&label).cloned().ok_or_else(|| {
+                        StorageError::label_not_found(format!("vertex label {}", label))
+                    })
+                })?;
         // Resolve internal IDs before deletion: the record cache is
         // forward-compatible (cached_at_ts <= query_ts hits), so the
         // cached vertex records must be invalidated alongside the ID
@@ -161,15 +186,26 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
+        if self.is_online_write() {
+            let mut count = 0usize;
+            for external_id in external_ids {
+                match self.stage_vertex_delete(label, &IdKey::Int(*external_id), ts) {
+                    Ok(()) => count += 1,
+                    Err(error) => log::warn!("batch_delete skipped vertex: {}", error),
+                }
+            }
+            return Ok(count);
+        }
+
         let mut scope = crate::vertex::WriteScope::new(ts);
-        let table = self
-            .persistent
-            .data_store
-            .with_vertex_tables(|vertex_tables| {
-                vertex_tables.get(&label).cloned().ok_or_else(|| {
-                    StorageError::label_not_found(format!("vertex label {}", label))
-                })
-            })?;
+        let table =
+            self.persistent
+                .data_store
+                .with_vertex_tables(|vertex_tables| {
+                    vertex_tables.get(&label).cloned().ok_or_else(|| {
+                        StorageError::label_not_found(format!("vertex label {}", label))
+                    })
+                })?;
         // Resolve internal IDs before deletion (see batch_delete_vertices).
         let internal_ids: Vec<Option<u32>> = external_ids
             .iter()

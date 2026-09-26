@@ -7,71 +7,6 @@ use crate::vertex::WriteScope;
 use super::super::GraphStorageContext;
 
 impl GraphStorageContext {
-    pub fn insert_vertex(
-        &self,
-        label: LabelId,
-        external_id: &str,
-        properties: &[(String, Value)],
-        ts: Timestamp,
-    ) -> StorageResult<u32> {
-        if !self.persistent.is_open.load(Ordering::Acquire) {
-            return Err(StorageError::storage_not_open());
-        }
-
-        let internal_id = self
-            .persistent
-            .data_store
-            .with_vertex_tables(|vertex_tables| {
-                let table = vertex_tables.get(&label).ok_or_else(|| {
-                    StorageError::label_not_found(format!("vertex label {}", label))
-                })?;
-                table.insert(external_id, properties, ts)
-            })?;
-
-        self.persistent
-            .cache_manager
-            .cache_vertex_id(label, external_id, internal_id, ts);
-        self.mark_vertex_modified(label);
-        self.observe_vertex_id_string(label);
-
-        Ok(internal_id)
-    }
-
-    pub fn insert_vertex_by_i64(
-        &self,
-        label: LabelId,
-        external_id: i64,
-        properties: &[(String, Value)],
-        ts: Timestamp,
-    ) -> StorageResult<u32> {
-        // Single rejection point for negative ids lives in
-        // VertexId::try_from_int64; the table layer re-checks as backstop.
-        VertexId::try_from_int64(external_id)?;
-        if !self.persistent.is_open.load(Ordering::Acquire) {
-            return Err(StorageError::storage_not_open());
-        }
-        let internal_id = self
-            .persistent
-            .data_store
-            .with_vertex_tables(|vertex_tables| {
-                let table = vertex_tables.get(&label).ok_or_else(|| {
-                    StorageError::label_not_found(format!("vertex label {}", label))
-                })?;
-                table.insert_by_i64(external_id, properties, ts)
-            })?;
-
-        self.persistent.cache_manager.cache_vertex_id(
-            label,
-            &external_id.to_string(),
-            internal_id,
-            ts,
-        );
-        self.mark_vertex_modified(label);
-        self.observe_vertex_id_i64(label, external_id);
-
-        Ok(internal_id)
-    }
-
     /// Scoped vertex insert staging the caller-owned row.
     ///
     /// Buffers the validated row in the scope without touching global
@@ -150,6 +85,19 @@ impl GraphStorageContext {
         self.persistent.data_store.with_vertex_tables(|tables| {
             if let Some(table) = tables.get(&label) {
                 table.rollback_write_scope(scope, ts);
+            }
+        });
+    }
+
+    /// Undo rows installed by a previous [`Self::commit_write_scope`] apply.
+    ///
+    /// Write entries that must fail the whole request after the table apply
+    /// succeeded (secondary index maintenance, mutation recording) call this
+    /// so a failed request leaves no applied row behind.
+    pub(crate) fn undo_applied_scope_inserts(&self, label: LabelId, global_ids: &[u32]) {
+        self.persistent.data_store.with_vertex_tables(|tables| {
+            if let Some(table) = tables.get(&label) {
+                table.undo_applied_ids(global_ids);
             }
         });
     }

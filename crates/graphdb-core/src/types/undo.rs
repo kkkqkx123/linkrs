@@ -53,13 +53,6 @@ pub trait UndoTarget: Send + Sync {
             "Edge restoration is not supported by this undo target".to_string(),
         ))
     }
-    fn undo_update_vertex_property(
-        &self,
-        vertex: VertexIdentifier,
-        col_id: ColumnId,
-        value: Value,
-        ts: Timestamp,
-    ) -> UndoLogResult<()>;
     fn undo_update_edge_property(
         &self,
         edge_id: EdgeIdentifier,
@@ -67,7 +60,6 @@ pub trait UndoTarget: Send + Sync {
         value: Value,
         ts: Timestamp,
     ) -> UndoLogResult<()>;
-    fn revert_delete_vertex(&self, vertex: VertexIdentifier, ts: Timestamp) -> UndoLogResult<()>;
     fn revert_delete_edge(&self, edge_ctx: EdgeDeletionContext) -> UndoLogResult<()>;
     fn revert_delete_vertex_properties(
         &self,

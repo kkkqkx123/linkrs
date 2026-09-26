@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::cursor::{FlatVertexRecord, ScanOptions, VertexCursor};
+use crate::cursor::{ColumnValues, FlatVertexRecord, ScanOptions, VertexCursor};
+use crate::engine::graph_storage::context::vertex_ops::StagedRow;
 use crate::engine::graph_storage::context::GraphStorageContext;
 use crate::vertex::ShardedVertexTable;
 use graphdb_core::types::{LabelId, Timestamp, VertexId};
@@ -47,6 +48,11 @@ pub(crate) struct GraphVertexCursor {
     allowlist: Option<Vec<u32>>,
     /// Whether the allowlist has been loaded into `pending_ids` once.
     allowlist_loaded: bool,
+    /// Staged rows composed for the current label (inserts and composed
+    /// updates), drained after the label's global ids are exhausted.
+    staged_rows: Vec<StagedRow>,
+    /// Index into `staged_rows`.
+    staged_idx: usize,
 }
 
 impl std::fmt::Debug for GraphVertexCursor {
@@ -107,15 +113,23 @@ impl GraphVertexCursor {
             ));
         }
 
+        // A transaction with staged rows must scan even when every global
+        // table is empty: its own rows only exist in staging until commit.
+        let staged_active = ctx
+            .active_txn_staging()
+            .is_some_and(|buffer| !buffer.lock().is_empty());
         let exhausted = match &options.internal_id_allowlist {
             Some(ids) => ids.is_empty(),
-            None => ctx.data_store().with_vertex_tables(|tables| {
-                tags.labels.iter().all(|label_id| {
-                    tables
-                        .get(label_id)
-                        .is_none_or(|t| t.approximate_id_hole_stats(ts).0 == 0)
-                })
-            }),
+            None => {
+                !staged_active
+                    && ctx.data_store().with_vertex_tables(|tables| {
+                        tags.labels.iter().all(|label_id| {
+                            tables
+                                .get(label_id)
+                                .is_none_or(|t| t.approximate_id_hole_stats(ts).0 == 0)
+                        })
+                    })
+            }
         };
 
         Ok(Self {
@@ -140,6 +154,8 @@ impl GraphVertexCursor {
             ts,
             allowlist: options.internal_id_allowlist.clone(),
             allowlist_loaded: false,
+            staged_rows: Vec::new(),
+            staged_idx: 0,
         })
     }
 
@@ -160,6 +176,8 @@ impl GraphVertexCursor {
         self.current_label = None;
         self.pending_ids.clear();
         self.pending_idx = 0;
+        self.staged_rows.clear();
+        self.staged_idx = 0;
         if let Some(ids) = self.allowlist.clone() {
             if self.allowlist_loaded {
                 self.exhausted = true;
@@ -167,12 +185,21 @@ impl GraphVertexCursor {
             }
             self.allowlist_loaded = true;
             for label_id in &self.tags.labels {
-                if let Some(table) = tables.get(label_id) {
-                    self.current_label = Some(*label_id);
-                    self.pending_ids = ids;
-                    self.current_table = Some(Arc::clone(table));
-                    return;
-                }
+                let Some(table) = tables.get(label_id) else {
+                    continue;
+                };
+                // Allowlist decoding addresses explicit internal ids, so
+                // staged inserts (which have none) cannot join it; staged
+                // deletes still veto their resolved ids.
+                let merge = self.ctx.staged_scan_merge(*label_id, table, guard);
+                let ids: Vec<u32> = ids
+                    .into_iter()
+                    .filter(|id| !merge.dropped_ids.contains(id))
+                    .collect();
+                self.pending_ids = ids;
+                self.current_label = Some(*label_id);
+                self.current_table = Some(Arc::clone(table));
+                return;
             }
             self.exhausted = true;
             return;
@@ -180,17 +207,110 @@ impl GraphVertexCursor {
         while self.current_table_idx < self.tags.labels.len() {
             let label_id = self.tags.labels[self.current_table_idx];
             self.current_table_idx += 1;
-            if let Some(table) = tables.get(&label_id) {
-                let ids = table.live_ids(guard);
-                if !ids.is_empty() {
-                    self.current_label = Some(label_id);
-                    self.pending_ids = ids;
-                    self.current_table = Some(Arc::clone(table));
-                    return;
-                }
+            let Some(table) = tables.get(&label_id) else {
+                continue;
+            };
+            let merge = self.ctx.staged_scan_merge(label_id, table, guard);
+            let ids: Vec<u32> = table
+                .live_ids(guard)
+                .into_iter()
+                .filter(|id| !merge.dropped_ids.contains(id))
+                .collect();
+            if !ids.is_empty() || !merge.rows.is_empty() {
+                self.current_label = Some(label_id);
+                self.pending_ids = ids;
+                self.staged_rows = merge.rows;
+                self.current_table = Some(Arc::clone(table));
+                return;
             }
         }
         self.exhausted = true;
+    }
+
+    /// Drain staged rows of the current label into a column batch. Each
+    /// surviving row contributes its composed properties as general column
+    /// values; the external-id range and offset skipping mirror the
+    /// global-run filters, and pushed predicates are applied later over the
+    /// union columns like every other run.
+    fn drain_staged_columns(
+        &mut self,
+        batch_size: usize,
+        tag_name: &str,
+        internal_ids: &mut Vec<u32>,
+        vids: &mut Vec<VertexId>,
+        tag_names: &mut Vec<String>,
+        union_names: &mut Vec<String>,
+        columns: &mut Vec<ColumnValues>,
+    ) {
+        let end = (self.staged_idx + (batch_size - internal_ids.len())).min(self.staged_rows.len());
+        let mut rows_sel: Vec<usize> = Vec::new();
+        for index in self.staged_idx..end {
+            let vid = self.staged_rows[index].vid;
+            if let Some(ref range) = self.id_range {
+                match vid.as_int64() {
+                    Some(v) if (range.start..range.end).contains(&v) => {}
+                    _ => continue,
+                }
+            }
+            if self.offset_remaining > 0 {
+                self.offset_remaining -= 1;
+                continue;
+            }
+            rows_sel.push(index);
+        }
+        self.staged_idx = end;
+        if rows_sel.is_empty() {
+            return;
+        }
+        let mut decoded_names: Vec<String> = Vec::new();
+        for &index in &rows_sel {
+            for (name, _) in &self.staged_rows[index].properties {
+                if !decoded_names.contains(name) {
+                    decoded_names.push(name.clone());
+                }
+            }
+        }
+        let decoded: Vec<(String, ColumnValues)> = decoded_names
+            .into_iter()
+            .map(|name| {
+                let values: Vec<Option<Value>> = rows_sel
+                    .iter()
+                    .map(|&index| {
+                        self.staged_rows[index]
+                            .properties
+                            .iter()
+                            .find(|(existing, _)| *existing == name)
+                            .map(|(_, value)| value.clone())
+                    })
+                    .collect();
+                (name, ColumnValues::General(values))
+            })
+            .collect();
+
+        // Merge the staged run into the batch's column union, exactly like a
+        // decoded global run.
+        let run_rows = rows_sel.len();
+        let before = internal_ids.len();
+        for (name, _) in &decoded {
+            if !union_names.contains(name) {
+                union_names.push(name.clone());
+                let mut new_column = ColumnValues::General(Vec::new());
+                new_column.append_nulls(before);
+                columns.push(new_column);
+            }
+        }
+        for (index, uname) in union_names.iter().enumerate() {
+            match decoded.iter().position(|(n, _)| n == uname) {
+                Some(run_index) => {
+                    let run_column = decoded[run_index].1.clone();
+                    columns[index].append(run_column);
+                }
+                None => columns[index].append_nulls(run_rows),
+            }
+        }
+        internal_ids.extend(rows_sel.iter().map(|&index| self.staged_rows[index].id));
+        vids.extend(rows_sel.iter().map(|&index| self.staged_rows[index].vid));
+        tag_names.extend(std::iter::repeat_n(tag_name.to_string(), run_rows));
     }
 }
 
@@ -269,10 +389,29 @@ impl GraphVertexCursor {
                     continue;
                 }
                 if self.pending_idx >= self.pending_ids.len() {
+                    if self.staged_idx < self.staged_rows.len() {
+                        let tag_name = self
+                            .current_label
+                            .and_then(|l| names.get(&l))
+                            .map(|s| s.as_str())
+                            .unwrap_or("unknown");
+                        self.drain_staged_columns(
+                            batch_size,
+                            tag_name,
+                            &mut internal_ids,
+                            &mut vids,
+                            &mut tag_names,
+                            &mut union_names,
+                            &mut columns,
+                        );
+                        continue;
+                    }
                     self.current_table = None;
                     self.current_label = None;
                     self.pending_ids.clear();
                     self.pending_idx = 0;
+                    self.staged_rows.clear();
+                    self.staged_idx = 0;
                     continue;
                 }
 
@@ -502,10 +641,62 @@ impl GraphVertexCursor {
                     continue;
                 }
                 if self.pending_idx >= self.pending_ids.len() {
+                    if self.staged_idx < self.staged_rows.len() {
+                        let end = (self.staged_idx + (batch_size - batch.len()))
+                            .min(self.staged_rows.len());
+                        let tag_name = self
+                            .current_label
+                            .and_then(|l| names.get(&l))
+                            .map(|s| s.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        while self.staged_idx < end && !self.exhausted {
+                            let index = self.staged_idx;
+                            self.staged_idx += 1;
+                            let vid = self.staged_rows[index].vid;
+                            let internal_id = self.staged_rows[index].id;
+                            let mut properties =
+                                std::mem::take(&mut self.staged_rows[index].properties);
+                            if let Some(names) = self.projection.as_deref() {
+                                properties.retain(|(name, _)| names.iter().any(|n| n == name));
+                            }
+                            if let Some(ref range) = self.id_range {
+                                match vid.as_int64() {
+                                    Some(vid) if (range.start..range.end).contains(&vid) => {}
+                                    _ => continue,
+                                }
+                            }
+                            if !self.predicate.is_empty()
+                                && !self.predicate.iter().all(|p| p.matches(&properties))
+                            {
+                                continue;
+                            }
+                            if self.offset_remaining > 0 {
+                                self.offset_remaining -= 1;
+                                continue;
+                            }
+                            batch.push(build(
+                                vid,
+                                internal_id as i64,
+                                tag_name.clone(),
+                                properties,
+                            ));
+                            self.emitted += 1;
+                            if let Some(limit) = self.limit {
+                                if self.emitted >= limit {
+                                    self.exhausted = true;
+                                    break;
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     self.current_table = None;
                     self.current_label = None;
                     self.pending_ids.clear();
                     self.pending_idx = 0;
+                    self.staged_rows.clear();
+                    self.staged_idx = 0;
                     continue;
                 }
 

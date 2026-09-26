@@ -7,6 +7,7 @@ mod group_window_tests;
 mod layout_version_tests;
 mod schema_tests;
 mod serial_tests;
+mod staged_txn_tests;
 mod string_id_tests;
 mod vertex_tests;
 

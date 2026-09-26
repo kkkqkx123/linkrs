@@ -18,11 +18,13 @@ use graphdb_transaction::VersionManager;
 pub mod autocommit;
 pub mod evidence;
 pub mod persistent;
+pub(crate) mod txn_staging;
 
 pub use autocommit::{AutoCommitBatchWindow, WriteGateStats};
 pub(crate) use autocommit::{AutoCommitMutationRecorder, AutoCommitWriteLease};
 pub(crate) use evidence::VertexIdDomainEvidence;
 pub(crate) use persistent::GraphStoragePersistent;
+pub(crate) use txn_staging::TxnStaging;
 
 #[derive(Clone)]
 pub(crate) struct GraphStorageLayout {
@@ -325,7 +327,7 @@ mod maintenance;
 mod persistence;
 mod query;
 mod schema;
-mod vertex_ops;
+pub(crate) mod vertex_ops;
 
 impl std::fmt::Debug for GraphStorageContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

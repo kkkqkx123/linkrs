@@ -7,6 +7,7 @@ USE e2e_geography
 
 -- Create tags
 CREATE TAG IF NOT EXISTS location(
+    id STRING,
     name: STRING NOT NULL,
     coord: GEOGRAPHY,
     address: STRING,
@@ -14,6 +15,7 @@ CREATE TAG IF NOT EXISTS location(
 )
 
 CREATE TAG IF NOT EXISTS city(
+    id STRING,
     name: STRING NOT NULL,
     center: GEOGRAPHY,
     population: INT,

@@ -1,7 +1,6 @@
 //! Dirty page tracking for Shadow Page Copy-on-Write.
 
-use std::collections::{BTreeSet, HashMap};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -54,96 +53,13 @@ impl PageId {
 }
 
 // ---------------------------------------------------------------------------
-// DirtyPageTracker
+// Row/page mapping
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
-pub struct DirtyPageTracker {
-    dirty_pages: BTreeSet<u32>,
-    dirty_count: AtomicUsize,
-    total_pages: usize,
-}
-
-impl Clone for DirtyPageTracker {
-    fn clone(&self) -> Self {
-        Self {
-            dirty_pages: self.dirty_pages.clone(),
-            dirty_count: AtomicUsize::new(self.dirty_count.load(Ordering::Relaxed)),
-            total_pages: self.total_pages,
-        }
-    }
-}
-
-impl DirtyPageTracker {
-    pub fn new(total_pages: usize) -> Self {
-        Self {
-            dirty_pages: BTreeSet::new(),
-            dirty_count: AtomicUsize::new(0),
-            total_pages,
-        }
-    }
-
-    pub fn mark_page(&mut self, page_id: usize) -> bool {
-        let key = page_id as u32;
-        if self.dirty_pages.insert(key) {
-            self.dirty_count.fetch_add(1, Ordering::Relaxed);
-            if page_id >= self.total_pages {
-                self.total_pages = page_id + 1;
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn dirty_count(&self) -> usize {
-        self.dirty_count.load(Ordering::Relaxed)
-    }
-
-    pub fn total_pages(&self) -> usize {
-        self.total_pages
-    }
-
-    pub fn set_total_pages(&mut self, total: usize) {
-        self.total_pages = total;
-    }
-
-    pub fn dirty_pages(&self) -> Vec<usize> {
-        self.dirty_pages.iter().map(|&id| id as usize).collect()
-    }
-
-    pub fn clear_page(&mut self, page_id: usize) -> bool {
-        let key = page_id as u32;
-        if self.dirty_pages.remove(&key) {
-            self.dirty_count.fetch_sub(1, Ordering::Relaxed);
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.dirty_pages.clear();
-        self.dirty_count.store(0, Ordering::Relaxed);
-    }
-
-    pub fn ensure_rows(&mut self, num_rows: usize) {
-        let needed_pages = num_rows.div_ceil(ROWS_PER_PAGE);
-        if needed_pages > self.total_pages {
-            self.total_pages = needed_pages;
-        }
-    }
-
-    #[inline]
-    pub fn row_to_page(row_idx: usize) -> usize {
-        row_idx / ROWS_PER_PAGE
-    }
-}
-
-impl Default for DirtyPageTracker {
-    fn default() -> Self {
-        Self::new(0)
-    }
+/// Map a row index to its dirty-page id.
+#[inline]
+pub fn row_to_page(row_idx: usize) -> usize {
+    row_idx / ROWS_PER_PAGE
 }
 
 // ---------------------------------------------------------------------------
@@ -308,37 +224,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_mark_and_query() {
-        let mut tracker = DirtyPageTracker::new(10);
-        assert_eq!(tracker.dirty_count(), 0);
-        assert!(tracker.mark_page(2));
-        assert!(!tracker.mark_page(2));
-        assert_eq!(tracker.dirty_count(), 1);
-        assert_eq!(tracker.dirty_pages(), vec![2]);
-    }
-
-    #[test]
-    fn test_clear() {
-        let mut tracker = DirtyPageTracker::new(10);
-        tracker.mark_page(5);
-        tracker.clear();
-        assert_eq!(tracker.dirty_count(), 0);
-    }
-
-    #[test]
-    fn test_collect() {
-        let mut tracker = DirtyPageTracker::new(10);
-        tracker.mark_page(1);
-        tracker.mark_page(3);
-        let pages = tracker.dirty_pages();
-        assert_eq!(pages, vec![1, 3]);
-    }
-
-    #[test]
     fn test_row_to_page() {
-        assert_eq!(DirtyPageTracker::row_to_page(0), 0);
-        assert_eq!(DirtyPageTracker::row_to_page(1023), 0);
-        assert_eq!(DirtyPageTracker::row_to_page(1024), 1);
+        assert_eq!(row_to_page(0), 0);
+        assert_eq!(row_to_page(1023), 0);
+        assert_eq!(row_to_page(1024), 1);
     }
 
     #[test]
@@ -348,17 +237,6 @@ mod tests {
         let serialized = page.serialize();
         let decoded = PageData::deserialize(&serialized).unwrap();
         assert_eq!(decoded.data, data);
-    }
-
-    #[test]
-    fn test_clear_page() {
-        let mut tracker = DirtyPageTracker::new(10);
-        tracker.mark_page(1);
-        tracker.mark_page(3);
-        assert!(tracker.clear_page(1));
-        assert!(!tracker.clear_page(1));
-        assert_eq!(tracker.dirty_pages(), vec![3]);
-        assert_eq!(tracker.dirty_count(), 1);
     }
 
     #[test]

@@ -87,6 +87,24 @@ pub(crate) fn scan_vertex_serial_column(
                 }
             }
         }
+        // This transaction's own staged rows occupy serial values too: a
+        // staged insert or a staged column write must be seen by the
+        // conflict scan before the rows land in the table.
+        if let Some(buffer) = ctx.active_txn_staging() {
+            let buffer = buffer.lock();
+            let staged_rows = buffer
+                .insert_rows(label)
+                .map(|(_, _, props)| props)
+                .chain(buffer.update_rows(label).map(|(_, cols)| cols));
+            for properties in staged_rows {
+                if let Some((_, value)) = properties.iter().find(|(name, _)| name == prop_name) {
+                    if let Some(integer) = value_as_i64(value) {
+                        present.push(integer);
+                        max_value = Some(max_value.map_or(integer, |m| m.max(integer)));
+                    }
+                }
+            }
+        }
         present.sort_unstable();
         Some(SerialColumnScan { max_value, present })
     })
