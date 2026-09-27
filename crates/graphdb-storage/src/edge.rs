@@ -165,8 +165,22 @@ pub(crate) const SCHEMA_CHANGE_PENDING_MSG: &str = "another schema change is alr
 /// Pure and bundled layouts carry no rank column, so any nonzero rank must
 /// stay on the columnar form. Every write, bulk and migration gate reports
 /// this exact wording so operators see one conflict and one way out.
-pub(crate) const BUNDLED_RANK_REQUIRES_COLUMNAR_MSG: &str =
+pub const BUNDLED_RANK_REQUIRES_COLUMNAR_MSG: &str =
     "nonzero rank requires the columnar record form; keep the columnar form, see migration_plan/migrate_record_form/switch_record_form_online";
+
+/// Whether an inline-form table may accept one write with the given rank.
+///
+/// Single source of truth for the rank gate shared by prevalidation and the
+/// caller-side guard: inline forms (`Pure`/`Bundled`) pin rank to zero, so a
+/// nonzero rank must stay columnar. Callers planning rank writes on a
+/// bundled candidate probe this before staging the batch instead of paying
+/// a whole-batch rollback after the commit rejects it.
+pub fn inline_form_accepts_rank(record_form: RecordForm, rank: i64) -> bool {
+    match record_form {
+        RecordForm::Pure | RecordForm::Bundled => rank == 0,
+        RecordForm::Columnar => true,
+    }
+}
 
 /// Whether one direction may pair a strategy with a record form.
 ///

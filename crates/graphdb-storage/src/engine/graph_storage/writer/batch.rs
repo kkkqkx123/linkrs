@@ -12,6 +12,29 @@ use graphdb_core::{DataType, Edge, EdgeDeleteKey, StorageError, StorageResult, V
 use super::super::context::GraphStorageContext;
 use super::super::ops::endpoint_label_id;
 
+/// Recommended caller-side chunk size for very large edge batches.
+///
+/// One batch is one atomic unit holding the table lock for the whole apply,
+/// so commit latency grows with batch size. Batches up to this size are the
+/// measured regime (see `edge_group_commit_bench`); callers with larger
+/// fanouts split into chunks of at most this many edges and treat each chunk
+/// as its own atomic unit instead of one giant commit.
+pub(crate) const RECOMMENDED_BATCH_CHUNK_EDGES: usize = 10_000;
+
+/// Split an edge batch into caller-side chunks.
+///
+/// Pure slicing helper behind the chunking contract above: each returned
+/// chunk commits atomically on its own, so callers keep the per-commit
+/// lock-hold bounded without changing the single-writer discipline. Returns
+/// one chunk per `RECOMMENDED_BATCH_CHUNK_EDGES` edges (the tail may be
+/// shorter); an empty input yields no chunks.
+pub(crate) fn chunk_edges_for_commit(edges: &[Edge]) -> Vec<&[Edge]> {
+    if edges.is_empty() {
+        return Vec::new();
+    }
+    edges.chunks(RECOMMENDED_BATCH_CHUNK_EDGES).collect()
+}
+
 /// Pre-resolved, per-batch schema context shared by every row of a batch
 /// vertex insert: the tag table, the tag indexes, and the SERIAL state all
 /// come from a single pass over the batch instead of per-row lookups.
@@ -107,6 +130,13 @@ pub(crate) fn batch_insert_edges(
     space: &str,
     edges: Vec<Edge>,
 ) -> StorageResult<()> {
+    if edges.len() > RECOMMENDED_BATCH_CHUNK_EDGES {
+        log::debug!(
+            "batch_insert_edges holds one atomic commit for {} edges (recommended chunk <= {}); very large fanouts should chunk explicitly via GraphStorage::chunk_edges_for_commit with one chunk per atomic commit",
+            edges.len(),
+            RECOMMENDED_BATCH_CHUNK_EDGES,
+        );
+    }
     let space_info = ctx
         .schema_manager()
         .get_space(space)?

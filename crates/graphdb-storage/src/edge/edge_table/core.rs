@@ -107,6 +107,14 @@ pub struct EdgeStore {
     pub(crate) form_width_samples: AtomicU64,
     pub(crate) form_reads: AtomicU64,
     pub(crate) form_writes: AtomicU64,
+    /// Per-direction read counters for direction-narrowing audits.
+    ///
+    /// Memory-only observability: incremented on out-leg and in-leg adjacency
+    /// and point reads, never persisted. A `Both` table whose one direction
+    /// stays at zero while the other serves traffic pays double topology
+    /// writes for an unused leg and should narrow to `OutOnly`/`InOnly`.
+    pub(crate) form_out_reads: AtomicU64,
+    pub(crate) form_in_reads: AtomicU64,
     /// Last automatically migrated target for hysteresis. Automatic
     /// migration only moves columnar to bundled; a bundled table never
     /// auto-reverses until an operator migrates manually, so a single
@@ -198,6 +206,31 @@ impl EdgeStore {
         self.form_reads.fetch_add(rows.max(1), Ordering::Relaxed);
     }
 
+    /// Per-direction read observation for direction-narrowing audits.
+    ///
+    /// Called alongside `observe_form_read` on adjacency reads serving a
+    /// known leg. Point lookups (`get_edge`, `has_edge`, `edge_id_of`) are
+    /// excluded: the write path reuses them for existence checks, which
+    /// would pollute the traversal signal. Memory-only; checkpoints never
+    /// persist these counters, so a freshly loaded table reports zero until
+    /// it serves traffic again and audits must require minimum samples.
+    pub(crate) fn observe_direction_read(&self, outgoing: bool, rows: u64) {
+        let rows = rows.max(1);
+        if outgoing {
+            self.form_out_reads.fetch_add(rows, Ordering::Relaxed);
+        } else {
+            self.form_in_reads.fetch_add(rows, Ordering::Relaxed);
+        }
+    }
+
+    /// Current per-direction read counts for direction-narrowing audits.
+    pub fn direction_usage_snapshot(&self) -> maintenance::DirectionUsageSnapshot {
+        maintenance::DirectionUsageSnapshot {
+            out_reads: self.form_out_reads.load(Ordering::Relaxed),
+            in_reads: self.form_in_reads.load(Ordering::Relaxed),
+        }
+    }
+
     /// Current width and access snapshot for record-form decisions.
     pub fn form_profile_snapshot(&self) -> super::stats::FormProfileSnapshot {
         super::stats::FormProfileSnapshot {
@@ -220,7 +253,10 @@ impl EdgeStore {
 
 mod index;
 mod maintenance;
-pub use maintenance::EdgeStorageBreakdown;
+pub use maintenance::{
+    DirectionMigrationStats, DirectionNarrowingSuggestion, DirectionUsageSnapshot,
+    EdgeStorageBreakdown,
+};
 pub(crate) mod owner;
 mod query;
 mod reads;

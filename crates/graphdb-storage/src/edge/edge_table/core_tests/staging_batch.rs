@@ -426,8 +426,10 @@ fn test_bundled_bulk_import_rejects_nonempty_and_ranked_batches() {
     assert!(err.to_string().contains("requires an empty table"));
 
     // Ranked batches keep the original bundled rejection on the direct
-    // import. The staging router rejects them too: the bundled topology
-    // pins rank to zero, so a nonzero rank never commits on any path.
+    // import. The staging router rejects them too: the inline form pins
+    // rank to zero, so a nonzero rank never commits on any path. The
+    // prevalidation gate reports the shared wording before paying
+    // reservation, WAL append or prefix rollback.
     let schema2 = table.schema.clone();
     let config2 = EdgeTableConfig {
         record_form: RecordFormPreference::Bundled,
@@ -442,7 +444,9 @@ fn test_bundled_bulk_import_rejects_nonempty_and_ranked_batches() {
         .contains("inline values ride the value column"));
     assert_eq!(ranked.edge_count(), 0);
     let err = ranked.insert_edges_batch(&ranked_entries).unwrap_err();
-    assert!(err.to_string().contains("rank must be 0"));
+    assert!(err
+        .to_string()
+        .contains("nonzero rank requires the columnar record form"));
     assert_eq!(ranked.edge_count(), 0);
 }
 

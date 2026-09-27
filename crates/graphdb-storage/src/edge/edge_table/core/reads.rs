@@ -238,7 +238,9 @@ impl EdgeStore {
         if !self.schema.has_out() {
             return Vec::new();
         }
-        self.merged_nbrs_with_limit(&self.out_csr, src, ts, limit)
+        let out = self.merged_nbrs_with_limit(&self.out_csr, src, ts, limit);
+        self.observe_direction_read(true, out.len() as u64);
+        out
     }
 
     /// First-`limit` visible in-neighbors, mirroring the out direction.
@@ -246,7 +248,9 @@ impl EdgeStore {
         if !self.schema.has_in() {
             return Vec::new();
         }
-        self.merged_nbrs_with_limit(&self.in_csr, dst, ts, limit)
+        let out = self.merged_nbrs_with_limit(&self.in_csr, dst, ts, limit);
+        self.observe_direction_read(false, out.len() as u64);
+        out
     }
 
     fn merged_nbrs_with_limit(
@@ -290,6 +294,7 @@ impl EdgeStore {
                 true
             }
         });
+        self.observe_direction_read(true, out.len() as u64);
         out
     }
 
@@ -312,6 +317,7 @@ impl EdgeStore {
                 true
             }
         });
+        self.observe_direction_read(false, out.len() as u64);
         out
     }
 
@@ -341,6 +347,7 @@ impl EdgeStore {
         // without the gate.
         let mut hots = Vec::new();
         self.collect_visible_hots_with_gate(&self.out_csr, src, ts, gate, &mut hots);
+        self.observe_direction_read(true, hots.len() as u64);
         if self.is_bundled() {
             return hots
                 .into_iter()
@@ -398,6 +405,7 @@ impl EdgeStore {
         // re-deciding without the gate.
         let mut hots = Vec::new();
         self.collect_visible_hots_with_gate(&self.in_csr, dst, ts, gate, &mut hots);
+        self.observe_direction_read(false, hots.len() as u64);
         if self.is_bundled() {
             return hots
                 .into_iter()
@@ -1152,6 +1160,7 @@ impl EdgeStore {
         let mut hots = Vec::new();
         self.collect_visible_hots(&self.out_csr, src, ts, &mut hots);
         self.observe_form_read(hots.len() as u64);
+        self.observe_direction_read(true, hots.len() as u64);
         if self.is_bundled() {
             return hots
                 .into_iter()
@@ -1195,7 +1204,9 @@ impl EdgeStore {
         if !self.schema.has_out() {
             return Vec::new();
         }
-        self.merged_edges_of(&self.out_csr, src, ts)
+        let out = self.merged_edges_of(&self.out_csr, src, ts);
+        self.observe_direction_read(true, out.len() as u64);
+        out
     }
 
     pub fn in_edges(&self, dst: u32, ts: Timestamp) -> Vec<EdgeRecord> {
@@ -1226,6 +1237,7 @@ impl EdgeStore {
         let mut hots = Vec::new();
         self.collect_visible_hots(&self.in_csr, dst, ts, &mut hots);
         self.observe_form_read(hots.len() as u64);
+        self.observe_direction_read(false, hots.len() as u64);
         if self.is_bundled() {
             return hots
                 .into_iter()

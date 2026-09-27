@@ -175,6 +175,8 @@ impl EdgeStore {
             form_width_samples: std::sync::atomic::AtomicU64::new(0),
             form_reads: std::sync::atomic::AtomicU64::new(0),
             form_writes: std::sync::atomic::AtomicU64::new(0),
+            form_out_reads: std::sync::atomic::AtomicU64::new(0),
+            form_in_reads: std::sync::atomic::AtomicU64::new(0),
             last_auto_migrated_to_bundled: false,
             pending_add_column: None,
             pending_drop_column: None,
@@ -254,6 +256,17 @@ impl EdgeStore {
             want,
             self.schema.storage_direction()
         ))
+    }
+
+    /// Whether this table may accept a write carrying the given rank.
+    ///
+    /// Caller-side guard for bundled candidates: inline forms (`Pure` and
+    /// `Bundled`) carry no rank column, so any nonzero rank must stay on the
+    /// columnar form. Probe this before staging rank writes instead of paying
+    /// a whole-batch rollback after prevalidation rejects them with
+    /// `BUNDLED_RANK_REQUIRES_COLUMNAR_MSG`.
+    pub fn can_accept_rank(&self, rank: i64) -> bool {
+        crate::edge::inline_form_accepts_rank(self.schema.record_form, rank)
     }
 
     pub(crate) fn schema_mut(&mut self) -> &mut EdgeSchema {

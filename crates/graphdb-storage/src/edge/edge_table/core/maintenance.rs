@@ -1,9 +1,60 @@
 //! Resource accounting, backpressure and background upkeep.
 
-use super::super::super::{CsrBase, MutableCsrTrait};
+use super::super::super::{CsrBase, CsrShardSet, MutableCsrTrait};
 use super::EdgeStore;
 use crate::edge::VertexFragmentation;
 use graphdb_core::types::Timestamp;
+
+/// Per-direction read counts for direction-narrowing audits.
+///
+/// Memory-only observability (never checkpointed): out-leg and in-leg
+/// adjacency and point reads increment their own counter. A `Both` table
+/// serving traffic on only one leg pays double topology writes and double
+/// topology storage for an unused leg.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DirectionUsageSnapshot {
+    /// Out-leg reads served since open.
+    pub out_reads: u64,
+    /// In-leg reads served since open.
+    pub in_reads: u64,
+}
+
+impl DirectionUsageSnapshot {
+    /// Total directional reads observed.
+    pub fn total(&self) -> u64 {
+        self.out_reads.saturating_add(self.in_reads)
+    }
+
+    /// Share of reads served by the incoming leg.
+    pub fn in_share(&self) -> Option<f64> {
+        let total = self.total();
+        if total == 0 {
+            None
+        } else {
+            Some(self.in_reads as f64 / total as f64)
+        }
+    }
+}
+
+/// Recommended narrowing of a dual-direction table to one leg.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectionNarrowingSuggestion {
+    /// Direction the table holds now (`Both`).
+    pub current: crate::edge::StorageDirection,
+    /// Single direction to keep.
+    pub target: crate::edge::StorageDirection,
+    /// Decision basis with observed counts and the write-amplification saving.
+    pub basis: String,
+}
+
+/// Outcome of one storage-direction migration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DirectionMigrationStats {
+    /// Topology edge slots dropped with the removed leg.
+    pub edges_dropped: u64,
+    /// Groups the removed leg held before the drop.
+    pub groups_dropped: usize,
+}
 
 /// Per-component storage bytes of one edge table. See
 /// `EdgeStore::storage_breakdown`.
@@ -92,6 +143,143 @@ impl EdgeStore {
             crate::edge::StorageDirection::Both => 2,
             crate::edge::StorageDirection::OutOnly | crate::edge::StorageDirection::InOnly => 1,
         }
+    }
+
+    /// Suggest narrowing a dual-direction table to one leg.
+    ///
+    /// Usage governance (no engine change): when a `Both` table has served at
+    /// least `min_observations` directional reads and every one of them hit
+    /// the same leg, the other leg burns commit and storage bandwidth without
+    /// serving any traversal. Returns the single direction to keep with the
+    /// observed counts as the basis, or `None` when both legs serve traffic,
+    /// the table is already single-direction, or observations are too few to
+    /// decide. Counters are memory-only, so a freshly loaded table reports
+    /// zero until it serves traffic again.
+    pub fn suggest_direction_narrowing(
+        &self,
+        min_observations: u64,
+    ) -> Option<DirectionNarrowingSuggestion> {
+        use crate::edge::StorageDirection;
+        let current = self.schema.storage_direction();
+        if current != StorageDirection::Both {
+            return None;
+        }
+        let snapshot = self.direction_usage_snapshot();
+        if snapshot.total() < min_observations {
+            return None;
+        }
+        let basis = format!(
+            "direction usage out_reads={} in_reads={} (min_observations={}); Both pays 2x topology writes, single direction pays 1x",
+            snapshot.out_reads, snapshot.in_reads, min_observations,
+        );
+        if snapshot.in_reads == 0 && snapshot.out_reads > 0 {
+            return Some(DirectionNarrowingSuggestion {
+                current,
+                target: StorageDirection::OutOnly,
+                basis,
+            });
+        }
+        if snapshot.out_reads == 0 && snapshot.in_reads > 0 {
+            return Some(DirectionNarrowingSuggestion {
+                current,
+                target: StorageDirection::InOnly,
+                basis,
+            });
+        }
+        None
+    }
+
+    /// Migrate a dual-direction table to one stored leg.
+    ///
+    /// Usage-layer schema migration (no engine change): `Both` to `OutOnly`
+    /// drops the incoming leg, `Both` to `InOnly` drops the outgoing leg.
+    /// The remaining leg keeps every logical edge; the dropped leg answered
+    /// only reverse traversals, which read as empty afterwards (see
+    /// `is_direction_available` and `direction_note`). WAL redo stays
+    /// logical and replays onto the remaining leg, so unlike the record-form
+    /// switch no WAL fence or mandatory checkpoint gate applies; checkpoint
+    /// after the migration to reclaim the dropped leg storage. Widening
+    /// (single to `Both`) and single-to-single repurposing are rejected:
+    /// the dropped leg cannot be rebuilt from nothing here, reimport or
+    /// reload the table instead.
+    pub fn migrate_storage_direction(
+        &mut self,
+        target: crate::edge::StorageDirection,
+    ) -> graphdb_core::StorageResult<DirectionMigrationStats> {
+        use crate::edge::{EdgeStrategy, StorageDirection};
+        if !self.is_open {
+            return Err(graphdb_core::StorageError::storage_not_open());
+        }
+        let current = self.schema.storage_direction();
+        if current == target {
+            return Ok(DirectionMigrationStats {
+                edges_dropped: 0,
+                groups_dropped: 0,
+            });
+        }
+        let (drop_out, drop_in) = match (current, target) {
+            (StorageDirection::Both, StorageDirection::OutOnly) => (false, true),
+            (StorageDirection::Both, StorageDirection::InOnly) => (true, false),
+            _ => {
+                return Err(graphdb_core::StorageError::invalid_operation(format!(
+                    "storage-direction migration supports narrowing Both to OutOnly/InOnly only (current {:?}, target {:?}); widening needs a reimport, see storage_direction/is_direction_available",
+                    current, target,
+                )));
+            }
+        };
+        if self.pending_add_column.is_some()
+            || self.pending_drop_column.is_some()
+            || self.pending_rename_column.is_some()
+        {
+            return Err(graphdb_core::StorageError::invalid_operation(
+                "storage-direction migration rejects a pending schema change".to_string(),
+            ));
+        }
+        let record_form = self.schema.record_form;
+        let node_group_bits = self.config.node_group_bits;
+        let overflow_chunk_edges = self.config.overflow_chunk_edges;
+        let mut stats = DirectionMigrationStats {
+            edges_dropped: 0,
+            groups_dropped: 0,
+        };
+        if drop_in {
+            stats.edges_dropped = self.in_csr.edge_count();
+            stats.groups_dropped = self.in_csr.group_count();
+            self.schema.ie_strategy = EdgeStrategy::None;
+            self.schema.validate_resolved()?;
+            self.in_csr = CsrShardSet::new(
+                EdgeStrategy::None,
+                node_group_bits,
+                overflow_chunk_edges,
+                record_form,
+            )?;
+        }
+        if drop_out {
+            stats.edges_dropped = self.out_csr.edge_count();
+            stats.groups_dropped = self.out_csr.group_count();
+            self.schema.oe_strategy = EdgeStrategy::None;
+            self.schema.validate_resolved()?;
+            self.out_csr = CsrShardSet::new(
+                EdgeStrategy::None,
+                node_group_bits,
+                overflow_chunk_edges,
+                record_form,
+            )?;
+        }
+        self.segment_stats.clear();
+        self.property_column_dirt.clear();
+        self.mark_properties_dirty();
+        self.out_csr.mark_all_dirty();
+        self.in_csr.mark_all_dirty();
+        log::info!(
+            "edge table '{}' narrowed storage direction {:?} to {:?}: dropped {} edges in {} groups; reverse reads on the dropped leg are empty",
+            self.label_name,
+            current,
+            target,
+            stats.edges_dropped,
+            stats.groups_dropped,
+        );
+        Ok(stats)
     }
 
     pub fn memory_size(&self) -> usize {
@@ -317,5 +505,264 @@ impl EdgeStore {
             groups.truncate(limit);
         }
         groups
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::edge::edge_table::config::EdgeTableConfig;
+    use crate::edge::{EdgeSchema, EdgeStrategy, RecordForm, StorageDirection};
+
+    fn both_schema() -> EdgeSchema {
+        EdgeSchema {
+            label_id: 0,
+            label_name: "link".to_string(),
+            src_label: 0,
+            dst_label: 0,
+            properties: Vec::new(),
+            oe_strategy: EdgeStrategy::Multiple,
+            ie_strategy: EdgeStrategy::Multiple,
+            schema_version: 1,
+            record_form: RecordForm::Columnar,
+        }
+    }
+
+    #[test]
+    fn narrowing_needs_minimum_observations() {
+        let table = EdgeStore::with_config(both_schema(), EdgeTableConfig::default())
+            .expect("table builds");
+        assert!(table.suggest_direction_narrowing(10).is_none());
+    }
+
+    #[test]
+    fn out_only_traffic_suggests_out_only() {
+        let table = EdgeStore::with_config(both_schema(), EdgeTableConfig::default())
+            .expect("table builds");
+        for _ in 0..5 {
+            table.observe_direction_read(true, 1);
+        }
+        let suggestion = table
+            .suggest_direction_narrowing(5)
+            .expect("out-only traffic suggests");
+        assert_eq!(suggestion.current, StorageDirection::Both);
+        assert_eq!(suggestion.target, StorageDirection::OutOnly);
+        assert!(suggestion.basis.contains("out_reads=5"));
+    }
+
+    #[test]
+    fn mixed_traffic_suggests_nothing() {
+        let table = EdgeStore::with_config(both_schema(), EdgeTableConfig::default())
+            .expect("table builds");
+        for _ in 0..5 {
+            table.observe_direction_read(true, 1);
+            table.observe_direction_read(false, 1);
+        }
+        assert!(table.suggest_direction_narrowing(5).is_none());
+    }
+
+    #[test]
+    fn narrowing_drops_one_leg_and_serves_the_other() {
+        let mut table = EdgeStore::with_config(both_schema(), EdgeTableConfig::default())
+            .expect("table builds");
+        table.insert_edge(0, 1, 0, &[], 100).expect("insert");
+        table.insert_edge(0, 2, 0, &[], 100).expect("insert");
+        assert_eq!(table.topology_write_amplification(), 2);
+        let stats = table
+            .migrate_storage_direction(StorageDirection::OutOnly)
+            .expect("narrow to out");
+        assert_eq!(stats.edges_dropped, 2);
+        assert_eq!(table.storage_direction(), StorageDirection::OutOnly);
+        assert_eq!(table.topology_write_amplification(), 1);
+        assert_eq!(table.out_edges(0, 200).len(), 2);
+        assert!(table.in_edges(1, 200).is_empty());
+        assert!(table.direction_note(false).is_some());
+        assert!(table.suggest_direction_narrowing(1).is_none());
+    }
+
+    #[test]
+    fn widening_is_rejected() {
+        let mut table = EdgeStore::with_config(both_schema(), EdgeTableConfig::default())
+            .expect("table builds");
+        table
+            .migrate_storage_direction(StorageDirection::OutOnly)
+            .expect("narrow");
+        assert!(table
+            .migrate_storage_direction(StorageDirection::Both)
+            .is_err());
+        assert_eq!(table.storage_direction(), StorageDirection::OutOnly);
+    }
+
+    #[test]
+    fn same_direction_migration_is_noop_via_observe() {
+        let mut table = EdgeStore::with_config(both_schema(), EdgeTableConfig::default())
+            .expect("table builds");
+        let stats = table
+            .migrate_storage_direction(StorageDirection::Both)
+            .expect("noop");
+        assert_eq!(stats.edges_dropped, 0);
+        assert_eq!(table.storage_direction(), StorageDirection::Both);
+    }
+
+    #[test]
+    fn direct_observe_drives_suggestion() {
+        let table = EdgeStore::with_config(both_schema(), EdgeTableConfig::default())
+            .expect("table builds");
+        for _ in 0..5 {
+            table.observe_direction_read(true, 1);
+            table.observe_direction_read(false, 1);
+        }
+        assert!(table.suggest_direction_narrowing(5).is_none());
+    }
+}
+
+#[cfg(test)]
+mod direction_migration_tests {
+    use super::*;
+    use crate::edge::edge_table::config::EdgeTableConfig;
+    use crate::edge::{EdgeSchema, EdgeStrategy, RecordForm, StorageDirection};
+
+    fn both_schema() -> EdgeSchema {
+        EdgeSchema {
+            label_id: 0,
+            label_name: "link".to_string(),
+            src_label: 0,
+            dst_label: 0,
+            properties: Vec::new(),
+            oe_strategy: EdgeStrategy::Multiple,
+            ie_strategy: EdgeStrategy::Multiple,
+            schema_version: 1,
+            record_form: RecordForm::Columnar,
+        }
+    }
+
+    fn both_table() -> EdgeStore {
+        EdgeStore::with_config(both_schema(), EdgeTableConfig::default())
+            .expect("dual-direction table builds")
+    }
+
+    #[test]
+    fn unused_reverse_leg_suggests_out_only() {
+        let mut table = both_table();
+        table.insert_edge(0, 1, 0, &[], 100).expect("insert");
+        for _ in 0..5 {
+            let _ = table.out_edges(0, 200);
+        }
+        let suggestion = table
+            .suggest_direction_narrowing(3)
+            .expect("unused in leg suggests narrowing");
+        assert_eq!(suggestion.current, StorageDirection::Both);
+        assert_eq!(suggestion.target, StorageDirection::OutOnly);
+        assert!(suggestion.basis.contains("in_reads=0"));
+    }
+
+    #[test]
+    fn used_both_legs_suggest_nothing() {
+        let mut table = both_table();
+        table.insert_edge(0, 1, 0, &[], 100).expect("insert");
+        let _ = table.out_edges(0, 200);
+        let _ = table.in_edges(1, 200);
+        assert!(table.suggest_direction_narrowing(1).is_none());
+    }
+
+    #[test]
+    fn too_few_observations_suggest_nothing() {
+        let mut table = both_table();
+        table.insert_edge(0, 1, 0, &[], 100).expect("insert");
+        let _ = table.out_edges(0, 200);
+        assert!(table.suggest_direction_narrowing(100).is_none());
+    }
+
+    #[test]
+    fn narrowing_drops_one_leg_and_keeps_writes() {
+        let mut table = both_table();
+        table.insert_edge(0, 1, 0, &[], 100).expect("insert");
+        table.insert_edge(0, 2, 0, &[], 100).expect("insert");
+        let stats = table
+            .migrate_storage_direction(StorageDirection::OutOnly)
+            .expect("narrowing succeeds");
+        assert_eq!(stats.edges_dropped, 2);
+        assert_eq!(table.storage_direction(), StorageDirection::OutOnly);
+        assert_eq!(table.topology_write_amplification(), 1);
+        assert_eq!(table.out_edges(0, 200).len(), 2);
+        assert!(table.in_edges(1, 200).is_empty());
+        assert!(table.direction_note(false).is_some());
+        table
+            .insert_edge(0, 3, 0, &[], 150)
+            .expect("writes continue on the kept leg");
+        assert_eq!(table.out_edges(0, 200).len(), 3);
+    }
+
+    #[test]
+    fn widening_is_rejected() {
+        let mut table = both_table();
+        table
+            .migrate_storage_direction(StorageDirection::OutOnly)
+            .expect("narrow first");
+        assert!(table
+            .migrate_storage_direction(StorageDirection::Both)
+            .is_err());
+        assert!(table
+            .migrate_storage_direction(StorageDirection::InOnly)
+            .is_err());
+        assert_eq!(table.storage_direction(), StorageDirection::OutOnly);
+    }
+
+    #[test]
+    fn inline_tables_reject_rank_up_front() {
+        use crate::edge::{is_bundled_eligible, RecordFormPreference};
+        use crate::types::StoragePropertyDef;
+        use graphdb_core::types::DataType;
+        use graphdb_core::Value;
+        let schema = EdgeSchema {
+            properties: vec![StoragePropertyDef {
+                name: "weight".to_string(),
+                data_type: DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            }],
+            ..both_schema()
+        };
+        assert!(is_bundled_eligible(
+            &schema.properties,
+            schema.oe_strategy,
+            schema.ie_strategy
+        ));
+        let mut table = EdgeStore::with_config(
+            schema,
+            EdgeTableConfig {
+                record_form: RecordFormPreference::Bundled,
+                ..Default::default()
+            },
+        )
+        .expect("bundled table builds");
+        assert!(table.can_accept_rank(0));
+        assert!(!table.can_accept_rank(3));
+        let err = table
+            .insert_edge(0, 1, 3, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .expect_err("nonzero rank on bundled must fail");
+        assert!(err.to_string().contains("columnar record form"));
+    }
+
+    #[test]
+    fn gate_share_advice_prefers_batch_above_threshold() {
+        use crate::engine::graph_storage::context::WriteGateStats;
+        let before = WriteGateStats {
+            acquisitions: 0,
+            wait_nanos: 0,
+        };
+        let after = WriteGateStats {
+            acquisitions: 100,
+            wait_nanos: 800_000_000,
+        };
+        let share = after.share_since(&before, std::time::Duration::from_secs(1), 4);
+        assert!((share - 0.20).abs() < 1e-9);
+        assert!(WriteGateStats::prefer_batch_commits(share));
+        let idle = WriteGateStats {
+            acquisitions: 100,
+            wait_nanos: 10_000_000,
+        };
+        let low = idle.share_since(&before, std::time::Duration::from_secs(1), 4);
+        assert!(!WriteGateStats::prefer_batch_commits(low));
     }
 }

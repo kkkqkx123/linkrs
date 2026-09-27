@@ -109,6 +109,24 @@ impl GraphStorage {
         self.ctx.write_gate_stats()
     }
 
+    /// Recommended caller-side chunk size for very large edge batches.
+    ///
+    /// One batch is one atomic unit holding the table lock for the whole
+    /// apply; batches up to this size are the measured regime (see
+    /// `edge_group_commit_bench`). Larger fanouts split via
+    /// [`Self::chunk_edges_for_commit`] with one chunk per atomic commit.
+    pub const RECOMMENDED_BATCH_CHUNK_EDGES: usize = writer::RECOMMENDED_BATCH_CHUNK_EDGES;
+
+    /// Split an edge batch into caller-side chunks of at most
+    /// [`Self::RECOMMENDED_BATCH_CHUNK_EDGES`] edges.
+    ///
+    /// Each chunk commits atomically on its own through `batch_insert_edges`,
+    /// keeping the per-commit lock-hold bounded under the single-writer
+    /// discipline.
+    pub fn chunk_edges_for_commit(edges: &[Edge]) -> Vec<&[Edge]> {
+        writer::chunk_edges_for_commit(edges)
+    }
+
     /// Outbox pending depth for backpressure-aware clients.
     pub fn outbox_pending(&self) -> u64 {
         self.ctx.outbox_pending()

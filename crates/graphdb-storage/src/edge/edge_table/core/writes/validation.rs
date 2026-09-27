@@ -35,6 +35,18 @@ impl EdgeStore {
     }
 
     pub(super) fn prevalidate_staging_batch(&self, batch: &EdgeStagingBatch) -> StorageResult<()> {
+        // Inline-form rank gate first: pure and bundled tables carry no rank
+        // column, so any nonzero rank fails here with the shared wording
+        // before paying reservation, WAL append or prefix rollback. Callers
+        // planning rank writes probe `can_accept_rank` up front instead.
+        if self.schema.record_form != crate::edge::RecordForm::Columnar {
+            let ranked = batch.staged_inserts().iter().any(|ins| ins.rank != 0);
+            if ranked {
+                return Err(StorageError::invalid_operation(
+                    crate::edge::BUNDLED_RANK_REQUIRES_COLUMNAR_MSG.to_string(),
+                ));
+            }
+        }
         // Insert-only batches skip the order-sensitive cancel bookkeeping:
         // without deletes no insert can cancel, so sorted duplicate scans
         // replace the per-batch hash sets.

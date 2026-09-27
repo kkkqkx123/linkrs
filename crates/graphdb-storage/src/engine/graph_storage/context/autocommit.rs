@@ -22,6 +22,49 @@ pub struct WriteGateStats {
     pub wait_nanos: u64,
 }
 
+impl WriteGateStats {
+    /// Gate-wait share of total thread time since `before`.
+    ///
+    /// Divides the waited nanos by `wall * threads` (the same caliber the
+    /// `write_gate_bench` reports). Returns `0.0` for empty runs.
+    pub fn share_since(
+        &self,
+        before: &WriteGateStats,
+        wall: std::time::Duration,
+        threads: usize,
+    ) -> f64 {
+        let waited = self.wait_nanos.saturating_sub(before.wait_nanos) as f64;
+        let budget = wall.as_nanos() as f64 * threads.max(1) as f64;
+        if budget <= 0.0 {
+            0.0
+        } else {
+            waited / budget
+        }
+    }
+
+    /// Whether callers should prefer batch commits over per-statement
+    /// auto-commit for the observed share.
+    ///
+    /// Usage governance (no engine change): at or above 20% gate-wait share
+    /// the global `AutoCommitWriteGate` serializes the workload, so one gate
+    /// acquisition per statement wastes most thread time waiting. Prefer
+    /// `batch_insert_edges` (one commit for the whole batch) or the
+    /// `begin_auto_commit_group` window (one gate lease for many statements)
+    /// instead of adding finer locks below the gate.
+    pub fn prefer_batch_commits(share: f64) -> bool {
+        share >= 0.20
+    }
+
+    /// Human-readable contention advice for the observed share.
+    pub fn contention_advice(share: f64) -> &'static str {
+        if Self::prefer_batch_commits(share) {
+            "gate-wait share above 20%: prefer batch_insert_edges or begin_auto_commit_group over per-statement auto-commit; finer locks below the gate are not justified"
+        } else {
+            "gate-wait share below 20%: per-statement auto-commit is fine; keep explicit caller chunking"
+        }
+    }
+}
+
 /// Serializes auto-commit DML statements.
 pub(crate) struct AutoCommitWriteGate {
     /// Gate state, guarded by `mutex`: the holder thread and its lease depth.
