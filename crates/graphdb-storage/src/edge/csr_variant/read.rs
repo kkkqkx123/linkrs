@@ -20,7 +20,6 @@ impl CsrVariant {
             CsrVariant::Pure(csr) => Some(CsrRowIter::Pure(csr.iter_row(src_vid))),
             CsrVariant::Bundled(csr) => Some(CsrRowIter::Bundled(csr.iter_row(src_vid))),
             CsrVariant::Frozen(csr) => Some(CsrRowIter::Frozen(csr.iter_edges_of(src_vid, ts))),
-            CsrVariant::Mapped(csr) => Some(CsrRowIter::Mapped(csr.iter_edges_of(src_vid, ts))),
             CsrVariant::None { .. } => None,
         }
     }
@@ -40,7 +39,6 @@ impl CsrVariant {
             CsrVariant::Pure(csr) => CsrIterator::Pure(csr.iter_all()),
             CsrVariant::Bundled(csr) => CsrIterator::Bundled(csr.iter_all()),
             CsrVariant::Frozen(csr) => CsrIterator::Frozen(csr.iter_all()),
-            CsrVariant::Mapped(csr) => CsrIterator::Mapped(csr.iter_all()),
             CsrVariant::None { .. } => CsrIterator::None,
         }
     }
@@ -59,7 +57,6 @@ impl CsrVariant {
             CsrVariant::Pure(csr) => csr.visit_physical(src_vid, f),
             CsrVariant::Bundled(csr) => csr.visit_physical(src_vid, f),
             CsrVariant::Frozen(csr) => csr.visit_physical(src_vid, f),
-            CsrVariant::Mapped(csr) => csr.visit_physical(src_vid, f),
             CsrVariant::None { .. } => {}
         }
     }
@@ -79,7 +76,6 @@ impl CsrVariant {
             CsrVariant::Pure(csr) => csr.visit_hot(src_vid, f),
             CsrVariant::Bundled(csr) => csr.visit_hot(src_vid, f),
             CsrVariant::Frozen(csr) => csr.visit_hot(src_vid, f),
-            CsrVariant::Mapped(csr) => csr.visit_hot(src_vid, f),
             CsrVariant::None { .. } => {}
         }
     }
@@ -99,18 +95,17 @@ impl CsrVariant {
             CsrVariant::Pure(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::Bundled(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::Frozen(csr) => csr.fill_physical_into(src_vid, out),
-            CsrVariant::Mapped(csr) => csr.fill_physical_into(src_vid, out),
             CsrVariant::None { .. } => out.clear(),
         }
     }
 
     /// Whether the live entries of one row arrive in key order.
     ///
-    /// Only frozen, mapped and single-slot rows promise order and may use
-    /// bisection. All other forms report an observation that callers must
-    /// not cache across restarts: the flag is memory-only, rebuilt on load,
-    /// and query planning falls back to a linear walk unless the promise
-    /// holds for the row's current variant.
+    /// Only frozen and single-slot rows promise order and may use bisection.
+    /// All other forms report an observation that callers must not cache
+    /// across restarts: the flag is memory-only, rebuilt on load, and query
+    /// planning falls back to a linear walk unless the promise holds for the
+    /// row's current variant.
     pub fn is_row_sorted(&self, src_vid: u32) -> bool {
         match self {
             CsrVariant::Multiple(csr) => csr.is_row_sorted(src_vid),
@@ -118,7 +113,6 @@ impl CsrVariant {
             CsrVariant::Pure(csr) => csr.is_row_sorted(src_vid),
             CsrVariant::Bundled(csr) => csr.is_row_sorted(src_vid),
             CsrVariant::Frozen(csr) => csr.is_row_sorted(src_vid),
-            CsrVariant::Mapped(csr) => csr.is_row_sorted(src_vid),
             CsrVariant::None { .. } => true,
         }
     }
@@ -153,7 +147,6 @@ impl CsrVariant {
                 csr.visit_threshold(src_vid, lower.map(|(ep, _)| ep), upper.map(|(ep, _)| ep), f)
             }
             CsrVariant::Frozen(csr) => csr.visit_threshold(src_vid, lower, upper, f),
-            CsrVariant::Mapped(csr) => csr.visit_threshold(src_vid, lower, upper, f),
             CsrVariant::None { .. } => {}
         }
     }

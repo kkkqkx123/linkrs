@@ -14,9 +14,14 @@
 //!
 //! - `CsrVariant::Multiple`: Mutable CSR with dynamic capacity growth
 //! - `CsrVariant::Single`: Mutable single-edge CSR
+//! - `CsrVariant::Pure`: Pure topology CSR without timestamps or ranks
+//! - `CsrVariant::Bundled`: Pure topology plus one inline scalar value column
 //! - `CsrVariant::Frozen`: Packed immutable CSR, writes rejected until unfrozen
-//! - `CsrVariant::Mapped`: Memory-mapped frozen CSR, same read-only semantics
 //! - `CsrVariant::None`: Placeholder for relationships with no edges
+//!
+//! Frozen groups may additionally carry a derived memory-mapped serving
+//! cache. Residency lives with the group container, never in this enum: the
+//! heap form stays authoritative and the mapping only accelerates reads.
 //!
 //! Layout by responsibility (`csr_variant/` subdirectory):
 //! - `core` holds construction, clearing, stats and capability queries.
@@ -29,7 +34,7 @@
 
 use super::bundled_csr::BundledCsr;
 use super::pure_csr::PureTopologyCsr;
-use super::{ImmutableCsr, MappedFrozen, MutableCsr, SingleMutableCsr};
+use super::{ImmutableCsr, MutableCsr, SingleMutableCsr};
 
 /// Macro for dispatching method calls to the underlying CSR variant.
 ///
@@ -59,7 +64,6 @@ macro_rules! dispatch {
             CsrVariant::Pure(csr) => csr.$method($($arg),+),
             CsrVariant::Bundled(csr) => csr.$method($($arg),+),
             CsrVariant::Frozen(csr) => csr.$method($($arg),+),
-            CsrVariant::Mapped(csr) => csr.$method($($arg),+),
             CsrVariant::None { .. } => $default,
         }
     };
@@ -72,7 +76,6 @@ macro_rules! dispatch {
             CsrVariant::Pure(csr) => csr.$method(),
             CsrVariant::Bundled(csr) => csr.$method(),
             CsrVariant::Frozen(csr) => csr.$method(),
-            CsrVariant::Mapped(csr) => csr.$method(),
             CsrVariant::None { .. } => $default,
         }
     };
@@ -121,17 +124,13 @@ pub use iter::{CsrIterator, CsrRowIter};
 /// go through these three.
 ///
 /// Ordering is promised per form, never globally: mutable, single, pure and
-/// bundled rows are insertion-ordered and promise no order; frozen and
-/// mapped rows are packed sorted by `(endpoint, rank, edge_id)` and promise
-/// that order plus key-interval bisection. Freeze, compaction, compression
-/// and snapshot rebuilds may change the order; the query layer must never depend on an
+/// bundled rows are insertion-ordered and promise no order; frozen rows are
+/// packed sorted by `(endpoint, rank, edge_id)` and promise that order plus
+/// key-interval bisection. Freeze, compaction, compression and snapshot
+/// rebuilds may change the order; the query layer must never depend on an
 /// unpromised order. Plan selection uses `should_use_bisection`, combining
 /// the per-form promise with the memory-only sorted observation that is
 /// rebuilt on load and never cached across restarts.
-///
-/// Mapped rows hold their mapping by value (`Arc` inside the iterator), so a
-/// row walk stays valid across group replacement; the walk still yields the
-/// snapshot it was created from, never the replaced group.
 #[derive(Debug, Clone)]
 pub enum CsrVariant {
     /// Multi-edge mutable CSR: each vertex can have multiple outgoing edges
@@ -144,8 +143,6 @@ pub enum CsrVariant {
     Bundled(Box<BundledCsr>),
     /// Frozen packed CSR: read-only until explicitly unfrozen
     Frozen(Box<ImmutableCsr>),
-    /// Memory-mapped frozen CSR: same read-only content as `Frozen`
-    Mapped(Box<MappedFrozen>),
     /// No-edge placeholder: vertices exist but have no outgoing edges
     None { vertex_capacity: usize },
 }

@@ -7,10 +7,8 @@ impl CsrVariant {
     /// Whole-table timestamp reclaim: the capability query owns the
     /// exemption list, the match below only serves the supported forms.
     /// Pure and bundled rows hold no timestamps so they report zero; their
-    /// holes still compact through the per-row entry. Frozen groups reclaim
-    /// tombstones in place with no reserve; mapped views need a snapshot-file
-    /// rebuild and stay no-op here. Production frozen reclaim uses the
-    /// batched rows entry below instead of one call per row.
+    /// holes still compact through the per-row entry. Production frozen
+    /// reclaim uses the batched rows entry below instead of one call per row.
     pub fn compact_with_ts_reporting(
         &mut self,
         cutoff: Timestamp,
@@ -51,17 +49,14 @@ impl CsrVariant {
     /// Sort one primary row into key order on the maintenance path.
     ///
     /// Same invalidation as the underlying stores: positions go stale and
-    /// the caller relocates through the edge-id key. Frozen, mapped,
-    /// single-slot and empty forms are already ordered and report false.
+    /// the caller relocates through the edge-id key. Frozen, single-slot and
+    /// empty forms are already ordered and report false.
     pub fn sort_row(&mut self, src_vid: u32) -> bool {
         match self {
             CsrVariant::Multiple(csr) => csr.sort_row(src_vid),
             CsrVariant::Pure(csr) => csr.sort_row(src_vid),
             CsrVariant::Bundled(csr) => csr.sort_row(src_vid),
-            CsrVariant::Single(_)
-            | CsrVariant::Frozen(_)
-            | CsrVariant::Mapped(_)
-            | CsrVariant::None { .. } => false,
+            CsrVariant::Single(_) | CsrVariant::Frozen(_) | CsrVariant::None { .. } => false,
         }
     }
 }

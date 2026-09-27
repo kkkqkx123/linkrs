@@ -276,9 +276,10 @@ if csr.fragmentation_ratio() >= GROUP_FRAGMENTATION_THRESHOLD {
 
 - 行级回收；Bundled 拓扑与值双列同步移动，有效位同步清理。
 
-### Frozen / Mapped / None
+### Frozen / None
 
-- 无操作：只读或零边。
+- 无操作：只读或零边。冻结组的映射驻留不参与回收；
+  回收一律走堆内权威。
 
 ---
 

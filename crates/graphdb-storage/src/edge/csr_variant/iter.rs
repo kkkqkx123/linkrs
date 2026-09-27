@@ -1,7 +1,7 @@
 use super::super::mutable_csr::VertexEdgesIter;
 use super::super::{
-    FrozenRowIter, ImmutableCsrIterator, MappedFrozenIterator, MappedFrozenRowIter,
-    MutableCsrIterator, Nbr, PureAllIter, PureRowIter, SingleMutableCsrIterator, VertexId,
+    FrozenRowIter, ImmutableCsrIterator, MutableCsrIterator, Nbr, PureAllIter, PureRowIter,
+    SingleMutableCsrIterator, VertexId,
 };
 
 /// Iterator over CSR edges, supporting multiple implementation types
@@ -16,8 +16,6 @@ pub enum CsrIterator<'a> {
     Bundled(PureAllIter<'a>),
     /// Iterator over frozen packed CSR
     Frozen(ImmutableCsrIterator<'a>),
-    /// Iterator over memory-mapped frozen CSR (owns its mapping handle)
-    Mapped(MappedFrozenIterator),
     /// Empty iterator
     None,
 }
@@ -32,7 +30,6 @@ impl<'a> Iterator for CsrIterator<'a> {
             CsrIterator::Pure(iter) => iter.next(),
             CsrIterator::Bundled(iter) => iter.next(),
             CsrIterator::Frozen(iter) => iter.next(),
-            CsrIterator::Mapped(iter) => iter.next(),
             CsrIterator::None => None,
         }
     }
@@ -62,8 +59,6 @@ pub enum CsrRowIter<'a> {
     Bundled(PureRowIter<'a>),
     /// Frozen row: filtered packed-slice walk.
     Frozen(FrozenRowIter<'a>),
-    /// Mapped frozen row: on-demand decode walk owning its mapping handle.
-    Mapped(MappedFrozenRowIter),
 }
 
 impl<'a> Iterator for CsrRowIter<'a> {
@@ -76,7 +71,6 @@ impl<'a> Iterator for CsrRowIter<'a> {
             CsrRowIter::Pure(iter) => iter.next(),
             CsrRowIter::Bundled(iter) => iter.next(),
             CsrRowIter::Frozen(iter) => iter.next(),
-            CsrRowIter::Mapped(iter) => iter.next(),
         }
     }
 }

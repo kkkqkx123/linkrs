@@ -60,7 +60,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
-use super::{CsrVariant, RecordForm};
+use super::{CsrVariant, MappedFrozen, RecordForm};
 
 pub(crate) mod address;
 pub(crate) mod append_log;
@@ -94,6 +94,11 @@ pub(crate) use append_log::{decode_append_ops, encode_append_ops, ShardAppendLog
 #[derive(Debug, Clone)]
 struct Shard {
     variant: CsrVariant,
+    /// Derived serving cache for frozen groups. The heap variant stays
+    /// authoritative: the mapping only accelerates reads and is dropped on
+    /// every mutation of the variant (freeze, unfreeze, clear, load). It is
+    /// only ever populated for frozen groups by the checkpoint load path.
+    mapped: Option<MappedFrozen>,
     dirty: GroupDirty,
     regions: Vec<RegionDirty>,
     append: ShardAppendLog,

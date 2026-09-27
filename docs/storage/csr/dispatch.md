@@ -72,7 +72,7 @@ pub fn from_strategy_with_overflow(
 运行期显式冻结/解冻：
   MutableCsr ──freeze──→ Frozen（ImmutableCsr）
   Frozen ──unfreeze──→ Multiple / Single（原策略）
-  Frozen + 边车有效 ──open──→ Mapped（mmap 视图）
+  Frozen + 边车有效 ──load──→ 堆内 Frozen + 组级映射驻留（mmap 热点读）
 ```
 
 ## CsrVariant 枚举
@@ -86,10 +86,13 @@ pub enum CsrVariant {
     Pure(Box<PureTopologyCsr>),
     Bundled(Box<BundledCsr>),
     Frozen(Box<ImmutableCsr>),
-    Mapped(Box<MappedFrozen>),
     None { vertex_capacity: usize },
 }
 ```
+
+映射（`MappedFrozen`）不再是枚举分支，而是冻结组的派生驻留：
+组槽在变体之外另持可选映射句柄，堆内冻结保持权威，
+热点读在驻留有效时经映射服务。
 
 跨层遍历契约：行位置（`EdgePosition` 块/槽对、主块偏移、
 溢出下标）是变体私有的，永不过层边界。层间交接
@@ -114,11 +117,10 @@ macro_rules! dispatch {
             CsrVariant::Pure(csr) => csr.$method($($arg),+),
             CsrVariant::Bundled(csr) => csr.$method($($arg),+),
             CsrVariant::Frozen(csr) => csr.$method($($arg),+),
-            CsrVariant::Mapped(csr) => csr.$method($($arg),+),
             CsrVariant::None { .. } => $default,
         }
     };
-    ($self:expr, $method:ident() -> $default:expr) => { /* 同上七分支 */ };
+    ($self:expr, $method:ident() -> $default:expr) => { /* 同上六分支 */ };
 }
 ```
 
@@ -135,7 +137,6 @@ impl MutableCsrTrait for CsrVariant {
         if self.is_read_only() {
             return match self {
                 CsrVariant::Frozen(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
-                CsrVariant::Mapped(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
                 _ => Err(...),
             };
         }
@@ -158,8 +159,8 @@ impl MutableCsrTrait for CsrVariant {
 （`is_writable/is_read_only/is_empty_placeholder/supports_positions/
 supports_vertex_compact/supports_timestamp_reclaim/
 has_reserved_capacity/promises_key_order/should_use_bisection`），
-分发点只执行门结论。`Frozen` / `Mapped` 须显式解冻，
-无隐式解冻；只读臂转发到底层是为了保留各自拒绝文案，
+分发点只执行门结论。`Frozen` 须显式解冻，
+无隐式解冻；只读臂转发到底层是为了保留拒绝文案，
 决策本身仍在门上。`dispatch!` 只留给纯读与门后的可写转发，
 不再作为写删的决策路径。
 
@@ -186,19 +187,18 @@ Tag  变体
 0    None
 1    Multiple
 2    Single
-3    Frozen / Mapped（Mapped 按 Frozen 标签转储，共享标签 3）
+3    Frozen（堆内权威字节；映射身份不持久）
 4    Pure
 5    Bundled
 ```
 
 `dump()` 首字节打标签；`load()` 按首字节分发重建。
-标签 3 由 `Frozen` 与 `Mapped` 共享是刻意的不对称：
-转储保留权威堆字节，加载一律重建堆内 `Frozen`，映射身份不持久。
-需要映射视图的调用方走检查点边车路径重开映射，
-不得假设视图类型可往返。`dump_into()` 与 `dump()` 字节一致，
-供检查点零拷贝追加；带暂存转储同样共享该标签行为。
-各形态载荷尾带 CRC32，加载先验签再解析；边 ID 计数等
-结构字段做重算校验，篡改与截断均拒绝。
+标签 3 只承载堆内 `Frozen` 字节：转储保留权威堆字节，
+加载一律重建堆内 `Frozen`。需要映射加速的调用方走检查点边车
+路径挂载组级驻留，不得假设视图类型可往返。`dump_into()` 与
+`dump()` 字节一致，供检查点零拷贝追加；带暂存转储同样共享
+该标签行为。各形态载荷尾带 CRC32，加载先验签再解析；边 ID
+计数等结构字段做重算校验，篡改与截断均拒绝。
 
 ### 模式四：迭代器分发
 
@@ -207,12 +207,12 @@ Tag  变体
 ```rust
 pub enum CsrIterator<'a> {
     Multiple(...), Single(...), Pure(...), Bundled(...),
-    Frozen(...), Mapped(...), None,
+    Frozen(...), None,
 }
 ```
 
 行内顺序按形态承诺，不做全局承诺：可变 /
-Pure / Bundled 行为插入序、无序承诺；Frozen / Mapped / Single 行按
+Pure / Bundled 行为插入序、无序承诺；Frozen / Single 行按
 键有序并承诺该顺序与键区间二分（`Single` 行至多一槽，天然有序）。
 冻结、回收、压缩与服务重建可改变顺序，查询层不得依赖未承诺顺序。
 `is_row_sorted` 只在承诺有序的形态上选择二分，其余走线性扫描；
@@ -251,8 +251,7 @@ Query("traverse edges")
   │       ├─ Single ────→ O(1) 直接槽
   │       ├─ Pure ──────→ 主块 + 溢出链（现场组装 Nbr）
   │       ├─ Bundled ───→ 同 Pure 并附值列
-  │       ├─ Frozen ────→ 有序行二分 / 线性扫描
-  │       ├─ Mapped ────→ 同 Frozen，经 mmap 按需分页
+  │       ├─ Frozen ────→ 有序行二分 / 线性扫描（驻留有效时经映射同序服务）
   │       └─ None ──────→ 空
   │
   └─→ Columnar：按 EdgeId 查属性列式存储；Pure/Bundled：属性 stub/内联
@@ -280,7 +279,6 @@ Query("traverse edges")
 | `Single` | 丢截止线下单槽墓碑并上报（无整表 reserve 参数） | 同行级语义 |
 | `Pure` / `Bundled` | 行级回收（Bundled 双列同步移动） | 无操作，离线重建同样不走整表 |
 | `Frozen` | 无操作（只读） | 堆内回收并上报 |
-| `Mapped` | 无操作（需重建服务文件） | 无操作 |
 | `None` | 无操作（零边） |
 
 碎片口径覆盖持有预留行容量的形态（`Multiple` / `Pure` / `Bundled`），
@@ -302,7 +300,7 @@ Query("traverse edges")
 
 ### 3. 显式失败
 
-- `Frozen` / `Mapped` 写拒绝错误，不静默成功；
+- `Frozen` 写拒绝错误，不静默成功；
 - 无位置寻址能力的形态对定位写 fail-closed；
 - `None` 读返回空；计数删返回零，结果型删返回拒绝错误；
   组层稀疏洞结果型删回 `Ok(false)`（无边策略表除外）；

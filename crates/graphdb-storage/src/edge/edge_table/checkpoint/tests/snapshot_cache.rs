@@ -39,8 +39,12 @@ fn frozen_flush_writes_snapshot_and_load_serves_mapped() {
     let mut loaded = make_table();
     loaded.load(dir.path()).expect("load should succeed");
     assert!(
-        matches!(loaded.out_csr.group_variant(0), Some(CsrVariant::Mapped(_))),
-        "load serves a clean frozen group from the mapping"
+        matches!(loaded.out_csr.group_variant(0), Some(CsrVariant::Frozen(_))),
+        "load keeps the authoritative heap frozen form"
+    );
+    assert!(
+        loaded.out_csr.group_has_mapped(0),
+        "load attaches the validated mapping as group residency"
     );
     let after: Vec<_> = loaded
         .out_edges(0, 200)
@@ -88,6 +92,10 @@ fn missing_snapshot_falls_back_to_authoritative() {
         matches!(loaded.out_csr.group_variant(0), Some(CsrVariant::Frozen(_))),
         "missing sidecar falls back to the heap frozen form"
     );
+    assert!(
+        loaded.out_csr.group_has_mapped(0),
+        "rebuilt sidecar attaches as serving cache in the same load"
+    );
     let after: Vec<_> = loaded
         .out_edges(0, 200)
         .into_iter()
@@ -126,6 +134,10 @@ fn corrupt_snapshot_falls_back_to_authoritative() {
     assert!(
         matches!(loaded.out_csr.group_variant(0), Some(CsrVariant::Frozen(_))),
         "corrupt sidecar falls back to the heap frozen form"
+    );
+    assert!(
+        loaded.out_csr.group_has_mapped(0),
+        "rebuilt sidecar attaches as serving cache in the same load"
     );
     let after: Vec<_> = loaded
         .out_edges(0, 200)
@@ -190,15 +202,16 @@ fn snapshot_state_machine_full_cycle() {
     };
     let snapshot = snapshot_path_for(&dir.path().join(out_group_file(0)));
 
-    // Generate: frozen flush writes a valid sidecar; loads map it.
+    // Generate: frozen flush writes a valid sidecar; loads attach it.
     flush(&mut table);
     assert!(snapshot.exists());
     let mut loaded = make_table();
     loaded.load(dir.path()).expect("load should succeed");
     assert!(matches!(
         loaded.out_csr.group_variant(0),
-        Some(CsrVariant::Mapped(_))
+        Some(CsrVariant::Frozen(_))
     ));
+    assert!(loaded.out_csr.group_has_mapped(0));
     assert_eq!(loaded.out_edges(0, 200).len(), 2);
 
     // Expire: corrupt the sidecar; the next load falls back to the authority
@@ -212,6 +225,7 @@ fn snapshot_state_machine_full_cycle() {
         expired.out_csr.group_variant(0),
         Some(CsrVariant::Frozen(_))
     ));
+    assert!(expired.out_csr.group_has_mapped(0));
     assert_eq!(expired.out_edges(0, 200).len(), 2);
     expired
         .flush(
@@ -224,8 +238,9 @@ fn snapshot_state_machine_full_cycle() {
     remapped.load(dir.path()).expect("load should succeed");
     assert!(matches!(
         remapped.out_csr.group_variant(0),
-        Some(CsrVariant::Mapped(_))
+        Some(CsrVariant::Frozen(_))
     ));
+    assert!(remapped.out_csr.group_has_mapped(0));
 
     // Delete: unfreezing plus flush drops the stale sidecar with the base.
     table.unfreeze_group(true, 0).unwrap();

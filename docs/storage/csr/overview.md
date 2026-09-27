@@ -29,8 +29,7 @@
 |---|---|---|
 | `Multiple` | `MutableCsr` | 通用多边行，主块 + 分级溢出块 |
 | `Single` | `SingleMutableCsr` | 一对一关系，直接槽数组，空槽用永不存活哨兵 |
-| `Frozen` | `ImmutableCsr` | 冻结的只读紧凑组，显式解冻前拒绝写入 |
-| `Mapped` | `MappedFrozen` | 同 `Frozen` 内容的内存映射服务视图 |
+| `Frozen` | `ImmutableCsr` | 冻结的只读紧凑组，显式解冻前拒绝写入；可附映射驻留加速热点读 |
 | `Pure` | `PureTopologyCsr` | `Pure` 记录形态的拓扑 |
 | `Bundled` | `BundledCsr` | `Bundled` 记录形态的拓扑 + 内联值列 |
 | `None` | 占位 | 该方向不存边 |
@@ -114,7 +113,7 @@ crates/graphdb-storage/src/edge/
 ├── edge.rs                     # Nbr/HotNbr/ColdStamps、EdgeSchema、RecordForm
 ├── csr_shared.rs               # 删除状态机、顶点容量增长、溢出表、VertexBookkeeping
 ├── csr_trait.rs                # CsrBase、MutableCsrTrait
-├── csr_variant.rs              # Multiple/Single/Pure/Bundled/Frozen/Mapped/None 枚举与 dispatch 宏
+├── csr_variant.rs              # Multiple/Single/Pure/Bundled/Frozen/None 枚举与 dispatch 宏
 ├── csr_variant/                # core、persistence、trait_impl、read、maintenance、values、iter
 ├── csr_with_properties.rs      # 列式属性存储（EdgeId 索引）
 ├── csr_with_properties/        # encoding、mapping、read、write、persistence 等
@@ -123,7 +122,7 @@ crates/graphdb-storage/src/edge/
 ├── pure_csr.rs + pure_csr/           # Pure 变体（端点 + 边 ID）
 ├── bundled_csr.rs + bundled_csr/     # Bundled 变体（拓扑 + 内联值列）
 ├── immutable_csr.rs + immutable_csr/ # Frozen 变体（紧凑只读组）
-├── frozen_serving.rs + frozen_serving/ # Mapped 变体（mmap 服务视图）
+├── edge_table/checkpoint/snapshot* # 冻结组映射驻留（mmap 服务缓存，组级持有）
 ├── node_group.rs + node_group/ # 组分片容器、脏标记、追加日志、冻结/解冻、回收
 ├── edge_table.rs + edge_table/ # EdgeStore：分片表、提交、检查点、MVCC、WAL、模式机
 ├── fragmentation_stats.rs      # 浪费占比口径、组合并门控、按顶点碎片视图
@@ -132,7 +131,7 @@ crates/graphdb-storage/src/edge/
 
 ## 相关文档
 
-- [变体详解](variants.md)——七种变体的结构与取舍
+- [变体详解](variants.md)——六种变体与冻结组驻留的结构与取舍
 - [选择与分发](dispatch.md)——RecordForm/EdgeStrategy 选择与分发实现
 - [碎片与回收](fragmentation.md)——度量与回收细节
 - [速查](quick_reference.md)——选型指南与代码示例

@@ -20,7 +20,7 @@
   NO  -> 继续
 
 读为主、长期不变的组？
-  YES -> 显式 freeze 到 Frozen；open 时边车有效则走 Mapped（mmap 视图）
+  YES -> 显式 freeze 到 Frozen；加载时边车有效则挂载映射驻留加速热点读
   NO  -> 继续
 
 该方向不存边？
@@ -54,9 +54,9 @@ let csr = CsrVariant::from_strategy_with_overflow(
     1000, 0, 4096,
 )?;
 
-// Pure / Bundled / Frozen / Mapped 不走策略工厂：
+// Pure / Bundled / Frozen 不走策略工厂：
 // 由组容器按 RecordForm 经 fresh_variant() 装配，
-// 或由冻结/解冻与 mmap open 路径产生。
+// 冻结组由冻结路径产生，映射驻留由检查点加载挂载。
 ```
 
 ### 插入与查询
@@ -221,7 +221,7 @@ pub trait CsrBase: Debug + Send + Sync {
 }
 ```
 
-### MutableCsrTrait（可变变体；Frozen/Mapped/None 为拒绝或空实现）
+### MutableCsrTrait（可变变体；Frozen/None 为拒绝或空实现）
 
 ```rust
 pub trait MutableCsrTrait: CsrBase {
@@ -253,7 +253,7 @@ pub trait MutableCsrTrait: CsrBase {
 | 文件 | 内容 |
 |---|---|
 | `edge.rs` | `Nbr`/`HotNbr`/`ColdStamps`、`EdgeSchema`、`RecordForm` |
-| `csr_variant.rs` | `CsrVariant` 七变体枚举、`dispatch!` 宏、序列化标签 |
+| `csr_variant.rs` | `CsrVariant` 六变体枚举、`dispatch!` 宏、序列化标签 |
 | `csr_variant/` | core（工厂/清理/统计）、persistence、trait_impl、read、maintenance、values、iter |
 | `csr_trait.rs` | `CsrBase`、`MutableCsrTrait` 定义 |
 | `mutable_csr.rs` + `mutable_csr/` | Multiple 变体（core、row、write、read、overflow、compaction…） |
@@ -261,7 +261,7 @@ pub trait MutableCsrTrait: CsrBase {
 | `pure_csr.rs` + `pure_csr/` | Pure 变体（端点 + 边 ID） |
 | `bundled_csr.rs` + `bundled_csr/` | Bundled 变体（拓扑 + 内联值列） |
 | `immutable_csr.rs` + `immutable_csr/` | Frozen 变体（紧凑只读组） |
-| `frozen_serving.rs` + `frozen_serving/` | Mapped 变体（mmap 服务视图） |
+| `edge_table/checkpoint/snapshot*` | 冻结组映射驻留（mmap 服务缓存，组级持有） |
 | `node_group.rs` + `node_group/` | 组分片容器、脏标记、追加日志、冻结/解冻、回收 |
 | `edge_table.rs` + `edge_table/` | `EdgeStore`（分片表、提交、检查点、MVCC、WAL、模式机） |
 | `csr_with_properties.rs` + 同名目录 | 列式属性存储（`EdgeId` 索引） |
@@ -343,23 +343,24 @@ csr.delete_edge_by_offset(0, 0, ts);
 ### 8. 持久化往返假设
 
 ```rust
-// 错：以为 Mapped 转储加载后仍是映射视图
-// 对：标签 3 共享，转储保留权威字节，加载一律重建堆内 Frozen；
-// 需要映射则走检查点边车重开
+// 错：以为转储加载后能恢复映射驻留
+// 对：标签 3 只承载堆内 Frozen 字节，加载一律重建堆内 Frozen；
+// 需要映射加速则走检查点边车挂载组级驻留
 ```
 
 ### 9. 行有序假设
 
 ```rust
-// 只有 Frozen / Mapped / Single 承诺有序并可用二分，其余走线性扫描；
+// 只有 Frozen / Single 承诺有序并可用二分，其余走线性扫描；
 // 内存态有序标志不持久，计划缓存不得跨重启复用
+// （冻结组经堆或映射服务同一有序行）
 ```
 
 ## 性能特征
 
 ### 查询复杂度
 
-| 操作 | Multiple | Single | Pure | Bundled | Frozen/Mapped |
+| 操作 | Multiple | Single | Pure | Bundled | Frozen |
 |---|---|---|---|---|---|
 | `get_edge` | O(degree) | O(1) | O(degree) | O(degree) | O(log degree) 二分后取首个可见 |
 | `edges_of` | O(degree) | O(1) | O(degree) | O(degree) | O(degree) |
@@ -378,8 +379,7 @@ csr.delete_edge_by_offset(0, 0, ts);
 | Single | O(V) | 仅单槽墓碑 |
 | Pure | O(E + V)，12 字节/边 | 同 Multiple（无时间戳列） |
 | Bundled | O(E + V)，20 字节/边 | 同 Multiple（双列同步） |
-| Frozen | O(E + V)，无容量/溢出/索引 | 无（紧凑有序） |
-| Mapped | 文件页按需换入 + 行偏移表 | 无 |
+| Frozen | O(E + V)，无容量/溢出/索引 | 无（紧凑有序；有效映射另计页缓存） |
 | None | O(1) | 无 |
 
 ## 测试
@@ -395,7 +395,7 @@ cargo test --lib edge -- --nocapture
 ## 文档
 
 - [总览](overview.md)——架构全貌
-- [变体](variants.md)——七种变体实现细节
+- [变体](variants.md)——六种变体与冻结组驻留实现细节
 - [分发](dispatch.md)——选择与多态分发
 - [碎片](fragmentation.md)——内存管理与回收
 - **[速查](quick_reference.md)**——本文件

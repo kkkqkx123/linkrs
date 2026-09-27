@@ -28,26 +28,13 @@ impl CsrVariant {
     }
 
     /// Clear all edges.
-    ///
-    /// Mapped views hold their payload off heap and cannot be emptied, so
-    /// clearing one swaps the whole variant to the empty placeholder at the
-    /// same vertex capacity. Group containers keep the group slot and must
-    /// treat the post-clear variant as a placeholder for every later branch.
     pub fn clear(&mut self) {
-        // Clearing drops the snapshot view: the mapping is outside the heap
-        // and cannot be emptied, so the group falls back to the placeholder.
-        if let CsrVariant::Mapped(csr) = self {
-            let vertex_capacity = csr.vertex_capacity();
-            *self = CsrVariant::None { vertex_capacity };
-            return;
-        }
         match self {
             CsrVariant::Multiple(csr) => csr.clear(),
             CsrVariant::Single(csr) => csr.clear(),
             CsrVariant::Pure(csr) => csr.clear(),
             CsrVariant::Bundled(csr) => csr.clear(),
             CsrVariant::Frozen(csr) => csr.clear(),
-            CsrVariant::Mapped(_) => unreachable!("mapped view replaced above"),
             CsrVariant::None { .. } => {}
         }
     }
@@ -97,8 +84,8 @@ impl CsrVariant {
     ///
     /// Only forms carrying timestamps reclaim here. Pure and bundled rows
     /// hold no timestamps so their holes compact through the per-row entry
-    /// instead; mapped views need a snapshot-file rebuild. Production frozen
-    /// reclaim uses the batched rows entry instead of one call per row.
+    /// instead. Production frozen reclaim uses the batched rows entry instead
+    /// of one call per row.
     pub fn supports_timestamp_reclaim(&self) -> bool {
         matches!(
             self,
@@ -110,8 +97,8 @@ impl CsrVariant {
     ///
     /// Covers the multi-edge store plus the pure-topology and bundled forms
     /// sharing its primary-plus-overflow layout. Single slots carry no
-    /// reserved gaps beyond their tombstone, frozen and mapped rows are
-    /// packed without gaps, and the placeholder holds no edges.
+    /// reserved gaps beyond their tombstone, frozen rows are packed without
+    /// gaps, and the placeholder holds no edges.
     pub fn has_reserved_capacity(&self) -> bool {
         matches!(
             self,
@@ -123,10 +110,10 @@ impl CsrVariant {
     ///
     /// Covers every variant holding reserved row capacity: the multi-edge
     /// store plus the pure-topology and bundled forms sharing its
-    /// primary-plus-overflow layout. Single-slot, frozen, mapped and empty
-    /// forms report zero: single slots carry no reserved gaps beyond their
-    /// tombstone, frozen and mapped rows are packed without gaps, and the
-    /// placeholder holds no edges.
+    /// primary-plus-overflow layout. Single-slot, frozen and empty forms
+    /// report zero: single slots carry no reserved gaps beyond their
+    /// tombstone, frozen rows are packed without gaps, and the placeholder
+    /// holds no edges.
     pub fn fragmentation_ratio(&self) -> f32 {
         if !self.has_reserved_capacity() {
             return 0.0;
@@ -225,19 +212,14 @@ impl CsrVariant {
 
     /// Whether this variant is a read-only packed view.
     ///
-    /// Frozen groups need an explicit unfreeze first and mapped groups need
-    /// a snapshot-file rebuild. Table write paths check the group frozen
-    /// state before reaching the row so counting deletes never read as a
-    /// plain miss.
+    /// Frozen groups need an explicit unfreeze first. Table write paths check
+    /// the group frozen state before reaching the row so counting deletes
+    /// never read as a plain miss.
     pub fn is_read_only(&self) -> bool {
-        matches!(self, CsrVariant::Frozen(_) | CsrVariant::Mapped(_))
+        matches!(self, CsrVariant::Frozen(_))
     }
 
     /// Whether this variant is the empty placeholder.
-    ///
-    /// Clearing a mapped view swaps the whole variant to this form at the
-    /// same vertex capacity. Group containers keep the group slot and treat
-    /// the post-clear variant through the placeholder path everywhere.
     pub fn is_empty_placeholder(&self) -> bool {
         matches!(self, CsrVariant::None { .. })
     }
@@ -260,9 +242,8 @@ impl CsrVariant {
     ///
     /// Per-row defragmentation support: writable forms compact their own
     /// holes in place. Frozen single-row reclaim stays rejected and uses the
-    /// batched frozen entry; mapped views need a file rebuild. Whole-table
-    /// timestamp reclaim is a separate entry with its own exemptions for
-    /// forms carrying no timestamps.
+    /// batched frozen entry. Whole-table timestamp reclaim is a separate
+    /// entry with its own exemptions for forms carrying no timestamps.
     pub fn supports_vertex_compact(&self) -> bool {
         matches!(
             self,
@@ -275,14 +256,11 @@ impl CsrVariant {
 
     /// Whether rows promise key order and may use bisection.
     ///
-    /// Only single-slot, frozen and mapped rows promise order. Other forms
-    /// expose a memory-only observation through row sorted state that must
-    /// never be cached across restarts.
+    /// Only single-slot and frozen rows promise order. Other forms expose a
+    /// memory-only observation through row sorted state that must never be
+    /// cached across restarts.
     pub fn promises_key_order(&self) -> bool {
-        matches!(
-            self,
-            CsrVariant::Single(_) | CsrVariant::Frozen(_) | CsrVariant::Mapped(_)
-        )
+        matches!(self, CsrVariant::Single(_) | CsrVariant::Frozen(_))
     }
 
     /// Whether a range scan should bisect this row.

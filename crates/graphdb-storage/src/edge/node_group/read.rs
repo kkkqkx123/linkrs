@@ -20,9 +20,12 @@ impl CsrShardSet {
         let Some((gid, local)) = self.route(src_vid) else {
             return false;
         };
-        self.shards
-            .get(&gid)
-            .is_some_and(|shard| shard.variant.primary_contains(local, edge_id))
+        self.shards.get(&gid).is_some_and(|shard| {
+            if let Some(mapped) = &shard.mapped {
+                return mapped.primary_contains(local, edge_id);
+            }
+            shard.variant.primary_contains(local, edge_id)
+        })
     }
 
     /// Owner group of one global vertex id without creating groups.
@@ -43,7 +46,11 @@ impl CsrShardSet {
             return;
         };
         if let Some(shard) = self.shards.get(&gid) {
-            shard.variant.visit_physical(local, f);
+            if let Some(mapped) = &shard.mapped {
+                mapped.visit_physical(local, f);
+            } else {
+                shard.variant.visit_physical(local, f);
+            }
         }
     }
 
@@ -60,7 +67,11 @@ impl CsrShardSet {
             return;
         };
         if let Some(shard) = self.shards.get(&gid) {
-            shard.variant.visit_hot(local, f);
+            if let Some(mapped) = &shard.mapped {
+                mapped.visit_hot(local, f);
+            } else {
+                shard.variant.visit_hot(local, f);
+            }
         }
     }
 
@@ -74,7 +85,13 @@ impl CsrShardSet {
             return;
         };
         match self.shards.get(&gid) {
-            Some(shard) => shard.variant.fill_physical_into(local, out),
+            Some(shard) => {
+                if let Some(mapped) = &shard.mapped {
+                    mapped.fill_physical_into(local, out);
+                } else {
+                    shard.variant.fill_physical_into(local, out);
+                }
+            }
             None => out.clear(),
         }
     }
@@ -123,13 +140,21 @@ impl CsrShardSet {
                 continue;
             };
             let variant = &shard.variant;
+            let mapped = shard.mapped.clone();
             for vid in &vids[idx..run_end] {
                 offsets.push(out.len());
                 let (_, local) = self.route(*vid).expect("run shares one group");
-                variant.visit_physical(local, |nbr| {
-                    out.push(nbr);
-                    true
-                });
+                if let Some(mapped) = &mapped {
+                    mapped.visit_physical(local, |nbr| {
+                        out.push(nbr);
+                        true
+                    });
+                } else {
+                    variant.visit_physical(local, |nbr| {
+                        out.push(nbr);
+                        true
+                    });
+                }
             }
             idx = run_end;
         }
@@ -175,13 +200,21 @@ impl CsrShardSet {
                 continue;
             };
             let variant = &shard.variant;
+            let mapped = shard.mapped.clone();
             for vid in &vids[idx..run_end] {
                 offsets.push(out.len());
                 let (_, local) = self.route(*vid).expect("run shares one group");
-                variant.visit_physical_with_values(local, |nbr, value| {
-                    out.push((nbr, value));
-                    true
-                });
+                if let Some(mapped) = &mapped {
+                    mapped.visit_physical_with_values(local, |nbr, value| {
+                        out.push((nbr, value));
+                        true
+                    });
+                } else {
+                    variant.visit_physical_with_values(local, |nbr, value| {
+                        out.push((nbr, value));
+                        true
+                    });
+                }
             }
             idx = run_end;
         }
@@ -190,11 +223,12 @@ impl CsrShardSet {
 
     /// Whether the live entries of one row arrive in key order.
     ///
-    /// Only frozen, mapped and single-slot rows promise order and may use
-    /// bisection; other variants report an observation that is memory-only,
-    /// rebuilt on load and never cached across restarts. Planning paths
-    /// prefer `should_use_bisection` below so the promise plus the live
-    /// observation stay in one place.
+    /// Only frozen and single-slot rows promise order and may use bisection;
+    /// other variants report an observation that is memory-only, rebuilt on
+    /// load and never cached across restarts. Planning paths prefer
+    /// `should_use_bisection` below so the promise plus the live observation
+    /// stay in one place. Frozen groups serve the same sorted order from the
+    /// heap and from a derived mapping alike.
     pub fn is_row_sorted(&self, src_vid: u32) -> bool {
         let Some((gid, local)) = self.route(src_vid) else {
             return true;
@@ -245,7 +279,11 @@ impl CsrShardSet {
             return;
         };
         if let Some(shard) = self.shards.get(&gid) {
-            shard.variant.visit_threshold(local, lower, upper, f);
+            if let Some(mapped) = &shard.mapped {
+                mapped.visit_threshold(local, lower, upper, f);
+            } else {
+                shard.variant.visit_threshold(local, lower, upper, f);
+            }
         }
     }
 
@@ -281,9 +319,18 @@ impl CsrShardSet {
             return;
         };
         if let Some(shard) = self.shards.get(&gid) {
-            shard
-                .variant
-                .visit_threshold_endpoint_only(local, lower, upper, f);
+            if let Some(mapped) = &shard.mapped {
+                mapped.visit_threshold(
+                    local,
+                    lower.map(|endpoint| (endpoint, i64::MIN)),
+                    upper.map(|endpoint| (endpoint, i64::MAX)),
+                    f,
+                );
+            } else {
+                shard
+                    .variant
+                    .visit_threshold_endpoint_only(local, lower, upper, f);
+            }
         }
     }
 

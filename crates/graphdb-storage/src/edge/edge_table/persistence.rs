@@ -39,7 +39,7 @@
 //! | `*.append` sidecars | address width plus op sections | no version, decode fails closed |
 //! | property shards | page-framed visibility plus current values (page layer carries per-page CRC32); duplicate names/ids and unknown encoding tags rejected | no version, encoding tags validated |
 //! | `edge_wal.bin` | length-prefixed postcard ops; torn tails fail the load, repairable offline by truncating at the last valid entry | no version |
-//! | `CsrVariant` tag | 0=None, 1=Multiple, 2=Single, 3=Frozen/Mapped, 4=Pure, 5=Bundled; unknown tags rejected | dispatch tag, not a format version |
+//! | `CsrVariant` tag | 0=None, 1=Multiple, 2=Single, 3=Frozen, 4=Pure, 5=Bundled; unknown tags rejected | dispatch tag, not a format version |
 
 use super::super::{CsrBase, CsrVariant};
 use super::mvcc::EdgeTimestamps;

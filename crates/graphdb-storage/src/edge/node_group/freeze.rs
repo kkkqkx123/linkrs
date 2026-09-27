@@ -79,9 +79,9 @@ impl FreezeFeasibility {
 impl CsrShardSet {
     /// Whether one existing group is frozen.
     pub fn is_frozen(&self, gid: usize) -> bool {
-        self.shards.get(&gid).is_some_and(|shard| {
-            matches!(shard.variant, CsrVariant::Frozen(_) | CsrVariant::Mapped(_))
-        })
+        self.shards
+            .get(&gid)
+            .is_some_and(|shard| matches!(shard.variant, CsrVariant::Frozen(_)))
     }
 
     /// Whether the group owning `vid` exists and is frozen.
@@ -123,7 +123,7 @@ impl CsrShardSet {
             // groups freeze with their properties intact.
             CsrVariant::Pure(csr) => ImmutableCsr::pack_from_pure(csr),
             CsrVariant::Bundled(csr) => ImmutableCsr::pack_from_bundled(csr),
-            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) | CsrVariant::None { .. } => {
+            CsrVariant::Frozen(_) | CsrVariant::None { .. } => {
                 return Err(StorageError::invalid_operation(format!(
                     "group {} changed under freeze",
                     gid
@@ -132,6 +132,7 @@ impl CsrShardSet {
         };
         let packed_edges = frozen.edge_count();
         shard.variant = CsrVariant::Frozen(Box::new(frozen));
+        shard.mapped = None;
         shard.dirty.deleted = true;
         for region in shard.regions.iter_mut() {
             region.deleted = true;
@@ -194,14 +195,6 @@ impl CsrShardSet {
         let frozen = match self.shards.get(&gid) {
             Some(shard) => match &shard.variant {
                 CsrVariant::Frozen(csr) => csr.clone(),
-                // Mapped groups replay from identical authoritative bytes:
-                // the dump is byte-equal to the heap frozen dump by
-                // construction, so the rebuilt content matches.
-                CsrVariant::Mapped(csr) => {
-                    let mut heap = ImmutableCsr::new();
-                    heap.load(&csr.dump())?;
-                    Box::new(heap)
-                }
                 _ => {
                     return Err(StorageError::invalid_operation(format!(
                         "group {} is not frozen",
@@ -289,6 +282,7 @@ impl CsrShardSet {
             StorageError::invalid_operation(format!("group {} missing on unfreeze", gid))
         })?;
         shard.variant = variant;
+        shard.mapped = None;
         shard.dirty.deleted = true;
         for region in shard.regions.iter_mut() {
             region.deleted = true;

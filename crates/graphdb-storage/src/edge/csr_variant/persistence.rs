@@ -13,7 +13,6 @@ impl CsrBase for CsrVariant {
             CsrVariant::Pure(csr) => csr.vertex_capacity(),
             CsrVariant::Bundled(csr) => csr.vertex_capacity(),
             CsrVariant::Frozen(csr) => csr.vertex_capacity(),
-            CsrVariant::Mapped(csr) => csr.vertex_capacity(),
         }
     }
 
@@ -22,11 +21,9 @@ impl CsrBase for CsrVariant {
     }
 
     fn dump(&self) -> Vec<u8> {
-        // Tag 3 is shared by design: frozen heap and mapped view dump the
-        // same authoritative heap bytes. The mapping identity is a derived
-        // snapshot cache and never persists; loading tag 3 always rebuilds
-        // the heap frozen form. Checkpoint snapshot files own the mapped
-        // fast path, never this payload.
+        // Tag 3 holds the authoritative frozen heap bytes. Snapshot mappings
+        // are a derived serving cache and never persist through this payload;
+        // checkpoint snapshot files own the mapped fast path, never this tag.
         match self {
             CsrVariant::None { vertex_capacity } => {
                 let mut result = vec![0u8];
@@ -48,11 +45,6 @@ impl CsrBase for CsrVariant {
                 result.extend(csr.dump());
                 result
             }
-            CsrVariant::Mapped(csr) => {
-                let mut result = vec![3u8];
-                result.extend(csr.dump());
-                result
-            }
             CsrVariant::Pure(csr) => {
                 let mut result = vec![4u8];
                 result.extend(csr.dump());
@@ -67,8 +59,7 @@ impl CsrBase for CsrVariant {
     }
 
     fn dump_into(&self, out: &mut Vec<u8>) {
-        // Same shared-tag contract as `dump`: byte-equal for frozen and
-        // mapped inputs, always loading back as the heap frozen form.
+        // Same tag contract as `dump`: tag 3 always carries heap frozen bytes.
         match self {
             CsrVariant::None { vertex_capacity } => {
                 out.push(0u8);
@@ -86,10 +77,6 @@ impl CsrBase for CsrVariant {
                 out.push(3u8);
                 csr.dump_into(out);
             }
-            CsrVariant::Mapped(csr) => {
-                out.push(3u8);
-                csr.dump_into(out);
-            }
             CsrVariant::Pure(csr) => {
                 out.push(4u8);
                 csr.dump_into(out);
@@ -102,10 +89,8 @@ impl CsrBase for CsrVariant {
     }
 
     fn load(&mut self, data: &[u8]) -> StorageResult<()> {
-        // Tag 3 loads as the heap frozen form even when the bytes were
-        // dumped from a mapped view. Byte payloads never produce a mapped
-        // view: mappings only open from snapshot files, and view-type
-        // roundtrip is not promised.
+        // Tag 3 always loads the heap frozen form. Mappings only open from
+        // snapshot files through the group container, never from this payload.
         if data.is_empty() {
             return Err(graphdb_core::StorageError::deserialize_error(
                 "Cannot load CSR variant: empty data",
@@ -165,10 +150,8 @@ impl CsrBase for CsrVariant {
 impl CsrVariant {
     /// Borrow-based dump reusing caller-owned column buffers.
     ///
-    /// Same bytes as `dump_into` through the base trait, including the
-    /// shared frozen tag: a checkpoint over many groups pays one allocation
-    /// per column instead of one per group, and mapped groups still dump as
-    /// heap frozen bytes that load back as the heap form.
+    /// Same bytes as `dump_into` through the base trait. A checkpoint over
+    /// many groups pays one allocation per column instead of one per group.
     pub fn dump_into_with_scratch(
         &self,
         out: &mut Vec<u8>,
@@ -188,10 +171,6 @@ impl CsrVariant {
                 csr.dump_into(out);
             }
             CsrVariant::Frozen(csr) => {
-                out.push(3u8);
-                csr.dump_into(out);
-            }
-            CsrVariant::Mapped(csr) => {
                 out.push(3u8);
                 csr.dump_into(out);
             }

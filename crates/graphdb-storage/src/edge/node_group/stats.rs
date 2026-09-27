@@ -110,14 +110,18 @@ impl CsrShardSet {
 
     /// Approximate memory usage in bytes, summed across existing groups.
     /// Missing groups consume nothing, so sparse tables stay proportional to
-    /// materialized groups rather than the endpoint span.
+    /// materialized groups rather than the endpoint span. Derived serving
+    /// caches count on top of their authoritative heap form.
     pub fn used_memory_size(&self) -> usize {
         if self.strategy == EdgeStrategy::None {
             return std::mem::size_of::<Self>();
         }
         self.shards
             .values()
-            .map(|shard| shard.variant.used_memory_size())
+            .map(|shard| {
+                shard.variant.used_memory_size()
+                    + shard.mapped.as_ref().map_or(0, |m| m.used_memory_size())
+            })
             .sum::<usize>()
             + std::mem::size_of::<Self>()
     }

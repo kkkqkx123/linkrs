@@ -8,11 +8,11 @@
 ## 文档
 
 - **[总览](overview.md)**——当前架构：记录形态 × 策略两级选型、
-  七变体、`CsrVariant` 分发、trait 层级、可见性权威、
+  六变体、`CsrVariant` 分发、trait 层级、可见性权威、
   浪费占比口径与文件组织
-- **[变体](variants.md)**——七种变体实现细节：
+- **[变体](variants.md)**——六种变体与冻结组驻留实现细节：
   `Multiple` / `Single` / `Pure` / `Bundled` /
-  `Frozen` / `Mapped` / `None`
+  `Frozen` / `None`（映射为冻结组派生驻留，不占变体分支）
 - **[选择与分发](dispatch.md)**——`fresh_variant` 两级选择、
   `from_strategy_with_overflow` 工厂、单个 `dispatch!` 宏、
   序列化标签、迭代器分发、表集成
@@ -27,7 +27,7 @@
 
 - `crates/graphdb-storage/src/edge.rs`——`Nbr`/`HotNbr`/`ColdStamps`、
   `EdgeSchema`、`RecordForm`
-- `crates/graphdb-storage/src/edge/csr_variant.rs`——七变体枚举与分发宏
+- `crates/graphdb-storage/src/edge/csr_variant.rs`——六变体枚举与分发宏
 - `crates/graphdb-storage/src/edge/csr_trait.rs`——`CsrBase`、`MutableCsrTrait`
 - `crates/graphdb-storage/src/edge/node_group.rs`——组分片、脏标记、冻结/解冻
 - `crates/graphdb-storage/src/edge/fragmentation_stats.rs`——浪费占比口径与组门限

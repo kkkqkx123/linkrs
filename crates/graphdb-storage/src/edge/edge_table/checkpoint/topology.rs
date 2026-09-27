@@ -258,25 +258,50 @@ impl EdgeStore {
             } else {
                 &mut self.in_csr
             };
-            let variant = shards.group_variant_mut(gid).ok_or_else(|| {
-                StorageError::deserialize_error(format!("group {} missing on load", gid))
-            })?;
-            // Snapshot cache branch: the base file holds the authoritative
-            // heap bytes (mapped groups dump under the shared frozen tag),
-            // while the snapshot file is a derived view. A validated mapping
-            // skips the authoritative decode and yields the mapped form;
-            // anything else falls through to the heap frozen form below, so
-            // the mapped identity never roundtrips through the base payload.
-            // Pending append deltas rule the view out, since a read-only
+            // The base file holds the authoritative heap bytes and always
+            // decodes first. The snapshot file is a derived serving cache:
+            // a validated mapping attaches as group residency for hot reads
+            // while the heap stays authoritative for writes, reclaim and the
+            // next flush. Anything else serves from the heap alone.
+            // Pending append deltas rule the cache out, since a read-only
             // view cannot absorb the write-through delta. A regenerated
             // snapshot file is a cache: rebuilding it must never fail the load.
             let snapshot = snapshot_path_for(&path);
-            if !append_path.exists() {
+            let has_append_delta = append_path.exists();
+            let loaded_frozen = {
+                let variant = shards.group_variant_mut(gid).ok_or_else(|| {
+                    StorageError::deserialize_error(format!("group {} missing on load", gid))
+                })?;
+                super::super::persistence::load_csr(&path, variant, expected)?;
+                if let CsrVariant::Frozen(csr) = &*variant {
+                    if let Err(error) = write_snapshot_file(csr, &snapshot) {
+                        log::warn!("snapshot cache rebuild failed for group {}: {}", gid, error,);
+                        if let Some(stats) = &self.stats_manager {
+                            stats.add_value(graphdb_metrics::MetricType::SnapshotFallbackCount);
+                        }
+                    }
+                    true
+                } else {
+                    false
+                }
+            };
+            if has_append_delta {
+                log::debug!(
+                    "snapshot cache bypassed for group {} with pending append delta",
+                    gid,
+                );
+                if let Some(stats) = &self.stats_manager {
+                    stats.add_value(graphdb_metrics::MetricType::SnapshotFallbackCount);
+                }
+            } else if loaded_frozen {
                 match MappedFrozen::open_with_intent(&snapshot, self.config.memory_intent) {
                     Ok(mapped) => {
-                        *variant = CsrVariant::Mapped(Box::new(mapped));
-                        shards.clear_group_dirty(gid);
-                        continue;
+                        shards.set_group_mapped(gid, mapped).map_err(|e| {
+                            StorageError::deserialize_error(format!(
+                                "mapped cache attach failed for group {}: {}",
+                                gid, e
+                            ))
+                        })?;
                     }
                     Err(error) => {
                         log::debug!(
@@ -288,23 +313,6 @@ impl EdgeStore {
                         if let Some(stats) = &self.stats_manager {
                             stats.add_value(graphdb_metrics::MetricType::SnapshotFallbackCount);
                         }
-                    }
-                }
-            } else {
-                log::debug!(
-                    "snapshot cache bypassed for group {} with pending append delta",
-                    gid,
-                );
-                if let Some(stats) = &self.stats_manager {
-                    stats.add_value(graphdb_metrics::MetricType::SnapshotFallbackCount);
-                }
-            }
-            super::super::persistence::load_csr(&path, variant, expected)?;
-            if let CsrVariant::Frozen(csr) = &*variant {
-                if let Err(error) = write_snapshot_file(csr, &snapshot) {
-                    log::warn!("snapshot cache rebuild failed for group {}: {}", gid, error,);
-                    if let Some(stats) = &self.stats_manager {
-                        stats.add_value(graphdb_metrics::MetricType::SnapshotFallbackCount);
                     }
                 }
             }

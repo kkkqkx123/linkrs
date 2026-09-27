@@ -10,8 +10,8 @@ use graphdb_core::{StorageError, StorageResult};
 use std::collections::BTreeMap;
 
 use super::super::{
-    csr_shared::decode_endpoint_pair, CsrBase, CsrVariant, EdgePut, MutableCsrTrait, Nbr,
-    RecordForm, RowEdgeBatch, NO_EDGES_STORED_MSG,
+    csr_shared::decode_endpoint_pair, CsrBase, CsrVariant, EdgePut, MappedFrozen, MutableCsrTrait,
+    Nbr, RecordForm, RowEdgeBatch, NO_EDGES_STORED_MSG,
 };
 use super::{
     group_id_for, group_size, local_vid, regions_per_group, validate_group_bits, CsrShardSet,
@@ -47,6 +47,7 @@ impl CsrShardSet {
                 0,
                 Shard {
                     variant: set.fresh_variant()?,
+                    mapped: None,
                     dirty: GroupDirty::default(),
                     regions: vec![RegionDirty::default(); regions_per_group(set.group_size())],
                     append: ShardAppendLog::default(),
@@ -189,6 +190,7 @@ impl CsrShardSet {
                 gid,
                 Shard {
                     variant: self.fresh_variant()?,
+                    mapped: None,
                     dirty: GroupDirty::default(),
                     regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
                     append: ShardAppendLog::default(),
@@ -214,6 +216,7 @@ impl CsrShardSet {
                 gid,
                 Shard {
                     variant: self.fresh_variant()?,
+                    mapped: None,
                     dirty: GroupDirty::default(),
                     regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
                     append: ShardAppendLog::default(),
@@ -263,19 +266,21 @@ impl CsrShardSet {
     /// Read one edge's inline value within its source row.
     pub fn bundled_value_at(&self, src_vid: u32, edge_id: EdgeId) -> Option<(u64, bool)> {
         let (gid, local) = self.route(src_vid)?;
-        self.shards
-            .get(&gid)?
-            .variant
-            .bundled_value_by_edge_id(local, edge_id)
+        let shard = self.shards.get(&gid)?;
+        if let Some(mapped) = &shard.mapped {
+            return mapped.bundled_value_by_edge_id(local, edge_id);
+        }
+        shard.variant.bundled_value_by_edge_id(local, edge_id)
     }
 
     /// Read the inline value of the live edge for one endpoint.
     pub fn bundled_value_by_endpoint(&self, src_vid: u32, endpoint: u32) -> Option<(u64, bool)> {
         let (gid, local) = self.route(src_vid)?;
-        self.shards
-            .get(&gid)?
-            .variant
-            .bundled_value_by_endpoint(local, endpoint)
+        let shard = self.shards.get(&gid)?;
+        if let Some(mapped) = &shard.mapped {
+            return mapped.bundled_value_by_endpoint(local, endpoint);
+        }
+        shard.variant.bundled_value_by_endpoint(local, endpoint)
     }
 
     /// Overwrite the inline value of the live edge for one endpoint.
@@ -349,7 +354,11 @@ impl CsrShardSet {
     {
         if let Some((gid, local)) = self.route(src_vid) {
             if let Some(shard) = self.shards.get(&gid) {
-                shard.variant.visit_physical_with_values(local, f);
+                if let Some(mapped) = &shard.mapped {
+                    mapped.visit_physical_with_values(local, f);
+                } else {
+                    shard.variant.visit_physical_with_values(local, f);
+                }
             }
         }
     }
@@ -364,7 +373,17 @@ impl CsrShardSet {
             return;
         };
         match self.shards.get(&gid) {
-            Some(shard) => shard.variant.fill_physical_with_values_into(local, out),
+            Some(shard) => {
+                if let Some(mapped) = &shard.mapped {
+                    out.clear();
+                    mapped.visit_physical_with_values(local, |nbr, value| {
+                        out.push((nbr, value));
+                        true
+                    });
+                } else {
+                    shard.variant.fill_physical_with_values_into(local, out);
+                }
+            }
             None => out.clear(),
         }
     }
@@ -636,6 +655,44 @@ impl CsrShardSet {
         self.shards.get_mut(&gid).map(|shard| &mut shard.variant)
     }
 
+    /// Derived serving cache of one group, if the checkpoint load attached one.
+    ///
+    /// Clones share one mapping through the reference count, so snapshotting
+    /// the handle for a reader is cheap. Only frozen groups ever carry one.
+    pub fn group_mapped(&self, gid: usize) -> Option<MappedFrozen> {
+        self.shards.get(&gid).and_then(|shard| shard.mapped.clone())
+    }
+
+    /// Whether one group serves hot reads from its derived mapping.
+    pub fn group_has_mapped(&self, gid: usize) -> bool {
+        self.shards
+            .get(&gid)
+            .is_some_and(|shard| shard.mapped.is_some())
+    }
+
+    /// Attach a derived serving cache to a frozen group. Non-frozen groups
+    /// reject the handle so residency never shadows a writable heap.
+    pub fn set_group_mapped(&mut self, gid: usize, mapped: MappedFrozen) -> StorageResult<()> {
+        let shard = self.shards.get_mut(&gid).ok_or_else(|| {
+            StorageError::deserialize_error(format!("group {} missing on mapped attach", gid))
+        })?;
+        if !matches!(shard.variant, CsrVariant::Frozen(_)) {
+            return Err(StorageError::invalid_operation(format!(
+                "group {} is not frozen, refusing a mapped serving cache",
+                gid
+            )));
+        }
+        shard.mapped = Some(mapped);
+        Ok(())
+    }
+
+    /// Drop one group serving cache, falling back to heap serving.
+    pub fn clear_group_mapped(&mut self, gid: usize) {
+        if let Some(shard) = self.shards.get_mut(&gid) {
+            shard.mapped = None;
+        }
+    }
+
     /// Resize the group space for construction only: grows with fresh
     /// variants, shrinks by dropping trailing groups. Construction and load
     /// paths only; normal writes grow through the routed insert path and
@@ -702,6 +759,7 @@ impl CsrShardSet {
                 gid,
                 Shard {
                     variant: self.fresh_variant()?,
+                    mapped: None,
                     dirty: GroupDirty::default(),
                     regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
                     append: ShardAppendLog::default(),
@@ -715,6 +773,7 @@ impl CsrShardSet {
                 0,
                 Shard {
                     variant: self.fresh_variant()?,
+                    mapped: None,
                     dirty: GroupDirty::default(),
                     regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
                     append: ShardAppendLog::default(),
@@ -738,6 +797,7 @@ impl CsrShardSet {
             StorageError::deserialize_error(format!("group {} out of range on load", gid))
         })?;
         shard.variant.load(data)?;
+        shard.mapped = None;
         shard.dirty = GroupDirty::default();
         for region in shard.regions.iter_mut() {
             *region = RegionDirty::default();
@@ -780,6 +840,7 @@ impl CsrShardSet {
                     0,
                     Shard {
                         variant,
+                        mapped: None,
                         dirty: GroupDirty::default(),
                         regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
                         append: ShardAppendLog::default(),
@@ -800,14 +861,14 @@ impl CsrShardSet {
     /// Clear all edges, keeping the group space. Marks surviving groups
     /// dirty so the next checkpoint persists the cleared state.
     ///
-    /// Mapped groups cannot empty their off-heap mapping, so clearing one
-    /// replaces it with the empty placeholder at the same vertex capacity.
-    /// The discriminant change is intentional: later freeze, reclaim and
-    /// property branches must observe the placeholder, never the old view.
-    /// Missing-group reads stay empty and no group is dropped here.
+    /// Clearing also drops every derived serving cache: the heap form is
+    /// emptied and the mapping is outside the heap, so the group falls back
+    /// to heap serving. Missing-group reads stay empty and no group is
+    /// dropped here.
     pub fn clear(&mut self) {
         for shard in self.shards.values_mut() {
             shard.variant.clear();
+            shard.mapped = None;
             shard.dirty = GroupDirty {
                 inserted: false,
                 deleted: true,

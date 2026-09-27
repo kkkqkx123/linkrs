@@ -201,9 +201,11 @@ impl MutableCsrTrait for CsrShardSet {
 
     fn locate_edge(&self, src_vid: u32, edge_id: EdgeId) -> Option<(EdgePosition, Nbr)> {
         let (gid, local) = self.route(src_vid)?;
-        self.shards
-            .get(&gid)
-            .and_then(|shard| shard.variant.locate_edge(local, edge_id))
+        let shard = self.shards.get(&gid)?;
+        if let Some(mapped) = &shard.mapped {
+            return mapped.locate_edge(local, edge_id);
+        }
+        shard.variant.locate_edge(local, edge_id)
     }
 
     fn delete_edge_at_position(
@@ -307,12 +309,20 @@ impl MutableCsrTrait for CsrShardSet {
 
     fn nbr_at_offset(&self, src_vid: u32, offset: i32) -> Option<Nbr> {
         let (gid, local) = self.route(src_vid)?;
-        self.shards.get(&gid)?.variant.nbr_at_offset(local, offset)
+        let shard = self.shards.get(&gid)?;
+        if let Some(mapped) = &shard.mapped {
+            return mapped.nbr_at_offset(local, offset);
+        }
+        shard.variant.nbr_at_offset(local, offset)
     }
 
     fn get_edge_physical(&self, src_vid: u32, dst: VertexId) -> Option<Nbr> {
         let (gid, local) = self.route(src_vid)?;
-        self.shards.get(&gid)?.variant.get_edge_physical(local, dst)
+        let shard = self.shards.get(&gid)?;
+        if let Some(mapped) = &shard.mapped {
+            return mapped.get_edge_physical(local, dst);
+        }
+        shard.variant.get_edge_physical(local, dst)
     }
 
     fn physical_edges_of(&self, src_vid: u32) -> Vec<Nbr> {
@@ -321,7 +331,12 @@ impl MutableCsrTrait for CsrShardSet {
         };
         self.shards
             .get(&gid)
-            .map(|shard| shard.variant.physical_edges_of(local))
+            .map(|shard| {
+                if let Some(mapped) = &shard.mapped {
+                    return mapped.physical_edges_of(local);
+                }
+                shard.variant.physical_edges_of(local)
+            })
             .unwrap_or_default()
     }
 
@@ -333,18 +348,24 @@ impl MutableCsrTrait for CsrShardSet {
         let Some((gid, local)) = self.route(vid) else {
             return false;
         };
-        self.shards
-            .get(&gid)
-            .is_some_and(|shard| shard.variant.has_physical_entries(local))
+        self.shards.get(&gid).is_some_and(|shard| {
+            if let Some(mapped) = &shard.mapped {
+                return mapped.has_physical_entries(local);
+            }
+            shard.variant.has_physical_entries(local)
+        })
     }
 
     fn primary_contains(&self, src_vid: u32, edge_id: EdgeId) -> bool {
         let Some((gid, local)) = self.route(src_vid) else {
             return false;
         };
-        self.shards
-            .get(&gid)
-            .is_some_and(|shard| shard.variant.primary_contains(local, edge_id))
+        self.shards.get(&gid).is_some_and(|shard| {
+            if let Some(mapped) = &shard.mapped {
+                return mapped.primary_contains(local, edge_id);
+            }
+            shard.variant.primary_contains(local, edge_id)
+        })
     }
 
     fn revert_delete_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool {
@@ -406,7 +427,11 @@ impl MutableCsrTrait for CsrShardSet {
 
     fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
         let (gid, local) = self.route(src_vid)?;
-        self.shards.get(&gid)?.variant.get_edge(local, dst, ts)
+        let shard = self.shards.get(&gid)?;
+        if let Some(mapped) = &shard.mapped {
+            return mapped.get_edge(local, dst, ts);
+        }
+        shard.variant.get_edge(local, dst, ts)
     }
 
     fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr> {
@@ -415,7 +440,12 @@ impl MutableCsrTrait for CsrShardSet {
         };
         self.shards
             .get(&gid)
-            .map(|shard| shard.variant.edges_of(local, ts))
+            .map(|shard| {
+                if let Some(mapped) = &shard.mapped {
+                    return mapped.edges_of(local, ts);
+                }
+                shard.variant.edges_of(local, ts)
+            })
             .unwrap_or_default()
     }
 
