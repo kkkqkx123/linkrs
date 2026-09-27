@@ -47,9 +47,17 @@ impl CsrVariant {
     /// [`MutableCsr::set_tombstone_reuse_cutoff`](super::super::MutableCsr::set_tombstone_reuse_cutoff):
     /// only watermark-derived bounds refresh, the sentinel disables, and a
     /// stale value only narrows reuse.
+    ///
+    /// Non-multi-edge variants ignore the hint; the ignored call is observed
+    /// at debug level so silent drops stay diagnosable.
     pub fn set_tombstone_reuse_cutoff(&mut self, cutoff: Timestamp) {
         if let CsrVariant::Multiple(csr) = self {
             csr.set_tombstone_reuse_cutoff(cutoff);
+        } else {
+            log::debug!(
+                "tombstone reuse cutoff ignored: variant {:?} never reuses tombstones",
+                self.variant_name()
+            );
         }
     }
 
@@ -77,6 +85,18 @@ impl CsrVariant {
             csr.tombstone_reuse_cutoff()
         } else {
             Timestamp::MAX
+        }
+    }
+
+    /// Stable variant name for observability (logs and diagnostics).
+    pub fn variant_name(&self) -> &'static str {
+        match self {
+            CsrVariant::Multiple(_) => "multiple",
+            CsrVariant::Single(_) => "single",
+            CsrVariant::Pure(_) => "pure",
+            CsrVariant::Bundled(_) => "bundled",
+            CsrVariant::Frozen(_) => "frozen",
+            CsrVariant::None { .. } => "none",
         }
     }
 

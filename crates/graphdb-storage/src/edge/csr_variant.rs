@@ -3,12 +3,17 @@
 //! Enum wrapper for different CSR implementations (mutable).
 //! Provides runtime polymorphism without dynamic dispatch (dyn).
 //!
-//! # CSR Type Selection
+//! # CSR Type Selection (two-level)
 //!
-//! The `EdgeStrategy` enum determines which CSR implementation to use:
+//! Selection is two-level: the record form (`RecordForm`: `Pure` /
+//! `Bundled` / `Columnar`) fixes bytes per edge first; under the
+//! `Columnar` form the `EdgeStrategy` enum then picks the row strategy:
 //! - `Multiple`: Standard `MutableCsr` for general multi-edge scenarios
 //! - `Single`: `SingleMutableCsr` for one-edge-per-vertex (O(1) access)
 //! - `None`: No edges stored
+//!
+//! `Pure` / `Bundled` variants are constructed directly from the record
+//! form by the group container; `Frozen` only arises from explicit freeze.
 //!
 //! # Variants
 //!

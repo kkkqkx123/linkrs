@@ -13,20 +13,31 @@
 //! - `CsrShardSet`: Node-group sharded topology container routing by endpoint interval
 //! - `EdgeStore`: Node-group sharded edge table combining out/in shards and property storage
 //!
-//! ## CSR Type Selection
+//! ## CSR Type Selection (two-level)
 //!
-//! The `EdgeStrategy` enum determines which CSR type to use:
-//! - `Multiple`: Use `MutableCsr` (supports multiple edges per vertex)
-//! - `Single`: Use `SingleMutableCsr` (one edge per vertex, O(1) access)
-//! - `None`: No edges stored
+//! Selection is two-level: first the record form (`RecordForm`), then the
+//! row strategy (`EdgeStrategy`) under the columnar form.
 //!
-//! ## Use Cases
+//! Level 1 — `RecordForm` fixes bytes per edge and capability ceiling:
+//!
+//! | RecordForm | Bytes/edge | Use Case |
+//! |------------|------------|----------|
+//! | `Pure` | 12 | Pure topology: no rank, no timestamps, no properties |
+//! | `Bundled` | 20 | One inline scalar property, read-mostly, stable schema |
+//! | `Columnar` (default) | 32 + columnar properties | General multi-property edges |
+//!
+//! Level 2 — under `Columnar`, `EdgeStrategy` picks the CSR variant:
 //!
 //! | Strategy | CSR Type | Use Case | Time Complexity |
 //! |----------|----------|----------|-----------------|
 //! | `Multiple` | `MutableCsr` | General multi-edge relationships | O(degree) |
 //! | `Single` | `SingleMutableCsr` | One-to-one relationships (spouse, current_employer) | O(1) |
 //! | `None` | - | No edges stored | - |
+//!
+//! The form is locked at table creation and persisted; loading never
+//! re-derives it, and precondition-breaking changes go through explicit
+//! migration. Only `Pure` and `Columnar` are auto-derived; `Bundled` must
+//! be selected explicitly because of its capability ceiling.
 
 pub(crate) mod bundled_csr;
 pub(crate) mod csr_shared;

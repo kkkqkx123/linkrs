@@ -16,6 +16,10 @@ impl CsrVariant {
         on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
     ) -> usize {
         if !self.supports_timestamp_reclaim() {
+            log::debug!(
+                "timestamp reclaim ignored: variant {:?} holds no timestamps",
+                self.variant_name()
+            );
             return 0;
         }
         match self {
