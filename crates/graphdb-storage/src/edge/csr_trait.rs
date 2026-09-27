@@ -110,7 +110,10 @@ pub trait MutableCsrTrait: CsrBase {
     /// `on_deleted` call per stamped edge so callers needing the ids (append
     /// logs, audits) skip their own collection scan. The default routes
     /// through `delete_edge_by_dst` and reports nothing; row stores override
-    /// it with an in-place reporting pass.
+    /// it with an in-place reporting pass. A zero return covers both no match
+    /// and read-only refusal without invoking the callback; table write paths
+    /// reject frozen groups before reaching here so the two cases never merge
+    /// into one silent miss.
     fn delete_edge_by_dst_reporting(
         &mut self,
         src_vid: u32,

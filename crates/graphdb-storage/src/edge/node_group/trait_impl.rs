@@ -6,7 +6,7 @@
 //! fail-closed guard: persistence moves through the per-group incremental
 //! protocol only.
 
-use graphdb_core::types::{EdgeId, Timestamp, VertexId};
+use graphdb_core::types::{EdgeId, EdgeStrategy, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
 
 use super::super::{csr_shared::decode_endpoint_pair, CsrBase, EdgePosition, MutableCsrTrait, Nbr};
@@ -52,7 +52,7 @@ impl CsrBase for CsrShardSet {
 }
 
 fn no_edges_error() -> StorageError {
-    StorageError::invalid_operation("no edges stored for this edge type".to_string())
+    StorageError::invalid_operation(super::super::NO_EDGES_STORED_MSG.to_string())
 }
 
 impl MutableCsrTrait for CsrShardSet {
@@ -82,8 +82,14 @@ impl MutableCsrTrait for CsrShardSet {
     }
 
     fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool> {
+        // Missing groups read as empty, matching the routed read contract:
+        // a sparse hole holds no row, so the edge is simply absent. Only a
+        // no-edge table rejects the call, mirroring the placeholder variant.
         let Some((gid, local)) = self.route(src_vid) else {
-            return Err(no_edges_error());
+            if self.strategy == EdgeStrategy::None {
+                return Err(no_edges_error());
+            }
+            return Ok(false);
         };
         let deleted = self
             .shards
@@ -114,6 +120,10 @@ impl MutableCsrTrait for CsrShardSet {
         ts: Timestamp,
         on_deleted: &mut dyn FnMut(EdgeId),
     ) -> usize {
+        // Counting deletes stay silent on missing groups and read-only
+        // variants: a zero return means either no match or no write. Audited
+        // production deletes go through the table layer, which rejects frozen
+        // groups explicitly so a refused write never reads as a miss.
         let Some((gid, local)) = self.route(src_vid) else {
             return 0;
         };
@@ -203,7 +213,12 @@ impl MutableCsrTrait for CsrShardSet {
         expected: EdgeId,
         ts: Timestamp,
     ) -> StorageResult<bool> {
+        // Same missing-group rule as `delete_edge`: sparse holes miss with
+        // `Ok(false)`, no-edge tables fail closed like the placeholder form.
         let Some((gid, local)) = self.route(src_vid) else {
+            if self.strategy == EdgeStrategy::None {
+                return Err(no_edges_error());
+            }
             return Ok(false);
         };
         let deleted = self
@@ -259,7 +274,12 @@ impl MutableCsrTrait for CsrShardSet {
         offset: i32,
         ts: Timestamp,
     ) -> StorageResult<bool> {
+        // Same missing-group rule as `delete_edge`: sparse holes miss with
+        // `Ok(false)`, no-edge tables fail closed like the placeholder form.
         let Some((gid, local)) = self.route(src_vid) else {
+            if self.strategy == EdgeStrategy::None {
+                return Err(no_edges_error());
+            }
             return Ok(false);
         };
         let before = self

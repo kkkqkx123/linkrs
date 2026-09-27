@@ -1,6 +1,9 @@
 use graphdb_core::{StorageError, StorageResult};
 
-use super::super::{EdgeId, EdgePosition, MutableCsrTrait, Nbr, Timestamp, VertexId};
+use super::super::{
+    EdgeId, EdgePosition, MutableCsrTrait, Nbr, Timestamp, VertexId, NO_EDGES_STORED_MSG,
+    ROW_POSITION_CROSS_VARIANT_MSG,
+};
 use super::CsrVariant;
 
 impl MutableCsrTrait for CsrVariant {
@@ -11,26 +14,69 @@ impl MutableCsrTrait for CsrVariant {
         edge_id: EdgeId,
         ts: Timestamp,
     ) -> StorageResult<()> {
+        // Capability gate first: writability decides the outcome, the match
+        // below only forwards to the concrete writable form.
+        if self.is_empty_placeholder() {
+            return Err(StorageError::invalid_operation(
+                NO_EDGES_STORED_MSG.to_string(),
+            ));
+        }
+        if !self.is_writable() {
+            return match self {
+                CsrVariant::Frozen(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
+                CsrVariant::Mapped(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
+                _ => Err(StorageError::invalid_operation(
+                    NO_EDGES_STORED_MSG.to_string(),
+                )),
+            };
+        }
         match self {
             CsrVariant::Multiple(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::Single(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::Pure(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::Bundled(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
-            CsrVariant::Frozen(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
-            CsrVariant::Mapped(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
-            CsrVariant::None { .. } => Err(StorageError::invalid_operation(
-                "no edges stored for this edge type".to_string(),
-            )),
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) | CsrVariant::None { .. } => {
+                unreachable!("capability gate handles non-writable forms above")
+            }
         }
     }
 
     fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool> {
-        dispatch!(self, delete_edge(src_vid, edge_id, ts) -> Err(StorageError::invalid_operation(
-            "no edges stored for this edge type".to_string()
-        )))
+        // Same capability gate as inserts: result-returning deletes refuse
+        // read-only and placeholder forms with an error, never a silent miss.
+        // The read-only arms forward so frozen and mapped keep their own
+        // rejection wording; the match below only serves writable forms.
+        if self.is_empty_placeholder() {
+            return Err(StorageError::invalid_operation(
+                NO_EDGES_STORED_MSG.to_string(),
+            ));
+        }
+        if self.is_read_only() {
+            return match self {
+                CsrVariant::Frozen(csr) => csr.delete_edge(src_vid, edge_id, ts),
+                CsrVariant::Mapped(csr) => csr.delete_edge(src_vid, edge_id, ts),
+                _ => Err(StorageError::invalid_operation(
+                    NO_EDGES_STORED_MSG.to_string(),
+                )),
+            };
+        }
+        match self {
+            CsrVariant::Multiple(csr) => csr.delete_edge(src_vid, edge_id, ts),
+            CsrVariant::Single(csr) => csr.delete_edge(src_vid, edge_id, ts),
+            CsrVariant::Pure(csr) => csr.delete_edge(src_vid, edge_id, ts),
+            CsrVariant::Bundled(csr) => csr.delete_edge(src_vid, edge_id, ts),
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) | CsrVariant::None { .. } => {
+                unreachable!("capability gate handles non-writable forms above")
+            }
+        }
     }
 
     fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> usize {
+        // Counting deletes stay silent on read-only and placeholder forms;
+        // the capability query owns that decision.
+        if self.is_read_only() || self.is_empty_placeholder() {
+            return 0;
+        }
         dispatch!(self, delete_edge_by_dst(src_vid, dst, ts) -> 0)
     }
 
@@ -41,24 +87,13 @@ impl MutableCsrTrait for CsrVariant {
         ts: Timestamp,
         on_deleted: &mut dyn FnMut(EdgeId),
     ) -> usize {
-        // Count-returning deletes report zero for read-only and empty forms:
-        // frozen and mapped groups need an explicit unfreeze first, and the
-        // placeholder holds no edges. Result-returning deletes below refuse
+        // Same gate as the other counting deletes: read-only and placeholder
+        // forms report zero here, while result-returning deletes above refuse
         // those forms with an error instead of a silent zero.
-        match self {
-            CsrVariant::Multiple(csr) => {
-                csr.delete_edge_by_dst_reporting(src_vid, dst, ts, on_deleted)
-            }
-            CsrVariant::Single(csr) => {
-                csr.delete_edge_by_dst_reporting(src_vid, dst, ts, on_deleted)
-            }
-            CsrVariant::Pure(csr) => csr.delete_edge_by_dst_reporting(src_vid, dst, ts, on_deleted),
-            CsrVariant::Bundled(csr) => {
-                csr.delete_edge_by_dst_reporting(src_vid, dst, ts, on_deleted)
-            }
-            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => 0,
-            CsrVariant::None { .. } => 0,
+        if self.is_read_only() || self.is_empty_placeholder() {
+            return 0;
         }
+        dispatch!(self, delete_edge_by_dst_reporting(src_vid, dst, ts, on_deleted) -> 0)
     }
 
     fn delete_edge_by_dst_reporting_positioned(
@@ -68,6 +103,11 @@ impl MutableCsrTrait for CsrVariant {
         ts: Timestamp,
         on_deleted: &mut dyn FnMut(EdgeId, Option<EdgePosition>),
     ) -> usize {
+        // Read-only and placeholder forms report zero directly instead of
+        // re-entering the counting path; only writable forms carry positions.
+        if self.is_read_only() || self.is_empty_placeholder() {
+            return 0;
+        }
         match self {
             CsrVariant::Multiple(csr) => csr.delete_edge_by_dst_reporting_positioned(
                 src_vid,
@@ -84,9 +124,9 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Bundled(csr) => {
                 csr.delete_edge_by_dst_reporting_positioned(src_vid, dst, ts, on_deleted)
             }
-            _ => self.delete_edge_by_dst_reporting(src_vid, dst, ts, &mut |edge_id| {
-                on_deleted(edge_id, None)
-            }),
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) | CsrVariant::None { .. } => {
+                unreachable!("capability gate handles non-writable forms above")
+            }
         }
     }
 
@@ -109,6 +149,13 @@ impl MutableCsrTrait for CsrVariant {
         expected: EdgeId,
         ts: Timestamp,
     ) -> StorageResult<bool> {
+        // Positions are variant-local; forms without positional addressing
+        // refuse instead of falling back to an id scan.
+        if !self.supports_positions() {
+            return Err(StorageError::invalid_operation(
+                ROW_POSITION_CROSS_VARIANT_MSG.to_string(),
+            ));
+        }
         match self {
             CsrVariant::Multiple(csr) => {
                 csr.delete_edge_at_position(src_vid, position, expected, ts)
@@ -118,9 +165,9 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Bundled(csr) => {
                 csr.delete_edge_at_position(src_vid, position, expected, ts)
             }
-            _ => Err(StorageError::invalid_operation(
-                "row position must not cross variants; re-resolve by edge id".to_string(),
-            )),
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) | CsrVariant::None { .. } => {
+                unreachable!("capability gate handles non-positional forms above")
+            }
         }
     }
 
@@ -131,6 +178,10 @@ impl MutableCsrTrait for CsrVariant {
         expected: EdgeId,
         ts: Timestamp,
     ) -> bool {
+        if !self.supports_positions() {
+            debug_assert!(false, "{}", ROW_POSITION_CROSS_VARIANT_MSG);
+            return false;
+        }
         match self {
             CsrVariant::Multiple(csr) => {
                 csr.revert_delete_at_position(src_vid, position, expected, ts)
@@ -142,12 +193,8 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Bundled(csr) => {
                 csr.revert_delete_at_position(src_vid, position, expected, ts)
             }
-            _ => {
-                debug_assert!(
-                    false,
-                    "row position must not cross variants; re-resolve by edge id"
-                );
-                false
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) | CsrVariant::None { .. } => {
+                unreachable!("capability gate handles non-positional forms above")
             }
         }
     }
@@ -158,16 +205,31 @@ impl MutableCsrTrait for CsrVariant {
         offset: i32,
         ts: Timestamp,
     ) -> StorageResult<bool> {
+        // Result-returning delete like `delete_edge`: placeholder and
+        // read-only forms are refused, with frozen and mapped keeping their
+        // own rejection wording through forwarding.
+        if self.is_empty_placeholder() {
+            return Err(StorageError::invalid_operation(
+                NO_EDGES_STORED_MSG.to_string(),
+            ));
+        }
+        if self.is_read_only() {
+            return match self {
+                CsrVariant::Frozen(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
+                CsrVariant::Mapped(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
+                _ => Err(StorageError::invalid_operation(
+                    NO_EDGES_STORED_MSG.to_string(),
+                )),
+            };
+        }
         match self {
             CsrVariant::Multiple(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
             CsrVariant::Single(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
             CsrVariant::Pure(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
             CsrVariant::Bundled(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
-            CsrVariant::Frozen(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
-            CsrVariant::Mapped(csr) => csr.delete_edge_by_offset(src_vid, offset, ts),
-            CsrVariant::None { .. } => Err(StorageError::invalid_operation(
-                "no edges stored for this edge type".to_string(),
-            )),
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) | CsrVariant::None { .. } => {
+                unreachable!("capability gate handles non-writable forms above")
+            }
         }
     }
 
@@ -188,15 +250,7 @@ impl MutableCsrTrait for CsrVariant {
     }
 
     fn fill_physical_into(&self, src_vid: u32, out: &mut Vec<Nbr>) {
-        match self {
-            CsrVariant::Multiple(csr) => csr.fill_physical_into(src_vid, out),
-            CsrVariant::Single(csr) => csr.fill_physical_into(src_vid, out),
-            CsrVariant::Pure(csr) => csr.fill_physical_into(src_vid, out),
-            CsrVariant::Bundled(csr) => csr.fill_physical_into(src_vid, out),
-            CsrVariant::Frozen(csr) => csr.fill_physical_into(src_vid, out),
-            CsrVariant::Mapped(csr) => csr.fill_physical_into(src_vid, out),
-            CsrVariant::None { .. } => out.clear(),
-        }
+        CsrVariant::fill_physical_into(self, src_vid, out)
     }
 
     fn has_physical_entries(&self, vid: u32) -> bool {
@@ -245,6 +299,12 @@ impl MutableCsrTrait for CsrVariant {
         cutoff: Timestamp,
         on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
     ) -> usize {
+        // Single exemption source lives with the capability query: read-only
+        // and placeholder forms report zero here and reclaim through the
+        // batched frozen entry or a file rebuild instead.
+        if !self.supports_vertex_compact() {
+            return 0;
+        }
         match self {
             CsrVariant::Multiple(csr) => {
                 csr.compact_vertex_with_reporting(vid, cutoff, on_edge_removed)
@@ -258,12 +318,14 @@ impl MutableCsrTrait for CsrVariant {
             CsrVariant::Bundled(csr) => {
                 csr.compact_vertex_with_reporting(vid, cutoff, on_edge_removed)
             }
-            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => 0,
-            CsrVariant::None { .. } => 0,
+            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) | CsrVariant::None { .. } => 0,
         }
     }
 
     fn reclaimable_count(&self, vid: u32, cutoff: Timestamp) -> usize {
+        // Per-variant probe stays unsliced: pure and bundled report hole
+        // counts, frozen reports timestamp-eligible tombstones, mapped stays
+        // zero. The capability query only gates the reporting compact entry.
         match self {
             CsrVariant::Multiple(csr) => csr.reclaimable_count(vid, cutoff),
             CsrVariant::Single(csr) => csr.reclaimable_count(vid, cutoff),

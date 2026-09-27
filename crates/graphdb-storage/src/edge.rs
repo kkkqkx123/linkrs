@@ -160,6 +160,21 @@ pub(crate) const PURE_REQUIRES_ZERO_PROPERTIES_MSG: &str =
 /// one change is staged reports this exact wording from every entry.
 pub(crate) const SCHEMA_CHANGE_PENDING_MSG: &str = "another schema change is already pending";
 
+/// Shared rejection for writes against a direction storing no edges.
+///
+/// Placeholder groups hold vertex capacity only. Every insert and
+/// result-returning delete reports this exact wording so callers see one
+/// conflict and one way out instead of per-entry phrasing.
+pub(crate) const NO_EDGES_STORED_MSG: &str = "no edges stored for this edge type";
+
+/// Shared rejection for positional writes crossing variants.
+///
+/// Row positions are variant-local. Every positional entry validates the
+/// edge id and refuses stale or foreign positions with this exact wording
+/// instead of falling back to an id scan.
+pub(crate) const ROW_POSITION_CROSS_VARIANT_MSG: &str =
+    "row position must not cross variants; re-resolve by edge id";
+
 /// Shared rejection for nonzero ranks on an inline-form table.
 ///
 /// Pure and bundled layouts carry no rank column, so any nonzero rank must

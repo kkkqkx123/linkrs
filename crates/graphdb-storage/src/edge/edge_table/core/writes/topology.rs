@@ -511,6 +511,17 @@ impl EdgeStore {
         if self.is_bundled() {
             return self.apply_staged_insert_bundled(src, dst, rank, property_values, ts);
         }
+        // Frozen groups reject inserts explicitly like deletes do: the edge
+        // does not exist yet, only the layout refuses the write. Checking
+        // here keeps counting-delete silence from ever reading as success.
+        if (self.schema.has_out() && self.out_csr.is_group_frozen_for(src))
+            || (self.schema.has_in() && self.in_csr.is_group_frozen_for(dst))
+        {
+            return Err(StorageError::invalid_operation(format!(
+                "frozen group rejects inserts: ({}, {}, {})",
+                src, dst, rank
+            )));
+        }
         let converted_values = self.convert_property_values(property_values)?;
         let edge_id = self.next_edge_id.fetch_add();
 

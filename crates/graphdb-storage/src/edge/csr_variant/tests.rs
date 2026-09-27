@@ -421,3 +421,66 @@ fn pure_threshold_ignores_rank_half_explicitly() {
     assert_eq!(out[0].endpoint, 5);
     assert!(variant.is_row_sorted(0) || !variant.is_row_sorted(0));
 }
+
+#[test]
+fn capability_queries_match_dispatch_sets() {
+    let writable =
+        CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 8, 16, 64).unwrap();
+    assert!(writable.is_writable());
+    assert!(!writable.is_read_only());
+    assert!(!writable.is_empty_placeholder());
+    assert!(writable.supports_positions());
+    assert!(writable.supports_vertex_compact());
+    assert!(writable.supports_timestamp_reclaim());
+    assert!(writable.has_reserved_capacity());
+    let frozen = CsrVariant::Frozen(Box::new(ImmutableCsr::pack_from_mutable(
+        &MutableCsr::with_capacity(8, 16),
+    )));
+    assert!(!frozen.is_writable());
+    assert!(frozen.is_read_only());
+    assert!(frozen.promises_key_order());
+    assert!(frozen.should_use_bisection(0));
+    assert!(frozen.supports_timestamp_reclaim());
+    assert!(!frozen.has_reserved_capacity());
+    assert!(!frozen.supports_vertex_compact());
+    assert!(!frozen.supports_positions());
+    let empty = CsrVariant::from_strategy_with_overflow(EdgeStrategy::None, 8, 16, 64).unwrap();
+    assert!(!empty.is_writable());
+    assert!(empty.is_empty_placeholder());
+    assert!(!empty.supports_positions());
+    assert!(!empty.supports_vertex_compact());
+    assert!(!empty.supports_timestamp_reclaim());
+    assert!(!empty.has_reserved_capacity());
+    // Timestamp-less forms reclaim per row only, never through the
+    // whole-table entry; mapped views reclaim through a file rebuild.
+    let pure = CsrVariant::Pure(Box::new(PureTopologyCsr::with_capacity(8, 16)));
+    assert!(!pure.supports_timestamp_reclaim());
+    assert!(pure.has_reserved_capacity());
+    assert!(pure.supports_vertex_compact());
+    // Single plan exit: bisection combines the order promise with the live
+    // observation, never cached across restarts.
+    for variant in [&writable, &frozen, &empty, &pure] {
+        assert_eq!(
+            variant.should_use_bisection(0),
+            variant.promises_key_order() || variant.is_row_sorted(0)
+        );
+    }
+}
+
+#[test]
+fn paired_value_fill_and_endpoint_threshold_share_topology() {
+    let mut inner = BundledCsr::with_capacity(8, 16);
+    inner
+        .insert_edge(0, VertexId::edge_endpoint_key(4, 0), EdgeId(4), 0)
+        .unwrap();
+    inner.set_value_by_edge_id(0, EdgeId(4), Some(11));
+    let variant = CsrVariant::Bundled(Box::new(inner));
+    let mut paired = Vec::new();
+    variant.fill_physical_with_values_into(0, &mut paired);
+    assert_eq!(paired.len(), 1);
+    assert_eq!(paired[0].1, Some(11));
+    let mut endpoints = Vec::new();
+    variant.fill_threshold_endpoint_only_into(0, Some(2), Some(6), &mut endpoints);
+    assert_eq!(endpoints.len(), 1);
+    assert_eq!(endpoints[0].endpoint, 4);
+}

@@ -126,42 +126,48 @@ macro_rules! dispatch {
 
 ```rust
 impl MutableCsrTrait for CsrVariant {
+    // 结果型写（插入、按编号删除、按偏移删除）：先查能力门，
+    // 占位直接报拒绝错误，只读转发到底层以保留各自拒绝文案，
+    // 以下 match 只服务可写形态。
     fn insert_edge(&mut self, src_vid: u32, dst: VertexId,
                    edge_id: EdgeId, ts: Timestamp) -> StorageResult<()> {
-        // 拓扑与属性解耦：CSR 只存拓扑，无 prop_offset 参数。
-        // 插入用显式 match（非 dispatch!）：None 分支报拒绝错误，
-        // Frozen / Mapped 由底层实现拒绝写入。
+        if self.is_empty_placeholder() { return Err(...); }
+        if self.is_read_only() {
+            return match self {
+                CsrVariant::Frozen(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
+                CsrVariant::Mapped(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
+                _ => Err(...),
+            };
+        }
         match self {
             CsrVariant::Multiple(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::Single(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::Pure(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
             CsrVariant::Bundled(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
-            CsrVariant::Frozen(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
-            CsrVariant::Mapped(csr) => csr.insert_edge(src_vid, dst, edge_id, ts),
-            CsrVariant::None { .. } => Err(StorageError::invalid_operation(
-                "no edges stored for this edge type".to_string(),
-            )),
+            _ => unreachable!(...),
         }
     }
-    fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp)
-        -> StorageResult<bool> {
-        dispatch!(self, delete_edge(src_vid, edge_id, ts) -> Err(...))
-    }
-    // delete_edge_by_dst 全匹配语义：一次调用删除全部存活匹配，返回删除计数
+    // delete_edge / delete_edge_by_offset 与插入同门。
+    // delete_edge_by_dst 全匹配语义：一次调用删除全部存活匹配，返回删除计数；
+    // 计数型删除（含上报变体）先查只读与占位门，命中直接返回零。
 }
 ```
 
-要点：match 展开分发（可内联，无虚表）；`Frozen` / `Mapped`
-在底层实现侧拒绝写入（须显式解冻，无隐式解冻）；
-`dispatch!` 的 `None` 分支返回调用点给出的 `$default`
-（读取类为空值，删除类为 0 / 报错），
-插入用显式 `match` 使 `None` 直接报错。
+要点：match 展开分发（可内联，无虚表）；是否支持、
+失败时返回零还是报错的决策集中在能力查询
+（`is_writable/is_read_only/is_empty_placeholder/supports_positions/
+supports_vertex_compact/supports_timestamp_reclaim/
+has_reserved_capacity/promises_key_order/should_use_bisection`），
+分发点只执行门结论。`Frozen` / `Mapped` 须显式解冻，
+无隐式解冻；只读臂转发到底层是为了保留各自拒绝文案，
+决策本身仍在门上。`dispatch!` 只留给纯读与门后的可写转发，
+不再作为写删的决策路径。
 
-调用方契约（有意为之，不再收敛）：计数型删除
-（按目的删除及其上报变体）对只读形态与空占位返回零，
-结果型删除（插入、按编号删除、定位删除）对同等形态返回拒绝错误。
+调用方契约（计数与结果的区分有意保留，决策已收敛到能力门）：
+计数型删除（按目的删除及其上报变体）对只读形态与空占位返回零，
+结果型删除（插入、按编号删除、定位与偏移删除）对同等形态返回拒绝错误。
 审计与回滚路径统一按“计数型看数量、结果型看错误”处理，
-不再逐入口记忆差异。
+表层写路径在冻结组上提前拒绝，调用方不再逐入口记忆差异。
 
 ### 模式二：读操作
 
@@ -252,6 +258,14 @@ Query("traverse edges")
   └─→ Columnar：按 EdgeId 查属性列式存储；Pure/Bundled：属性 stub/内联
 ```
 
+生产批量走热端与配对批量：邻居与度数批量走 `visit_hot` 热端，
+避免属性解码；Bundled 表默认走配对批量
+（组 `fill_physical_with_values_batch_into`、表
+`AdjacencyBatchAccessor::fill_many_with_values_into`），
+拓扑批量只用于无需值的遍历。缺席组在各层一律读空：
+计数删除回零，结果型删除在稀疏洞上回 `Ok(false)`，
+仅无边策略表 fail-closed 报错，与占位变体一致。
+
 ## 回收与维护
 
 无整表重建式回收接口：生产回收走按行
@@ -290,13 +304,18 @@ Query("traverse edges")
 
 - `Frozen` / `Mapped` 写拒绝错误，不静默成功；
 - 无位置寻址能力的形态对定位写 fail-closed；
-- `None` 读返回空、删返回未找到；
+- `None` 读返回空；计数删返回零，结果型删返回拒绝错误；
+  组层稀疏洞结果型删回 `Ok(false)`（无边策略表除外）；
 - 校验失败（CRC、计数重算、尾部多余字节）一律拒绝加载。
 
 ### 4. 可扩展
 
 新增变体检查清单（存于本文档而非代码注释，上线前逐项核对，
 不实际新增变体时只做走查）：枚举定义、`dispatch!` 全部分支、
-持久化标签与加载分支、行/全表迭代器枚举、读遍历三形态、
-维护与回收分支、内联值分支、组容器构造出口、检查点边车分支、
-本文档与变体文档同步。宏使样板最小化，但不能代替逐项核对。
+能力查询（可写、只读、占位、位置、行回收、整表回收、
+预留容量、键序承诺、二分计划）、持久化标签与加载分支、
+行/全表迭代器枚举、读遍历三形态、维护与回收分支、内联值分支、
+组容器构造出口、表配对批量、检查点边车分支、
+本文档与变体文档同步。组批量（`fill_physical_batch_into` 与
+`fill_physical_with_values_batch_into`）按段借 shard 后走变体单行
+入口，不设逐形态分支，新增形态无需改动组批量。宏使样板最小化，但不能代替逐项核对。

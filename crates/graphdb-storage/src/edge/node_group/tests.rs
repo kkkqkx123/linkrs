@@ -216,6 +216,27 @@ fn fill_physical_batch_slices_per_vertex() {
 }
 
 #[test]
+fn fill_physical_with_values_batch_matches_single_row_fill() {
+    let mut set = multi_set();
+    set.insert_edge(0, endpoint(1, 0), EdgeId(0), 100).unwrap();
+    set.insert_edge(0, endpoint(2, 0), EdgeId(1), 100).unwrap();
+    set.insert_edge(5000, endpoint(3, 0), EdgeId(2), 100)
+        .unwrap();
+    let vids = vec![0u32, 1, 5000, 9000];
+    let mut out = Vec::new();
+    let mut offsets = Vec::new();
+    set.fill_physical_with_values_batch_into(&vids, &mut out, &mut offsets);
+    assert_eq!(offsets.len(), vids.len() + 1);
+    assert_eq!(*offsets.last().unwrap(), out.len());
+    let mut single = Vec::new();
+    for (i, vid) in vids.iter().enumerate() {
+        set.fill_physical_with_values_into(*vid, &mut single);
+        assert_eq!(out[offsets[i]..offsets[i + 1]], single[..]);
+    }
+    assert_eq!(set.existing_group_ids(), vec![0, 1]);
+}
+
+#[test]
 fn calibrator_density_grades_downward() {
     let height = calibrator_tree_height(DEFAULT_NODE_GROUP_BITS);
     assert_eq!(height, 4);

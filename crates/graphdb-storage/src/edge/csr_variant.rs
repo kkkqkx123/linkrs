@@ -19,7 +19,7 @@
 //! - `CsrVariant::None`: Placeholder for relationships with no edges
 //!
 //! Layout by responsibility (`csr_variant/` subdirectory):
-//! - `core` holds construction, clearing and stats.
+//! - `core` holds construction, clearing, stats and capability queries.
 //! - `persistence` handles dump, load and scratch dumps.
 //! - `trait_impl` adapts the type to CSR traits.
 //! - `read` implements iterators, visits and range scans.
@@ -125,8 +125,9 @@ pub use iter::{CsrIterator, CsrRowIter};
 /// mapped rows are packed sorted by `(endpoint, rank, edge_id)` and promise
 /// that order plus key-interval bisection. Freeze, compaction, compression
 /// and snapshot rebuilds may change the order; the query layer must never depend on an
-/// unpromised order. [`MutableCsr::is_row_sorted`](super::MutableCsr::is_row_sorted)
-/// reports the advisory per-row state for plan selection.
+/// unpromised order. Plan selection uses `should_use_bisection`, combining
+/// the per-form promise with the memory-only sorted observation that is
+/// rebuilt on load and never cached across restarts.
 ///
 /// Mapped rows hold their mapping by value (`Arc` inside the iterator), so a
 /// row walk stays valid across group replacement; the walk still yields the

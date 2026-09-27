@@ -129,6 +129,11 @@ impl CsrVariant {
     /// endpoint intervals, and reusing one binary interval across forms
     /// scans the wider endpoint range on these forms by contract rather than
     /// by silent widening.
+    ///
+    /// Bisection planning stays with [`Self::should_use_bisection`]: promised
+    /// forms bisect whole rows, other forms bisect only a sorted primary
+    /// prefix through their memory-only flag and scan the rest linearly.
+    /// This entry only forwards; it never re-decides the plan.
     pub fn visit_threshold<F>(
         &self,
         src_vid: u32,
@@ -166,6 +171,41 @@ impl CsrVariant {
     ) {
         out.clear();
         self.visit_threshold(src_vid, lower, upper, |nbr| {
+            out.push(nbr);
+            true
+        });
+    }
+
+    /// Visit entries whose endpoint falls in the inclusive endpoint range.
+    ///
+    /// Endpoint-only counterpart of `visit_threshold` for callers sharing one
+    /// interval across forms. Pure and bundled rows ignore rank halves by
+    /// contract; other forms widen the rank halves to the full range so the
+    /// same endpoint interval scans the same endpoints everywhere.
+    pub fn visit_threshold_endpoint_only<F>(
+        &self,
+        src_vid: u32,
+        lower: Option<u32>,
+        upper: Option<u32>,
+        f: F,
+    ) where
+        F: FnMut(Nbr) -> bool,
+    {
+        let lower_key = lower.map(|endpoint| (endpoint, i64::MIN));
+        let upper_key = upper.map(|endpoint| (endpoint, i64::MAX));
+        self.visit_threshold(src_vid, lower_key, upper_key, f)
+    }
+
+    /// Fill a caller buffer with the same endpoint-range content.
+    pub fn fill_threshold_endpoint_only_into(
+        &self,
+        src_vid: u32,
+        lower: Option<u32>,
+        upper: Option<u32>,
+        out: &mut Vec<Nbr>,
+    ) {
+        out.clear();
+        self.visit_threshold_endpoint_only(src_vid, lower, upper, |nbr| {
             out.push(nbr);
             true
         });

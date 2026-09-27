@@ -19,7 +19,9 @@
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult};
 
-use super::super::{CsrBase, CsrVariant, ImmutableCsr, MutableCsrTrait, Nbr, INVALID_EDGE_ID};
+use super::super::{
+    CsrBase, CsrVariant, ImmutableCsr, MutableCsrTrait, Nbr, INVALID_EDGE_ID, NO_EDGES_STORED_MSG,
+};
 use super::CsrShardSet;
 
 /// Why one group cannot freeze right now.
@@ -43,7 +45,7 @@ impl FreezeBlockReason {
             FreezeBlockReason::MissingGroup => {
                 format!("group {} missing, nothing to freeze", gid)
             }
-            FreezeBlockReason::NoEdgesStored => "no edges stored for this edge type".to_string(),
+            FreezeBlockReason::NoEdgesStored => NO_EDGES_STORED_MSG.to_string(),
             FreezeBlockReason::AlreadyFrozen => {
                 format!("group {} is already frozen", gid)
             }
@@ -167,14 +169,15 @@ impl CsrShardSet {
         let Some(shard) = self.shards.get(&gid) else {
             return Err(FreezeBlockReason::MissingGroup);
         };
-        match shard.variant {
-            CsrVariant::Multiple(_)
-            | CsrVariant::Single(_)
-            | CsrVariant::Pure(_)
-            | CsrVariant::Bundled(_) => Ok(()),
-            CsrVariant::Frozen(_) | CsrVariant::Mapped(_) => Err(FreezeBlockReason::AlreadyFrozen),
-            CsrVariant::None { .. } => Err(FreezeBlockReason::NoEdgesStored),
+        // Single gate source: writable variants freeze, read-only views report
+        // already frozen, and the cleared placeholder reports no edges stored.
+        if shard.variant.is_writable() {
+            return Ok(());
         }
+        if shard.variant.is_read_only() {
+            return Err(FreezeBlockReason::AlreadyFrozen);
+        }
+        Err(FreezeBlockReason::NoEdgesStored)
     }
 
     /// Unfreeze one group, rebuilding its mutable variant.

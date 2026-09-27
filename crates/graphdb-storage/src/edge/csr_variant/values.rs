@@ -125,4 +125,16 @@ impl CsrVariant {
             _ => false,
         }
     }
+
+    /// Fill a caller buffer with paired topology plus inline values.
+    ///
+    /// Batched counterpart of the paired walk above for scans reusing one
+    /// buffer across vertices. Non-bundled forms fill with `None` values.
+    pub fn fill_physical_with_values_into(&self, src_vid: u32, out: &mut Vec<(Nbr, Option<u64>)>) {
+        out.clear();
+        self.visit_physical_with_values(src_vid, |nbr, value| {
+            out.push((nbr, value));
+            true
+        });
+    }
 }

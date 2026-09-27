@@ -103,8 +103,9 @@ impl CsrBase for CsrVariant {
 
     fn load(&mut self, data: &[u8]) -> StorageResult<()> {
         // Tag 3 loads as the heap frozen form even when the bytes were
-        // dumped from a mapped view. View-type roundtrip is not promised:
-        // callers needing a mapping reopen the snapshot file instead.
+        // dumped from a mapped view. Byte payloads never produce a mapped
+        // view: mappings only open from snapshot files, and view-type
+        // roundtrip is not promised.
         if data.is_empty() {
             return Err(graphdb_core::StorageError::deserialize_error(
                 "Cannot load CSR variant: empty data",

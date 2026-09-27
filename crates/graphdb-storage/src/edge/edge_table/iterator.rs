@@ -155,6 +155,31 @@ impl<'a> AdjacencyBatchAccessor<'a> {
             out.extend(scratch.iter().copied());
         }
     }
+
+    /// Fill a caller buffer with the visible neighbors of many rows paired
+    /// with inline values (`None` for NULL slots and non-bundled forms).
+    ///
+    /// Paired counterpart of [`Self::fill_many_into`] and the default batch
+    /// read for bundled tables: one paired walk per row instead of a
+    /// topology walk plus one value lookup per edge. Missing legs contribute
+    /// nothing; visibility goes through the version authority alone.
+    pub fn fill_many_with_values_into(
+        &self,
+        srcs: &[u32],
+        out: &mut Vec<(Nbr, Option<u64>)>,
+        scratch: &mut Vec<(Nbr, Option<u64>)>,
+    ) {
+        out.clear();
+        if !self.table.is_direction_available(self.outgoing) {
+            return;
+        }
+        let csr = self.csr();
+        for src in srcs {
+            self.table
+                .fill_visible_with_values_into(csr, *src, self.ts, scratch);
+            out.extend(scratch.iter().copied());
+        }
+    }
 }
 
 /// Streaming full-table edge scan.

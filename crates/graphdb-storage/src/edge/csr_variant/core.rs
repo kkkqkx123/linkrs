@@ -93,6 +93,32 @@ impl CsrVariant {
         }
     }
 
+    /// Whether whole-table timestamp reclaim applies to this variant.
+    ///
+    /// Only forms carrying timestamps reclaim here. Pure and bundled rows
+    /// hold no timestamps so their holes compact through the per-row entry
+    /// instead; mapped views need a snapshot-file rebuild. Production frozen
+    /// reclaim uses the batched rows entry instead of one call per row.
+    pub fn supports_timestamp_reclaim(&self) -> bool {
+        matches!(
+            self,
+            CsrVariant::Multiple(_) | CsrVariant::Single(_) | CsrVariant::Frozen(_)
+        )
+    }
+
+    /// Whether this variant holds reserved row capacity reported as fragmentation.
+    ///
+    /// Covers the multi-edge store plus the pure-topology and bundled forms
+    /// sharing its primary-plus-overflow layout. Single slots carry no
+    /// reserved gaps beyond their tombstone, frozen and mapped rows are
+    /// packed without gaps, and the placeholder holds no edges.
+    pub fn has_reserved_capacity(&self) -> bool {
+        matches!(
+            self,
+            CsrVariant::Multiple(_) | CsrVariant::Pure(_) | CsrVariant::Bundled(_)
+        )
+    }
+
     /// Get fragmentation ratio for diagnostics
     ///
     /// Covers every variant holding reserved row capacity: the multi-edge
@@ -102,6 +128,9 @@ impl CsrVariant {
     /// tombstone, frozen and mapped rows are packed without gaps, and the
     /// placeholder holds no edges.
     pub fn fragmentation_ratio(&self) -> f32 {
+        if !self.has_reserved_capacity() {
+            return 0.0;
+        }
         match self {
             CsrVariant::Multiple(csr) => csr.fragmentation_ratio(),
             CsrVariant::Pure(csr) => csr.fragmentation_ratio(),
@@ -114,6 +143,9 @@ impl CsrVariant {
     ///
     /// Same coverage as the ratio above; other variants report zero.
     pub fn wasted_bytes_estimate(&self) -> usize {
+        if !self.has_reserved_capacity() {
+            return 0;
+        }
         match self {
             CsrVariant::Multiple(csr) => csr.wasted_bytes_estimate(),
             CsrVariant::Pure(csr) => csr.wasted_bytes_estimate(),
@@ -127,6 +159,9 @@ impl CsrVariant {
     /// Returns `Some(stats)` for variants holding reserved row capacity,
     /// `None` for the remaining forms.
     pub fn fragmentation_stats(&self) -> Option<super::super::FragmentationStats> {
+        if !self.has_reserved_capacity() {
+            return None;
+        }
         match self {
             CsrVariant::Multiple(csr) => {
                 let stats = csr.get_fragmentation_stats();
@@ -170,5 +205,92 @@ impl CsrVariant {
             self.used_memory_size(),
             self.edge_count(),
         )
+    }
+
+    /// Whether this variant accepts topology writes without unfreezing.
+    ///
+    /// Single source of truth for the writable set. Read-only and placeholder
+    /// forms report false here and refuse result-returning writes with an
+    /// error; counting deletes on those forms report zero at their own
+    /// entries.
+    pub fn is_writable(&self) -> bool {
+        matches!(
+            self,
+            CsrVariant::Multiple(_)
+                | CsrVariant::Single(_)
+                | CsrVariant::Pure(_)
+                | CsrVariant::Bundled(_)
+        )
+    }
+
+    /// Whether this variant is a read-only packed view.
+    ///
+    /// Frozen groups need an explicit unfreeze first and mapped groups need
+    /// a snapshot-file rebuild. Table write paths check the group frozen
+    /// state before reaching the row so counting deletes never read as a
+    /// plain miss.
+    pub fn is_read_only(&self) -> bool {
+        matches!(self, CsrVariant::Frozen(_) | CsrVariant::Mapped(_))
+    }
+
+    /// Whether this variant is the empty placeholder.
+    ///
+    /// Clearing a mapped view swaps the whole variant to this form at the
+    /// same vertex capacity. Group containers keep the group slot and treat
+    /// the post-clear variant through the placeholder path everywhere.
+    pub fn is_empty_placeholder(&self) -> bool {
+        matches!(self, CsrVariant::None { .. })
+    }
+
+    /// Whether positional row addressing is supported.
+    ///
+    /// Positions are variant-local. Forms without positional addressing
+    /// refuse positional writes instead of falling back to an id scan.
+    pub fn supports_positions(&self) -> bool {
+        matches!(
+            self,
+            CsrVariant::Multiple(_)
+                | CsrVariant::Single(_)
+                | CsrVariant::Pure(_)
+                | CsrVariant::Bundled(_)
+        )
+    }
+
+    /// Whether per-row reclaim with reporting is supported.
+    ///
+    /// Per-row defragmentation support: writable forms compact their own
+    /// holes in place. Frozen single-row reclaim stays rejected and uses the
+    /// batched frozen entry; mapped views need a file rebuild. Whole-table
+    /// timestamp reclaim is a separate entry with its own exemptions for
+    /// forms carrying no timestamps.
+    pub fn supports_vertex_compact(&self) -> bool {
+        matches!(
+            self,
+            CsrVariant::Multiple(_)
+                | CsrVariant::Single(_)
+                | CsrVariant::Pure(_)
+                | CsrVariant::Bundled(_)
+        )
+    }
+
+    /// Whether rows promise key order and may use bisection.
+    ///
+    /// Only single-slot, frozen and mapped rows promise order. Other forms
+    /// expose a memory-only observation through row sorted state that must
+    /// never be cached across restarts.
+    pub fn promises_key_order(&self) -> bool {
+        matches!(
+            self,
+            CsrVariant::Single(_) | CsrVariant::Frozen(_) | CsrVariant::Mapped(_)
+        )
+    }
+
+    /// Whether a range scan should bisect this row.
+    ///
+    /// Central plan selection combining the order promise with the live
+    /// sorted observation. Planning state stays memory-only and is rebuilt
+    /// on load.
+    pub fn should_use_bisection(&self, src_vid: u32) -> bool {
+        self.promises_key_order() || self.is_row_sorted(src_vid)
     }
 }

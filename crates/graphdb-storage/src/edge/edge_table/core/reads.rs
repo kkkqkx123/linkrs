@@ -56,6 +56,28 @@ impl EdgeStore {
         self.mvcc.retain_visible(out, ts);
     }
 
+    /// Fill a caller buffer with every visible neighbor of one row paired
+    /// with its inline value (`None` for NULL slots and non-bundled forms).
+    ///
+    /// Paired counterpart of [`Self::fill_visible_into`]: the default batch
+    /// read for bundled tables, so callers never stage topology first and
+    /// resolve values edge by edge. Visibility still goes through the version
+    /// authority alone; row stamps never filter.
+    pub(crate) fn fill_visible_with_values_into(
+        &self,
+        csr: &CsrShardSet,
+        src: u32,
+        ts: Timestamp,
+        out: &mut Vec<(Nbr, Option<u64>)>,
+    ) {
+        out.clear();
+        csr.visit_physical_with_values(src, |nbr, value| {
+            out.push((nbr, value));
+            true
+        });
+        out.retain(|(nbr, _)| self.is_visible(nbr.edge_id, ts));
+    }
+
     /// Visit every visible neighbor of one row without any allocation.
     ///
     /// Hot-only traversal primitive: no intermediate vector is built and the

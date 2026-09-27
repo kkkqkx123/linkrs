@@ -3,11 +3,11 @@
 //! Reads resolve rows through `route`, never creating groups: missing groups
 //! read as empty.
 //!
-//! Dispatch hoisting: single-row entries match the shard variant once per
-//! row, which is optimal for point lookups. Batch and full-table scans match
-//! once per shard and loop the rows of that shard with the concrete type,
-//! so the row loop never pays a per-row enum dispatch. The `CsrVariant`
-//! body itself is untouched; only these callers single-morphize.
+//! Batch scans group consecutive same-group vertices into runs so each run
+//! borrows its shard once, then walks rows through the `CsrVariant`
+//! single-row entries. Dispatch itself stays converged in the variant: these
+//! callers never match on the form, so adding a form only touches the
+//! variant read entries.
 
 use graphdb_core::types::EdgeId;
 
@@ -86,17 +86,18 @@ impl CsrShardSet {
     /// pass over the vertices, no per-vertex allocation; missing groups and
     /// empty rows contribute empty slices. Read paths never create groups.
     ///
-    /// Dispatch is hoisted to consecutive same-group runs: each run matches
-    /// its shard variant once and loops its rows with the concrete type,
-    /// instead of matching per row. Consecutive vertex batches (the common
-    /// scan order) therefore pay one dispatch per shard, not per row.
+    /// Dispatch stays converged in `CsrVariant`: each run borrows its shard
+    /// once (one map lookup per run), then walks rows through the variant
+    /// single-row entry. The row loop pays one variant match per row, which
+    /// is noise next to the per-row routing plus the row walk itself; in
+    /// return there are no per-form arms to keep in sync here, so adding a
+    /// form only touches the variant read entries.
     pub fn fill_physical_batch_into(
         &self,
         vids: &[u32],
         out: &mut Vec<Nbr>,
         offsets: &mut Vec<usize>,
     ) {
-        use super::super::CsrVariant;
         out.clear();
         offsets.clear();
         offsets.reserve(vids.len() + 1);
@@ -121,72 +122,66 @@ impl CsrShardSet {
                 idx = run_end;
                 continue;
             };
-            match &shard.variant {
-                CsrVariant::Multiple(csr) => {
-                    for vid in &vids[idx..run_end] {
-                        offsets.push(out.len());
-                        let (_, local) = self.route(*vid).expect("run shares one group");
-                        csr.visit_physical(local, |nbr| {
-                            out.push(nbr);
-                            true
-                        });
-                    }
+            let variant = &shard.variant;
+            for vid in &vids[idx..run_end] {
+                offsets.push(out.len());
+                let (_, local) = self.route(*vid).expect("run shares one group");
+                variant.visit_physical(local, |nbr| {
+                    out.push(nbr);
+                    true
+                });
+            }
+            idx = run_end;
+        }
+        offsets.push(out.len());
+    }
+
+    /// Fill one shared buffer with paired topology plus inline values.
+    ///
+    /// Batched counterpart of the single-row paired fill: same offsets
+    /// contract as the topology batch above, but each entry carries its
+    /// inline value. Non-bundled forms fill with `None` values through the
+    /// same walk. Like the topology batch, each run borrows its shard once
+    /// and walks rows through the variant paired entry, so there are no
+    /// per-form arms to keep in sync here either.
+    pub fn fill_physical_with_values_batch_into(
+        &self,
+        vids: &[u32],
+        out: &mut Vec<(Nbr, Option<u64>)>,
+        offsets: &mut Vec<usize>,
+    ) {
+        out.clear();
+        offsets.clear();
+        offsets.reserve(vids.len() + 1);
+        let mut idx = 0usize;
+        while idx < vids.len() {
+            let Some((gid, _)) = self.route(vids[idx]) else {
+                offsets.push(out.len());
+                idx += 1;
+                continue;
+            };
+            let mut run_end = idx + 1;
+            while run_end < vids.len() {
+                match self.route(vids[run_end]) {
+                    Some((next_gid, _)) if next_gid == gid => run_end += 1,
+                    _ => break,
                 }
-                CsrVariant::Single(csr) => {
-                    for vid in &vids[idx..run_end] {
-                        offsets.push(out.len());
-                        let (_, local) = self.route(*vid).expect("run shares one group");
-                        csr.visit_physical(local, |nbr| {
-                            out.push(nbr);
-                            true
-                        });
-                    }
+            }
+            let Some(shard) = self.shards.get(&gid) else {
+                for _ in idx..run_end {
+                    offsets.push(out.len());
                 }
-                CsrVariant::Pure(csr) => {
-                    for vid in &vids[idx..run_end] {
-                        offsets.push(out.len());
-                        let (_, local) = self.route(*vid).expect("run shares one group");
-                        csr.visit_physical(local, |nbr| {
-                            out.push(nbr);
-                            true
-                        });
-                    }
-                }
-                CsrVariant::Bundled(csr) => {
-                    for vid in &vids[idx..run_end] {
-                        offsets.push(out.len());
-                        let (_, local) = self.route(*vid).expect("run shares one group");
-                        csr.visit_physical(local, |nbr| {
-                            out.push(nbr);
-                            true
-                        });
-                    }
-                }
-                CsrVariant::Frozen(csr) => {
-                    for vid in &vids[idx..run_end] {
-                        offsets.push(out.len());
-                        let (_, local) = self.route(*vid).expect("run shares one group");
-                        csr.visit_physical(local, |nbr| {
-                            out.push(nbr);
-                            true
-                        });
-                    }
-                }
-                CsrVariant::Mapped(csr) => {
-                    for vid in &vids[idx..run_end] {
-                        offsets.push(out.len());
-                        let (_, local) = self.route(*vid).expect("run shares one group");
-                        csr.visit_physical(local, |nbr| {
-                            out.push(nbr);
-                            true
-                        });
-                    }
-                }
-                CsrVariant::None { .. } => {
-                    for _ in idx..run_end {
-                        offsets.push(out.len());
-                    }
-                }
+                idx = run_end;
+                continue;
+            };
+            let variant = &shard.variant;
+            for vid in &vids[idx..run_end] {
+                offsets.push(out.len());
+                let (_, local) = self.route(*vid).expect("run shares one group");
+                variant.visit_physical_with_values(local, |nbr, value| {
+                    out.push((nbr, value));
+                    true
+                });
             }
             idx = run_end;
         }
@@ -197,7 +192,9 @@ impl CsrShardSet {
     ///
     /// Only frozen, mapped and single-slot rows promise order and may use
     /// bisection; other variants report an observation that is memory-only,
-    /// rebuilt on load and never cached across restarts.
+    /// rebuilt on load and never cached across restarts. Planning paths
+    /// prefer `should_use_bisection` below so the promise plus the live
+    /// observation stay in one place.
     pub fn is_row_sorted(&self, src_vid: u32) -> bool {
         let Some((gid, local)) = self.route(src_vid) else {
             return true;
@@ -205,6 +202,20 @@ impl CsrShardSet {
         self.shards
             .get(&gid)
             .is_some_and(|shard| shard.variant.is_row_sorted(local))
+    }
+
+    /// Whether a range scan should bisect this row.
+    ///
+    /// Central plan selection combining the order promise with the live
+    /// sorted observation. Missing groups read as sorted empty. The result
+    /// is memory-only and must never be cached across restarts.
+    pub fn should_use_bisection(&self, src_vid: u32) -> bool {
+        let Some((gid, local)) = self.route(src_vid) else {
+            return true;
+        };
+        self.shards
+            .get(&gid)
+            .is_some_and(|shard| shard.variant.should_use_bisection(local))
     }
 
     /// Sort one row on the maintenance path. Positions for the row go stale.
@@ -248,6 +259,44 @@ impl CsrShardSet {
     ) {
         out.clear();
         self.visit_threshold(src_vid, lower, upper, |nbr| {
+            out.push(nbr);
+            true
+        });
+    }
+
+    /// Visit entries whose endpoint falls in the inclusive endpoint range.
+    ///
+    /// Endpoint-only counterpart of `visit_threshold` sharing one interval
+    /// across forms. Missing groups read as empty and never create groups.
+    pub fn visit_threshold_endpoint_only<F>(
+        &self,
+        src_vid: u32,
+        lower: Option<u32>,
+        upper: Option<u32>,
+        f: F,
+    ) where
+        F: FnMut(Nbr) -> bool,
+    {
+        let Some((gid, local)) = self.route(src_vid) else {
+            return;
+        };
+        if let Some(shard) = self.shards.get(&gid) {
+            shard
+                .variant
+                .visit_threshold_endpoint_only(local, lower, upper, f);
+        }
+    }
+
+    /// Fill a caller buffer with the same endpoint-range content.
+    pub fn fill_threshold_endpoint_only_into(
+        &self,
+        src_vid: u32,
+        lower: Option<u32>,
+        upper: Option<u32>,
+        out: &mut Vec<Nbr>,
+    ) {
+        out.clear();
+        self.visit_threshold_endpoint_only(src_vid, lower, upper, |nbr| {
             out.push(nbr);
             true
         });

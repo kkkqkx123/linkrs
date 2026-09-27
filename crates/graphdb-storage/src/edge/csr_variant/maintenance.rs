@@ -4,25 +4,29 @@ use super::CsrVariant;
 impl CsrVariant {
     /// Compact with per-edge removal reporting.
     ///
-    /// Both retained strategies report reclaimed tombstones; the placeholder
-    /// keeps the no-op semantics. Frozen groups reclaim tombstones in place
-    /// with no reserve; mapped views need a snapshot-file rebuild and stay
-    /// no-op here.
+    /// Whole-table timestamp reclaim: the capability query owns the
+    /// exemption list, the match below only serves the supported forms.
+    /// Pure and bundled rows hold no timestamps so they report zero; their
+    /// holes still compact through the per-row entry. Frozen groups reclaim
+    /// tombstones in place with no reserve; mapped views need a snapshot-file
+    /// rebuild and stay no-op here. Production frozen reclaim uses the
+    /// batched rows entry below instead of one call per row.
     pub fn compact_with_ts_reporting(
         &mut self,
         cutoff: Timestamp,
         reserve_ratio: f32,
         on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
     ) -> usize {
+        if !self.supports_timestamp_reclaim() {
+            return 0;
+        }
         match self {
             CsrVariant::Multiple(csr) => {
                 csr.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed)
             }
             CsrVariant::Single(csr) => csr.compact_with_ts_reporting(cutoff, on_edge_removed),
-            CsrVariant::Pure(_) | CsrVariant::Bundled(_) => 0,
             CsrVariant::Frozen(csr) => csr.compact_with_cutoff(cutoff, on_edge_removed),
-            CsrVariant::Mapped(_) => 0,
-            CsrVariant::None { .. } => 0,
+            _ => 0,
         }
     }
 

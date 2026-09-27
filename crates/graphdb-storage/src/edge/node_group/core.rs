@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use super::super::{
     csr_shared::decode_endpoint_pair, CsrBase, CsrVariant, EdgePut, MutableCsrTrait, Nbr,
-    RecordForm, RowEdgeBatch,
+    RecordForm, RowEdgeBatch, NO_EDGES_STORED_MSG,
 };
 use super::{
     group_id_for, group_size, local_vid, regions_per_group, validate_group_bits, CsrShardSet,
@@ -180,7 +180,7 @@ impl CsrShardSet {
     pub(super) fn ensure_group_for(&mut self, vid: u32) -> StorageResult<usize> {
         if self.strategy == EdgeStrategy::None {
             return Err(StorageError::invalid_operation(
-                "no edges stored for this edge type".to_string(),
+                NO_EDGES_STORED_MSG.to_string(),
             ));
         }
         let gid = group_id_for(vid, self.group_bits);
@@ -206,7 +206,7 @@ impl CsrShardSet {
     pub fn ensure_group_id(&mut self, gid: usize) -> StorageResult<()> {
         if self.strategy == EdgeStrategy::None {
             return Err(StorageError::invalid_operation(
-                "no edges stored for this edge type".to_string(),
+                NO_EDGES_STORED_MSG.to_string(),
             ));
         }
         if !self.shards.contains_key(&gid) {
@@ -354,6 +354,21 @@ impl CsrShardSet {
         }
     }
 
+    /// Fill a caller buffer with paired topology plus inline values.
+    ///
+    /// Missing groups read as empty and never create groups. Batch scans
+    /// reuse one buffer across vertices through the paired walk.
+    pub fn fill_physical_with_values_into(&self, src_vid: u32, out: &mut Vec<(Nbr, Option<u64>)>) {
+        let Some((gid, local)) = self.route(src_vid) else {
+            out.clear();
+            return;
+        };
+        match self.shards.get(&gid) {
+            Some(shard) => shard.variant.fill_physical_with_values_into(local, out),
+            None => out.clear(),
+        }
+    }
+
     pub(super) fn route(&self, vid: u32) -> Option<(usize, u32)> {
         // Hot-row fast path: repeats skip the group map search. Cached
         // triples are only stored for existing groups and removals
@@ -397,7 +412,7 @@ impl CsrShardSet {
     ) -> StorageResult<usize> {
         if self.strategy == EdgeStrategy::None {
             return Err(StorageError::invalid_operation(
-                "no edges stored for this edge type".to_string(),
+                NO_EDGES_STORED_MSG.to_string(),
             ));
         }
         let mut by_group: BTreeMap<usize, Vec<(u32, VertexId, EdgeId)>> = BTreeMap::new();
@@ -497,7 +512,7 @@ impl CsrShardSet {
     ) -> StorageResult<usize> {
         if self.strategy == EdgeStrategy::None {
             return Err(StorageError::invalid_operation(
-                "no edges stored for this edge type".to_string(),
+                NO_EDGES_STORED_MSG.to_string(),
             ));
         }
         let mut by_group: BTreeMap<usize, Vec<(u32, VertexId, EdgeId, Timestamp)>> =

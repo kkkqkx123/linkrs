@@ -102,9 +102,10 @@ impl EdgeStore {
         }
 
         if self.next_edge_id.0 == 0 {
-            // Legacy checkpoints may persist a zero counter: rebuild it from
-            // the largest allocated id across both legs so single-leg tables
-            // never reuse an id that is still live on the other leg.
+            // A zero counter cannot allocate safely: rebuild it from the
+            // largest allocated id across both legs so single-leg tables
+            // never reuse an id that is still live on the other leg. Empty
+            // tables stay zero through the same scan.
             let out_max = self
                 .out_csr
                 .iter_all()

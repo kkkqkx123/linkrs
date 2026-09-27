@@ -91,6 +91,14 @@ impl EdgeStore {
         property_values: &[(String, Value)],
         ts: Timestamp,
     ) -> StorageResult<EdgeId> {
+        if (self.schema.has_out() && self.out_csr.is_group_frozen_for(src))
+            || (self.schema.has_in() && self.in_csr.is_group_frozen_for(dst))
+        {
+            return Err(StorageError::invalid_operation(format!(
+                "frozen group rejects inserts: ({}, {}, {})",
+                src, dst, rank
+            )));
+        }
         let inline_value = self.convert_bundled_value(property_values)?;
         let edge_id = self.next_edge_id.fetch_add();
 
