@@ -1,58 +1,66 @@
 import { get, post, _delete } from '$utils/http';
 import type {
-  Space, SpaceDetail, Tag, TagDetail, EdgeType, EdgeTypeDetail,
-  IndexInfo, CreateSpaceParams, CreateTagParams, CreateEdgeTypeParams, CreateIndexParams, DDLData,
+  SpaceDetail, TagDetail, EdgeTypeDetail, IndexInfo,
+  CreateSpaceRequest, CreateTagRequest, CreateEdgeTypeRequest, CreateIndexRequest,
 } from '$types/schema';
+import type { ApiResponse_SpaceDetail, ApiResponse_TagDetail, ApiResponse_EdgeTypeDetail, ApiResponse_IndexInfo, ApiResponse_SpaceStatistics } from '$types/schema';
 
 export const schemaService = {
   spaces: {
-    list: async (): Promise<Space[]> => await get('/v1/schema/spaces')() as Space[],
-    create: async (params: CreateSpaceParams): Promise<{ message: string; space_name: string }> =>
-      await post('/v1/schema/spaces')(params) as { message: string; space_name: string },
-    get: async (name: string): Promise<{ space: Space }> =>
-      await get(`/v1/schema/spaces/${name}`)() as { space: Space },
+    list: async (): Promise<SpaceDetail[]> => 
+      await get('/api/v1/schema/spaces')().then(res => res.data || []),
+    create: async (params: CreateSpaceRequest): Promise<{ message: string; space_name: string }> =>
+      await post('/api/v1/schema/spaces', params),
+    get: async (name: string): Promise<{ space: SpaceDetail }> =>
+      await get(`/api/v1/schema/spaces/${name}`)(),
     getDetail: async (name: string): Promise<SpaceDetail> =>
-      await get(`/v1/schema/spaces/${name}/details`)() as SpaceDetail,
+      await get<ApiResponse_SpaceDetail>(`/api/v1/schema/spaces/${name}/details`)
+        .then(res => res.data!),
     getStatistics: async (name: string): Promise<SpaceDetail['statistics']> =>
-      await get(`/v1/schema/spaces/${name}/statistics`)() as SpaceDetail['statistics'],
+      await get<ApiResponse_SpaceStatistics>(`/api/v1/schema/spaces/${name}/statistics`)
+        .then(res => res.data!),
     delete: async (name: string): Promise<{ message: string; space_name: string }> =>
-      await _delete(`/v1/schema/spaces/${name}`)() as { message: string; space_name: string },
+      await _delete(`/api/v1/schema/spaces/${name}`)(),
   },
   tags: {
-    list: async (spaceName: string): Promise<Tag[]> => await get(`/v1/schema/spaces/${spaceName}/tags`)() as Tag[],
-    create: async (spaceName: string, params: CreateTagParams): Promise<Tag> =>
-      await post(`/v1/schema/spaces/${spaceName}/tags`)(params) as Tag,
+    list: async (spaceName: string): Promise<TagDetail[]> =>
+      await get(`/api/v1/schema/spaces/${spaceName}/tags`)().then(res => res.data || []),
+    create: async (spaceName: string, params: CreateTagRequest): Promise<TagDetail> =>
+      await post(`/api/v1/schema/spaces/${spaceName}/tags`, params),
     getDetail: async (spaceName: string, tagName: string): Promise<TagDetail> =>
-      await get(`/v1/schema/spaces/${spaceName}/tags/${tagName}`)() as TagDetail,
+      await get<ApiResponse_TagDetail>(`/api/v1/schema/spaces/${spaceName}/tags/${tagName}`)
+        .then(res => res.data!),
     delete: async (spaceName: string, tagName: string): Promise<void> => {
-      await _delete(`/v1/schema/spaces/${spaceName}/tags/${tagName}`)();
+      await _delete(`/api/v1/schema/spaces/${spaceName}/tags/${tagName}`)();
     },
   },
   edgeTypes: {
-    list: async (spaceName: string): Promise<EdgeType[]> => await get(`/v1/schema/spaces/${spaceName}/edge-types`)() as EdgeType[],
-    create: async (spaceName: string, params: CreateEdgeTypeParams): Promise<EdgeType> =>
-      await post(`/v1/schema/spaces/${spaceName}/edge-types`)(params) as EdgeType,
+    list: async (spaceName: string): Promise<EdgeTypeDetail[]> =>
+      await get(`/api/v1/schema/spaces/${spaceName}/edge-types`)().then(res => res.data || []),
+    create: async (spaceName: string, params: CreateEdgeTypeRequest): Promise<EdgeTypeDetail> =>
+      await post(`/api/v1/schema/spaces/${spaceName}/edge-types`, params),
     getDetail: async (spaceName: string, edgeName: string): Promise<EdgeTypeDetail> =>
-      await get(`/v1/schema/spaces/${spaceName}/edge-types/${edgeName}`)() as EdgeTypeDetail,
+      await get<ApiResponse_EdgeTypeDetail>(`/api/v1/schema/spaces/${spaceName}/edge-types/${edgeName}`)
+        .then(res => res.data!),
     delete: async (spaceName: string, edgeName: string): Promise<void> => {
-      await _delete(`/v1/schema/spaces/${spaceName}/edge-types/${edgeName}`)();
+      await _delete(`/api/v1/schema/spaces/${spaceName}/edge-types/${edgeName}`)();
     },
   },
   indexes: {
-    list: async (spaceName: string): Promise<IndexInfo[]> => await get(`/v1/schema/spaces/${spaceName}/indexes`)() as IndexInfo[],
-    create: async (spaceName: string, params: CreateIndexParams): Promise<IndexInfo> =>
-      await post(`/v1/schema/spaces/${spaceName}/indexes`)(params) as IndexInfo,
+    list: async (spaceName: string): Promise<IndexInfo[]> =>
+      await get<ApiResponse_IndexInfo[]>(`/api/v1/schema/spaces/${spaceName}/indexes`)()
+        .then(res => res.data || []),
+    create: async (spaceName: string, params: CreateIndexRequest): Promise<IndexInfo> =>
+      await post(`/api/v1/schema/spaces/${spaceName}/indexes`, params),
     getDetail: async (spaceName: string, indexName: string): Promise<IndexInfo> =>
-      await get(`/v1/schema/spaces/${spaceName}/indexes/${indexName}`)() as IndexInfo,
+      await get(`/api/v1/schema/spaces/${spaceName}/indexes/${indexName}`)(),
     delete: async (spaceName: string, indexName: string): Promise<void> => {
-      await _delete(`/v1/schema/spaces/${spaceName}/indexes/${indexName}`)();
+      await _delete(`/api/v1/schema/spaces/${spaceName}/indexes/${indexName}`)();
     },
     rebuild: async (spaceName: string, indexName: string): Promise<void> => {
-      await post(`/v1/schema/spaces/${spaceName}/indexes/${indexName}/rebuild`)();
+      await post(`/api/v1/schema/spaces/${spaceName}/indexes/${indexName}/rebuild`)();
     },
   },
-  exportDDL: async (spaceName: string): Promise<DDLData> =>
-    await get(`/v1/schema/spaces/${spaceName}/ddl`)() as DDLData,
 };
 
 export default schemaService;

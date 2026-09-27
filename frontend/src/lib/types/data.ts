@@ -1,3 +1,4 @@
+// Domain types for graph visualization - kept as-is since they're frontend-specific
 export interface Vertex {
   vid: string | number;
   tags: Record<string, Record<string, unknown>>;
@@ -11,6 +12,7 @@ export interface Edge {
   properties: Record<string, unknown>;
 }
 
+// Query parameter types - can be aligned with generated schemas later if needed
 export interface VertexListParams {
   limit?: number;
   offset?: number;

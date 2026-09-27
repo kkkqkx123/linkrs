@@ -1,5 +1,6 @@
 import { post } from '$utils/http';
 import type { QueryResult, QueryError } from '$types/query';
+import type { BatchQueryRequest, BatchQueryResponse, ApiResponse_Value } from '$types/schema';
 
 export interface ExecuteQueryParams {
   query: string;
@@ -18,9 +19,13 @@ export const queryService = {
   execute: async (params: ExecuteQueryParams): Promise<ExecuteQueryResponse> => {
     try {
       const startTime = Date.now();
-      const response = await post('/v1/query')(params) as ExecuteQueryResponse;
+      const response = await post('/v1/query', params) as any;
       const executionTime = Date.now() - startTime;
-      return { ...response, executionTime: response.executionTime || executionTime };
+      return { 
+        success: true, 
+        data: response.data?.data || undefined,
+        executionTime: response.executionTime || executionTime 
+      };
     } catch (error) {
       return {
         success: false,

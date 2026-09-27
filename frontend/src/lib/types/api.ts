@@ -1,13 +1,5 @@
-export interface ApiResponse<T = unknown> {
-  success: boolean;
-  data?: T;
-  error?: ApiError;
-}
-
-export interface ApiError {
-  code: string;
-  message: string;
-}
+// Re-export generated types from schema.d.ts
+export type { ApiResponse_Value as ApiResponse, ApiError } from '$types/schema';
 
 export interface PaginatedResponse<T> {
   items: T[];
@@ -15,3 +7,9 @@ export interface PaginatedResponse<T> {
   limit: number;
   offset: number;
 }
+
+// For backward compatibility with services expecting specific response shape
+export type DataPaginatedResponse<T> = {
+  items: T[];
+  total: number;
+};

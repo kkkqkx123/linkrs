@@ -13,3 +13,5 @@ Cargo.lock
 __pycache__
 *.pyc
 *.log
+tools/*/node_modules/
+frontend/src/lib/types/schema.d.ts

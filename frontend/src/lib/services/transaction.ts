@@ -1,4 +1,5 @@
 import { post } from '$utils/http';
+import type { BeginTransactionRequest, BatchQueryRequest, BatchQueryResponse } from '$types/schema';
 
 export interface BeginTransactionParams {
   session_id: number;
@@ -24,11 +25,11 @@ export interface RollbackTransactionParams {
 
 export const transactionService = {
   begin: async (params: BeginTransactionParams): Promise<BeginTransactionResponse> =>
-    await post('/v1/transactions')(params) as BeginTransactionResponse,
+    await post('/v1/transactions', params as any),
   commit: async (id: number, params: CommitTransactionParams): Promise<{ message: string; transaction_id: number }> =>
-    await post(`/v1/transactions/${id}/commit`)(params) as { message: string; transaction_id: number },
+    await post(`/v1/transactions/${id}/commit`, params),
   rollback: async (id: number, params: RollbackTransactionParams): Promise<{ message: string; transaction_id: number }> =>
-    await post(`/v1/transactions/${id}/rollback`)(params) as { message: string; transaction_id: number },
+    await post(`/v1/transactions/${id}/rollback`, params),
 };
 
 export default transactionService;

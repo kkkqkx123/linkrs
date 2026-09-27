@@ -1,3 +1,6 @@
+// Schema types - keep these as-is since OpenAPI generated types have many 'unknown' fields
+// These are frontend business domain types for schema operations
+
 export interface Space {
   id: number;
   name: string;

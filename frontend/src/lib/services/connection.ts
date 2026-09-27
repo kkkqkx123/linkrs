@@ -1,4 +1,5 @@
 import { post, get, _delete } from '$utils/http';
+import type { LoginRequest, LogoutRequest, HealthResponse } from '$types/schema';
 
 export interface LoginParams {
   username: string;
@@ -9,12 +10,6 @@ export interface LoginResponse {
   session_id: number;
   username: string;
   expires_at?: number;
-}
-
-export interface HealthResponse {
-  status: string;
-  service: string;
-  version: string;
 }
 
 export interface CreateSessionParams {
@@ -38,11 +33,11 @@ export interface SessionDetail {
 
 export const connectionService = {
   login: async (params: LoginParams): Promise<LoginResponse> => {
-    return await post('/v1/auth/login')(params) as LoginResponse;
+    return await post('/v1/auth/login', params as LoginRequest);
   },
 
   logout: async (sessionId: number): Promise<void> => {
-    await post('/v1/auth/logout')({ session_id: sessionId });
+    await post('/v1/auth/logout', { session_id: sessionId } as LogoutRequest);
   },
 
   health: async (): Promise<HealthResponse> => {
@@ -51,13 +46,15 @@ export const connectionService = {
 
   sessions: {
     create: async (params: CreateSessionParams): Promise<CreateSessionResponse> => {
-      return await post('/v1/sessions')(params) as CreateSessionResponse;
+      return await post('/v1/sessions', params);
     },
     get: async (id: number): Promise<SessionDetail> => {
-      return await get(`/v1/sessions/${id}`)() as SessionDetail;
+      return await get(`/v1/sessions/${id}`)();
     },
     delete: async (id: number): Promise<void> => {
       await _delete(`/v1/sessions/${id}`)();
     },
   },
 };
+
+export default connectionService;
