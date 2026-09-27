@@ -315,3 +315,15 @@ harness = false
 [[bench]]
 name = "edge_group_commit_bench"
 harness = false
+
+[[bench]]
+name = "rw_mix_group_striping_bench"
+harness = false
+
+[[bench]]
+name = "outonly_vs_both_bench"
+harness = false
+
+[[bench]]
+name = "bundled_necessity_bench"
+harness = false
