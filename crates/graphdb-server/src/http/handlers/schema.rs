@@ -276,15 +276,39 @@ pub async fn list_tags<
         + Sync
         + 'static,
 >(
-    State(_state): State<AppState<S>>,
+    State(state): State<AppState<S>>,
     Path(space_name): Path<String>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
-    // Returns an empty list for now, since SchemaApi doesn't have a list_tags method.
-    Ok(JsonResponse(serde_json::json!({
-        "tags": [],
-        "space_name": space_name,
-        "note": "This feature is pending implementation",
-    })))
+    let result = task::spawn_blocking(move || {
+        let storage = state.server.get_storage();
+        let storage = storage.read();
+        let tags = storage
+            .list_tags(&space_name)
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+        let tag_list: Vec<serde_json::Value> = tags
+            .into_iter()
+            .map(|tag| {
+                serde_json::json!({
+                    "name": tag.tag_name,
+                    "properties": tag.properties.iter().map(|p| {
+                        serde_json::json!({
+                            "name": p.name,
+                            "data_type": format!("{:?}", p.data_type),
+                            "nullable": p.nullable,
+                        })
+                    }).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        Ok::<_, HttpError>(serde_json::json!({
+            "tags": tag_list,
+            "space_name": space_name,
+        }))
+    })
+    .await
+    .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
+
+    Ok(JsonResponse(result?))
 }
 
 // ==================== Edge Type related ====================
@@ -369,15 +393,41 @@ pub async fn list_edge_types<
         + Sync
         + 'static,
 >(
-    State(_state): State<AppState<S>>,
+    State(state): State<AppState<S>>,
     Path(space_name): Path<String>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
-    // Returns an empty list for now, since SchemaApi doesn't have a list_edge_types method.
-    Ok(JsonResponse(serde_json::json!({
-        "edge_types": [],
-        "space_name": space_name,
-        "note": "This feature is pending implementation",
-    })))
+    let result = task::spawn_blocking(move || {
+        let storage = state.server.get_storage();
+        let storage = storage.read();
+        let edge_types = storage
+            .list_edge_types(&space_name)
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+        let edge_list: Vec<serde_json::Value> = edge_types
+            .into_iter()
+            .map(|edge| {
+                serde_json::json!({
+                    "name": edge.edge_type_name,
+                    "src_tag": edge.src_tag_name,
+                    "dst_tag": edge.dst_tag_name,
+                    "properties": edge.properties.iter().map(|p| {
+                        serde_json::json!({
+                            "name": p.name,
+                            "data_type": format!("{:?}", p.data_type),
+                            "nullable": p.nullable,
+                        })
+                    }).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        Ok::<_, HttpError>(serde_json::json!({
+            "edge_types": edge_list,
+            "space_name": space_name,
+        }))
+    })
+    .await
+    .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
+
+    Ok(JsonResponse(result?))
 }
 
 // ==================== Auxiliary Functions ====================

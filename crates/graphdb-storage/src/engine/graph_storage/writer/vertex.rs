@@ -13,7 +13,7 @@ use graphdb_transaction::{MutationEntityKey, MutationResult};
 use super::super::context::helpers;
 use super::super::context::txn_staging::StagedIndexOp;
 use super::super::context::GraphStorageContext;
-use super::super::ops::{route_vertex_id, tag_label_id, RoutedVertexId};
+use super::super::ops::{endpoint_label_id, route_vertex_id, tag_label_id, RoutedVertexId};
 use super::super::serial::scan_vertex_serial_column;
 use super::batch::{PrecheckedBatchContext, SerialBatchState};
 use crate::engine::data_store::EdgeTableKey;
@@ -485,6 +485,63 @@ pub(crate) fn update_vertex(
     Ok(())
 }
 
+/// Warn when a non-cascading vertex delete leaves incident edges behind.
+///
+/// Plain vertex deletion keeps incident edges by design, so the orphaned
+/// rows stay visible until repaired. Each matching edge type is probed with
+/// a limit of one, which costs a single row visit on connected vertices and
+/// nothing when the space has no edge types at all.
+fn warn_if_leaves_dangling_edges(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag_name: &str,
+    label_id: LabelId,
+    vid: &VertexId,
+) {
+    let edge_types = match ctx.schema_manager().list_edge_types(space) {
+        Ok(types) if !types.is_empty() => types,
+        _ => return,
+    };
+    let ts = ctx.get_read_timestamp();
+    for edge_info in &edge_types {
+        let (Some(src_label), Some(dst_label)) = (
+            endpoint_label_id(ctx, space, &edge_info.src_tag_name).unwrap_or(None),
+            endpoint_label_id(ctx, space, &edge_info.dst_tag_name).unwrap_or(None),
+        ) else {
+            continue;
+        };
+        // Unconstrained endpoints resolve to label 0 and match every tag.
+        let out_hit = (src_label == 0 || src_label == label_id)
+            && ctx
+                .out_edges_projected_limit(
+                    edge_info.edge_type_id,
+                    src_label,
+                    *vid,
+                    ts,
+                    Some(&[]),
+                    1,
+                )
+                .is_some_and(|records| !records.is_empty());
+        let in_hit = !out_hit
+            && (dst_label == 0 || dst_label == label_id)
+            && ctx
+                .in_edges_projected_limit(edge_info.edge_type_id, dst_label, *vid, ts, Some(&[]), 1)
+                .is_some_and(|records| !records.is_empty());
+        if out_hit || in_hit {
+            log::warn!(
+                "delete_vertex {}.{}:{} leaves incident {} edges behind; \
+                 use delete_vertex_with_edges for cascade deletes or run \
+                 repair_dangling_edges afterwards",
+                space,
+                tag_name,
+                vid,
+                edge_info.edge_type_name,
+            );
+            return;
+        }
+    }
+}
+
 pub(crate) fn delete_vertex(
     ctx: &GraphStorageContext,
     space: &str,
@@ -499,12 +556,42 @@ pub(crate) fn delete_vertex(
     let label_id = tag_label_id(ctx, space, tag_name)?
         .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag_name)))?;
     let vid = VertexId::normalize_for_vid_type(&space_info.vid_type, *id)?;
+    warn_if_leaves_dangling_edges(ctx, space, tag_name, label_id, &vid);
     let routed = route_vertex_id(&vid)?;
     let ts = ctx.get_write_timestamp()?;
+    delete_vertex_with_timestamp(
+        ctx,
+        space_info.space_id,
+        tag_name,
+        label_id,
+        &vid,
+        &routed,
+        ts,
+        true,
+    )
+}
 
+/// Delete one vertex row with a caller-provided write timestamp.
+///
+/// Shared by plain, cascade and batch deletes so a cascade stamps its edges
+/// and its vertices with one timestamp and settles it once: any failure
+/// aborts the timestamp, hiding both the edge and the vertex writes instead
+/// of leaving a half cascade. The online path still defers settling to the
+/// transaction commit; `settle` only gates the offline commit, which the
+/// batch caller performs once after its loop.
+fn delete_vertex_with_timestamp(
+    ctx: &GraphStorageContext,
+    space_id: u64,
+    tag_name: &str,
+    label_id: LabelId,
+    vid: &VertexId,
+    routed: &RoutedVertexId,
+    ts: Timestamp,
+    settle: bool,
+) -> StorageResult<()> {
     let redo = DeleteVertexRedo {
         label: label_id,
-        vid,
+        vid: *vid,
     };
     let redo_entry = ctx.append_wal_redo(WalOpType::DeleteVertex, ts, &redo)?;
 
@@ -528,24 +615,24 @@ pub(crate) fn delete_vertex(
         error
     };
 
-    let delete_result = match &routed {
+    let delete_result = match routed {
         RoutedVertexId::Int(vid_int) => ctx.delete_vertex_by_i64(label_id, *vid_int, ts),
         RoutedVertexId::Text(id_str) => ctx.delete_vertex(label_id, id_str, ts),
     };
     if let Err(error) = delete_result {
         return Err(unwind(error));
     }
-    if let Err(error) = record_vertex_remove(ctx, vid, Some(redo_entry)) {
+    if let Err(error) = record_vertex_remove(ctx, *vid, Some(redo_entry)) {
         return Err(unwind(error));
     }
 
-    let id_value = Value::from(vid);
+    let id_value = Value::from(*vid);
     if online {
         // Index entry removal replays at commit apply.
         if let Err(error) = ctx.stage_vertex_index_op(
             ts,
             StagedIndexOp::Delete {
-                space_id: space_info.space_id,
+                space_id,
                 vid: id_value,
                 tag: tag_name.to_string(),
             },
@@ -558,7 +645,7 @@ pub(crate) fn delete_vertex(
     if let Err(error) = super::index_maintenance::delete_vertex_indexes(
         ctx,
         ctx.index_metadata_manager(),
-        space_info.space_id,
+        space_id,
         &id_value,
         tag_name,
         ts,
@@ -566,21 +653,25 @@ pub(crate) fn delete_vertex(
         return Err(unwind(error));
     }
 
-    ctx.commit_write_timestamp_ordered(ts)?;
+    if settle {
+        ctx.commit_write_timestamp_ordered(ts)?;
+    }
 
     Ok(())
 }
 
 /// Delete a vertex together with every incident edge in table-scoped batches.
 ///
-/// One write timestamp covers the whole vertex. Each edge-type table removes
-/// its incident edges through the table-level batch entrance (one staging
-/// precheck plus one commit per touched table), while the transaction layer
-/// keeps per-edge redo entries, restore records and index maintenance, so
-/// explicit transactions still roll back edge by edge. Commits and table log
-/// entries scale with the touched tables, not the edge count. A failed table
-/// batch aborts the timestamp with prior tables already committed, never a
-/// half-batch; aborted stamps stay hidden through the pending gate.
+/// One write timestamp covers the edges and the vertex: each edge-type table
+/// removes its incident edges through the table-level batch entrance (one
+/// staging precheck plus one commit per touched table), then the vertex row
+/// is deleted with the same timestamp and settled once. Any failure aborts
+/// the timestamp, hiding both the edge and the vertex writes instead of
+/// leaving a half cascade; aborted stamps stay hidden through the pending
+/// gate. The transaction layer keeps per-edge redo entries, restore records
+/// and index maintenance, so explicit transactions still roll back edge by
+/// edge. Commits and table log entries scale with the touched tables, not
+/// the edge count.
 pub(crate) fn delete_vertex_with_edges(
     ctx: &GraphStorageContext,
     space: &str,
@@ -592,7 +683,10 @@ pub(crate) fn delete_vertex_with_edges(
         .schema_manager()
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
+    let label_id = tag_label_id(ctx, space, tag_name)?
+        .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag_name)))?;
     let id = VertexId::normalize_for_vid_type(&space_info.vid_type, *id)?;
+    let routed = route_vertex_id(&id)?;
     let edge_types = ctx.schema_manager().list_edge_types(space)?;
     let ts = ctx.get_write_timestamp()?;
     for edge_info in &edge_types {
@@ -601,23 +695,19 @@ pub(crate) fn delete_vertex_with_edges(
             return Err(error);
         }
     }
-    if let Err(error) = ctx.commit_write_timestamp_ordered(ts) {
-        ctx.abort_write_timestamp(ts);
-        return Err(error);
-    }
-
-    delete_vertex(ctx, space, tag_name, &id)
+    delete_vertex_with_timestamp(ctx, space_id, tag_name, label_id, &id, &routed, ts, true)
 }
 
 /// Batch-delete multiple vertices together with all their incident edges.
 ///
 /// One write timestamp covers the entire batch. For each edge type, one
 /// staging batch per physical table covers all vertices, reducing commits
-/// from `N * tables` to `tables`. The per-edge transaction redo, restore
+/// from `N * tables` to `tables`; the vertex rows are then deleted with the
+/// same timestamp and settled once. Any failure aborts the timestamp, hiding
+/// the whole batch instead of leaving a half cascade; aborted stamps stay
+/// hidden through the pending gate. The per-edge transaction redo, restore
 /// records and index maintenance keep the explicit transaction rollback
-/// path intact. A failed table batch aborts the timestamp with prior
-/// tables already committed; aborted stamps stay hidden through the
-/// pending gate.
+/// path intact.
 pub(crate) fn batch_delete_vertices_with_edges(
     ctx: &GraphStorageContext,
     space: &str,
@@ -632,14 +722,20 @@ pub(crate) fn batch_delete_vertices_with_edges(
         .schema_manager()
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
+    let label_id = tag_label_id(ctx, space, tag_name)?
+        .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag_name)))?;
     let ids: Vec<VertexId> = ids
         .iter()
         .map(|id| VertexId::normalize_for_vid_type(&space_info.vid_type, *id))
         .collect::<StorageResult<_>>()?;
+    let routed: Vec<RoutedVertexId> = ids
+        .iter()
+        .map(route_vertex_id)
+        .collect::<StorageResult<_>>()?;
     let edge_types = ctx.schema_manager().list_edge_types(space)?;
     let ts = ctx.get_write_timestamp()?;
 
-    // Phase 1: Cascade-delete edges for all vertices across all edge types.
+    // Cascade-delete edges for all vertices across all edge types.
     for edge_info in &edge_types {
         if let Err(error) = batch_delete_incident_edges_of_type(ctx, space_id, &ids, edge_info, ts)
         {
@@ -647,16 +743,19 @@ pub(crate) fn batch_delete_vertices_with_edges(
             return Err(error);
         }
     }
-    if let Err(error) = ctx.commit_write_timestamp_ordered(ts) {
-        ctx.abort_write_timestamp(ts);
-        return Err(error);
-    }
 
-    // Phase 2: Delete the vertices themselves.
+    // Delete the vertices themselves with the same timestamp, settling once.
+    // The online path defers settling to the transaction commit.
     let mut deleted = 0usize;
-    for id in &ids {
-        delete_vertex(ctx, space, tag_name, id)?;
+    for (id, route) in ids.iter().zip(routed.iter()) {
+        delete_vertex_with_timestamp(ctx, space_id, tag_name, label_id, id, route, ts, false)?;
         deleted += 1;
+    }
+    if !ctx.is_online_write() {
+        if let Err(error) = ctx.commit_write_timestamp_ordered(ts) {
+            ctx.abort_write_timestamp(ts);
+            return Err(error);
+        }
     }
     Ok(deleted)
 }

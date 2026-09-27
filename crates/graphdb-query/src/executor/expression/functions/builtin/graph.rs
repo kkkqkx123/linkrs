@@ -509,7 +509,7 @@ fn execute_out_edges_with_storage(
     let vid = extract_vertex_id(&args[0])?;
     let reader = storage.storage.read();
     let edges = reader
-        .get_node_edges(&storage.space, &vid, EdgeDirection::Out)
+        .get_node_edges(&storage.space, &vid, EdgeDirection::Out, &[])
         .map_err(|e| ExpressionError::function_error(format!("Storage error: {}", e)))?;
     drop(reader);
     let edge_values: Vec<Value> = edges
@@ -529,7 +529,7 @@ fn execute_in_edges_with_storage(
     let vid = extract_vertex_id(&args[0])?;
     let reader = storage.storage.read();
     let edges = reader
-        .get_node_edges(&storage.space, &vid, EdgeDirection::In)
+        .get_node_edges(&storage.space, &vid, EdgeDirection::In, &[])
         .map_err(|e| ExpressionError::function_error(format!("Storage error: {}", e)))?;
     drop(reader);
     let edge_values: Vec<Value> = edges
@@ -847,7 +847,7 @@ fn execute_pagerank_with_storage(
     for vid in &vertex_ids {
         let reader = storage.storage.read();
         let edges = reader
-            .get_node_edges(&storage.space, vid, graphdb_core::types::EdgeDirection::Out)
+            .get_node_edges(&storage.space, vid, graphdb_core::types::EdgeDirection::Out, &[])
             .map_err(|e| ExpressionError::function_error(format!("Storage error: {}", e)))?;
         drop(reader);
 

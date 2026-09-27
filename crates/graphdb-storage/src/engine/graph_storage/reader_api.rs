@@ -104,8 +104,32 @@ impl StorageReader for GraphStorage {
         space: &str,
         node_id: &VertexId,
         direction: EdgeDirection,
+        edge_types: &[String],
     ) -> Result<Vec<Edge>, StorageError> {
-        reader::get_node_edges(&self.ctx, space, node_id, direction)
+        reader::get_node_edges(&self.ctx, space, node_id, direction, edge_types)
+    }
+
+    fn get_node_edges_projected(
+        &self,
+        space: &str,
+        node_id: &VertexId,
+        direction: EdgeDirection,
+        edge_types: &[String],
+        projection: Option<&[String]>,
+        limit: Option<usize>,
+    ) -> Result<Vec<Edge>, StorageError> {
+        reader::get_node_edges_projected(
+            &self.ctx, space, node_id, direction, edge_types, projection, limit,
+        )
+    }
+
+    fn get_vertices_batch(
+        &self,
+        space: &str,
+        tag: &str,
+        ids: &[VertexId],
+    ) -> Result<Vec<Option<Vertex>>, StorageError> {
+        reader::get_vertices_batch(&self.ctx, space, tag, ids)
     }
 
     fn neighbor_dst_ids_batch(

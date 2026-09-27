@@ -330,7 +330,7 @@ pub fn load_csr(path: &Path, csr: &mut CsrVariant, expected_section: u32) -> Sto
 
     if !cursor.is_empty() {
         return Err(StorageError::deserialize_error(
-            "unexpected trailing data in edge CSR: old multi-segment format is not supported"
+            "unexpected trailing data in edge CSR: old multi-segment format is not supported, rebuild the edge table from source instead of relying on automatic migration"
                 .to_string(),
         ));
     }

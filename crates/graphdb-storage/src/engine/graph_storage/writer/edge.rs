@@ -140,11 +140,7 @@ fn insert_edge_at_timestamp(
             ))
         })?;
 
-    let props: Vec<(String, Value)> = edge
-        .props
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
+    let props: Vec<(String, Value)> = edge.props.into_iter().collect();
     let props =
         super::constraints::apply_edge_type_constraints(ctx, space, &edge.edge_type, props)?;
     let src_value = Value::from(edge.src);

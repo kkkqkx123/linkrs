@@ -469,6 +469,7 @@ mod tests {
             _space: &str,
             _node_id: &VertexId,
             _direction: EdgeDirection,
+            _edge_types: &[String],
         ) -> Result<Vec<Edge>, StorageError> {
             Ok(Vec::new())
         }

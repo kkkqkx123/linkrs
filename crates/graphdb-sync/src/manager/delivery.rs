@@ -723,7 +723,10 @@ impl super::SyncManager {
             | OutboxPayload::EdgeInsert { .. }
             | OutboxPayload::EdgeDelete { .. } => {
                 // Vertex/edge data-plane mapping is shared with rebuild
-                // catch-up replay (`vector_contexts_for_payload`).
+                // catch-up replay (`vector_contexts_for_payload`). Edge
+                // payloads intentionally map to zero contexts: vector
+                // indexes are vertex-only, so edge mutations never produce
+                // points on either the live or the rebuild path.
                 contexts = Self::vector_contexts_for_payload(coordinator, payload)?;
             }
             OutboxPayload::CreateIndex {

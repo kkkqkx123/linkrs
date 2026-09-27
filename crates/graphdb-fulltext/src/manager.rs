@@ -362,18 +362,25 @@ impl FulltextIndexManager {
         Ok(())
     }
 
-    fn validate_tag_exists(&self, space_id: u64, tag_name: &str) -> Result<(), SearchError> {
+    /// Accept a vertex tag or an edge type name: both share one fulltext
+    /// index namespace keyed by `(space, schema, field)`, so creation must
+    /// not reject edge type names.
+    fn validate_schema_exists(&self, space_id: u64, schema_name: &str) -> Result<(), SearchError> {
         if let Some(ref schema_manager) = self.schema_manager {
             let space = schema_manager
                 .get_space_by_id(space_id)
-                .map_err(|e| SearchError::Internal(format!("Failed to validate tag: {}", e)))?;
+                .map_err(|e| SearchError::Internal(format!("Failed to validate schema: {}", e)))?;
 
             if let Some(space_info) = space {
-                let tag_exists = space_info.tags.iter().any(|t| t.tag_name == tag_name);
-                if !tag_exists {
+                let schema_exists = space_info.tags.iter().any(|t| t.tag_name == schema_name)
+                    || space_info
+                        .edge_types
+                        .iter()
+                        .any(|e| e.edge_type_name == schema_name);
+                if !schema_exists {
                     return Err(SearchError::TagNotFound(format!(
                         "{}.{}",
-                        space_id, tag_name
+                        space_id, schema_name
                     )));
                 }
             }
@@ -412,6 +419,13 @@ impl FulltextIndexManager {
         Ok(self.base_path.clone())
     }
 
+    /// Create a fulltext index for one schema field.
+    ///
+    /// `schema_name` is a vertex tag or an edge type name. Vertex tags and
+    /// edge types share one index namespace: an edge type may reuse a vertex
+    /// tag name and both write into the same `(space, schema, field)` index.
+    /// This sharing is intentional; the sync delivery path indexes edge
+    /// properties through [`Self::index_edge_property`] into that same index.
     pub async fn create_index(
         &self,
         space_id: u64,
@@ -431,6 +445,10 @@ impl FulltextIndexManager {
         .await
     }
 
+    /// Create a fulltext index with explicit engine configuration.
+    ///
+    /// The `tag_name` parameter is a schema name: a vertex tag or an edge
+    /// type name sharing one index namespace (see [`Self::create_index`]).
     pub async fn create_index_with_engine_config(
         &self,
         space_id: u64,
@@ -441,7 +459,7 @@ impl FulltextIndexManager {
         engine_config: Option<serde_json::Value>,
     ) -> Result<String, SearchError> {
         self.validate_space_exists(space_id)?;
-        self.validate_tag_exists(space_id, tag_name)?;
+        self.validate_schema_exists(space_id, tag_name)?;
         #[cfg(not(feature = "fulltext"))]
         let _ = &engine_config;
 
@@ -705,6 +723,10 @@ impl FulltextIndexManager {
             .collect()
     }
 
+    /// Index one edge property value into the shared `(space, edge type,
+    /// field)` fulltext index. Edge types share the index namespace with
+    /// vertex tags, so this writes into the same index a vertex tag of the
+    /// same name would use.
     pub async fn index_edge_property(
         &self,
         space_id: u64,

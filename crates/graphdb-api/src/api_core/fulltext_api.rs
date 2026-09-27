@@ -59,7 +59,8 @@ impl FulltextApi {
     ///
     /// # Arguments
     /// * `space_id` - The space (namespace) ID
-    /// * `tag_name` - The tag (vertex type) name
+    /// * `tag_name` - The schema name: a vertex tag or an edge type name.
+    ///   Both share one fulltext index namespace.
     /// * `field_name` - The field name to index
     ///
     /// # Returns
@@ -80,7 +81,7 @@ impl FulltextApi {
     ///
     /// # Arguments
     /// * `space_id` - The space (namespace) ID
-    /// * `tag_name` - The tag (vertex type) name
+    /// * `tag_name` - The schema name: a vertex tag or an edge type name
     /// * `field_name` - The field name
     pub async fn drop_index(
         &self,
@@ -103,7 +104,7 @@ impl FulltextApi {
     ///
     /// # Arguments
     /// * `space_id` - The space (namespace) ID
-    /// * `tag_name` - The tag (vertex type) name
+    /// * `tag_name` - The schema name: a vertex tag or an edge type name
     /// * `field_name` - The field name
     /// * `query` - The search query string
     /// * `limit` - Maximum number of results
@@ -133,7 +134,7 @@ impl FulltextApi {
     ///
     /// # Arguments
     /// * `space_id` - The space (namespace) ID
-    /// * `tag_name` - The tag (vertex type) name
+    /// * `tag_name` - The schema name: a vertex tag or an edge type name
     /// * `field_name` - The field name
     /// * `force` - Explicit confirmation of the destructive clear
     pub async fn clear_index(

@@ -10,8 +10,10 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
         fn get_vertex(&self, space: &str, tag: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
         fn layout_version(&self) -> u64;
         fn vertex_id_domain(&self, space: &str) -> Option<std::ops::Range<i64>>;
+        fn get_vertex_projected(&self, space: &str, tag: &str, id: &VertexId, projection: &[String]) -> Result<Option<Vertex>, StorageError>;
         fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError>;
         fn scan_vertices_by_tag(&self, space: &str, tag: &str) -> Result<Vec<Vertex>, StorageError>;
+        fn scan_vertices_by_tag_paginated(&self, space: &str, tag: &str, offset: usize, limit: usize) -> Result<Vec<Vertex>, StorageError>;
         fn scan_vertices_by_prop(
             &self,
             space: &str,
@@ -27,12 +29,37 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
             edge_type: &str,
             rank: i64,
         ) -> Result<Option<Edge>, StorageError>;
+        fn get_edge_projected(
+            &self,
+            space: &str,
+            src: &VertexId,
+            dst: &VertexId,
+            edge_type: &str,
+            rank: i64,
+            projection: &[String],
+        ) -> Result<Option<Edge>, StorageError>;
         fn get_node_edges(
             &self,
             space: &str,
             node_id: &VertexId,
             direction: graphdb_core::EdgeDirection,
+            edge_types: &[String],
         ) -> Result<Vec<Edge>, StorageError>;
+        fn get_node_edges_projected(
+            &self,
+            space: &str,
+            node_id: &VertexId,
+            direction: graphdb_core::EdgeDirection,
+            edge_types: &[String],
+            projection: Option<&[String]>,
+            limit: Option<usize>,
+        ) -> Result<Vec<Edge>, StorageError>;
+        fn get_vertices_batch(
+            &self,
+            space: &str,
+            tag: &str,
+            ids: &[VertexId],
+        ) -> Result<Vec<Option<Vertex>>, StorageError>;
         fn neighbor_dst_ids_batch(
             &self,
             space: &str,
@@ -49,8 +76,13 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
         ) -> Result<Vec<usize>, StorageError>;
         fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>;
         fn scan_all_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
+        fn scan_edges_by_type_paginated(&self, space: &str, edge_type: &str, offset: usize, limit: usize) -> Result<Vec<Edge>, StorageError>;
         fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError>;
         fn count_edges_by_type(&self, space: &str, edge_type: &str) -> Result<u64, StorageError>;
+        fn enable_edge_property_index(&self, space: &str, edge_type: &str, pool_capacity: u64) -> Result<bool, StorageError>;
+        fn has_edge_property_index(&self, space: &str, edge_type: &str) -> Result<bool, StorageError>;
+        fn disable_edge_property_index(&self, space: &str, edge_type: &str) -> Result<(), StorageError>;
+        fn lookup_edges_by_property_range(&self, space: &str, edge_type: &str, prop_name: &str, lower: Option<&Value>, upper: Option<&Value>, include_lower: bool, include_upper: bool) -> Result<Vec<Edge>, StorageError>;
         fn lookup_index(
             &self,
             space: &str,
@@ -106,6 +138,7 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
             &self,
             space: &str,
         ) -> Result<Vec<graphdb_core::types::EdgeTypeInfo>, StorageError>;
+        fn resolve_edge_type_name(&self, space: &str, hash: u32) -> Result<Option<String>, StorageError>;
         fn get_tag_index(
             &self,
             space: &str,
@@ -176,5 +209,9 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
             &self,
             plan: &IndexScanPlan,
         ) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError>;
+        fn list_migration_history(&self, space: &str, label: &str, is_edge: bool) -> Result<Vec<crate::MigrationHistoryRecord>, StorageError>;
+        fn get_applied_versions(&self, space: &str, label: &str, is_edge: bool) -> Result<Vec<u64>, StorageError>;
+        fn record_migration_history(&self, record: crate::MigrationHistoryRecord) -> Result<(), StorageError>;
+        fn list_all_migration_history(&self) -> Result<Vec<crate::MigrationHistoryRecord>, StorageError>;
     );
 }

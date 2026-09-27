@@ -113,6 +113,11 @@ impl VectorApi {
     }
 
     /// Create a vector index
+    ///
+    /// Vector indexes are vertex-only: point IDs, payloads, and rebuild
+    /// sources are all modeled per vertex, and edge mutations never produce
+    /// vector points. `tag_name` must be a vertex tag; edge type names are
+    /// rejected by the query and HTTP creation paths before reaching here.
     pub async fn create_index(
         &self,
         space_id: u64,
@@ -131,6 +136,9 @@ impl VectorApi {
     }
 
     /// Create a vector index with full collection config (quantization/hnsw)
+    ///
+    /// Vertex-only, like [`VectorApi::create_index`]: `tag_name` must be a
+    /// vertex tag, never an edge type name.
     pub async fn create_index_with_config(
         &self,
         space_id: u64,

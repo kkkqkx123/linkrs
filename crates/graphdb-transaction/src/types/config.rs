@@ -179,8 +179,9 @@ pub struct TransactionConfig {
     pub concurrency_mode: ConcurrencyMode,
     /// Serializable full-scan read-set threshold.
     /// When a Serializable transaction's read set exceeds this many entries,
-    /// conservative certification is used: any concurrent write since the
-    /// transaction started causes an abort. `None` disables full-scan detection.
+    /// certification aborts only on a concurrent commit that overlaps the
+    /// tracked read footprint; unrelated concurrent writes no longer abort
+    /// the scan. `None` disables full-scan detection.
     ///
     /// Experimental: Serializable SSI is functional but not yet covered by
     /// equivalence regression tests or abort-rate benchmarks. Production

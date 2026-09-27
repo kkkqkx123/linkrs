@@ -225,6 +225,9 @@ impl VectorIndexManager {
     // ── Index lifecycle ───────────────────────────────────────────────
 
     /// Create a vector index (logical index in shared collection).
+    ///
+    /// Vertex-scoped: `tag_name` is always a vertex tag. Callers reject edge
+    /// type names before reaching here.
     pub async fn create_vector_index(
         &self,
         space_id: u64,
@@ -344,6 +347,8 @@ impl VectorIndexManager {
     }
 
     /// Create vector index with config (logical index in shared collection).
+    ///
+    /// Vertex-scoped, like [`Self::create_vector_index`].
     pub async fn create_index_with_config(
         &self,
         space_id: u64,

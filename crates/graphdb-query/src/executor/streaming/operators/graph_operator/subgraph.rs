@@ -65,12 +65,10 @@ pub(super) fn handle(
                         if current_step >= steps {
                             continue;
                         }
-                        if let Ok(edges) = reader.get_node_edges(space_name, &current, direction) {
-                            let et_set: HashSet<String> = edge_types.iter().cloned().collect();
+                        if let Ok(edges) =
+                            reader.get_node_edges(space_name, &current, direction, edge_types)
+                        {
                             for e in &edges {
-                                if !edge_types.is_empty() && !et_set.contains(&e.edge_type) {
-                                    continue;
-                                }
                                 let neighbor_id = match direction {
                                     EdgeDirection::Out => *e.dst(),
                                     EdgeDirection::In => *e.src(),

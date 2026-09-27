@@ -285,6 +285,28 @@ impl VectorOperator {
                         #[cfg(feature = "vector")]
                         {
                             if let Some(coordinator) = vector_coordinator {
+                                // Vector indexes are vertex-only: point IDs,
+                                // payloads, and rebuild sources are all modeled
+                                // per vertex. Reject edge type names here as well
+                                // so the no-metadata query path cannot create an
+                                // index that can never receive data. A storage
+                                // error fails open: the planner already rejects
+                                // known edge types, and an unreadable catalog
+                                // must not block vertex index creation.
+                                if let Some(storage) = storage.as_ref() {
+                                    if !tag_name.is_empty() {
+                                        if let Ok(edge) =
+                                            storage.read().get_edge_type(space_name, tag_name)
+                                        {
+                                            if edge.is_some() {
+                                                return Err(QueryError::execution(format!(
+                                                    "Vector indexes are vertex-only: '{}' is an edge type, create the index on a vertex tag instead",
+                                                    tag_name
+                                                )));
+                                            }
+                                        }
+                                    }
+                                }
                                 let distance = match distance {
                                     crate::parser::ast::vector::VectorDistance::Cosine => {
                                         vector_search::DistanceMetric::Cosine

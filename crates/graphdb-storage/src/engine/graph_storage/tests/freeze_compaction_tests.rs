@@ -280,6 +280,7 @@ fn test_compact_maintenance_propagates_vertex_remap_to_edge_tables() {
             "test_space",
             &VertexId::try_from_int64(1).expect("test vertex id"),
             EdgeDirection::Out,
+            &[],
         )
         .unwrap();
     assert_eq!(out_edges.len(), 1);
@@ -292,6 +293,7 @@ fn test_compact_maintenance_propagates_vertex_remap_to_edge_tables() {
             "test_space",
             &VertexId::try_from_int64(79).expect("test vertex id"),
             EdgeDirection::In,
+            &[],
         )
         .unwrap();
     assert_eq!(in_edges.len(), 1);

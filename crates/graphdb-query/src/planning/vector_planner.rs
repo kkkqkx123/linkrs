@@ -71,6 +71,22 @@ impl Planner for VectorSearchPlanner {
             create.schema_name.clone()
         };
 
+        // Vector indexes are vertex-only: point IDs, payloads, and rebuild
+        // sources are all modeled per vertex. Reject edge type names up
+        // front instead of creating an index that can never receive data.
+        let planner_metadata = self.metadata_context.clone();
+        let metadata = ctx.metadata.or(planner_metadata.as_deref());
+        if let Some(metadata) = metadata {
+            if !create.schema_name.is_empty()
+                && metadata.has_edge_type_metadata(&create.schema_name)
+            {
+                return Err(PlannerError::InvalidOperation(format!(
+                    "Vector indexes are vertex-only: '{}' is an edge type, create the index on a vertex tag instead",
+                    create.schema_name
+                )));
+            }
+        }
+
         let mut params = CreateVectorIndexParams::new(
             create.index_name.clone(),
             schema_name,
@@ -106,9 +122,12 @@ impl Planner for VectorSearchPlanner {
         let space_id = qctx.space_id().unwrap_or(0);
 
         match stmt {
-            Stmt::CreateVectorIndex(create) => {
-                self.transform_create_vector_index(create, &space_name, space_id)
-            }
+            Stmt::CreateVectorIndex(create) => self.transform_create_vector_index(
+                create,
+                &space_name,
+                space_id,
+                self.metadata_context.as_deref(),
+            ),
             Stmt::DropVectorIndex(drop) => self.transform_drop_vector_index(drop, &space_name),
             Stmt::SearchVector(search) => self.transform_search_vector(search, space_id),
             Stmt::LookupVector(lookup) => {
@@ -139,7 +158,20 @@ impl VectorSearchPlanner {
         create: &CreateVectorIndex,
         space_name: &str,
         space_id: u64,
+        metadata_context: Option<&MetadataContext>,
     ) -> Result<SubPlan, PlannerError> {
+        // Vector indexes are vertex-only (see plan_bound): reject edge type
+        // names instead of creating an index that can never receive data.
+        if let Some(metadata) = metadata_context {
+            if !create.schema_name.is_empty()
+                && metadata.has_edge_type_metadata(&create.schema_name)
+            {
+                return Err(PlannerError::InvalidOperation(format!(
+                    "Vector indexes are vertex-only: '{}' is an edge type, create the index on a vertex tag instead",
+                    create.schema_name
+                )));
+            }
+        }
         let schema_name = if create.schema_name.is_empty() {
             space_name.to_string()
         } else {
@@ -684,6 +716,47 @@ mod tests {
             if_exists: false,
         });
         assert!(planner.match_planner(&drop_stmt));
+    }
+
+    #[test]
+    fn test_create_rejects_edge_type_names() {
+        use crate::metadata::{EdgeTypeMetadata, TagMetadata};
+
+        let mut metadata = MetadataContext::new();
+        metadata.set_tag_metadata(
+            "Article".to_string(),
+            TagMetadata::new("Article".to_string(), 1),
+        );
+        metadata.set_edge_type_metadata(
+            "WROTE".to_string(),
+            EdgeTypeMetadata::new("WROTE".to_string(), 1),
+        );
+        let planner = VectorSearchPlanner::with_metadata_context(Arc::new(metadata));
+
+        let create = |schema: &str| CreateVectorIndex {
+            span: Span::default(),
+            index_name: "idx".to_string(),
+            schema_name: schema.to_string(),
+            field_name: "vec".to_string(),
+            config: VectorIndexConfig::new(128, crate::parser::ast::vector::VectorDistance::Cosine),
+            if_not_exists: false,
+        };
+        // Vertex tags pass validation.
+        assert!(planner
+            .transform_create_vector_index(&create("Article"), "default", 1, planner.metadata_context.as_deref())
+            .is_ok());
+        // Edge type names are rejected: vector indexes are vertex-only.
+        let rejected =
+            planner.transform_create_vector_index(&create("WROTE"), "default", 1, planner.metadata_context.as_deref());
+        assert!(
+            matches!(rejected, Err(PlannerError::InvalidOperation(_))),
+            "edge type vector creation should be rejected, got: {:?}",
+            rejected.map(|_| ()),
+        );
+        // Unknown schema names still pass the planner (resolved downstream).
+        assert!(planner
+            .transform_create_vector_index(&create("Missing"), "default", 1, planner.metadata_context.as_deref())
+            .is_ok());
     }
 
     #[test]

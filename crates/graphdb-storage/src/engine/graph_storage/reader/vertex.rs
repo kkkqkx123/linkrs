@@ -173,6 +173,55 @@ pub(crate) fn count_vertices_by_tag(
     Ok(count)
 }
 
+pub(crate) fn get_vertices_batch(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag: &str,
+    ids: &[VertexId],
+) -> StorageResult<Vec<Option<Vertex>>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    record_schema_read(ctx, space);
+    let space_info = ctx
+        .schema_manager()
+        .get_space(space)?
+        .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
+    let tag_info = ctx
+        .schema_manager()
+        .get_tag(space, tag)?
+        .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag)))?;
+    let label_id = tag_info.tag_id;
+    let ts = ctx.get_read_timestamp();
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        record_vertex_read(ctx, *id);
+        let normalized = match VertexId::normalize_for_vid_type(&space_info.vid_type, *id) {
+            Ok(vid) => vid,
+            Err(_) => {
+                out.push(None);
+                continue;
+            }
+        };
+        let routed = match route_vertex_id(&normalized) {
+            Ok(routed) => routed,
+            Err(_) => {
+                out.push(None);
+                continue;
+            }
+        };
+        let record = match &routed {
+            RoutedVertexId::Int(id_int) => ctx.get_vertex_by_i64(label_id, *id_int, ts),
+            RoutedVertexId::Text(id_str) => ctx.get_vertex(label_id, id_str, ts),
+        };
+        out.push(record.map(|record| {
+            let props: HashMap<String, Value> = record.properties.iter().cloned().collect();
+            Vertex::new(normalized, Tag::new(tag.to_string(), props))
+        }));
+    }
+    Ok(out)
+}
+
 pub(crate) fn get_vertex_with_schema(
     ctx: &GraphStorageContext,
     space: &str,

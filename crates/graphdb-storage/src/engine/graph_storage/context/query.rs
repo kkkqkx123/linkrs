@@ -58,6 +58,11 @@ impl GraphStorageContext {
 
     /// Live edge count on the stored leg. Unlike `total_vertex_count`,
     /// tombstoned edges are not included.
+    ///
+    /// Physical counter for storage stats and checkpoint metadata: it takes
+    /// no read timestamp, so snapshot reads must use the gate-filtered
+    /// per-type count (`count_edges_by_type`) or
+    /// [`Self::total_visible_edge_count`] instead.
     pub fn total_edge_count(&self) -> usize {
         self.persistent
             .data_store
@@ -66,6 +71,24 @@ impl GraphStorageContext {
                 tables
                     .values()
                     .map(|arc| arc.read().edge_count() as usize)
+                    .sum()
+            })
+    }
+
+    /// Snapshot-consistent live edge total across all tables at `ts`.
+    ///
+    /// Sums the per-table gate-filtered leg counts, so the result matches
+    /// what scans observe at the same snapshot. Walks each stored leg once;
+    /// latency-sensitive callers should prefer the per-type count instead.
+    pub fn total_visible_edge_count(&self, ts: Timestamp) -> usize {
+        let gate = self.pending_gate();
+        self.persistent
+            .data_store
+            .catalog_read_snapshot()
+            .with_edge_tables(|tables| {
+                tables
+                    .values()
+                    .map(|arc| arc.read().visible_edge_count(ts, &gate) as usize)
                     .sum()
             })
     }

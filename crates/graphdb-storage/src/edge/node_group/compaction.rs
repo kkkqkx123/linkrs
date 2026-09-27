@@ -59,10 +59,34 @@ impl CsrShardSet {
             .unwrap_or(false)
     }
 
+    /// Physical tombstone entries cached for one group. Zero guarantees the
+    /// group holds no tombstones, so reclaimable walks can stop at O(1).
+    pub fn group_dead_entries(&self, gid: usize) -> usize {
+        self.shards
+            .get(&gid)
+            .map(|shard| shard.dead_entries)
+            .unwrap_or(0)
+    }
+
     /// Clear the reclaim hint after a pass visited the whole group.
     pub fn clear_reclaim_hint(&mut self, gid: usize) {
         if let Some(shard) = self.shards.get_mut(&gid) {
             shard.reclaim_hint = false;
+        }
+    }
+
+    /// Account for tombstones dropped by a compaction pass. Clears the
+    /// reclaim hint once the cached count reaches zero, so later passes skip
+    /// the group without paying one audit walk to rediscover it is clean.
+    fn note_group_reclaimed(&mut self, gid: usize, removed: usize) {
+        if removed == 0 {
+            return;
+        }
+        if let Some(shard) = self.shards.get_mut(&gid) {
+            shard.dead_entries = shard.dead_entries.saturating_sub(removed);
+            if shard.dead_entries == 0 {
+                shard.reclaim_hint = false;
+            }
         }
     }
 
@@ -117,6 +141,12 @@ impl CsrShardSet {
         let Some(shard) = self.shards.get(&gid) else {
             return 0;
         };
+        // A zero cached tombstone count guarantees no reclaimable entry, so
+        // merge-scope selection over clean groups pays O(1) per region
+        // instead of one cold-line walk per row.
+        if shard.dead_entries == 0 {
+            return 0;
+        }
         let (start, end) = region_local_range(region, self.group_size());
         (start..end)
             .map(|local| shard.variant.reclaimable_count(local, cutoff))
@@ -198,6 +228,10 @@ impl CsrShardSet {
             if let Some(slot) = shard.regions.get_mut(region) {
                 slot.deleted = true;
             }
+            shard.dead_entries = shard.dead_entries.saturating_sub(removed);
+            if shard.dead_entries == 0 {
+                shard.reclaim_hint = false;
+            }
         }
         removed
     }
@@ -216,18 +250,23 @@ impl CsrShardSet {
         cutoff: Timestamp,
         on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
     ) -> usize {
-        let Some(shard) = self.shards.get_mut(&gid) else {
-            return 0;
-        };
-        let removed = shard
-            .variant
-            .compact_frozen_rows_batched(locals, cutoff, on_edge_removed);
-        if removed > 0 {
-            shard.dirty.deleted = true;
-            for region in shard.regions.iter_mut() {
-                region.deleted = true;
+        let removed = match self.shards.get_mut(&gid) {
+            Some(shard) => {
+                let removed =
+                    shard
+                        .variant
+                        .compact_frozen_rows_batched(locals, cutoff, on_edge_removed);
+                if removed > 0 {
+                    shard.dirty.deleted = true;
+                    for region in shard.regions.iter_mut() {
+                        region.deleted = true;
+                    }
+                }
+                removed
             }
-        }
+            None => return 0,
+        };
+        self.note_group_reclaimed(gid, removed);
         removed
     }
 
@@ -240,19 +279,23 @@ impl CsrShardSet {
         reserve_ratio: f32,
         on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
     ) -> usize {
-        let Some(shard) = self.shards.get_mut(&gid) else {
-            return 0;
-        };
-        let removed =
-            shard
-                .variant
-                .compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed);
-        if removed > 0 {
-            shard.dirty.deleted = true;
-            for region in shard.regions.iter_mut() {
-                region.deleted = true;
+        let removed = match self.shards.get_mut(&gid) {
+            Some(shard) => {
+                let removed =
+                    shard
+                        .variant
+                        .compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed);
+                if removed > 0 {
+                    shard.dirty.deleted = true;
+                    for region in shard.regions.iter_mut() {
+                        region.deleted = true;
+                    }
+                }
+                removed
             }
-        }
+            None => return 0,
+        };
+        self.note_group_reclaimed(gid, removed);
         removed
     }
 
@@ -272,10 +315,15 @@ impl CsrShardSet {
                 shard
                     .variant
                     .compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed);
-            if removed > before {
+            let delta = removed - before;
+            if delta > 0 {
                 shard.dirty.deleted = true;
                 for region in shard.regions.iter_mut() {
                     region.deleted = true;
+                }
+                shard.dead_entries = shard.dead_entries.saturating_sub(delta);
+                if shard.dead_entries == 0 {
+                    shard.reclaim_hint = false;
                 }
             }
         }

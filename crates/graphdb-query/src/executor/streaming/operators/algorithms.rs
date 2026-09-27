@@ -10,7 +10,7 @@ use crate::storage::QueryStorage;
 use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::storage_ids::VertexId;
-use graphdb_core::{Edge, EdgeDirection, NPath, Path, Value, Vertex};
+use graphdb_core::{EdgeDirection, NPath, Path, Value, Vertex};
 
 /// Materialize one path endpoint into a tagged vertex.
 ///
@@ -189,17 +189,13 @@ pub(crate) fn bidir_bfs_shortest_path(
                 if current_npath.len() >= cfg.max_depth {
                     continue;
                 }
-                if let Ok(edges) = storage.get_node_edges(cfg.space_name, &current_id, forward_dir)
-                {
-                    let filtered: Vec<&Edge> = if let Some(types) = cfg.edge_type_filter {
-                        edges
-                            .iter()
-                            .filter(|e| types.contains(&e.edge_type))
-                            .collect()
-                    } else {
-                        edges.iter().collect()
-                    };
-                    for edge in &filtered {
+                if let Ok(edges) = storage.get_node_edges(
+                    cfg.space_name,
+                    &current_id,
+                    forward_dir,
+                    cfg.edge_type_filter.unwrap_or(&[]),
+                ) {
+                    for edge in &edges {
                         let neighbor_id = edge.dst();
                         if left_visited.contains_key(neighbor_id) {
                             continue;
@@ -277,17 +273,13 @@ pub(crate) fn bidir_bfs_shortest_path(
                     continue;
                 }
 
-                if let Ok(edges) = storage.get_node_edges(cfg.space_name, &current_id, backward_dir)
-                {
-                    let filtered: Vec<&Edge> = if let Some(types) = cfg.edge_type_filter {
-                        edges
-                            .iter()
-                            .filter(|e| types.contains(&e.edge_type))
-                            .collect()
-                    } else {
-                        edges.iter().collect()
-                    };
-                    for edge in &filtered {
+                if let Ok(edges) = storage.get_node_edges(
+                    cfg.space_name,
+                    &current_id,
+                    backward_dir,
+                    cfg.edge_type_filter.unwrap_or(&[]),
+                ) {
+                    for edge in &edges {
                         let neighbor_id = if edge.dst() == &current_id {
                             edge.src()
                         } else {
@@ -427,14 +419,11 @@ pub(crate) fn enumerate_all_paths(
             continue;
         }
         let edges = storage
-            .get_node_edges(cfg.space_name, &current_id, cfg.direction)
+            .get_node_edges(cfg.space_name, &current_id, cfg.direction, cfg.edge_types)
             .map_err(|error| {
                 QueryError::execution(format!("Failed to read path edges: {error}"))
             })?;
         for edge in edges {
-            if !cfg.edge_types.is_empty() && !cfg.edge_types.contains(&edge.edge_type) {
-                continue;
-            }
             let next_id = match cfg.direction {
                 EdgeDirection::Out => *edge.dst(),
                 EdgeDirection::In => *edge.src(),

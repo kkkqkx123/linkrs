@@ -134,6 +134,9 @@ impl CsrShardSet {
         for region in shard.regions.iter_mut() {
             region.deleted = true;
         }
+        // The pack above carries tombstones verbatim, so the cached count
+        // stays exact while the hint clears: frozen groups reject writes and
+        // re-enter reclaim through unfreeze or the flush-time scope walk.
         shard.reclaim_hint = false;
         self.clear_group_append_log(gid);
         Ok(packed_edges)
@@ -212,6 +215,7 @@ impl CsrShardSet {
         };
         let mut variant = self.fresh_variant()?;
         let rows = frozen.vertex_capacity();
+        let mut restored_tombstones = 0usize;
         if variant.is_bundled() {
             // Valued replay: every packed slot restores its word and
             // validity through the regular valued insert entry, so the
@@ -245,6 +249,7 @@ impl CsrShardSet {
                                 nbr.edge_id, gid
                             )));
                         }
+                        restored_tombstones += 1;
                     }
                 }
             }
@@ -271,6 +276,7 @@ impl CsrShardSet {
                                 nbr.edge_id, gid
                             )));
                         }
+                        restored_tombstones += 1;
                     }
                 }
             }
@@ -284,7 +290,10 @@ impl CsrShardSet {
         for region in shard.regions.iter_mut() {
             region.deleted = true;
         }
-        shard.reclaim_hint = true;
+        // The replay above restores tombstones verbatim through fresh
+        // entries, so the counter is exact with no inherited drift.
+        shard.dead_entries = restored_tombstones;
+        shard.reclaim_hint = restored_tombstones > 0;
         self.clear_group_append_log(gid);
         Ok(restored)
     }

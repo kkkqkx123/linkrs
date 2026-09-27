@@ -50,6 +50,68 @@ pub struct GraphDataStore {
     /// Significantly improves performance of edge property operations
     edge_label_index: RwLock<HashMap<LabelId, Vec<EdgeTableKey>>>,
     lock_metrics: CatalogLockMetrics,
+    table_lock_metrics: TableLockMetrics,
+}
+
+/// Contention counters for per-partition edge-table locks.
+///
+/// Catalog metrics cover the registry guards; these cover the table
+/// `RwLock<EdgeStore>` acquisitions instead, split by read and write.
+/// A rising write-wait share on one table while catalog waits stay flat
+/// points at a hot partition (single hot vertex or single hot edge type),
+/// which is the signal for narrower sharding rather than catalog work.
+#[derive(Debug, Default)]
+pub(crate) struct TableLockMetrics {
+    read_acquisitions: AtomicU64,
+    read_wait_nanos: AtomicU64,
+    read_contended: AtomicU64,
+    write_acquisitions: AtomicU64,
+    write_wait_nanos: AtomicU64,
+    write_contended: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TableLockMetricsSnapshot {
+    pub read_acquisitions: u64,
+    pub read_wait_nanos: u64,
+    pub read_contended: u64,
+    pub write_acquisitions: u64,
+    pub write_wait_nanos: u64,
+    pub write_contended: u64,
+}
+
+impl TableLockMetrics {
+    fn record(&self, write: bool, started: Instant) {
+        let waited = started.elapsed();
+        let waited_nanos = waited.as_nanos().min(u64::MAX as u128) as u64;
+        let contended = waited >= std::time::Duration::from_micros(1);
+        if write {
+            self.write_acquisitions.fetch_add(1, Ordering::Relaxed);
+            self.write_wait_nanos
+                .fetch_add(waited_nanos, Ordering::Relaxed);
+            if contended {
+                self.write_contended.fetch_add(1, Ordering::Relaxed);
+            }
+        } else {
+            self.read_acquisitions.fetch_add(1, Ordering::Relaxed);
+            self.read_wait_nanos
+                .fetch_add(waited_nanos, Ordering::Relaxed);
+            if contended {
+                self.read_contended.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn snapshot(&self) -> TableLockMetricsSnapshot {
+        TableLockMetricsSnapshot {
+            read_acquisitions: self.read_acquisitions.load(Ordering::Relaxed),
+            read_wait_nanos: self.read_wait_nanos.load(Ordering::Relaxed),
+            read_contended: self.read_contended.load(Ordering::Relaxed),
+            write_acquisitions: self.write_acquisitions.load(Ordering::Relaxed),
+            write_wait_nanos: self.write_wait_nanos.load(Ordering::Relaxed),
+            write_contended: self.write_contended.load(Ordering::Relaxed),
+        }
+    }
 }
 
 /// A short-lived read view of catalog metadata. The view exposes closures,
@@ -293,6 +355,7 @@ impl GraphDataStore {
             edge_label_counter: RwLock::new(0),
             edge_label_index: RwLock::new(HashMap::new()),
             lock_metrics: CatalogLockMetrics::default(),
+            table_lock_metrics: TableLockMetrics::default(),
         }
     }
 
@@ -533,6 +596,10 @@ impl GraphDataStore {
         self.lock_metrics.snapshot()
     }
 
+    pub(crate) fn table_lock_metrics(&self) -> TableLockMetricsSnapshot {
+        self.table_lock_metrics.snapshot()
+    }
+
     pub(crate) fn catalog_read_snapshot(&self) -> CatalogReadSnapshot<'_> {
         CatalogReadSnapshot { store: self }
     }
@@ -639,7 +706,9 @@ impl GraphDataStore {
         };
         arcs.par_iter()
             .map(|(key, arc)| {
+                let started = Instant::now();
                 let mut table = arc.write();
+                self.table_lock_metrics.record(true, started);
                 operation(*key, &mut table)
             })
             .collect()
@@ -678,10 +747,60 @@ impl GraphDataStore {
             .collect();
         arcs.par_iter()
             .map(|(key, arc)| {
+                let started = Instant::now();
                 let mut table = arc.write();
+                self.table_lock_metrics.record(true, started);
                 operation(*key, &mut table)
             })
             .collect()
+    }
+
+    /// Collect the live partition handles for one edge label.
+    ///
+    /// Scatter-gather entry for read fan-out: both the label index and the
+    /// table registry are held only for the handle collection, then released
+    /// before any table lock is taken. Callers pin the returned `Arc`s across
+    /// their table reads, so a concurrent DDL drop cannot free a table under
+    /// them; such a read observes the pre-drop snapshot. Unknown labels
+    /// return empty instead of an error, matching filter-style traversal.
+    pub(crate) fn matching_edge_partition_arcs(
+        &self,
+        edge_label: LabelId,
+    ) -> Vec<Arc<RwLock<EdgeStore>>> {
+        let keys: Vec<EdgeTableKey> =
+            self.with_edge_label_index(|index| index.get(&edge_label).cloned().unwrap_or_default());
+        if keys.is_empty() {
+            return Vec::new();
+        }
+        let guard = self.edge_tables.read();
+        keys.iter()
+            .filter_map(|key| guard.get(key).cloned())
+            .collect()
+    }
+
+    /// Take one partition read lock with contention accounting.
+    ///
+    /// Used by fan-out loops that already hold collected handles outside the
+    /// catalog lock, so each table acquisition is timed on its own.
+    pub(crate) fn read_edge_table<'a>(
+        &self,
+        arc: &'a Arc<RwLock<EdgeStore>>,
+    ) -> parking_lot::RwLockReadGuard<'a, EdgeStore> {
+        let started = Instant::now();
+        let guard = arc.read();
+        self.table_lock_metrics.record(false, started);
+        guard
+    }
+
+    /// Take one partition write lock with contention accounting.
+    pub(crate) fn write_edge_table<'a>(
+        &self,
+        arc: &'a Arc<RwLock<EdgeStore>>,
+    ) -> parking_lot::RwLockWriteGuard<'a, EdgeStore> {
+        let started = Instant::now();
+        let guard = arc.write();
+        self.table_lock_metrics.record(true, started);
+        guard
     }
 
     /// Read a single edge table by key, holding only the table-level lock (not the catalog lock)
@@ -698,7 +817,7 @@ impl GraphDataStore {
                 .ok_or_else(|| StorageError::label_not_found(format!("edge partition {:?}", key)))?
                 .clone()
         };
-        let guard = arc.read();
+        let guard = self.read_edge_table(&arc);
         operation(&guard)
     }
 
@@ -725,7 +844,7 @@ impl GraphDataStore {
                 .ok_or_else(|| StorageError::label_not_found(format!("edge partition {:?}", key)))?
                 .clone()
         };
-        let mut guard = arc.write();
+        let mut guard = self.write_edge_table(&arc);
         operation(&mut guard)
     }
 
@@ -979,7 +1098,7 @@ impl GraphDataStore {
                     .clone()
             }
         };
-        let mut guard = table_arc.write();
+        let mut guard = self.write_edge_table(&table_arc);
         operation(&mut guard)
     }
 }

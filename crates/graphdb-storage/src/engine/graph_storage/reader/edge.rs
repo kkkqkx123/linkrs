@@ -128,13 +128,16 @@ fn edge_record_to_edge_with_projection(
 /// `projection`: `None` = all columns, `Some` = only listed columns
 /// (`Some(&[])` = topology only). `limit`: `None` = unlimited, `Some(k)` =
 /// first-`k` visible edges per direction branch via gate-aware limit pushdown.
+/// `edge_types`: empty = all types, otherwise only matching tables are
+/// visited so a single-type traversal never touches unrelated tables.
 pub(crate) fn get_node_edges(
     ctx: &GraphStorageContext,
     space: &str,
     node_id: &VertexId,
     direction: EdgeDirection,
+    edge_types: &[String],
 ) -> StorageResult<Vec<Edge>> {
-    get_node_edges_projected(ctx, space, node_id, direction, None, None)
+    get_node_edges_projected(ctx, space, node_id, direction, edge_types, None, None)
 }
 
 pub(crate) fn get_node_edges_projected(
@@ -142,6 +145,7 @@ pub(crate) fn get_node_edges_projected(
     space: &str,
     node_id: &VertexId,
     direction: EdgeDirection,
+    edge_types: &[String],
     projection: Option<&[String]>,
     limit: Option<usize>,
 ) -> StorageResult<Vec<Edge>> {
@@ -152,13 +156,16 @@ pub(crate) fn get_node_edges_projected(
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
     let node_vid = VertexId::normalize_for_vid_type(&space_info.vid_type, *node_id)?;
-    let edge_types = ctx.schema_manager().list_edge_types(space)?;
-    if edge_types.is_empty() {
+    let edge_types_all = ctx.schema_manager().list_edge_types(space)?;
+    if edge_types_all.is_empty() {
         return Ok(Vec::new());
     }
     let ts = ctx.get_read_timestamp();
     let mut edges = Vec::new();
-    for edge_info in &edge_types {
+    for edge_info in &edge_types_all {
+        if !edge_types.is_empty() && !edge_types.contains(&edge_info.edge_type_name) {
+            continue;
+        }
         let edge_label_id = edge_info.edge_type_id;
         let edge_type_name = &edge_info.edge_type_name;
         let Some(src_label_id) = endpoint_label_id(ctx, space, &edge_info.src_tag_name)? else {
@@ -227,6 +234,10 @@ pub(crate) fn get_node_edges_projected(
                 }
             }
             EdgeDirection::Both => {
+                // A self-loop lives in both legs, so the out pass and the in
+                // pass below would emit it twice. Deduplicate on the logical
+                // edge key, matching the batch neighbor paths.
+                let mut seen: HashSet<(VertexId, VertexId, i64)> = HashSet::new();
                 let out_records = match remaining {
                     Some(limit) => ctx
                         .out_edges_projected_limit(
@@ -243,6 +254,9 @@ pub(crate) fn get_node_edges_projected(
                         .unwrap_or_default(),
                 };
                 for record in out_records {
+                    if !seen.insert((node_vid, record.dst_vid, record.rank)) {
+                        continue;
+                    }
                     let edge = edge_record_to_edge_with_projection(
                         &record,
                         edge_type_name,
@@ -272,6 +286,9 @@ pub(crate) fn get_node_edges_projected(
                         .unwrap_or_default(),
                 };
                 for record in in_records {
+                    if !seen.insert((record.src_vid, node_vid, record.rank)) {
+                        continue;
+                    }
                     let edge = edge_record_to_edge_with_projection(
                         &record,
                         edge_type_name,
@@ -326,10 +343,11 @@ pub(crate) fn neighbor_dst_ids_batch(
     }
 
     let mut results = Vec::with_capacity(src_ids.len());
+    let mut seen: HashSet<(u32, u32, i64)> = HashSet::new();
     for src_id in src_ids {
         record_vertex_read(ctx, *src_id);
         let mut neighbors: Vec<VertexId> = Vec::new();
-        let mut seen: HashSet<(u32, u32, i64)> = HashSet::new();
+        seen.clear();
         for (edge_label_id, src_label_id, dst_label_id) in &resolved {
             append_hot_neighbors(
                 ctx,
@@ -376,9 +394,10 @@ pub(crate) fn out_degree_batch(
     }
 
     let mut results = Vec::with_capacity(src_ids.len());
+    let mut seen: HashSet<(u32, u32, i64)> = HashSet::new();
     for src_id in src_ids {
         record_vertex_read(ctx, *src_id);
-        let mut seen: HashSet<(u32, u32, i64)> = HashSet::new();
+        seen.clear();
         for (edge_label_id, src_label_id, dst_label_id) in &resolved {
             count_hot_neighbors(
                 ctx,
@@ -398,6 +417,10 @@ pub(crate) fn out_degree_batch(
 
 /// Append hot-CSR neighbors of `src_id` (direction-dependent endpoint) to
 /// `neighbors`. Deduplicated by `(src, dst, rank)` across tables.
+///
+/// Two-phase to avoid holding an edge-table read lock while resolving
+/// vertex ids: the adjacency callback only stages `(far_label, endpoint)`
+/// pairs, and external resolution runs after the edge lock is released.
 #[allow(clippy::too_many_arguments)]
 fn append_hot_neighbors(
     ctx: &GraphStorageContext,
@@ -416,6 +439,7 @@ fn append_hot_neighbors(
             None => true,
         }
     };
+    let mut staged: Vec<(LabelId, u32)> = Vec::new();
     match direction {
         EdgeDirection::Out => {
             ctx.visit_out_nbrs(
@@ -427,12 +451,7 @@ fn append_hot_neighbors(
                 |src_internal, far_label, nbr| {
                     let rank = nbr.rank;
                     if unique((src_internal, nbr.endpoint, rank)) {
-                        let Some(ext) =
-                            internal_to_external_vertex_id(ctx, far_label, nbr.endpoint, ts)
-                        else {
-                            return;
-                        };
-                        neighbors.push(ext);
+                        staged.push((far_label, nbr.endpoint));
                     }
                 },
             );
@@ -447,12 +466,7 @@ fn append_hot_neighbors(
                 |dst_internal, far_label, nbr| {
                     let rank = nbr.rank;
                     if unique((nbr.endpoint, dst_internal, rank)) {
-                        let Some(ext) =
-                            internal_to_external_vertex_id(ctx, far_label, nbr.endpoint, ts)
-                        else {
-                            return;
-                        };
-                        neighbors.push(ext);
+                        staged.push((far_label, nbr.endpoint));
                     }
                 },
             );
@@ -467,12 +481,7 @@ fn append_hot_neighbors(
                 |src_internal, far_label, nbr| {
                     let rank = nbr.rank;
                     if unique((src_internal, nbr.endpoint, rank)) {
-                        let Some(ext) =
-                            internal_to_external_vertex_id(ctx, far_label, nbr.endpoint, ts)
-                        else {
-                            return;
-                        };
-                        neighbors.push(ext);
+                        staged.push((far_label, nbr.endpoint));
                     }
                 },
             );
@@ -485,15 +494,16 @@ fn append_hot_neighbors(
                 |dst_internal, far_label, nbr| {
                     let rank = nbr.rank;
                     if unique((nbr.endpoint, dst_internal, rank)) {
-                        let Some(ext) =
-                            internal_to_external_vertex_id(ctx, far_label, nbr.endpoint, ts)
-                        else {
-                            return;
-                        };
-                        neighbors.push(ext);
+                        staged.push((far_label, nbr.endpoint));
                     }
                 },
             );
+        }
+    }
+    neighbors.reserve(staged.len());
+    for (far_label, endpoint) in staged {
+        if let Some(ext) = internal_to_external_vertex_id(ctx, far_label, endpoint, ts) {
+            neighbors.push(ext);
         }
     }
 }
@@ -674,51 +684,56 @@ pub(crate) fn scan_edges_by_type(
     }
 
     // Constrained path: access the specific edge table directly using iter()
-    // instead of ctx.scan_edges() which collects into Vec.
+    // instead of ctx.scan_edges() which collects into Vec. Scatter-gather:
+    // the handle is collected under a brief catalog lock, topology streams
+    // under the table lock alone, and vertex resolution runs after the table
+    // lock is released, so no edge lock is held while taking vertex locks.
     {
         let key = EdgeTableKey::new(src_label_id, dst_label_id, edge_label_id);
-        ctx.data_store().with_edge_tables(|edge_tables| {
-            if let Some(arc) = edge_tables.get(&key) {
-                let guard = arc.read();
-                let mut iter = guard.iter(ts);
-                loop {
-                    let batch: Vec<_> = iter.by_ref().take(BATCH_SIZE).collect();
-                    if batch.is_empty() {
-                        break;
-                    }
-                    for record in batch {
-                        record_edge_read(
-                            ctx,
-                            graphdb_core::types::EdgeIdentifier::new(
-                                src_label_id,
-                                record.src_vid,
-                                dst_label_id,
-                                record.dst_vid,
-                                edge_label_id,
-                                record.rank,
-                            ),
-                        );
-                        let src_external = match record.src_vid.as_internal_u32() {
-                            Some(internal) if src_label_id != 0 => {
-                                internal_to_external_vertex_id(ctx, src_label_id, internal, ts)
-                                    .unwrap_or(record.src_vid)
-                            }
-                            _ => record.src_vid,
-                        };
-                        let dst_external = match record.dst_vid.as_internal_u32() {
-                            Some(internal) if dst_label_id != 0 => {
-                                internal_to_external_vertex_id(ctx, dst_label_id, internal, ts)
-                                    .unwrap_or(record.dst_vid)
-                            }
-                            _ => record.dst_vid,
-                        };
-                        let edge =
-                            edge_record_to_edge(&record, edge_type, src_external, dst_external);
-                        edges.push(edge);
-                    }
+        let arc = ctx
+            .data_store()
+            .with_edge_tables(|edge_tables| edge_tables.get(&key).cloned());
+        let mut staged = Vec::new();
+        if let Some(arc) = arc {
+            let guard = ctx.data_store().read_edge_table(&arc);
+            let mut iter = guard.iter(ts);
+            loop {
+                let batch: Vec<_> = iter.by_ref().take(BATCH_SIZE).collect();
+                if batch.is_empty() {
+                    break;
                 }
+                staged.extend(batch);
             }
-        });
+        }
+        for record in staged {
+            record_edge_read(
+                ctx,
+                graphdb_core::types::EdgeIdentifier::new(
+                    src_label_id,
+                    record.src_vid,
+                    dst_label_id,
+                    record.dst_vid,
+                    edge_label_id,
+                    record.rank,
+                ),
+            );
+            let src_external = match record.src_vid.as_internal_u32() {
+                Some(internal) if src_label_id != 0 => {
+                    internal_to_external_vertex_id(ctx, src_label_id, internal, ts)
+                        .unwrap_or(record.src_vid)
+                }
+                _ => record.src_vid,
+            };
+            let dst_external = match record.dst_vid.as_internal_u32() {
+                Some(internal) if dst_label_id != 0 => {
+                    internal_to_external_vertex_id(ctx, dst_label_id, internal, ts)
+                        .unwrap_or(record.dst_vid)
+                }
+                _ => record.dst_vid,
+            };
+            let edge = edge_record_to_edge(&record, edge_type, src_external, dst_external);
+            edges.push(edge);
+        }
     }
     Ok(edges)
 }
@@ -781,26 +796,37 @@ pub(crate) fn count_edges_by_type(
         None => return Ok(0),
     };
 
+    // Snapshot-consistent count: the visibility gate keeps historical reads
+    // and uncommitted writes out of the result, matching what scans observe.
+    let ts = ctx.get_read_timestamp();
+    let gate = ctx.pending_gate();
     let hot_count = if src_label_id == 0 && dst_label_id == 0 {
-        ctx.data_store().with_edge_tables(|edge_tables| {
-            edge_tables
-                .values()
-                .map(|arc| arc.read())
-                .filter(|t| t.label() == edge_label_id)
-                .map(|t| t.edge_count())
-                .sum()
-        })
+        let arcs = ctx.data_store().matching_edge_partition_arcs(edge_label_id);
+        let mut hot_count = 0u64;
+        for arc in &arcs {
+            let table = ctx.data_store().read_edge_table(arc);
+            if table.label() != edge_label_id {
+                continue;
+            }
+            hot_count += table.visible_edge_count(ts, &gate);
+        }
+        hot_count
     } else {
         let key =
             crate::engine::data_store::EdgeTableKey::new(src_label_id, dst_label_id, edge_label_id);
         ctx.data_store()
-            .with_single_edge_table(&key, |t| Ok(t.edge_count()))
+            .with_single_edge_table(&key, |t| Ok(t.visible_edge_count(ts, &gate)))
             .unwrap_or(0)
     };
 
     Ok(hot_count)
 }
 
+/// Full edge materialization across all types, one type scan at a time.
+///
+/// Prefer `create_edge_cursor` for large spaces: cursors stream batches
+/// without holding every decoded `Edge` at once. This helper stays for
+/// small-space maintenance paths such as export and repair.
 pub(crate) fn scan_all_edges(ctx: &GraphStorageContext, space: &str) -> StorageResult<Vec<Edge>> {
     record_schema_read(ctx, space);
     let _space_info = ctx

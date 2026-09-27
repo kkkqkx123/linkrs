@@ -15,6 +15,8 @@ use vector_search::{DistanceMetric, VectorFilter};
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateVectorIndexRequest {
     pub space_id: u64,
+    /// Vertex tag name. Vector indexes are vertex-only; edge type names are
+    /// rejected.
     pub tag_name: String,
     pub field_name: String,
     pub vector_size: usize,
@@ -136,6 +138,30 @@ pub async fn create_index<
     let vector_api = graph_service.vector_api();
 
     if let Some(vector_api) = vector_api {
+        // Vector indexes are vertex-only: point IDs, payloads, and rebuild
+        // sources are all modeled per vertex. Reject edge type names up
+        // front instead of creating an index that can never receive data.
+        {
+            let storage = state.server.get_storage();
+            let storage = storage.read();
+            let space_name = storage
+                .get_space_by_id(request.space_id)
+                .map_err(|error| HttpError::InternalError(error.to_string()))?
+                .map(|info| info.space_name)
+                .ok_or_else(|| {
+                    HttpError::NotFound(format!("space id {} not found", request.space_id))
+                })?;
+            let is_edge_type = storage
+                .get_edge_type(&space_name, &request.tag_name)
+                .map_err(|error| HttpError::InternalError(error.to_string()))?
+                .is_some();
+            if is_edge_type {
+                return Err(HttpError::BadRequest(format!(
+                    "Vector indexes are vertex-only: '{}' is an edge type, create the index on a vertex tag instead",
+                    request.tag_name
+                )));
+            }
+        }
         let collection_name = if request.quantization.is_some()
             || request.hnsw_m.is_some()
             || request.hnsw_ef_construct.is_some()

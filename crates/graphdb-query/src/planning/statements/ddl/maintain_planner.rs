@@ -740,10 +740,21 @@ impl Planner for MaintainPlanner {
     fn transform(
         &mut self,
         validated: &ValidatedStatement,
-        _qctx: Arc<QueryContext>,
+        qctx: Arc<QueryContext>,
     ) -> Result<SubPlan, PlannerError> {
         let stmt = validated.stmt();
         let current_space = self.current_space(validated);
+
+        if let Stmt::Create(create_stmt) = stmt {
+            match &create_stmt.target {
+                CreateTarget::Node { .. } | CreateTarget::Edge { .. } | CreateTarget::Path { .. } => {
+                    let mut data_planner =
+                        crate::planning::statements::dml::create_planner::CreatePlanner::new();
+                    return data_planner.transform(validated, qctx);
+                }
+                _ => {}
+            }
+        }
 
         let final_node = match stmt {
             Stmt::Show(show_stmt) => self.plan_show(&show_stmt.target, &current_space),
@@ -761,7 +772,7 @@ impl Planner for MaintainPlanner {
                     return Ok(SubPlan::from_single_node(node));
                 }
                 return Err(PlannerError::UnsupportedOperation(
-                    "Create Node/Edge/Path is not supported by MaintainPlanner".to_string(),
+                    "Create target is not supported by MaintainPlanner".to_string(),
                 ));
             }
 

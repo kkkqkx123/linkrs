@@ -153,12 +153,11 @@ impl<'a> TraversalRuntime<'a> {
                 &self.config.space_name,
                 &item.vertex_id,
                 self.config.direction,
+                &self.config.edge_types,
             );
             self.stats.record_edge_scan(edges.len());
 
-            let filtered = self.reader.filter_edges(&edges, &self.config.edge_types);
-
-            for edge in filtered {
+            for edge in &edges {
                 self.check_cancel()?;
 
                 if self.check_limit() {
@@ -315,11 +314,11 @@ impl<'a> TraversalRuntime<'a> {
                     &self.config.space_name,
                     &top.vertex_id,
                     self.config.direction,
+                    &self.config.edge_types,
                 );
                 self.stats.record_edge_scan(edges.len());
-                let filtered = self.reader.filter_edges(&edges, &self.config.edge_types);
 
-                for edge in filtered {
+                for edge in &edges {
                     self.check_cancel()?;
                     let neighbor_id =
                         self.reader

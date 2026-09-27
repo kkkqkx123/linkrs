@@ -220,6 +220,7 @@ impl EdgeStore {
 
 mod index;
 mod maintenance;
+pub use maintenance::EdgeStorageBreakdown;
 pub(crate) mod owner;
 mod query;
 mod reads;

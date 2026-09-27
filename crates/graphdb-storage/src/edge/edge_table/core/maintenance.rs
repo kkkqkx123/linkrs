@@ -5,6 +5,26 @@ use super::EdgeStore;
 use crate::edge::VertexFragmentation;
 use graphdb_core::types::Timestamp;
 
+/// Per-component storage bytes of one edge table. See
+/// `EdgeStore::storage_breakdown`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EdgeStorageBreakdown {
+    /// Outgoing-leg topology bytes.
+    pub out_bytes: usize,
+    /// Incoming-leg topology bytes. Zero for `OutOnly` tables.
+    pub in_bytes: usize,
+    /// MVCC timestamp authority bytes (single copy).
+    pub authority_bytes: usize,
+    /// Owner-map bytes (single copy).
+    pub owner_bytes: usize,
+    /// Columnar property bytes, or the schema stub for inline forms.
+    pub property_bytes: usize,
+    /// Secondary index bytes plus the property-name cache.
+    pub index_bytes: usize,
+    /// Sum of every component above.
+    pub total_bytes: usize,
+}
+
 impl EdgeStore {
     /// Per-vertex fragmentation view combining both directions.
     ///
@@ -20,6 +40,57 @@ impl EdgeStore {
             capacity: out_cap + in_cap,
             reclaimable: self.out_csr.reclaimable_count(vid, cutoff)
                 + self.in_csr.reclaimable_count(vid, cutoff),
+        }
+    }
+
+    /// Per-component storage breakdown for capacity planning.
+    ///
+    /// Splits `used_memory_size` into its legs so operators can see the
+    /// `Both` topology doubling against the single-copy authority, property
+    /// and index shares before choosing a single direction or the bundled
+    /// inline form. Sums only, never walks rows; the total equals
+    /// `used_memory_size`.
+    pub fn storage_breakdown(&self) -> EdgeStorageBreakdown {
+        let out_bytes = self.out_csr.used_memory_size();
+        let in_bytes = self.in_csr.used_memory_size();
+        let authority_bytes = self.mvcc.edge_timestamps.memory_bytes();
+        let owner_bytes = self.edge_owner.memory_bytes();
+        let property_bytes = self.properties.used_memory_size();
+        let cache_bytes = self.property_index_cache.len()
+            * (std::mem::size_of::<String>() + std::mem::size_of::<usize>());
+        let index_bytes = self
+            .property_index
+            .as_ref()
+            .map(|index| index.memory_usage() as usize)
+            .unwrap_or(0)
+            + cache_bytes;
+        EdgeStorageBreakdown {
+            out_bytes,
+            in_bytes,
+            authority_bytes,
+            owner_bytes,
+            property_bytes,
+            index_bytes,
+            total_bytes: out_bytes
+                + in_bytes
+                + authority_bytes
+                + owner_bytes
+                + property_bytes
+                + index_bytes,
+        }
+    }
+
+    /// Topology write amplification of the stored direction.
+    ///
+    /// `Both` pays double topology writes and double topology storage to
+    /// serve forward and reverse traversal from local rows; single-direction
+    /// tables pay single. The authority, property and index shares stay
+    /// single-copy either way. Prefer `OutOnly`/`InOnly` at creation when
+    /// the missing direction is never traversed.
+    pub fn topology_write_amplification(&self) -> u32 {
+        match self.schema.storage_direction() {
+            crate::edge::StorageDirection::Both => 2,
+            crate::edge::StorageDirection::OutOnly | crate::edge::StorageDirection::InOnly => 1,
         }
     }
 

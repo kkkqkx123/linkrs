@@ -102,13 +102,22 @@ impl EdgeStore {
         }
 
         if self.next_edge_id.0 == 0 {
-            let max_id = self
+            // Legacy checkpoints may persist a zero counter: rebuild it from
+            // the largest allocated id across both legs so single-leg tables
+            // never reuse an id that is still live on the other leg.
+            let out_max = self
                 .out_csr
                 .iter_all()
                 .map(|(_, nbr)| nbr.edge_id.0 + 1)
                 .max()
                 .unwrap_or(0);
-            self.next_edge_id = graphdb_core::types::EdgeId(max_id);
+            let in_max = self
+                .in_csr
+                .iter_all()
+                .map(|(_, nbr)| nbr.edge_id.0 + 1)
+                .max()
+                .unwrap_or(0);
+            self.next_edge_id = graphdb_core::types::EdgeId(out_max.max(in_max));
         }
         // Damage detection for true corruption: torn manifest files already
         // recovered above via the embedded tail. A nonzero count here means

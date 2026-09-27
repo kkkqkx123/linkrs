@@ -88,7 +88,10 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
         }
         match state {
             NeighborScanState::Init => {
-                let dir: EdgeDirection = direction.as_str().into();
+                let dir: EdgeDirection = direction
+                    .as_str()
+                    .parse()
+                    .map_err(QueryError::execution)?;
                 let guard = storage_ref.read();
                 let vertices = guard
                     .scan_vertices_by_tag(space_name, tag)
@@ -127,27 +130,22 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
                 }
                 let end = (*position + op.config.chunk_size).min(vertex_ids.len());
                 let guard = storage_ref.read();
-                for vid in &vertex_ids[*position..end] {
-                    let edges =
-                        guard
-                            .get_node_edges(space_name, vid, *direction)
-                            .map_err(|error| {
-                                storage_error("GetNeighbors", "get node edges", space_name, error)
-                            })?;
-                    for edge in edges {
-                        let nid = match direction {
-                            EdgeDirection::Out => *edge.dst(),
-                            EdgeDirection::In => *edge.src(),
-                            EdgeDirection::Both => {
-                                if edge.src() == vid {
-                                    *edge.dst()
-                                } else {
-                                    *edge.src()
-                                }
-                            }
-                        };
-                        if seen.insert(nid) {
-                            neighbor_ids.push(nid);
+                // Topology-only batched fanout: no Edge or property decoding,
+                // one schema resolution for the whole chunk slice.
+                let batch = guard
+                    .neighbor_dst_ids_batch(
+                        space_name,
+                        &vertex_ids[*position..end],
+                        *direction,
+                        &[],
+                    )
+                    .map_err(|error| {
+                        storage_error("GetNeighbors", "get node edges", space_name, error)
+                    })?;
+                for nids in &batch {
+                    for nid in nids {
+                        if seen.insert(*nid) {
+                            neighbor_ids.push(*nid);
                         }
                     }
                 }
@@ -167,20 +165,18 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
                 let batch_size = end - *position;
                 let mut rows = Vec::with_capacity(batch_size);
                 if projected_properties.is_empty() {
-                    for neighbor_id in &neighbor_ids[*position..end] {
-                        if let Some(vertex) = guard
-                            .get_vertex(space_name, tag, neighbor_id)
-                            .map_err(|error| {
-                                storage_error(
-                                    "GetNeighbors",
-                                    "get neighbor vertex",
-                                    space_name,
-                                    error,
-                                )
-                            })?
-                        {
-                            rows.push(make_flat_vertex_row(vertex, projected_properties));
-                        }
+                    let vertices = guard
+                        .get_vertices_batch(space_name, tag, &neighbor_ids[*position..end])
+                        .map_err(|error| {
+                            storage_error(
+                                "GetNeighbors",
+                                "get neighbor vertex",
+                                space_name,
+                                error,
+                            )
+                        })?;
+                    for vertex in vertices.into_iter().flatten() {
+                        rows.push(make_flat_vertex_row(vertex, projected_properties));
                     }
                 } else {
                     for neighbor_id in &neighbor_ids[*position..end] {

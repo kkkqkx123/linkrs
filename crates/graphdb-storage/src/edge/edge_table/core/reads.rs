@@ -1281,12 +1281,44 @@ impl EdgeStore {
 
     /// Live edge count on the stored leg: the out leg when stored, else the
     /// in leg. Single-direction tables report their one leg, never zero.
+    ///
+    /// Physical counter for maintenance and storage stats: it ignores the
+    /// read timestamp, so snapshot reads must use [`EdgeStore::visible_edge_count`].
     pub fn edge_count(&self) -> u64 {
         if self.schema.has_out() {
             self.out_csr.edge_count()
         } else {
             self.in_csr.edge_count()
         }
+    }
+
+    /// Visible edge count on the stored leg at `ts`: same leg selection as
+    /// [`EdgeStore::edge_count`] with the visibility gate applied per edge.
+    /// Counts without materializing records; snapshot reads stay consistent
+    /// with scans at the cost of a full-leg walk.
+    pub fn visible_edge_count(
+        &self,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) -> u64 {
+        if !self.is_open {
+            return 0;
+        }
+        let mut count = 0u64;
+        if self.schema.has_out() {
+            for (_, nbr) in self.out_csr.iter_all() {
+                if self.is_visible_with_gate(nbr.edge_id, ts, gate) {
+                    count += 1;
+                }
+            }
+            return count;
+        }
+        for (_, nbr) in self.in_csr.iter_all() {
+            if self.is_visible_with_gate(nbr.edge_id, ts, gate) {
+                count += 1;
+            }
+        }
+        count
     }
 
     pub fn delta_edge_count(&self) -> u64 {

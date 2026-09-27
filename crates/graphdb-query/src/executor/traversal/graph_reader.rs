@@ -133,9 +133,10 @@ impl<'a> TraversalGraphReader<'a> {
         space_name: &str,
         vertex_id: &VertexId,
         direction: EdgeDirection,
+        edge_types: &[String],
     ) -> Vec<Edge> {
         self.storage
-            .get_node_edges(space_name, vertex_id, direction)
+            .get_node_edges(space_name, vertex_id, direction, edge_types)
             .unwrap_or_default()
     }
 
@@ -177,13 +178,22 @@ impl<'a> TraversalGraphReader<'a> {
         direction: EdgeDirection,
         edge_types: &[String],
     ) -> Vec<(Vertex, Edge)> {
-        let edges = self.get_edges(space_name, vertex_id, direction);
-        let filtered = self.filter_edges(&edges, edge_types);
-        let mut result = Vec::with_capacity(filtered.len());
-        for edge in filtered {
-            let neighbor_id = self.get_neighbor_id(edge, vertex_id, direction);
-            if let Ok(Some(vertex)) = self.storage.get_vertex(space_name, tag, &neighbor_id) {
-                result.push((vertex, edge.clone()));
+        let edges = self.get_edges(space_name, vertex_id, direction, edge_types);
+        if edges.is_empty() {
+            return Vec::new();
+        }
+        let mut neighbor_ids = Vec::with_capacity(edges.len());
+        for edge in &edges {
+            neighbor_ids.push(self.get_neighbor_id(edge, vertex_id, direction));
+        }
+        let vertices = self
+            .storage
+            .get_vertices_batch(space_name, tag, &neighbor_ids)
+            .unwrap_or_default();
+        let mut result = Vec::with_capacity(edges.len());
+        for (edge, vertex) in edges.into_iter().zip(vertices) {
+            if let Some(vertex) = vertex {
+                result.push((vertex, edge));
             }
         }
         result

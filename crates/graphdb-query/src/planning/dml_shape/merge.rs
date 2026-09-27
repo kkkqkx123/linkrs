@@ -1,8 +1,8 @@
 //! MERGE statement shape renderer.
 //!
-//! Only node/path patterns are supported (the shapes the parser produces for
-//! `MERGE`). Non-outbound edge directions, edge ranges, and pattern
-//! predicates are not re-rendered and fall back to the non-cached path.
+//! Node/path patterns are supported (the shapes the parser produces for
+//! `MERGE`). Edge ranges and pattern predicates are not re-rendered and
+//! fall back to the non-cached path.
 
 use crate::parser::ast::{EdgePattern, MergeStmt, NodePattern, PathElement, Pattern};
 use graphdb_core::types::EdgeDirection;
@@ -70,12 +70,23 @@ fn render_edge(out: &mut String, values: &mut Vec<Value>, edge: &EdgePattern) ->
     if !edge.predicates.is_empty() || edge.range.is_some() {
         return None;
     }
-    match edge.direction {
+    let suffix = match edge.direction {
         EdgeDirection::Out => {
             out.push_str("-[");
+
+            "]->"
         }
-        EdgeDirection::In | EdgeDirection::Both => return None,
-    }
+        EdgeDirection::In => {
+            out.push_str("<-[");
+
+            "]-"
+        }
+        EdgeDirection::Both => {
+            out.push_str("-[");
+
+            "]-"
+        }
+    };
     if let Some(variable) = &edge.variable {
         out.push_str(variable);
     }
@@ -87,6 +98,6 @@ fn render_edge(out: &mut String, values: &mut Vec<Value>, edge: &EdgePattern) ->
         out.push(' ');
         render_contextual(out, values, properties)?;
     }
-    out.push_str("]->");
+    out.push_str(suffix);
     Some(())
 }

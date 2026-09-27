@@ -171,14 +171,17 @@ pub(super) fn handle_bi_expand(
                     }
                 };
                 {
-                    if let Ok(edges) = reader.get_node_edges(space_name, &vid, dir) {
+                    if let Ok(edges) = reader.get_node_edges(
+                        space_name,
+                        &vid,
+                        dir,
+                        &edge_types
+                            .iter()
+                            .filter(|t| t.as_str() != "both")
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                    ) {
                         for e in &edges {
-                            let edge_type_matches = edge_types.is_empty()
-                                || edge_types.contains(&"both".to_string())
-                                || edge_types.contains(&e.edge_type);
-                            if !edge_type_matches {
-                                continue;
-                            }
                             let neighbor_id = if e.src() == &vid { *e.dst() } else { *e.src() };
                             let Some(neighbor_tag) =
                                 crate::executor::traversal::graph_reader::resolve_neighbor_tag(
@@ -304,14 +307,17 @@ pub(super) fn handle_bi_traverse(
                         if depth >= max_depth {
                             continue;
                         }
-                        if let Ok(edges) = reader.get_node_edges(space_name, &current, dir) {
+                        if let Ok(edges) = reader.get_node_edges(
+                            space_name,
+                            &current,
+                            dir,
+                            &edge_types
+                                .iter()
+                                .filter(|t| t.as_str() != "both")
+                                .cloned()
+                                .collect::<Vec<_>>(),
+                        ) {
                             for e in &edges {
-                                let edge_type_matches = edge_types.is_empty()
-                                    || edge_types.contains(&"both".to_string())
-                                    || edge_types.contains(&e.edge_type);
-                                if !edge_type_matches {
-                                    continue;
-                                }
                                 let nid = if e.src() == &current {
                                     *e.dst()
                                 } else {

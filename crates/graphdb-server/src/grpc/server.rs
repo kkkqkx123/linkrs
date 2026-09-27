@@ -525,30 +525,94 @@ impl<
     // Schema Management - Edge Type
     async fn create_edge_type(
         &self,
-        _request: Request<CreateEdgeTypeRequest>,
+        request: Request<CreateEdgeTypeRequest>,
     ) -> Result<Response<CreateEdgeTypeResponse>, Status> {
-        unimplemented!("CreateEdgeType not yet implemented")
+        let req = request.into_inner();
+        if req.space_name.is_empty() || req.edge_type_name.is_empty() {
+            return Err(Status::invalid_argument(
+                "space_name and edge_type_name must not be empty",
+            ));
+        }
+        let properties = req
+            .properties
+            .into_iter()
+            .map(proto_property_to_core)
+            .collect::<Vec<_>>();
+        let edge_info = graphdb_core::types::EdgeTypeInfo::new(req.edge_type_name.clone())
+            .with_properties(properties);
+        let storage = self.app_state.server.get_storage();
+        let mut storage_guard = storage.write();
+        let edge_type_id = storage_guard
+            .create_edge_type(&req.space_name, &edge_info)
+            .map_err(|e| Status::internal(format!("Failed to create edge type: {e}")))?;
+        Ok(Response::new(CreateEdgeTypeResponse {
+            success: true,
+            edge_type_id: edge_type_id as i32,
+            error: String::new(),
+        }))
     }
 
     async fn get_edge_type(
         &self,
-        _request: Request<GetEdgeTypeRequest>,
+        request: Request<GetEdgeTypeRequest>,
     ) -> Result<Response<GetEdgeTypeResponse>, Status> {
-        unimplemented!("GetEdgeType not yet implemented")
+        let req = request.into_inner();
+        let storage = self.app_state.server.get_storage();
+        let storage_guard = storage.read();
+        let edge = storage_guard
+            .get_edge_type(&req.space_name, &req.edge_type_name)
+            .map_err(|e| Status::internal(format!("Failed to get edge type: {e}")))?;
+        match edge {
+            Some(info) => Ok(Response::new(GetEdgeTypeResponse {
+                exists: true,
+                edge_type: Some(core_edge_info_to_proto(&info)),
+                error: String::new(),
+            })),
+            None => Ok(Response::new(GetEdgeTypeResponse {
+                exists: false,
+                edge_type: None,
+                error: String::new(),
+            })),
+        }
     }
 
     async fn list_edge_types(
         &self,
-        _request: Request<ListEdgeTypesRequest>,
+        request: Request<ListEdgeTypesRequest>,
     ) -> Result<Response<ListEdgeTypesResponse>, Status> {
-        unimplemented!("ListEdgeTypes not yet implemented")
+        let req = request.into_inner();
+        let storage = self.app_state.server.get_storage();
+        let storage_guard = storage.read();
+        let edges = storage_guard
+            .list_edge_types(&req.space_name)
+            .map_err(|e| Status::internal(format!("Failed to list edge types: {e}")))?;
+        Ok(Response::new(ListEdgeTypesResponse {
+            edge_types: edges.iter().map(core_edge_info_to_proto).collect(),
+            error: String::new(),
+        }))
     }
 
     async fn drop_edge_type(
         &self,
-        _request: Request<DropEdgeTypeRequest>,
+        request: Request<DropEdgeTypeRequest>,
     ) -> Result<Response<DropEdgeTypeResponse>, Status> {
-        unimplemented!("DropEdgeType not yet implemented")
+        let req = request.into_inner();
+        let storage = self.app_state.server.get_storage();
+        let mut storage_guard = storage.write();
+        let dropped = storage_guard
+            .drop_edge_type(&req.space_name, &req.edge_type_name)
+            .map_err(|e| Status::internal(format!("Failed to drop edge type: {e}")))?;
+        if dropped || req.if_exists {
+            Ok(Response::new(DropEdgeTypeResponse {
+                success: true,
+                error: String::new(),
+            }))
+        } else {
+            Ok(Response::new(DropEdgeTypeResponse {
+                success: false,
+                error: format!("Edge type '{}' does not exist", req.edge_type_name),
+            }))
+        }
     }
 
     // Batch Operations
@@ -1205,6 +1269,82 @@ fn transaction_status(error: TransactionError) -> Status {
         | TransactionErrorKind::SavepointNotActive
         | TransactionErrorKind::NoSavepointsInTransaction => Status::failed_precondition(message),
         _ => Status::internal(message),
+    }
+}
+
+fn proto_property_type_to_data_type(value: i32) -> graphdb_core::DataType {
+    use graphdb_core::DataType;
+    match value {
+        0 => DataType::Bool,
+        1 => DataType::Int,
+        2 => DataType::Float,
+        3 => DataType::Double,
+        4 => DataType::String,
+        5 | 7 => DataType::DateTime,
+        6 => DataType::Date,
+        8 => DataType::String,
+        9 => DataType::Edge,
+        10 => DataType::Vertex,
+        11 => DataType::List(Box::new(DataType::Empty)),
+        12 => DataType::Set(Box::new(DataType::Empty)),
+        13 => DataType::Map(Box::new(DataType::Empty)),
+        _ => DataType::String,
+    }
+}
+
+fn data_type_to_proto_property_type(data_type: &graphdb_core::DataType) -> i32 {
+    use graphdb_core::DataType;
+    match data_type {
+        DataType::Bool => 0,
+        DataType::Int | DataType::SmallInt | DataType::BigInt => 1,
+        DataType::Float => 2,
+        DataType::Double => 3,
+        DataType::String | DataType::FixedString(_) => 4,
+        DataType::DateTime => 7,
+        DataType::Date => 6,
+        DataType::Time => 5,
+        DataType::Edge => 9,
+        DataType::Vertex => 10,
+        DataType::List(_) => 11,
+        DataType::Set(_) => 12,
+        DataType::Map(_) => 13,
+        _ => 4,
+    }
+}
+
+fn proto_property_to_core(prop: super::proto::PropertyDef) -> graphdb_core::types::PropertyDef {
+    graphdb_core::types::PropertyDef::new(
+        prop.name,
+        proto_property_type_to_data_type(prop.r#type),
+    )
+    .with_nullable(prop.nullable)
+}
+
+fn core_property_to_proto(
+    prop: &graphdb_core::types::PropertyDef,
+) -> super::proto::PropertyDef {
+    super::proto::PropertyDef {
+        name: prop.name.clone(),
+        r#type: data_type_to_proto_property_type(&prop.data_type),
+        nullable: prop.nullable,
+        default_value: None,
+        is_primary_key: false,
+    }
+}
+
+fn core_edge_info_to_proto(
+    info: &graphdb_core::types::EdgeTypeInfo,
+) -> super::proto::EdgeTypeInfo {
+    super::proto::EdgeTypeInfo {
+        id: info.edge_type_id as i32,
+        name: info.edge_type_name.clone(),
+        properties: info.properties.iter().map(core_property_to_proto).collect(),
+        options: Some(super::proto::EdgeTypeOptions {
+            directed: true,
+            ttl_seconds: info.ttl_duration.unwrap_or(0),
+            ttl_column: info.ttl_col.clone().unwrap_or_default(),
+        }),
+        created_at: 0,
     }
 }
 

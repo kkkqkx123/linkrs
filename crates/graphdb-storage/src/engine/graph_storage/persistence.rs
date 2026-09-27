@@ -429,6 +429,13 @@ pub(crate) fn persistence_diagnostics(
                     }
                 })
                 .collect();
+        let table_locks = ctx.data_store().table_lock_metrics();
+        diagnostics.table_lock_read_acquisitions = table_locks.read_acquisitions;
+        diagnostics.table_lock_read_wait_nanos = table_locks.read_wait_nanos;
+        diagnostics.table_lock_read_contentions = table_locks.read_contended;
+        diagnostics.table_lock_write_acquisitions = table_locks.write_acquisitions;
+        diagnostics.table_lock_write_wait_nanos = table_locks.write_wait_nanos;
+        diagnostics.table_lock_write_contentions = table_locks.write_contended;
         diagnostics
     })
 }

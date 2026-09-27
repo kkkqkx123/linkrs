@@ -193,7 +193,7 @@ impl StatisticsCollector {
         let mut in_total: u64 = 0;
         for vertex in &vertices {
             let out = storage
-                .get_node_edges(space, &vertex.vid, EdgeDirection::Out)
+                .get_node_edges(space, &vertex.vid, EdgeDirection::Out, &[])
                 .map_err(|e| {
                     format!(
                         "Failed to read out edges for vertex '{}': {}",
@@ -202,7 +202,7 @@ impl StatisticsCollector {
                 })?
                 .len() as u64;
             let incoming = storage
-                .get_node_edges(space, &vertex.vid, EdgeDirection::In)
+                .get_node_edges(space, &vertex.vid, EdgeDirection::In, &[])
                 .map_err(|e| format!("Failed to read in edges for vertex '{}': {}", vertex.vid, e))?
                 .len() as u64;
             out_total += out;

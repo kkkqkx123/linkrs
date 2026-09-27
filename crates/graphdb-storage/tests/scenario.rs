@@ -388,6 +388,7 @@ fn test_multi_edge_type_traversal() {
             "test_space",
             &VertexId::try_from_int64(1).expect("test vertex id"),
             EdgeDirection::Out,
+            &[],
         )
         .unwrap();
     assert_eq!(alice_out.len(), 2, "Alice should have 2 outgoing edges");
@@ -398,6 +399,7 @@ fn test_multi_edge_type_traversal() {
             "test_space",
             &VertexId::try_from_int64(1).expect("test vertex id"),
             EdgeDirection::In,
+            &[],
         )
         .unwrap();
     assert_eq!(
@@ -412,6 +414,7 @@ fn test_multi_edge_type_traversal() {
             "test_space",
             &VertexId::try_from_int64(3).expect("test vertex id"),
             EdgeDirection::In,
+            &[],
         )
         .unwrap();
     assert_eq!(charlie_in.len(), 2, "Charlie should have 2 incoming edges");
@@ -422,6 +425,7 @@ fn test_multi_edge_type_traversal() {
             "test_space",
             &VertexId::try_from_int64(3).expect("test vertex id"),
             EdgeDirection::Out,
+            &[],
         )
         .unwrap();
     assert_eq!(
@@ -863,6 +867,7 @@ fn test_edge_both_direction_traversal() {
             "test_space",
             &VertexId::try_from_int64(1).expect("test vertex id"),
             EdgeDirection::Both,
+            &[],
         )
         .unwrap();
     assert_eq!(both.len(), 1, "Both traversal should find 1 edge for Alice");
@@ -873,6 +878,7 @@ fn test_edge_both_direction_traversal() {
             "test_space",
             &VertexId::try_from_int64(2).expect("test vertex id"),
             EdgeDirection::Both,
+            &[],
         )
         .unwrap();
     assert_eq!(

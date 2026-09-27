@@ -123,8 +123,14 @@ fn test_create_cypher_edge_bidirectional() {
     let query = "CREATE (a)-[:COLLEAGUE]-(b)";
     let mut parser = Parser::new(query);
 
-    let _result = parser.parse();
-    // Bidirectional edges may not be supported at this time, just record the results
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "Cypher CREATE bidirectional edge parse should succeed: {:?}",
+        result.err()
+    );
+    let stmt = result.expect("CREATE bidirectional edge parse should succeed");
+    assert_eq!(stmt.ast.stmt.kind(), "CREATE");
 }
 
 #[test]
@@ -132,8 +138,14 @@ fn test_create_cypher_edge_left_to_right() {
     let query = "CREATE (a)<-[:FOLLOWS]-(b)";
     let mut parser = Parser::new(query);
 
-    let _result = parser.parse();
-    // Reverse edges may not be supported at this time, just record the results
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "Cypher CREATE reverse edge parse should succeed: {:?}",
+        result.err()
+    );
+    let stmt = result.expect("CREATE reverse edge parse should succeed");
+    assert_eq!(stmt.ast.stmt.kind(), "CREATE");
 }
 
 // ==================== CREATE Path Test ====================

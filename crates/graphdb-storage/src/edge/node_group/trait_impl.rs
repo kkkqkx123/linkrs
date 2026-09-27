@@ -96,6 +96,7 @@ impl MutableCsrTrait for CsrShardSet {
             self.record_append_delete(gid, local, edge_id, ts);
             if let Some(shard) = self.shards.get_mut(&gid) {
                 shard.reclaim_hint = true;
+                shard.dead_entries = shard.dead_entries.saturating_add(1);
             }
         }
         Ok(deleted)
@@ -143,6 +144,7 @@ impl MutableCsrTrait for CsrShardSet {
             }
             if let Some(shard) = self.shards.get_mut(&gid) {
                 shard.reclaim_hint = true;
+                shard.dead_entries = shard.dead_entries.saturating_add(deleted);
             }
         }
         deleted
@@ -181,6 +183,7 @@ impl MutableCsrTrait for CsrShardSet {
             }
             if let Some(shard) = self.shards.get_mut(&gid) {
                 shard.reclaim_hint = true;
+                shard.dead_entries = shard.dead_entries.saturating_add(deleted);
             }
         }
         deleted
@@ -214,6 +217,7 @@ impl MutableCsrTrait for CsrShardSet {
             self.record_append_delete(gid, local, expected, ts);
             if let Some(shard) = self.shards.get_mut(&gid) {
                 shard.reclaim_hint = true;
+                shard.dead_entries = shard.dead_entries.saturating_add(1);
             }
         }
         Ok(deleted)
@@ -229,14 +233,24 @@ impl MutableCsrTrait for CsrShardSet {
         let Some((gid, local)) = self.route(src_vid) else {
             return false;
         };
-        self.shards
+        let reverted = self
+            .shards
             .get_mut(&gid)
             .map(|shard| {
                 shard
                     .variant
                     .revert_delete_at_position(local, position, expected, ts)
             })
-            .unwrap_or(false)
+            .unwrap_or(false);
+        if reverted {
+            if let Some(shard) = self.shards.get_mut(&gid) {
+                shard.dead_entries = shard.dead_entries.saturating_sub(1);
+                if shard.dead_entries == 0 {
+                    shard.reclaim_hint = false;
+                }
+            }
+        }
+        reverted
     }
 
     fn delete_edge_by_offset(
@@ -265,6 +279,7 @@ impl MutableCsrTrait for CsrShardSet {
             }
             if let Some(shard) = self.shards.get_mut(&gid) {
                 shard.reclaim_hint = true;
+                shard.dead_entries = shard.dead_entries.saturating_add(1);
             }
         }
         Ok(deleted)
@@ -323,6 +338,12 @@ impl MutableCsrTrait for CsrShardSet {
             .unwrap_or(false);
         if reverted {
             self.mark_region_delete(gid, local);
+            if let Some(shard) = self.shards.get_mut(&gid) {
+                shard.dead_entries = shard.dead_entries.saturating_sub(1);
+                if shard.dead_entries == 0 {
+                    shard.reclaim_hint = false;
+                }
+            }
         }
         reverted
     }
@@ -353,6 +374,12 @@ impl MutableCsrTrait for CsrShardSet {
             .unwrap_or(false);
         if reverted {
             self.mark_region_delete(gid, local);
+            if let Some(shard) = self.shards.get_mut(&gid) {
+                shard.dead_entries = shard.dead_entries.saturating_sub(1);
+                if shard.dead_entries == 0 {
+                    shard.reclaim_hint = false;
+                }
+            }
         }
         reverted
     }
@@ -392,6 +419,12 @@ impl MutableCsrTrait for CsrShardSet {
             .unwrap_or(0);
         if removed > 0 {
             self.mark_region_delete(gid, local);
+            if let Some(shard) = self.shards.get_mut(&gid) {
+                shard.dead_entries = shard.dead_entries.saturating_sub(removed);
+                if shard.dead_entries == 0 {
+                    shard.reclaim_hint = false;
+                }
+            }
         }
         removed
     }

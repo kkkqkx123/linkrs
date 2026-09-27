@@ -40,6 +40,7 @@ pub struct MockStorage {
     /// executor-level tests for the point-lookup sources).
     vertices: Arc<RwLock<HashMap<String, Vec<Vertex>>>>,
     migration_history: Arc<RwLock<crate::migration_history::MigrationHistoryManager>>,
+    edge_property_indexes: Arc<RwLock<std::collections::HashSet<String>>>,
 }
 
 impl MockStorage {
@@ -57,6 +58,7 @@ impl MockStorage {
             migration_history: Arc::new(RwLock::new(
                 crate::migration_history::MigrationHistoryManager::new(),
             )),
+            edge_property_indexes: Arc::new(RwLock::new(std::collections::HashSet::new())),
         })
     }
 
@@ -150,13 +152,111 @@ impl StorageReader for MockStorage {
             })
             .cloned())
     }
-    mock_stub!(&self, get_node_edges(_space: &str, _node_id: &VertexId, _direction: EdgeDirection) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
+    fn get_edge_projected(
+        &self,
+        space: &str,
+        src: &VertexId,
+        dst: &VertexId,
+        edge_type: &str,
+        rank: i64,
+        projection: &[String],
+    ) -> Result<Option<Edge>, StorageError> {
+        let edge = self.get_edge(space, src, dst, edge_type, rank)?;
+        if projection.is_empty() {
+            return Ok(edge);
+        }
+        Ok(edge.map(|mut e| {
+            e.props.retain(|k, _| projection.contains(k));
+            e
+        }))
+    }
+    mock_stub!(&self, get_node_edges(_space: &str, _node_id: &VertexId, _direction: EdgeDirection, _edge_types: &[String]) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, neighbor_dst_ids_batch(_space: &str, _src_ids: &[VertexId], _direction: EdgeDirection, _edge_types: &[String]) -> Result<Vec<Vec<VertexId>>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, out_degree_batch(_space: &str, _src_ids: &[VertexId], _direction: EdgeDirection, _edge_types: &[String]) -> Result<Vec<usize>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, scan_edges_by_type(_space: &str, _edge_type: &str) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, scan_all_edges(_space: &str) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, count_vertices_by_tag(_space: &str, _tag: &str) -> Result<u64, StorageError>, Ok(0));
     mock_stub!(&self, count_edges_by_type(_space: &str, _edge_type: &str) -> Result<u64, StorageError>, Ok(0));
+    fn enable_edge_property_index(
+        &self,
+        space: &str,
+        edge_type: &str,
+        _pool_capacity: u64,
+    ) -> Result<bool, StorageError> {
+        self.edge_property_indexes
+            .write()
+            .insert(format!("{space}.{edge_type}"));
+        Ok(true)
+    }
+    fn has_edge_property_index(&self, space: &str, edge_type: &str) -> Result<bool, StorageError> {
+        Ok(self
+            .edge_property_indexes
+            .read()
+            .contains(&format!("{space}.{edge_type}")))
+    }
+    fn disable_edge_property_index(
+        &self,
+        space: &str,
+        edge_type: &str,
+    ) -> Result<(), StorageError> {
+        self.edge_property_indexes
+            .write()
+            .remove(&format!("{space}.{edge_type}"));
+        Ok(())
+    }
+    fn lookup_edges_by_property_range(
+        &self,
+        _space: &str,
+        edge_type: &str,
+        prop_name: &str,
+        lower: Option<&Value>,
+        upper: Option<&Value>,
+        include_lower: bool,
+        include_upper: bool,
+    ) -> Result<Vec<Edge>, StorageError> {
+        let codec = graphdb_core::value::ordered_codec::OrderedCodec::new();
+        let prefix_bounds = include_lower && !include_upper && lower.is_some() && upper == lower;
+        let value_lower = match lower {
+            Some(value) => {
+                let encoded = codec.encode(value)?;
+                if include_lower {
+                    encoded
+                } else {
+                    graphdb_core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&encoded)
+                }
+            }
+            None => Vec::new(),
+        };
+        let value_upper = match upper {
+            Some(value) => {
+                let encoded = codec.encode(value)?;
+                if prefix_bounds || include_upper {
+                    graphdb_core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&encoded)
+                } else {
+                    encoded
+                }
+            }
+            None => Vec::new(),
+        };
+        let edges = self.edges.read().clone();
+        let mut result = Vec::new();
+        for edge in edges.into_iter().filter(|e| e.edge_type == edge_type) {
+            let Some(prop_value) = edge.props.get(prop_name) else {
+                continue;
+            };
+            let Ok(encoded) = codec.encode(prop_value) else {
+                continue;
+            };
+            if !value_lower.is_empty() && encoded < value_lower {
+                continue;
+            }
+            if !value_upper.is_empty() && encoded >= value_upper {
+                continue;
+            }
+            result.push(edge);
+        }
+        Ok(result)
+    }
     mock_stub!(&self, lookup_index(_space: &str, _index: &str, _value: &Value) -> Result<Vec<Value>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, get_vertex_with_schema(_space: &str, _tag: &str, _id: &Value) -> Result<Option<(TagInfo, Vec<u8>)>, StorageError>, Ok(None));
     mock_stub!(&self, get_edge_with_schema(_space: &str, _edge_type: &str, _src: &Value, _dst: &Value) -> Result<Option<(EdgeTypeInfo, Vec<u8>)>, StorageError>, Ok(None));
@@ -523,6 +623,15 @@ impl UndoTarget for MockStorage {
             .delete_edge(&params, edge_ctx.timestamp)
             .map(|_| ())
             .map_err(|e| graphdb_transaction::undo_log::UndoLogError::UndoFailed(e.to_string()))
+    }
+
+    fn restore_edge(
+        &self,
+        edge: graphdb_core::types::EdgeIdentifier,
+        properties: Vec<(String, graphdb_core::Value)>,
+        ts: graphdb_transaction::wal::Timestamp,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        self.graph.restore_edge(edge, properties, ts)
     }
 
     fn undo_update_edge_property(

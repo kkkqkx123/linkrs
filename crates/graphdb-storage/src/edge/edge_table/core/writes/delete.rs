@@ -112,6 +112,18 @@ impl EdgeStore {
                         edge_id
                     )));
                 }
+                // Dual-leg inconsistency, already repaired by the revert
+                // above: surface it in logs so callers can tell a repaired
+                // inconsistency apart from a plain miss, which shares the
+                // same `None` return.
+                log::warn!(
+                    "edge table '{}' delete ({}, {}, {}) hit a dual-leg mismatch \
+                     and rolled the out leg back; reporting as miss",
+                    self.label_name,
+                    src,
+                    dst,
+                    rank,
+                );
                 return Ok(None);
             }
             if in_deleted > 1 {

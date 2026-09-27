@@ -101,6 +101,14 @@ struct Shard {
     /// cleared after a reclaim scan visits the whole group. Lets reclaim
     /// passes skip groups that never held a deletion.
     reclaim_hint: bool,
+    /// Physical tombstone entries in the group, kept as an over-estimate.
+    ///
+    /// Every tombstone-creating path increments it and every exact removal
+    /// (compaction reporting, revert) decrements it, so zero guarantees the
+    /// group holds no tombstones and reclaim walks can stop at O(1).
+    /// Tombstone reuse on insert is not tracked and only over-estimates,
+    /// which costs an extra scan but never skips needed work.
+    dead_entries: usize,
 }
 
 /// Hot-row routing cache slots. Power of two so the slot is a mask, no

@@ -448,6 +448,10 @@ impl VectorSyncCoordinator {
 
     // ── Index lifecycle (delegated) ───────────────────────────────────
 
+    /// Vertex-scoped index creation. The coordinator has no schema access:
+    /// callers (query planner/executor, HTTP) must reject edge type names
+    /// before reaching here; vector delivery and rebuild never produce
+    /// points for edges.
     pub async fn create_vector_index(
         &self,
         space_id: u64,
@@ -521,6 +525,8 @@ impl VectorSyncCoordinator {
         );
     }
 
+    /// Vertex-scoped index creation with full config. Same contract as
+    /// [`Self::create_vector_index`]: `tag_name` is always a vertex tag.
     pub async fn create_index_with_config(
         &self,
         space_id: u64,

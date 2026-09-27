@@ -115,7 +115,7 @@ fn main() {
     for _ in 0..iterations {
         let start = Instant::now();
         for seed in &seeds {
-            let _ = storage.get_node_edges(SPACE, seed, graphdb::core::EdgeDirection::Out);
+            let _ = storage.get_node_edges(SPACE, seed, graphdb::core::EdgeDirection::Out, &no_types);
         }
         per_vertex_us.push(start.elapsed().as_micros() as u64 * 1_000 / seeds.len() as u64);
     }

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 
-use graphdb_core::types::{LabelId, Timestamp, VertexId};
+use graphdb_core::types::{EdgeIdentifier, Timestamp, VertexId};
 
 use super::context::TransactionContext;
 use super::error::TransactionError;
@@ -138,8 +138,10 @@ pub struct Certifier {
     /// Maps each vertex ID to committed write timestamps + transaction IDs.
     committed_vertex_writes: Mutex<ConflictMap<VertexId>>,
     /// Spatial index for O(1) edge conflict lookup.
-    /// Key: (src_vid, dst_vid, edge_label).
-    committed_edge_writes: Mutex<ConflictMap<(VertexId, VertexId, LabelId)>>,
+    /// Keyed by the full edge identity (endpoint labels and rank included)
+    /// so edges sharing endpoints but differing in rank or endpoint labels
+    /// do not falsely conflict; matches the publish-time precise check.
+    committed_edge_writes: Mutex<ConflictMap<EdgeIdentifier>>,
     /// Spatial index for O(1) schema resource conflict lookup.
     committed_schema_writes: Mutex<ConflictMap<String>>,
     /// Spatial index for O(1) index resource conflict lookup.
@@ -331,8 +333,7 @@ impl Certifier {
         // O(1) edge conflict lookup via spatial index.
         let edge_idx = self.committed_edge_writes.lock();
         for edge in txn_write_set.edges.iter() {
-            let key = (edge.src_vid, edge.dst_vid, edge.edge_label);
-            if let Some(entries) = edge_idx.get(&key) {
+            if let Some(entries) = edge_idx.get(edge) {
                 if entries
                     .iter()
                     .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
@@ -443,8 +444,7 @@ impl Certifier {
 
             let edge_idx = self.committed_edge_writes.lock();
             for edge in txn_read_set.edges.iter() {
-                let key = (edge.src_vid, edge.dst_vid, edge.edge_label);
-                if let Some(entries) = edge_idx.get(&key) {
+                if let Some(entries) = edge_idx.get(edge) {
                     if entries
                         .iter()
                         .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
@@ -527,18 +527,22 @@ impl Certifier {
                 }
             }
 
-            // Conservative full-scan detection when the read set is large.
+            // Full-scan certification when the read set is large: the
+            // per-resource probes above already passed, so abort only on a
+            // newer commit that actually touches the tracked footprint.
+            // Unrelated concurrent commits no longer abort the scan.
             if let Some(threshold) = ctx.serializable_full_scan_threshold() {
                 let read_size = txn_read_set.size() + txn_read_set.read_ranges.len();
                 if read_size >= threshold {
-                    let has_new_commit = committed
-                        .iter()
-                        .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp);
-                    if has_new_commit {
+                    let has_conflicting_commit = committed.iter().any(|(commit_ts, ws)| {
+                        *commit_ts > ctx.start_timestamp
+                            && txn_read_set.has_read_conflict_with(ws)
+                    });
+                    if has_conflicting_commit {
                         drop(committed);
                         stats.record_txn_conflict_with_type(ConflictType::Phantom);
                         return Err(TransactionError::serialization_failed(
-                            "full-scan read set exceeds threshold, conservative abort",
+                            "full-scan read set exceeds threshold with overlapping commit",
                         ));
                     }
                 }
@@ -692,7 +696,7 @@ impl Certifier {
         let mut edge_idx = self.committed_edge_writes.lock();
         for edge in write_set.edges.iter() {
             edge_idx
-                .entry((edge.src_vid, edge.dst_vid, edge.edge_label))
+                .entry(*edge)
                 .or_default()
                 .push((write_timestamp, txn_id));
         }
@@ -755,7 +759,7 @@ impl Certifier {
         for edge in write_set.edges.iter() {
             push_index_entry(
                 edge_idx
-                    .entry((edge.src_vid, edge.dst_vid, edge.edge_label))
+                    .entry(*edge)
                     .or_default(),
                 commit_timestamp,
                 txn_id,

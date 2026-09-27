@@ -65,7 +65,11 @@ impl SnapshotHandle {
 // EdgeId - Newtype Wrapper
 // ============================================================================
 
-/// Edge ID type - unique edge identifier with type safety.
+/// Edge ID type - table-scoped edge identifier with type safety.
+///
+/// Allocated per edge table from zero, so the same numeric value repeats
+/// across tables and must never be compared across tables. The globally
+/// unique edge identity is `EdgeIdentifier` (endpoint labels plus rank).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct EdgeId(pub u64);

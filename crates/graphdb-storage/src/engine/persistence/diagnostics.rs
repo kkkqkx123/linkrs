@@ -29,6 +29,18 @@ pub struct PersistenceDiagnostics {
     pub catalog_lock_contentions: u64,
     /// Lock metrics split by catalog operation type.
     pub catalog_lock_by_operation: Vec<CatalogLockDiagnostic>,
+    /// Edge-table read lock acquisitions across all partitions.
+    pub table_lock_read_acquisitions: u64,
+    /// Total time spent waiting for edge-table read locks, in nanoseconds.
+    pub table_lock_read_wait_nanos: u64,
+    /// Edge-table read acquisitions that observed measurable contention.
+    pub table_lock_read_contentions: u64,
+    /// Edge-table write lock acquisitions across all partitions.
+    pub table_lock_write_acquisitions: u64,
+    /// Total time spent waiting for edge-table write locks, in nanoseconds.
+    pub table_lock_write_wait_nanos: u64,
+    /// Edge-table write acquisitions that observed measurable contention.
+    pub table_lock_write_contentions: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,6 +160,12 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
             catalog_lock_hold_nanos: 0,
             catalog_lock_contentions: 0,
             catalog_lock_by_operation: Vec::new(),
+            table_lock_read_acquisitions: 0,
+            table_lock_read_wait_nanos: 0,
+            table_lock_read_contentions: 0,
+            table_lock_write_acquisitions: 0,
+            table_lock_write_wait_nanos: 0,
+            table_lock_write_contentions: 0,
         }
     }
 

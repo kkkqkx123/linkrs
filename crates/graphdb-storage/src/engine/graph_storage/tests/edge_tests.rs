@@ -217,6 +217,7 @@ fn test_get_node_edges() {
             "test_space",
             &VertexId::try_from_int64(1).expect("test vertex id"),
             EdgeDirection::Out,
+            &[],
         )
         .unwrap();
     assert_eq!(out_edges.len(), 2);
@@ -226,9 +227,28 @@ fn test_get_node_edges() {
             "test_space",
             &VertexId::try_from_int64(2).expect("test vertex id"),
             EdgeDirection::In,
+            &[],
         )
         .unwrap();
     assert_eq!(in_edges.len(), 1);
+    let filtered = storage
+        .get_node_edges(
+            "test_space",
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            EdgeDirection::Out,
+            &["KNOWS".to_string()],
+        )
+        .unwrap();
+    assert_eq!(filtered.len(), 2);
+    let empty_filtered = storage
+        .get_node_edges(
+            "test_space",
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            EdgeDirection::Out,
+            &["MISSING".to_string()],
+        )
+        .unwrap();
+    assert!(empty_filtered.is_empty());
 }
 
 /// The batched accessors must agree with
@@ -263,15 +283,14 @@ fn test_batch_accessors_match_get_node_edges() {
 
     for direction in [EdgeDirection::Out, EdgeDirection::In, EdgeDirection::Both] {
         for (edge_types, label) in [(Vec::<String>::new(), "all"), (knowses.clone(), "KNOWS")] {
-            // Reference: distinct dst ids from get_node_edges.
+            // Reference: distinct dst ids from filtered get_node_edges.
             let mut expected: Vec<Vec<VertexId>> = Vec::new();
             for seed in &seeds {
                 let edges = storage
-                    .get_node_edges("test_space", seed, direction)
+                    .get_node_edges("test_space", seed, direction, &edge_types)
                     .unwrap();
                 let mut dsts: Vec<VertexId> = edges
                     .iter()
-                    .filter(|e| edge_types.is_empty() || edge_types.contains(&e.edge_type))
                     .map(|e| {
                         if matches!(direction, EdgeDirection::Out) {
                             e.dst
@@ -312,13 +331,9 @@ fn test_batch_accessors_match_get_node_edges() {
                 .iter()
                 .map(|seed| {
                     storage
-                        .get_node_edges("test_space", seed, direction)
+                        .get_node_edges("test_space", seed, direction, &edge_types)
                         .unwrap()
-                        .iter()
-                        .filter(|edge| {
-                            edge_types.is_empty() || edge_types.contains(&edge.edge_type)
-                        })
-                        .count()
+                        .len()
                 })
                 .collect();
             assert_eq!(

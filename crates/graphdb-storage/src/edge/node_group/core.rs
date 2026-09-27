@@ -51,6 +51,7 @@ impl CsrShardSet {
                     regions: vec![RegionDirty::default(); regions_per_group(set.group_size())],
                     append: ShardAppendLog::default(),
                     reclaim_hint: false,
+                    dead_entries: 0,
                 },
             );
         }
@@ -192,6 +193,7 @@ impl CsrShardSet {
                     regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
                     append: ShardAppendLog::default(),
                     reclaim_hint: false,
+                    dead_entries: 0,
                 },
             );
         }
@@ -216,6 +218,7 @@ impl CsrShardSet {
                     regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
                     append: ShardAppendLog::default(),
                     reclaim_hint: false,
+                    dead_entries: 0,
                 },
             );
         }
@@ -328,6 +331,12 @@ impl CsrShardSet {
             .unwrap_or(false);
         if reverted {
             self.mark_region_delete(gid, local);
+            if let Some(shard) = self.shards.get_mut(&gid) {
+                shard.dead_entries = shard.dead_entries.saturating_sub(1);
+                if shard.dead_entries == 0 {
+                    shard.reclaim_hint = false;
+                }
+            }
         }
         reverted
     }
@@ -682,6 +691,7 @@ impl CsrShardSet {
                     regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
                     append: ShardAppendLog::default(),
                     reclaim_hint: false,
+                    dead_entries: 0,
                 },
             );
         }
@@ -694,6 +704,7 @@ impl CsrShardSet {
                     regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
                     append: ShardAppendLog::default(),
                     reclaim_hint: false,
+                    dead_entries: 0,
                 },
             );
         }
@@ -703,9 +714,10 @@ impl CsrShardSet {
         Ok(())
     }
 
-    /// Load one group payload without marking it dirty. The reclaim hint
-    /// stays set: loaded groups may hold tombstones the next reclaim pass
-    /// must inspect once.
+    /// Load one group payload without marking it dirty. The tombstone
+    /// counter is derived from the loaded payload in one pass, and the
+    /// reclaim hint follows it, so clean groups skip reclaim scans without
+    /// paying one audit walk after every load.
     pub fn load_group(&mut self, gid: usize, data: &[u8]) -> StorageResult<()> {
         let shard = self.shards.get_mut(&gid).ok_or_else(|| {
             StorageError::deserialize_error(format!("group {} out of range on load", gid))
@@ -716,7 +728,15 @@ impl CsrShardSet {
             *region = RegionDirty::default();
         }
         shard.append.clear();
-        shard.reclaim_hint = true;
+        let dead = shard
+            .variant
+            .iter_all()
+            .filter(|(_, nbr)| {
+                nbr.edge_id != super::super::INVALID_EDGE_ID && nbr.delete_ts != Timestamp::MAX
+            })
+            .count();
+        shard.dead_entries = dead;
+        shard.reclaim_hint = dead > 0;
         Ok(())
     }
 
@@ -749,6 +769,7 @@ impl CsrShardSet {
                         regions: vec![RegionDirty::default(); regions_per_group(self.group_size())],
                         append: ShardAppendLog::default(),
                         reclaim_hint: false,
+                        dead_entries: 0,
                     },
                 );
             }
@@ -786,6 +807,7 @@ impl CsrShardSet {
             }
             shard.append.clear();
             shard.reclaim_hint = false;
+            shard.dead_entries = 0;
         }
     }
 }

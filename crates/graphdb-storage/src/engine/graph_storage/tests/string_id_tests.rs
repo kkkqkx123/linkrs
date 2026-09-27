@@ -58,6 +58,7 @@ fn test_string_id_get_node_edges_in() {
             "str_space",
             &VertexId::try_from_string("a").expect("test vertex id"),
             EdgeDirection::In,
+            &[],
         )
         .unwrap();
     assert_eq!(in_edges.len(), 2, "Node 'a' should have 2 incoming edges");
@@ -117,6 +118,7 @@ fn test_string_id_get_node_edges_out() {
             "str_space",
             &VertexId::try_from_string("a").expect("test vertex id"),
             EdgeDirection::Out,
+            &[],
         )
         .unwrap();
     assert_eq!(out_edges.len(), 1, "Node 'a' should have 1 outgoing edge");

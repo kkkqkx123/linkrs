@@ -802,6 +802,11 @@ message GetFunctionInfoResponse {
 
 // ============================================================
 // Vector Index
+//
+// Vector indexes are vertex-only: every `tag_name` field below is a vertex
+// tag name, never an edge type name. Edge mutations never produce vector
+// points (no edge scan source, no edge point-ID scheme), so there are no
+// edge vector DTOs. A future edge-vector project would add them here.
 // ============================================================
 
 message CreateVectorIndexRequest {

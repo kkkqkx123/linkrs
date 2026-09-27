@@ -462,16 +462,25 @@ impl GraphStorageContext {
         // against, so no retry loop remains: no match reads empty, and a
         // gate-hidden match is a filtered dirty read (a foreign uncommitted
         // creation leaking through the plain predicate).
-        self.persistent.data_store.with_edge_tables(|edge_tables| {
-            let guard = edge_tables.get(&key)?.read();
-            let (record, edge_id) =
-                guard.get_edge_with_id(src_internal, dst_internal, params.rank, ts)?;
-            if guard.mvcc.is_edge_visible_with_gate(edge_id, ts, &gate) {
-                Some(record)
-            } else {
-                None
-            }
-        })
+        // Scatter-gather point lookup: the catalog lock covers only the
+        // handle collection inside `with_single_edge_table`, and the fused
+        // row scan plus gate recheck run under the single table lock alone.
+        self.persistent
+            .data_store
+            .with_single_edge_table(&key, |table| {
+                Ok(
+                    match table.get_edge_with_id(src_internal, dst_internal, params.rank, ts) {
+                        Some((record, edge_id))
+                            if table.mvcc.is_edge_visible_with_gate(edge_id, ts, &gate) =>
+                        {
+                            Some(record)
+                        }
+                        _ => None,
+                    },
+                )
+            })
+            .ok()
+            .flatten()
     }
 
     /// Projected point lookup: same pending-aware recheck as `get_edge`
@@ -530,22 +539,29 @@ impl GraphStorageContext {
         // and the recheck below reuses that id with no second scan and no
         // second lock acquisition. One snapshot closes the lock-to-lock race
         // window, so the old retry loop collapses to a single pass.
-        self.persistent.data_store.with_edge_tables(|edge_tables| {
-            let guard = edge_tables.get(&key)?.read();
-            let (record, edge_id) = guard.get_edge_projected_with_id(
-                src_internal,
-                dst_internal,
-                params.rank,
-                ts,
-                &gate,
-                projection,
-            )?;
-            if guard.mvcc.is_edge_visible_with_gate(edge_id, ts, &gate) {
-                Some(record)
-            } else {
-                None
-            }
-        })
+        self.persistent
+            .data_store
+            .with_single_edge_table(&key, |table| {
+                Ok(
+                    match table.get_edge_projected_with_id(
+                        src_internal,
+                        dst_internal,
+                        params.rank,
+                        ts,
+                        &gate,
+                        projection,
+                    ) {
+                        Some((record, edge_id))
+                            if table.mvcc.is_edge_visible_with_gate(edge_id, ts, &gate) =>
+                        {
+                            Some(record)
+                        }
+                        _ => None,
+                    },
+                )
+            })
+            .ok()
+            .flatten()
     }
 
     pub fn delete_edge(&self, params: &EdgeOperationParams, ts: Timestamp) -> StorageResult<bool> {
@@ -707,6 +723,15 @@ impl GraphStorageContext {
     /// table's owning dst label so callers can project internal endpoints to
     /// external ids even when the edge type's endpoint tags are unconstrained.
     /// Returns the resolved internal src id.
+    ///
+    /// Lock contract: the visitor runs under one table read lock at a time
+    /// and must never acquire a vertex, catalog or second table lock
+    /// (no vertex-id resolution inside the callback). Stage neighbor ids in
+    /// the callback and resolve them after the visit returns; reversing the
+    /// order inverts the vertex-before-edge discipline and can deadlock
+    /// against writers. Handles are collected under a brief catalog lock and
+    /// the catalog is released before any table is touched, so DDL is never
+    /// blocked by a long fan-out.
     pub fn visit_out_nbrs<F>(
         &self,
         edge_label: LabelId,
@@ -738,19 +763,21 @@ impl GraphStorageContext {
                     Some((src_internal, actual_src))
                 })?;
 
-        self.persistent.data_store.with_edge_tables(|edge_tables| {
-            let gate = self.pending_gate();
-            for table in edge_tables
-                .values()
-                .map(|arc| arc.read())
-                .filter(|t| t.label() == edge_label && t.src_label() == actual_src)
-            {
-                let far_label = table.dst_label();
-                table.visit_out_with_gate(src_internal, ts, &gate, |nbr| {
-                    f(src_internal, far_label, nbr)
-                });
+        let arcs = self
+            .persistent
+            .data_store
+            .matching_edge_partition_arcs(edge_label);
+        let gate = self.pending_gate();
+        for arc in &arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            if table.label() != edge_label || table.src_label() != actual_src {
+                continue;
             }
-        });
+            let far_label = table.dst_label();
+            table.visit_out_with_gate(src_internal, ts, &gate, |nbr| {
+                f(src_internal, far_label, nbr)
+            });
+        }
         Some(src_internal)
     }
 
@@ -759,6 +786,10 @@ impl GraphStorageContext {
     /// In-direction counterpart of `visit_out_nbrs`, streaming
     /// `(dst_internal, far_label, nbr)` pairs where `far_label` is the
     /// table's owning src label. Returns the resolved internal dst id.
+    ///
+    /// Same lock contract as `visit_out_nbrs`: the visitor must never
+    /// acquire a vertex, catalog or second table lock; stage and resolve
+    /// after the visit returns.
     pub fn visit_in_nbrs<F>(
         &self,
         edge_label: LabelId,
@@ -790,19 +821,21 @@ impl GraphStorageContext {
                     Some((dst_internal, actual_dst))
                 })?;
 
-        self.persistent.data_store.with_edge_tables(|edge_tables| {
-            let gate = self.pending_gate();
-            for table in edge_tables
-                .values()
-                .map(|arc| arc.read())
-                .filter(|t| t.label() == edge_label && t.dst_label() == actual_dst)
-            {
-                let far_label = table.src_label();
-                table.visit_in_with_gate(dst_internal, ts, &gate, |nbr| {
-                    f(dst_internal, far_label, nbr)
-                });
+        let arcs = self
+            .persistent
+            .data_store
+            .matching_edge_partition_arcs(edge_label);
+        let gate = self.pending_gate();
+        for arc in &arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            if table.label() != edge_label || table.dst_label() != actual_dst {
+                continue;
             }
-        });
+            let far_label = table.src_label();
+            table.visit_in_with_gate(dst_internal, ts, &gate, |nbr| {
+                f(dst_internal, far_label, nbr)
+            });
+        }
         Some(dst_internal)
     }
 
@@ -831,24 +864,29 @@ impl GraphStorageContext {
                     };
                     Some((src_internal, actual_src))
                 })?;
-        let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
-            let mut records = Vec::new();
-            let gate = self.pending_gate();
-            for table in edge_tables
-                .values()
-                .map(|arc| arc.read())
-                .filter(|t| t.label() == edge_label && t.src_label() == actual_src)
-            {
-                let tbl_dst = table.dst_label();
-                for mut record in
-                    table.out_edges_with_gate_projected(src_internal, ts, &gate, projection)
-                {
-                    record.dst_vid = endpoint_to_external(self, tbl_dst, record.dst_vid, ts);
-                    records.push(record);
-                }
+        let arcs = self
+            .persistent
+            .data_store
+            .matching_edge_partition_arcs(edge_label);
+        let gate = self.pending_gate();
+        let mut staged: Vec<(LabelId, EdgeRecord)> = Vec::new();
+        for arc in &arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            if table.label() != edge_label || table.src_label() != actual_src {
+                continue;
             }
-            records
-        });
+            let tbl_dst = table.dst_label();
+            for record in table.out_edges_with_gate_projected(src_internal, ts, &gate, projection) {
+                staged.push((tbl_dst, record));
+            }
+        }
+        // Vertex resolution runs after the edge-table guards are released,
+        // so no edge lock is held while taking vertex-table locks.
+        let mut records = Vec::with_capacity(staged.len());
+        for (tbl_dst, mut record) in staged.drain(..) {
+            record.dst_vid = endpoint_to_external(self, tbl_dst, record.dst_vid, ts);
+            records.push(record);
+        }
         Some(records)
     }
 
@@ -877,24 +915,27 @@ impl GraphStorageContext {
                     };
                     Some((dst_internal, actual_dst))
                 })?;
-        let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
-            let mut records = Vec::new();
-            let gate = self.pending_gate();
-            for table in edge_tables
-                .values()
-                .map(|arc| arc.read())
-                .filter(|t| t.label() == edge_label && t.dst_label() == actual_dst)
-            {
-                let tbl_src = table.src_label();
-                for mut record in
-                    table.in_edges_with_gate_projected(dst_internal, ts, &gate, projection)
-                {
-                    record.src_vid = endpoint_to_external(self, tbl_src, record.src_vid, ts);
-                    records.push(record);
-                }
+        let arcs = self
+            .persistent
+            .data_store
+            .matching_edge_partition_arcs(edge_label);
+        let gate = self.pending_gate();
+        let mut staged: Vec<(LabelId, EdgeRecord)> = Vec::new();
+        for arc in &arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            if table.label() != edge_label || table.dst_label() != actual_dst {
+                continue;
             }
-            records
-        });
+            let tbl_src = table.src_label();
+            for record in table.in_edges_with_gate_projected(dst_internal, ts, &gate, projection) {
+                staged.push((tbl_src, record));
+            }
+        }
+        let mut records = Vec::with_capacity(staged.len());
+        for (tbl_src, mut record) in staged.drain(..) {
+            record.src_vid = endpoint_to_external(self, tbl_src, record.src_vid, ts);
+            records.push(record);
+        }
         Some(records)
     }
 
@@ -924,32 +965,37 @@ impl GraphStorageContext {
                     };
                     Some((src_internal, actual_src))
                 })?;
-        let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
-            let mut records = Vec::new();
-            let gate = self.pending_gate();
-            for table in edge_tables
-                .values()
-                .map(|arc| arc.read())
-                .filter(|t| t.label() == edge_label && t.src_label() == actual_src)
-            {
-                let remaining = limit.saturating_sub(records.len());
-                if remaining == 0 {
-                    break;
-                }
-                let tbl_dst = table.dst_label();
-                for mut record in table.out_edges_with_gate_projected_limit(
-                    src_internal,
-                    ts,
-                    &gate,
-                    projection,
-                    remaining,
-                ) {
-                    record.dst_vid = endpoint_to_external(self, tbl_dst, record.dst_vid, ts);
-                    records.push(record);
-                }
+        let arcs = self
+            .persistent
+            .data_store
+            .matching_edge_partition_arcs(edge_label);
+        let gate = self.pending_gate();
+        let mut staged: Vec<(LabelId, EdgeRecord)> = Vec::new();
+        for arc in &arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            if table.label() != edge_label || table.src_label() != actual_src {
+                continue;
             }
-            records
-        });
+            let remaining = limit.saturating_sub(staged.len());
+            if remaining == 0 {
+                break;
+            }
+            let tbl_dst = table.dst_label();
+            for record in table.out_edges_with_gate_projected_limit(
+                src_internal,
+                ts,
+                &gate,
+                projection,
+                remaining,
+            ) {
+                staged.push((tbl_dst, record));
+            }
+        }
+        let mut records = Vec::with_capacity(staged.len());
+        for (tbl_dst, mut record) in staged.drain(..) {
+            record.dst_vid = endpoint_to_external(self, tbl_dst, record.dst_vid, ts);
+            records.push(record);
+        }
         Some(records)
     }
 
@@ -979,32 +1025,37 @@ impl GraphStorageContext {
                     };
                     Some((dst_internal, actual_dst))
                 })?;
-        let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
-            let mut records = Vec::new();
-            let gate = self.pending_gate();
-            for table in edge_tables
-                .values()
-                .map(|arc| arc.read())
-                .filter(|t| t.label() == edge_label && t.dst_label() == actual_dst)
-            {
-                let remaining = limit.saturating_sub(records.len());
-                if remaining == 0 {
-                    break;
-                }
-                let tbl_src = table.src_label();
-                for mut record in table.in_edges_with_gate_projected_limit(
-                    dst_internal,
-                    ts,
-                    &gate,
-                    projection,
-                    remaining,
-                ) {
-                    record.src_vid = endpoint_to_external(self, tbl_src, record.src_vid, ts);
-                    records.push(record);
-                }
+        let arcs = self
+            .persistent
+            .data_store
+            .matching_edge_partition_arcs(edge_label);
+        let gate = self.pending_gate();
+        let mut staged: Vec<(LabelId, EdgeRecord)> = Vec::new();
+        for arc in &arcs {
+            let table = self.persistent.data_store.read_edge_table(arc);
+            if table.label() != edge_label || table.dst_label() != actual_dst {
+                continue;
             }
-            records
-        });
+            let remaining = limit.saturating_sub(staged.len());
+            if remaining == 0 {
+                break;
+            }
+            let tbl_src = table.src_label();
+            for record in table.in_edges_with_gate_projected_limit(
+                dst_internal,
+                ts,
+                &gate,
+                projection,
+                remaining,
+            ) {
+                staged.push((tbl_src, record));
+            }
+        }
+        let mut records = Vec::with_capacity(staged.len());
+        for (tbl_src, mut record) in staged.drain(..) {
+            record.src_vid = endpoint_to_external(self, tbl_src, record.src_vid, ts);
+            records.push(record);
+        }
         Some(records)
     }
 }

@@ -286,6 +286,28 @@ pub(crate) fn find_dangling_edges(
         .collect();
 
     let edge_records = ctx.collect_all_edge_records(ts);
+    // Batch existence probe: one vertex lookup per unique (label, internal)
+    // endpoint instead of two lookups per edge plus two more for external
+    // resolution. Cached records also supply the external id for dangling
+    // endpoints without re-querying.
+    let mut unique_endpoints: std::collections::HashSet<(LabelId, u32)> =
+        std::collections::HashSet::with_capacity(edge_records.len().saturating_mul(2));
+    for (src_label_id, dst_label_id, _, record) in &edge_records {
+        if let Some(internal) = record.src_vid.as_internal_u32() {
+            unique_endpoints.insert((*src_label_id, internal));
+        }
+        if let Some(internal) = record.dst_vid.as_internal_u32() {
+            unique_endpoints.insert((*dst_label_id, internal));
+        }
+    }
+    let mut endpoint_records: std::collections::HashMap<
+        (LabelId, u32),
+        Option<crate::vertex::VertexRecord>,
+    > = std::collections::HashMap::with_capacity(unique_endpoints.len());
+    for (label, internal) in unique_endpoints {
+        let record = ctx.get_vertex_by_internal_id(label, internal, ts);
+        endpoint_records.insert((label, internal), record);
+    }
     for (src_label_id, dst_label_id, edge_label_id, record) in edge_records {
         let Some(edge_type_name) = edge_type_names.get(&edge_label_id) else {
             continue;
@@ -293,24 +315,34 @@ pub(crate) fn find_dangling_edges(
         let src_internal = record.src_vid.as_internal_u32();
         let dst_internal = record.dst_vid.as_internal_u32();
         let src_exists = src_internal
-            .and_then(|internal| ctx.get_vertex_by_internal_id(src_label_id, internal, ts))
+            .and_then(|internal| {
+                endpoint_records
+                    .get(&(src_label_id, internal))
+                    .and_then(|entry| entry.as_ref())
+            })
             .is_some();
         let dst_exists = dst_internal
-            .and_then(|internal| ctx.get_vertex_by_internal_id(dst_label_id, internal, ts))
+            .and_then(|internal| {
+                endpoint_records
+                    .get(&(dst_label_id, internal))
+                    .and_then(|entry| entry.as_ref())
+            })
             .is_some();
 
         if !src_exists || !dst_exists {
             let src_external = src_internal
                 .and_then(|internal| {
-                    ctx.get_vertex_by_internal_id(src_label_id, internal, ts)
-                        .map(|vr| vr.vid)
+                    endpoint_records
+                        .get(&(src_label_id, internal))
+                        .and_then(|entry| entry.as_ref().map(|vr| vr.vid))
                         .or_else(|| ctx.get_external_id_by_internal_id(src_label_id, internal))
                 })
                 .unwrap_or(record.src_vid);
             let dst_external = dst_internal
                 .and_then(|internal| {
-                    ctx.get_vertex_by_internal_id(dst_label_id, internal, ts)
-                        .map(|vr| vr.vid)
+                    endpoint_records
+                        .get(&(dst_label_id, internal))
+                        .and_then(|entry| entry.as_ref().map(|vr| vr.vid))
                         .or_else(|| ctx.get_external_id_by_internal_id(dst_label_id, internal))
                 })
                 .unwrap_or(record.dst_vid);

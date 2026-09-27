@@ -41,12 +41,8 @@ impl MergeConsecutiveExpandRule {
         Self
     }
 
-    fn parse_direction(dir: &str) -> EdgeDirection {
-        match dir.to_uppercase().as_str() {
-            "OUT" => EdgeDirection::Out,
-            "IN" => EdgeDirection::In,
-            _ => EdgeDirection::Both,
-        }
+    fn parse_direction(dir: &str) -> Option<EdgeDirection> {
+        EdgeDirection::parse(dir).ok()
     }
 
     fn can_merge(&self, first: &ExpandAllNode, second: &ExpandAllNode) -> bool {
@@ -78,7 +74,11 @@ impl MergeConsecutiveExpandRule {
         }
 
         let edge_types = self.merge_edge_types(inner.edge_types(), outer.edge_types());
-        let direction = Self::parse_direction(outer.direction());
+        // Unknown directions must not be assumed bidirectional: skip the
+        // rewrite instead of merging with a guessed direction.
+        let Some(direction) = Self::parse_direction(outer.direction()) else {
+            return Ok(None);
+        };
 
         let mut traverse = TraverseNode::new(0, "", 1, 2);
         traverse.set_edge_types(edge_types);
@@ -144,15 +144,16 @@ mod tests {
     fn test_parse_direction() {
         assert!(matches!(
             MergeConsecutiveExpandRule::parse_direction("OUT"),
-            EdgeDirection::Out
+            Some(EdgeDirection::Out)
         ));
         assert!(matches!(
             MergeConsecutiveExpandRule::parse_direction("IN"),
-            EdgeDirection::In
+            Some(EdgeDirection::In)
         ));
         assert!(matches!(
             MergeConsecutiveExpandRule::parse_direction("BOTH"),
-            EdgeDirection::Both
+            Some(EdgeDirection::Both)
         ));
+        assert!(MergeConsecutiveExpandRule::parse_direction("SIDEWAYS").is_none());
     }
 }

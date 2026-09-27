@@ -18,7 +18,7 @@ impl GraphStorageRef {
         use graphdb_core::types::EdgeDirection;
         let reader = self.storage.read();
         let edges = reader
-            .get_node_edges(&self.space, node_id, EdgeDirection::Both)
+            .get_node_edges(&self.space, node_id, EdgeDirection::Both, &[])
             .map_err(|e| format!("Storage error: {}", e))?;
         let neighbors: Vec<(VertexId, Edge)> = edges
             .into_iter()

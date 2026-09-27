@@ -162,13 +162,37 @@ impl EdgeDirection {
     }
 }
 
+impl EdgeDirection {
+    /// Parse a direction name, trimming surrounding whitespace and accepting
+    /// every spelling the planners produce (`bidirect`/`undirected` included).
+    /// Unknown input is an error: silently widening a typo to a bidirectional
+    /// scan returns wrong rows at double the cost.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s.trim().to_lowercase().as_str() {
+            "out" | "outgoing" | "forward" => Ok(EdgeDirection::Out),
+            "in" | "incoming" | "backward" => Ok(EdgeDirection::In),
+            "both" | "bidirectional" | "bidirect" | "undirected" => Ok(EdgeDirection::Both),
+            _ => Err(format!("unknown edge direction: {s}")),
+        }
+    }
+}
+
+impl std::str::FromStr for EdgeDirection {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
 impl From<&str> for EdgeDirection {
     fn from(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "out" | "outgoing" | "forward" => EdgeDirection::Out,
-            "in" | "incoming" | "backward" => EdgeDirection::In,
-            "both" | "bidirectional" => EdgeDirection::Both,
-            _ => EdgeDirection::Both,
+        match Self::parse(s) {
+            Ok(direction) => direction,
+            Err(error) => {
+                log::warn!("{error}; falling back to bidirectional scan");
+                EdgeDirection::Both
+            }
         }
     }
 }

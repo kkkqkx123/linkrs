@@ -682,6 +682,13 @@ impl SyncManager {
                         continue;
                     }
                 }
+                // Intentional: vector indexes are vertex-only, so edge events
+                // never contribute points. Skipping here keeps rebuild
+                // converged on the same vertex-scoped data as live delivery
+                // (`vector_contexts_for_payload` maps edge payloads to zero
+                // contexts for the same reason). Edge vector indexing would
+                // need a separate point-ID scheme, edge scan source, replay,
+                // and query planning; that is a deferred project, not a gap.
                 OutboxPayload::EdgeInsert { .. } | OutboxPayload::EdgeDelete { .. } => {
                     continue;
                 }

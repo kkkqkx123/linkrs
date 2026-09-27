@@ -108,6 +108,29 @@ impl WriteSet {
         false
     }
 
+    /// Whether any entity or resource in `committed` overlaps this read set.
+    ///
+    /// Full-scan certification path: the per-resource index probes already
+    /// passed, so this write-set-level recheck aborts only on a newer commit
+    /// that actually touches the tracked footprint. Iterates the committed
+    /// side, which is normally far smaller than a full-scan read set.
+    pub fn has_read_conflict_with(&self, committed: &WriteSet) -> bool {
+        if committed.vertices.iter().any(|vid| self.vertices.contains(vid)) {
+            return true;
+        }
+        if committed.edges.iter().any(|edge| self.edges.contains(edge)) {
+            return true;
+        }
+        if !self
+            .schema_resources
+            .is_disjoint(&committed.schema_resources)
+            || !self.index_resources.is_disjoint(&committed.index_resources)
+        {
+            return true;
+        }
+        self.has_read_range_conflict_with(committed)
+    }
+
     /// Whether the set carries no certification-relevant resources.
     pub fn is_empty(&self) -> bool {
         self.vertices.is_empty()

@@ -138,7 +138,61 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         space: &str,
         node_id: &VertexId,
         direction: EdgeDirection,
+        edge_types: &[String],
     ) -> Result<Vec<Edge>, StorageError>;
+
+    /// Filtered and projected per-node edge fanout.
+    ///
+    /// `edge_types` is pushed to storage: empty means all types, otherwise
+    /// only matching tables are visited. `projection` trims decoded columns
+    /// (`None` means all columns, `Some(&[])` means topology only).
+    /// `limit` caps emitted edges per direction branch.
+    /// The default implementation filters and trims in memory for adapters;
+    /// the native engine overrides with CSR-level pushdown.
+    fn get_node_edges_projected(
+        &self,
+        space: &str,
+        node_id: &VertexId,
+        direction: EdgeDirection,
+        edge_types: &[String],
+        projection: Option<&[String]>,
+        limit: Option<usize>,
+    ) -> Result<Vec<Edge>, StorageError> {
+        let mut edges = self.get_node_edges(space, node_id, direction, edge_types)?;
+        if let Some(projection) = projection {
+            if !projection.is_empty() {
+                for edge in &mut edges {
+                    edge.props.retain(|k, _| projection.contains(k));
+                }
+            } else {
+                for edge in &mut edges {
+                    edge.props.clear();
+                }
+            }
+        }
+        if let Some(limit) = limit {
+            edges.truncate(limit);
+        }
+        Ok(edges)
+    }
+
+    /// Batch vertex point lookups with the schema resolved once.
+    ///
+    /// Returns one entry per input id in input order. The default
+    /// implementation loops over `get_vertex` for adapters; the native
+    /// engine overrides with a single-timestamp batched path.
+    fn get_vertices_batch(
+        &self,
+        space: &str,
+        tag: &str,
+        ids: &[VertexId],
+    ) -> Result<Vec<Option<Vertex>>, StorageError> {
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            out.push(self.get_vertex(space, tag, id)?);
+        }
+        Ok(out)
+    }
 
     /// Lightweight batch neighbor read used by de-materialized expand hops
     /// (`id_only`/`count_only`).  Resolves the edge-type schema once for the
@@ -467,6 +521,10 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
 pub trait StorageWriter: Send + Sync + std::fmt::Debug {
     fn insert_vertex(&mut self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError>;
     fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError>;
+    /// Delete one vertex without touching its incident edges. The orphaned
+    /// edge rows stay visible until repaired: prefer
+    /// `delete_vertex_with_edges` for cascade deletes, or run
+    /// `repair_dangling_edges` afterwards.
     fn delete_vertex(&mut self, space: &str, tag: &str, id: &VertexId) -> Result<(), StorageError>;
     fn delete_vertex_with_edges(
         &mut self,

@@ -77,7 +77,12 @@ impl Planner for FulltextSearchPlanner {
         let planner_metadata = self.metadata_context.clone();
         let metadata = ctx.metadata.or(planner_metadata.as_deref());
         if let Some(metadata) = metadata {
-            if !create.schema_name.is_empty() && !metadata.has_tag_metadata(&create.schema_name) {
+            // Fulltext indexes share one namespace for vertex tags and edge
+            // types: accept either, reject only unknown schema names.
+            if !create.schema_name.is_empty()
+                && !metadata.has_tag_metadata(&create.schema_name)
+                && !metadata.has_edge_type_metadata(&create.schema_name)
+            {
                 return Err(PlannerError::TagNotFound(create.schema_name.clone()));
             }
             if !create.if_not_exists && metadata.has_index_metadata(&create.index_name) {
@@ -224,12 +229,15 @@ impl FulltextSearchPlanner {
         metadata_context: &MetadataContext,
         space_id: u64,
     ) -> Result<SubPlan, PlannerError> {
-        // Validate that the schema exists in metadata context
+        // Validate schema exists: a fulltext index may target a vertex tag
+        // or an edge type, which share one index namespace.
         let schema_name = if create.schema_name.is_empty() {
             space_name.to_string()
         } else {
             // Validate schema exists
-            if !metadata_context.has_tag_metadata(&create.schema_name) {
+            if !metadata_context.has_tag_metadata(&create.schema_name)
+                && !metadata_context.has_edge_type_metadata(&create.schema_name)
+            {
                 return Err(PlannerError::TagNotFound(create.schema_name.clone()));
             }
             create.schema_name.clone()
@@ -423,8 +431,11 @@ impl FulltextSearchPlanner {
         let schema_name = if lookup.schema_name.is_empty() {
             space_name.to_string()
         } else {
-            // Validate schema exists
-            if !metadata_context.has_tag_metadata(&lookup.schema_name) {
+            // Validate schema exists: vertex tags and edge types share one
+            // fulltext index namespace, so accept either.
+            if !metadata_context.has_tag_metadata(&lookup.schema_name)
+                && !metadata_context.has_edge_type_metadata(&lookup.schema_name)
+            {
                 return Err(PlannerError::TagNotFound(lookup.schema_name.clone()));
             }
             lookup.schema_name.clone()
@@ -705,9 +716,42 @@ impl FulltextSearchPlanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metadata::{EdgeTypeMetadata, TagMetadata};
     use crate::parser::ast::fulltext::{IndexFieldDef, IndexOptions};
     use graphdb_core::types::span::Span;
     use graphdb_core::types::FulltextEngineType;
+
+    fn test_create_stmt(schema_name: &str) -> CreateFulltextIndex {
+        CreateFulltextIndex {
+            span: Span::default(),
+            index_name: "idx".to_string(),
+            schema_name: schema_name.to_string(),
+            fields: vec![IndexFieldDef {
+                field_name: "content".to_string(),
+                analyzer: None,
+                boost: None,
+            }],
+            engine_type: FulltextEngineType::Bm25,
+            options: IndexOptions {
+                bm25_config: None,
+                common_options: std::collections::HashMap::new(),
+            },
+            if_not_exists: false,
+        }
+    }
+
+    fn metadata_with_tag_and_edge() -> MetadataContext {
+        let mut metadata = MetadataContext::new();
+        metadata.set_tag_metadata(
+            "Article".to_string(),
+            TagMetadata::new("Article".to_string(), 1),
+        );
+        metadata.set_edge_type_metadata(
+            "WROTE".to_string(),
+            EdgeTypeMetadata::new("WROTE".to_string(), 1),
+        );
+        metadata
+    }
 
     #[test]
     fn test_fulltext_search_planner_new() {
@@ -750,6 +794,72 @@ mod tests {
             if_exists: false,
         });
         assert!(planner.match_planner(&drop_stmt));
+    }
+
+    #[test]
+    fn test_create_accepts_vertex_tag_and_edge_type() {
+        let planner = FulltextSearchPlanner::new();
+        let metadata = metadata_with_tag_and_edge();
+
+        assert!(planner
+            .transform_create_fulltext_index_with_metadata(
+                &test_create_stmt("Article"),
+                "default",
+                &metadata,
+                1
+            )
+            .is_ok());
+        assert!(planner
+            .transform_create_fulltext_index_with_metadata(
+                &test_create_stmt("WROTE"),
+                "default",
+                &metadata,
+                1
+            )
+            .is_ok());
+        let unknown = planner.transform_create_fulltext_index_with_metadata(
+            &test_create_stmt("Missing"),
+            "default",
+            &metadata,
+            1,
+        );
+        assert!(matches!(unknown, Err(PlannerError::TagNotFound(_))));
+    }
+
+    #[test]
+    fn test_lookup_accepts_vertex_tag_and_edge_type() {
+        let planner = FulltextSearchPlanner::new();
+        let metadata = metadata_with_tag_and_edge();
+        // Lookup requires the named index to exist in metadata.
+        let mut metadata = metadata;
+        metadata.set_index_metadata(
+            "idx".to_string(),
+            crate::metadata::IndexMetadata::new(
+                "idx".to_string(),
+                1,
+                "WROTE".to_string(),
+                "content".to_string(),
+                crate::metadata::IndexType::Fulltext,
+            ),
+        );
+
+        let lookup = |schema: &str| LookupFulltext {
+            span: Span::default(),
+            schema_name: schema.to_string(),
+            index_name: "idx".to_string(),
+            query: "graph".to_string(),
+            yield_clause: None,
+            limit: None,
+        };
+        assert!(planner
+            .transform_lookup_fulltext_with_metadata(&lookup("Article"), "default", &metadata)
+            .is_ok());
+        assert!(planner
+            .transform_lookup_fulltext_with_metadata(&lookup("WROTE"), "default", &metadata)
+            .is_ok());
+        let unknown =
+            planner.transform_lookup_fulltext_with_metadata(&lookup("Missing"), "default", &metadata);
+        assert!(matches!(unknown, Err(PlannerError::TagNotFound(_))));
     }
 
     #[test]

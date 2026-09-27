@@ -336,6 +336,7 @@ fn bench_large_edge_density(c: &mut Criterion) {
                         &space_name,
                         &VertexId::try_from_int64(0).expect("valid vertex id"),
                         graphdb_core::EdgeDirection::Out,
+                        &[],
                     )
                     .expect("get edges");
                 black_box(edges.len());

@@ -10,6 +10,8 @@ mod common;
 mod concurrent;
 #[path = "fulltext_tests/edge_cases.rs"]
 mod edge_cases;
+#[path = "fulltext_tests/edge_lifecycle.rs"]
+mod edge_lifecycle;
 #[path = "fulltext_tests/persistence.rs"]
 mod persistence;
 #[path = "fulltext_tests/sync.rs"]

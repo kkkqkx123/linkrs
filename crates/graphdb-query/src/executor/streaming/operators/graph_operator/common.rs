@@ -223,12 +223,9 @@ pub(super) fn expand_single_step(
     }
 
     for (vid, seed_row) in seed_vids.iter().zip(seed_rows.iter()) {
-        let edges = reader.get_node_edges(space_name, vid, direction)?;
+        let edges = reader.get_node_edges(space_name, vid, direction, edge_types)?;
 
         for edge in &edges {
-            if !edge_types.is_empty() && !edge_types.contains(&edge.edge_type) {
-                continue;
-            }
 
             let dst_vid = match direction {
                 EdgeDirection::Out => *edge.dst(),
