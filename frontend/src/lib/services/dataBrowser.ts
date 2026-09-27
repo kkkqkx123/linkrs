@@ -44,5 +44,5 @@ export const dataBrowserService = {
   },
 
   getStatistics: async (space: string): Promise<Statistics> =>
-    await get('/api/v1/schema/spaces/' + space + '/statistics')(),
+    await get<Statistics>('/api/v1/schema/spaces/' + space + '/statistics'),
 };

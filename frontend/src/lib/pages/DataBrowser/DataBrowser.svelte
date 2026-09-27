@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
+  import { navigate } from 'svelte-routing';
   import { dataBrowserStore } from '$stores/dataBrowser';
+  import { graphStore } from '$stores/graph';
   import { schemaStore } from '$stores/schema';
   import { dataBrowserService } from '$services/dataBrowser';
   import { formatCellValue } from '$utils/parseData';
@@ -124,6 +126,26 @@
   function showDetail(data: any, type: 'vertex' | 'edge') {
     dataBrowserStore.showDetail(data, type);
   }
+
+  function viewInGraph(data: any, type: 'vertex' | 'edge') {
+    if (type === 'vertex') {
+      graphStore.mergeGraphData({
+        nodes: [{ id: String(data.id), tag: data.tag ?? 'unknown', properties: data.properties ?? {} }],
+        edges: [],
+      });
+    } else {
+      const src = String(data.src);
+      const dst = String(data.dst);
+      graphStore.mergeGraphData({
+        nodes: [
+          { id: src, tag: 'unknown', properties: {} },
+          { id: dst, tag: 'unknown', properties: {} },
+        ],
+        edges: [{ id: String(data.id), type: data.type ?? 'unknown', source: src, target: dst, rank: data.rank ?? 0, properties: data.properties ?? {} }],
+      });
+    }
+    navigate('/graph');
+  }
 </script>
 
 {#if !pageInitialized}
@@ -196,6 +218,7 @@
                         {/each}
                         <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50">
                           <button class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer" onclick={() => showDetail(v, 'vertex')}>{$t('dataBrowser.viewDetail')}</button>
+                          <button class="ml-2 text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300 text-xs cursor-pointer" onclick={() => viewInGraph(v, 'vertex')}>Graph</button>
                         </td>
                       </tr>
                     {/each}
@@ -264,6 +287,7 @@
                         {/each}
                         <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50">
                           <button class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer" onclick={() => showDetail(e, 'edge')}>{$t('dataBrowser.viewDetail')}</button>
+                          <button class="ml-2 text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300 text-xs cursor-pointer" onclick={() => viewInGraph(e, 'edge')}>Graph</button>
                         </td>
                       </tr>
                     {/each}

@@ -1,5 +1,7 @@
 import { writable } from 'svelte/store';
-import type { GraphData, LayoutType } from '$types/graph';
+import type { GraphData, LayoutType, NodeDetail, EdgeDetail } from '$types/graph';
+
+export type { NodeDetail, EdgeDetail };
 
 export interface NodeStyle {
   color: string;
@@ -11,21 +13,6 @@ export interface EdgeStyle {
   color: string;
   width: 'thin' | 'medium' | 'thick';
   labelProperty: string;
-}
-
-export interface NodeDetail {
-  id: string;
-  tag: string;
-  properties: Record<string, unknown>;
-}
-
-export interface EdgeDetail {
-  id: string;
-  type: string;
-  source: string;
-  target: string;
-  rank: number;
-  properties: Record<string, unknown>;
 }
 
 interface GraphState {
@@ -64,6 +51,10 @@ function loadPersisted(): Partial<GraphState> {
 
 const persisted = loadPersisted();
 
+function persistStyles(state: GraphState) {
+  localStorage.setItem('graph-storage', JSON.stringify({ layout: state.layout, nodeStyles: state.nodeStyles, edgeStyles: state.edgeStyles }));
+}
+
 function createGraphStore() {
   const { subscribe, set, update } = writable<GraphState>({
     graphData: null,
@@ -92,10 +83,42 @@ function createGraphStore() {
         if (!newEdgeStyles[edge.type]) newEdgeStyles[edge.type] = { ...defaultEdgeStyle, color: generateEdgeColor(edgeColorIndex++) };
       });
       const newState = { ...s, graphData: data, nodeStyles: newNodeStyles, edgeStyles: newEdgeStyles };
-      localStorage.setItem('graph-storage', JSON.stringify({ layout: newState.layout, nodeStyles: newState.nodeStyles, edgeStyles: newState.edgeStyles }));
+      persistStyles(newState);
       return newState;
     }),
     clearGraphData: () => update(s => ({ ...s, graphData: null, selectedNodes: [], selectedEdges: [] })),
+    mergeGraphData: (data: GraphData) => update(s => {
+      const nodeIds = new Set((s.graphData?.nodes ?? []).map(n => n.id));
+      const edgeIds = new Set((s.graphData?.edges ?? []).map(e => e.id));
+      const nodes = [...(s.graphData?.nodes ?? [])];
+      const edges = [...(s.graphData?.edges ?? [])];
+      for (const node of data.nodes) {
+        if (!nodeIds.has(node.id)) {
+          nodeIds.add(node.id);
+          nodes.push(node);
+        }
+      }
+      for (const edge of data.edges) {
+        if (!edgeIds.has(edge.id)) {
+          edgeIds.add(edge.id);
+          edges.push(edge);
+        }
+      }
+      const merged: GraphData = { nodes, edges };
+      const newNodeStyles = { ...s.nodeStyles };
+      const newEdgeStyles = { ...s.edgeStyles };
+      let nodeColorIndex = Object.keys(s.nodeStyles).length;
+      merged.nodes.forEach(node => {
+        if (!newNodeStyles[node.tag]) newNodeStyles[node.tag] = { ...defaultNodeStyle, color: generateNodeColor(nodeColorIndex++) };
+      });
+      let edgeColorIndex = Object.keys(s.edgeStyles).length;
+      merged.edges.forEach(edge => {
+        if (!newEdgeStyles[edge.type]) newEdgeStyles[edge.type] = { ...defaultEdgeStyle, color: generateEdgeColor(edgeColorIndex++) };
+      });
+      const newState = { ...s, graphData: merged, nodeStyles: newNodeStyles, edgeStyles: newEdgeStyles };
+      persistStyles(newState);
+      return newState;
+    }),
     setLayout: (layout: LayoutType) => update(s => ({ ...s, layout })),
     setZoom: (zoom: number) => update(s => ({ ...s, zoom })),
     selectNode: (id: string, multi = false) => update(s => {
@@ -113,13 +136,21 @@ function createGraphStore() {
       return { ...s, selectedEdges: [id], selectedNodes: [] };
     }),
     clearSelection: () => update(s => ({ ...s, selectedNodes: [], selectedEdges: [] })),
-    setNodeStyle: (tag: string, style: Partial<NodeStyle>) => update(s => ({
-      ...s, nodeStyles: { ...s.nodeStyles, [tag]: { ...(s.nodeStyles[tag] || defaultNodeStyle), ...style } },
-    })),
-    setEdgeStyle: (type: string, style: Partial<EdgeStyle>) => update(s => ({
-      ...s, edgeStyles: { ...s.edgeStyles, [type]: { ...(s.edgeStyles[type] || defaultEdgeStyle), ...style } },
-    })),
-    resetStyles: () => update(s => ({ ...s, nodeStyles: {}, edgeStyles: {} })),
+    setNodeStyle: (tag: string, style: Partial<NodeStyle>) => update(s => {
+      const next = { ...s, nodeStyles: { ...s.nodeStyles, [tag]: { ...(s.nodeStyles[tag] || defaultNodeStyle), ...style } } };
+      persistStyles(next);
+      return next;
+    }),
+    setEdgeStyle: (type: string, style: Partial<EdgeStyle>) => update(s => {
+      const next = { ...s, edgeStyles: { ...s.edgeStyles, [type]: { ...(s.edgeStyles[type] || defaultEdgeStyle), ...style } } };
+      persistStyles(next);
+      return next;
+    }),
+    resetStyles: () => update(s => {
+      const next = { ...s, nodeStyles: {}, edgeStyles: {} };
+      persistStyles(next);
+      return next;
+    }),
     showDetail: (data: NodeDetail | EdgeDetail, type: 'node' | 'edge') => update(s => ({ ...s, detailData: data, detailType: type, detailPanelVisible: true })),
     hideDetail: () => update(s => ({ ...s, detailPanelVisible: false, detailData: null, detailType: null })),
   };

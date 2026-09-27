@@ -33,26 +33,26 @@ export interface SessionDetail {
 
 export const connectionService = {
   login: async (params: LoginParams): Promise<LoginResponse> => {
-    return await post('/v1/auth/login', params as LoginRequest);
+    return await post<LoginResponse>('/v1/auth/login', params as LoginRequest);
   },
 
   logout: async (sessionId: number): Promise<void> => {
-    await post('/v1/auth/logout', { session_id: sessionId } as LogoutRequest);
+    await post<void>('/v1/auth/logout', { session_id: sessionId } as LogoutRequest);
   },
 
   health: async (): Promise<HealthResponse> => {
-    return await get('/v1/health')() as HealthResponse;
+    return await get<HealthResponse>('/v1/health');
   },
 
   sessions: {
     create: async (params: CreateSessionParams): Promise<CreateSessionResponse> => {
-      return await post('/v1/sessions', params);
+      return await post<CreateSessionResponse>('/v1/sessions', params);
     },
     get: async (id: number): Promise<SessionDetail> => {
-      return await get(`/v1/sessions/${id}`)();
+      return await get<SessionDetail>(`/v1/sessions/${id}`);
     },
     delete: async (id: number): Promise<void> => {
-      await _delete(`/v1/sessions/${id}`)();
+      await _delete<void>(`/v1/sessions/${id}`);
     },
   },
 };

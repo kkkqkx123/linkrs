@@ -3,6 +3,11 @@ import type { QueryResult } from '$types/query';
 export const exportToCSV = (result: QueryResult, filename?: string): void => {
   if (!result || !result.columns || result.columns.length === 0) return;
   const { columns, rows } = result;
+  const formatValue = (value: unknown): string => {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+  };
   const escapeField = (field: unknown): string => {
     if (field === null || field === undefined) return '';
     const str = String(field);
@@ -10,7 +15,7 @@ export const exportToCSV = (result: QueryResult, filename?: string): void => {
     return str;
   };
   const csvRows: string[] = [columns.map(escapeField).join(',')];
-  rows.forEach((row) => csvRows.push(row.map(escapeField).join(',')));
+  rows.forEach((row) => csvRows.push(columns.map((col) => escapeField(formatValue(row[col]))).join(',')));
   const csvContent = csvRows.join('\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const link = document.createElement('a');

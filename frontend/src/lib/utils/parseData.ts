@@ -4,15 +4,17 @@ export const parseQueryResult = (response: unknown): QueryResult | null => {
   if (!response || typeof response !== 'object') return null;
   const data = response as Record<string, unknown>;
   if (data.columns && Array.isArray(data.columns) && data.rows && Array.isArray(data.rows)) {
+    const rows = (data.rows as unknown[]).filter(
+      (row): row is Record<string, unknown> => typeof row === 'object' && row !== null && !Array.isArray(row),
+    );
     return {
       columns: data.columns as string[],
-      rows: data.rows as unknown[][],
-      rowCount: (data.rowCount as number) || (data.rows as unknown[]).length,
-      data: [],
+      rows,
+      rowCount: (data.rowCount as number) || (data.row_count as number) || rows.length,
     };
   }
   if (data.data && typeof data.data === 'object') return parseQueryResult(data.data);
-  return { columns: [], rows: [], rowCount: 0, data: [] };
+  return { columns: [], rows: [], rowCount: 0 };
 };
 
 export const parseQueryError = (response: unknown): QueryError | null => {
@@ -58,12 +60,8 @@ export const formatRowCount = (count: number): string => {
 };
 
 export const resultToObjects = (result: QueryResult): Record<string, unknown>[] => {
-  if (!result || !result.columns || !result.rows) return [];
-  return result.rows.map((row) => {
-    const obj: Record<string, unknown> = {};
-    result.columns.forEach((col, index) => { obj[col] = row[index]; });
-    return obj;
-  });
+  if (!result || !result.rows) return [];
+  return result.rows;
 };
 
 export const isNumeric = (value: unknown): boolean => {
@@ -72,9 +70,13 @@ export const isNumeric = (value: unknown): boolean => {
   return false;
 };
 
-export const sortRows = (rows: unknown[][], columnIndex: number, direction: 'asc' | 'desc'): unknown[][] => {
+export const sortRows = (
+  rows: Record<string, unknown>[],
+  column: string,
+  direction: 'asc' | 'desc',
+): Record<string, unknown>[] => {
   return [...rows].sort((a, b) => {
-    const aVal = a[columnIndex], bVal = b[columnIndex];
+    const aVal = a[column], bVal = b[column];
     if (aVal === null && bVal === null) return 0;
     if (aVal === null) return direction === 'asc' ? -1 : 1;
     if (bVal === null) return direction === 'asc' ? 1 : -1;

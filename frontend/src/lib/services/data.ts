@@ -8,14 +8,14 @@ export const dataService = {
       await get<ApiResponse_PaginatedResponse_Value>(
         `/api/v1/data/spaces/${spaceName}/tags/${tagName}/vertices`,
         params
-      ).then(res => res.data?.items || []),
+      ).then(res => (res.data?.items || []) as Vertex[]),
   },
   edges: {
     list: async (spaceName: string, edgeName: string, params?: EdgeListParams): Promise<Edge[]> =>
       await get<ApiResponse_PaginatedResponse_Value>(
         `/api/v1/data/spaces/${spaceName}/edge-types/${edgeName}/edges`,
         params
-      ).then(res => res.data?.items || []),
+      ).then(res => (res.data?.items || []) as Edge[]),
   },
 };
 

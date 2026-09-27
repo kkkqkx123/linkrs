@@ -40,9 +40,8 @@ export interface UpdateFavoriteParams {
 
 export interface QueryResult {
   columns: string[];
-  rows: unknown[][];
+  rows: Record<string, unknown>[];
   rowCount: number;
-  data: unknown[];
 }
 
 export interface QueryError {

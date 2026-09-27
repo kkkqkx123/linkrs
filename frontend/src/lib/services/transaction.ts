@@ -25,11 +25,11 @@ export interface RollbackTransactionParams {
 
 export const transactionService = {
   begin: async (params: BeginTransactionParams): Promise<BeginTransactionResponse> =>
-    await post('/v1/transactions', params as any),
+    await post<BeginTransactionResponse>('/v1/transactions', params as any),
   commit: async (id: number, params: CommitTransactionParams): Promise<{ message: string; transaction_id: number }> =>
-    await post(`/v1/transactions/${id}/commit`, params),
+    await post<{ message: string; transaction_id: number }>(`/v1/transactions/${id}/commit`, params),
   rollback: async (id: number, params: RollbackTransactionParams): Promise<{ message: string; transaction_id: number }> =>
-    await post(`/v1/transactions/${id}/rollback`, params),
+    await post<{ message: string; transaction_id: number }>(`/v1/transactions/${id}/rollback`, params),
 };
 
 export default transactionService;

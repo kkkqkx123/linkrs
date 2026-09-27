@@ -3,7 +3,7 @@ export interface VertexDetail {
   tags: Record<string, Record<string, unknown>>;
 }
 
-export interface EdgeDetail {
+export interface WireEdgeDetail {
   src: string | number;
   dst: string | number;
   edge_type: string;
@@ -64,7 +64,7 @@ export interface NodeDetail {
   properties: Record<string, unknown>;
 }
 
-export interface EdgeDetailInfo {
+export interface EdgeDetail {
   id: string;
   type: string;
   source: string;

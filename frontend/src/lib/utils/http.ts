@@ -99,16 +99,16 @@ const sendRequest = async (
   return res;
 };
 
-export const get = (api: string) => (params?: object, config: AxiosRequestConfig = {}) =>
-  sendRequest('get', api, params, config);
+export const get = <T>(api: string, params?: object, config: AxiosRequestConfig = {}): Promise<T> =>
+  sendRequest('get', api, params, config) as Promise<T>;
 
-export const post = (api: string) => (params?: object, config: AxiosRequestConfig = {}) =>
-  sendRequest('post', api, params, config);
+export const post = <T>(api: string, data?: object, config: AxiosRequestConfig = {}): Promise<T> =>
+  sendRequest('post', api, data, config) as Promise<T>;
 
-export const put = (api: string) => (params?: object, config: AxiosRequestConfig = {}) =>
-  sendRequest('put', api, params, config);
+export const put = <T>(api: string, data?: object, config: AxiosRequestConfig = {}): Promise<T> =>
+  sendRequest('put', api, data, config) as Promise<T>;
 
-export const _delete = (api: string) => (params?: object, config: AxiosRequestConfig = {}) =>
-  sendRequest('delete', api, params, config);
+export const _delete = <T>(api: string, params?: object, config: AxiosRequestConfig = {}): Promise<T> =>
+  sendRequest('delete', api, params, config) as Promise<T>;
 
 export { initService };

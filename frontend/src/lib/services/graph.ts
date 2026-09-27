@@ -1,5 +1,5 @@
 import { get } from '$utils/http';
-import type { VertexDetail, EdgeDetail, Neighbor, NeighborParams } from '$types/graph';
+import type { VertexDetail, WireEdgeDetail, Neighbor, NeighborParams } from '$types/graph';
 import type { ApiResponse_Value } from '$types/schema';
 
 export const graphService = {
@@ -13,8 +13,8 @@ export const graphService = {
       ),
   },
   edges: {
-    get: async (src: string | number, dst: string | number, space: string, edgeType: string, rank?: number): Promise<EdgeDetail> =>
-      await get<EdgeDetail>(
+    get: async (src: string | number, dst: string | number, space: string, edgeType: string, rank?: number): Promise<WireEdgeDetail> =>
+      await get<WireEdgeDetail>(
         '/api/v1/graph/edges',
         { space, src, dst, edge_type: edgeType, rank: rank ?? 0 }
       ),

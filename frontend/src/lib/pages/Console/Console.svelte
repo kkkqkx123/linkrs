@@ -1,24 +1,79 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { t } from 'svelte-i18n';
   import { get } from 'svelte/store';
-  import { consoleStore } from '$stores/console';
+  import { navigate } from 'svelte-routing';
+  import { consoleStore, type QueryHistoryItem, type QueryFavoriteItem } from '$stores/console';
+  import { graphStore } from '$stores/graph';
   import { formatExecutionTime, formatRowCount, formatCellValue } from '$utils/parseData';
+  import { queryResultToGraph, convertToCytoscapeElements, generateCytoscapeStyle } from '$utils/cytoscapeConfig';
+  import type cytoscape from 'cytoscape';
   import { exportToCSV, exportToJSON } from '$utils/export';
+  import type { QueryResult, QueryError } from '$types/query';
 
   let editorContent = $state('');
   let isExecuting = $state(false);
-  let currentResult = $state<any>(null);
+  let currentResult = $state<QueryResult | null>(null);
   let executionTime = $state(0);
-  let error = $state<any>(null);
+  let error = $state<QueryError | null>(null);
   let activeView = $state<'table' | 'json' | 'graph'>('table');
-  let history = $state<Array<any>>([]);
-  let favorites = $state<Array<any>>([]);
+  let history = $state<QueryHistoryItem[]>([]);
+  let favorites = $state<QueryFavoriteItem[]>([]);
   let historyOpen = $state(false);
   let favoritesOpen = $state(false);
   let saveModalOpen = $state(false);
   let favoriteName = $state('');
   let saveModalError = $state('');
+
+  let graphSummary = $derived.by(() => {
+    if (!currentResult) return null;
+    const parsed = queryResultToGraph(currentResult);
+    return { nodes: parsed.nodes.length, edges: parsed.edges.length, skipped: parsed.stats.skipped, truncated: parsed.stats.truncated };
+  });
+
+  let graph = $derived.by(() => {
+    if (!currentResult) return null;
+    return queryResultToGraph(currentResult);
+  });
+
+  let previewContainer = $state<HTMLDivElement>();
+  let previewCy = $state<cytoscape.Core | null>(null);
+  let previewActive = $state(false);
+
+  const destroyPreview = () => {
+    if (previewCy) {
+      previewCy.destroy();
+      previewCy = null;
+    }
+  };
+
+  const mountPreview = async () => {
+    if (!previewContainer || !graph) return;
+    destroyPreview();
+    const cytoscape = (await import('cytoscape')).default;
+    if (!previewContainer || !graph) return;
+    previewCy = cytoscape({
+      container: previewContainer,
+      elements: convertToCytoscapeElements(graph),
+      style: generateCytoscapeStyle({ nodes: {}, edges: {} }),
+      layout: { name: 'cose', animate: false, numIter: graph.nodes.length > 200 ? 300 : 1000 },
+      minZoom: 0.1,
+      maxZoom: 10,
+      wheelSensitivity: 0.3,
+    });
+    previewCy.on('tap', (evt) => { if (evt.target === previewCy) previewCy?.elements().unselect(); });
+  };
+
+  function handlePreviewToggle(open: boolean) {
+    previewActive = open;
+    if (!open) destroyPreview();
+  }
+
+  $effect(() => {
+    if (previewActive && previewContainer && !previewCy) {
+      void mountPreview();
+    }
+  });
 
   onMount(() => {
     const unsub = consoleStore.subscribe(s => {
@@ -60,6 +115,17 @@
       saveModalError = result.error || 'Failed to save';
     }
   }
+
+  function handleOpenInGraph() {
+    if (!currentResult) return;
+    const parsed = queryResultToGraph(currentResult);
+    graphStore.setGraphData({ nodes: parsed.nodes, edges: parsed.edges });
+    navigate('/graph');
+  }
+
+  onDestroy(() => {
+    destroyPreview();
+  });
 </script>
 
 <div class="flex flex-col h-full gap-4 animate-fade-in">
@@ -145,8 +211,8 @@
           {/each}
         </div>
         <div class="h-4 w-px bg-gray-300 dark:bg-gray-600"></div>
-        <button class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer" onclick={() => exportToCSV(currentResult)}>CSV</button>
-        <button class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer" onclick={() => exportToJSON(currentResult)}>JSON</button>
+        <button class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer" onclick={() => { if (currentResult) exportToCSV(currentResult); }}>CSV</button>
+        <button class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer" onclick={() => { if (currentResult) exportToJSON(currentResult); }}>JSON</button>
       </div>
       <div class="flex-1 overflow-auto p-4">
         {#if activeView === 'table'}
@@ -162,8 +228,8 @@
               <tbody>
                 {#each currentResult.rows as row}
                   <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30 even:bg-gray-50/50 dark:even:bg-gray-800/20">
-                    {#each row as cell}
-                      <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300 max-w-xs truncate">{formatCellValue(cell)}</td>
+                    {#each currentResult.columns as col}
+                      <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300 max-w-xs truncate">{formatCellValue(row[col])}</td>
                     {/each}
                   </tr>
                 {/each}
@@ -173,7 +239,34 @@
         {:else if activeView === 'json'}
           <pre class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-4 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-96 text-gray-700 dark:text-gray-300">{JSON.stringify(currentResult, null, 2)}</pre>
         {:else}
-          <div class="flex items-center justify-center h-48 text-gray-400 text-sm">{$t('console.viewGraph')} - {$t('graph.noData')}</div>
+          {#if graphSummary && (graphSummary.nodes > 0 || graphSummary.edges > 0)}
+            <div class="flex flex-col gap-2 text-sm text-gray-600 dark:text-gray-300">
+              <div class="flex flex-col items-center gap-2">
+                <p>🔗 {graphSummary.nodes} nodes / {graphSummary.edges} edges{#if graphSummary.truncated} (truncated){/if}</p>
+                {#if graphSummary.skipped > 0}
+                  <p class="text-xs text-gray-400">{graphSummary.skipped} scalar cells ignored</p>
+                {/if}
+                <div class="flex gap-2">
+                  <button class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer" onclick={handleOpenInGraph}>
+                    Open in Graph
+                  </button>
+                  <button
+                    class="px-4 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer"
+                    onclick={() => handlePreviewToggle(!previewActive)}
+                  >
+                    {previewActive ? 'Hide Preview' : 'Preview'}
+                  </button>
+                </div>
+              </div>
+              {#if previewActive}
+                <div class="h-80 rounded border border-gray-200 dark:border-gray-700 relative overflow-hidden">
+                  <div bind:this={previewContainer} class="absolute inset-0"></div>
+                </div>
+              {/if}
+            </div>
+          {:else}
+            <div class="flex items-center justify-center h-48 text-gray-400 text-sm">{$t('console.viewGraph')} - {$t('graph.noData')}</div>
+          {/if}
         {/if}
       </div>
     {:else}

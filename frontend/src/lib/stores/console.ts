@@ -85,8 +85,10 @@ function createConsoleStore() {
         const query = queries[0];
         const response = await queryService.execute({ query });
         if (response.success && response.data) {
-          update(s => ({ ...s, currentResult: response.data, executionTime: response.executionTime || 0, isExecuting: false }));
-          addToHistory({ query, executionTime: response.executionTime || 0, rowCount: response.data.rowCount || 0, success: true });
+          const data = response.data;
+          const executionTime = response.executionTime || 0;
+          update(s => ({ ...s, currentResult: data, executionTime, isExecuting: false }));
+          addToHistory({ query, executionTime, rowCount: data.rowCount || 0, success: true });
         } else {
           update(s => ({ ...s, error: response.error || { code: 'UNKNOWN_ERROR', message: 'Unknown error' }, executionTime: response.executionTime || 0, isExecuting: false }));
           addToHistory({ query, executionTime: response.executionTime || 0, rowCount: 0, success: false });
@@ -104,8 +106,10 @@ function createConsoleStore() {
       try {
         const response = await queryService.execute({ query });
         if (response.success && response.data) {
-          update(s => ({ ...s, currentResult: response.data, executionTime: response.executionTime || 0, isExecuting: false }));
-          addToHistory({ query, executionTime: response.executionTime || 0, rowCount: response.data.rowCount || 0, success: true });
+          const data = response.data;
+          const executionTime = response.executionTime || 0;
+          update(s => ({ ...s, currentResult: data, executionTime, isExecuting: false }));
+          addToHistory({ query, executionTime, rowCount: data.rowCount || 0, success: true });
         } else {
           update(s => ({ ...s, error: response.error || { code: 'UNKNOWN_ERROR', message: 'Unknown error' }, executionTime: response.executionTime || 0, isExecuting: false }));
           addToHistory({ query, executionTime: response.executionTime || 0, rowCount: 0, success: false });
