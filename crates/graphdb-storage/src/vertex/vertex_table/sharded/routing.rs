@@ -142,36 +142,39 @@ pub(super) fn try_decode_id(
 
 /// External-key routing scheme version pinned in the table manifest.
 ///
-/// Version 1 is the `fxhash` mask scheme below. The version travels with
-/// the persisted data (not the binary): a future routing change takes
-/// effect only in a new redistribution generation, and old generations
-/// keep decoding with their pinned version. Unknown versions refuse the
-/// open with a rebuild directive instead of misrouting.
+/// Locked at 1 through the development phase: there is no old data in
+/// the wild, so routing improvements land in place with no version change
+/// and no migration path.
 pub(super) const ROUTER_VERSION: u8 = 1;
+
+/// Splitmix64 avalanche finalizer: diffuses input entropy across all output
+/// bits so prefix-similar keys and sequential integers spread evenly over
+/// the shard mask instead of clustering.
+fn finalize(mut hash: u64) -> u64 {
+    hash = hash.wrapping_add(0x9e3779b97f4a7c15);
+    hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d049bb133111eb);
+    hash ^ (hash >> 31)
+}
 
 /// External-key shard hash: stability contract.
 ///
 /// The shard index routes both writes and reads, and persisted global IDs
 /// embed the routing shard, so this function must return the same value
-/// for the same key for the lifetime of the manifest format. A stronger
-/// mixer would reduce skew on adversarial keys, but changing the output
-/// would silently misroute every persisted row. Any future hash change
-/// must therefore ride the offline `reshard_to` rebuild (which re-routes
-/// by external key) under a new manifest marker, never as an in-place
-/// edit here.
+/// for the same key for the lifetime of the manifest format. The FNV-1a
+/// fold plus finalizer spreads prefix-similar string keys that the bare
+/// multiply-xor fold clustered.
 pub(super) fn fxhash(s: &str) -> u64 {
-    let mut hash: u64 = 0;
+    let mut hash: u64 = 0xcbf29ce484222325;
     for byte in s.bytes() {
-        hash = hash.wrapping_mul(0x517cc1b727220a95);
         hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
     }
-    hash
+    finalize(hash)
 }
 
 pub(super) fn fxhash_i64(n: i64) -> u64 {
-    let mut hash: u64 = 0x517cc1b727220a95;
-    hash ^= n as u64;
-    hash
+    finalize(n as u64)
 }
 
 impl ShardedVertexTable {

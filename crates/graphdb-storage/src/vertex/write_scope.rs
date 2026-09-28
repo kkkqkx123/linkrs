@@ -237,6 +237,18 @@ impl WriteScope {
         out
     }
 
+    /// Reserved global ids of staged inserts for one label, without
+    /// consuming them. Commit pre-validation exempts updates and deletes
+    /// targeting these ids from the liveness check: their rows are created
+    /// by the insert stage of the same commit.
+    pub fn staged_insert_ids_for_label(&self, label: LabelId) -> Vec<u32> {
+        self.inserts
+            .iter()
+            .filter(|((entry_label, _), _)| *entry_label == label)
+            .map(|(_, (reserved, _))| *reserved)
+            .collect()
+    }
+
     /// Labels with staged rows in any of the three sets, sorted.
     pub fn labels(&self) -> Vec<LabelId> {
         let mut labels: Vec<LabelId> = self

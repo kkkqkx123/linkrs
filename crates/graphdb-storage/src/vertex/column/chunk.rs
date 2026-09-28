@@ -184,8 +184,11 @@ impl ColumnChunk {
     }
 
     /// Whether this chunk may be evicted: resident, encoded, with no
-    /// unmerged overlay writes and no live version-chain entries. Raw chunks
-    /// stay resident until the flush encoding pass decides their scheme, so
+    /// unmerged overlay writes, no live version-chain entries and no
+    /// overflow mappings. Overflow rows live in the column-level side store
+    /// which snapshots do not capture, so an overflow-mapped chunk stays
+    /// resident until flush rebuilds the side store. Raw chunks stay
+    /// resident until the flush encoding pass decides their scheme, so
     /// eviction never preempts encoding and promotion restores the encoded
     /// form directly.
     pub fn is_evictable(&self) -> bool {
@@ -193,6 +196,7 @@ impl ColumnChunk {
         matches!(state.residency, ChunkResidency::Resident)
             && state.encoding.is_encoded()
             && state.overlay.len() == 0
+            && state.overflow_rows.is_empty()
             && state
                 .version_chains
                 .as_ref()

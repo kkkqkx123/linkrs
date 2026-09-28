@@ -121,10 +121,10 @@ impl IdIndexer {
         self.manager.delta_len()
     }
 
-    /// Anchor check against an explicit live size (see
-    /// [`IdManager::should_anchor_baseline_for_live`]).
-    pub fn should_anchor_baseline_for_live(&self, live: usize) -> bool {
-        self.manager.should_anchor_baseline_for_live(live)
+    /// Consume the compaction-moved-rows flag (see
+    /// [`IdManager::take_baseline_invalidated`]).
+    pub fn take_baseline_invalidated(&self) -> bool {
+        self.manager.take_baseline_invalidated()
     }
 
     /// Cumulative free-stack reuses (see [`IdManager::reuse_count`]).
@@ -212,7 +212,7 @@ impl IdIndexer {
                             core.keys[idx as usize] = None;
                         }
                         core.live_ids.remove(&idx);
-                        core.free_ids.push(idx);
+                        core.push_free(idx);
                     }
                 }
                 _ => {
@@ -253,7 +253,7 @@ impl IdIndexer {
         if mapping.is_empty() {
             // Already dense; still clear free list if it had stale entries.
             // Ids did not move, so the since-baseline delta stays valid.
-            self.manager.core.lock().free_ids.clear();
+            self.manager.core.lock().clear_free();
             return Ok(std::collections::HashMap::new());
         }
 
@@ -265,7 +265,7 @@ impl IdIndexer {
         }
         entries.sort_by_key(|(old_id, _)| *old_id);
         rebuild_with_mapping_locked(&mut core, &mut guards, &entries)?;
-        core.free_ids.clear();
+        core.clear_free();
         // Live rows moved: delta entries addressed by old ids are stale.
         // Drop them and force the next flush to anchor a new baseline.
         core.delta_log.clear();
@@ -342,7 +342,7 @@ fn rebuild_with_mapping_locked(
     }
     core.keys = new_keys;
     core.live_ids = (0..entries.len() as u32).collect();
-    core.free_ids.clear();
+    core.clear_free();
     Ok(())
 }
 

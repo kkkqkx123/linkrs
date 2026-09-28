@@ -1,7 +1,7 @@
 use super::ShardedVertexTable;
 use crate::schema::ChangeDetails;
 use crate::types::StoragePropertyDef;
-use graphdb_core::StorageResult;
+use graphdb_core::{StorageError, StorageResult};
 
 impl ShardedVertexTable {
     pub fn schema(&self) -> crate::vertex::VertexSchema {
@@ -156,14 +156,42 @@ impl ShardedVertexTable {
         Ok(())
     }
 
-    /// Publish the staged change on every shard, aborting everywhere on failure.
+    /// Publish the staged change on every shard with forward recovery.
+    ///
+    /// A published shard cannot be unpublished, so a mid-fan-out failure
+    /// completes the publish on every remaining shard and reports the first
+    /// error instead of aborting: abort would leave published and staged
+    /// shards diverged, while forward completion converges every shard on
+    /// the published schema.
     pub fn publish_pending_schema_change(&self) -> StorageResult<()> {
+        let mut first_error: Option<StorageError> = None;
         for shard in &self.shards {
-            let result = shard.write().publish_pending_schema_change();
-            if let Err(error) = result {
-                self.abort_staged_on_all_shards();
-                return Err(error);
+            if let Err(error) = shard.write().publish_pending_schema_change() {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
             }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Fail when shards disagree on the published schema version.
+    ///
+    /// Column decoding trusts one layout, so a divergence must surface as
+    /// an error at the scan entry instead of a silent per-row downgrade.
+    pub fn verify_shard_schema_uniform(&self) -> StorageResult<()> {
+        let mut versions = std::collections::HashSet::new();
+        for shard in &self.shards {
+            versions.insert(shard.read().schema().schema_version);
+        }
+        if versions.len() > 1 {
+            return Err(StorageError::invalid_operation(format!(
+                "vertex table '{}' shards disagree on schema version: {:?}",
+                self.label_name, versions
+            )));
         }
         Ok(())
     }

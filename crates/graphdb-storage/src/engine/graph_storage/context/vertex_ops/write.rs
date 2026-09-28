@@ -70,11 +70,22 @@ impl GraphStorageContext {
         scope: &mut WriteScope,
         ts: Timestamp,
     ) -> StorageResult<Vec<(crate::vertex::IdKey, u32)>> {
+        Ok(self.commit_write_scope_tracked(label, scope, ts)?.mapping)
+    }
+
+    /// Tracked commit hook reporting every applied mutation for later
+    /// compensation of post-apply durability failures.
+    pub fn commit_write_scope_tracked(
+        &self,
+        label: LabelId,
+        scope: &mut WriteScope,
+        ts: Timestamp,
+    ) -> StorageResult<crate::vertex::vertex_table::sharded::CommitApplied> {
         self.persistent.data_store.with_vertex_tables(|tables| {
             tables
                 .get(&label)
                 .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", label)))
-                .and_then(|table| table.commit_write_scope(scope, ts))
+                .and_then(|table| table.commit_write_scope_tracked(scope, ts))
         })
     }
 

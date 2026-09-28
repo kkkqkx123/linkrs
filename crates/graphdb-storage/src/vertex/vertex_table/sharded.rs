@@ -8,7 +8,9 @@ pub(crate) mod persistence;
 mod read;
 pub(crate) mod routing;
 mod schema;
-mod write;
+pub(crate) mod write;
+
+pub(crate) use write::CommitApplied;
 
 pub struct ShardedVertexTable {
     shards: Vec<RwLock<VertexTable>>,
@@ -130,10 +132,13 @@ impl ShardedVertexTable {
     /// Reads every live row at the maximum timestamp and rebuilds it in a
     /// fresh table with `new_num_shards`, returning the rebuilt table plus
     /// the old-global to new-global internal id mapping the rebuild
-    /// produced. The source stays untouched; the caller flushes the returned
-    /// table and checkpoints it as the new baseline, then retires the old
-    /// checkpoint directory. Online shard count changes stay rejected by the
-    /// table manifest; this is the only adjustment outlet.
+    /// produced. Row creation stamps travel with their rows so snapshot
+    /// reads keep their original visibility lower bound; per-value version
+    /// chains stay memory-only and are not migrated. The source stays
+    /// untouched; the caller flushes the returned table and checkpoints it
+    /// as the new baseline, then retires the old checkpoint directory.
+    /// Online shard count changes stay rejected by the table manifest; this
+    /// is the only adjustment outlet.
     ///
     /// Offline fence: the caller must hold the maintenance barrier with no
     /// concurrent writes, and no staged schema change may be pending on any
@@ -175,24 +180,32 @@ impl ShardedVertexTable {
         let ts = MAX_TIMESTAMP - 1;
         let mut id_mapping: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
         for key in self.external_id_keys() {
-            let (old_global, record) = match &key {
+            let (old_global, record, orig_create) = match &key {
                 crate::vertex::IdKey::Text(name) => {
                     let Some(old_global) = self.get_internal_id(name, ts) else {
                         continue;
                     };
-                    let Some(record) = self.get_by_internal_id(old_global, ts) else {
+                    let Some(record) = self.get_by_internal_id_offline(old_global, ts) else {
                         continue;
                     };
-                    (old_global, record)
+                    let create = self
+                        .row_timestamps(old_global)
+                        .map(|(create, _)| create)
+                        .unwrap_or(ts);
+                    (old_global, record, create)
                 }
                 crate::vertex::IdKey::Int(n) => {
                     let Some(old_global) = self.get_internal_id_by_i64(*n, ts) else {
                         continue;
                     };
-                    let Some(record) = self.get_by_internal_id(old_global, ts) else {
+                    let Some(record) = self.get_by_internal_id_offline(old_global, ts) else {
                         continue;
                     };
-                    (old_global, record)
+                    let create = self
+                        .row_timestamps(old_global)
+                        .map(|(create, _)| create)
+                        .unwrap_or(ts);
+                    (old_global, record, create)
                 }
             };
             let new_global = match &key {
@@ -201,6 +214,12 @@ impl ShardedVertexTable {
                     rebuilt.insert_by_i64(*n, &record.properties, ts)?
                 }
             };
+            if orig_create < ts {
+                let (new_shard, new_local) = rebuilt.decode_id(new_global);
+                rebuilt.shards[new_shard]
+                    .read()
+                    .backdate_row_for_reshard(new_local, orig_create);
+            }
             id_mapping.insert(old_global, new_global);
         }
         Ok((rebuilt, id_mapping))
@@ -271,7 +290,7 @@ mod tests {
             ids.push(id);
         }
         for (i, &id) in ids.iter().enumerate() {
-            let record = table.get_by_internal_id(id, ts).unwrap();
+            let record = table.get_by_internal_id_offline(id, ts).unwrap();
             assert_eq!(
                 record
                     .properties
@@ -308,7 +327,7 @@ mod tests {
         let new_id = insert_with_name(&reloaded, "v_new_after_load", ts);
         let new_id2 = insert_with_name(&reloaded, "v_new_after_load2", ts);
         assert_ne!(new_id, new_id2);
-        assert!(reloaded.get_by_internal_id(new_id, ts).is_some());
+        assert!(reloaded.get_by_internal_id_offline(new_id, ts).is_some());
         assert!(reloaded.get_internal_id("v_new_after_load", ts).is_some());
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -328,7 +347,7 @@ mod tests {
                 ts,
             )
             .unwrap();
-        let record = table.get_by_internal_id(id, ts).unwrap();
+        let record = table.get_by_internal_id_offline(id, ts).unwrap();
         assert_eq!(record.properties.len(), 2);
     }
 
@@ -355,9 +374,10 @@ mod tests {
         let table = ShardedVertexTable::with_config(1, "person".to_string(), test_schema(), 4);
         let ts = TEST_TS;
         let id = insert_with_name(&table, "bob", ts);
-        assert!(table.get_by_internal_id(id, ts).is_some());
-        assert_eq!(table.batch_delete(&["bob"], ts).unwrap(), 1);
-        assert!(table.get_by_internal_id(id, ts).is_none());
+        assert!(table.get_by_internal_id_offline(id, ts).is_some());
+        let gid = table.get_internal_id("bob", ts).unwrap();
+        table.delete_by_internal_id(gid, ts).unwrap();
+        assert!(table.get_by_internal_id_offline(id, ts).is_none());
     }
 
     #[test]
@@ -475,7 +495,8 @@ mod tests {
         let ts_insert = 100;
         let ts_delete = 200;
         insert_with_name(&table, "gc_test", ts_insert);
-        assert_eq!(table.batch_delete(&["gc_test"], ts_delete).unwrap(), 1);
+        let gid = table.get_internal_id("gc_test", ts_delete).unwrap();
+        table.delete_by_internal_id(gid, ts_delete).unwrap();
         let (gc_vertices, gc_versions) = table.gc_detailed(250).unwrap();
 
         let count = gc_vertices + gc_versions;
@@ -496,7 +517,9 @@ mod tests {
 
     #[test]
     fn test_id_hole_stats_tracks_allocated_and_live() {
-        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 8);
+        // Single shard: shard selection is hash-driven, so a multi-shard
+        // table may skip low-fragmentation shards and remove only a subset.
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
         let ts_insert = 100;
         let ts_delete = 200;
         for i in 0..100 {
@@ -506,12 +529,10 @@ mod tests {
         assert_eq!((live, allocated), (100, 100));
 
         for i in 0..30 {
-            assert_eq!(
-                table
-                    .batch_delete(&[format!("v_{}", i).as_str()], ts_delete)
-                    .unwrap(),
-                1
-            );
+            let gid = table
+                .get_internal_id(&format!("v_{}", i), ts_delete)
+                .unwrap();
+            table.delete_by_internal_id(gid, ts_delete).unwrap();
         }
         // Deleted vertices leave holes: allocated stays at the high-water
         // mark, live only counts vertices not deleted at the cutoff.
@@ -623,7 +644,8 @@ mod tests {
             let id = insert_with_name(&table, &name, ts_insert);
             before.insert(name, id);
         }
-        assert_eq!(table.batch_delete(&["stable_0"], ts_delete).unwrap(), 1);
+        let gid = table.get_internal_id("stable_0", ts_delete).unwrap();
+        table.delete_by_internal_id(gid, ts_delete).unwrap();
         let (removed, mapping, _) = table
             .compact_with_cutoff_collect_mapping(ts_delete)
             .unwrap();
@@ -657,12 +679,10 @@ mod tests {
             before.insert(name, id);
         }
         for i in 0..4 {
-            assert_eq!(
-                table
-                    .batch_delete(&[format!("row_{}", i).as_str()], ts_delete)
-                    .unwrap(),
-                1
-            );
+            let gid = table
+                .get_internal_id(&format!("row_{}", i), ts_delete)
+                .unwrap();
+            table.delete_by_internal_id(gid, ts_delete).unwrap();
         }
         let (removed, mapping, _) = table.compact_with_cutoff_stable_collect(ts_delete).unwrap();
         assert_eq!(removed.len(), 4);
@@ -693,8 +713,10 @@ mod tests {
             let name = format!("hole_{}", i);
             insert_with_name(&table, &name, ts_insert);
         }
-        assert_eq!(table.batch_delete(&["hole_1"], ts_delete).unwrap(), 1);
-        assert_eq!(table.batch_delete(&["hole_3"], ts_delete).unwrap(), 1);
+        let gid = table.get_internal_id("hole_1", ts_delete).unwrap();
+        table.delete_by_internal_id(gid, ts_delete).unwrap();
+        let gid = table.get_internal_id("hole_3", ts_delete).unwrap();
+        table.delete_by_internal_id(gid, ts_delete).unwrap();
         let (removed, mapping, _) = table.compact_with_cutoff_stable_collect(ts_delete).unwrap();
         assert_eq!(removed.len(), 2);
         assert!(mapping.is_empty());
@@ -724,12 +746,10 @@ mod tests {
                 insert_with_name(&table, &format!("row_{}", i), 100);
             }
             for i in 0..4 {
-                assert_eq!(
-                    table
-                        .batch_delete(&[format!("row_{}", i).as_str()], 200)
-                        .unwrap(),
-                    1
-                );
+                let gid = table
+                    .get_internal_id(&format!("row_{}", i), 200)
+                    .unwrap();
+                table.delete_by_internal_id(gid, 200).unwrap();
             }
             table
         };
@@ -760,8 +780,8 @@ mod tests {
             let stable_before = build().get_internal_id(&name, 200).expect("pre compact id");
             let stable_id = stable.get_internal_id(&name, 200).expect("stable survivor");
             assert_eq!(stable_id, stable_before);
-            assert!(stable.get_by_internal_id(stable_id, 200).is_some());
-            assert!(offline.get_by_internal_id(offline_id, 200).is_some());
+            assert!(stable.get_by_internal_id_offline(stable_id, 200).is_some());
+            assert!(offline.get_by_internal_id_offline(offline_id, 200).is_some());
         }
     }
 
@@ -778,8 +798,10 @@ mod tests {
             let id = insert_with_name(&table, &name, ts_insert);
             before.insert(name, id);
         }
-        assert_eq!(table.batch_delete(&["gc_1"], ts_delete).unwrap(), 1);
-        assert_eq!(table.batch_delete(&["gc_3"], ts_delete).unwrap(), 1);
+        let gid = table.get_internal_id("gc_1", ts_delete).unwrap();
+        table.delete_by_internal_id(gid, ts_delete).unwrap();
+        let gid = table.get_internal_id("gc_3", ts_delete).unwrap();
+        table.delete_by_internal_id(gid, ts_delete).unwrap();
         let (reclaimed, _) = table.gc_detailed(ts_delete).unwrap();
         assert_eq!(reclaimed, 2);
         for i in [0, 2, 4] {
@@ -848,7 +870,8 @@ mod tests {
         for i in 0..3 {
             insert_with_name(&table, &format!("incr_{}", i), ts);
         }
-        assert_eq!(table.batch_delete(&["base_0"], ts).unwrap(), 1);
+        let gid = table.get_internal_id("base_0", ts).unwrap();
+        table.delete_by_internal_id(gid, ts).unwrap();
         table
             .flush_incremental_with_epoch(
                 &incr,
@@ -974,8 +997,8 @@ mod tests {
             let old_id = table.get_internal_id(&name, ts).expect("old row");
             let new_id = rebuilt.get_internal_id(&name, ts).expect("rebuilt row");
             assert_eq!(mapping.get(&old_id), Some(&new_id));
-            let old_record = table.get_by_internal_id(old_id, ts).expect("old record");
-            let new_record = rebuilt.get_by_internal_id(new_id, ts).expect("new record");
+            let old_record = table.get_by_internal_id_offline(old_id, ts).expect("old record");
+            let new_record = rebuilt.get_by_internal_id_offline(new_id, ts).expect("new record");
             assert_eq!(old_record.properties, new_record.properties);
         }
         assert!(table.reshard_to(2).is_err());
@@ -988,12 +1011,10 @@ mod tests {
             insert_with_name(&table, &format!("card_{}", i), 100);
         }
         for i in 0..3 {
-            assert_eq!(
-                table
-                    .batch_delete(&[format!("card_{}", i).as_str()], 200)
-                    .unwrap(),
-                1
-            );
+            let gid = table
+                .get_internal_id(&format!("card_{}", i), 200)
+                .unwrap();
+            table.delete_by_internal_id(gid, 200).unwrap();
         }
         let snapshot = table.table_cardinality_at(250);
         assert_eq!((snapshot.live_rows, snapshot.allocated_slots), (7, 10));
@@ -1026,5 +1047,28 @@ mod tests {
         let (rebuilt, _) = table.reshard_to(4).expect("reshard succeeds after abort");
         assert_eq!(rebuilt.num_shards(), 4);
         assert!(rebuilt.get_internal_id("r_0", TEST_TS).is_some());
+    }
+
+    #[test]
+    fn test_reshard_preserves_creation_stamps() {
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        for i in 0..10 {
+            insert_with_name(&table, &format!("aged_{}", i), 100 + i);
+        }
+        let (rebuilt, _) = table.reshard_to(8).expect("reshard succeeds");
+        for i in 0..10 {
+            let name = format!("aged_{}", i);
+            let new_id = rebuilt.get_internal_id(&name, TEST_TS).expect("rebuilt row");
+            let (create, _) = rebuilt.row_timestamps(new_id).expect("stamps");
+            assert_eq!(create, 100 + i as u64);
+            if 100 + i <= 105 {
+                let record = rebuilt
+                    .get_by_internal_id_offline(new_id, 105)
+                    .expect("readable below the rebuild stamp");
+                assert!(record.properties.iter().any(|(k, _)| k == "name"));
+            } else {
+                assert!(rebuilt.get_by_internal_id_offline(new_id, 105).is_none());
+            }
+        }
     }
 }

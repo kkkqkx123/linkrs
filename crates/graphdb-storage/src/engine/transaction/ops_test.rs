@@ -251,7 +251,7 @@ mod tests {
         let table = vertex_tables.get(&0).unwrap();
         let internal = table.get_internal_id_by_i64(1, 2);
         assert!(internal.is_none());
-        let v = internal.and_then(|id| table.get_by_internal_id(id, 2));
+        let v = internal.and_then(|id| table.get_by_internal_id_offline(id, 2));
         assert!(v.is_none());
     }
 
@@ -284,7 +284,7 @@ mod tests {
 
         let table = vertex_tables.get(&0).unwrap();
         let internal = table.get_internal_id_by_i64(1, 2).unwrap();
-        let record = table.get_by_internal_id(internal, 2).unwrap();
+        let record = table.get_by_internal_id_offline(internal, 2).unwrap();
         let name_val = record
             .properties
             .iter()

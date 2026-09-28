@@ -134,7 +134,7 @@ fn test_insert_and_get() {
     assert_eq!(internal_id, 0);
 
     let lookup_id = lookup_visible(&table, "v1", 100).unwrap();
-    let record = table.get_by_internal_id(lookup_id, 100).unwrap();
+    let record = table.get_by_internal_id_offline(lookup_id, 100).unwrap();
     // `id` is auto-filled from the external key on top of the two payloads.
     assert_eq!(record.properties.len(), 3);
 }
@@ -212,7 +212,8 @@ fn test_batch_projected_read() {
     );
 
     // Invalid (deleted) id yields None in its input position.
-    assert_eq!(table.batch_delete(&["v2"], 100).unwrap(), 1);
+    let id = table.get_internal_id_raw("v2").unwrap();
+    table.delete_by_internal_id(id, 100).unwrap();
     let with_gap = table
         .try_get_projected_batch(&[0, 1, 2], 100, None)
         .expect("strict batch");
@@ -230,10 +231,11 @@ fn test_delete() {
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
 
-    assert_eq!(table.batch_delete(&["v1"], 200).unwrap(), 1);
+    let id = table.get_internal_id_raw("v1").unwrap();
+    table.delete_by_internal_id(id, 200).unwrap();
 
     let internal_id = lookup_visible(&table, "v1", 150).unwrap();
-    assert!(table.get_by_internal_id(internal_id, 150).is_some());
+    assert!(table.get_by_internal_id_offline(internal_id, 150).is_some());
     assert!(lookup_visible(&table, "v1", 250).is_none());
 }
 
@@ -268,7 +270,8 @@ fn test_live_ids_at_excludes_timestamp_deleted_rows() {
         .insert("v2", &[("name".to_string(), Value::string("Bob"))], 100)
         .unwrap();
 
-    assert_eq!(table.batch_delete(&["v1"], 200).unwrap(), 1);
+    let id = table.get_internal_id_raw("v1").unwrap();
+    table.delete_by_internal_id(id, 200).unwrap();
 
     // Snapshot enumeration hides the row deleted at 200.
     assert_eq!(table.live_ids(150), vec![0, 1]);
@@ -303,7 +306,7 @@ fn test_rename_and_remove_property() {
     staged_remove(&mut table, "city").expect("remove should succeed");
 
     let record = table
-        .get_by_internal_id(internal_id, 100)
+        .get_by_internal_id_offline(internal_id, 100)
         .expect("record should remain visible");
 
     assert_eq!(
@@ -368,7 +371,7 @@ fn test_batch_insert() {
     let count = table.scan(100).count();
     assert_eq!(count, 3);
 
-    let record1 = table.get_by_internal_id(ids[0], 100).unwrap();
+    let record1 = table.get_by_internal_id_offline(ids[0], 100).unwrap();
     assert_eq!(
         record1
             .properties
@@ -377,34 +380,6 @@ fn test_batch_insert() {
             .map(|(_, v)| v),
         Some(&Value::string("Alice"))
     );
-}
-
-#[test]
-fn test_batch_delete() {
-    let schema = create_test_schema();
-    let table = new_table(0, "person", schema);
-
-    table
-        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
-        .unwrap();
-    table
-        .insert("v2", &[("name".to_string(), Value::string("Bob"))], 100)
-        .unwrap();
-    table
-        .insert("v3", &[("name".to_string(), Value::string("Charlie"))], 100)
-        .unwrap();
-
-    let deleted = table.batch_delete(&["v1", "v3"], 200).unwrap();
-    assert_eq!(deleted, 2);
-
-    let count_before_delete = table.scan(100).count();
-    assert_eq!(count_before_delete, 3);
-
-    let count_after_delete = table.scan(200).count();
-    assert_eq!(count_after_delete, 1);
-
-    assert!(lookup_visible(&table, "v2", 200).is_some());
-    assert!(lookup_visible(&table, "v1", 200).is_none());
 }
 
 #[test]
@@ -586,12 +561,9 @@ fn test_compact_delete_all() {
     assert_eq!(table.scan(100).count(), 5);
 
     for i in 0..5 {
-        assert_eq!(
-            table
-                .batch_delete(&[format!("v{}", i).as_str()], 200)
-                .unwrap(),
-            1
-        );
+        let key = format!("v{}", i);
+        let id = table.get_internal_id_raw(&key).unwrap();
+        table.delete_by_internal_id(id, 200).unwrap();
     }
 
     assert_eq!(table.scan(200).count(), 0);
@@ -655,9 +627,11 @@ fn test_compact_multiple_cycles() {
 
         for i in 0..10 {
             if i % 2 == 0 {
-                table
-                    .batch_delete(&[format!("v{}_{}", cycle, i).as_str()], ts_delete)
-                    .unwrap_or_else(|_| panic!("delete cycle {} should succeed", cycle));
+                let key = format!("v{}_{}", cycle, i);
+                let id = table.get_internal_id_raw(&key).unwrap();
+                table.delete_by_internal_id(id, ts_delete).unwrap_or_else(|_| {
+                    panic!("delete cycle {} should succeed", cycle)
+                });
             }
         }
 
@@ -708,8 +682,10 @@ fn test_compact_id_consistency() {
             .unwrap(),
     ];
 
-    assert_eq!(table.batch_delete(&["v2"], 200).unwrap(), 1);
-    assert_eq!(table.batch_delete(&["v5"], 200).unwrap(), 1);
+    let id = table.get_internal_id_raw("v2").unwrap();
+    table.delete_by_internal_id(id, 200).unwrap();
+    let id = table.get_internal_id_raw("v5").unwrap();
+    table.delete_by_internal_id(id, 200).unwrap();
 
     let before_count = table.scan(150).count();
     assert_eq!(before_count, 5);
@@ -729,7 +705,7 @@ fn test_compact_id_consistency() {
         let internal_id =
             lookup_visible(&table, key, 200).unwrap_or_else(|| panic!("should find {}", key));
         let record = table
-            .get_by_internal_id(internal_id, 200)
+            .get_by_internal_id_offline(internal_id, 200)
             .unwrap_or_else(|| panic!("should retrieve {}", key));
 
         let name_val = record
@@ -771,9 +747,10 @@ fn test_vertex_snapshot_isolation() {
         .update_property(0, "name", &Value::string("Alice Updated"), 200)
         .unwrap();
 
-    assert_eq!(table.batch_delete(&["v1"], 300).unwrap(), 1);
+    let id = table.get_internal_id_raw("v1").unwrap();
+    table.delete_by_internal_id(id, 300).unwrap();
 
-    assert!(table.get_by_internal_id(0, 100).is_some());
+    assert!(table.get_by_internal_id_offline(0, 100).is_some());
     assert!(lookup_visible(&table, "v1", 300).is_none());
 }
 
@@ -790,15 +767,16 @@ fn test_vertex_multiple_snapshots() {
         .insert("v2", &[("name".to_string(), Value::string("Bob"))], 150)
         .unwrap();
 
-    assert_eq!(table.batch_delete(&["v1"], 250).unwrap(), 1);
+    let id = table.get_internal_id_raw("v1").unwrap();
+    table.delete_by_internal_id(id, 250).unwrap();
 
-    let v1_at_snap1 = table.get_by_internal_id(0, 100);
+    let v1_at_snap1 = table.get_by_internal_id_offline(0, 100);
     assert!(v1_at_snap1.is_some());
 
-    let v1_at_snap2 = table.get_by_internal_id(0, 200);
+    let v1_at_snap2 = table.get_by_internal_id_offline(0, 200);
     assert!(v1_at_snap2.is_some());
 
-    assert!(table.get_by_internal_id(0, 300).is_none());
+    assert!(table.get_by_internal_id_offline(0, 300).is_none());
 }
 
 #[test]
@@ -815,7 +793,7 @@ fn test_vertex_gc_placeholder() {
     let cleaned = gc_vertices + gc_versions;
     assert_eq!(cleaned, 0);
 
-    assert!(table.get_by_internal_id(0, 100).is_some());
+    assert!(table.get_by_internal_id_offline(0, 100).is_some());
 }
 
 #[test]
@@ -860,13 +838,13 @@ fn test_repeatable_read_property_updates() {
 
     // T1 re-reads at its snapshot timestamp: it must still see the old values
     // (RepeatableRead), not the values written by T2.
-    let t1_read = table.get_by_internal_id(0, 100).unwrap();
+    let t1_read = table.get_by_internal_id_offline(0, 100).unwrap();
     let props: std::collections::HashMap<String, Value> = t1_read.properties.into_iter().collect();
     assert_eq!(props.get("age"), Some(&Value::Int(30)));
     assert_eq!(props.get("name"), Some(&Value::string("Alice")));
 
     // A newer reader at ts=200 sees the new values.
-    let t2_read = table.get_by_internal_id(0, 200).unwrap();
+    let t2_read = table.get_by_internal_id_offline(0, 200).unwrap();
     let props: std::collections::HashMap<String, Value> = t2_read.properties.into_iter().collect();
     assert_eq!(props.get("age"), Some(&Value::Int(31)));
     assert_eq!(props.get("name"), Some(&Value::string("Alice-renamed")));
@@ -905,7 +883,7 @@ fn test_property_version_gc_does_not_break_visible_snapshots() {
         "no versions may be reclaimed while a snapshot is active below them"
     );
     let props_at_200: std::collections::HashMap<String, Value> = table
-        .get_by_internal_id(0, 200)
+        .get_by_internal_id_offline(0, 200)
         .unwrap()
         .properties
         .into_iter()
@@ -921,7 +899,7 @@ fn test_property_version_gc_does_not_break_visible_snapshots() {
         "old versions should be reclaimed after snapshots drop"
     );
     let props_at_300: std::collections::HashMap<String, Value> = table
-        .get_by_internal_id(0, 300)
+        .get_by_internal_id_offline(0, 300)
         .unwrap()
         .properties
         .into_iter()
@@ -1002,7 +980,7 @@ fn test_flush_chunk_sidecars_and_chunked_reload() {
     let mut reloaded = new_table(0, "person", schema);
     reloaded.load(&shard).unwrap();
     // Schema and stats load eagerly; verify a mid-table read first.
-    let rec = reloaded.get_by_internal_id(10, 100).unwrap();
+    let rec = reloaded.get_by_internal_id_offline(10, 100).unwrap();
     let props: std::collections::HashMap<String, Value> = rec.properties.into_iter().collect();
     assert_eq!(props.get("age"), Some(&Value::Int(10)));
 
@@ -1013,7 +991,7 @@ fn test_flush_chunk_sidecars_and_chunked_reload() {
     assert!(age.chunk_count() >= 2);
     let age = reloaded.columns.get_column("age").unwrap();
     assert_eq!(age.get(0), Some(Value::Int(0)));
-    let rec = reloaded.get_by_internal_id(0, 100).unwrap();
+    let rec = reloaded.get_by_internal_id_offline(0, 100).unwrap();
     let props: std::collections::HashMap<String, Value> = rec.properties.into_iter().collect();
     assert_eq!(props.get("age"), Some(&Value::Int(0)));
 }
@@ -1119,8 +1097,10 @@ fn test_partial_compact_preserves_unmoved_rows() {
             .insert(key, &[("name".to_string(), Value::string(name))], 100)
             .unwrap();
     }
-    assert_eq!(table.batch_delete(&["v1"], 200).unwrap(), 1);
-    assert_eq!(table.batch_delete(&["v3"], 200).unwrap(), 1);
+    let id = table.get_internal_id_raw("v1").unwrap();
+    table.delete_by_internal_id(id, 200).unwrap();
+    let id = table.get_internal_id_raw("v3").unwrap();
+    table.delete_by_internal_id(id, 200).unwrap();
 
     let (removed, _mapping, _journal) = table
         .compact_with_cutoff_collect_mapping(300)
@@ -1131,7 +1111,7 @@ fn test_partial_compact_preserves_unmoved_rows() {
         let id = lookup_visible(&table, key, 300)
             .unwrap_or_else(|| panic!("{} lost after partial compact", key));
         let record = table
-            .get_by_internal_id(id, 300)
+            .get_by_internal_id_offline(id, 300)
             .unwrap_or_else(|| panic!("no record for {} after partial compact", key));
         let got = record
             .properties
@@ -1164,7 +1144,8 @@ fn test_compact_preserves_moved_row_history() {
     table
         .update_property(v0, "name", &Value::string("Alice2"), 200)
         .unwrap();
-    assert_eq!(table.batch_delete(&["tmp"], 250).unwrap(), 1);
+    let id = table.get_internal_id_raw("tmp").unwrap();
+    table.delete_by_internal_id(id, 250).unwrap();
 
     let (_, mapping, _) = table
         .compact_with_cutoff_collect_mapping(300)
@@ -1174,7 +1155,7 @@ fn test_compact_preserves_moved_row_history() {
     let id = lookup_visible(&table, "v0", 300).expect("v0 survives");
     let name_at = |ts: Timestamp| {
         table
-            .get_by_internal_id(id, ts)
+            .get_by_internal_id_offline(id, ts)
             .unwrap_or_else(|| panic!("no record for v0 at {}", ts))
             .properties
             .iter()

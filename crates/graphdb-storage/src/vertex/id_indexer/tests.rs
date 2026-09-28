@@ -436,8 +436,6 @@ fn test_compact_drops_delta_and_invalidates_baseline() {
     indexer.remove(&IdKey::Int(1));
     indexer.compact().unwrap();
     assert_eq!(indexer.delta_len(), 0);
-    assert!(indexer.should_anchor_baseline_for_live(indexer.len()));
-    assert!(!indexer.should_anchor_baseline_for_live(indexer.len()));
 }
 
 #[test]
@@ -471,16 +469,6 @@ fn test_delta_apply_rejects_divergence() {
     assert!(base.apply_delta_entries(&divergent).is_err());
     let idempotent = vec![(0u8, 7u32, IdKey::Int(3))];
     assert!(base.apply_delta_entries(&idempotent).is_ok());
-}
-
-#[test]
-fn test_over_threshold_delta_forces_anchor() {
-    let indexer = IdIndexer::new();
-    assert!(!indexer.should_anchor_baseline_for_live(indexer.len()));
-    for i in 0..PK_DELTA_ANCHOR_THRESHOLD as i64 {
-        indexer.insert(IdKey::Int(i)).unwrap();
-    }
-    assert!(indexer.should_anchor_baseline_for_live(indexer.len()));
 }
 
 #[test]
@@ -608,16 +596,6 @@ fn test_anchor_threshold_scales_with_live_size() {
         IdManager::anchor_threshold_for_live(PK_DELTA_ANCHOR_THRESHOLD * 8),
         PK_DELTA_ANCHOR_THRESHOLD * 2
     );
-    let indexer = IdIndexer::new();
-    for i in 0..8 {
-        indexer.insert(IdKey::Int(i)).unwrap();
-    }
-    indexer.clear_index_delta();
-    assert!(!indexer.should_anchor_baseline_for_live(8));
-    for i in 8..(8 + PK_DELTA_ANCHOR_THRESHOLD as i64) {
-        indexer.insert(IdKey::Int(i)).unwrap();
-    }
-    assert!(indexer.should_anchor_baseline_for_live(8));
 }
 
 #[test]

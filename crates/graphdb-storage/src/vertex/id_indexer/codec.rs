@@ -201,14 +201,16 @@ pub fn deserialize(data: &[u8]) -> StorageResult<IdManager> {
     // (e.g., after deletions that left gaps).
     {
         let mut core = manager.core.lock();
-        core.free_ids = core
+        core.clear_free();
+        let holes: Vec<u32> = core
             .keys
             .iter()
             .enumerate()
             .filter_map(|(idx, k)| if k.is_none() { Some(idx as u32) } else { None })
-            .collect::<Vec<u32>>()
-            .into_iter()
             .collect();
+        for hole in holes {
+            core.push_free(hole);
+        }
     }
 
     Ok(manager)

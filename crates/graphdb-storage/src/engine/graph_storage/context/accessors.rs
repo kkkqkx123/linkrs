@@ -862,10 +862,11 @@ impl GraphStorageContext {
     ) -> graphdb_core::StorageResult<graphdb_core::types::CommitLsn> {
         // Explicit-transaction commit point: staged vertex rows are applied
         // before the WAL append, and the WAL durability plus barrier is the
-        // publication. A durability failure undoes the applied rows (the
-        // aborted timestamp keeps any index residue invisible). Auto-commit
-        // statements certify in `finalize_operation` after this call, so
-        // their apply is deferred there.
+        // publication. A durability failure undoes every applied mutation
+        // (inserts, updates, deletes) so no committed-timestamp residue
+        // leaks to later readers. Auto-commit statements certify in
+        // `finalize_operation` after this call, so their apply is deferred
+        // there.
         let defer_apply = self
             .operation_context
             .as_ref()

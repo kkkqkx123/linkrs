@@ -45,6 +45,7 @@ impl IdentityLatch {
 pub struct VertexTimestamp {
     start_ts: Vec<Timestamp>,
     end_ts: Vec<Timestamp>,
+    pending: std::collections::HashSet<u32>,
 }
 
 impl VertexTimestamp {
@@ -56,6 +57,7 @@ impl VertexTimestamp {
         Self {
             start_ts: Vec::with_capacity(capacity),
             end_ts: Vec::with_capacity(capacity),
+            pending: std::collections::HashSet::new(),
         }
     }
 
@@ -74,6 +76,26 @@ impl VertexTimestamp {
         }
         self.start_ts[idx] = ts;
         self.end_ts[idx] = MAX_TIMESTAMP;
+        self.pending.remove(&index);
+    }
+
+    pub fn mark_pending(&mut self, index: u32) {
+        self.pending.insert(index);
+    }
+
+    pub fn clear_pending(&mut self, index: u32) {
+        self.pending.remove(&index);
+    }
+
+    pub fn is_pending(&self, index: u32) -> bool {
+        self.pending.contains(&index)
+    }
+
+    pub fn revert_delete(&mut self, index: u32) {
+        let idx = index as usize;
+        if idx < self.end_ts.len() && self.start_ts[idx] != INVALID_TIMESTAMP {
+            self.end_ts[idx] = MAX_TIMESTAMP;
+        }
     }
 
     pub fn remove(&mut self, index: u32, ts: Timestamp) {
@@ -92,6 +114,7 @@ impl VertexTimestamp {
             self.start_ts[idx] = INVALID_TIMESTAMP;
             self.end_ts[idx] = MAX_TIMESTAMP;
         }
+        self.pending.remove(&index);
     }
 
     /// Row-liveness probe delegating to the unified [`crate::mvcc_visibility::Visibility::row_live`]
@@ -102,6 +125,9 @@ impl VertexTimestamp {
     pub fn is_valid(&self, index: u32, ts: Timestamp) -> bool {
         let idx = index as usize;
         if idx >= self.start_ts.len() {
+            return false;
+        }
+        if self.pending.contains(&index) {
             return false;
         }
 
@@ -155,9 +181,14 @@ impl VertexTimestamp {
         self.start_ts.len()
     }
 
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
     pub fn clear(&mut self) {
         self.start_ts.clear();
         self.end_ts.clear();
+        self.pending.clear();
     }
 
     pub fn dump(&self) -> Vec<Timestamp> {
@@ -184,6 +215,7 @@ impl VertexTimestamp {
     pub fn memory_size(&self) -> usize {
         self.start_ts.len() * std::mem::size_of::<Timestamp>()
             + self.end_ts.len() * std::mem::size_of::<Timestamp>()
+            + self.pending.len() * std::mem::size_of::<u32>()
             + std::mem::size_of::<Self>()
     }
 

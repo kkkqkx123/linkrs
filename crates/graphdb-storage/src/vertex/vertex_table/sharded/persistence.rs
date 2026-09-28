@@ -664,6 +664,49 @@ impl ShardedVertexTable {
         }))
     }
 
+    /// Open a table from whatever layout and generation its manifest pins.
+    ///
+    /// Single layout-aware entry: the manifest's shard count, segment
+    /// width and redistribution generation build the table, so callers
+    /// never hand-construct a layout that disagrees with the checkpoint.
+    /// Unknown router versions refuse with a rebuild directive instead of
+    /// misrouting persisted rows.
+    pub fn open_at<P: AsRef<Path>>(
+        label: graphdb_core::types::LabelId,
+        label_name: String,
+        schema: crate::vertex::VertexSchema,
+        path: P,
+    ) -> StorageResult<Self> {
+        let manifest = Self::read_table_manifest(path.as_ref())?.ok_or_else(|| {
+            graphdb_core::StorageError::deserialize_error(format!(
+                "missing table manifest at {}: rebuild the table before opening",
+                path.as_ref().display()
+            ))
+        })?;
+        if manifest.router_version != super::routing::ROUTER_VERSION {
+            return Err(graphdb_core::StorageError::deserialize_error(format!(
+                "table manifest router version {} differs from binary {}: \
+                 rebuild the table with the offline redistribution tool instead of opening it in place",
+                manifest.router_version,
+                super::routing::ROUTER_VERSION,
+            )));
+        }
+        let layout = super::routing::ShardLayout {
+            num_shards: manifest.num_shards,
+            segment_slots_bits: manifest.segment_slots_bits,
+            total_segments: manifest.total_segments,
+        };
+        if !layout.is_consistent() {
+            return Err(graphdb_core::StorageError::deserialize_error(format!(
+                "table manifest pins an inconsistent shard layout at {}",
+                path.as_ref().display()
+            )));
+        }
+        let table = Self::with_layout(label, label_name, schema, layout, manifest.generation);
+        table.load(path)?;
+        Ok(table)
+    }
+
     fn read_table_manifest<P: AsRef<Path>>(path: P) -> StorageResult<Option<TableManifest>> {
         let manifest_path = path.as_ref().join(TABLE_MANIFEST_FILE_NAME);
         if !manifest_path.exists() {
@@ -1248,6 +1291,7 @@ impl ShardedVertexTable {
             plan.reason.as_str(),
             plan.merge_pages,
         );
+        let anchor = self.decide_pk_anchor();
         self.shards
             .par_iter()
             .enumerate()
@@ -1255,14 +1299,21 @@ impl ShardedVertexTable {
                 let shard_dir = path.join(format!("shard_{}", i));
                 let mut table = shard.write();
                 let dirty: Vec<crate::persistence::dirty_page::PageId> = table.dirty_pages();
-                if dirty.is_empty() {
+                // Clean shards carry no column, timestamp or pk-delta change
+                // (every timestamp mutation marks its row dirty), so they
+                // write nothing: the replay falls back to the baseline.
+                if dirty.is_empty() && table.id_indexer.delta_len() == 0 && !anchor {
                     let _ = std::fs::create_dir_all(&shard_dir);
-                    if table.total_count() == 0 {
-                        return Ok(());
-                    }
-                    table.flush_incremental(&shard_dir, &[], compression)
+                    return Ok(());
+                }
+                if dirty.is_empty() && table.total_count() == 0 {
+                    let _ = std::fs::create_dir_all(&shard_dir);
+                    return Ok(());
+                }
+                if dirty.is_empty() {
+                    table.flush_incremental_with_anchor(&shard_dir, &[], compression, anchor)
                 } else {
-                    table.flush_incremental(&shard_dir, &dirty, compression)
+                    table.flush_incremental_with_anchor(&shard_dir, &dirty, compression, anchor)
                 }
             })?;
         self.write_table_manifest(path)?;
@@ -2103,6 +2154,13 @@ mod commit_tests {
         assert_eq!(adopted.approximate_total_count(), 10);
         let rebuilt_ts = graphdb_core::types::MAX_TIMESTAMP - 1;
         assert!(adopted.get_internal_id("s_3", rebuilt_ts).is_some());
+        let via_open_at =
+            ShardedVertexTable::open_at(1, "t".to_string(), test_schema(), &staging)
+                .expect("open adopts manifest layout and generation");
+        assert_eq!(via_open_at.num_shards(), 4);
+        assert_eq!(via_open_at.generation(), 1);
+        assert_eq!(via_open_at.approximate_total_count(), 10);
+        assert!(via_open_at.get_internal_id("s_3", rebuilt_ts).is_some());
         let _ = std::fs::remove_dir_all(&staging);
     }
 
@@ -2125,7 +2183,10 @@ mod commit_tests {
             .unwrap();
         let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
         assert!(report.is_healthy());
-        assert_eq!(report.router_version, Some(1));
+        assert_eq!(
+            report.router_version,
+            Some(crate::vertex::vertex_table::sharded::routing::ROUTER_VERSION)
+        );
         assert_eq!(report.generation, Some(0));
         assert_eq!(report.commit_generation, Some(0));
         assert!(report.lineage_issues.is_empty());

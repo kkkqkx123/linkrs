@@ -472,15 +472,22 @@ impl Column {
 
     /// Mark the page containing `row_idx` as dirty. The mark lives in the
     /// owning chunk's segment state; the page id is global so flush
-    /// aggregation stays a plain union. Owning chunk is located by row-offset
-    /// range, never by dividing with the current chunk capacity, so a
-    /// mid-flight capacity change cannot misroute the mark.
+    /// aggregation stays a plain union. The owner is located by direct
+    /// capacity division with a range recheck, falling back to a linear
+    /// scan only for windows realigned by a capacity change.
     #[inline]
     pub fn mark_dirty(&self, row_idx: usize) {
         let page_id = crate::persistence::dirty_page::row_to_page(row_idx);
         self.total_dirty_pages
             .fetch_max(page_id + 1, Ordering::Relaxed);
         let chunks = self.chunks.read();
+        let direct = row_idx / self.chunk_capacity().max(1);
+        if let Some(chunk) = chunks.get(direct) {
+            if row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count {
+                chunk.write_state().dirty_pages.insert(page_id as u32);
+                return;
+            }
+        }
         for chunk in chunks.iter() {
             if row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count {
                 chunk.write_state().dirty_pages.insert(page_id as u32);
@@ -524,16 +531,25 @@ impl Column {
 
     /// Clear the dirty mark for a single row-page (keeps other dirty pages).
     ///
-    /// Page ids are global, so the mark is removed from whichever chunk
-    /// holds it instead of routing by the current chunk capacity. Routing
-    /// by capacity would misroute after a mid-flight capacity change and
-    /// leave a stale mark behind.
+    /// Page ids are global; the owner is located by direct capacity division
+    /// from the page's first row with a range recheck, falling back to a
+    /// scan only for windows realigned by a capacity change.
     #[inline]
     pub fn clear_page_dirty(&self, page_id: usize) {
         let chunks = self.chunks.read();
         let Ok(mark) = u32::try_from(page_id) else {
             return;
         };
+        let first_row = page_id * crate::persistence::dirty_page::ROWS_PER_PAGE;
+        let direct = first_row / self.chunk_capacity().max(1);
+        if let Some(chunk) = chunks.get(direct) {
+            if first_row >= chunk.row_offset && first_row < chunk.row_offset + chunk.row_count
+            {
+                if chunk.write_state().dirty_pages.remove(&mark) {
+                    return;
+                }
+            }
+        }
         for chunk in chunks.iter() {
             if chunk.write_state().dirty_pages.remove(&mark) {
                 break;
@@ -1299,7 +1315,7 @@ impl Column {
     /// type-agnostic string encoding (dictionary / FSST), which always
     /// decodes to `Value::String`. Raw reads already carry the declared
     /// type, so only encoded reads pass through here.
-    fn restore_string_type(&self, value: Option<Value>) -> Option<Value> {
+    pub(super) fn restore_string_type(&self, value: Option<Value>) -> Option<Value> {
         match (value, &self.data_type) {
             (Some(Value::String(s)), DataType::FixedString(_)) => {
                 Some(Value::FixedString(s.to_string()))

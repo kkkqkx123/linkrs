@@ -728,7 +728,8 @@ mod tests {
     fn test_mvcc_metrics_gc_count() {
         let mut table = create_edge_table_with_props();
 
-        for i in 0..5u64 {
+        // timestamp 0 is reserved; start inserts at 1
+        for i in 1..=5u64 {
             table
                 .insert_edge(
                     0,
@@ -740,8 +741,8 @@ mod tests {
                 .unwrap();
         }
 
-        table.delete_edge(0, 1, 0, 2).unwrap();
-        table.delete_edge(0, 1, 1, 3).unwrap();
+        table.delete_edge(0, 1, 1, 2).unwrap();
+        table.delete_edge(0, 1, 2, 3).unwrap();
 
         table.mvcc.register_active_snapshot(1);
         table.mvcc.register_active_snapshot(4);
@@ -761,7 +762,8 @@ mod tests {
         let stats_manager = Arc::new(StatsManager::new());
         table.set_stats_manager(stats_manager.clone());
 
-        for i in 0..5u64 {
+        // timestamp 0 is reserved; start inserts at 1
+        for i in 1..=5u64 {
             table
                 .insert_edge(
                     0,
@@ -773,9 +775,9 @@ mod tests {
                 .unwrap();
         }
 
-        table.delete_edge(0, 1, 0, 10).unwrap();
-        table.delete_edge(0, 1, 1, 11).unwrap();
-        table.delete_edge(0, 1, 2, 12).unwrap();
+        table.delete_edge(0, 1, 1, 10).unwrap();
+        table.delete_edge(0, 1, 2, 11).unwrap();
+        table.delete_edge(0, 1, 3, 12).unwrap();
 
         let tom_stats = table.mvcc.tombstone_stats();
         assert_eq!(tom_stats.count, 3);

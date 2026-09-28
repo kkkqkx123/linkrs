@@ -54,11 +54,12 @@ pub(super) fn memory_breakdown(manager: &IdManager) -> IdIndexMemoryBreakdown {
     let slot_bytes = core.keys.capacity() * std::mem::size_of::<Option<IdKey>>();
     let map_bytes = live * (std::mem::size_of::<IdKey>() + std::mem::size_of::<u32>());
     let set_bytes = core.live_ids.len() * (std::mem::size_of::<u32>() + 32);
-    let free_bytes = core.free_ids.capacity() * std::mem::size_of::<u32>();
+    let free_bytes = core.free_ids.capacity() * std::mem::size_of::<u32>()
+        + core.free_set.capacity() * (std::mem::size_of::<u32>() + 8);
     IdIndexMemoryBreakdown {
         slot_count: core.keys.len(),
         live_count: live,
-        free_depth: core.free_ids.len(),
+        free_depth: core.free_set.len(),
         delta_entries: core.delta_log.len(),
         delta_heap_bytes,
         keys_heap_bytes,

@@ -886,7 +886,7 @@ impl super::GraphStorageContext {
     pub(crate) fn apply_txn_staging(
         &self,
         transaction_id: TransactionId,
-    ) -> StorageResult<Vec<(LabelId, Vec<u32>)>> {
+    ) -> StorageResult<Vec<AppliedLabel>> {
         let Some(buffer) = self
             .persistent
             .txn_staging
@@ -899,7 +899,7 @@ impl super::GraphStorageContext {
         // The guard must not outlive this statement: a `for` expression would
         // keep it alive across the loop body, which locks the buffer again.
         let labels = buffer.lock().labels();
-        let mut applied: Vec<(LabelId, Vec<u32>)> = Vec::new();
+        let mut applied: Vec<AppliedLabel> = Vec::new();
         for label in labels {
             // Cache bookkeeping must be collected before the drain erases
             // the staged keys.
@@ -928,14 +928,14 @@ impl super::GraphStorageContext {
             if scope.is_empty() {
                 continue;
             }
-            let mapping = match self.commit_write_scope(label, &mut scope, ts) {
-                Ok(mapping) => mapping,
+            let commit = match self.commit_write_scope_tracked(label, &mut scope, ts) {
+                Ok(commit) => commit,
                 Err(error) => {
                     self.undo_applied_staging(&applied);
                     return Err(error);
                 }
             };
-            for (key, id) in &mapping {
+            for (key, id) in &commit.mapping {
                 let external = match key {
                     IdKey::Text(name) => name.as_str().to_string(),
                     IdKey::Int(n) => n.to_string(),
@@ -959,7 +959,7 @@ impl super::GraphStorageContext {
                     .remove_cached_vertex(label, id);
             }
             self.mark_vertex_modified(label);
-            applied.push((label, mapping.into_iter().map(|(_, id)| id).collect()));
+            applied.push(AppliedLabel::from_commit(label, ts, commit));
         }
         let ops = buffer.lock().take_index_ops();
         let maintenance = self.replay_staged_index_ops(ops, ts);
@@ -1018,13 +1018,18 @@ impl super::GraphStorageContext {
         Ok(())
     }
 
-    /// Undo the labels an [`Self::apply_txn_staging`] run already installed
-    /// (insert channel only: update and delete residue stays invisible
-    /// because the timestamp never publishes).
-    pub(crate) fn undo_applied_staging(&self, applied: &[(LabelId, Vec<u32>)]) {
-        for (label, ids) in applied {
-            self.undo_applied_scope_inserts(*label, ids);
-        }
+    /// Undo every mutation an [`Self::apply_txn_staging`] run already
+    /// installed: deletes are revived, updates pop their version entry,
+    /// inserts drop their keys. A durability failure after the apply (WAL
+    /// append, index replay) leaves no committed-timestamp residue behind.
+    pub(crate) fn undo_applied_staging(&self, applied: &[AppliedLabel]) {
+        self.persistent.data_store.with_vertex_tables(|tables| {
+            for entry in applied {
+                if let Some(table) = tables.get(&entry.label) {
+                    table.undo_applied_commit(&entry.commit, entry.write_ts);
+                }
+            }
+        });
     }
 
     /// Drop one transaction's buffer, releasing every reservation it held.
@@ -1039,6 +1044,27 @@ impl super::GraphStorageContext {
             self.release_staged_reservations(&released);
         }
         self.persistent.txn_staging.remove(&transaction_id);
+    }
+}
+
+/// One label's installed mutations for later compensation.
+pub(crate) struct AppliedLabel {
+    pub(crate) label: LabelId,
+    pub(crate) write_ts: Timestamp,
+    commit: crate::vertex::vertex_table::sharded::CommitApplied,
+}
+
+impl AppliedLabel {
+    fn from_commit(
+        label: LabelId,
+        write_ts: Timestamp,
+        commit: crate::vertex::vertex_table::sharded::CommitApplied,
+    ) -> Self {
+        Self {
+            label,
+            write_ts,
+            commit,
+        }
     }
 }
 

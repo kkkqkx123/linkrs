@@ -51,6 +51,7 @@ impl VariableWidthColumn {
         }
         let mut packed = Vec::with_capacity(self.data.len().saturating_sub(self.wasted_bytes));
         let mut new_offsets = Vec::with_capacity(self.offsets.len());
+        let mut coerced = 0usize;
         for (idx, off) in self.offsets.iter().enumerate() {
             if idx >= self.row_count || *off == u32::MAX {
                 new_offsets.push(u32::MAX);
@@ -59,6 +60,7 @@ impl VariableWidthColumn {
             let start = *off as usize;
             if start + 8 > self.data.len() {
                 new_offsets.push(u32::MAX);
+                coerced += 1;
                 continue;
             }
             let len = u64::from_le_bytes(
@@ -66,11 +68,18 @@ impl VariableWidthColumn {
             ) as usize;
             if start + 8 + len > self.data.len() {
                 new_offsets.push(u32::MAX);
+                coerced += 1;
                 continue;
             }
             let pos = packed.len() as u32;
             packed.extend_from_slice(&self.data[start..start + 8 + len]);
             new_offsets.push(pos);
+        }
+        if coerced > 0 {
+            log::warn!(
+                "variable column compact coerced {} corrupt spans to null",
+                coerced
+            );
         }
         self.data = packed;
         self.offsets = new_offsets;
@@ -80,97 +89,12 @@ impl VariableWidthColumn {
 
 impl ColumnStorage for VariableWidthColumn {
     fn get(&self, row_idx: usize) -> Option<Value> {
-        if self.is_null(row_idx) {
-            return None;
-        }
-        if row_idx >= self.row_count {
-            return None;
-        }
-
-        if row_idx >= self.offsets.len() {
-            return None;
-        }
-
-        let start_u32 = self.offsets[row_idx];
-        if start_u32 == u32::MAX {
-            return None;
-        }
-        let start = start_u32 as usize;
-
-        if start + 8 > self.data.len() {
-            return None;
-        }
-
-        let len_bytes: [u8; 8] = self.data[start..start + 8].try_into().ok()?;
-        let len = u64::from_le_bytes(len_bytes) as usize;
-
-        if start + 8 + len > self.data.len() {
-            return None;
-        }
-
-        let bytes = &self.data[start + 8..start + 8 + len];
-        if matches!(self.data_type, DataType::Geography) {
-            postcard::from_bytes::<graphdb_core::value::Geography>(bytes)
-                .ok()
-                .map(Value::Geography)
-        } else if matches!(
-            self.data_type,
-            DataType::Vector | DataType::VectorDense(_) | DataType::VectorSparse(_)
-        ) {
-            if bytes.len().is_multiple_of(std::mem::size_of::<f32>()) {
-                let dim = bytes.len() / std::mem::size_of::<f32>();
-                if let DataType::VectorDense(expected) = &self.data_type {
-                    if *expected > 0 && dim != *expected {
-                        return None;
-                    }
-                }
-                let mut data = Vec::with_capacity(dim);
-                for i in 0..dim {
-                    let chunk: [u8; 4] = bytes[i * 4..(i + 1) * 4].try_into().ok()?;
-                    data.push(f32::from_le_bytes(chunk));
-                }
-                Some(Value::Vector(VectorValue::dense(data)))
-            } else {
+        match self.try_get(row_idx) {
+            Ok(value) => value,
+            Err(e) => {
+                log::warn!("variable column row {} lenient read failed: {}; reading as missing", row_idx, e);
                 None
             }
-        } else if matches!(self.data_type, DataType::Json) {
-            let s = String::from_utf8(bytes.to_vec()).ok()?;
-            graphdb_core::value::Json::parse(&s)
-                .ok()
-                .map(|j| Value::Json(Box::new(j)))
-        } else if matches!(self.data_type, DataType::JsonB) {
-            let s = String::from_utf8(bytes.to_vec()).ok()?;
-            graphdb_core::value::JsonB::parse(&s)
-                .ok()
-                .map(|jb| Value::JsonB(Box::new(jb)))
-        } else if matches!(self.data_type, DataType::FixedString(_)) {
-            String::from_utf8(bytes.to_vec())
-                .ok()
-                .map(Value::FixedString)
-        } else if matches!(
-            self.data_type,
-            DataType::Struct(_)
-                | DataType::Array(_)
-                | DataType::List(_)
-                | DataType::Map(_)
-                | DataType::Set(_)
-                | DataType::DataSet
-                | DataType::Vertex
-                | DataType::Edge
-                | DataType::Path
-                | DataType::Interval
-                | DataType::Decimal128
-                | DataType::Decimal { .. }
-                | DataType::Union(_)
-        ) {
-            // Opaque complex values are stored as postcard-encoded whole
-            // `Value`s (same single-track format as the undo log). No
-            // per-type compression or statistics pruning applies.
-            postcard::from_bytes::<Value>(bytes).ok()
-        } else if matches!(self.data_type, DataType::Blob) {
-            Some(Value::Blob(bytes.to_vec()))
-        } else {
-            String::from_utf8(bytes.to_vec()).ok().map(Value::string)
         }
     }
 

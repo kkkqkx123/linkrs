@@ -383,7 +383,7 @@ fn test_auto_vertex_compaction_reclaims_id_holes() {
         .unwrap();
     assert_eq!(
         (live, allocated),
-        (100, 100),
+        (60, 100),
         "stable compaction absorbs tombstones without re-densifying the ID space"
     );
 

@@ -674,21 +674,20 @@ impl GraphStorageContext {
                                                         || lineage.generation != table.generation()
                                                     {
                                                         let rebuilt = std::sync::Arc::new(
-                                                            crate::vertex::vertex_table::ShardedVertexTable::with_layout(
+                                                            crate::vertex::vertex_table::ShardedVertexTable::open_at(
                                                                 label_id,
                                                                 table.label_name().to_string(),
                                                                 table.schema(),
-                                                                lineage.layout,
-                                                                lineage.generation,
-                                                            ),
+                                                                &path,
+                                                            )?,
                                                         );
                                                         vertex_tables.insert(label_id, rebuilt);
+                                                    } else {
+                                                        table.as_ref().load(&path)?;
                                                     }
+                                                } else {
+                                                    table.as_ref().load(&path)?;
                                                 }
-                                                let table = vertex_tables
-                                                    .get(&label_id)
-                                                    .expect("table present after layout adopt");
-                                                table.as_ref().load(&path)?;
                                             }
                                         }
                                     }

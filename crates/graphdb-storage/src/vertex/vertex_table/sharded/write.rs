@@ -5,6 +5,40 @@ use graphdb_core::{StorageError, StorageResult, Value};
 
 type ShardStagedInsert = (IdKey, u32, Vec<(String, Value)>);
 
+/// Every mutation a tracked commit installed, addressed by global id so a
+/// later durability failure can compensate the whole triple.
+#[derive(Debug, Default)]
+pub struct CommitApplied {
+    pub mapping: Vec<(IdKey, u32)>,
+    pub inserts: Vec<u32>,
+    pub updates: Vec<(u32, String)>,
+    pub deletes: Vec<u32>,
+}
+
+impl CommitApplied {
+    fn from_shard_parts(
+        table: &ShardedVertexTable,
+        mapping: Vec<(IdKey, u32)>,
+        applied_updates: Vec<(usize, u32, String)>,
+        applied_deletes: Vec<(usize, u32)>,
+    ) -> Self {
+        Self {
+            inserts: mapping.iter().map(|(_, id)| *id).collect(),
+            mapping,
+            updates: applied_updates
+                .into_iter()
+                .map(|(shard_idx, local_id, col)| {
+                    (table.encode_id(shard_idx, local_id), col)
+                })
+                .collect(),
+            deletes: applied_deletes
+                .into_iter()
+                .map(|(shard_idx, local_id)| table.encode_id(shard_idx, local_id))
+                .collect(),
+        }
+    }
+}
+
 impl ShardedVertexTable {
     pub fn insert(
         &self,
@@ -51,37 +85,6 @@ impl ShardedVertexTable {
         let (idx, local_id) = self.decode_id(global_id);
         let table = self.shards[idx].read();
         table.delete_by_internal_id(local_id, ts)
-    }
-
-    pub fn batch_delete(&self, external_ids: &[&str], ts: Timestamp) -> StorageResult<usize> {
-        // Route ids to their owning shard and delete each shard's batch under
-        // one shared guard: each row's tombstone runs the identity-then-
-        // segment point path, so no shard write lock is needed.
-        let mut by_shard: Vec<Vec<&str>> = vec![Vec::new(); self.layout.num_shards];
-        for id in external_ids {
-            by_shard[self.shard_index_by_str(id)].push(id);
-        }
-        let mut total = 0;
-        for (idx, ids) in by_shard.iter().enumerate() {
-            if !ids.is_empty() {
-                total += self.shards[idx].read().batch_delete(ids, ts)?;
-            }
-        }
-        Ok(total)
-    }
-
-    pub fn batch_delete_i64(&self, external_ids: &[i64], ts: Timestamp) -> StorageResult<usize> {
-        let mut by_shard: Vec<Vec<i64>> = vec![Vec::new(); self.layout.num_shards];
-        for id in external_ids {
-            by_shard[self.shard_index_by_i64(*id)].push(*id);
-        }
-        let mut total = 0;
-        for (idx, ids) in by_shard.iter().enumerate() {
-            if !ids.is_empty() {
-                total += self.shards[idx].read().batch_delete_i64(ids, ts)?;
-            }
-        }
-        Ok(total)
     }
 
     pub fn reserve_id_capacity(&self, additional: usize) {
@@ -143,7 +146,11 @@ impl ShardedVertexTable {
             }
         }
         if let Some(e) = first_error {
-            let _ = self.batch_delete(&applied, ts);
+            let applied_ids: Vec<u32> = applied
+                .iter()
+                .filter_map(|name| self.get_internal_id(name, ts))
+                .collect();
+            self.undo_applied_ids(&applied_ids);
             return Err(e);
         }
         Ok(applied.len())
@@ -190,7 +197,11 @@ impl ShardedVertexTable {
             }
         }
         if let Some(e) = first_error {
-            let _ = self.batch_delete_i64(&applied, ts);
+            let applied_ids: Vec<u32> = applied
+                .iter()
+                .filter_map(|name| self.get_internal_id_by_i64(*name, ts))
+                .collect();
+            self.undo_applied_ids(&applied_ids);
             return Err(e);
         }
         Ok(applied.len())
@@ -213,6 +224,10 @@ impl ShardedVertexTable {
         ts: Timestamp,
     ) -> Vec<StorageResult<u32>> {
         let mut by_shard: Vec<Vec<usize>> = vec![Vec::new(); self.layout.num_shards];
+        let estimate = rows.len().div_ceil(self.layout.num_shards.max(1)).max(1);
+        for group in by_shard.iter_mut() {
+            group.reserve(estimate);
+        }
         for (pos, (external_id, _)) in rows.iter().enumerate() {
             by_shard[self.shard_index_by_str(external_id)].push(pos);
         }
@@ -245,6 +260,10 @@ impl ShardedVertexTable {
         ts: Timestamp,
     ) -> Vec<StorageResult<u32>> {
         let mut by_shard: Vec<Vec<usize>> = vec![Vec::new(); self.layout.num_shards];
+        let estimate = rows.len().div_ceil(self.layout.num_shards.max(1)).max(1);
+        for group in by_shard.iter_mut() {
+            group.reserve(estimate);
+        }
         for (pos, (external_id, _)) in rows.iter().enumerate() {
             by_shard[self.shard_index_by_i64(*external_id)].push(pos);
         }
@@ -497,9 +516,9 @@ impl ShardedVertexTable {
         Ok(())
     }
 
-    /// Scoped batch delete staging. Every resolvable id is buffered;
-    /// unresolvable ids fail per row and are skipped by the caller, matching
-    /// the direct batch contract. The commit hook applies the staged set.
+    /// Scoped batch delete staging. Returns per-row staging results;
+    /// unresolvable ids fail per row and stage nothing, while resolvable
+    /// ids are buffered. The commit hook applies the staged set.
     pub fn batch_delete_with_scope(
         &self,
         external_ids: &[&str],
@@ -550,27 +569,23 @@ impl ShardedVertexTable {
             .collect()
     }
 
-    /// Commit hook for one label table: applies every staged row of the
-    /// label, then drops the label's staging records.
-    ///
-    /// Application order is fixed: inserts grouped by shard in shard-index
-    /// order, then updates, then deletes; one shard guard is held at a time
-    /// and never alongside another shard's. Inserts carry their conflict
-    /// recheck inside the table apply, so a concurrent commit of the same
-    /// key fails exactly one side. A row failure undoes the rows this call
-    /// already applied and rejects the whole commit with nothing partially
-    /// applied left behind; the failed label's staging records are dropped
-    /// together with the undo, so the scope stays consistent for the
-    /// caller's rollback hook. Called before the timestamp commit; the WAL
-    /// commit entries stay the durability point. Returns the staged key to
-    /// allocated global id mapping for the label.
-    pub fn commit_write_scope(
+    /// Tracked commit hook reporting every applied mutation for later
+    /// compensation: a durability failure after this apply (WAL append,
+    /// index replay) undoes the whole triple through
+    /// [`Self::undo_applied_commit`] instead of inserts only.
+    pub fn commit_write_scope_tracked(
         &self,
         scope: &mut WriteScope,
         ts: Timestamp,
-    ) -> StorageResult<Vec<(IdKey, u32)>> {
+    ) -> StorageResult<CommitApplied> {
         scope.ensure_same_write_ts(ts)?;
+        if let Err(error) = self.prevalidate_staged(scope, ts) {
+            self.rollback_write_scope(scope, ts);
+            return Err(error);
+        }
         let mut applied: Vec<(usize, u32)> = Vec::new();
+        let mut applied_updates: Vec<(usize, u32, String)> = Vec::new();
+        let mut applied_deletes: Vec<(usize, u32)> = Vec::new();
         let mut mapping: Vec<(IdKey, u32)> = Vec::new();
         let result = self.apply_staged_inserts(scope, ts, &mut applied, &mut mapping);
         if let Err(error) = result {
@@ -578,18 +593,108 @@ impl ShardedVertexTable {
             self.rollback_write_scope(scope, ts);
             return Err(error);
         }
-        if let Err(error) = self.apply_staged_updates(scope, ts) {
+        if let Err(error) = self.apply_staged_updates(scope, ts, &mut applied_updates) {
+            self.undo_applied_updates(&applied_updates, ts);
             self.undo_applied_inserts(&applied);
             self.rollback_write_scope(scope, ts);
             return Err(error);
         }
-        if let Err(error) = self.apply_staged_deletes(scope, ts) {
+        if let Err(error) = self.apply_staged_deletes(scope, ts, &mut applied_deletes) {
+            self.undo_applied_deletes(&applied_deletes);
+            self.undo_applied_updates(&applied_updates, ts);
             self.undo_applied_inserts(&applied);
             self.rollback_write_scope(scope, ts);
             return Err(error);
         }
         scope.commit_label(self.label);
-        Ok(mapping)
+        Ok(CommitApplied::from_shard_parts(
+            self,
+            mapping,
+            applied_updates,
+            applied_deletes,
+        ))
+    }
+
+    /// Compensate a previous tracked apply in reverse order: deletes are
+    /// revived, updates pop their version entry, inserts drop their keys.
+    pub fn undo_applied_commit(&self, applied: &CommitApplied, ts: Timestamp) {
+        for global_id in applied.deletes.iter().rev() {
+            let (idx, local_id) = self.decode_id(*global_id);
+            self.shards[idx].read().revert_delete(local_id);
+        }
+        for (global_id, col_name) in applied.updates.iter().rev() {
+            let (idx, local_id) = self.decode_id(*global_id);
+            let _ = self.shards[idx]
+                .read()
+                .undo_update(local_id, col_name, ts);
+        }
+        self.undo_applied_ids(&applied.inserts);
+    }
+
+    fn prevalidate_staged(&self, scope: &mut WriteScope, ts: Timestamp) -> StorageResult<()> {
+        // Rows created by this commit's own insert stage are exempt from
+        // the liveness check; their values were validated at staging.
+        let created: std::collections::HashSet<u32> = scope
+            .staged_insert_ids_for_label(self.label)
+            .into_iter()
+            .collect();
+        let staged_updates = scope.take_updates_for_label(self.label);
+        let mut first_error: Option<StorageError> = None;
+        for (global_id, props) in &staged_updates {
+            if first_error.is_some() {
+                break;
+            }
+            let (idx, local_id) = self.decode_id(*global_id);
+            let table = self.shards[idx].read();
+            if created.contains(global_id) {
+                for (col_name, value) in props {
+                    if table.is_pk_column(col_name) {
+                        continue;
+                    }
+                    if let Err(error) = table.prepare_update(col_name, value) {
+                        first_error = Some(error);
+                        break;
+                    }
+                }
+                continue;
+            }
+            if !table.is_row_live_at(local_id, ts) {
+                first_error = Some(StorageError::vertex_not_found());
+                break;
+            }
+            for (col_name, value) in props {
+                if let Err(error) = table.validate_update_value(local_id, col_name, value) {
+                    first_error = Some(error);
+                    break;
+                }
+            }
+        }
+        for (global_id, props) in staged_updates {
+            let _ = scope.stage_update(self.label, global_id, props);
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        let staged_deletes = scope.take_deletes_for_label(self.label);
+        let mut delete_error: Option<StorageError> = None;
+        for global_id in &staged_deletes {
+            if created.contains(global_id) {
+                continue;
+            }
+            let (idx, local_id) = self.decode_id(*global_id);
+            let table = self.shards[idx].read();
+            if !table.is_row_live_at(local_id, ts) {
+                delete_error = Some(StorageError::vertex_not_found());
+                break;
+            }
+        }
+        for global_id in staged_deletes {
+            let _ = scope.stage_delete(self.label, global_id);
+        }
+        if let Some(error) = delete_error {
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Apply the label's staged inserts grouped by shard. Every row commits
@@ -606,6 +711,10 @@ impl ShardedVertexTable {
     ) -> StorageResult<()> {
         let staged = scope.take_inserts_for_label(self.label);
         let mut by_shard: Vec<Vec<ShardStagedInsert>> = vec![Vec::new(); self.layout.num_shards];
+        let estimate = staged.len().div_ceil(self.layout.num_shards.max(1)).max(1);
+        for group in by_shard.iter_mut() {
+            group.reserve(estimate);
+        }
         for (key, reserved, props) in staged {
             let idx = match &key {
                 IdKey::Text(name) => self.shard_index_by_str(name),
@@ -651,27 +760,53 @@ impl ShardedVertexTable {
     }
 
     /// Apply the label's staged updates after the inserts.
-    fn apply_staged_updates(&self, scope: &mut WriteScope, ts: Timestamp) -> StorageResult<()> {
+    fn apply_staged_updates(
+        &self,
+        scope: &mut WriteScope,
+        ts: Timestamp,
+        applied: &mut Vec<(usize, u32, String)>,
+    ) -> StorageResult<()> {
         let staged = scope.take_updates_for_label(self.label);
         for (global_id, props) in staged {
             let (idx, local_id) = self.decode_id(global_id);
             let table = self.shards[idx].read();
             for (col_name, value) in &props {
                 table.update_property(local_id, col_name, value, ts)?;
+                applied.push((idx, local_id, col_name.clone()));
             }
         }
         Ok(())
     }
 
     /// Apply the label's staged deletes after inserts and updates.
-    fn apply_staged_deletes(&self, scope: &mut WriteScope, ts: Timestamp) -> StorageResult<()> {
+    fn apply_staged_deletes(
+        &self,
+        scope: &mut WriteScope,
+        ts: Timestamp,
+        applied: &mut Vec<(usize, u32)>,
+    ) -> StorageResult<()> {
         let staged = scope.take_deletes_for_label(self.label);
         for global_id in staged {
             let (idx, local_id) = self.decode_id(global_id);
             let table = self.shards[idx].read();
             table.apply_delete(local_id, ts)?;
+            applied.push((idx, local_id));
         }
         Ok(())
+    }
+
+    fn undo_applied_updates(&self, applied: &[(usize, u32, String)], ts: Timestamp) {
+        for &(shard_idx, local_id, ref col_name) in applied.iter().rev() {
+            let _ = self.shards[shard_idx]
+                .read()
+                .undo_update(local_id, col_name, ts);
+        }
+    }
+
+    fn undo_applied_deletes(&self, applied: &[(usize, u32)]) {
+        for &(shard_idx, local_id) in applied.iter().rev() {
+            self.shards[shard_idx].read().revert_delete(local_id);
+        }
     }
 
     /// Undo rows applied by a failed commit: drop each key and invalidate
@@ -695,7 +830,7 @@ impl ShardedVertexTable {
     }
 
     /// Undo rows this caller already committed through a previous
-    /// [`Self::commit_write_scope`] apply, addressed by their allocated
+    /// [`Self::commit_write_scope_tracked`] apply, addressed by their allocated
     /// global ids. Used by write entries that must fail a whole request
     /// after the table apply succeeded (secondary index maintenance,
     /// mutation recording): each key is dropped and its timestamp slot
@@ -742,10 +877,13 @@ mod scoped_tests {
             .unwrap();
         // Staged but unapplied: the global area still misses the key.
         assert_eq!(table.lookup_pk("k1", write_ts), PkLookup::Missing);
-        let applied = table.commit_write_scope(&mut scope, write_ts).unwrap();
+        let applied = table
+            .commit_write_scope_tracked(&mut scope, write_ts)
+            .unwrap()
+            .mapping;
         assert_eq!(applied.len(), 1);
         let global = applied[0].1;
-        assert!(table.get_by_internal_id(global, write_ts).is_some());
+        assert!(table.get_by_internal_id_offline(global, write_ts).is_some());
         assert_eq!(table.lookup_pk("absent", write_ts), PkLookup::Missing);
         assert_eq!(
             table.lookup_pk("k1", write_ts - 1),
@@ -753,7 +891,7 @@ mod scoped_tests {
             "older snapshots miss committed keys by timestamp ordering"
         );
         assert!(scope.is_empty());
-        assert!(table.get_by_internal_id(global, write_ts).is_some());
+        assert!(table.get_by_internal_id_offline(global, write_ts).is_some());
     }
 
     #[test]
@@ -767,7 +905,7 @@ mod scoped_tests {
         assert!(table
             .insert_with_scope("dup", &props("dup"), ts, &mut scope)
             .is_err());
-        table.commit_write_scope(&mut scope, ts).unwrap();
+        table.commit_write_scope_tracked(&mut scope, ts).unwrap();
         assert_eq!(table.approximate_total_count(), 1);
     }
 
@@ -783,8 +921,8 @@ mod scoped_tests {
         table
             .insert_with_scope("hot", &props("hot"), ts, &mut second)
             .unwrap();
-        assert!(table.commit_write_scope(&mut first, ts).is_ok());
-        assert!(table.commit_write_scope(&mut second, ts).is_err());
+        assert!(table.commit_write_scope_tracked(&mut first, ts).is_ok());
+        assert!(table.commit_write_scope_tracked(&mut second, ts).is_err());
         assert_eq!(table.approximate_total_count(), 1);
         assert!(second.is_empty());
     }
@@ -816,7 +954,10 @@ mod scoped_tests {
         scope
             .stage_insert(7, key.clone(), second, props("x"))
             .unwrap();
-        let applied = table.commit_write_scope(&mut scope, ts).unwrap();
+        let applied = table
+            .commit_write_scope_tracked(&mut scope, ts)
+            .unwrap()
+            .mapping;
         assert_eq!(applied, vec![(key.clone(), second)]);
         assert_eq!(table.get_internal_id("x", ts), Some(second));
         // Releasing a bound id is a no-op: the live row keeps its slot and
@@ -859,7 +1000,9 @@ mod scoped_tests {
                 table
                     .insert_with_scope("race", &props("race"), ts, &mut scope)
                     .expect("staging never touches global state");
-                table.commit_write_scope(&mut scope, ts).map(|_| ())
+                table
+                    .commit_write_scope_tracked(&mut scope, ts)
+                    .map(|_| ())
             }));
         }
         let mut oks = 0usize;
@@ -884,7 +1027,10 @@ mod scoped_tests {
         assert_eq!(results.len(), 2);
         let oks = results.iter().filter(|r| r.is_ok()).count();
         assert_eq!(oks, 1);
-        let applied = table.commit_write_scope(&mut scope, ts).unwrap();
+        let applied = table
+            .commit_write_scope_tracked(&mut scope, ts)
+            .unwrap()
+            .mapping;
         assert_eq!(applied.len(), 1);
         assert_eq!(table.approximate_total_count(), 1);
         assert!(scope.is_empty());
@@ -917,7 +1063,10 @@ mod scoped_tests {
             vec![(42, holder.as_slice()), (42, holder.as_slice())];
         let results = table.insert_batch_i64_with_scope(&rows, ts, &mut scope);
         assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
-        let applied = table.commit_write_scope(&mut scope, ts).unwrap();
+        let applied = table
+            .commit_write_scope_tracked(&mut scope, ts)
+            .unwrap()
+            .mapping;
         assert_eq!(applied.len(), 1);
         assert_eq!(table.approximate_total_count(), 1);
         assert!(scope.is_empty());
@@ -953,7 +1102,9 @@ mod scoped_tests {
                 &mut scope,
             )
             .unwrap();
-        table.commit_write_scope(&mut scope, ts).unwrap();
+        table
+            .commit_write_scope_tracked(&mut scope, ts)
+            .unwrap();
         let global = table.get_internal_id("row", ts).expect("applied");
 
         let mut scope = WriteScope::new(ts + 1);
@@ -963,7 +1114,7 @@ mod scoped_tests {
         // Staged update is invisible until the commit apply.
         assert_eq!(
             table
-                .get_by_internal_id(global, ts + 1)
+                .get_by_internal_id_offline(global, ts + 1)
                 .expect("row")
                 .properties,
             vec![
@@ -971,10 +1122,12 @@ mod scoped_tests {
                 ("age".to_string(), Value::from(1)),
             ]
         );
-        table.commit_write_scope(&mut scope, ts + 1).unwrap();
+        table
+            .commit_write_scope_tracked(&mut scope, ts + 1)
+            .unwrap();
         assert_eq!(
             table
-                .get_by_internal_id(global, ts + 1)
+                .get_by_internal_id_offline(global, ts + 1)
                 .expect("row")
                 .properties,
             vec![
@@ -985,9 +1138,11 @@ mod scoped_tests {
 
         let mut scope = WriteScope::new(ts + 2);
         table.delete_with_scope("row", ts + 2, &mut scope).unwrap();
-        assert!(table.get_by_internal_id(global, ts + 2).is_some());
-        table.commit_write_scope(&mut scope, ts + 2).unwrap();
-        assert!(table.get_by_internal_id(global, ts + 2).is_none());
+        assert!(table.get_by_internal_id_offline(global, ts + 2).is_some());
+        table
+            .commit_write_scope_tracked(&mut scope, ts + 2)
+            .unwrap();
+        assert!(table.get_by_internal_id_offline(global, ts + 2).is_none());
     }
 
     #[test]
@@ -1005,7 +1160,7 @@ mod scoped_tests {
             .unwrap();
         // Staging accepts both; the commit recheck rejects the taken key and
         // undoes the fresh row applied ahead of it in shard order.
-        assert!(table.commit_write_scope(&mut scope, ts).is_err());
+        assert!(table.commit_write_scope_tracked(&mut scope, ts).is_err());
         assert_eq!(table.lookup_pk("fresh", ts), PkLookup::Missing);
         assert_eq!(table.approximate_total_count(), 1);
     }

@@ -207,19 +207,19 @@ impl VertexTable {
         };
         match kind {
             PendingVertexSchemaKind::Add(prop) => {
-                self.schema.properties.push(prop.clone());
-                let idx = self.schema.properties.len() - 1;
-                self.property_index_cache.insert(prop.name.clone(), idx);
                 if let Err(error) = self.record_schema_change(ChangeDetails::PropertyAdded {
                     name: prop.name.clone(),
                     data_type: prop.data_type.clone(),
                     nullable: prop.nullable,
                     default_value: prop.default_value.clone(),
                 }) {
-                    self.schema.properties.pop();
-                    self.property_index_cache.remove(&prop.name);
+                    let _ = self.columns.remove_column(&prop.name);
+                    self.pending_schema_change = None;
                     return Err(error);
                 }
+                self.schema.properties.push(prop.clone());
+                let idx = self.schema.properties.len() - 1;
+                self.property_index_cache.insert(prop.name.clone(), idx);
             }
             PendingVertexSchemaKind::Drop { name } => {
                 let index = self
@@ -234,6 +234,10 @@ impl VertexTable {
                     ));
                 }
                 let removed_prop = self.schema.properties[index].clone();
+                self.record_schema_change(ChangeDetails::PropertyRemoved {
+                    name: removed_prop.name,
+                    data_type: removed_prop.data_type,
+                })?;
                 self.columns.remove_column(&name)?;
                 self.schema.properties.remove(index);
                 if index < self.schema.primary_key_index {
@@ -245,10 +249,6 @@ impl VertexTable {
                         *idx -= 1;
                     }
                 }
-                self.record_schema_change(ChangeDetails::PropertyRemoved {
-                    name: removed_prop.name,
-                    data_type: removed_prop.data_type,
-                })?;
             }
             PendingVertexSchemaKind::Rename { old_name, new_name } => {
                 if self
@@ -265,12 +265,15 @@ impl VertexTable {
                     .iter()
                     .position(|prop| prop.name == old_name)
                     .ok_or_else(|| StorageError::column_not_found(old_name.clone()))?;
+                self.record_schema_change(ChangeDetails::PropertyRenamed {
+                    old_name: old_name.clone(),
+                    new_name: new_name.clone(),
+                })?;
                 self.columns.rename_column(&old_name, new_name.clone())?;
                 self.schema.properties[index].name = new_name.clone();
                 if let Some(idx) = self.property_index_cache.remove(&old_name) {
                     self.property_index_cache.insert(new_name.clone(), idx);
                 }
-                self.record_schema_change(ChangeDetails::PropertyRenamed { old_name, new_name })?;
             }
         }
         self.pending_schema_change = None;

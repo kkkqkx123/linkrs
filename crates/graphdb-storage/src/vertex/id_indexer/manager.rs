@@ -40,13 +40,15 @@ pub(super) enum IndexDelta {
 ///
 /// The free heap is a max-heap: reclaim pops the largest free id first so
 /// recycled slots refill the allocation tail instead of scattering holes,
-/// keeping sequential scans dense under delete-plus-reinsert churn. Pop
-/// and push stay logarithmic no matter how deep the churn grows.
+/// keeping sequential scans dense under delete-plus-reinsert churn. The
+/// companion membership set makes release dedup and reclaim constant-time;
+/// heap entries removed from the set go stale and are skipped on pop.
 #[derive(Debug)]
 pub(super) struct SharedCore {
     pub(super) keys: Vec<Option<IdKey>>,
     pub(super) live_ids: BTreeSet<u32>,
     pub(super) free_ids: std::collections::BinaryHeap<u32>,
+    pub(super) free_set: std::collections::HashSet<u32>,
     pub(super) reuse_count: u64,
     pub(super) delta_log: Vec<IndexDelta>,
     pub(super) baseline_invalidated: bool,
@@ -58,10 +60,22 @@ impl SharedCore {
         self.keys = fresh.keys.clone();
         self.live_ids = fresh.live_ids.clone();
         self.free_ids = fresh.free_ids.clone();
+        self.free_set = fresh.free_set.clone();
         self.reuse_count = fresh.reuse_count;
         self.delta_log = fresh.delta_log.clone();
         self.baseline_invalidated = fresh.baseline_invalidated;
         self.config = fresh.config.clone();
+    }
+
+    pub(super) fn push_free(&mut self, id: u32) {
+        if self.free_set.insert(id) {
+            self.free_ids.push(id);
+        }
+    }
+
+    pub(super) fn clear_free(&mut self) {
+        self.free_ids.clear();
+        self.free_set.clear();
     }
 }
 
@@ -89,6 +103,7 @@ impl IdManager {
                 keys: Vec::with_capacity(capacity),
                 live_ids: BTreeSet::new(),
                 free_ids: std::collections::BinaryHeap::new(),
+                free_set: std::collections::HashSet::new(),
                 reuse_count: 0,
                 delta_log: Vec::new(),
                 baseline_invalidated: false,
@@ -142,7 +157,12 @@ impl IdManager {
     /// serves the largest id in logarithmic time.
     fn take_next_id_locked(core: &mut SharedCore) -> StorageResult<u32> {
         // Lazy ID reuse: recycle a deleted slot before growing the id space.
-        if let Some(recycled) = core.free_ids.pop() {
+        // Stale heap entries (reclaimed through the membership set) are
+        // skipped without a linear scan.
+        while let Some(recycled) = core.free_ids.pop() {
+            if !core.free_set.remove(&recycled) {
+                continue;
+            }
             core.reuse_count = core.reuse_count.saturating_add(1);
             let idx = recycled as usize;
             if idx >= core.keys.len() {
@@ -228,16 +248,13 @@ impl IdManager {
 
     /// Return an unbound reserved id to the free stack. Bound ids are a
     /// no-op, making release safe to call on slots whose reservation was
-    /// already consumed by a bind. An id already on the free stack is not
-    /// pushed twice: a duplicate entry would hand the same slot to two
-    /// later reservations and surface as a spurious bind conflict.
-    /// Core-only: no stripe is held.
+    /// already consumed by a bind. Membership is constant-time: a duplicate
+    /// entry would hand the same slot to two later reservations and surface
+    /// as a spurious bind conflict. Core-only: no stripe is held.
     pub fn release_reserved(&self, id: u32) {
         let mut core = self.core.lock();
-        if matches!(core.keys.get(id as usize), Some(None))
-            && !core.free_ids.iter().any(|free| *free == id)
-        {
-            core.free_ids.push(id);
+        if matches!(core.keys.get(id as usize), Some(None)) {
+            core.push_free(id);
         }
     }
 
@@ -245,15 +262,14 @@ impl IdManager {
     /// while its slot is still unbound. Only frees-and-reclaims a still
     /// pending release; any other unbound state (another row's live
     /// reservation or a never-released hole) reports false and the caller
-    /// must reserve a fresh id instead. Core-only.
+    /// must reserve a fresh id instead. The heap entry goes stale and is
+    /// skipped on pop. Core-only.
     pub fn try_reclaim(&self, id: u32) -> bool {
         let mut core = self.core.lock();
         if !matches!(core.keys.get(id as usize), Some(None)) {
             return false;
         }
-        let before = core.free_ids.len();
-        core.free_ids.retain(|free| *free != id);
-        core.free_ids.len() != before
+        core.free_set.remove(&id)
     }
 
     /// Visibility-aware lookup: the global committed area gated by the
@@ -302,7 +318,7 @@ impl IdManager {
             core.keys[idx as usize] = None;
         }
         core.live_ids.remove(&idx);
-        core.free_ids.push(idx);
+        core.push_free(idx);
         core.delta_log.push(IndexDelta::Remove { key: key.clone() });
         Some(idx)
     }
@@ -375,12 +391,11 @@ impl IdManager {
         super::PK_DELTA_ANCHOR_THRESHOLD.max(live / 4)
     }
 
-    /// Anchor check against an explicit live size, for flush paths that
-    /// already hold the count. Consumes the invalidation flag. Core-only.
-    pub fn should_anchor_baseline_for_live(&self, live: usize) -> bool {
-        let mut core = self.core.lock();
-        let invalidated = std::mem::take(&mut core.baseline_invalidated);
-        invalidated || core.delta_log.len() >= Self::anchor_threshold_for_live(live)
+    /// Consume the compaction-moved-rows flag without deciding on the delta
+    /// threshold. Table-level coordination takes every shard flag once per
+    /// flush and broadcasts one anchor instruction. Core-only.
+    pub fn take_baseline_invalidated(&self) -> bool {
+        std::mem::take(&mut self.core.lock().baseline_invalidated)
     }
 
     /// Cumulative free-stack reuses since creation (see `reuse_count`).
@@ -397,16 +412,19 @@ impl IdManager {
         self.core.lock().baseline_invalidated
     }
 
-    /// Current free-stack depth: slots awaiting reuse. Core-only.
+    /// Current free-stack depth: slots awaiting reuse. Membership-backed,
+    /// so stale heap entries reclaimed through the set are not counted.
+    /// Core-only.
     pub fn free_depth(&self) -> usize {
-        self.core.lock().free_ids.len()
+        self.core.lock().free_set.len()
     }
 
     /// Index-level hole ratio `1 - bound / allocated` over the raw id
-    /// space, ignoring timestamp visibility. Fast pre-check for the
-    /// hole-rate watermark: when this is below the watermark, the
+    /// space, ignoring timestamp visibility. Fast pre-check only, never a
+    /// compaction-gate input: when this is below the watermark, the
     /// snapshot-aware ratio cannot be above it, so maintenance can skip
-    /// the timestamp scan. Ordered reuse keeps this low by refilling
+    /// the timestamp scan; the gate itself always uses the snapshot-aware
+    /// table counts. Ordered reuse keeps this low by refilling
     /// tail-adjacent holes first. Core-only.
     pub fn hole_ratio(&self) -> f64 {
         let core = self.core.lock();
@@ -488,9 +506,7 @@ impl IdManager {
                                 core.keys[idx as usize] = None;
                             }
                             core.live_ids.remove(&idx);
-                            if !core.free_ids.iter().any(|free| *free == idx) {
-                                core.free_ids.push(idx);
-                            }
+                            core.push_free(idx);
                         }
                         None => {
                             return Err(StorageError::deserialize_error(format!(

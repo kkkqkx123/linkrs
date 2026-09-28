@@ -389,18 +389,20 @@ impl ColumnStore {
         Ok(())
     }
 
-    /// Versioned write of a single property for one row at `ts`.
-    pub fn set_property_versioned(
+    /// Versioned write of a single property for one row at `ts` with row
+    /// liveness rechecked inside the segment latch.
+    pub fn set_property_versioned_checked<F: Fn() -> bool>(
         &self,
         row_idx: usize,
         col_name: &str,
         value: Option<&Value>,
         ts: Timestamp,
+        row_alive: F,
     ) -> StorageResult<()> {
         let col = self
             .get_column(col_name)
             .ok_or_else(|| StorageError::column_not_found(col_name.to_string()))?;
-        col.set_versioned(row_idx, value, ts)
+        col.set_versioned_checked(row_idx, value, ts, row_alive)
     }
 
     /// Read all columns for one row as visible at `query_ts`.
@@ -415,6 +417,33 @@ impl ColumnStore {
     /// only when they still match live storage.
     pub fn picked_starts_at(&self, row_idx: usize, query_ts: Timestamp) -> Vec<Timestamp> {
         self.for_each_column(|col| col.start_ts_at(row_idx, query_ts))
+    }
+
+    /// Combined values plus covering stamps for one row under one pass per
+    /// column. Merges the projected decode and the fence-stamp read so
+    /// fenced point reads pay one chunk locate per column instead of two.
+    pub fn get_projected_with_stamps_at_ts(
+        &self,
+        row_idx: usize,
+        projection: &[String],
+        query_ts: Timestamp,
+    ) -> (Vec<(String, Option<Value>)>, Vec<Timestamp>) {
+        let mut values = Vec::with_capacity(projection.len());
+        let mut stamps = Vec::with_capacity(projection.len());
+        for name in projection {
+            match self.get_column(name) {
+                Some(column) => {
+                    let (stamp, value) = column.get_with_stamp(row_idx, query_ts);
+                    values.push((name.clone(), value));
+                    stamps.push(stamp);
+                }
+                None => {
+                    values.push((name.clone(), None));
+                    stamps.push(0);
+                }
+            }
+        }
+        (values, stamps)
     }
 
     /// Read only the requested columns for one row as visible at `query_ts`.
@@ -931,8 +960,30 @@ impl ColumnStore {
     pub fn mark_row_dirty(&self, row_idx: usize) {
         let columns = self.columns.read();
         for col in columns.iter() {
+            if col.len() <= row_idx {
+                continue;
+            }
             col.mark_dirty(row_idx);
         }
+    }
+
+    pub fn backdate_row(&self, row_idx: usize, ts: Timestamp) {
+        let columns = self.columns.read();
+        for col in columns.iter() {
+            col.backdate_created(row_idx, ts);
+        }
+    }
+
+    pub fn undo_last_versioned_write(
+        &self,
+        row_idx: usize,
+        col_name: &str,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let col = self
+            .get_column(col_name)
+            .ok_or_else(|| StorageError::column_not_found(col_name.to_string()))?;
+        col.undo_last_versioned_write(row_idx, ts)
     }
 
     pub fn apply_encoding_to_column(

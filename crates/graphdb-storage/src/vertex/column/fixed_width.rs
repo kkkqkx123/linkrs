@@ -51,28 +51,13 @@ impl FixedWidthColumn {
 
 impl ColumnStorage for FixedWidthColumn {
     fn get(&self, row_idx: usize) -> Option<Value> {
-        if self.is_null(row_idx) {
-            return None;
+        match self.try_get(row_idx) {
+            Ok(value) => value,
+            Err(e) => {
+                log::warn!("fixed column row {} lenient read failed: {}; reading as missing", row_idx, e);
+                None
+            }
         }
-        if row_idx >= self.row_count {
-            return None;
-        }
-
-        if let DataType::FixedString(limit) = &self.data_type {
-            return read_fixed_string(&self.data, row_idx * self.element_size, *limit);
-        }
-
-        if let DataType::VectorDense(dim) = &self.data_type {
-            return read_fixed_vector(&self.data, row_idx * self.element_size, *dim);
-        }
-
-        let offset = row_idx * self.element_size;
-        if offset + self.element_size > self.data.len() {
-            return None;
-        }
-
-        let raw = read_fixed_value(&self.data, offset, self.element_size)?;
-        Some(convert_to_type(raw, &self.data_type))
     }
 
     fn try_get(&self, row_idx: usize) -> StorageResult<Option<Value>> {
@@ -387,23 +372,6 @@ pub(crate) fn try_read_fixed_vector(
     )))
 }
 
-/// Read one fixed-dense-vector slot as little-endian `f32` components.
-pub(crate) fn read_fixed_vector(data: &[u8], offset: usize, dim: usize) -> Option<Value> {
-    if dim == 0 {
-        return None;
-    }
-    let bytes = dim.checked_mul(std::mem::size_of::<f32>())?;
-    if offset + bytes > data.len() {
-        return None;
-    }
-    let mut out = Vec::with_capacity(dim);
-    for i in 0..dim {
-        let chunk: [u8; 4] = data[offset + i * 4..offset + (i + 1) * 4].try_into().ok()?;
-        out.push(f32::from_le_bytes(chunk));
-    }
-    Some(Value::Vector(graphdb_core::value::VectorValue::dense(out)))
-}
-
 /// Write one fixed-dense-vector slot as little-endian `f32` components.
 ///
 /// Only dense vectors of exactly `dim` components are accepted; sparse
@@ -452,25 +420,6 @@ pub(crate) fn write_fixed_vector(
         data[offset + i * 4..offset + (i + 1) * 4].copy_from_slice(&component.to_le_bytes());
     }
     Ok(())
-}
-
-/// Read one zero-padded inline fixed-string slot.
-///
-/// Slots stay fixed width on disk; reads use the declared length and strip
-/// only the zero padding appended by writes. No first-zero truncation
-/// heuristic applies: interior zeros survive, and values ending with a zero
-/// byte are rejected at write time so padding removal stays lossless.
-pub(crate) fn read_fixed_string(data: &[u8], offset: usize, limit: usize) -> Option<Value> {
-    if limit == 0 || offset + limit > data.len() {
-        return None;
-    }
-    let mut end = offset + limit;
-    while end > offset && data[end - 1] == 0 {
-        end -= 1;
-    }
-    String::from_utf8(data[offset..end].to_vec())
-        .ok()
-        .map(Value::FixedString)
 }
 
 /// Strict fixed-string read with declared-length semantics.

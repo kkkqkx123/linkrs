@@ -172,6 +172,32 @@ impl ShardedVertexTable {
         super::super::flush_trigger::decide(self.flush_signals())
     }
 
+    /// One-shot primary-key anchor decision for the whole table.
+    ///
+    /// Peeks every shard without consuming flags, then consumes the
+    /// invalidation flags exactly once and broadcasts one verdict: any
+    /// invalidated shard or a table-wide over-threshold delta anchors every
+    /// shard, so shards never diverge on the baseline-vs-delta choice.
+    pub fn decide_pk_anchor(&self) -> bool {
+        use crate::vertex::id_indexer::IdManager;
+        let mut live_rows = 0usize;
+        let mut delta_entries = 0usize;
+        let mut invalidated = false;
+        for shard in &self.shards {
+            let table = shard.read();
+            live_rows += table.id_indexer.len();
+            delta_entries += table.id_indexer.delta_len();
+            invalidated |= table.id_indexer.baseline_invalidated();
+        }
+        if invalidated {
+            for shard in &self.shards {
+                let _ = shard.read().take_pk_baseline_invalidated();
+            }
+            return true;
+        }
+        delta_entries >= IdManager::anchor_threshold_for_live(live_rows)
+    }
+
     /// Aggregate version-chain pressure across shards for observability.
     ///
     /// Returns `(total_entries, max_chain_len, memory_bytes)` after any
@@ -291,9 +317,11 @@ impl ShardedVertexTable {
     /// Evict cold column chunks across shards oldest-first until `max_bytes`
     /// are released. Returns `(chunks_evicted, bytes_released)`.
     ///
-    /// Each shard is handled under its shard write lock with the
-    /// evictability rechecked inside: a chunk that gained an overlay write
-    /// or a version chain since selection is skipped for this pass.
+    /// Each shard is handled under its shard read lock with the
+    /// evictability rechecked inside the segment latch: eviction is
+    /// per-chunk locked, so it runs concurrently with point reads and
+    /// writes while a chunk that gained an overlay write or a version
+    /// chain since selection is skipped for this pass.
     pub fn evict_cold_chunks(&self, max_bytes: u64) -> (usize, u64) {
         let mut count = 0usize;
         let mut freed = 0u64;
@@ -301,7 +329,7 @@ impl ShardedVertexTable {
             if freed >= max_bytes {
                 break;
             }
-            let table = shard.write();
+            let table = shard.read();
             let (n, bytes) = table
                 .columns
                 .evict_cold_chunks(max_bytes.saturating_sub(freed));
@@ -331,7 +359,7 @@ impl ShardedVertexTable {
             if freed >= max_bytes {
                 break;
             }
-            let table = shard.write();
+            let table = shard.read();
             let (n, bytes, segs) = table
                 .columns
                 .evict_cold_chunks_with_quota(max_bytes.saturating_sub(freed), task_quota);

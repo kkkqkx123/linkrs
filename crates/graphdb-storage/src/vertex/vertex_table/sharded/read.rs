@@ -26,10 +26,10 @@ impl ShardedVertexTable {
     // flight (WAL replay, reshard). Every entry point that hands row identity
     // or row data to a consumer takes a [`VisibilityGuard`] instead.
 
-    pub(crate) fn get_by_internal_id(&self, global_id: u32, ts: Timestamp) -> Option<VertexRecord> {
+    pub(crate) fn get_by_internal_id_offline(&self, global_id: u32, ts: Timestamp) -> Option<VertexRecord> {
         let (idx, local_id) = self.decode_id(global_id);
         let table = self.shards[idx].read();
-        table.get_by_internal_id(local_id, ts).map(|mut record| {
+        table.get_by_internal_id_offline(local_id, ts).map(|mut record| {
             record.internal_id = global_id;
             record
         })
@@ -84,9 +84,8 @@ impl ShardedVertexTable {
             return None;
         }
         let snapshot = guard.snapshot();
-        let mut record = table.get_projected_by_internal_id(local_id, snapshot, None)?;
+        let (mut record, starts) = table.get_projected_with_stamps(local_id, snapshot, None)?;
         record.internal_id = global_id;
-        let starts = table.row_picked_starts(local_id, snapshot);
         Some((record, create_ts, starts, snapshot))
     }
 
@@ -236,6 +235,9 @@ impl ShardedVertexTable {
         guard: &VisibilityGuard<'_>,
         names: &[String],
     ) -> (Vec<u32>, Vec<VertexId>, Vec<(String, ColumnValues)>) {
+        if let Err(error) = self.verify_shard_schema_uniform() {
+            log::error!("scan_columns proceeding under shard schema divergence: {}", error);
+        }
         let snapshot = guard.snapshot();
         let (resolved_names, types) = self.column_layout(names);
         let mut merged: Vec<(String, ColumnValues)> = resolved_names
@@ -270,7 +272,7 @@ impl ShardedVertexTable {
                 continue;
             }
             let locals: Vec<u32> = visible.iter().map(|&(_, local)| local).collect();
-            for (name, column) in table.get_projected_columns(&locals, snapshot, &resolved_names) {
+            for (name, column) in table.get_projected_columns_offline(&locals, snapshot, &resolved_names) {
                 if let Some((_, target)) = merged.iter_mut().find(|(n, _)| *n == name) {
                     column.scatter(target, &visible);
                 }
@@ -317,6 +319,13 @@ impl ShardedVertexTable {
     /// with the shard-local id.
     fn group_by_shard(&self, global_ids: &[u32]) -> Vec<(usize, Vec<(usize, u32)>)> {
         let mut by_shard: Vec<Vec<(usize, u32)>> = vec![Vec::new(); self.layout.num_shards];
+        let estimate = global_ids
+            .len()
+            .div_ceil(self.layout.num_shards.max(1))
+            .max(1);
+        for group in by_shard.iter_mut() {
+            group.reserve(estimate);
+        }
         for (slot, &global_id) in global_ids.iter().enumerate() {
             match self.try_decode_global_id(global_id) {
                 Ok((shard_idx, local_id)) => {

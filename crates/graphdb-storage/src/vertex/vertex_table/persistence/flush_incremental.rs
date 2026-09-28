@@ -6,12 +6,12 @@ use graphdb_core::StorageResult;
 use super::super::core::VertexTable;
 
 impl VertexTable {
-    /// Incremental flush: only serialize dirty pages.
-    pub fn flush_incremental<P: AsRef<Path>>(
+    pub fn flush_incremental_with_anchor<P: AsRef<Path>>(
         &mut self,
         path: P,
         dirty_pages: &[crate::persistence::dirty_page::PageId],
         compression: crate::compression::CompressionType,
+        force_anchor: bool,
     ) -> StorageResult<()> {
         use std::fs;
 
@@ -50,17 +50,14 @@ impl VertexTable {
         let timestamps_path = path.join("timestamps.bin");
         self.flush_timestamps(&timestamps_path)?;
 
-        // Primary-key baseline plus delta: an invalidated or over-threshold
-        // baseline is rewritten in full as the new anchor (superseding any
+        // Primary-key baseline plus delta: the caller broadcasts one table
+        // anchor verdict for every shard, so shards never diverge on the
+        // baseline-vs-delta choice inside a global incremental. An anchor
+        // rewrites the baseline in full as the new anchor (superseding any
         // delta); otherwise only the since-baseline delta is persisted
         // alongside the column delta pages under the same checkpoint commit.
-        // The threshold scales with the live size so large tables do not
-        // anchor on every flush (write amplification) and small tables do
-        // not replay unbounded deltas.
-        if self
-            .id_indexer
-            .should_anchor_baseline_for_live(self.id_indexer.len())
-        {
+        if force_anchor {
+            let _ = self.take_pk_baseline_invalidated();
             let id_indexer_path = path.join("id_indexer.bin");
             self.flush_id_indexer_baseline(path, &id_indexer_path)?;
         } else if self.id_indexer.delta_len() > 0 {

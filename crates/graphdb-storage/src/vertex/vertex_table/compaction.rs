@@ -515,7 +515,7 @@ mod tests {
                 .get_index(&IdKey::Text(key.to_string()))
                 .expect("survivor keeps its key");
             let record = table
-                .get_by_internal_id(id, 100)
+                .get_by_internal_id_offline(id, 100)
                 .expect("survivor stays readable");
             assert_eq!(
                 record
@@ -543,8 +543,10 @@ mod tests {
                 )
                 .unwrap();
         }
-        assert_eq!(table.batch_delete(&["w1"], 200).unwrap(), 1);
-        assert_eq!(table.batch_delete(&["w3"], 200).unwrap(), 1);
+        let id = table.get_internal_id_raw("w1").unwrap();
+        table.delete_by_internal_id(id, 200).unwrap();
+        let id = table.get_internal_id_raw("w3").unwrap();
+        table.delete_by_internal_id(id, 200).unwrap();
 
         let (removed, mapping, _) = table.compact_with_cutoff_collect_mapping(200).unwrap();
         assert_eq!(removed.len(), 2);
@@ -555,7 +557,7 @@ mod tests {
                 .get_index(&IdKey::Text(key.to_string()))
                 .expect("survivor keeps its key");
             let record = table
-                .get_by_internal_id(id, 200)
+                .get_by_internal_id_offline(id, 200)
                 .expect("survivor stays readable");
             assert_eq!(
                 record

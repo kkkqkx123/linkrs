@@ -46,19 +46,15 @@ impl VertexTable {
         // Apply encoding to in-memory columns so data stays compressed after flush.
         // This moves compression from "flush-time only" to "post-flush in-memory",
         // reducing memory footprint for the lifetime of the column store.
+        // Failures propagate: a silent skip would diverge the disk image
+        // from memory and serve different values on reload.
         for (name, encoding_type) in &selections {
             if *encoding_type != EncodingType::None {
-                if let Err(e) = self.columns.apply_encoding_to_column(
+                self.columns.apply_encoding_to_column(
                     name,
                     *encoding_type,
                     self.encoding_selector.thresholds().fsst_max_symbols,
-                ) {
-                    log::warn!(
-                        "failed to apply encoding to in-memory column {}: {}",
-                        name,
-                        e
-                    );
-                }
+                )?;
             }
         }
 
@@ -168,13 +164,18 @@ impl VertexTable {
             snapshot.rebuild_overflow()?;
             // Evicted chunks promote on the snapshot only: persisted output
             // keeps full fidelity while the live table stays evicted.
+            // Promotion failures fail the flush: persisting a partial
+            // snapshot would drop the unpromoted rows from the baseline.
             match snapshot.ensure_all_resident() {
                 Ok(0) => {}
                 Ok(loaded) => {
                     log::debug!("flush promoted {} evicted chunks", loaded);
                 }
                 Err(e) => {
-                    log::warn!("flush chunk promotion failed: {}", e);
+                    return Err(StorageError::io_error(format!(
+                        "flush chunk promotion failed for column {}: {}",
+                        name, e
+                    )));
                 }
             }
             // Use the persistent encoding selector so compression feedback
@@ -226,20 +227,22 @@ impl VertexTable {
             if crate::vertex::column::overflow::OverflowStore::routes_for(&snapshot.data_type)
                 && snapshot.has_overflow()
             {
-                match snapshot.serialize_overflow() {
-                    Ok(bytes) => {
-                        let sidecar = path
-                            .parent()
-                            .unwrap_or(Path::new("."))
-                            .join(format!("{}.overflow", name));
-                        if let Err(e) = crate::compression::write_shadow_file(&sidecar, &bytes) {
-                            log::warn!("failed to write overflow sidecar for {}: {}", name, e);
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("failed to serialize overflow for {}: {}", name, e);
-                    }
-                }
+                let bytes = snapshot.serialize_overflow().map_err(|e| {
+                    StorageError::serialize_error(format!(
+                        "failed to serialize overflow for {}: {}",
+                        name, e
+                    ))
+                })?;
+                let sidecar = path
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .join(format!("{}.overflow", name));
+                crate::compression::write_shadow_file(&sidecar, &bytes).map_err(|e| {
+                    StorageError::io_error(format!(
+                        "failed to write overflow sidecar for {}: {}",
+                        name, e
+                    ))
+                })?;
             }
             selections.push((name.clone(), selection));
         }
