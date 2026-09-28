@@ -115,6 +115,20 @@ impl VertexTimestamp {
         crate::mvcc_visibility::Visibility::row_live(ts, start, Some(end))
     }
 
+    /// Maximum creation stamp over live slots, ignoring invalidated ones.
+    ///
+    /// Load-time history floor: version chains do not survive checkpoints,
+    /// so no pre-floor history exists for rows created at or before this
+    /// stamp. Zero on an empty table, disabling the fence.
+    pub fn max_start_ts(&self) -> Timestamp {
+        self.start_ts
+            .iter()
+            .copied()
+            .filter(|ts| *ts != INVALID_TIMESTAMP)
+            .max()
+            .unwrap_or(0)
+    }
+
     pub fn get_start_ts(&self, index: u32) -> Option<Timestamp> {
         let idx = index as usize;
         if idx < self.start_ts.len() {

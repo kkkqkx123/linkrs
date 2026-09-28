@@ -1,7 +1,7 @@
 use super::{CsrWithProperties, RowVisibility};
+use crate::edge::csr_shared::EdgeIdBitSet;
 use crate::edge::property_schema::PropertySchema;
 use graphdb_core::types::{EdgeId, Timestamp};
-use std::collections::HashSet;
 
 impl CsrWithProperties {
     /// Pre-allocate row and column capacity for an incoming batch.
@@ -70,9 +70,9 @@ impl CsrWithProperties {
         total
     }
 
-    pub fn reclaim_slots(
+    pub(crate) fn reclaim_slots(
         &mut self,
-        valid_edge_ids: &HashSet<EdgeId>,
+        valid_edge_ids: &EdgeIdBitSet,
         retention_bound: Timestamp,
     ) -> usize {
         if retention_bound == Timestamp::MAX {

@@ -233,7 +233,13 @@ impl EdgeStore {
         let mut applied = 0usize;
         for (i, (src, dst, rank, _, ts)) in entries.iter().enumerate() {
             let edge_id = ids[i];
-            self.mvcc.record_creation(edge_id, *ts);
+            if let Err(e) = self.mvcc.record_creation(edge_id, *ts) {
+                for (j, (rsrc, rdst, rrank, _, rts)) in entries.iter().enumerate() {
+                    self.erase_applied_insert(*rsrc, *rdst, *rrank, ids[j], *rts);
+                }
+                self.next_edge_id = EdgeId(base);
+                return Err(e);
+            }
             if !inline {
                 if let Err(e) = self
                     .properties
@@ -450,7 +456,13 @@ impl EdgeStore {
                     edge_id
                 )));
             }
-            self.mvcc.record_creation(edge_id, *ts);
+            if let Err(e) = self.mvcc.record_creation(edge_id, *ts) {
+                for (j, (rsrc, rdst, rrank, _, rts)) in entries.iter().enumerate() {
+                    self.erase_applied_insert(*rsrc, *rdst, *rrank, ids[j], *rts);
+                }
+                self.next_edge_id = EdgeId(base);
+                return Err(e);
+            }
             if self.property_index.is_some() {
                 if let Some((prop_name, prop_value)) = self.bundled_index_pair(value) {
                     let label = self.label;
@@ -534,7 +546,9 @@ impl EdgeStore {
         // same conflicts in O(1) without another row scan, and the failure
         // path underneath cleans up the record staged above.
 
-        self.mvcc.record_creation(edge_id, ts);
+        if let Err(e) = self.mvcc.record_creation(edge_id, ts) {
+            return Err(e);
+        }
 
         if let Err(e) = self
             .properties

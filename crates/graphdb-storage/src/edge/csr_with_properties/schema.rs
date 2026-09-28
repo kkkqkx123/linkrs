@@ -36,6 +36,7 @@ impl CsrWithProperties {
             row_count: 0,
             dirty_columns: HashSet::new(),
             next_prop_id,
+            history_floor: 0,
             inline: false,
         };
         store.rebuild_schema_indexes();

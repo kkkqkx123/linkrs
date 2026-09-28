@@ -50,7 +50,8 @@ pub mod wal;
 pub use config::EdgeTableConfig;
 pub use core::{
     DirectionMigrationStats, DirectionNarrowingSuggestion, DirectionUsageSnapshot, EdgeIndexStatus,
-    EdgeStorageBreakdown, EdgeStore, IncidentDeletedEdge, UpdateEdgePropertyByKeyParams,
+    EdgeStorageBreakdown, EdgeStore, EdgeWalRecoveryMode, IncidentDeletedEdge,
+    UpdateEdgePropertyByKeyParams,
 };
 pub use iterator::{AdjacencyBatchAccessor, EdgeTableScanIterator, DEFAULT_ADJACENCY_BATCH};
 pub use record_form::MigrateStats;

@@ -34,14 +34,19 @@ pub(super) enum IndexDelta {
 }
 
 /// Shared allocation state behind the striped key map: slot table, live
-/// set, free stack, delta log and config. Guarded by one short critical
+/// set, free heap, delta log and config. Guarded by one short critical
 /// section; keyed writes hold their stripe plus this core, probes hold
 /// only their stripe.
+///
+/// The free heap is a max-heap: reclaim pops the largest free id first so
+/// recycled slots refill the allocation tail instead of scattering holes,
+/// keeping sequential scans dense under delete-plus-reinsert churn. Pop
+/// and push stay logarithmic no matter how deep the churn grows.
 #[derive(Debug)]
 pub(super) struct SharedCore {
     pub(super) keys: Vec<Option<IdKey>>,
     pub(super) live_ids: BTreeSet<u32>,
-    pub(super) free_ids: Vec<u32>,
+    pub(super) free_ids: std::collections::BinaryHeap<u32>,
     pub(super) reuse_count: u64,
     pub(super) delta_log: Vec<IndexDelta>,
     pub(super) baseline_invalidated: bool,
@@ -83,7 +88,7 @@ impl IdManager {
             core: Mutex::new(SharedCore {
                 keys: Vec::with_capacity(capacity),
                 live_ids: BTreeSet::new(),
-                free_ids: Vec::new(),
+                free_ids: std::collections::BinaryHeap::new(),
                 reuse_count: 0,
                 delta_log: Vec::new(),
                 baseline_invalidated: false,
@@ -133,18 +138,11 @@ impl IdManager {
     /// Reuse is ordered: the largest free id (closest to the high-water
     /// mark) is claimed first, so recycled slots refill the allocation
     /// tail instead of scattering holes across the id space. Sequential
-    /// scans stay dense under delete-plus-reinsert churn; the free stack
-    /// itself keeps insertion order and only the claim is ordered.
+    /// scans stay dense under delete-plus-reinsert churn. The max-heap
+    /// serves the largest id in logarithmic time.
     fn take_next_id_locked(core: &mut SharedCore) -> StorageResult<u32> {
         // Lazy ID reuse: recycle a deleted slot before growing the id space.
-        if !core.free_ids.is_empty() {
-            let mut best = 0usize;
-            for (i, id) in core.free_ids.iter().enumerate() {
-                if *id > core.free_ids[best] {
-                    best = i;
-                }
-            }
-            let recycled = core.free_ids.swap_remove(best);
+        if let Some(recycled) = core.free_ids.pop() {
             core.reuse_count = core.reuse_count.saturating_add(1);
             let idx = recycled as usize;
             if idx >= core.keys.len() {
@@ -230,13 +228,15 @@ impl IdManager {
 
     /// Return an unbound reserved id to the free stack. Bound ids are a
     /// no-op, making release safe to call on slots whose reservation was
-    /// already consumed by a bind; releasing a double reservation would
-    /// only add a duplicate free-stack entry the next pop turns into a
-    /// no-op bind conflict, so callers keep single ownership.
+    /// already consumed by a bind. An id already on the free stack is not
+    /// pushed twice: a duplicate entry would hand the same slot to two
+    /// later reservations and surface as a spurious bind conflict.
     /// Core-only: no stripe is held.
     pub fn release_reserved(&self, id: u32) {
         let mut core = self.core.lock();
-        if matches!(core.keys.get(id as usize), Some(None)) {
+        if matches!(core.keys.get(id as usize), Some(None))
+            && !core.free_ids.iter().any(|free| *free == id)
+        {
             core.free_ids.push(id);
         }
     }
@@ -251,13 +251,9 @@ impl IdManager {
         if !matches!(core.keys.get(id as usize), Some(None)) {
             return false;
         }
-        match core.free_ids.iter().rposition(|free| *free == id) {
-            Some(pos) => {
-                core.free_ids.swap_remove(pos);
-                true
-            }
-            None => false,
-        }
+        let before = core.free_ids.len();
+        core.free_ids.retain(|free| *free != id);
+        core.free_ids.len() != before
     }
 
     /// Visibility-aware lookup: the global committed area gated by the
@@ -486,12 +482,22 @@ impl IdManager {
                 }
                 1 => {
                     let stripe = stripe_index(key);
-                    if let Some(idx) = guards[stripe].remove(key) {
-                        if (idx as usize) < core.keys.len() {
-                            core.keys[idx as usize] = None;
+                    match guards[stripe].remove(key) {
+                        Some(idx) => {
+                            if (idx as usize) < core.keys.len() {
+                                core.keys[idx as usize] = None;
+                            }
+                            core.live_ids.remove(&idx);
+                            if !core.free_ids.iter().any(|free| *free == idx) {
+                                core.free_ids.push(idx);
+                            }
                         }
-                        core.live_ids.remove(&idx);
-                        core.free_ids.push(idx);
+                        None => {
+                            return Err(StorageError::deserialize_error(format!(
+                                "pk delta remove diverges for {:?}: no baseline mapping",
+                                key
+                            )));
+                        }
                     }
                 }
                 _ => {

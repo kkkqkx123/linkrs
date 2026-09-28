@@ -112,22 +112,23 @@ impl LiveKeySet {
         }
     }
 
-    /// Remove a key in place, keeping the sorted form when sorted.
+    /// Remove a key, converting to hash when currently sorted.
     ///
-    /// Single deletes are the common mutation between rebuilds; staying
-    /// sorted avoids a full hash rebuild and keeps point lookups on the
-    /// cache-friendly binary search. Inserts still promote to hash (see
-    /// `insert`) so bulk growth stays amortized.
+    /// Mirrors `insert`: a sorted vector removal shifts the whole tail, so
+    /// repeated deletes between rebuilds degrade linearly with row width.
+    /// Converting once keeps every later mutation constant-time; the next
+    /// structural rebuild may re-promote to sorted.
     pub(crate) fn remove(&mut self, key: &(u32, i64)) {
         match self {
             Self::Hash(map) => {
                 map.remove(key);
             }
-            Self::Sorted(vec) => {
-                let idx = vec.partition_point(|(k, _)| k < key);
-                if idx < vec.len() && vec[idx].0 == *key {
-                    vec.remove(idx);
-                }
+            Self::Sorted(_) => {
+                let sorted = std::mem::take(self).into_sorted();
+                let mut map = HashMap::with_capacity(sorted.len());
+                map.extend(sorted);
+                map.remove(key);
+                *self = Self::Hash(map);
             }
         }
     }

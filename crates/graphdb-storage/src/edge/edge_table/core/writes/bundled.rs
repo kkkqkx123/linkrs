@@ -102,7 +102,9 @@ impl EdgeStore {
         let inline_value = self.convert_bundled_value(property_values)?;
         let edge_id = self.next_edge_id.fetch_add();
 
-        self.mvcc.record_creation(edge_id, ts);
+        if let Err(e) = self.mvcc.record_creation(edge_id, ts) {
+            return Err(e);
+        }
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let src_key = Self::edge_endpoint_key(src, rank);

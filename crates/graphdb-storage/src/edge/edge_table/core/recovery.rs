@@ -5,6 +5,21 @@ use graphdb_core::types::Timestamp;
 use graphdb_core::StorageResult;
 use std::collections::HashSet;
 
+/// WAL torn-tail policy for [`EdgeStore::load_with_wal_recovery`].
+///
+/// The default stays fail-closed: a torn tail rejects the open and only
+/// an explicit repair truncates. The truncating mode is for single-node
+/// restarts without an operator, and it always reports what it dropped.
+/// Read-only diagnosis stays on [`EdgeStore::diagnose_edge_wal_at`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeWalRecoveryMode {
+    /// Reject the open on any torn tail.
+    Strict,
+    /// Truncate the torn tail at the last valid entry, then load and
+    /// report the salvaged prefix with the discarded bytes.
+    TruncateTornTail,
+}
+
 impl EdgeStore {
     pub fn flush<P: AsRef<std::path::Path>>(
         &mut self,
@@ -52,6 +67,31 @@ impl EdgeStore {
         path: P,
     ) -> StorageResult<super::super::wal::EdgeWalRepairReport> {
         super::super::wal::discard_torn_tail_reported(path.as_ref())
+    }
+
+    /// Load a checkpoint with an explicit WAL torn-tail policy.
+    ///
+    /// `Strict` behaves exactly like [`Self::load`]. `TruncateTornTail`
+    /// runs the same explicit repair [`Self::repair_edge_wal_at_reported`]
+    /// performs before loading, and returns its report so the discarded
+    /// tail stays observable instead of silent. Repair still requires sole
+    /// ownership of the table directory.
+    pub fn load_with_wal_recovery<P: AsRef<std::path::Path>>(
+        &mut self,
+        path: P,
+        mode: EdgeWalRecoveryMode,
+    ) -> StorageResult<Option<super::super::wal::EdgeWalRepairReport>> {
+        match mode {
+            EdgeWalRecoveryMode::Strict => {
+                self.load(path)?;
+                Ok(None)
+            }
+            EdgeWalRecoveryMode::TruncateTornTail => {
+                let report = Self::repair_edge_wal_at_reported(&path)?;
+                self.load(path)?;
+                Ok(Some(report))
+            }
+        }
     }
 
     /// Fail-closed cross-copy audit used by [`EdgeStore::load`].
@@ -374,7 +414,9 @@ mod tests {
         assert!(table.delete_edge(0, 1, 0, 160).unwrap());
         let watermarks =
             graphdb_transaction::MvccWatermarks::from_parts(300, 300, None, CommitLsn::ZERO);
-        table.compact_csr_only_with_watermarks(&watermarks, 0, 0.2);
+        table
+            .compact_csr_only_with_watermarks(&watermarks, 0, 0.2)
+            .expect("drift-free compaction passes");
         assert!(table.audit_copy_drift().is_empty());
 
         table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
@@ -397,6 +439,95 @@ mod tests {
         assert_eq!(loaded.out_edges(0, 500).len(), 1);
         assert!(loaded.has_edge(0, 2, 0, 500));
         assert!(!loaded.has_edge(0, 1, 0, 500));
+    }
+
+    #[test]
+    fn wal_recovery_mode_strict_rejects_truncate_repairs_torn_tail() {
+        use super::EdgeWalRecoveryMode;
+        use std::io::Write as _;
+        let mut table = audit_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush succeeds");
+        // Torn tail: length prefix claims a payload the file does not hold.
+        let wal_path = dir.path().join("edge_wal.bin");
+        {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&wal_path)
+                .expect("torn wal writable");
+            file.write_all(&128u64.to_le_bytes())
+                .expect("torn prefix writable");
+            file.write_all(&[9u8, 9, 9]).expect("torn body writable");
+        }
+        let mut strict_table = audit_table();
+        assert!(strict_table.load(dir.path()).is_err());
+        let mut strict_mode = audit_table();
+        assert!(strict_mode
+            .load_with_wal_recovery(dir.path(), EdgeWalRecoveryMode::Strict)
+            .is_err());
+        let mut repaired = audit_table();
+        let report = repaired
+            .load_with_wal_recovery(dir.path(), EdgeWalRecoveryMode::TruncateTornTail)
+            .expect("truncating recovery loads");
+        let report = report.expect("truncating recovery always reports");
+        assert!(report.repaired);
+        assert_eq!(report.torn_bytes, 11);
+        assert!(repaired.audit_copy_drift().is_empty());
+        assert!(repaired.has_edge(0, 1, 0, 500));
+    }
+
+    #[test]
+    fn strict_property_reads_fence_pre_floor_history_after_reload() {
+        let mut table = audit_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        table
+            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 200)
+            .unwrap();
+        let dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush succeeds");
+        let mut loaded = audit_table();
+        loaded.load(dir.path()).expect("load succeeds");
+        // Dropped version chains start a new epoch at the maximum creation
+        // stamp: the older row has no retained history below the floor.
+        let err = loaded
+            .properties
+            .try_get_projected_physical_by_edge_id(EdgeId(0), 150, None)
+            .expect_err("pre-floor history must fail closed");
+        assert!(err.to_string().contains("floor"));
+        assert!(loaded
+            .properties
+            .try_get_projected_physical_by_edge_id(EdgeId(0), 250, None)
+            .expect("post-floor read serves")
+            .is_some());
+        let batch_err = loaded
+            .properties
+            .try_get_projected_physical_batch_by_edge_ids(&[EdgeId(0), EdgeId(1)], 150, None)
+            .expect_err("pre-floor batch must fail closed");
+        assert!(batch_err.to_string().contains("floor"));
+        assert_eq!(
+            loaded
+                .properties
+                .try_get_projected_physical_batch_by_edge_ids(&[EdgeId(0), EdgeId(1)], 250, None)
+                .expect("post-floor batch serves")
+                .len(),
+            2
+        );
     }
 
     #[test]

@@ -97,6 +97,9 @@ impl VertexTable {
 
         let timestamps_path = path.join("timestamps.bin");
         self.load_timestamps(&timestamps_path)?;
+        // Dropped version chains start a new history epoch: fence
+        // pre-floor time travel on the strict paths.
+        self.history_floor = self.timestamps.read().max_start_ts();
 
         self.is_open
             .store(true, std::sync::atomic::Ordering::Release);
@@ -327,7 +330,7 @@ impl VertexTable {
                 col.rebuild_chunk_profiles();
             }
             if overflow_present {
-                Self::load_overflow_sidecar(&mut self.columns, dir.as_deref(), &name);
+                Self::load_overflow_sidecar(&mut self.columns, dir.as_deref(), &name)?;
             }
         }
 
@@ -456,32 +459,42 @@ impl VertexTable {
         Ok(overflow_present)
     }
 
-    /// Best-effort restore of a `<col>.overflow` sidecar: a corrupt or
-    /// missing sidecar degrades to placeholder reads, never a load failure.
+    /// Restore of a `<col>.overflow` sidecar flagged present by the column
+    /// record. The sidecar holds real payloads, not a derived cache, so a
+    /// missing or corrupt file fails the load instead of degrading to
+    /// placeholder reads that would present data loss as empty values.
     fn load_overflow_sidecar(
         columns: &mut crate::vertex::ColumnStore,
         dir: Option<&std::path::Path>,
         name: &str,
-    ) {
+    ) -> StorageResult<()> {
         let dir = match dir {
             Some(d) => d,
-            None => return,
+            None => {
+                return Err(StorageError::deserialize_error(format!(
+                    "overflow sidecar for {} has no directory",
+                    name
+                )));
+            }
         };
         let sidecar = dir.join(format!("{}.overflow", name));
-        if !sidecar.exists() {
-            return;
-        }
-        match std::fs::read(&sidecar) {
-            Ok(bytes) => {
-                if let Some(col) = columns.get_column(name) {
-                    if let Err(e) = col.load_overflow_bytes(&bytes) {
-                        log::warn!("ignoring corrupt overflow sidecar for {}: {}", name, e);
-                    }
-                }
-            }
-            Err(e) => {
-                log::warn!("failed to read overflow sidecar for {}: {}", name, e);
-            }
+        let bytes = std::fs::read(&sidecar).map_err(|e| {
+            StorageError::deserialize_error(format!(
+                "overflow sidecar for {} unreadable: {}",
+                name, e
+            ))
+        })?;
+        match columns.get_column(name) {
+            Some(col) => col.load_overflow_bytes(&bytes).map_err(|e| {
+                StorageError::deserialize_error(format!(
+                    "overflow sidecar for {} corrupt: {}",
+                    name, e
+                ))
+            }),
+            None => Err(StorageError::deserialize_error(format!(
+                "overflow sidecar for {} names a missing column",
+                name
+            ))),
         }
     }
 

@@ -309,7 +309,9 @@ fn owner_rebuild_converges_reclaimed_tombstones_with_count() {
         None,
         graphdb_core::types::CommitLsn::ZERO,
     );
-    table.compact_csr_only_with_watermarks(&watermarks, 0, 0.2);
+    table
+        .compact_csr_only_with_watermarks(&watermarks, 0, 0.2)
+        .expect("drift-free compaction passes");
     let stats = table.rebuild_owner_map_with_stats();
     assert_eq!(
         stats.mapped, 1,
@@ -340,7 +342,9 @@ fn reclaim_boundary_stamp_uses_shared_gc_predicate() {
         None,
         graphdb_core::types::CommitLsn::ZERO,
     );
-    table.compact_csr_only_with_watermarks(&watermarks, 0, 0.2);
+    table
+        .compact_csr_only_with_watermarks(&watermarks, 0, 0.2)
+        .expect("drift-free compaction passes");
     assert!(
         table
             .mvcc

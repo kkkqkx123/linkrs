@@ -88,6 +88,14 @@ pub struct VertexTable {
     /// boundary. While set, `set_schema` is rejected so the staged change
     /// cannot be silently discarded.
     pub(super) pending_schema_change: Option<super::staged_schema::PendingVertexSchemaChange>,
+    /// Checkpoint-epoch floor for attribute time travel.
+    ///
+    /// Version chains stay memory-only, so a load drops every before-image.
+    /// Reads at timestamps below this floor may need dropped history and
+    /// fail closed on the strict paths; reads at or above it serve from
+    /// live chains. Recomputed on every load as the maximum creation
+    /// stamp; zero on fresh tables, disabling the fence.
+    pub(super) history_floor: Timestamp,
 }
 
 impl VertexTable {
@@ -146,6 +154,7 @@ impl VertexTable {
             string_overflow_threshold: config.string_overflow_threshold,
             chunk_capacity: config.chunk_capacity,
             pending_schema_change: None,
+            history_floor: 0,
         }
     }
 
@@ -503,6 +512,83 @@ impl VertexTable {
             });
         }
         out
+    }
+
+    /// Strict fenced batch read with explicit decode errors.
+    ///
+    /// Same shape as [`Self::get_projected_batch`] but corrupt payloads
+    /// fail instead of reading as missing. Attribute time travel ends at
+    /// the last load: version chains do not survive checkpoints, so a
+    /// query below [`Self::history_floor`] for a row created at or below
+    /// the query timestamp may need dropped before-images and fails
+    /// instead of returning the current value. Rows created after the
+    /// query timestamp still read as missing.
+    pub fn try_get_projected_batch(
+        &self,
+        internal_ids: &[u32],
+        ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> StorageResult<Vec<Option<VertexRecord>>> {
+        if !self.is_open.load(Ordering::Acquire) {
+            return Ok(internal_ids.iter().map(|_| None).collect());
+        }
+        let floor = self.history_floor;
+        let mut positions: Vec<(usize, u32)> = Vec::with_capacity(internal_ids.len());
+        for (pos, &id) in internal_ids.iter().enumerate() {
+            if self.is_row_live_at(id, ts) {
+                positions.push((pos, id));
+            }
+        }
+        if ts < floor {
+            let stamps = self.timestamps.read();
+            for &(_, id) in &positions {
+                let created = stamps.get_start_ts(id).unwrap_or(0);
+                if created <= ts {
+                    return Err(StorageError::deserialize_error(format!(
+                        "vertex row {} history before epoch floor {} is not retained",
+                        id, floor
+                    )));
+                }
+            }
+        }
+
+        let mut out: Vec<Option<VertexRecord>> = internal_ids.iter().map(|_| None).collect();
+        if positions.is_empty() {
+            return Ok(out);
+        }
+        let row_indices: Vec<usize> = positions.iter().map(|&(_, id)| id as usize).collect();
+        let props = match projection {
+            Some(names) => self
+                .columns
+                .try_get_projected_batch_at_ts(&row_indices, names, ts)?,
+            None => self.columns.try_get_batch_at_ts(&row_indices, ts)?,
+        };
+        for ((pos, id), prop_row) in positions.into_iter().zip(props) {
+            let key = match self.id_indexer.get_key(id) {
+                Some(key) => key,
+                None => continue,
+            };
+            let vid = match key {
+                IdKey::Int(i) => match VertexId::try_from_int64(i).ok() {
+                    Some(vid) => vid,
+                    None => continue,
+                },
+                IdKey::Text(s) => match VertexId::try_from_string(&s).ok() {
+                    Some(vid) => vid,
+                    None => continue,
+                },
+            };
+            let properties: Vec<(String, Value)> = prop_row
+                .into_iter()
+                .filter_map(|(name, opt_val)| opt_val.map(|v| (name, v)))
+                .collect();
+            out[pos] = Some(VertexRecord {
+                vid,
+                internal_id: id,
+                properties,
+            });
+        }
+        Ok(out)
     }
 
     /// Column-major batch decode (A1).  Decodes the requested columns for

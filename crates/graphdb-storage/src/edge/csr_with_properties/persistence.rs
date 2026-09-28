@@ -128,6 +128,15 @@ impl CsrWithProperties {
                     has_del
                 )));
             };
+            // Free slots persist as zero creation with no deletion mark;
+            // any deletion-marked row must carry an allocator stamp, since
+            // zero doubles as the free-row marker in release and reclaim.
+            if del.is_some() && !graphdb_core::types::is_allocatable_timestamp(create) {
+                return Err(StorageError::deserialize_error(format!(
+                    "property row carries reserved creation stamp {} with a deletion mark",
+                    create
+                )));
+            }
             self.visibility.push(RowVisibility {
                 create_ts: create,
                 delete_ts: del,
@@ -162,6 +171,21 @@ impl CsrWithProperties {
                 ));
             }
             self.map_insert(EdgeId(eid), pos as usize)?;
+        }
+        // Mapped rows own live property state, so a zero creation stamp
+        // here means the payload confuses a free slot with a live row.
+        for (edge_id, pos) in self.edge_mappings() {
+            let owned = self
+                .visibility
+                .get(pos as usize)
+                .map(|vis| graphdb_core::types::is_allocatable_timestamp(vis.create_ts))
+                .unwrap_or(false);
+            if !owned {
+                return Err(StorageError::deserialize_error(format!(
+                    "property mapping for edge {:?} lands on a free row",
+                    edge_id
+                )));
+            }
         }
         need(data, offset, 4, "free list length")?;
         let free_len = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
@@ -333,7 +357,23 @@ impl CsrWithProperties {
         }
         self.rebuild_aux_indexes();
         self.dirty_columns.clear();
+        self.recompute_history_floor();
         Ok(())
+    }
+
+    /// Recompute the attribute time-travel floor after any load or merge.
+    ///
+    /// Dropped version chains start a new history epoch at the maximum
+    /// creation stamp; strict reads below it fail instead of serving the
+    /// current value as history. Zero on empty stores, disabling the fence.
+    pub(crate) fn recompute_history_floor(&mut self) {
+        self.history_floor = self
+            .visibility
+            .iter()
+            .map(|vis| vis.create_ts)
+            .filter(|ts| graphdb_core::types::is_allocatable_timestamp(*ts))
+            .max()
+            .unwrap_or(0);
     }
 
     fn rebuild_aux_indexes(&mut self) {

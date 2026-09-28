@@ -86,6 +86,41 @@ pub(crate) fn is_reclaimable_cold(cold: &ColdStamps, cutoff: Timestamp) -> bool 
         && crate::mvcc_visibility::Visibility::is_gc_eligible(cold.delete_ts, cutoff)
 }
 
+/// Dense edge-id membership set backed by one bit per id.
+///
+/// Reclaim passes build candidate sets over the whole table; a hash set
+/// costs tens of bytes per edge at peak while a bitset costs one bit.
+/// Edge ids are table-allocated dense values from zero, so the bit index
+/// is the id itself. Out-of-range ids read as absent; inserts grow the
+/// words on demand.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct EdgeIdBitSet {
+    words: Vec<u64>,
+}
+
+impl EdgeIdBitSet {
+    pub(crate) fn with_max_id(max_id: u64) -> Self {
+        let words = max_id.div_ceil(64) as usize + 1;
+        Self {
+            words: vec![0u64; words],
+        }
+    }
+
+    pub(crate) fn insert(&mut self, id: super::EdgeId) {
+        let word = (id.0 / 64) as usize;
+        if word >= self.words.len() {
+            self.words.resize(word + 1, 0);
+        }
+        self.words[word] |= 1u64 << (id.0 % 64);
+    }
+
+    pub(crate) fn contains(&self, id: &super::EdgeId) -> bool {
+        self.words
+            .get((id.0 / 64) as usize)
+            .is_some_and(|word| word & (1u64 << (id.0 % 64)) != 0)
+    }
+}
+
 /// Per-vertex row bookkeeping shared by `MutableCsr` and `PureTopologyCsr`.
 ///
 /// Both CSR variants maintain identical arrays for vertex addressing:

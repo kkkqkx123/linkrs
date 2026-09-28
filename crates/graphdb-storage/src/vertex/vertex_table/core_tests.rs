@@ -924,6 +924,45 @@ fn test_property_version_gc_does_not_break_visible_snapshots() {
 }
 
 #[test]
+fn test_strict_batch_fences_pre_floor_history_after_reload() {
+    use tempfile::TempDir;
+    let schema = create_test_schema();
+    let mut table = new_table(0, "person", schema.clone());
+    table
+        .insert("v0", &[("age".to_string(), Value::Int(30))], 100)
+        .unwrap();
+    table
+        .insert("v1", &[("age".to_string(), Value::Int(40))], 200)
+        .unwrap();
+    let tmp = TempDir::new().unwrap();
+    let shard = tmp.path().join("shard");
+    table
+        .flush(
+            &shard,
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .unwrap();
+    let mut reloaded = new_table(0, "person", schema);
+    reloaded.load(&shard).unwrap();
+    // Dropped version chains start a new epoch at the maximum creation
+    // stamp: the older row has no retained history below the floor.
+    let err = reloaded
+        .try_get_projected_batch(&[0, 1], 150, None)
+        .expect_err("pre-floor history must fail closed");
+    assert!(err.to_string().contains("floor"));
+    let current = reloaded
+        .try_get_projected_batch(&[0, 1], 250, None)
+        .expect("post-floor read serves");
+    assert_eq!(current.len(), 2);
+    assert!(current[0].is_some());
+    assert!(current[1].is_some());
+    let missing = reloaded
+        .try_get_projected_batch(&[0, 1], 50, None)
+        .expect("pre-creation reads stay missing");
+    assert!(missing.iter().all(|slot| slot.is_none()));
+}
+
+#[test]
 fn test_flush_chunk_sidecars_and_chunked_reload() {
     use tempfile::TempDir;
     let schema = create_test_schema();

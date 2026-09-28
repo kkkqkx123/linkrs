@@ -86,7 +86,9 @@ impl CsrWithProperties {
     ///
     /// Callers must decide visibility through the version authority first;
     /// row stamps exist only for collection. Returns `None` only when the
-    /// edge has no row mapping.
+    /// edge has no row mapping. Lenient on history: version chains do not
+    /// survive checkpoints, so pre-floor reads may return the current value;
+    /// time-travel callers use the strict entry instead.
     pub fn get_projected_physical_by_edge_id(
         &self,
         edge_id: EdgeId,
@@ -149,6 +151,35 @@ impl CsrWithProperties {
             .collect()
     }
 
+    /// Epoch fence for attribute time travel.
+    ///
+    /// Version chains do not survive checkpoints, so a strict read below
+    /// the load floor for a row created at or below the query timestamp
+    /// may need dropped before-images and fails instead of returning the
+    /// current value. Rows created after the query timestamp read as
+    /// missing through the normal path.
+    fn check_history_floor(
+        &self,
+        pos: usize,
+        edge_id: EdgeId,
+        query_ts: Timestamp,
+    ) -> StorageResult<()> {
+        if query_ts < self.history_floor {
+            let created = self
+                .visibility
+                .get(pos)
+                .map(|vis| vis.create_ts)
+                .unwrap_or(0);
+            if created <= query_ts {
+                return Err(StorageError::deserialize_error(format!(
+                    "edge {:?} history before epoch floor {} is not retained",
+                    edge_id, self.history_floor
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Strict physical projection with explicit decode errors.
     ///
     /// Query entry for explicit failure semantics. Visibility stays with the
@@ -156,7 +187,8 @@ impl CsrWithProperties {
     /// here. Never-written windows yield `None` cells; corrupt snapshots,
     /// side-store payloads and raw length or dimension mismatches yield
     /// `Err` carrying the column and edge so scans never observe silent
-    /// nulls. Unmapped edges still yield `Ok(None)`.
+    /// nulls. Reads below the history epoch floor fail instead of serving
+    /// the current value as history. Unmapped edges still yield `Ok(None)`.
     pub fn try_get_projected_physical_by_edge_id(
         &self,
         edge_id: EdgeId,
@@ -172,6 +204,7 @@ impl CsrWithProperties {
         if pos >= self.visibility.len() {
             return Ok(None);
         }
+        self.check_history_floor(pos, edge_id, query_ts)?;
         let mut out = Vec::with_capacity(self.property_schema.len());
         for (i, name) in self.resolve_projection(projection) {
             let value = self.property_columns[i]
@@ -185,6 +218,50 @@ impl CsrWithProperties {
             out.push((name.to_string(), value));
         }
         Ok(Some(out))
+    }
+
+    /// Strict batch physical projection with explicit decode errors.
+    ///
+    /// Batch form of
+    /// [`Self::try_get_projected_physical_by_edge_id`]: the projection
+    /// resolves once and every edge reuses it, with the same epoch fence
+    /// and decode contract per edge. Output order follows the input.
+    pub fn try_get_projected_physical_batch_by_edge_ids(
+        &self,
+        edge_ids: &[EdgeId],
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> StorageResult<ProjectedBatch> {
+        if self.inline {
+            return Ok(edge_ids.iter().map(|_| None).collect());
+        }
+        let columns = self.resolve_projection(projection);
+        let mut out = Vec::with_capacity(edge_ids.len());
+        for edge_id in edge_ids {
+            let Some(pos) = self.mapped_row(*edge_id) else {
+                out.push(None);
+                continue;
+            };
+            if pos >= self.visibility.len() {
+                out.push(None);
+                continue;
+            }
+            self.check_history_floor(pos, *edge_id, query_ts)?;
+            let mut row = Vec::with_capacity(columns.len());
+            for (i, name) in &columns {
+                let value = self.property_columns[*i]
+                    .try_get_at_ts(pos, query_ts)
+                    .map_err(|e| {
+                        StorageError::deserialize_error(format!(
+                            "edge {:?} column {} decode failed: {}",
+                            edge_id, name, e
+                        ))
+                    })?;
+                row.push((name.to_string(), value));
+            }
+            out.push(Some(row));
+        }
+        Ok(out)
     }
     pub fn read_properties_by_edge_id(&self, edge_id: EdgeId) -> Option<Vec<(String, Value)>> {
         if self.inline {

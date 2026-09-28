@@ -21,9 +21,7 @@ impl EdgeStore {
         let out_done = !has_out || out_ok;
         let in_done = !has_in || in_ok;
         if out_done && in_done && (out_ok || in_ok || (!has_out && !has_in)) {
-            if let Some(ts_info) = self.mvcc.edge_timestamps.get_mut(&edge_id) {
-                ts_info.delete_ts = Timestamp::MAX;
-            }
+            self.mvcc.edge_timestamps.revive(&edge_id);
             let _ = self.properties.revert_deletion_for_edge(edge_id);
             // Trace the owning group so the revived row reaches its shard
             // even when no other write marked that group.
@@ -39,9 +37,7 @@ impl EdgeStore {
             return Ok(false);
         }
         if (!has_out || out_ok) && (!has_in || in_ok) {
-            if let Some(ts_info) = self.mvcc.edge_timestamps.get_mut(&edge_id) {
-                ts_info.delete_ts = Timestamp::MAX;
-            }
+            self.mvcc.edge_timestamps.revive(&edge_id);
             let _ = self.properties.revert_deletion_for_edge(edge_id);
             if let Some(owner) = self.edge_owner.get(&edge_id) {
                 self.mark_properties_dirty_for_owner(owner);

@@ -11,7 +11,7 @@ use crate::edge::IndexConsistency;
 use crate::index::edge_index_manager::EdgePropertyIndex;
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::super::iterator::EdgeTableScanIterator;
 
@@ -314,6 +314,9 @@ impl EdgeStore {
         if predicates.is_empty() {
             return None;
         }
+        if !self.is_open {
+            return None;
+        }
         let index = self.property_index.as_ref()?;
         if !self.is_index_usable() {
             return None;
@@ -365,10 +368,43 @@ impl EdgeStore {
             if !index.has_index(column) {
                 return None;
             }
+            // One physical row fill per touched source instead of one point
+            // lookup per hit: hits sharing a source resolve against a single
+            // authority-filtered row instead of rescanning it per hit.
             let mut hits = HashSet::new();
-            for ((src, dst, rank), _) in index.lookup(column, &lower, &upper) {
-                if let Some(edge_id) = self.edge_id_of(src, dst, rank, query_ts) {
-                    hits.insert(edge_id);
+            if self.schema.has_out() {
+                let mut by_src: HashMap<u32, Vec<(u32, i64)>> = HashMap::new();
+                for ((src, dst, rank), _) in index.lookup(column, &lower, &upper) {
+                    by_src.entry(src).or_default().push((dst, rank));
+                }
+                let mut scratch = Vec::new();
+                for (src, keys) in &by_src {
+                    self.fill_visible_into(&self.out_csr, *src, query_ts, &mut scratch);
+                    for (dst, rank) in keys {
+                        if let Some(nbr) = scratch
+                            .iter()
+                            .find(|nbr| nbr.endpoint == *dst && nbr.rank == *rank)
+                        {
+                            hits.insert(nbr.edge_id);
+                        }
+                    }
+                }
+            } else if self.schema.has_in() {
+                let mut by_dst: HashMap<u32, Vec<(u32, i64)>> = HashMap::new();
+                for ((src, dst, rank), _) in index.lookup(column, &lower, &upper) {
+                    by_dst.entry(dst).or_default().push((src, rank));
+                }
+                let mut scratch = Vec::new();
+                for (dst, keys) in &by_dst {
+                    self.fill_visible_into(&self.in_csr, *dst, query_ts, &mut scratch);
+                    for (src, rank) in keys {
+                        if let Some(nbr) = scratch
+                            .iter()
+                            .find(|nbr| nbr.endpoint == *src && nbr.rank == *rank)
+                        {
+                            hits.insert(nbr.edge_id);
+                        }
+                    }
                 }
             }
             merged = Some(match merged {

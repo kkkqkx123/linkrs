@@ -185,21 +185,25 @@ pub(crate) fn decode_overflow_payload(
 }
 
 impl OverflowStore {
-    pub fn append(&mut self, bytes: &[u8]) -> OverflowHandle {
+    pub fn append(&mut self, bytes: &[u8]) -> StorageResult<OverflowHandle> {
+        let len = u32::try_from(bytes.len()).map_err(|_| {
+            StorageError::invalid_input(format!(
+                "overflow payload of {} bytes exceeds the 4GiB entry limit",
+                bytes.len()
+            ))
+        })?;
+        let entry_id =
+            u32::try_from(self.index.len()).map_err(|_| StorageError::capacity_exceeded())?;
         let offset = self.pending.len() as u64;
         self.pending.extend_from_slice(bytes);
-        let entry_id = self.index.len() as u32;
-        self.index.push(OverflowEntry {
-            offset,
-            len: bytes.len() as u32,
-        });
-        OverflowHandle { entry_id }
+        self.index.push(OverflowEntry { offset, len });
+        Ok(OverflowHandle { entry_id })
     }
 
     pub fn get(&self, handle: &OverflowHandle) -> Option<Vec<u8>> {
         let entry = self.index.get(handle.entry_id as usize)?;
         let start = entry.offset as usize;
-        let end = start + entry.len as usize;
+        let end = (entry.offset as usize).checked_add(entry.len as usize)?;
         if end <= self.pending.len() {
             return Some(self.pending[start..end].to_vec());
         }
@@ -211,18 +215,27 @@ impl OverflowStore {
     }
 
     /// Rebuild from live payloads only; used by flush to drop garbage.
-    pub fn rebuild_from_live(&mut self, live: &[Vec<u8>]) {
+    pub fn rebuild_from_live(&mut self, live: &[Vec<u8>]) -> StorageResult<()> {
         self.pending.clear();
         self.index.clear();
         for payload in live {
-            self.append(payload);
+            self.append(payload)?;
         }
+        Ok(())
     }
 
     pub fn flush_to_sidecar_buffer(&self, buf: &mut Vec<u8>) -> StorageResult<()> {
         let start = buf.len();
-        buf.extend_from_slice(&(self.index.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&(self.threshold as u32).to_le_bytes());
+        let count = u32::try_from(self.index.len()).map_err(|_| {
+            StorageError::invalid_input(format!(
+                "overflow entry count {} exceeds the sidecar format limit",
+                self.index.len()
+            ))
+        })?;
+        buf.extend_from_slice(&count.to_le_bytes());
+        // Threshold persists at full width: a configured threshold above
+        // 4GiB must round-trip instead of truncating into a smaller value.
+        buf.extend_from_slice(&(self.threshold as u64).to_le_bytes());
         for entry in &self.index {
             buf.extend_from_slice(&entry.offset.to_le_bytes());
             buf.extend_from_slice(&entry.len.to_le_bytes());
@@ -234,7 +247,7 @@ impl OverflowStore {
     }
 
     pub fn load_from_bytes(&mut self, bytes: &[u8]) -> StorageResult<()> {
-        if bytes.len() < 12 {
+        if bytes.len() < 16 {
             return Err(StorageError::deserialize_error(
                 "overflow section too small".to_string(),
             ));
@@ -253,8 +266,9 @@ impl OverflowStore {
         let mut u32b = [0u8; 4];
         cursor.read_exact(&mut u32b)?;
         let count = u32::from_le_bytes(u32b) as usize;
-        cursor.read_exact(&mut u32b)?;
-        self.threshold = u32::from_le_bytes(u32b) as usize;
+        let mut u64b = [0u8; 8];
+        cursor.read_exact(&mut u64b)?;
+        self.threshold = u64::from_le_bytes(u64b) as usize;
         self.index.clear();
         for _ in 0..count {
             let mut off = [0u8; 8];
@@ -279,15 +293,21 @@ mod tests {
         let mut store = OverflowStore::new(10);
         assert!(store.should_overflow(11));
         assert!(!store.should_overflow(10));
-        let h = store.append(b"hello world, large payload");
+        let h = store
+            .append(b"hello world, large payload")
+            .expect("small payload appends");
         assert_eq!(store.get(&h).unwrap(), b"hello world, large payload");
     }
 
     #[test]
     fn sidecar_buffer_roundtrip_with_crc() {
         let mut store = OverflowStore::new(4);
-        let h1 = store.append(b"first large value");
-        let h2 = store.append(b"second large value");
+        let h1 = store
+            .append(b"first large value")
+            .expect("small payload appends");
+        let h2 = store
+            .append(b"second large value")
+            .expect("small payload appends");
         let mut buf = Vec::new();
         store.flush_to_sidecar_buffer(&mut buf).unwrap();
         let mut loaded = OverflowStore::new(1024);
@@ -301,7 +321,9 @@ mod tests {
     fn rebuild_drops_garbage() {
         let mut store = OverflowStore::new(4);
         let _ = store.append(b"dead payload here");
-        store.rebuild_from_live(&[b"live payload!!".to_vec()]);
+        store
+            .rebuild_from_live(&[b"live payload!!".to_vec()])
+            .expect("small payload rebuilds");
         assert_eq!(store.index.len(), 1);
         assert_eq!(
             store.get(&OverflowHandle { entry_id: 0 }).unwrap(),

@@ -509,12 +509,21 @@ impl Column {
     }
 
     /// Clear the dirty mark for a single row-page (keeps other dirty pages).
+    ///
+    /// Page ids are global, so the mark is removed from whichever chunk
+    /// holds it instead of routing by the current chunk capacity. Routing
+    /// by capacity would misroute after a mid-flight capacity change and
+    /// leave a stale mark behind.
     #[inline]
     pub fn clear_page_dirty(&self, page_id: usize) {
-        let first_row = page_id.saturating_mul(crate::persistence::dirty_page::ROWS_PER_PAGE);
         let chunks = self.chunks.read();
-        if let Some(chunk) = Self::chunk_for_row_in(&chunks, first_row, self.chunk_capacity()) {
-            chunk.write_state().dirty_pages.remove(&(page_id as u32));
+        let Ok(mark) = u32::try_from(page_id) else {
+            return;
+        };
+        for chunk in chunks.iter() {
+            if chunk.write_state().dirty_pages.remove(&mark) {
+                break;
+            }
         }
     }
 
@@ -686,6 +695,15 @@ impl Column {
         let start = page.header.page_id as usize * rows_per_page;
         if start + count > self.len() {
             self.resize(start + count);
+            if start + count > self.len() {
+                return Err(StorageError::deserialize_error(format!(
+                    "column {} page {} replay length {} exceeds column length {}",
+                    self.name,
+                    page.header.page_id,
+                    start + count,
+                    self.len()
+                )));
+            }
         }
         let elem = element_size(&self.data_type);
         let is_fixed = elem > 0;
@@ -948,7 +966,7 @@ impl Column {
                     if !store.should_overflow(bytes.len()) {
                         None
                     } else {
-                        Some(store.append(&bytes))
+                        Some(store.append(&bytes)?)
                     }
                 };
                 if let Some(handle) = handle {
@@ -2309,10 +2327,10 @@ impl Column {
     /// Rebuild the overflow store from live rows only (flush-time GC).
     /// Exclusive-only (flush path): it replaces the store and repartitions
     /// every mapping.
-    pub fn rebuild_overflow(&self) {
+    pub fn rebuild_overflow(&self) -> StorageResult<()> {
         let rows = self.collect_overflow_rows();
         if rows.is_empty() {
-            return;
+            return Ok(());
         }
         let threshold = self.overflow_threshold();
         // Main buffers hold placeholders for overflow rows, so payloads are
@@ -2338,7 +2356,7 @@ impl Column {
             order.iter().map(|&i| live_payloads[i].clone()).collect();
         self.overflow_store
             .lock()
-            .rebuild_from_live(&sorted_payloads);
+            .rebuild_from_live(&sorted_payloads)?;
         // Rebuild preserves row order, so entry ids follow the sorted rows.
         let mut sorted_rows: Vec<usize> = live_rows;
         sorted_rows.sort_unstable();
@@ -2349,7 +2367,12 @@ impl Column {
         }
         for (entry_id, row) in sorted_rows.into_iter().enumerate() {
             let handle = OverflowHandle {
-                entry_id: entry_id as u32,
+                entry_id: u32::try_from(entry_id).map_err(|_| {
+                    StorageError::invalid_input(format!(
+                        "overflow entry count {} exceeds the handle limit",
+                        entry_id
+                    ))
+                })?,
             };
             if let Some(chunk) = chunks.get(row / capacity.max(1)) {
                 if row >= chunk.row_offset && row < chunk.row_offset + chunk.row_count {
@@ -2360,6 +2383,7 @@ impl Column {
                 }
             }
         }
+        Ok(())
     }
 
     /// Serialize overflow state for the `<col>.overflow` sidecar.

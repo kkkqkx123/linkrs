@@ -110,11 +110,20 @@ impl CsrWithProperties {
     /// performs no name lookup or string comparison per edge. Columns with
     /// no provided value take their default. An out-of-range position is a
     /// caller bug and fails loudly instead of writing the wrong column.
+    /// The creation stamp must come from the timestamp allocator: zero and
+    /// the two top sentinels are reserved, and zero doubles as the free-row
+    /// marker checked by release and reclaim paths.
     pub(crate) fn allocate_row_at(
         &mut self,
         positioned: &[(usize, Value)],
         create_ts: Timestamp,
     ) -> StorageResult<usize> {
+        if !graphdb_core::types::is_allocatable_timestamp(create_ts) {
+            return Err(StorageError::invalid_input(format!(
+                "property row carries reserved creation timestamp {}",
+                create_ts
+            )));
+        }
         for (idx, _) in positioned {
             if *idx >= self.property_schema.len() {
                 return Err(StorageError::column_not_found(format!(

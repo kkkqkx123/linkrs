@@ -206,6 +206,8 @@ pub fn deserialize(data: &[u8]) -> StorageResult<IdManager> {
             .iter()
             .enumerate()
             .filter_map(|(idx, k)| if k.is_none() { Some(idx as u32) } else { None })
+            .collect::<Vec<u32>>()
+            .into_iter()
             .collect();
     }
 

@@ -37,7 +37,9 @@ fn test_compact_physically_removes_edges_below_gc_bound() {
     assert!(table.delete_edge(0, 2, 0, 250).unwrap());
     assert_eq!(table.edge_count(), 2);
 
-    let removed = table.compact_csr_only_with_watermarks(&watermark_at(210), 0, 0.0);
+    let removed = table
+        .compact_csr_only_with_watermarks(&watermark_at(210), 0, 0.0)
+        .expect("drift-free compaction passes");
     assert_eq!(removed, 1);
     assert_eq!(table.edge_count(), 2);
     assert!(!table.has_edge(0, 1, 0, 300));
@@ -101,7 +103,9 @@ fn test_row_capacity_assertion_on_compaction() {
     table.delete_edge(0, 50_000, 0, 150).unwrap();
     table.insert_edge(0, 50_001, 1, &[], 160).unwrap();
 
-    let _removed = table.compact_csr_only_with_watermarks(&watermark_at(Timestamp::MAX), 0, 0.25);
+    let _removed = table
+        .compact_csr_only_with_watermarks(&watermark_at(Timestamp::MAX), 0, 0.25)
+        .expect("drift-free compaction passes");
 
     let max_src = 100_002usize;
     let max_dst = 500_001usize;
@@ -180,6 +184,27 @@ fn test_valid_edge_ids_survive_tombstone_gc() {
     assert_eq!(table.properties.row_count(), 1);
     assert!(table.get_edge(0, 2, 0, 250).is_some());
     assert_eq!(table.loaded_copy_mismatches(), (0, 0));
+}
+
+#[test]
+fn test_compact_csr_only_refuses_drifted_table() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    table
+        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
+        .unwrap();
+    // Simulate a write-path regression that drops the authority entry of a
+    // live edge: the physical rows survive, so the post-rebuild audit must
+    // refuse the pass instead of compacting the divergence into new files.
+    table.mvcc.edge_timestamps.remove(&EdgeId(0));
+    assert!(!table.audit_copy_drift().is_empty());
+    let err = table
+        .compact_csr_only_with_watermarks(&watermark_at(300), 0, 0.0)
+        .expect_err("drifted compaction must fail closed");
+    assert!(err.to_string().contains("drift"));
 }
 
 #[test]

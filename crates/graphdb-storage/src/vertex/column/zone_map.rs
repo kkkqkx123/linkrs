@@ -477,14 +477,17 @@ impl Column {
         self.zone.read().maps.clone()
     }
 
-    /// Per-zone length summaries parallel to [`Self::zone_maps`].
-    pub fn zone_complex(&self) -> Vec<ComplexZoneSummary> {
-        self.zone.read().complex.clone()
-    }
-
     /// Bounds of one zone chunk, if the zone exists.
     pub fn zone_for_chunk(&self, chunk: usize) -> Option<ZoneBounds> {
         self.zone.read().maps.get(chunk).cloned()
+    }
+
+    /// Length summary of one zone chunk, if the zone exists.
+    ///
+    /// Length summary of one zone chunk: pruning probes one chunk at a time
+    /// and must not clone the whole summary vector per probe.
+    pub fn zone_complex_for_chunk(&self, chunk: usize) -> Option<ComplexZoneSummary> {
+        self.zone.read().complex.get(chunk).cloned()
     }
 
     /// Length interval of one zone chunk, if any measured value exists.

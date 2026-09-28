@@ -51,12 +51,16 @@ impl EdgeStore {
     /// Compact every group, sharing one pass cutoff across all sub-systems.
     /// Deletions are promoted into the tombstone layer. Explicit maintenance
     /// only; the write path uses the bounded reclaim pass below.
+    ///
+    /// Fail-closed on authority drift like the load and freeze gates: a
+    /// nonzero audit refuses the pass instead of compacting a diverged table
+    /// into new files.
     pub fn compact_csr_only_with_watermarks(
         &mut self,
         watermarks: &graphdb_transaction::MvccWatermarks,
         margin: Timestamp,
         reserve_ratio: f32,
-    ) -> usize {
+    ) -> StorageResult<usize> {
         let cutoff = watermarks.safe_gc_timestamp_with_margin(margin);
         // The explicit pass refreshes the reuse hint from its own fresh
         // capture; a disabled sentinel propagates as disabled.
@@ -92,9 +96,12 @@ impl EdgeStore {
         }
         let drift = self.audit_copy_drift();
         if !drift.is_empty() {
-            log::warn!("compact_csr_only drift after rebuild: {}", drift.join("; "));
+            return Err(graphdb_core::StorageError::data_corruption(format!(
+                "compact_csr_only drift after rebuild: {}",
+                drift.join("; ")
+            )));
         }
-        removed_edges.len()
+        Ok(removed_edges.len())
     }
 
     /// Reclaim rows holding entries eligible at `bound`, visiting at most
@@ -616,7 +623,11 @@ impl EdgeStore {
                 orphan_mappings, orphan_csr_rows, live_orphans
             )));
         }
-        let mut live_topology = std::collections::HashSet::new();
+        // One bit per allocated id instead of a hash set per live edge:
+        // the same single CSR pass feeds the check at a fraction of the
+        // peak memory.
+        let mut live_topology =
+            crate::edge::csr_shared::EdgeIdBitSet::with_max_id(self.next_edge_id.0);
         for (_, nbr) in self.out_csr.iter_all().chain(self.in_csr.iter_all()) {
             live_topology.insert(nbr.edge_id);
         }
@@ -627,7 +638,8 @@ impl EdgeStore {
     }
 
     pub fn compact_properties(&mut self, bound: Timestamp) {
-        let mut valid_edge_ids = std::collections::HashSet::new();
+        let mut valid_edge_ids =
+            crate::edge::csr_shared::EdgeIdBitSet::with_max_id(self.next_edge_id.0);
         for (edge_id, _pos) in self.properties.edge_mappings() {
             // Authoritative visibility, not the tombstone table alone: a
             // tombstone reclaimed by an earlier GC round must not resurrect

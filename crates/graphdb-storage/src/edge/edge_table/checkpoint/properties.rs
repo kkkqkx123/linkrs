@@ -383,20 +383,21 @@ impl EdgeStore {
             }
         }
         for edge_id in edges {
-            let Some((_, _, values)) = live.export_row(*edge_id) else {
+            let Some((create_ts, _, values)) = live.export_row(*edge_id) else {
                 return Ok(None);
             };
+            // Patch with the live row stamp, not a sentinel: the shard is
+            // re-serialized below, and a reserved stamp would poison the
+            // next incremental load of this shard.
+            if !graphdb_core::types::is_allocatable_timestamp(create_ts) {
+                return Ok(None);
+            }
             let value_map: HashMap<&String, &Option<graphdb_core::Value>> =
                 values.iter().map(|(name, value)| (name, value)).collect();
             for name in dirty_columns {
                 let value = value_map.get(name).and_then(|cell| (*cell).clone());
                 if shard
-                    .set_property_for_edge(
-                        *edge_id,
-                        name,
-                        value,
-                        graphdb_core::types::MAX_TIMESTAMP,
-                    )
+                    .set_property_for_edge(*edge_id, name, value, create_ts)
                     .is_err()
                 {
                     return Ok(None);
@@ -533,6 +534,7 @@ impl EdgeStore {
         self.properties.restore_prop_ids(&prop_ids);
         self.properties.refresh_column_stats();
         self.properties.clear_dirty_columns();
+        self.properties.recompute_history_floor();
         Ok(())
     }
 }

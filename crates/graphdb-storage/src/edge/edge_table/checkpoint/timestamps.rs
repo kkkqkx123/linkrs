@@ -144,6 +144,20 @@ impl EdgeStore {
                 crate::persistence::section::EDGE_TS_SHARD,
             )?;
             for (edge_id, ts) in entries {
+                if !graphdb_core::types::is_allocatable_timestamp(ts.create_ts) {
+                    return Err(StorageError::deserialize_error(format!(
+                        "timestamp shard entry for edge {:?} carries reserved creation stamp {}",
+                        edge_id, ts.create_ts
+                    )));
+                }
+                if ts.delete_ts != graphdb_core::types::Timestamp::MAX
+                    && !graphdb_core::types::is_allocatable_timestamp(ts.delete_ts)
+                {
+                    return Err(StorageError::deserialize_error(format!(
+                        "timestamp shard entry for edge {:?} carries reserved deletion stamp {}",
+                        edge_id, ts.delete_ts
+                    )));
+                }
                 if let Some(prev) = self.mvcc.edge_timestamps.get(&edge_id) {
                     if prev.create_ts != ts.create_ts || prev.delete_ts != ts.delete_ts {
                         return Err(StorageError::deserialize_error(format!(

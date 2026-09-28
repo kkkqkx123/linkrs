@@ -64,6 +64,12 @@ impl CsrWithProperties {
         let pos = self
             .mapped_row(edge_id)
             .ok_or_else(|| StorageError::invalid_offset(0))?;
+        if !graphdb_core::types::is_allocatable_timestamp(ts) {
+            return Err(StorageError::invalid_input(format!(
+                "property update carries reserved timestamp {}",
+                ts
+            )));
+        }
         let idx = self
             .prop_id_index
             .get(&(prop_id.0 as i32))
@@ -85,6 +91,12 @@ impl CsrWithProperties {
         value: Option<Value>,
         ts: Timestamp,
     ) -> StorageResult<()> {
+        if !graphdb_core::types::is_allocatable_timestamp(ts) {
+            return Err(StorageError::invalid_input(format!(
+                "property update carries reserved timestamp {}",
+                ts
+            )));
+        }
         if row_idx >= self.visibility.len() || self.visibility[row_idx].create_ts == 0 {
             return Err(StorageError::invalid_offset(row_idx as u32));
         }

@@ -216,51 +216,55 @@ impl Column {
             // Chunk-routed base read: overlay first, then encoded base.
             return self.get_in(&chunks, row_idx);
         }
-        let chain = state
+        // The chain is searched under the read guard and only the matched
+        // value is cloned: cloning the whole chain per point read
+        // allocates on every hot lookup of a long-chained row.
+        let value = state
             .version_chains
             .as_ref()
             .and_then(|c| c.get(&local))
-            .cloned();
-        drop(state);
-        drop(chunks);
-        let chain = chain?;
-        if chain.is_empty() {
-            return None;
-        }
-        // Version chain is ordered by start_ts ascending (oldest first).
-        // Binary search finds the candidate interval containing query_ts
-        // in O(log n) instead of O(n) linear scan.
-        let idx = match chain.binary_search_by_key(&query_ts, |e| e.start_ts) {
-            Ok(i) => i,
-            Err(i) => {
-                if i == 0 {
+            .and_then(|chain| {
+                if chain.is_empty() {
                     return None;
                 }
-                i - 1
-            }
-        };
-        let entry = &chain[idx];
-        if crate::mvcc_visibility::Visibility::is_version_visible(
-            query_ts,
-            entry.start_ts,
-            entry.end_ts,
-        ) {
-            return entry.value.clone();
-        }
-        // After folding/GC intervals may have been merged; a single
-        // predecessor check suffices for contiguous chains. Fall back
-        // to neighbour check for the rare folded-gap case.
-        if idx + 1 < chain.len() {
-            let nxt = &chain[idx + 1];
-            if crate::mvcc_visibility::Visibility::is_version_visible(
-                query_ts,
-                nxt.start_ts,
-                nxt.end_ts,
-            ) {
-                return nxt.value.clone();
-            }
-        }
-        None
+                // Version chain is ordered by start_ts ascending (oldest first).
+                // Binary search finds the candidate interval containing query_ts
+                // in O(log n) instead of O(n) linear scan.
+                let idx = match chain.binary_search_by_key(&query_ts, |e| e.start_ts) {
+                    Ok(i) => i,
+                    Err(i) => {
+                        if i == 0 {
+                            return None;
+                        }
+                        i - 1
+                    }
+                };
+                let entry = &chain[idx];
+                if crate::mvcc_visibility::Visibility::is_version_visible(
+                    query_ts,
+                    entry.start_ts,
+                    entry.end_ts,
+                ) {
+                    return entry.value.clone();
+                }
+                // After folding/GC intervals may have been merged; a single
+                // predecessor check suffices for contiguous chains. Fall back
+                // to neighbour check for the rare folded-gap case.
+                if idx + 1 < chain.len() {
+                    let nxt = &chain[idx + 1];
+                    if crate::mvcc_visibility::Visibility::is_version_visible(
+                        query_ts,
+                        nxt.start_ts,
+                        nxt.end_ts,
+                    ) {
+                        return nxt.value.clone();
+                    }
+                }
+                None
+            });
+        drop(state);
+        drop(chunks);
+        value
     }
 
     /// Strict versioned read with explicit decode errors.
@@ -294,47 +298,46 @@ impl Column {
             drop(state);
             return self.try_get_in(&chunks, row_idx);
         }
-        let chain = state
+        let value = state
             .version_chains
             .as_ref()
             .and_then(|c| c.get(&local))
-            .cloned();
+            .and_then(|chain| {
+                if chain.is_empty() {
+                    return None;
+                }
+                let idx = match chain.binary_search_by_key(&query_ts, |e| e.start_ts) {
+                    Ok(i) => i,
+                    Err(i) => {
+                        if i == 0 {
+                            return None;
+                        }
+                        i - 1
+                    }
+                };
+                let entry = &chain[idx];
+                if crate::mvcc_visibility::Visibility::is_version_visible(
+                    query_ts,
+                    entry.start_ts,
+                    entry.end_ts,
+                ) {
+                    return entry.value.clone();
+                }
+                if idx + 1 < chain.len() {
+                    let nxt = &chain[idx + 1];
+                    if crate::mvcc_visibility::Visibility::is_version_visible(
+                        query_ts,
+                        nxt.start_ts,
+                        nxt.end_ts,
+                    ) {
+                        return nxt.value.clone();
+                    }
+                }
+                None
+            });
         drop(state);
         drop(chunks);
-        let Some(chain) = chain else {
-            return Ok(None);
-        };
-        if chain.is_empty() {
-            return Ok(None);
-        }
-        let idx = match chain.binary_search_by_key(&query_ts, |e| e.start_ts) {
-            Ok(i) => i,
-            Err(i) => {
-                if i == 0 {
-                    return Ok(None);
-                }
-                i - 1
-            }
-        };
-        let entry = &chain[idx];
-        if crate::mvcc_visibility::Visibility::is_version_visible(
-            query_ts,
-            entry.start_ts,
-            entry.end_ts,
-        ) {
-            return Ok(entry.value.clone());
-        }
-        if idx + 1 < chain.len() {
-            let nxt = &chain[idx + 1];
-            if crate::mvcc_visibility::Visibility::is_version_visible(
-                query_ts,
-                nxt.start_ts,
-                nxt.end_ts,
-            ) {
-                return Ok(nxt.value.clone());
-            }
-        }
-        Ok(None)
+        Ok(value)
     }
 
     /// Start timestamp of the version covering `query_ts` for a row.
@@ -365,14 +368,10 @@ impl Column {
         if crate::mvcc_visibility::Visibility::is_column_visible(query_ts, start_ts) {
             return start_ts;
         }
-        let chain = state
+        let stamp = state
             .version_chains
             .as_ref()
             .and_then(|c| c.get(&local))
-            .cloned();
-        drop(state);
-        drop(chunks);
-        chain
             .and_then(|chain| {
                 if chain.is_empty() {
                     return None;
@@ -406,7 +405,10 @@ impl Column {
                 }
                 None
             })
-            .unwrap_or(0)
+            .unwrap_or(0);
+        drop(state);
+        drop(chunks);
+        stamp
     }
 
     /// Garbage-collect version-chain entries eligible under

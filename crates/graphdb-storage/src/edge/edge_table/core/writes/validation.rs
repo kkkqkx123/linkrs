@@ -35,6 +35,26 @@ impl EdgeStore {
     }
 
     pub(super) fn prevalidate_staging_batch(&self, batch: &EdgeStagingBatch) -> StorageResult<()> {
+        // Timestamp reservation gate first: zero and the two top sentinels
+        // never come from the allocator, and zero doubles as the free-row
+        // marker in the property store. Rejecting the whole batch here keeps
+        // the apply free of prefix rollback for reserved stamps.
+        for ins in batch.staged_inserts() {
+            if !graphdb_core::types::is_allocatable_timestamp(ins.create_ts) {
+                return Err(StorageError::invalid_input(format!(
+                    "staged insert carries reserved creation timestamp {}",
+                    ins.create_ts
+                )));
+            }
+        }
+        for del in batch.staged_deletes() {
+            if !graphdb_core::types::is_allocatable_timestamp(del.delete_ts) {
+                return Err(StorageError::invalid_input(format!(
+                    "staged delete carries reserved deletion timestamp {}",
+                    del.delete_ts
+                )));
+            }
+        }
         // Inline-form rank gate first: pure and bundled tables carry no rank
         // column, so any nonzero rank fails here with the shared wording
         // before paying reservation, WAL append or prefix rollback. Callers

@@ -165,7 +165,7 @@ impl VertexTable {
                 .map(|col| col.clone())
                 .ok_or_else(|| StorageError::column_not_found(name.clone()))?;
             // Rebuild overflow sidecars from live rows so deleted payloads shrink.
-            snapshot.rebuild_overflow();
+            snapshot.rebuild_overflow()?;
             // Evicted chunks promote on the snapshot only: persisted output
             // keeps full fidelity while the live table stays evicted.
             match snapshot.ensure_all_resident() {

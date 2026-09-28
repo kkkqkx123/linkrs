@@ -24,6 +24,12 @@ use std::collections::HashMap;
 pub struct AuthorityMap {
     segments: Vec<Option<Box<[Option<EdgeTimestamps>; 1024]>>>,
     live: usize,
+    /// Cached tombstone count backing the write-path reclaim gate.
+    ///
+    /// Incrementally maintained by every mutation below so the commit path
+    /// never scans the authority to decide whether a reclaim pass is
+    /// worthwhile. Load rebuilds it through `insert`, one entry at a time.
+    tombstones: usize,
 }
 
 impl AuthorityMap {
@@ -35,6 +41,7 @@ impl AuthorityMap {
         Self {
             segments: Vec::new(),
             live: 0,
+            tombstones: 0,
         }
     }
 
@@ -61,10 +68,63 @@ impl AuthorityMap {
         }
         let segment =
             self.segments[seg].get_or_insert_with(|| Box::new([None; Self::SEGMENT_ROWS]));
+        let was_tombstoned = segment[off].is_some_and(|prev| prev.delete_ts != Timestamp::MAX);
         if segment[off].is_none() {
             self.live += 1;
         }
         segment[off] = Some(ts);
+        // Overwrites keep the count exact: only a fresh tombstone state
+        // transition moves it.
+        let is_tombstoned = ts.delete_ts != Timestamp::MAX;
+        match (was_tombstoned, is_tombstoned) {
+            (false, true) => self.tombstones += 1,
+            (true, false) => self.tombstones = self.tombstones.saturating_sub(1),
+            _ => {}
+        }
+    }
+
+    /// Record a deletion stamp, keeping the earliest stamp on repeat calls.
+    ///
+    /// Returns whether this call newly tombstoned the edge, so the caller
+    /// keeps the cached tombstone count without a second lookup.
+    pub fn note_deletion(&mut self, edge_id: &EdgeId, delete_ts: Timestamp) -> bool {
+        let (seg, off) = Self::segment_of(edge_id);
+        let Some(slot) = self
+            .segments
+            .get_mut(seg)
+            .and_then(|s| s.as_mut())
+            .and_then(|values| values[off].as_mut())
+        else {
+            return false;
+        };
+        let newly = slot.delete_ts == Timestamp::MAX && delete_ts != Timestamp::MAX;
+        slot.delete_ts = slot.delete_ts.min(delete_ts);
+        if newly {
+            self.tombstones += 1;
+        }
+        newly
+    }
+
+    /// Clear a deletion stamp, reviving the edge.
+    ///
+    /// Returns whether a tombstone was lifted, so the caller keeps the
+    /// cached tombstone count without a second lookup.
+    pub fn revive(&mut self, edge_id: &EdgeId) -> bool {
+        let (seg, off) = Self::segment_of(edge_id);
+        let Some(slot) = self
+            .segments
+            .get_mut(seg)
+            .and_then(|s| s.as_mut())
+            .and_then(|values| values[off].as_mut())
+        else {
+            return false;
+        };
+        let was_tombstoned = slot.delete_ts != Timestamp::MAX;
+        slot.delete_ts = Timestamp::MAX;
+        if was_tombstoned {
+            self.tombstones = self.tombstones.saturating_sub(1);
+        }
+        was_tombstoned
     }
 
     pub fn remove(&mut self, edge_id: &EdgeId) {
@@ -72,8 +132,10 @@ impl AuthorityMap {
         let Some(segment) = self.segments.get_mut(seg).and_then(|s| s.as_mut()) else {
             return;
         };
-        if segment[off].is_some() {
-            segment[off] = None;
+        if let Some(prev) = segment[off].take() {
+            if prev.delete_ts != Timestamp::MAX {
+                self.tombstones = self.tombstones.saturating_sub(1);
+            }
             self.live = self.live.saturating_sub(1);
             if segment.iter().all(|slot| slot.is_none()) {
                 self.segments[seg] = None;
@@ -97,6 +159,12 @@ impl AuthorityMap {
     pub fn clear(&mut self) {
         self.segments.clear();
         self.live = 0;
+        self.tombstones = 0;
+    }
+
+    /// Cached tombstone count, maintained by every mutation above.
+    pub fn tombstone_count(&self) -> usize {
+        self.tombstones
     }
 
     pub fn values(&self) -> impl Iterator<Item = &EdgeTimestamps> {
@@ -205,6 +273,9 @@ impl AuthorityMap {
             }
         }
         self.live = self.live.saturating_sub(reclaimed);
+        // Every reclaimed record passed the tombstone eligibility check
+        // above, so each one leaves the tombstone count as well.
+        self.tombstones = self.tombstones.saturating_sub(reclaimed);
         self.truncate_empty_tail_segments();
         reclaimed
     }
@@ -352,12 +423,10 @@ impl MVCCManager {
 
     /// Total count of deletions (for memory accounting).
     ///
-    /// Derived from the authority records.
+    /// Cached counter maintained by every authority mutation, so the
+    /// write-path reclaim gate stays constant-time on delete-heavy tables.
     pub fn total_tombstone_count(&self) -> usize {
-        self.edge_timestamps
-            .values()
-            .filter(|info| info.delete_ts != Timestamp::MAX)
-            .count()
+        self.edge_timestamps.tombstone_count()
     }
 
     /// Record a deletion against the authority record.
@@ -367,9 +436,7 @@ impl MVCCManager {
     /// earlier deletion covers a wider query range and must win. Edges
     /// without authority are ignored; such orphans are rejected on load.
     pub fn record_deletion(&mut self, edge_id: EdgeId, delete_ts: Timestamp) {
-        if let Some(info) = self.edge_timestamps.get_mut(&edge_id) {
-            info.delete_ts = info.delete_ts.min(delete_ts);
-        }
+        self.edge_timestamps.note_deletion(&edge_id, delete_ts);
     }
 
     /// Get number of active snapshots (for testing and debugging)
@@ -382,17 +449,33 @@ impl MVCCManager {
 
     /// Record edge creation. Called on insert_edge to register the edge's
     /// creation timestamp in the centralized MVCC store.
-    pub fn record_creation(&mut self, edge_id: EdgeId, create_ts: Timestamp) {
+    ///
+    /// The stamp must come from the timestamp allocator: zero and the two
+    /// top sentinels are reserved (uncommitted marker and liveness pins) and
+    /// doubling as a creation stamp would alias the free-row state kept by
+    /// the property store. Reserved stamps fail here instead of aliasing.
+    pub fn record_creation(
+        &mut self,
+        edge_id: EdgeId,
+        create_ts: Timestamp,
+    ) -> graphdb_core::StorageResult<()> {
+        if !graphdb_core::types::is_allocatable_timestamp(create_ts) {
+            return Err(graphdb_core::StorageError::invalid_input(format!(
+                "edge {:?} carries reserved creation timestamp {}",
+                edge_id, create_ts
+            )));
+        }
         self.edge_timestamps
             .insert(edge_id, EdgeTimestamps::new(create_ts));
+        Ok(())
     }
 
     /// Record edge deletion (logical). Called on delete_edge to set the
     /// edge's deletion timestamp and record the tombstone.
+    ///
+    /// Delegates fully to the single deletion entry: the earliest stamp
+    /// wins and the cached tombstone count moves exactly once.
     pub fn record_edge_deletion(&mut self, edge_id: EdgeId, delete_ts: Timestamp) {
-        if let Some(ts) = self.edge_timestamps.get_mut(&edge_id) {
-            ts.delete_ts = ts.delete_ts.min(delete_ts);
-        }
         self.record_deletion(edge_id, delete_ts);
     }
 
@@ -821,7 +904,8 @@ mod tests {
     #[test]
     fn test_record_deletion_keeps_earliest_ts() {
         let mut mvcc = MVCCManager::new();
-        mvcc.record_creation(EdgeId(7), 100);
+        mvcc.record_creation(EdgeId(7), 100)
+            .expect("allocatable creation stamp records");
 
         mvcc.record_deletion(EdgeId(7), 200);
         mvcc.record_deletion(EdgeId(7), 150);
@@ -835,7 +919,8 @@ mod tests {
     #[test]
     fn test_record_deletion_deduplicates() {
         let mut mvcc = MVCCManager::new();
-        mvcc.record_creation(EdgeId(3), 100);
+        mvcc.record_creation(EdgeId(3), 100)
+            .expect("allocatable creation stamp records");
 
         // Repeated deletions of the same edge must not grow the authority
         // count: a single record keeps the earliest delete_ts.
@@ -846,5 +931,40 @@ mod tests {
         assert_eq!(mvcc.total_tombstone_count(), 1);
         assert!(mvcc.is_tombstoned(EdgeId(3), 200));
         assert!(!mvcc.is_tombstoned(EdgeId(3), 100));
+    }
+
+    #[test]
+    fn cached_tombstone_count_tracks_all_transitions() {
+        let mut mvcc = MVCCManager::new();
+        let full_scan = |mvcc: &MVCCManager| {
+            mvcc.edge_timestamps
+                .values()
+                .filter(|info| info.delete_ts != graphdb_core::types::Timestamp::MAX)
+                .count()
+        };
+        for id in 0..5u64 {
+            mvcc.record_creation(EdgeId(id), 100)
+                .expect("allocatable creation stamp records");
+        }
+        assert_eq!(mvcc.total_tombstone_count(), 0);
+        mvcc.record_deletion(EdgeId(0), 200);
+        mvcc.record_deletion(EdgeId(1), 200);
+        // Repeat deletions never double count.
+        mvcc.record_deletion(EdgeId(0), 250);
+        mvcc.record_edge_deletion(EdgeId(1), 300);
+        assert_eq!(mvcc.total_tombstone_count(), 2);
+        // Reviving lifts exactly one tombstone.
+        mvcc.edge_timestamps.revive(&EdgeId(0));
+        assert_eq!(mvcc.total_tombstone_count(), 1);
+        // Reviving a live edge moves nothing.
+        mvcc.edge_timestamps.revive(&EdgeId(2));
+        assert_eq!(mvcc.total_tombstone_count(), 1);
+        // Removing a tombstoned record decrements; removing a live one
+        // leaves the count alone.
+        mvcc.edge_timestamps.remove(&EdgeId(1));
+        assert_eq!(mvcc.total_tombstone_count(), 0);
+        mvcc.edge_timestamps.remove(&EdgeId(2));
+        assert_eq!(mvcc.total_tombstone_count(), 0);
+        assert_eq!(mvcc.total_tombstone_count(), full_scan(&mvcc));
     }
 }

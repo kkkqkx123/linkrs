@@ -382,6 +382,11 @@ impl EdgeStore {
             maintenance_ran += 1;
         }
 
+        // Lag gauges refresh on every pass, even when no rebuild fires, so
+        // idle tables keep observable staleness without a full audit walk.
+        // The full drift audit stays on demand (`audit_and_report`): it
+        // walks the table and never runs on a timer.
+        self.emit_index_lag_metrics();
         // Staleness-driven secondary index rebuild: threshold or age trigger
         // from the table config, reusing the capacity recorded at the last
         // build. Queries fall back to segment scans while lagged, so a

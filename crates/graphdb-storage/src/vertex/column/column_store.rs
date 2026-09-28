@@ -241,15 +241,6 @@ impl ColumnStore {
         self.get_column(name).map(|col| col.zone_maps())
     }
 
-    /// Per-zone length summaries of one column, for complex equality
-    /// pre-pruning. `None` when the column does not exist.
-    pub fn zone_complex_for_column(
-        &self,
-        name: &str,
-    ) -> Option<Vec<super::zone_map::ComplexZoneSummary>> {
-        self.get_column(name).map(|col| col.zone_complex())
-    }
-
     /// Whether the zone chunk covering `chunk` may contain rows matching
     /// `range`. Returns true unless the chunk provably lies outside.
     ///
@@ -261,11 +252,11 @@ impl ColumnStore {
     /// when outer lengths coincide. All probes then fall back to
     /// whole-value min/max ordering, preserving the conservative contract.
     pub fn zone_prunes_in(&self, chunk: usize, range: &crate::cursor::PredicateRange) -> bool {
+        let Some(column) = self.get_column(&range.column) else {
+            return true;
+        };
         if let Some(probe_len) = range.equality_len() {
-            if let Some(summary) = self
-                .zone_complex_for_column(&range.column)
-                .and_then(|s| s.into_iter().nth(chunk))
-            {
+            if let Some(summary) = column.zone_complex_for_chunk(chunk) {
                 if let (Some(lo), Some(hi)) = (summary.len_min, summary.len_max) {
                     if probe_len < lo || probe_len > hi {
                         return false;
@@ -288,10 +279,7 @@ impl ColumnStore {
                 }
             }
         }
-        let Some(bounds) = self.zone_maps_for_column(&range.column) else {
-            return true;
-        };
-        let Some(zb) = bounds.into_iter().nth(chunk) else {
+        let Some(zb) = column.zone_for_chunk(chunk) else {
             return true;
         };
         let (Some(min), Some(max)) = (&zb.min, &zb.max) else {
@@ -470,6 +458,32 @@ impl ColumnStore {
                     ))
                 })?;
                 out[ri].push((col.name.clone(), value));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Strict projected batch read: corrupt payloads fail with column and
+    /// row context, mirroring [`Self::try_get_batch_at_ts`] for projections.
+    pub fn try_get_projected_batch_at_ts(
+        &self,
+        rows: &[usize],
+        projection: &[String],
+        query_ts: Timestamp,
+    ) -> StorageResult<Vec<Vec<(String, Option<Value>)>>> {
+        let mut out = vec![Vec::with_capacity(projection.len()); rows.len()];
+        for name in projection {
+            let column = self
+                .get_column(name)
+                .ok_or_else(|| StorageError::column_not_found(name.clone()))?;
+            for (ri, &row) in rows.iter().enumerate() {
+                let value = column.try_get_at_ts(row, query_ts).map_err(|e| {
+                    StorageError::deserialize_error(format!(
+                        "column {} batch decode failed at row {}: {}",
+                        name, row, e
+                    ))
+                })?;
+                out[ri].push((name.clone(), value));
             }
         }
         Ok(out)

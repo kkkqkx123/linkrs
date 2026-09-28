@@ -346,7 +346,7 @@ impl GraphStorageContext {
             .data_store
             .for_all_edge_partitions_mut(|key, table| {
                 let reserve_ratio = config.compute_reserve_ratio(table.edge_count() as usize, 0);
-                let removed = table.compact_csr_only_with_watermarks(&wm, margin, reserve_ratio);
+                let removed = table.compact_csr_only_with_watermarks(&wm, margin, reserve_ratio)?;
                 table.compact_properties_with_watermarks(&wm, margin);
                 Ok((key, removed))
             })?;

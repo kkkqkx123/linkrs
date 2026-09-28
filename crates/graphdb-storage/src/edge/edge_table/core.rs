@@ -261,6 +261,7 @@ pub(crate) mod owner;
 mod query;
 mod reads;
 mod recovery;
+pub use recovery::EdgeWalRecoveryMode;
 mod schema_ops;
 mod store;
 mod writes;

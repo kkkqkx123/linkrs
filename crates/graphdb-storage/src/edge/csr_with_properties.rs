@@ -79,6 +79,14 @@ pub struct CsrWithProperties {
     /// Stable column identifier allocator. Never reused or reassigned so
     /// stored undo parameters keyed by id stay valid across column drops.
     next_prop_id: i32,
+    /// Checkpoint-epoch floor for attribute time travel.
+    ///
+    /// Row version chains stay memory-only, so a load drops every
+    /// before-image. Strict reads below this floor for rows created at or
+    /// below the query timestamp fail instead of returning the current
+    /// value. Recomputed on every load as the maximum creation stamp;
+    /// zero on fresh tables, disabling the fence.
+    history_floor: Timestamp,
     /// Inline-form marker: the owning table stores its single scalar in the
     /// CSR value column, so this store keeps only the schema and the
     /// name/id indexes. Every row operation fails instead of forking a

@@ -219,7 +219,7 @@ impl GraphStorageContext {
                         let reserve_ratio =
                             config.compute_reserve_ratio(table.edge_count() as usize, 0);
                         frozen_here =
-                            table.compact_csr_only_with_watermarks(wm, margin, reserve_ratio)
+                            table.compact_csr_only_with_watermarks(wm, margin, reserve_ratio)?
                                 as u64;
                         table.compact_properties_with_watermarks(wm, margin);
                         any_here = true;
@@ -231,7 +231,7 @@ impl GraphStorageContext {
                         let reserve_ratio =
                             config.compute_reserve_ratio(table.edge_count() as usize, 0);
                         frozen_here =
-                            table.compact_csr_only_with_watermarks(wm, margin, reserve_ratio)
+                            table.compact_csr_only_with_watermarks(wm, margin, reserve_ratio)?
                                 as u64;
                         table.compact_properties_with_watermarks(wm, margin);
                         any_here = true;
