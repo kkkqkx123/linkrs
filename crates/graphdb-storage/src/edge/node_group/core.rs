@@ -19,6 +19,28 @@ use super::{
 };
 
 impl CsrShardSet {
+    /// Routing-cache invalidation family for cache coherence.
+    ///
+    /// Group drops, load replacement and per-group updates converge on the
+    /// per-group entry; group-space resets use the all-routes entry. The
+    /// cache stays an accelerator only: misses never populate for missing
+    /// groups, so absent rows read as empty and no invalidation path can
+    /// leave a stale triple behind.
+    pub(crate) fn invalidate_group_route(&self, gid: usize) {
+        self.route_cache.invalidate_gid(gid);
+    }
+
+    /// Invalidate every cached route after a group-space reset.
+    pub(crate) fn invalidate_all_routes(&self) {
+        self.route_cache.clear();
+    }
+
+    /// Routing-cache hit rate for observability. Capacity stays fixed;
+    /// this only reports so operators can tell whether hot lookups hit.
+    pub fn route_hit_rate(&self) -> f32 {
+        self.route_cache.hit_rate()
+    }
+
     pub fn new(
         strategy: EdgeStrategy,
         group_bits: u32,
@@ -417,12 +439,13 @@ impl CsrShardSet {
     /// Bulk insert pre-grouped edges with one reservation per touched row.
     ///
     /// Input is `(src, dst, edge_id)` triples at global addresses; rows are
-    /// grouped by shard, each `Multiple` group is written through its bulk
-    /// path (single reservation, single live-set rebuild per row), and
-    /// `Single` groups fall back to per-edge inserts. Dirt and append-log
-    /// entries are recorded per inserted edge exactly like the single-edge
-    /// path. Duplicate keys are rejected before any write when
-    /// `check_duplicates` is set.
+    /// grouped by shard then appended group by group, so cross-group
+    /// interleaving never repeats routing and codec work. Each `Multiple`
+    /// group is written through its bulk path (single reservation, single
+    /// live-set rebuild per row), and `Single` groups fall back to per-edge
+    /// inserts. Dirt and append-log entries are recorded per inserted edge
+    /// exactly like the single-edge path. Duplicate keys are rejected before
+    /// any write when `check_duplicates` is set.
     pub fn batch_put_edges(
         &mut self,
         edges: &[(u32, VertexId, EdgeId)],
@@ -477,6 +500,9 @@ impl CsrShardSet {
                             gid
                         )));
                     };
+                    let counts: Vec<(u32, usize)> =
+                        batch.iter().map(|(local, puts)| (*local, puts.len())).collect();
+                    csr.reserve_for_batch(&counts);
                     inserted += csr.batch_put_edges(&batch, check_duplicates)?;
                 }
                 for (src, dst, edge_id) in &group_edges {
@@ -578,6 +604,9 @@ impl CsrShardSet {
                             gid
                         )));
                     };
+                    let counts: Vec<(u32, usize)> =
+                        batch.iter().map(|(local, puts)| (*local, puts.len())).collect();
+                    csr.reserve_for_batch(&counts);
                     inserted += csr.batch_put_edges(&batch, check_duplicates)?;
                 }
                 for (src, dst, edge_id, ts) in &group_edges {
@@ -713,7 +742,7 @@ impl CsrShardSet {
                 )));
             }
             self.shards.clear();
-            self.route_cache.clear();
+            self.invalidate_all_routes();
             return Ok(());
         }
         let ids: Vec<u32> = (0..count).map(|gid| gid as u32).collect();
@@ -747,7 +776,7 @@ impl CsrShardSet {
                 )));
             }
             self.shards.clear();
-            self.route_cache.clear();
+            self.invalidate_all_routes();
             return Ok(());
         }
         let mut wanted: Vec<usize> = ids.iter().map(|id| *id as usize).collect();
@@ -783,7 +812,7 @@ impl CsrShardSet {
             );
         }
         self.shards = fresh;
-        self.route_cache.clear();
+        self.invalidate_all_routes();
         self.clear_all_dirty();
         Ok(())
     }
@@ -812,6 +841,7 @@ impl CsrShardSet {
             .count();
         shard.dead_entries = dead;
         shard.reclaim_hint = dead > 0;
+        self.invalidate_group_route(gid);
         Ok(())
     }
 
@@ -854,7 +884,7 @@ impl CsrShardSet {
         // later reads route to missing groups as empty instead of hitting
         // stale triples.
         for gid in removed {
-            self.route_cache.invalidate_gid(gid);
+            self.invalidate_group_route(gid);
         }
     }
 

@@ -223,10 +223,8 @@ impl VertexTable {
                 }
             }
             Self::append_column_payload(&mut payload, &snapshot)?;
-            if matches!(
-                snapshot.data_type,
-                graphdb_core::DataType::String | graphdb_core::DataType::Blob
-            ) && snapshot.has_overflow()
+            if crate::vertex::column::overflow::OverflowStore::routes_for(&snapshot.data_type)
+                && snapshot.has_overflow()
             {
                 match snapshot.serialize_overflow() {
                     Ok(bytes) => {
@@ -307,10 +305,8 @@ impl VertexTable {
 
         // Overflow sidecar presence flag.
         let overflow_present = (col.has_overflow()
-            && matches!(
-                col.data_type,
-                graphdb_core::DataType::String | graphdb_core::DataType::Blob
-            )) as u8;
+            && crate::vertex::column::overflow::OverflowStore::routes_for(&col.data_type))
+            as u8;
         payload.push(overflow_present);
 
         Self::write_stats_with_fallback(payload, col);

@@ -114,7 +114,7 @@ impl EdgeStore {
                 crate::persistence::section::EDGE_TS_SHARD,
                 &mut payload,
             )?;
-            super::super::persistence::write_pages_to_file(
+            super::super::persistence::write_pages_to_file_without_dir_sync(
                 &path,
                 &payload,
                 page_size,

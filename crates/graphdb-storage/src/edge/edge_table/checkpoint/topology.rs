@@ -92,7 +92,7 @@ impl EdgeStore {
                     &mut payload,
                     &mut dump_scratch,
                 )?;
-                super::super::persistence::write_pages_to_file(
+                super::super::persistence::write_pages_to_file_without_dir_sync(
                     &base_path,
                     &payload,
                     page_size,
@@ -143,7 +143,7 @@ impl EdgeStore {
                         &mut payload,
                         &mut dump_scratch,
                     )?;
-                    super::super::persistence::write_pages_to_file(
+                    super::super::persistence::write_pages_to_file_without_dir_sync(
                         &base_path,
                         &payload,
                         page_size,
@@ -170,7 +170,7 @@ impl EdgeStore {
                     )?;
                     payload.extend_from_slice(&(ops.len() as u64).to_le_bytes());
                     payload.extend_from_slice(&ops);
-                    super::super::persistence::write_pages_to_file(
+                    super::super::persistence::write_pages_to_file_without_dir_sync(
                         &append_path,
                         &payload,
                         page_size,
@@ -266,6 +266,24 @@ impl EdgeStore {
             // Pending append deltas rule the cache out, since a read-only
             // view cannot absorb the write-through delta. A regenerated
             // snapshot file is a cache: rebuilding it must never fail the load.
+            // A missing base file means a torn epoch for this group only: the
+            // manifest is the sole validity bit, so the group is rebuilt
+            // empty and its residuals are cleaned instead of stitching
+            // cross-epoch files or failing the whole table.
+            if !path.exists() {
+                self.remove_invalid_group_files(dir, *gid_u32);
+                let shards = if outgoing {
+                    &mut self.out_csr
+                } else {
+                    &mut self.in_csr
+                };
+                if let Some(variant) = shards.group_variant_mut(gid) {
+                    variant.clear();
+                }
+                shards.clear_group_dirty(gid);
+                shards.clear_group_append_log(gid);
+                continue;
+            }
             let snapshot = snapshot_path_for(&path);
             let has_append_delta = append_path.exists();
             let loaded_frozen = {

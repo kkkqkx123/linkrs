@@ -354,6 +354,21 @@ pub fn write_pages_to_file(
     level: i32,
     total_rows: u32,
 ) -> StorageResult<()> {
+    let final_buf = encode_pages_to_file_buffer(payload, page_size, level, total_rows)?;
+    crate::compression::write_shadow_file(path, &final_buf)
+}
+
+/// Encode the page-compressed file image without touching the filesystem.
+///
+/// Batch flush paths persist many per-group shards before a single directory
+/// sync, so they encode first, rename through the no-sync shadow helper, and
+/// sync the directory once for the whole batch.
+pub fn encode_pages_to_file_buffer(
+    payload: &[u8],
+    page_size: usize,
+    level: i32,
+    total_rows: u32,
+) -> StorageResult<Vec<u8>> {
     let mut pages_buf = Vec::new();
     let mut writer = crate::compression::PageWriter::new(page_size, level);
     writer.write_all(&mut pages_buf, payload)?;
@@ -366,8 +381,22 @@ pub fn write_pages_to_file(
     };
     header.serialize(&mut final_buf)?;
     final_buf.extend_from_slice(&pages_buf);
+    Ok(final_buf)
+}
 
-    crate::compression::write_shadow_file(path, &final_buf)
+/// Write one page-compressed payload through the no-sync shadow helper.
+///
+/// The caller owns directory durability and must sync the directory once the
+/// batch of data files is durable, before publishing metadata and manifest.
+pub fn write_pages_to_file_without_dir_sync(
+    path: &Path,
+    payload: &[u8],
+    page_size: usize,
+    level: i32,
+    total_rows: u32,
+) -> StorageResult<()> {
+    let final_buf = encode_pages_to_file_buffer(payload, page_size, level, total_rows)?;
+    crate::compression::write_shadow_file_without_dir_sync(path, &final_buf)
 }
 
 /// Read pages from a page-compressed file.

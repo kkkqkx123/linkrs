@@ -54,6 +54,9 @@ impl ColumnStorage for FixedWidthColumn {
         if self.is_null(row_idx) {
             return None;
         }
+        if row_idx >= self.row_count {
+            return None;
+        }
 
         if let DataType::FixedString(limit) = &self.data_type {
             return read_fixed_string(&self.data, row_idx * self.element_size, *limit);
@@ -70,6 +73,38 @@ impl ColumnStorage for FixedWidthColumn {
 
         let raw = read_fixed_value(&self.data, offset, self.element_size)?;
         Some(convert_to_type(raw, &self.data_type))
+    }
+
+    fn try_get(&self, row_idx: usize) -> StorageResult<Option<Value>> {
+        if self.is_null(row_idx) {
+            return Ok(None);
+        }
+        if row_idx >= self.row_count {
+            return Ok(None);
+        }
+        if let DataType::FixedString(limit) = &self.data_type {
+            return try_read_fixed_string(&self.data, row_idx * self.element_size, *limit);
+        }
+        if let DataType::VectorDense(dim) = &self.data_type {
+            return try_read_fixed_vector(&self.data, row_idx * self.element_size, *dim);
+        }
+        let offset = row_idx * self.element_size;
+        if offset + self.element_size > self.data.len() {
+            return Err(StorageError::deserialize_error(format!(
+                "fixed column truncated at row {}: offset {} + size {} exceeds {} bytes",
+                row_idx,
+                offset,
+                self.element_size,
+                self.data.len()
+            )));
+        }
+        let Some(raw) = read_fixed_value(&self.data, offset, self.element_size) else {
+            return Err(StorageError::deserialize_error(format!(
+                "fixed column undecodable at row {}: element size {}",
+                row_idx, self.element_size
+            )));
+        };
+        Ok(Some(convert_to_type(raw, &self.data_type)))
     }
 
     fn set(&mut self, row_idx: usize, value: Option<&Value>) -> StorageResult<()> {
@@ -130,6 +165,8 @@ impl ColumnStorage for FixedWidthColumn {
             self.data.resize(offset + self.element_size, 0);
         }
 
+        let old_count = self.row_count;
+        let mut new_gaps = 0usize;
         match value {
             Some(v) => {
                 if let DataType::FixedString(limit) = &self.data_type {
@@ -141,18 +178,31 @@ impl ColumnStorage for FixedWidthColumn {
                 }
                 if let Some(ref mut bitmap) = self.null_bitmap {
                     ensure_bitmap_len(bitmap, row_idx + 1);
+                    for gap in old_count..row_idx {
+                        if !bitmap[gap] {
+                            bitmap.set(gap, true);
+                            new_gaps += 1;
+                        }
+                    }
                     bitmap.set(row_idx, false);
                 }
             }
             None => {
                 if let Some(ref mut bitmap) = self.null_bitmap {
                     ensure_bitmap_len(bitmap, row_idx + 1);
+                    for gap in old_count..row_idx {
+                        if !bitmap[gap] {
+                            bitmap.set(gap, true);
+                            new_gaps += 1;
+                        }
+                    }
                     bitmap.set(row_idx, true);
                 }
             }
         }
 
         if self.null_bitmap.is_some() {
+            self.null_count += new_gaps;
             match value {
                 Some(v) if !v.is_null() => {
                     if was_null {
@@ -160,7 +210,9 @@ impl ColumnStorage for FixedWidthColumn {
                     }
                 }
                 _ => {
-                    if !was_null {
+                    if !was_null && row_idx < old_count {
+                        self.null_count += 1;
+                    } else if row_idx >= old_count {
                         self.null_count += 1;
                     }
                 }
@@ -242,7 +294,7 @@ impl ColumnStorage for FixedWidthColumn {
     fn load_data_from_raw(
         &mut self,
         data: Vec<u8>,
-        _offsets: Vec<u64>,
+        _offsets: Vec<u32>,
         null_bitmap_raw: Option<Vec<u8>>,
         bitmap_bit_len: usize,
     ) {
@@ -266,7 +318,7 @@ impl ColumnStorage for FixedWidthColumn {
         self.row_count = self.data.len() / elem_size;
     }
 
-    fn get_flush_data(&self) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>) {
+    fn get_flush_data(&self) -> (Vec<u8>, Vec<u32>, Option<BitVec<u8, Lsb0>>) {
         (self.data.clone(), Vec::new(), self.null_bitmap.clone())
     }
 }
@@ -291,6 +343,48 @@ pub fn element_size(data_type: &DataType) -> usize {
         }
         _ => 0,
     }
+}
+
+/// Strict fixed-vector read: dimension and length mismatches are errors.
+pub(crate) fn try_read_fixed_vector(
+    data: &[u8],
+    offset: usize,
+    dim: usize,
+) -> StorageResult<Option<Value>> {
+    if dim == 0 {
+        return Err(StorageError::deserialize_error(
+            "fixed vector with zero dimension".to_string(),
+        ));
+    }
+    let Some(bytes) = dim.checked_mul(std::mem::size_of::<f32>()) else {
+        return Err(StorageError::deserialize_error(format!(
+            "fixed vector dimension overflow: {}",
+            dim
+        )));
+    };
+    if offset + bytes > data.len() {
+        return Err(StorageError::deserialize_error(format!(
+            "fixed vector truncated: offset {} + {} bytes exceeds {} bytes",
+            offset,
+            bytes,
+            data.len()
+        )));
+    }
+    let mut out = Vec::with_capacity(dim);
+    for i in 0..dim {
+        let chunk: [u8; 4] = data[offset + i * 4..offset + (i + 1) * 4]
+            .try_into()
+            .map_err(|_| {
+                StorageError::deserialize_error(format!(
+                    "fixed vector component {} undecodable",
+                    i
+                ))
+            })?;
+        out.push(f32::from_le_bytes(chunk));
+    }
+    Ok(Some(Value::Vector(
+        graphdb_core::value::VectorValue::dense(out),
+    )))
 }
 
 /// Read one fixed-dense-vector slot as little-endian `f32` components.
@@ -361,6 +455,11 @@ pub(crate) fn write_fixed_vector(
 }
 
 /// Read one zero-padded inline fixed-string slot.
+///
+/// Slots stay fixed width on disk; reads use the declared length and strip
+/// only the zero padding appended by writes. No first-zero truncation
+/// heuristic applies: interior zeros survive, and values ending with a zero
+/// byte are rejected at write time so padding removal stays lossless.
 pub(crate) fn read_fixed_string(data: &[u8], offset: usize, limit: usize) -> Option<Value> {
     if limit == 0 || offset + limit > data.len() {
         return None;
@@ -372,6 +471,39 @@ pub(crate) fn read_fixed_string(data: &[u8], offset: usize, limit: usize) -> Opt
     String::from_utf8(data[offset..end].to_vec())
         .ok()
         .map(Value::FixedString)
+}
+
+/// Strict fixed-string read with declared-length semantics.
+///
+/// Never-written windows are reported by the caller before this runs.
+/// Truncated slots and invalid UTF-8 payloads are storage errors carrying
+/// the row window so queries fail loudly instead of observing silent nulls.
+pub(crate) fn try_read_fixed_string(
+    data: &[u8],
+    offset: usize,
+    limit: usize,
+) -> StorageResult<Option<Value>> {
+    if limit == 0 {
+        return Err(StorageError::deserialize_error(
+            "fixed string slot with zero declared length".to_string(),
+        ));
+    }
+    if offset + limit > data.len() {
+        return Err(StorageError::deserialize_error(format!(
+            "fixed string truncated: offset {} + limit {} exceeds {} bytes",
+            offset,
+            limit,
+            data.len()
+        )));
+    }
+    let mut end = offset + limit;
+    while end > offset && data[end - 1] == 0 {
+        end -= 1;
+    }
+    let s = String::from_utf8(data[offset..end].to_vec()).map_err(|e| {
+        StorageError::deserialize_error(format!("fixed string invalid UTF-8: {}", e))
+    })?;
+    Ok(Some(Value::FixedString(s)))
 }
 
 /// Write one zero-padded inline fixed-string slot.
@@ -401,6 +533,15 @@ pub(crate) fn write_fixed_string(
             "FixedString({}) cannot hold {} bytes",
             limit,
             bytes.len()
+        )));
+    }
+    // Zero-padded slots cannot round-trip a trailing zero byte: the reader
+    // strips padding, so such a value would lose bytes silently. Reject
+    // loudly instead of storing a corrupted value.
+    if bytes.last().is_some_and(|b| *b == 0) {
+        return Err(StorageError::invalid_input(format!(
+            "FixedString({}) cannot hold a value with trailing zero byte",
+            limit
         )));
     }
     if offset + limit > data.len() {

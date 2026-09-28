@@ -71,8 +71,10 @@ pub struct ChunkState {
     pub encoding_meta: ChunkEncodingMeta,
     /// Overlay writes since the last encode; feeds the hot-update signal.
     pub updates_since_encode: u64,
-    /// MVCC version chains for rows in this chunk, chunk-local indexed.
-    pub version_chains: Option<Vec<Vec<VersionEntry>>>,
+    /// MVCC version chains for rows in this chunk, sparsely indexed by
+    /// chunk-local row. Rows without overwrite history allocate nothing;
+    /// only rows that suffered a covering write own a history vector.
+    pub version_chains: Option<HashMap<usize, Vec<VersionEntry>>>,
     /// Row-level visibility metadata for this chunk, chunk-local indexed.
     pub visibility: RowVisibility,
     /// Global dirty page ids touched through this chunk.
@@ -194,7 +196,7 @@ impl ColumnChunk {
             && state
                 .version_chains
                 .as_ref()
-                .is_none_or(|chains| chains.iter().all(|chain| chain.is_empty()))
+                .is_none_or(|chains| chains.values().all(|chain| chain.is_empty()))
     }
 
     /// Write one row: in-place when the encoding absorbs it, otherwise into
@@ -335,7 +337,7 @@ pub struct ChunkFlushView {
     pub overlay: Vec<(u32, Option<Value>)>,
     pub raw_form: bool,
     pub raw_data: Vec<u8>,
-    pub raw_offsets: Vec<u64>,
+    pub raw_offsets: Vec<u32>,
     pub raw_bitmap: Option<BitVec<u8, Lsb0>>,
 }
 

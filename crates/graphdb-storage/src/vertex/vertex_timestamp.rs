@@ -126,7 +126,7 @@ impl VertexTimestamp {
         None
     }
 
-    pub fn get_end_ts(&self, index: u32) -> Option<Timestamp> {
+    pub(crate) fn get_end_ts(&self, index: u32) -> Option<Timestamp> {
         let idx = index as usize;
         if idx < self.end_ts.len() {
             let ts = self.end_ts[idx];

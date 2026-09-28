@@ -1,7 +1,8 @@
 use graphdb_core::types::{EdgeId, Timestamp};
 
 use super::super::pure_csr::PureOverflowChunk;
-use super::{BundledCsr, BundledOverflowValues, INVALID_EDGE_ID};
+use super::super::INVALID_EDGE_ID;
+use super::{BundledCsr, BundledOverflowValues};
 
 impl BundledCsr {
     /// Sort one primary row into `(endpoint, edge_id)` order with values.

@@ -137,6 +137,8 @@ struct RouteCache {
     vids: Box<[AtomicU32]>,
     gids: Box<[AtomicUsize]>,
     locals: Box<[AtomicU32]>,
+    hits: AtomicUsize,
+    misses: AtomicUsize,
 }
 
 impl RouteCache {
@@ -149,6 +151,8 @@ impl RouteCache {
                 .map(|_| AtomicUsize::new(0))
                 .collect(),
             locals: (0..ROUTE_CACHE_SLOTS).map(|_| AtomicU32::new(0)).collect(),
+            hits: AtomicUsize::new(0),
+            misses: AtomicUsize::new(0),
         }
     }
 
@@ -160,8 +164,10 @@ impl RouteCache {
     fn lookup(&self, vid: u32) -> Option<(usize, u32)> {
         let slot = Self::slot(vid);
         if self.vids[slot].load(Ordering::Relaxed) != vid {
+            self.misses.fetch_add(1, Ordering::Relaxed);
             return None;
         }
+        self.hits.fetch_add(1, Ordering::Relaxed);
         Some((
             self.gids[slot].load(Ordering::Relaxed),
             self.locals[slot].load(Ordering::Relaxed),
@@ -190,6 +196,16 @@ impl RouteCache {
             self.vids[slot].store(ROUTE_CACHE_EMPTY, Ordering::Relaxed);
         }
     }
+
+    fn hit_rate(&self) -> f32 {
+        let hits = self.hits.load(Ordering::Relaxed) as f64;
+        let misses = self.misses.load(Ordering::Relaxed) as f64;
+        if hits + misses == 0.0 {
+            0.0
+        } else {
+            (hits / (hits + misses)) as f32
+        }
+    }
 }
 
 impl Clone for RouteCache {
@@ -208,6 +224,7 @@ impl fmt::Debug for RouteCache {
         f.debug_struct("RouteCache")
             .field("slots", &ROUTE_CACHE_SLOTS)
             .field("live", &live)
+            .field("hit_rate", &self.hit_rate())
             .finish()
     }
 }

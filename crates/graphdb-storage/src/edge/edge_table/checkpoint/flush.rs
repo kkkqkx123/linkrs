@@ -9,9 +9,13 @@ use graphdb_core::StorageResult;
 use std::path::Path;
 
 impl EdgeStore {
-    /// Flush dirty state incrementally: topology group bases or append
-    /// sidecars, per-group timestamp shards and per-group property shards
-    /// first, metadata carrying the manifest tail second, manifest last.
+    /// Flush dirty state incrementally with one commit point.
+    ///
+    /// One owner group is one persistence unit: its topology base or append
+    /// sidecar, timestamp shard and property shard share the same dirt and
+    /// are flushed in the same batch, then cleared together. Commit order is
+    /// fixed: all data files first, metadata carrying the manifest tail
+    /// second, manifest last as the sole validity bit.
     ///
     /// Each group picks its own mode: groups carrying delete dirt rewrite
     /// the base and absorb (then delete) their sidecar; insert-only groups
@@ -21,15 +25,19 @@ impl EdgeStore {
     /// dirt as their owner group, so small writes rewrite only dirty owners
     /// rather than global files. In-memory append row indexes are dropped
     /// after the flush that persists them; the on-disk sidecar stays
-    /// cumulative until a base merge absorbs it. Groups and shards land in
-    /// shadow files before the metadata commit so a crash before the manifest
-    /// publish leaves only discardable `.tmp` state plus the previous
-    /// consistent snapshot. Property statistics are refreshed before shards
-    /// are serialized so they follow the checkpoint. The checkpoint kind is
-    /// Rebalance when any group merged a base, AppendOnly otherwise.
-    /// Flushed bytes, elapsed time and authority tombstone totals are
-    /// reported to the shared metrics registry when one is set. Returns the
-    /// checkpoint kind for engine-side logging.
+    /// cumulative until a base merge absorbs it. Data files land through
+    /// no-sync shadow renames inside one batch with a single directory sync,
+    /// so one refresh pays one directory sync for all data files instead of
+    /// one per file. A crash before the manifest publish leaves only
+    /// discardable `.tmp` state plus the previous consistent snapshot; a
+    /// crash between data files never mixes epochs because loading only
+    /// trusts the manifest and rebuilds groups with missing companions as
+    /// empty. Property statistics are refreshed before shards are serialized
+    /// so they follow the checkpoint. The checkpoint kind is Rebalance when
+    /// any group merged a base, AppendOnly otherwise. Flushed bytes, elapsed
+    /// time and authority tombstone totals are reported to the shared metrics
+    /// registry when one is set. Returns the checkpoint kind for engine-side
+    /// logging.
     pub(crate) fn flush_incremental(
         &mut self,
         dir: &Path,
@@ -89,6 +97,7 @@ impl EdgeStore {
         } else {
             EdgeCheckpointKind::AppendOnly
         };
+        crate::compression::sync_dir(dir)?;
         flushed_bytes += self.flush_metadata_file(dir, page_size, level, &manifest)?;
         self.write_manifest(dir, &manifest)?;
         flushed_bytes += file_bytes(&manifest_path(dir));

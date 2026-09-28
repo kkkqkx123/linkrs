@@ -76,6 +76,7 @@ impl EdgeStore {
         self.load_group_set(dir, false, &manifest.in_groups, &manifest)?;
         self.load_timestamp_shards(dir, &manifest)?;
         self.load_property_shards(dir, &manifest)?;
+        self.invalidate_incomplete_owner_groups(dir, &manifest);
         self.load_segment_stats(dir)?;
         self.load_form_profile(dir)?;
         let owner_stats = self.rebuild_owner_map_with_stats();
@@ -200,5 +201,81 @@ impl EdgeStore {
         self.wal_dir = Some(dir.to_path_buf());
         self.is_open = true;
         Ok(())
+    }
+
+    /// Rebuild groups with missing companions as empty without cross-epoch
+    /// stitching.
+    ///
+    /// The manifest is the sole validity bit: a group whose topology base
+    /// holds edges but whose timestamp companion is absent saw a crash
+    /// between data files of one epoch. New topology with old timestamps or
+    /// old properties must never load together, so the group is cleared,
+    /// its residuals are removed, and it stays writable as an empty group.
+    /// Property companions are required only when the table carries
+    /// columnar properties; inline forms and property-less schemas
+    /// legitimately have no property files.
+    pub(crate) fn invalidate_incomplete_owner_groups(
+        &mut self,
+        dir: &Path,
+        manifest: &TableShardManifest,
+    ) {
+        use super::layout::{props_group_path, ts_group_path};
+        use crate::edge::CsrBase;
+        let owners = self.owner_list_for_load(manifest);
+        let needs_props = !self.schema.properties.is_empty()
+            && !matches!(
+                self.schema.record_form,
+                crate::edge::RecordForm::Pure | crate::edge::RecordForm::Bundled
+            );
+        let use_out = self.schema.oe_strategy != crate::edge::EdgeStrategy::None;
+        for gid in owners {
+            let edge_count = if use_out {
+                self.out_csr
+                    .group_variant(gid as usize)
+                    .map(|v| v.edge_count())
+                    .unwrap_or(0)
+            } else {
+                self.in_csr
+                    .group_variant(gid as usize)
+                    .map(|v| v.edge_count())
+                    .unwrap_or(0)
+            };
+            if edge_count == 0 {
+                continue;
+            }
+            if !ts_group_path(dir, gid).exists() {
+                self.remove_invalid_group_files(dir, gid);
+                if use_out {
+                    if let Some(v) = self.out_csr.group_variant_mut(gid as usize) {
+                        v.clear();
+                    }
+                    self.out_csr.clear_group_dirty(gid as usize);
+                    self.out_csr.clear_group_append_log(gid as usize);
+                } else {
+                    if let Some(v) = self.in_csr.group_variant_mut(gid as usize) {
+                        v.clear();
+                    }
+                    self.in_csr.clear_group_dirty(gid as usize);
+                    self.in_csr.clear_group_append_log(gid as usize);
+                }
+                continue;
+            }
+            if needs_props && !props_group_path(dir, gid).exists() {
+                self.remove_invalid_group_files(dir, gid);
+                if use_out {
+                    if let Some(v) = self.out_csr.group_variant_mut(gid as usize) {
+                        v.clear();
+                    }
+                    self.out_csr.clear_group_dirty(gid as usize);
+                    self.out_csr.clear_group_append_log(gid as usize);
+                } else {
+                    if let Some(v) = self.in_csr.group_variant_mut(gid as usize) {
+                        v.clear();
+                    }
+                    self.in_csr.clear_group_dirty(gid as usize);
+                    self.in_csr.clear_group_append_log(gid as usize);
+                }
+            }
+        }
     }
 }

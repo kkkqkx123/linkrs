@@ -1,6 +1,12 @@
 use super::{CsrWithProperties, RowVisibility};
 use graphdb_core::types::{EdgeId, Timestamp};
 
+/// Row-stamp projection for reclamation probing only.
+///
+/// Query visibility never consults these stamps; every query filters through
+/// the version authority (`EdgeStore::is_visible`). These helpers exist so
+/// garbage collection can probe row liveness without a second authority
+/// lookup.
 impl RowVisibility {
     pub(crate) fn new(create_ts: Timestamp) -> Self {
         Self {
@@ -38,7 +44,7 @@ impl CsrWithProperties {
         false
     }
 
-    pub fn is_deleted_at_row(&self, row_idx: usize) -> bool {
+    pub(crate) fn is_deleted_at_row(&self, row_idx: usize) -> bool {
         if let Some(vis) = self.visibility.get(row_idx) {
             return vis.delete_ts.is_some();
         }

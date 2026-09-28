@@ -449,6 +449,32 @@ impl ColumnStore {
         out
     }
 
+    /// Strict batch read: corrupt payloads fail with column and row context.
+    ///
+    /// Query entry for explicit failure semantics. Never-written windows
+    /// yield `None`; snapshot, side-store and raw decode failures yield
+    /// `Err` so scans never observe silent nulls.
+    pub fn try_get_batch_at_ts(
+        &self,
+        rows: &[usize],
+        query_ts: Timestamp,
+    ) -> StorageResult<Vec<Vec<(String, Option<Value>)>>> {
+        let columns = self.columns.read();
+        let mut out = vec![Vec::with_capacity(columns.len()); rows.len()];
+        for col in columns.iter() {
+            for (ri, &row) in rows.iter().enumerate() {
+                let value = col.try_get_at_ts(row, query_ts).map_err(|e| {
+                    StorageError::deserialize_error(format!(
+                        "column {} batch decode failed at row {}: {}",
+                        col.name, row, e
+                    ))
+                })?;
+                out[ri].push((col.name.clone(), value));
+            }
+        }
+        Ok(out)
+    }
+
     /// Batch variant of [`get_projected_at_ts`].
     pub fn get_projected_batch_at_ts(
         &self,
@@ -628,11 +654,13 @@ impl ColumnStore {
         }
     }
 
-    pub fn resize(&self, new_count: usize) {
+    pub fn resize(&self, new_count: usize) -> bool {
         let columns = self.columns.read();
+        let mut ok = true;
         for col in columns.iter() {
-            col.resize(new_count);
+            ok &= col.resize(new_count);
         }
+        ok
     }
 
     /// Column names in store order.

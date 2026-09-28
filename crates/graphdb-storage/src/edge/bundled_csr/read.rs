@@ -1,7 +1,7 @@
 use graphdb_core::types::EdgeId;
 
-use super::super::{EdgePosition, MutableCsrTrait, Nbr};
-use super::{BundledCsr, INVALID_EDGE_ID};
+use super::super::{EdgePosition, MutableCsrTrait, Nbr, INVALID_EDGE_ID};
+use super::BundledCsr;
 
 impl BundledCsr {
     pub fn visit_physical<F>(&self, src_vid: u32, f: F)

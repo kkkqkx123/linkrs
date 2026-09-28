@@ -456,12 +456,19 @@ impl EdgeStore {
 
     /// Lookup edges by a property value range using the EdgePropertyIndex.
     /// Returns `(src, dst, rank)` tuples for matching edges.
+    ///
+    /// Only serves while the index carries no lag since the last rebuild
+    /// baseline; any lag yields an empty candidate set so callers fall back
+    /// to the segment scan instead of risking dropped hits.
     pub fn lookup_edges_by_property_range(
         &self,
         prop_name: &str,
         value_lower: &[u8],
         value_upper: &[u8],
     ) -> Vec<(u32, u32, i64)> {
+        if !self.is_index_usable() {
+            return Vec::new();
+        }
         let Some(ref index) = self.property_index else {
             return Vec::new();
         };

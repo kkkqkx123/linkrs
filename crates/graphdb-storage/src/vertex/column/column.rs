@@ -20,6 +20,14 @@ use super::chunk_residency::{next_tick, ChunkResidency, EvictedSnapshot};
 /// Unified column storage interface.
 pub trait ColumnStorage: Send + Sync + std::fmt::Debug {
     fn get(&self, row_idx: usize) -> Option<Value>;
+    /// Strict read distinguishing never-written windows from corrupt payloads.
+    ///
+    /// Never-written rows (out of range, gaps, null slots) yield `Ok(None)`.
+    /// Truncated buffers, length or dimension mismatches and undecodable
+    /// opaque payloads yield `Err` so queries never observe silent nulls.
+    fn try_get(&self, row_idx: usize) -> StorageResult<Option<Value>> {
+        Ok(self.get(row_idx))
+    }
     fn set(&mut self, row_idx: usize, value: Option<&Value>) -> StorageResult<()>;
     fn len(&self) -> usize;
     fn is_null(&self, row_idx: usize) -> bool;
@@ -38,11 +46,11 @@ pub trait ColumnStorage: Send + Sync + std::fmt::Debug {
     fn load_data_from_raw(
         &mut self,
         data: Vec<u8>,
-        offsets: Vec<u64>,
+        offsets: Vec<u32>,
         null_bitmap_raw: Option<Vec<u8>>,
         bitmap_bit_len: usize,
     );
-    fn get_flush_data(&self) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>);
+    fn get_flush_data(&self) -> (Vec<u8>, Vec<u32>, Option<BitVec<u8, Lsb0>>);
 }
 
 /// Internal dispatch between fixed-width and variable-width storage.
@@ -399,11 +407,11 @@ impl Column {
             }
             ColumnInner::Variable(var) => {
                 let mut left_data = Vec::new();
-                let mut left_offsets: Vec<u64> = Vec::new();
+                let mut left_offsets: Vec<u32> = Vec::new();
                 let mut left_bits: Option<BitVec<u8, Lsb0>> =
                     var.null_bitmap.as_ref().map(|_| BitVec::new());
                 let mut right_data = Vec::new();
-                let mut right_offsets: Vec<u64> = Vec::new();
+                let mut right_offsets: Vec<u32> = Vec::new();
                 let mut right_bits: Option<BitVec<u8, Lsb0>> =
                     var.null_bitmap.as_ref().map(|_| BitVec::new());
                 let bits: Vec<bool> = var
@@ -412,23 +420,23 @@ impl Column {
                     .map(|b| b.iter().by_vals().collect())
                     .unwrap_or_default();
                 for local in 0..var.row_count {
-                    let off = var.offsets.get(local).copied().unwrap_or(usize::MAX);
+                    let off = var.offsets.get(local).copied().unwrap_or(u32::MAX) as usize;
                     let bit = bits.get(local).copied().unwrap_or(false);
                     let (data, offsets, bits) = if local < at {
                         (&mut left_data, &mut left_offsets, &mut left_bits)
                     } else {
                         (&mut right_data, &mut right_offsets, &mut right_bits)
                     };
-                    if off == usize::MAX || off + 8 > var.data.len() {
-                        offsets.push(u64::MAX);
+                    if off == u32::MAX as usize || off + 8 > var.data.len() {
+                        offsets.push(u32::MAX);
                     } else {
                         let len_bytes: [u8; 8] =
                             var.data[off..off + 8].try_into().unwrap_or([0u8; 8]);
                         let len = u64::from_le_bytes(len_bytes) as usize;
                         if off + 8 + len > var.data.len() {
-                            offsets.push(u64::MAX);
+                            offsets.push(u32::MAX);
                         } else {
-                            offsets.push(data.len() as u64);
+                            offsets.push(data.len() as u32);
                             data.extend_from_slice(&var.data[off..off + 8 + len]);
                         }
                     }
@@ -527,8 +535,15 @@ impl Column {
     }
 
     /// Serialize a single page for incremental checkpoint.
-    /// Returns `PageData` serialized bytes including header + payload.
+    ///
+    /// Compact per-type encoding: fixed columns copy raw bytes, variable
+    /// columns copy length-prefixed payloads, plus a null bitmap. No generic
+    /// value-enum framing crosses the page boundary, so equal increments
+    /// persist fewer bytes with less CPU. Page boundaries and dirty
+    /// granularity stay unchanged. Old generic pages fail the magic check
+    /// and rebuild through a fresh checkpoint with no dual-format branch.
     pub fn serialize_page(&self, page_id: usize) -> StorageResult<Vec<u8>> {
+        use super::fixed_width::{element_size, write_fixed_value};
         let rows_per_page = crate::persistence::dirty_page::ROWS_PER_PAGE;
         let start = page_id * rows_per_page;
         let total = self.len();
@@ -539,41 +554,356 @@ impl Column {
             )));
         }
         let end = (start + rows_per_page).min(total);
-        let mut values = Vec::with_capacity(end - start);
-        for row in start..end {
-            values.push(self.get(row));
+        let count = end - start;
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"CPG1");
+        payload.extend_from_slice(&(count as u32).to_le_bytes());
+        let elem = element_size(&self.data_type);
+        let is_fixed = elem > 0;
+        let mut null_bits = vec![0u8; count.div_ceil(8)];
+        let mut body = Vec::new();
+        for (i, row) in (start..end).enumerate() {
+            let value = self.try_get(row).map_err(|e| {
+                StorageError::deserialize_error(format!(
+                    "column {} page {} row {} encode failed: {}",
+                    self.name, page_id, row, e
+                ))
+            })?;
+            if value.is_none() {
+                null_bits[i / 8] |= 1 << (i % 8);
+                if is_fixed {
+                    body.extend(std::iter::repeat_n(0u8, elem));
+                } else {
+                    body.extend_from_slice(&0u64.to_le_bytes());
+                }
+                continue;
+            }
+            let v = value.as_ref().unwrap();
+            if is_fixed {
+                if let DataType::FixedString(limit) = &self.data_type {
+                    let bytes: &[u8] = match v {
+                        Value::FixedString(s) => s.as_bytes(),
+                        Value::String(s) => s.as_bytes(),
+                        _ => {
+                            return Err(StorageError::deserialize_error(format!(
+                                "column {} page {} row {} fixed string type mismatch",
+                                self.name, page_id, row
+                            )));
+                        }
+                    };
+                    if bytes.len() > *limit {
+                        return Err(StorageError::deserialize_error(format!(
+                            "column {} page {} row {} fixed string overflow",
+                            self.name, page_id, row
+                        )));
+                    }
+                    body.extend_from_slice(bytes);
+                    body.extend(std::iter::repeat_n(0u8, limit - bytes.len()));
+                } else if let DataType::VectorDense(dim) = &self.data_type {
+                    let dense: &[f32] = match v {
+                        Value::Vector(vec) => vec.as_dense().ok_or_else(|| {
+                            StorageError::deserialize_error(format!(
+                                "column {} page {} row {} sparse vector in dense slot",
+                                self.name, page_id, row
+                            ))
+                        })?,
+                        _ => {
+                            return Err(StorageError::deserialize_error(format!(
+                                "column {} page {} row {} vector type mismatch",
+                                self.name, page_id, row
+                            )));
+                        }
+                    };
+                    if dense.len() != *dim {
+                        return Err(StorageError::deserialize_error(format!(
+                            "column {} page {} row {} vector dimension mismatch",
+                            self.name, page_id, row
+                        )));
+                    }
+                    for f in dense {
+                        body.extend_from_slice(&f.to_le_bytes());
+                    }
+                } else {
+                    let mut slot = vec![0u8; elem];
+                    write_fixed_value(&mut slot, 0, elem, v).map_err(|e| {
+                        StorageError::deserialize_error(format!(
+                            "column {} page {} row {} fixed encode failed: {}",
+                            self.name, page_id, row, e
+                        ))
+                    })?;
+                    body.extend_from_slice(&slot);
+                }
+            } else {
+                super::variable_width::write_variable_value(&mut body, v).map_err(|e| {
+                    StorageError::deserialize_error(format!(
+                        "column {} page {} row {} variable encode failed: {}",
+                        self.name, page_id, row, e
+                    ))
+                })?;
+            }
         }
-        let payload = postcard::to_allocvec(&values)
-            .map_err(|e| StorageError::serialize_error(e.to_string()))?;
+        payload.extend_from_slice(&(null_bits.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&null_bits);
+        payload.extend_from_slice(&body);
         let page_data =
             crate::persistence::dirty_page::PageData::new(page_id as u32, payload, false);
         Ok(page_data.serialize())
     }
 
-    /// Deserialize and apply a single page. Does not mark the page dirty
-    /// (clean after checkpoint load).
+    /// Deserialize and apply a single compact page. Does not mark the page
+    /// dirty (clean after checkpoint load). Old generic pages fail the magic
+    /// check with no fallback branch.
     pub fn deserialize_page(&self, data: &[u8]) -> StorageResult<()> {
+        use super::fixed_width::{convert_to_type, element_size, read_fixed_value};
         let page =
             crate::persistence::dirty_page::PageData::deserialize(data).ok_or_else(|| {
                 StorageError::deserialize_error(
                     "invalid page data or checksum mismatch".to_string(),
                 )
             })?;
-        let values: Vec<Option<Value>> = postcard::from_bytes(&page.data)
-            .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
+        let mut cursor = &page.data[..];
+        if cursor.len() < 8 || &cursor[..4] != b"CPG1" {
+            return Err(StorageError::deserialize_error(
+                "page payload magic mismatch: old generic page format is not supported, rebuild through a fresh checkpoint".to_string(),
+            ));
+        }
+        cursor = &cursor[4..];
+        let mut u32b = [0u8; 4];
+        u32b.copy_from_slice(&cursor[..4]);
+        cursor = &cursor[4..];
+        let count = u32::from_le_bytes(u32b) as usize;
+        u32b.copy_from_slice(&cursor[..4]);
+        cursor = &cursor[4..];
+        let bitmap_len = u32::from_le_bytes(u32b) as usize;
+        if cursor.len() < bitmap_len {
+            return Err(StorageError::deserialize_error(
+                "compact page truncated null bitmap".to_string(),
+            ));
+        }
+        let null_bits = &cursor[..bitmap_len];
+        cursor = &cursor[bitmap_len..];
         let rows_per_page = crate::persistence::dirty_page::ROWS_PER_PAGE;
         let start = page.header.page_id as usize * rows_per_page;
-        // Ensure column can hold the restored rows without marking dirty.
-        if start + values.len() > self.len() {
-            self.resize(start + values.len());
+        if start + count > self.len() {
+            self.resize(start + count);
         }
-        for (offset, val) in values.into_iter().enumerate() {
-            let row_idx = start + offset;
-            self.write_value_without_dirty(row_idx, val.as_ref())?;
+        let elem = element_size(&self.data_type);
+        let is_fixed = elem > 0;
+        for i in 0..count {
+            let row_idx = start + i;
+            let is_null = null_bits.get(i / 8).is_some_and(|b| (b >> (i % 8)) & 1 == 1);
+            if is_null {
+                self.write_value_without_dirty(row_idx, None)?;
+                if is_fixed {
+                    if cursor.len() < elem {
+                        return Err(StorageError::deserialize_error(
+                            "compact page truncated fixed body".to_string(),
+                        ));
+                    }
+                    cursor = &cursor[elem..];
+                } else {
+                    if cursor.len() < 8 {
+                        return Err(StorageError::deserialize_error(
+                            "compact page truncated variable prefix".to_string(),
+                        ));
+                    }
+                    let mut lb = [0u8; 8];
+                    lb.copy_from_slice(&cursor[..8]);
+                    let len = u64::from_le_bytes(lb) as usize;
+                    cursor = &cursor[8..];
+                    if cursor.len() < len {
+                        return Err(StorageError::deserialize_error(
+                            "compact page truncated variable body".to_string(),
+                        ));
+                    }
+                    cursor = &cursor[len..];
+                }
+                continue;
+            }
+            if is_fixed {
+                if let DataType::FixedString(limit) = &self.data_type {
+                    if cursor.len() < *limit {
+                        return Err(StorageError::deserialize_error(
+                            "compact page truncated fixed string body".to_string(),
+                        ));
+                    }
+                    let slot = &cursor[..*limit];
+                    cursor = &cursor[*limit..];
+                    let mut end = slot.len();
+                    while end > 0 && slot[end - 1] == 0 {
+                        end -= 1;
+                    }
+                    let s = String::from_utf8(slot[..end].to_vec()).map_err(|e| {
+                        StorageError::deserialize_error(format!("compact page UTF-8: {}", e))
+                    })?;
+                    let v = Value::FixedString(s);
+                    self.write_value_without_dirty(row_idx, Some(&v))?;
+                } else if let DataType::VectorDense(dim) = &self.data_type {
+                    let bytes = dim * 4;
+                    if cursor.len() < bytes {
+                        return Err(StorageError::deserialize_error(
+                            "compact page truncated vector body".to_string(),
+                        ));
+                    }
+                    let slot = &cursor[..bytes];
+                    cursor = &cursor[bytes..];
+                    let mut out = Vec::with_capacity(*dim);
+                    for k in 0..*dim {
+                        let chunk: [u8; 4] = slot[k * 4..(k + 1) * 4].try_into().map_err(|_| {
+                            StorageError::deserialize_error(
+                                "compact page vector component undecodable".to_string(),
+                            )
+                        })?;
+                        out.push(f32::from_le_bytes(chunk));
+                    }
+                    let v = Value::Vector(graphdb_core::value::VectorValue::dense(out));
+                    self.write_value_without_dirty(row_idx, Some(&v))?;
+                } else {
+                    if cursor.len() < elem {
+                        return Err(StorageError::deserialize_error(
+                            "compact page truncated fixed body".to_string(),
+                        ));
+                    }
+                    let slot = &cursor[..elem];
+                    cursor = &cursor[elem..];
+                    let raw = read_fixed_value(slot, 0, elem).ok_or_else(|| {
+                        StorageError::deserialize_error(
+                            "compact page fixed value undecodable".to_string(),
+                        )
+                    })?;
+                    let v = convert_to_type(raw, &self.data_type);
+                    self.write_value_without_dirty(row_idx, Some(&v))?;
+                }
+            } else {
+                if cursor.len() < 8 {
+                    return Err(StorageError::deserialize_error(
+                        "compact page truncated variable prefix".to_string(),
+                    ));
+                }
+                let mut lb = [0u8; 8];
+                lb.copy_from_slice(&cursor[..8]);
+                cursor = &cursor[8..];
+                let len = u64::from_le_bytes(lb) as usize;
+                if cursor.len() < len {
+                    return Err(StorageError::deserialize_error(
+                        "compact page truncated variable body".to_string(),
+                    ));
+                }
+                let payload = &cursor[..len];
+                cursor = &cursor[len..];
+                let mut tmp = Vec::with_capacity(8 + len);
+                tmp.extend_from_slice(&(len as u64).to_le_bytes());
+                tmp.extend_from_slice(payload);
+                let v = self.decode_compact_variable_payload(&tmp)?;
+                self.write_value_without_dirty(row_idx, Some(&v))?;
+            }
+        }
+        if !cursor.is_empty() {
+            return Err(StorageError::deserialize_error(
+                "compact page trailing bytes".to_string(),
+            ));
         }
         // Mark page clean after successful restore (was dirtied by writes if any).
         self.clear_page_dirty(page.header.page_id as usize);
         Ok(())
+    }
+
+    /// Decode one compact variable payload (`len prefix + bytes`) for this
+    /// column type. Mirrors the strict variable decoder with explicit errors
+    /// and no generic value-enum framing.
+    fn decode_compact_variable_payload(&self, tmp: &[u8]) -> StorageResult<Value> {
+        use graphdb_core::value::VectorValue;
+        if tmp.len() < 8 {
+            return Err(StorageError::deserialize_error(
+                "compact variable payload truncated prefix".to_string(),
+            ));
+        }
+        let mut lb = [0u8; 8];
+        lb.copy_from_slice(&tmp[..8]);
+        let len = u64::from_le_bytes(lb) as usize;
+        if tmp.len() < 8 + len {
+            return Err(StorageError::deserialize_error(
+                "compact variable payload truncated body".to_string(),
+            ));
+        }
+        let bytes = &tmp[8..8 + len];
+        if matches!(self.data_type, DataType::Geography) {
+            let geo = postcard::from_bytes::<graphdb_core::value::Geography>(bytes).map_err(|e| {
+                StorageError::deserialize_error(format!("compact geography: {}", e))
+            })?;
+            return Ok(Value::Geography(geo));
+        } else if matches!(
+            self.data_type,
+            DataType::Vector | DataType::VectorDense(_) | DataType::VectorSparse(_)
+        ) {
+            if !bytes.len().is_multiple_of(4) {
+                return Err(StorageError::deserialize_error(
+                    "compact vector length not a multiple of 4".to_string(),
+                ));
+            }
+            let dim = bytes.len() / 4;
+            if let DataType::VectorDense(expected) = &self.data_type {
+                if *expected > 0 && dim != *expected {
+                    return Err(StorageError::deserialize_error(format!(
+                        "compact vector dimension mismatch: need {}, got {}",
+                        expected, dim
+                    )));
+                }
+            }
+            let mut out = Vec::with_capacity(dim);
+            for i in 0..dim {
+                let chunk: [u8; 4] = bytes[i * 4..(i + 1) * 4].try_into().map_err(|_| {
+                    StorageError::deserialize_error(
+                        "compact vector component undecodable".to_string(),
+                    )
+                })?;
+                out.push(f32::from_le_bytes(chunk));
+            }
+            return Ok(Value::Vector(VectorValue::dense(out)));
+        } else if matches!(self.data_type, DataType::Json) {
+            let s = String::from_utf8(bytes.to_vec())
+                .map_err(|e| StorageError::deserialize_error(format!("compact JSON UTF-8: {}", e)))?;
+            let j = graphdb_core::value::Json::parse(&s)
+                .map_err(|e| StorageError::deserialize_error(format!("compact JSON: {}", e)))?;
+            return Ok(Value::Json(Box::new(j)));
+        } else if matches!(self.data_type, DataType::JsonB) {
+            let s = String::from_utf8(bytes.to_vec()).map_err(|e| {
+                StorageError::deserialize_error(format!("compact JSONB UTF-8: {}", e))
+            })?;
+            let jb = graphdb_core::value::JsonB::parse(&s)
+                .map_err(|e| StorageError::deserialize_error(format!("compact JSONB: {}", e)))?;
+            return Ok(Value::JsonB(Box::new(jb)));
+        } else if matches!(self.data_type, DataType::FixedString(_)) {
+            let s = String::from_utf8(bytes.to_vec()).map_err(|e| {
+                StorageError::deserialize_error(format!("compact fixed string UTF-8: {}", e))
+            })?;
+            return Ok(Value::FixedString(s));
+        } else if matches!(
+            self.data_type,
+            DataType::Struct(_)
+                | DataType::Array(_)
+                | DataType::List(_)
+                | DataType::Map(_)
+                | DataType::Set(_)
+                | DataType::DataSet
+                | DataType::Vertex
+                | DataType::Edge
+                | DataType::Path
+                | DataType::Interval
+                | DataType::Decimal128
+                | DataType::Decimal { .. }
+                | DataType::Union(_)
+        ) {
+            let v = postcard::from_bytes::<Value>(bytes)
+                .map_err(|e| StorageError::deserialize_error(format!("compact opaque: {}", e)))?;
+            return Ok(v);
+        } else if matches!(self.data_type, DataType::Blob) {
+            return Ok(Value::Blob(bytes.to_vec()));
+        } else {
+            let s = String::from_utf8(bytes.to_vec())
+                .map_err(|e| StorageError::deserialize_error(format!("compact string UTF-8: {}", e)))?;
+            return Ok(Value::string(s));
+        }
     }
 
     /// Core value write with the segment write latch already held.
@@ -600,31 +930,39 @@ impl Column {
             )));
         }
         let local = (row_idx - chunk.row_offset) as u32;
-        // Large-string overflow routing happens before encoding checks so the
-        // main buffers only ever hold the small inline placeholder.
-        if matches!(self.data_type, DataType::String | DataType::Blob) {
-            let payload: Option<&[u8]> = match value {
-                Some(Value::String(s)) => Some(s.as_bytes()),
-                Some(Value::Blob(b)) => Some(b.as_slice()),
+        // Unified overflow routing by payload bytes happens before encoding
+        // checks so the main buffers only ever hold small payloads plus
+        // placeholders. The side store stays a short critical section: one
+        // lock for the threshold check plus handle allocation, never nesting
+        // back into a segment latch. Segment work below only updates row
+        // payloads and metadata. Threshold stays per-column configurable;
+        // `usize::MAX` disables routing with the same small-inline behavior.
+        if super::overflow::OverflowStore::routes_for(&self.data_type) {
+            let payload: Option<Vec<u8>> = match value {
+                Some(v) if !v.is_null() => super::overflow::overflow_payload_bytes(v),
                 _ => None,
             };
             if let Some(bytes) = payload {
-                if self.overflow_store.lock().should_overflow(bytes.len()) {
-                    let handle = self.overflow_store.lock().append(bytes);
+                let handle = {
+                    let mut store = self.overflow_store.lock();
+                    if !store.should_overflow(bytes.len()) {
+                        None
+                    } else {
+                        Some(store.append(&bytes))
+                    }
+                };
+                if let Some(handle) = handle {
                     state.overflow_rows.insert(local, handle);
                     // The side store is authoritative for this row: main
                     // buffers keep only an inline placeholder, and any
                     // chunk overlay entry for the row is stale.
                     state.overlay.remove(local);
-                    let placeholder = match self.data_type {
-                        DataType::Blob => Value::Blob(Vec::new()),
-                        _ => Value::string(""),
-                    };
+                    let placeholder = Value::string("");
                     let normalized = match Some(&placeholder) {
                         Some(v) if v.is_null() => None,
                         other => other,
                     };
-                    state.raw.as_storage_mut().set(local as usize, normalized)?;
+                    let _ = state.raw.as_storage_mut().set(local as usize, normalized);
                     return Ok(false);
                 }
             }
@@ -752,13 +1090,9 @@ impl Column {
     ) -> StorageResult<()> {
         let use_chunk_layer = self.chunk_layer_routes(&self.chunks.read());
         let absorbed = self.with_resident_chunk(row_idx, |chunk, state| {
-            // Fresh coverage has no side state yet; size it to the window.
+            // Fresh coverage has no side state yet; size visibility to the
+            // window. Sparse chains allocate only on real history writes.
             state.visibility.ensure_len(chunk.row_count);
-            if let Some(chains) = state.version_chains.as_mut() {
-                if chains.len() < chunk.row_count {
-                    chains.resize(chunk.row_count, Vec::new());
-                }
-            }
             self.write_core(chunk, state, row_idx, value, use_chunk_layer)
         })?;
         let _ = absorbed;
@@ -788,12 +1122,7 @@ impl Column {
             let local = row_idx - chunk.row_offset;
             state.visibility.ensure_len(chunk.row_count);
             if let Some(chains) = state.version_chains.as_mut() {
-                if chains.len() < chunk.row_count {
-                    chains.resize(chunk.row_count, Vec::new());
-                }
-                if local < chains.len() {
-                    chains[local].clear();
-                }
+                chains.remove(&local);
             }
             state.visibility.mark_created(local, 0);
             self.write_core(chunk, state, row_idx, value, use_chunk_layer)
@@ -832,12 +1161,7 @@ impl Column {
             state.visibility.ensure_len(chunk.row_count);
             // Clear any existing version chain for this row
             if let Some(chains) = state.version_chains.as_mut() {
-                if chains.len() < chunk.row_count {
-                    chains.resize(chunk.row_count, Vec::new());
-                }
-                if local < chains.len() {
-                    chains[local].clear();
-                }
+                chains.remove(&local);
             }
             // Set the correct creation timestamp
             state.visibility.mark_created(local, create_ts);
@@ -859,69 +1183,97 @@ impl Column {
         self.get_in(&chunks, row_idx)
     }
 
-    /// [`Self::get`] against an already-locked chunk vector.
-    pub(super) fn get_in(&self, chunks: &[ColumnChunk], row_idx: usize) -> Option<Value> {
+    /// Strict point read distinguishing never-written windows from corrupt
+    /// payloads.
+    ///
+    /// Never-written rows (out of range, gaps, null slots) yield `Ok(None)`.
+    /// Evicted-snapshot decode failures, side-store corruptions and raw
+    /// length or dimension mismatches yield `Err` carrying the column name
+    /// and row so queries fail loudly instead of observing silent nulls.
+    pub fn try_get(&self, row_idx: usize) -> StorageResult<Option<Value>> {
+        let chunks = self.chunks.read();
+        self.try_get_in(&chunks, row_idx)
+    }
+
+    pub(super) fn try_get_in(
+        &self,
+        chunks: &[ColumnChunk],
+        row_idx: usize,
+    ) -> StorageResult<Option<Value>> {
         let capacity = self.chunk_capacity();
-        let chunk = chunks.get(row_idx / capacity.max(1))?;
-        // Rows outside the owning window (only possible when the
-        // chunk shrank under a concurrent-free exclusive op) read as
-        // missing, matching out-of-range reads.
+        let Some(chunk) = chunks.get(row_idx / capacity.max(1)) else {
+            return Ok(None);
+        };
         if row_idx < chunk.row_offset || row_idx >= chunk.row_offset + chunk.row_count {
-            return None;
+            return Ok(None);
         }
         let local = (row_idx - chunk.row_offset) as u32;
-        // Overflow rows are authoritative in the side store. The handle is
-        // copied out before locking the store so the segment latch never
-        // nests inside the store lock.
-        if matches!(self.data_type, DataType::String | DataType::Blob) {
+        if super::overflow::OverflowStore::routes_for(&self.data_type) {
             let handle = chunk.read_state().overflow_rows.get(&local).copied();
             if let Some(handle) = handle {
-                if let Some(bytes) = self.overflow_store.lock().get(&handle) {
-                    match self.data_type {
-                        DataType::Blob => return Some(Value::Blob(bytes)),
-                        _ => {
-                            if let Ok(s) = String::from_utf8(bytes) {
-                                return Some(Value::string(s));
-                            }
-                        }
-                    }
-                }
+                let bytes = self.overflow_store.lock().get(&handle).ok_or_else(|| {
+                    StorageError::deserialize_error(format!(
+                        "column {} overflow payload missing at row {}",
+                        self.name, row_idx
+                    ))
+                })?;
+                let value =
+                    super::overflow::decode_overflow_payload(&self.data_type, bytes).map_err(
+                        |e| {
+                            StorageError::deserialize_error(format!(
+                                "column {} overflow decode failed at row {}: {}",
+                                self.name, row_idx, e
+                            ))
+                        },
+                    )?;
+                return Ok(Some(value));
             }
         }
-        // Recency stamp for watermark-ordered eviction. Atomic so
-        // shared-reference reads participate without a lock upgrade.
         chunk.touch();
         let state = chunk.read_state();
         match &state.residency {
             ChunkResidency::Resident => {
                 if let Some(hit) = state.overlay.get(local) {
-                    return hit;
+                    return Ok(hit);
                 }
-                // Chunk-local encodings are authoritative when present;
-                // raw chunks serve their owned buffers.
                 if state.encoding.is_encoded() {
-                    return self.restore_string_type(state.encoding.get(local as usize));
+                    return Ok(self.restore_string_type(state.encoding.get(local as usize)));
                 }
-                state.raw.as_storage().get(local as usize)
+                state.raw.as_storage().try_get(local as usize).map_err(|e| {
+                    StorageError::deserialize_error(format!(
+                        "column {} raw decode failed at rows {}-{}: {}",
+                        self.name,
+                        chunk.row_offset,
+                        chunk.row_offset + chunk.row_count,
+                        e
+                    ))
+                })
             }
-            ChunkResidency::Evicted(snapshot) => {
-                // Cold miss served from the compressed snapshot
-                // without promoting: promotion happens on write
-                // paths (writes, batch prefetch, encode, flush).
-                // The snapshot is checksummed in memory, so a
-                // decode failure here is unreachable; warn and miss
-                // rather than failing the read.
-                match snapshot.decode_row(row_idx) {
-                    Ok(value) => value,
-                    Err(e) => {
-                        log::warn!(
-                            "evicted chunk row {} snapshot decode failed: {}; reading as missing",
-                            row_idx,
-                            e
-                        );
-                        None
-                    }
-                }
+            ChunkResidency::Evicted(snapshot) => snapshot.decode_row(row_idx).map_err(|e| {
+                StorageError::deserialize_error(format!(
+                    "column {} evicted snapshot decode failed at row {}: {}",
+                    self.name, row_idx, e
+                ))
+            }),
+        }
+    }
+
+    /// [`Self::get`] against an already-locked chunk vector.
+    ///
+    /// Lenient wrapper over [`Self::try_get_in`]: never-written windows read
+    /// as missing, while corrupt payloads log and read as missing. Query
+    /// paths needing explicit errors must call `try_get_in` directly.
+    pub(super) fn get_in(&self, chunks: &[ColumnChunk], row_idx: usize) -> Option<Value> {
+        match self.try_get_in(chunks, row_idx) {
+            Ok(value) => value,
+            Err(e) => {
+                log::warn!(
+                    "column {} row {} lenient read failed: {}; reading as missing",
+                    self.name,
+                    row_idx,
+                    e
+                );
+                None
             }
         }
     }
@@ -947,16 +1299,16 @@ impl Column {
     fn is_null_in(column: &Column, chunks: &[ColumnChunk], row_idx: usize) -> bool {
         let capacity = column.chunk_capacity();
         let Some(chunk) = chunks.get(row_idx / capacity.max(1)) else {
-            return false;
+            return true;
         };
         if row_idx < chunk.row_offset || row_idx >= chunk.row_offset + chunk.row_count {
-            return false;
+            return true;
         }
         let local = (row_idx - chunk.row_offset) as u32;
-        if matches!(column.data_type, DataType::String | DataType::Blob)
-            && chunk.read_state().overflow_rows.contains_key(&local)
-        {
-            return false;
+        if super::overflow::OverflowStore::routes_for(&column.data_type) {
+            if chunk.read_state().overflow_rows.contains_key(&local) {
+                return false;
+            }
         }
         let state = chunk.read_state();
         if let Some(hit) = state.overlay.get(local) {
@@ -970,7 +1322,7 @@ impl Column {
             {
                 Some(Ok(value)) => return value.is_none(),
                 Some(Err(_)) => return false,
-                None => return false,
+                None => return true,
             }
         }
         if state.encoding.is_encoded() {
@@ -1017,7 +1369,7 @@ impl Column {
         for chunk in chunks.iter() {
             let state = chunk.read_state();
             if let Some(chains) = state.version_chains.as_ref() {
-                for chain in chains.iter() {
+                for (_, chain) in chains.iter() {
                     version_bytes += chain.len() * std::mem::size_of::<super::mvcc::VersionEntry>();
                     for entry in chain.iter() {
                         version_bytes += entry
@@ -1083,9 +1435,6 @@ impl Column {
             state.raw.as_storage_mut().reserve(additional);
             state.visibility.ensure_len(chunk.row_count);
             if let Some(chains) = state.version_chains.as_mut() {
-                if chains.len() < chunk.row_count {
-                    chains.resize(chunk.row_count, Vec::new());
-                }
                 chains.reserve(additional);
             }
         }
@@ -1095,18 +1444,55 @@ impl Column {
         self.total_dirty_pages.fetch_max(needed, Ordering::Relaxed);
     }
 
+    /// Whether truncated rows still hold version history.
+    ///
+    /// Conservative snapshot guard: any retained before-image in the cut
+    /// range may still serve an active snapshot, so the shrink refuses
+    /// instead of dropping history silently. Callers GC versions to the
+    /// watermark first; an empty cut range always allows the shrink.
+    fn shrink_blocked_by_history(&self, new_count: usize, current: usize) -> bool {
+        let chunks = self.chunks.read();
+        for chunk in chunks.iter() {
+            let chunk_start = chunk.row_offset;
+            let chunk_end = chunk.row_offset + chunk.row_count;
+            if chunk_end <= new_count || chunk_start >= current {
+                continue;
+            }
+            let state = chunk.read_state();
+            if let Some(chains) = state.version_chains.as_ref() {
+                for (local, chain) in chains.iter() {
+                    if chunk_start + local >= new_count && !chain.is_empty() {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Grow or shrink the column to `new_count` rows.
     ///
     /// Growth only appends the tail and is safe under the shard read lock.
     /// Shrinking rewrites windows and is exclusive-only (shard write lock),
-    /// like `materialize_chunks`.
-    pub fn resize(&self, new_count: usize) {
+    /// like `materialize_chunks`. Shrinks align to the reclamation watermark:
+    /// rows at or past `new_count` holding version history are treated as
+    /// still referenced by active snapshots and refuse the shrink so history
+    /// is never dropped silently. Returns false when the shrink is refused.
+    pub fn resize(&self, new_count: usize) -> bool {
         let current = self.len();
         if new_count > current {
             // Grow through the coverage path so windows stay
             // capacity-aligned and gap rows read back as null.
             self.ensure_coverage(new_count - 1);
         } else if new_count < current {
+            if self.shrink_blocked_by_history(new_count, current) {
+                log::warn!(
+                    "column {} refuses shrink to {} rows: version history still references truncated range",
+                    self.name,
+                    new_count
+                );
+                return false;
+            }
             // Shrink from the tail: drop whole windows past the cut, then
             // trim the straddling chunk and its owned buffers.
             let mut chunks = self.chunks.write();
@@ -1140,7 +1526,7 @@ impl Column {
                     }
                     state.visibility.truncate(keep);
                     if let Some(chains) = state.version_chains.as_mut() {
-                        chains.truncate(keep);
+                        chains.retain(|local, _| *local < keep);
                     }
                     state
                         .overflow_rows
@@ -1156,11 +1542,7 @@ impl Column {
             let count = chunk.row_count;
             state.visibility.ensure_len(count);
             if let Some(chains) = state.version_chains.as_mut() {
-                if chains.len() < count {
-                    chains.resize(count, Vec::new());
-                } else {
-                    chains.truncate(count);
-                }
+                chains.retain(|local, _| *local < count);
             }
             state
                 .overflow_rows
@@ -1171,6 +1553,7 @@ impl Column {
             new_count.div_ceil(crate::persistence::dirty_page::ROWS_PER_PAGE),
             Ordering::Relaxed,
         );
+        true
     }
 
     /// Raw base value for encoding inputs and persisted buffers: overflow
@@ -1183,7 +1566,7 @@ impl Column {
         chunks: &[ColumnChunk],
         row_idx: usize,
     ) -> Option<Value> {
-        if matches!(self.data_type, DataType::String | DataType::Blob) {
+        if super::overflow::OverflowStore::routes_for(&self.data_type) {
             let capacity = self.chunk_capacity();
             if let Some(chunk) = chunks.get(row_idx / capacity.max(1)) {
                 if row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count {
@@ -1209,7 +1592,7 @@ impl Column {
         chunks: &[ColumnChunk],
         row_idx: usize,
     ) -> Option<Value> {
-        if matches!(self.data_type, DataType::String | DataType::Blob) {
+        if super::overflow::OverflowStore::routes_for(&self.data_type) {
             let capacity = self.chunk_capacity();
             if let Some(chunk) = chunks.get(row_idx / capacity.max(1)) {
                 if row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count {
@@ -1232,7 +1615,7 @@ impl Column {
     fn values_into_buffers(
         &self,
         values: impl Iterator<Item = Option<Value>>,
-    ) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>) {
+    ) -> (Vec<u8>, Vec<u32>, Option<BitVec<u8, Lsb0>>) {
         let is_var = super::is_variable_length_type(&self.data_type);
         let elem_size = super::element_size(&self.data_type);
         let mut new_data = Vec::new();
@@ -1246,7 +1629,7 @@ impl Column {
                         bm.push(false);
                     }
                     if is_var {
-                        new_offsets.push(new_data.len() as u64);
+                        new_offsets.push(new_data.len() as u32);
                         match &v {
                             Value::String(s) => {
                                 let bytes = s.as_bytes();
@@ -1260,7 +1643,7 @@ impl Column {
                             }
                             _ => {
                                 new_offsets.pop();
-                                new_offsets.push(u64::MAX);
+                                new_offsets.push(u32::MAX);
                             }
                         }
                     } else {
@@ -1288,7 +1671,7 @@ impl Column {
                         bm.push(true);
                     }
                     if is_var {
-                        new_offsets.push(u64::MAX);
+                        new_offsets.push(u32::MAX);
                     }
                 }
             }
@@ -1297,7 +1680,7 @@ impl Column {
         (new_data, new_offsets, new_bitmap)
     }
 
-    pub fn get_flush_data(&self) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>) {
+    pub fn get_flush_data(&self) -> (Vec<u8>, Vec<u32>, Option<BitVec<u8, Lsb0>>) {
         // Fast path: concatenate owned chunk buffers. Only when every chunk
         // is resident and raw; evicted chunks (whose live encoding reads as
         // None) fall through to the row-wise path that serves snapshots.
@@ -1316,12 +1699,12 @@ impl Column {
                 for chunk in chunks.iter() {
                     let state = chunk.read_state();
                     let (chunk_data, chunk_offsets, _) = state.raw.as_storage().get_flush_data();
-                    let base = data.len() as u64;
+                    let base = data.len() as u32;
                     for off in chunk_offsets {
-                        offsets.push(if off == u64::MAX {
-                            u64::MAX
+                        offsets.push(if off == u32::MAX {
+                            u32::MAX
                         } else {
-                            base + off
+                            base.saturating_add(off)
                         });
                     }
                     data.extend_from_slice(&chunk_data);
@@ -1615,7 +1998,7 @@ impl Column {
             || state
                 .version_chains
                 .as_ref()
-                .is_some_and(|chains| chains.iter().any(|chain| !chain.is_empty()))
+                .is_some_and(|chains| chains.values().any(|chain| !chain.is_empty()))
         {
             return Ok(0);
         }
@@ -2122,7 +2505,18 @@ impl Column {
                 debug_assert_eq!(state.overlay.len(), 0);
                 let (left_raw, right_raw) = Self::split_raw(&state.raw, at);
                 state.raw = left_raw;
-                let right_chains = state.version_chains.as_mut().map(|c| c.split_off(at));
+                let right_chains = state.version_chains.as_mut().map(|c| {
+                    let mut right = std::collections::HashMap::new();
+                    c.retain(|local, chain| {
+                        if *local < at {
+                            true
+                        } else {
+                            right.insert(*local - at, std::mem::take(chain));
+                            false
+                        }
+                    });
+                    right
+                });
                 let right_vis = state.visibility.split_off(at);
                 // Dirty pages are global ids: a page stays with the side
                 // holding its first row. A straddling page stays left; its
@@ -2301,9 +2695,13 @@ impl Column {
     /// Apply an encoding type independently per chunk.
     ///
     /// Each chunk is resolved and encoded in isolation (bounded by chunk
-    /// capacity): no full-column value vector is ever materialized. When a
-    /// chunk selects `None`, its overlay-merged values are written back to
-    /// the raw buffer before the overlay is cleared so no update is lost.
+    /// capacity): no full-column value vector is ever materialized. Hot
+    /// chunks encode first so write hotspots become evictable sooner; cold
+    /// chunks keep their rhythm. When a chunk selects `None`, its
+    /// overlay-merged values are written back to the raw buffer before the
+    /// overlay is cleared so no update is lost. Overlay-full chunks already
+    /// mark hot on the write path and never wait for a whole-column
+    /// fallback.
     pub fn apply_encoding_to_chunks(
         &self,
         encoding_type: crate::encoding::EncodingType,
@@ -2326,8 +2724,22 @@ impl Column {
             self.ensure_resident(idx)?;
         }
         let total = self.len();
-        let len = self.chunks.read().len();
-        for idx in 0..len {
+        let order: Vec<usize> = {
+            let chunks = self.chunks.read();
+            let mut scored: Vec<(u64, usize)> = chunks
+                .iter()
+                .enumerate()
+                .map(|(idx, chunk)| {
+                    let hot = chunk.read_state().updates_since_encode;
+                    (hot, idx)
+                })
+                .collect();
+            scored.sort_by(|a, b| b.0.cmp(&a.0));
+            scored.into_iter().map(|(_, idx)| idx).collect()
+        };
+        let len = order.len();
+        for pos in 0..len {
+            let idx = order[pos];
             let (start, end) = {
                 let chunks = self.chunks.read();
                 let Some(chunk) = chunks.get(idx) else {

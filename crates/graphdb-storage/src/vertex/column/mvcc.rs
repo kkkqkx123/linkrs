@@ -1,5 +1,5 @@
 use graphdb_core::types::Timestamp;
-use graphdb_core::Value;
+use graphdb_core::{StorageResult, Value};
 
 use super::Column;
 
@@ -159,19 +159,14 @@ impl Column {
             // that reuse the transaction's original timestamp).
             if local < chunk.row_count && old_create < ts && (current.is_some() || cur_null) {
                 if state.version_chains.is_none() {
-                    state.version_chains = Some(vec![Vec::new(); chunk.row_count]);
+                    state.version_chains = Some(std::collections::HashMap::new());
                 }
                 if let Some(chains) = state.version_chains.as_mut() {
-                    if chains.len() < chunk.row_count {
-                        chains.resize(chunk.row_count, Vec::new());
-                    }
-                    if local < chains.len() {
-                        chains[local].push(VersionEntry {
-                            start_ts: old_create,
-                            end_ts: ts,
-                            value: current.clone(),
-                        });
-                    }
+                    chains.entry(local).or_default().push(VersionEntry {
+                        start_ts: old_create,
+                        end_ts: ts,
+                        value: current.clone(),
+                    });
                 }
             }
             let absorbed = self.write_core(chunk, state, row_idx, value, use_chunk_layer)?;
@@ -224,7 +219,7 @@ impl Column {
         let chain = state
             .version_chains
             .as_ref()
-            .and_then(|c| c.get(local))
+            .and_then(|c| c.get(&local))
             .cloned();
         drop(state);
         drop(chunks);
@@ -268,6 +263,80 @@ impl Column {
         None
     }
 
+    /// Strict versioned read with explicit decode errors.
+    ///
+    /// Same visibility discipline as [`Self::get_at_ts`] through the unified
+    /// predicate: column visibility only, row liveness stays with the caller.
+    /// Never-written windows yield `Ok(None)`; corrupt base payloads yield
+    /// `Err` with the column and row so queries fail loudly.
+    pub fn try_get_at_ts(
+        &self,
+        row_idx: usize,
+        query_ts: Timestamp,
+    ) -> StorageResult<Option<Value>> {
+        let chunks = self.chunks.read();
+        let capacity = self.chunk_capacity();
+        let Some(chunk) = chunks.get(row_idx / capacity.max(1)) else {
+            return Ok(None);
+        };
+        if row_idx < chunk.row_offset || row_idx >= chunk.row_offset + chunk.row_count {
+            return Ok(None);
+        }
+        let local = row_idx - chunk.row_offset;
+        let state = chunk.read_state();
+        let start_ts = state
+            .visibility
+            .create_ts()
+            .get(local)
+            .copied()
+            .unwrap_or(0);
+        if crate::mvcc_visibility::Visibility::is_column_visible(query_ts, start_ts) {
+            drop(state);
+            return self.try_get_in(&chunks, row_idx);
+        }
+        let chain = state
+            .version_chains
+            .as_ref()
+            .and_then(|c| c.get(&local))
+            .cloned();
+        drop(state);
+        drop(chunks);
+        let Some(chain) = chain else {
+            return Ok(None);
+        };
+        if chain.is_empty() {
+            return Ok(None);
+        }
+        let idx = match chain.binary_search_by_key(&query_ts, |e| e.start_ts) {
+            Ok(i) => i,
+            Err(i) => {
+                if i == 0 {
+                    return Ok(None);
+                }
+                i - 1
+            }
+        };
+        let entry = &chain[idx];
+        if crate::mvcc_visibility::Visibility::is_version_visible(
+            query_ts,
+            entry.start_ts,
+            entry.end_ts,
+        ) {
+            return Ok(entry.value.clone());
+        }
+        if idx + 1 < chain.len() {
+            let nxt = &chain[idx + 1];
+            if crate::mvcc_visibility::Visibility::is_version_visible(
+                query_ts,
+                nxt.start_ts,
+                nxt.end_ts,
+            ) {
+                return Ok(nxt.value.clone());
+            }
+        }
+        Ok(None)
+    }
+
     /// Start timestamp of the version covering `query_ts` for a row.
     ///
     /// Internal companion of [`Column::get_at_ts`]: returns the stamp the
@@ -299,7 +368,7 @@ impl Column {
         let chain = state
             .version_chains
             .as_ref()
-            .and_then(|c| c.get(local))
+            .and_then(|c| c.get(&local))
             .cloned();
         drop(state);
         drop(chunks);
@@ -350,7 +419,7 @@ impl Column {
         for chunk in chunks.iter() {
             let mut state = chunk.write_state();
             if let Some(chains) = state.version_chains.as_mut() {
-                for chain in chains.iter_mut() {
+                for chain in chains.values_mut() {
                     let before = chain.len();
                     if chain.is_empty() {
                         continue;
@@ -423,7 +492,7 @@ impl Column {
         let src_chain = src_state
             .version_chains
             .as_ref()
-            .and_then(|c| c.get(src_local))
+            .and_then(|c| c.get(&src_local))
             .cloned();
         let src_has_chains = src_state.version_chains.is_some();
         drop(src_state);
@@ -446,14 +515,16 @@ impl Column {
         }
         if src_has_chains {
             if dst_state.version_chains.is_none() {
-                dst_state.version_chains = Some(vec![Vec::new(); dst_chunk.row_count]);
+                dst_state.version_chains = Some(std::collections::HashMap::new());
             }
             if let Some(vecs) = dst_state.version_chains.as_mut() {
-                if vecs.len() < dst_chunk.row_count {
-                    vecs.resize(dst_chunk.row_count, Vec::new());
-                }
-                if dst_local < vecs.len() {
-                    vecs[dst_local] = src_chain.clone().unwrap_or_default();
+                match src_chain.clone() {
+                    Some(chain) if !chain.is_empty() => {
+                        vecs.insert(dst_local, chain);
+                    }
+                    _ => {
+                        vecs.remove(&dst_local);
+                    }
                 }
             }
         }
@@ -468,7 +539,7 @@ impl Column {
         for chunk in chunks.iter() {
             let state = chunk.read_state();
             if let Some(chains) = state.version_chains.as_ref() {
-                for (local, chain) in chains.iter().enumerate() {
+                for (local, chain) in chains.iter() {
                     for entry in chain.iter() {
                         out.push((chunk.row_offset + local, entry.value.clone()));
                     }
@@ -492,7 +563,7 @@ impl Column {
                     .read_state()
                     .version_chains
                     .as_ref()
-                    .and_then(|c| c.get(row_idx - chunk.row_offset))
+                    .and_then(|c| c.get(&(row_idx - chunk.row_offset)))
                     .map(|c| c.len())
                     .unwrap_or(0)
             })
@@ -509,7 +580,7 @@ impl Column {
             let state = chunk.read_state();
             if let Some(chains) = state.version_chains.as_ref() {
                 total_rows += chains.len();
-                for chain in chains.iter() {
+                for (_, chain) in chains.iter() {
                     total_entries += chain.len();
                     max_len = max_len.max(chain.len());
                     memory_bytes += chain.len() * std::mem::size_of::<VersionEntry>();

@@ -46,6 +46,10 @@ impl CsrWithProperties {
     }
 
     /// Drop the mapping for `edge_id`, returning its former row.
+    ///
+    /// Edge identifiers never recycle: removal only clears the slot and
+    /// releases empty segments, never returns the id to an allocator. Loads
+    /// rebuild the map in a single pass from persisted rows.
     pub(crate) fn map_remove(&mut self, edge_id: EdgeId) -> Option<usize> {
         let slot = edge_id.0 as usize;
         let (seg, off) = Self::segment_of(slot);

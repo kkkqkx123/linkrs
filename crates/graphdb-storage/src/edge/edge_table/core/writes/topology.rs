@@ -187,6 +187,7 @@ impl EdgeStore {
                 log::debug!("bulk import reserve in skipped: {}", e);
             }
         }
+        self.properties.reserve_for_batch(entries.len());
         let base = self.next_edge_id.0;
         let ids: Vec<EdgeId> = (0..entries.len())
             .map(|i| EdgeId(base + i as u64))
@@ -387,6 +388,7 @@ impl EdgeStore {
                 log::debug!("bulk import reserve in skipped: {}", e);
             }
         }
+        self.properties.reserve_for_batch(entries.len());
         let base = self.next_edge_id.0;
         let ids: Vec<EdgeId> = (0..entries.len())
             .map(|i| EdgeId(base + i as u64))

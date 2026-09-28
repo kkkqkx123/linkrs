@@ -462,7 +462,7 @@ impl EdgeStore {
                 continue;
             };
             for (local_vid, nbr) in variant.iter_all() {
-                if nbr.edge_id == crate::edge::INVALID_EDGE_ID {
+                if crate::edge::csr_shared::is_gap_nbr(&nbr) {
                     continue;
                 }
                 // Authority-total: live edges always hold an authority
@@ -571,7 +571,7 @@ impl EdgeStore {
         for gid in self.out_csr.existing_group_ids() {
             if let Some(variant) = self.out_csr.group_variant(gid) {
                 for (_, nbr) in variant.iter_all() {
-                    if nbr.edge_id == crate::edge::INVALID_EDGE_ID {
+                    if crate::edge::csr_shared::is_gap_nbr(&nbr) {
                         continue;
                     }
                     debug_assert!(

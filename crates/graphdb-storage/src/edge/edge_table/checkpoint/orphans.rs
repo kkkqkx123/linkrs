@@ -12,6 +12,48 @@ use std::collections::HashSet;
 use std::path::Path;
 
 impl EdgeStore {
+    /// Delete every residual file of one owner group and count removals.
+    ///
+    /// Invalid-group recovery after a torn epoch: the manifest lists the
+    /// group but a companion file is missing or corrupt, so no cross-epoch
+    /// stitching is attempted. Residual base, sidecar, timestamp, property
+    /// and snapshot files are removed and the group is rebuilt empty by the
+    /// caller, leaving the table writable.
+    pub(crate) fn remove_invalid_group_files(&self, dir: &Path, gid: u32) -> usize {
+        use super::layout::{
+            in_append_path, in_group_path, out_append_path, out_group_path, props_group_path,
+            ts_group_path,
+        };
+        use super::snapshot::snapshot_path_for;
+        let mut removed = 0usize;
+        let candidates = [
+            out_group_path(dir, gid as usize),
+            in_group_path(dir, gid as usize),
+            out_append_path(dir, gid as usize),
+            in_append_path(dir, gid as usize),
+            ts_group_path(dir, gid),
+            props_group_path(dir, gid),
+        ];
+        for path in candidates {
+            if path.exists() && std::fs::remove_file(&path).is_ok() {
+                removed += 1;
+            }
+            let snapshot = snapshot_path_for(&path);
+            if snapshot.exists() && std::fs::remove_file(&snapshot).is_ok() {
+                removed += 1;
+            }
+        }
+        if removed > 0 {
+            log::warn!(
+                "EdgeTable[{}] cleaned residual files of invalid group {}: {} files",
+                self.label,
+                gid,
+                removed
+            );
+        }
+        removed
+    }
+
     /// Remove group files whose group no longer exists, returning the removed
     /// count for observability.
     ///

@@ -124,6 +124,16 @@ impl EdgeStore {
                     .filter_edge_ids_by_predicates(predicates, query_ts, Some(&indexed));
             return self.visible_only(hits, query_ts);
         }
+        if self.property_index.is_some() && self.index_lag() > 0 {
+            log::warn!(
+                "edge table '{}' index lagged (lag={}): falling back to main-table scan",
+                self.label_name,
+                self.index_lag()
+            );
+            if let Some(stats) = &self.stats_manager {
+                stats.add_value(graphdb_metrics::MetricType::SnapshotFallbackCount);
+            }
+        }
         let pruned = self.pruned_owner_groups(predicates);
         if pruned.is_empty() {
             log::debug!(

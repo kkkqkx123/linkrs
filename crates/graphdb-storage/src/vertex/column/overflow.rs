@@ -47,6 +47,144 @@ impl OverflowStore {
         len > self.threshold
     }
 
+    /// Whether overflow routing applies to `data_type`.
+    ///
+    /// Unified by payload bytes, not a type whitelist: every variable-length
+    /// type spills when its serialized payload exceeds the threshold. Fixed
+    /// small types never spill. `usize::MAX` disables routing entirely.
+    pub fn routes_for(data_type: &graphdb_core::DataType) -> bool {
+        if !crate::vertex::column::is_variable_length_type(data_type) {
+            return false;
+        }
+        true
+    }
+}
+
+/// Serialized overflow payload bytes for one value (without length prefix).
+///
+/// Unified threshold input: strings, blobs, vectors, JSON, geography and
+/// opaque containers all measure their stored bytes here. Fixed small values
+/// and nulls yield `None` and never spill. Disabled thresholds
+/// (`usize::MAX`) are checked by the caller via `should_overflow`.
+pub(crate) fn overflow_payload_bytes(value: &graphdb_core::Value) -> Option<Vec<u8>> {
+    use graphdb_core::Value;
+    match value {
+        Value::String(s) => Some(s.as_bytes().to_vec()),
+        Value::FixedString(s) => Some(s.as_bytes().to_vec()),
+        Value::Blob(b) => Some(b.clone()),
+        Value::Vector(v) => {
+            let dense = v.to_dense();
+            let mut out = Vec::with_capacity(dense.len() * 4);
+            for f in dense {
+                out.extend_from_slice(&f.to_le_bytes());
+            }
+            Some(out)
+        }
+        Value::Json(j) => Some(j.as_str().as_bytes().to_vec()),
+        Value::JsonB(j) => Some(j.to_json_string().as_bytes().to_vec()),
+        Value::Geography(g) => postcard::to_allocvec(g).ok(),
+        Value::Struct(_)
+        | Value::Array(_)
+        | Value::List(_)
+        | Value::Map(_)
+        | Value::Set(_)
+        | Value::DataSet(_)
+        | Value::Vertex(_)
+        | Value::Edge(_)
+        | Value::Path(_)
+        | Value::Interval(_)
+        | Value::Decimal128(_)
+        | Value::VertexId(_)
+        | Value::EdgeId(_) => postcard::to_allocvec(value).ok(),
+        _ => None,
+    }
+}
+
+/// Decode overflow payload bytes for one column type.
+///
+/// Strict companion of the variable-width decoder: invalid UTF-8,
+/// dimension mismatches and undecodable containers are storage errors
+/// carrying no row context here; callers attach column and row.
+pub(crate) fn decode_overflow_payload(
+    data_type: &graphdb_core::DataType,
+    bytes: Vec<u8>,
+) -> graphdb_core::StorageResult<graphdb_core::Value> {
+    use graphdb_core::{DataType, StorageError, Value};
+    match data_type {
+        DataType::Blob => Ok(Value::Blob(bytes)),
+        DataType::String => String::from_utf8(bytes)
+            .map(Value::string)
+            .map_err(|e| StorageError::deserialize_error(format!("overflow UTF-8: {}", e))),
+        DataType::FixedString(_) => String::from_utf8(bytes)
+            .map(Value::FixedString)
+            .map_err(|e| StorageError::deserialize_error(format!("overflow UTF-8: {}", e))),
+        DataType::Vector | DataType::VectorDense(_) | DataType::VectorSparse(_) => {
+            if !bytes.len().is_multiple_of(4) {
+                return Err(StorageError::deserialize_error(format!(
+                    "overflow vector length {} not a multiple of 4",
+                    bytes.len()
+                )));
+            }
+            let dim = bytes.len() / 4;
+            if let DataType::VectorDense(expected) = data_type {
+                if *expected > 0 && dim != *expected {
+                    return Err(StorageError::deserialize_error(format!(
+                        "overflow vector dimension mismatch: need {}, got {}",
+                        expected, dim
+                    )));
+                }
+            }
+            let mut out = Vec::with_capacity(dim);
+            for i in 0..dim {
+                let chunk: [u8; 4] = bytes[i * 4..(i + 1) * 4].try_into().map_err(|_| {
+                    StorageError::deserialize_error("overflow vector component undecodable".to_string())
+                })?;
+                out.push(f32::from_le_bytes(chunk));
+            }
+            Ok(Value::Vector(
+                graphdb_core::value::VectorValue::dense(out),
+            ))
+        }
+        DataType::Json => {
+            let s = String::from_utf8(bytes).map_err(|e| {
+                StorageError::deserialize_error(format!("overflow JSON UTF-8: {}", e))
+            })?;
+            graphdb_core::value::Json::parse(&s)
+                .map(|j| Value::Json(Box::new(j)))
+                .map_err(|e| StorageError::deserialize_error(format!("overflow JSON: {}", e)))
+        }
+        DataType::JsonB => {
+            let s = String::from_utf8(bytes).map_err(|e| {
+                StorageError::deserialize_error(format!("overflow JSONB UTF-8: {}", e))
+            })?;
+            graphdb_core::value::JsonB::parse(&s)
+                .map(|jb| Value::JsonB(Box::new(jb)))
+                .map_err(|e| StorageError::deserialize_error(format!("overflow JSONB: {}", e)))
+        }
+        DataType::Geography => postcard::from_bytes::<graphdb_core::value::Geography>(&bytes)
+            .map(Value::Geography)
+            .map_err(|e| StorageError::deserialize_error(format!("overflow geography: {}", e))),
+        DataType::Struct(_)
+        | DataType::Array(_)
+        | DataType::List(_)
+        | DataType::Map(_)
+        | DataType::Set(_)
+        | DataType::DataSet
+        | DataType::Vertex
+        | DataType::Edge
+        | DataType::Path
+        | DataType::Interval
+        | DataType::Decimal128
+        | DataType::Decimal { .. }
+        | DataType::Union(_) => postcard::from_bytes::<Value>(&bytes)
+            .map_err(|e| StorageError::deserialize_error(format!("overflow opaque: {}", e))),
+        _ => String::from_utf8(bytes)
+            .map(Value::string)
+            .map_err(|e| StorageError::deserialize_error(format!("overflow UTF-8: {}", e))),
+    }
+}
+
+impl OverflowStore {
     pub fn append(&mut self, bytes: &[u8]) -> OverflowHandle {
         let offset = self.pending.len() as u64;
         self.pending.extend_from_slice(bytes);

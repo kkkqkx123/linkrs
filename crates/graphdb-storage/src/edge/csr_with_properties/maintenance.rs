@@ -4,6 +4,23 @@ use graphdb_core::types::{EdgeId, Timestamp};
 use std::collections::HashSet;
 
 impl CsrWithProperties {
+    /// Pre-allocate row and column capacity for an incoming batch.
+    ///
+    /// Sizes visibility, reverse indexes and every property column once so a
+    /// batch of `additional` edges lands in reserved gaps instead of growing
+    /// row by row. Inline stubs keep no rows and skip reservation.
+    pub fn reserve_for_batch(&mut self, additional: usize) {
+        if additional == 0 || self.is_inline_stub() {
+            return;
+        }
+        self.visibility.reserve(additional);
+        self.row_to_edge.reserve(additional);
+        self.free_list.reserve(additional);
+        for col in &mut self.property_columns {
+            col.reserve(additional);
+        }
+    }
+
     pub fn compaction_stats(&self) -> crate::edge::property_schema::PropertyCompactionStats {
         let tombstone_count = self
             .visibility

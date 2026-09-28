@@ -379,9 +379,9 @@ impl VertexTable {
                     let offsets_count = u32::from_le_bytes(u32b) as usize;
                     let mut offsets = Vec::with_capacity(offsets_count);
                     for _ in 0..offsets_count {
-                        let mut off_bytes = [0u8; 8];
+                        let mut off_bytes = [0u8; 4];
                         cursor.read_exact(&mut off_bytes)?;
-                        offsets.push(u64::from_le_bytes(off_bytes));
+                        offsets.push(u32::from_le_bytes(off_bytes));
                     }
                     let mut bitmap_flag = [0u8; 1];
                     cursor.read_exact(&mut bitmap_flag)?;

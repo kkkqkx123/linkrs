@@ -1,8 +1,8 @@
 use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult};
 
-use super::super::{EdgePosition, MutableCsrTrait};
-use super::{BundledCsr, BundledOverflowValues, INVALID_EDGE_ID};
+use super::super::{EdgePosition, MutableCsrTrait, INVALID_EDGE_ID};
+use super::{BundledCsr, BundledOverflowValues};
 
 impl BundledCsr {
     /// Grow the primary value columns to cover the topology primary block.

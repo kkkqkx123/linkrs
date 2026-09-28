@@ -38,7 +38,7 @@ impl CsrShardSet {
     }
 
     /// Visit every physically stored entry of one vertex without allocating.
-    pub fn visit_physical<F>(&self, src_vid: u32, f: F)
+    pub fn visit_physical<F>(&self, src_vid: u32, mut f: F)
     where
         F: FnMut(Nbr) -> bool,
     {
@@ -46,10 +46,24 @@ impl CsrShardSet {
             return;
         };
         if let Some(shard) = self.shards.get(&gid) {
+            let mut visited = 0usize;
+            let wrapped = |nbr: Nbr| {
+                visited += 1;
+                f(nbr)
+            };
             if let Some(mapped) = &shard.mapped {
-                mapped.visit_physical(local, f);
+                mapped.visit_physical(local, wrapped);
             } else {
-                shard.variant.visit_physical(local, f);
+                shard.variant.visit_physical(local, wrapped);
+            }
+            if visited > super::super::mutable_csr::row::HIGH_DEGREE_LIVE_THRESHOLD {
+                log::warn!(
+                    "slow topology traversal at row {} (group {} local {}): degree {} exceeds wide threshold",
+                    src_vid,
+                    gid,
+                    local,
+                    visited
+                );
             }
         }
     }

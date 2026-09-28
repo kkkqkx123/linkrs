@@ -726,9 +726,10 @@ impl Nbr {
     /// version authority
     /// ([`crate::mvcc_visibility::Visibility::is_edge_visible`]); using this
     /// probe for queries would fork a second visibility decision that drifts
-    /// from the authority. Restricted to crate-internal maintenance paths.
+    /// from the authority. Visible to the edge subtree only so storage layers
+    /// outside edge storage cannot mistake it for a visibility check.
     #[inline]
-    pub(crate) fn is_alive_at(&self, ts: Timestamp) -> bool {
+    pub(in crate::edge) fn is_alive_at(&self, ts: Timestamp) -> bool {
         ts < self.delete_ts
     }
 

@@ -38,8 +38,7 @@
 //! - `persistence` handles dump, load and encoding reports.
 //! - `trait_impl` adapts the type to CSR traits.
 
-use graphdb_core::types::EdgeId;
-
+pub(crate) use super::INVALID_EDGE_ID;
 use super::csr_shared::SegmentedTable;
 use super::pure_csr::PureTopologyCsr;
 use bitvec::order::Lsb0;
@@ -59,8 +58,6 @@ mod tests;
 
 pub use codec::{decode_scalar, encode_scalar};
 pub(crate) use overflow_values::BundledOverflowValues;
-
-const INVALID_EDGE_ID: EdgeId = EdgeId(u64::MAX);
 
 /// Bundled CSR: pure topology + one inline `value: u64` column.
 ///

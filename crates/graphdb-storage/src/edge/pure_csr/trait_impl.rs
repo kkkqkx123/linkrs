@@ -24,7 +24,7 @@ impl MutableCsrTrait for PureTopologyCsr {
         edge_id: EdgeId,
         _ts: Timestamp,
     ) -> StorageResult<bool> {
-        if edge_id == INVALID_EDGE_ID {
+        if super::super::csr_shared::is_gap_edge(edge_id) {
             return Ok(false);
         }
 

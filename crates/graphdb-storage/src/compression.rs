@@ -354,6 +354,15 @@ impl PageReader {
 }
 
 pub fn write_shadow_file<P: AsRef<std::path::Path>>(path: P, data: &[u8]) -> StorageResult<()> {
+    write_shadow_file_without_dir_sync(&path, data)?;
+    sync_dir_for_path(path.as_ref())?;
+    Ok(())
+}
+
+pub fn write_shadow_file_without_dir_sync<P: AsRef<std::path::Path>>(
+    path: P,
+    data: &[u8],
+) -> StorageResult<()> {
     use std::io::Write;
     let path = path.as_ref();
     let shadow_path = path.with_extension("tmp");
@@ -388,17 +397,27 @@ pub fn write_shadow_file<P: AsRef<std::path::Path>>(path: P, data: &[u8]) -> Sto
             e
         ))
     })?;
+    Ok(())
+}
+
+pub fn sync_dir_for_path(path: &std::path::Path) -> StorageResult<()> {
     if let Some(parent) = path.parent() {
-        std::fs::File::open(parent)
-            .and_then(|dir| dir.sync_all())
-            .map_err(|e| {
-                StorageError::io_error(format!(
-                    "Failed to sync parent dir for {}: {}",
-                    path.display(),
-                    e
-                ))
-            })?;
+        sync_dir(parent)?;
     }
+    Ok(())
+}
+
+pub fn sync_dir<P: AsRef<std::path::Path>>(dir: P) -> StorageResult<()> {
+    let dir = dir.as_ref();
+    std::fs::File::open(dir)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| {
+            StorageError::io_error(format!(
+                "Failed to sync parent dir for {}: {}",
+                dir.display(),
+                e
+            ))
+        })?;
     Ok(())
 }
 

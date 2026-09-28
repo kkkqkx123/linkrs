@@ -2,7 +2,7 @@ use super::CsrWithProperties;
 use crate::cursor::{PredicateRange, ScanPredicate};
 use crate::vertex::column::zone_map::ZONE_MAP_CHUNK_ROWS;
 use graphdb_core::types::{EdgeId, Timestamp};
-use graphdb_core::Value;
+use graphdb_core::{StorageError, StorageResult, Value};
 use std::collections::HashSet;
 
 type ProjectedProps = Vec<(String, Option<Value>)>;
@@ -147,6 +147,44 @@ impl CsrWithProperties {
                 )
             })
             .collect()
+    }
+
+    /// Strict physical projection with explicit decode errors.
+    ///
+    /// Query entry for explicit failure semantics. Visibility stays with the
+    /// caller through the version authority; row stamps never decide it
+    /// here. Never-written windows yield `None` cells; corrupt snapshots,
+    /// side-store payloads and raw length or dimension mismatches yield
+    /// `Err` carrying the column and edge so scans never observe silent
+    /// nulls. Unmapped edges still yield `Ok(None)`.
+    pub fn try_get_projected_physical_by_edge_id(
+        &self,
+        edge_id: EdgeId,
+        query_ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> StorageResult<Option<Vec<(String, Option<Value>)>>> {
+        if self.inline {
+            return Ok(None);
+        }
+        let Some(pos) = self.mapped_row(edge_id) else {
+            return Ok(None);
+        };
+        if pos >= self.visibility.len() {
+            return Ok(None);
+        }
+        let mut out = Vec::with_capacity(self.property_schema.len());
+        for (i, name) in self.resolve_projection(projection) {
+            let value = self.property_columns[i]
+                .try_get_at_ts(pos, query_ts)
+                .map_err(|e| {
+                    StorageError::deserialize_error(format!(
+                        "edge {:?} column {} decode failed: {}",
+                        edge_id, name, e
+                    ))
+                })?;
+            out.push((name.to_string(), value));
+        }
+        Ok(Some(out))
     }
     pub fn read_properties_by_edge_id(&self, edge_id: EdgeId) -> Option<Vec<(String, Value)>> {
         if self.inline {

@@ -32,7 +32,7 @@ impl EdgeStore {
         payload.extend_from_slice(&(snapshot.len() as u64).to_le_bytes());
         payload.extend_from_slice(&snapshot);
         let path = segment_stats_path(dir);
-        super::super::persistence::write_pages_to_file(
+        super::super::persistence::write_pages_to_file_without_dir_sync(
             &path,
             &payload,
             page_size,
@@ -109,21 +109,30 @@ impl EdgeStore {
         payload.extend_from_slice(&(encoded.len() as u64).to_le_bytes());
         payload.extend_from_slice(&encoded);
         let path = form_profile_path(dir);
-        super::super::persistence::write_pages_to_file(&path, &payload, page_size, level, 1)?;
+        super::super::persistence::write_pages_to_file_without_dir_sync(
+            &path,
+            &payload,
+            page_size,
+            level,
+            1,
+        )?;
         Ok(file_bytes(&path))
     }
 
     /// Load the width and access profile snapshot.
     ///
-    /// Missing files from old checkpoints load as unknown (zero samples),
-    /// never as zero-width: decision logic must keep such tables columnar
-    /// rather than misreading the absence as narrow.
+    /// The snapshot shares the manifest commit point and must exist in every
+    /// checkpoint epoch. A missing file means a torn epoch or an old layout
+    /// without the profile: old products are rebuilt through a fresh
+    /// checkpoint instead of loading through a compat default.
     pub(crate) fn load_form_profile(&self, dir: &Path) -> StorageResult<()> {
         use std::io::Read as _;
         let path = form_profile_path(dir);
         if !path.exists() {
-            self.restore_form_profile(super::super::stats::FormProfileSnapshot::default());
-            return Ok(());
+            return Err(StorageError::deserialize_error(format!(
+                "missing form profile snapshot at {}: torn write or old layout, rebuild through a fresh checkpoint",
+                path.display()
+            )));
         }
         let (raw, _) = super::super::persistence::read_pages_from_file(&path).map_err(|e| {
             StorageError::deserialize_error(format!(

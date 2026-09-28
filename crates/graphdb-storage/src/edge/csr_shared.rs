@@ -61,6 +61,20 @@ pub(crate) fn can_revert_delete(nbr: &Nbr, ts: Timestamp) -> bool {
     nbr.delete_ts != Timestamp::MAX && nbr.delete_ts <= ts
 }
 
+/// Shared gap-slot predicate across morphologies.
+///
+/// Reserved-slot fillers carry the unassignable edge sentinel and no edge.
+/// Every walk (pure, bundled, multiple, single, frozen) excludes them through
+/// this helper so no morphology grows a second gap definition.
+pub(crate) fn is_gap_edge(edge_id: EdgeId) -> bool {
+    edge_id == super::INVALID_EDGE_ID
+}
+
+/// Shared gap check for neighbor records.
+pub(crate) fn is_gap_nbr(nbr: &Nbr) -> bool {
+    is_gap_edge(nbr.edge_id)
+}
+
 /// Shared tombstone-eligibility predicate for one slot. Callers keep their
 /// own `cutoff == Timestamp::MAX` early-out: without it every tombstone
 /// would be eligible since `is_gc_eligible(ts, MAX)` always holds.

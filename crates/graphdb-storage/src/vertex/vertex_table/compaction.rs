@@ -263,7 +263,12 @@ impl CompactionCoordinator {
         }
 
         // Step 4: Resize columns to match new id_indexer size
-        table.columns.resize(table.id_indexer.len());
+        if !table.columns.resize(table.id_indexer.len()) {
+            log::warn!(
+                "compaction keeps column length: active snapshot blocks shrink to {} rows",
+                table.id_indexer.len()
+            );
+        }
         self.journal.mark_committed();
 
         Ok(())

@@ -219,14 +219,17 @@ impl EdgeStore {
         (groups, total, max, skew)
     }
 
-    /// Pre-size touched topology rows once for the staged inserts.
+    /// Pre-size touched topology rows and property columns once for staged
+    /// inserts.
     ///
     /// Counts inserts per bound endpoint per direction and sizes each row a
     /// single time at the packed density target (`PACKED_CSR_DENSITY = 0.8`,
     /// fixed with no tunable set), so the apply loop below lands in reserved
-    /// gaps instead of growing overflow chunk by chunk. Sizing only; inserts still flow
-    /// through the regular apply path so authority, properties, dirt and
-    /// append logs stay exact. Failures leave at most empty groups behind.
+    /// gaps instead of growing overflow chunk by chunk. Property columns and
+    /// row indexes are reserved once by batch size for the same reason.
+    /// Sizing only; inserts still flow through the regular apply path so
+    /// authority, properties, dirt and append logs stay exact. Failures leave
+    /// at most empty groups behind.
     fn reserve_topology_for_inserts(&mut self, inserts: &[StagedInsert]) {
         if inserts.is_empty() {
             return;
@@ -270,6 +273,7 @@ impl EdgeStore {
                 log::debug!("reserve in topology skipped: {}", e);
             }
         }
+        self.properties.reserve_for_batch(inserts.len());
     }
 
     #[inline]

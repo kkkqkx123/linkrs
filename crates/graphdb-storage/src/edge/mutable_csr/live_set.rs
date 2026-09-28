@@ -243,6 +243,25 @@ impl MutableCsr {
     pub fn has_live_set(&self, vid: &u32) -> bool {
         self.live_sets.get(vid).is_some()
     }
+
+    /// Layering observability: narrow rows served by scans vs wide rows
+    /// served by the live-set index, with the fixed width bound.
+    ///
+    /// Thresholds stay fixed; this only reports so operators can tell
+    /// whether hot traversals hit the indexed path and how long narrow
+    /// scans run before any tuning decision.
+    pub(crate) fn layer_counts(&self) -> (usize, usize) {
+        let mut narrow = 0usize;
+        let mut wide = 0usize;
+        for vid in 0..self.vertex_capacity() as u32 {
+            if self.live_sets.get(&vid).is_some() {
+                wide += 1;
+            } else if self.row_live_count(vid) > 0 {
+                narrow += 1;
+            }
+        }
+        (narrow, wide)
+    }
 }
 
 impl MutableCsr {

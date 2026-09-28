@@ -70,7 +70,7 @@ impl Column {
         let (data, offsets, bitmap) = self.get_flush_data();
         let raw_size = data
             .len()
-            .saturating_add(offsets.len().saturating_mul(std::mem::size_of::<u64>()))
+            .saturating_add(offsets.len().saturating_mul(std::mem::size_of::<u32>()))
             .saturating_add(
                 bitmap
                     .as_ref()
@@ -122,7 +122,7 @@ impl Column {
         // Raw size is column-wide and identical for every chunk: resolve the
         // flush buffers once instead of materializing them per chunk.
         let (flush_data, flush_offsets, _) = self.get_flush_data();
-        let raw_size = flush_data.len() as u64 + flush_offsets.len() as u64 * 8;
+        let raw_size = flush_data.len() as u64 + flush_offsets.len() as u64 * 4;
         let total_rows = self.len();
         // Windows are read once up front; the per-chunk refresh below only
         // touches segment latches, so no container lock is held across rows.

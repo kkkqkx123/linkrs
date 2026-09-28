@@ -275,7 +275,7 @@ impl EdgeStore {
                 )
                 .unwrap_or(None);
                 if let Some(bytes) = incremental {
-                    super::super::persistence::write_pages_to_file(
+                    super::super::persistence::write_pages_to_file_without_dir_sync(
                         &path,
                         &bytes,
                         page_size,
@@ -306,7 +306,7 @@ impl EdgeStore {
                 crate::persistence::section::EDGE_PROPS_SHARD,
                 &mut payload,
             )?;
-            super::super::persistence::write_pages_to_file(
+            super::super::persistence::write_pages_to_file_without_dir_sync(
                 &path,
                 &payload,
                 page_size,

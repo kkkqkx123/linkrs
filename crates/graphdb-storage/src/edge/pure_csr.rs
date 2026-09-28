@@ -26,8 +26,7 @@
 //! reads are safe while no mutation is in flight; concurrent writers must be
 //! serialized by the caller.
 
-use graphdb_core::types::EdgeId;
-
+pub(crate) use super::INVALID_EDGE_ID;
 use super::csr_shared::VertexBookkeeping;
 
 pub(crate) mod core;
@@ -46,8 +45,6 @@ mod tests;
 pub use iter::{PureAllIter, PureRowIter};
 pub(crate) use live_set::PureLiveSetStorage;
 pub(crate) use overflow::{PureOverflowChunk, PureOverflowStorage};
-
-const INVALID_EDGE_ID: EdgeId = EdgeId(u64::MAX);
 
 pub(crate) const DEFAULT_VERTEX_DEGREE: usize = 4;
 

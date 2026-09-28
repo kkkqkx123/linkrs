@@ -125,4 +125,22 @@ impl CsrShardSet {
             .sum::<usize>()
             + std::mem::size_of::<Self>()
     }
+
+    /// Narrow vs wide row counts summed across groups.
+    ///
+    /// Thresholds stay fixed; this only reports so slow traversals can be
+    /// attributed to a row width layer. Only multi-edge groups report;
+    /// other forms contribute zero.
+    pub fn layer_counts(&self) -> (usize, usize) {
+        let mut narrow = 0usize;
+        let mut wide = 0usize;
+        for shard in self.shards.values() {
+            if let super::super::CsrVariant::Multiple(csr) = &shard.variant {
+                let (n, w) = csr.layer_counts();
+                narrow += n;
+                wide += w;
+            }
+        }
+        (narrow, wide)
+    }
 }
