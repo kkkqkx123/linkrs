@@ -589,6 +589,19 @@ fn collect_storage_files(root: &Path) -> Result<Vec<StorageFileRef>, String> {
             if !path.is_file() {
                 continue;
             }
+            // Table redo logs live next to the snapshot but are not part
+            // of it: post-checkpoint commits append here and recovery
+            // replays them on top of the base. Inventorying them would
+            // invalidate every manifest on the first write after publish.
+            // Each log carries its own integrity gate (torn tails fail
+            // the load closed), so exclusion loses no damage detection.
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "edge_wal.bin")
+            {
+                continue;
+            }
             let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
             let relative = path
                 .strip_prefix(root)

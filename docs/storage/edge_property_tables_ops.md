@@ -27,7 +27,8 @@
 - `diagnose_edge_wal_at` 只读诊断，`repair_edge_wal_at` 与
   `repair_edge_wal_at_reported` 离线截断并报告。
 - 无人值守的单机重启用 `load_with_wal_recovery` 加
-  `EdgeWalRecoveryMode::TruncateTornTail`，返回的报告必须入库审计；
+  `EdgeWalRecoveryMode::TruncateTornTail`，或直接用
+  `load_for_unattended_restart`（自动记 warn 日志），返回的报告必须入库审计；
   有人值守保持 `Strict`。
 
 ## 二级索引
@@ -35,8 +36,10 @@
 - 两档一致性：尽力档主写权威、失败计 lag 并回退段扫描；
   强一致档索引失败即主写失败，只用于小基数关键属性。
 - `lag != 0` 即不可用，查询自动回退，结果集不受影响。
-- lag 水印每个维护 pass 刷新 gauges，长时间 lag 用
+- lag 水印每个写径维护 pass 刷新 gauges（无 store 内定时器，idle 零写表需外部定时调用
+  `rebuild_index_if_needed`）；长时间 lag 用
   `report_index_status` 观察，用 `rebuild_index_if_needed` 恢复。
+- 大命中（>8192）自动回退段扫，不再逐边点查。
 
 ## 漂移审计
 
@@ -65,3 +68,10 @@
   只用于观测，不进写径门限。
 - 压缩按水位单 pass，跨表水位钉死时先查快照泄漏，
   不要反复手动触发压缩。
+- 维护跳过计数 `maintenance_skip_counts`（回收/迁移/索引）只增不减，
+  持续增长说明水位钉死或守卫常败，下次水位推进时重试。
+- 路由缓存命中率 `route_hit_rate` 与碰撞 `route_collision_count` 可观测，
+  碰撞持续走高说明 128 槽覆盖不足；墓碑复用命中率
+  `tombstone_reuse_hint_hit_rate` 走低时调小批量而非放大扫描 bound。
+- 空值计数为列级缓存，写后失效；`overlay` 除数与 `zone` 陈旧阈值分别经
+  `set_overlay_capacity_divisor` 与 `set_zone_stale_rebuild_threshold` 可调。

@@ -309,3 +309,60 @@ fn positional_delete_and_revert_roundtrip() {
         .delete_edge_at_position(0u32, position, EdgeId(999), 3)
         .unwrap());
 }
+
+#[test]
+fn reserve_narrow_move_leaves_no_live_orphans() {
+    // Wide address space with few touched rows forces the narrow
+    // tail-move path in reserve_for_batch: the row moves to a tail
+    // block and the superseded block must not stay live, otherwise a
+    // later dump double-counts the moved entries on load. Row 0 is
+    // anchored by a later row 7 block so the move branch (not the
+    // tail-extend branch) is taken.
+    let mut csr = MutableCsr::with_capacity(20000, 64);
+    for i in 0..8u32 {
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key(i + 1, 0),
+            EdgeId(i as u64),
+            1,
+        )
+        .unwrap();
+    }
+    for i in 0..2u32 {
+        csr.insert_edge(
+            7u32,
+            VertexId::edge_endpoint_key(100 + i, 0),
+            EdgeId(100 + i as u64),
+            1,
+        )
+        .unwrap();
+    }
+    csr.reserve_for_batch(&[(0u32, 64)]);
+    let data = csr.dump();
+    let mut loaded = MutableCsr::new();
+    loaded
+        .load(&data)
+        .expect("post-reserve dump must round-trip");
+    assert_eq!(loaded.edge_count(), csr.edge_count());
+}
+
+#[test]
+fn rollback_insert_leaves_no_live_tail_slot() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    for i in 0..4u32 {
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key(i + 1, 0),
+            EdgeId(i as u64),
+            1,
+        )
+        .unwrap();
+    }
+    assert!(csr.rollback_insert(0u32, EdgeId(1)));
+    let data = csr.dump();
+    let mut loaded = MutableCsr::new();
+    loaded
+        .load(&data)
+        .expect("post-rollback dump must round-trip");
+    assert_eq!(loaded.edge_count(), csr.edge_count());
+}

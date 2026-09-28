@@ -538,6 +538,11 @@ impl MutableCsrTrait for PureTopologyCsr {
             self.edge_ids
                 .copy_within(base + idx - base + 1..base + degree, base + idx - base);
             self.rows.degrees[src_idx] -= 1;
+            // The left-shift duplicates the old tail slot outside the
+            // shrunk window; loads count every non-invalid slot, so the
+            // tail must die here.
+            let tail = base + self.rows.degrees[src_idx] as usize;
+            self.edge_ids[tail] = INVALID_EDGE_ID.0;
             self.sub_capacity(1);
             self.edge_count -= 1;
             self.rebuild_live_set_for_vertex(src_vid);

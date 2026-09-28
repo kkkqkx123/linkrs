@@ -5,7 +5,7 @@ use crate::persistence::read_u32_le;
 use super::super::{EdgeId, Nbr};
 use super::overflow::OverflowChunk;
 
-pub(crate) const MUTABLE_CSR_FORMAT_VERSION: u32 = 8;
+pub(crate) const MUTABLE_CSR_FORMAT_VERSION: u32 = 10;
 
 /// Integer-only column encoding for topology persistence.
 ///

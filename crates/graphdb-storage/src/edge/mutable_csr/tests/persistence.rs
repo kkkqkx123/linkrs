@@ -195,3 +195,18 @@ fn retired_raw_marker_is_rejected() {
         .is_err());
     assert!(MutableCsr::new().load(&[]).is_err());
 }
+
+#[test]
+fn test_reuse_cutoff_survives_dump_load() {
+    use graphdb_core::types::Timestamp;
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    csr.insert_edge(0u32, VertexId::edge_endpoint_key(1, 0), EdgeId(100), 1)
+        .unwrap();
+    assert_eq!(csr.tombstone_reuse_cutoff(), Timestamp::MAX);
+    csr.refresh_tombstone_reuse_cutoff(150);
+    let data = csr.dump();
+    let mut loaded = MutableCsr::new();
+    loaded.load(&data).expect("cutoff payload must load");
+    assert_eq!(loaded.tombstone_reuse_cutoff(), 150);
+    assert_eq!(loaded.edge_count(), csr.edge_count());
+}

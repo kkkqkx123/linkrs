@@ -315,3 +315,7 @@ harness = false
 [[bench]]
 name = "edge_group_commit_bench"
 harness = false
+
+[[bench]]
+name = "edge_property_tables_bench"
+harness = false

@@ -223,3 +223,27 @@ fn test_compact_reduces_fragmentation() {
         ratio_after
     );
 }
+
+#[test]
+fn compact_tighten_leaves_no_live_tail_slots() {
+    let mut csr = MutableCsr::with_capacity(10, 100);
+    for i in 0..6u32 {
+        csr.insert_edge(
+            0u32,
+            VertexId::edge_endpoint_key(i + 1, 0),
+            EdgeId(i as u64),
+            1,
+        )
+        .unwrap();
+    }
+    csr.delete_edge(0u32, EdgeId(1), 5).unwrap();
+    csr.delete_edge(0u32, EdgeId(3), 5).unwrap();
+    let removed = csr.compact_vertex_with_reporting(0u32, 6, &mut |_, _| {});
+    assert_eq!(removed, 2);
+    let data = csr.dump();
+    let mut loaded = MutableCsr::new();
+    loaded
+        .load(&data)
+        .expect("post-compact dump must round-trip");
+    assert_eq!(loaded.edge_count(), csr.edge_count());
+}

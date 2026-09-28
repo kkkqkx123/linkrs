@@ -1,8 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::edge::{EdgeRecord, EdgeStore};
-use crate::engine::data_store::EdgeTableKey;
+use crate::edge::EdgeRecord;
 use crate::engine::graph_storage::context::GraphStorageContext;
 use crate::engine::graph_storage::ops::{
     edge_record_to_edge, edge_record_to_edge_projected, endpoint_label_id, serialize_properties,
@@ -587,12 +586,19 @@ fn count_hot_neighbors(
     }
 }
 
+/// Internal page size for the default full scan: bounds the intermediate
+/// while the cursor stays the single scan implementation.
+const SCAN_PAGE: usize = 1024;
+
 pub(crate) fn scan_edges_by_type(
     ctx: &GraphStorageContext,
     space: &str,
     edge_type: &str,
 ) -> StorageResult<Vec<Edge>> {
     record_schema_read(ctx, space);
+    // Label ids for read-set recording below. The cursor returns external
+    // vertex ids, which is also the form the write path records, so
+    // read/write conflict keys finally meet instead of missing by form.
     let edge_info = ctx
         .schema_manager()
         .get_edge_type(space, edge_type)?
@@ -602,136 +608,45 @@ pub(crate) fn scan_edges_by_type(
                 edge_type, space
             ))
         })?;
-
-    let ts = ctx.get_read_timestamp();
-    let mut edges = Vec::new();
-
     let edge_label_id = edge_info.edge_type_id;
-
     let src_label_id: LabelId = match endpoint_label_id(ctx, space, &edge_info.src_tag_name)? {
         Some(id) => id,
-        None => return Ok(edges),
+        None => return Ok(Vec::new()),
     };
     let dst_label_id: LabelId = match endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? {
         Some(id) => id,
-        None => return Ok(edges),
+        None => return Ok(Vec::new()),
     };
-
-    const BATCH_SIZE: usize = 256;
-
-    // For unconstrained edge types (both tags empty), edges may be spread across
-    // multiple edge tables. Use iter() directly instead of scan() to avoid
-    // intermediate Vec<EdgeRecord> allocation per table.
-    if src_label_id == 0 && dst_label_id == 0 {
-        // Scatter-gather: collect the matching partition handles under a brief
-        // catalog read lock, then scan each partition in parallel under its own
-        // read lock. Results preserve partition order (indexed rayon collect).
-        let matching: Vec<(EdgeTableKey, Arc<parking_lot::RwLock<EdgeStore>>)> =
-            ctx.data_store().with_edge_tables(|edge_tables| {
-                edge_tables
-                    .iter()
-                    .filter(|(_, arc)| arc.read().label() == edge_label_id)
-                    .map(|(key, arc)| (*key, arc.clone()))
-                    .collect()
-            });
-
-        use rayon::prelude::*;
-        let per_partition: Vec<Vec<Edge>> = matching
-            .par_iter()
-            .map(|(_key, arc)| {
-                let guard = arc.read();
-                let mut iter = guard.iter(ts);
-                let mut partition_edges = Vec::new();
-                loop {
-                    let batch: Vec<_> = iter.by_ref().take(BATCH_SIZE).collect();
-                    if batch.is_empty() {
-                        break;
-                    }
-                    for record in batch {
-                        let src_internal = record.src_vid.as_internal_u32();
-                        let dst_internal = record.dst_vid.as_internal_u32();
-
-                        let tbl_src = guard.src_label();
-                        let tbl_dst = guard.dst_label();
-
-                        let src_external = match src_internal {
-                            Some(internal) if tbl_src != 0 => {
-                                internal_to_external_vertex_id(ctx, tbl_src, internal, ts)
-                                    .unwrap_or(record.src_vid)
-                            }
-                            _ => record.src_vid,
-                        };
-
-                        let dst_external = match dst_internal {
-                            Some(internal) if tbl_dst != 0 => {
-                                internal_to_external_vertex_id(ctx, tbl_dst, internal, ts)
-                                    .unwrap_or(record.dst_vid)
-                            }
-                            _ => record.dst_vid,
-                        };
-
-                        let edge =
-                            edge_record_to_edge(&record, edge_type, src_external, dst_external);
-                        partition_edges.push(edge);
-                    }
-                }
-                partition_edges
-            })
-            .collect();
-
-        let edges: Vec<Edge> = per_partition.into_iter().flatten().collect();
-        return Ok(edges);
-    }
-
-    // Constrained path: access the specific edge table directly using iter()
-    // instead of ctx.scan_edges() which collects into Vec. Scatter-gather:
-    // the handle is collected under a brief catalog lock, topology streams
-    // under the table lock alone, and vertex resolution runs after the table
-    // lock is released, so no edge lock is held while taking vertex locks.
-    {
-        let key = EdgeTableKey::new(src_label_id, dst_label_id, edge_label_id);
-        let arc = ctx
-            .data_store()
-            .with_edge_tables(|edge_tables| edge_tables.get(&key).cloned());
-        let mut staged = Vec::new();
-        if let Some(arc) = arc {
-            let guard = ctx.data_store().read_edge_table(&arc);
-            let mut iter = guard.iter(ts);
-            loop {
-                let batch: Vec<_> = iter.by_ref().take(BATCH_SIZE).collect();
-                if batch.is_empty() {
-                    break;
-                }
-                staged.extend(batch);
-            }
+    // The paginated cursor is the single scan implementation: one cursor
+    // drains in bounded batches instead of materializing every record up
+    // front. A fresh cursor per page would re-walk the offset each time;
+    // draining one cursor keeps the full scan linear.
+    let mut cursor = super::super::cursor_impl::edge::create_edge_cursor(
+        Arc::new(ctx.clone()),
+        space,
+        &crate::cursor::ScanOptions {
+            edge_type: Some(edge_type.to_string()),
+            ..Default::default()
+        },
+    )?;
+    let mut edges = Vec::new();
+    loop {
+        let batch = cursor.next_batch(SCAN_PAGE)?;
+        if batch.is_empty() {
+            break;
         }
-        for record in staged {
+        for edge in batch {
             record_edge_read(
                 ctx,
                 graphdb_core::types::EdgeIdentifier::new(
                     src_label_id,
-                    record.src_vid,
+                    edge.src,
                     dst_label_id,
-                    record.dst_vid,
+                    edge.dst,
                     edge_label_id,
-                    record.rank,
+                    edge.ranking,
                 ),
             );
-            let src_external = match record.src_vid.as_internal_u32() {
-                Some(internal) if src_label_id != 0 => {
-                    internal_to_external_vertex_id(ctx, src_label_id, internal, ts)
-                        .unwrap_or(record.src_vid)
-                }
-                _ => record.src_vid,
-            };
-            let dst_external = match record.dst_vid.as_internal_u32() {
-                Some(internal) if dst_label_id != 0 => {
-                    internal_to_external_vertex_id(ctx, dst_label_id, internal, ts)
-                        .unwrap_or(record.dst_vid)
-                }
-                _ => record.dst_vid,
-            };
-            let edge = edge_record_to_edge(&record, edge_type, src_external, dst_external);
             edges.push(edge);
         }
     }

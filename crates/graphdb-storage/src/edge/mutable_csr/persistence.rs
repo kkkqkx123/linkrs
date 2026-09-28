@@ -82,6 +82,7 @@ impl MutableCsr {
     /// - edge_count (u64)
     /// - primary_len (u64)
     /// - overflow_chunk_edges (u64)
+    /// - tombstone_reuse_cutoff (u64, MAX disables reuse)
     /// - encoded offsets column
     /// - encoded degrees column
     /// - encoded capacities column
@@ -119,6 +120,7 @@ impl MutableCsr {
         out.extend_from_slice(&self.edge_count.to_le_bytes());
         out.extend_from_slice(&(self.hot_list.len() as u64).to_le_bytes());
         out.extend_from_slice(&(self.overflow_chunk_edges as u64).to_le_bytes());
+        out.extend_from_slice(&self.tombstone_reuse_cutoff.to_le_bytes());
 
         let (_, offsets_payload) = encode_topology_u32_column(&self.rows.adj_offsets);
         out.extend_from_slice(&offsets_payload);
@@ -240,6 +242,7 @@ impl MutableCsr {
                 "Mutable CSR overflow chunk size must be greater than zero",
             ));
         }
+        let tombstone_reuse_cutoff = read_u64_le(data, &mut offset)?;
 
         let (adj_offsets, degrees, primary_capacities) = (
             decode_topology_u32_column(data, &mut offset)?,
@@ -373,6 +376,11 @@ impl MutableCsr {
         self.hot_list = hot_list;
         self.cold_list = cold_list;
         self.edge_count = edge_count;
+        // The reuse hint is a watermark-derived cache, not authority:
+        // persisting it only avoids the cold-start overflow cliff. Stale
+        // values stay safe because refreshes only narrow through the
+        // cutoff setter.
+        self.tombstone_reuse_cutoff = tombstone_reuse_cutoff;
         self.reuse_hint = vec![super::core::REUSE_HINT_UNKNOWN; vertex_capacity];
         self.live_counts = vec![0; vertex_capacity];
         self.tombstone_counts = vec![0; vertex_capacity];

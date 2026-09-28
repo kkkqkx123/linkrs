@@ -11,7 +11,7 @@ fn persistence_live_markers_are_current() {
     // selects the live write mode, not history.
     assert_eq!(
         crate::edge::mutable_csr::serialization::MUTABLE_CSR_FORMAT_VERSION,
-        8
+        10
     );
 }
 

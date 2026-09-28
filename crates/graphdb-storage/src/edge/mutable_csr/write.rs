@@ -554,6 +554,11 @@ impl MutableCsr {
             self.cold_list
                 .copy_within(start + i + 1..start + degree, start + i);
             self.rows.degrees[src_idx] -= 1;
+            // The left-shift duplicates the old tail slot outside the
+            // shrunk window; it stays live unless killed here.
+            let tail = start + self.rows.degrees[src_idx] as usize;
+            self.hot_list[tail] = HotNbr::dead_gap();
+            self.cold_list[tail] = ColdStamps::dead_gap();
             self.invalidate_reuse_hint(src_idx);
             if was_live {
                 self.live_counts[src_idx] = self.live_counts[src_idx].saturating_sub(1);
@@ -805,6 +810,14 @@ impl MutableCsr {
                     self.rows.adj_offsets[src_idx] = new_base as u32;
                     self.rows.primary_capacities[src_idx] = want as u32;
                     self.add_capacity(want);
+                    // The superseded block stays allocated as orphaned
+                    // filler, but it must not stay live: dumps persist the
+                    // whole column and loads count every live slot, so a
+                    // moved entry left behind would double-count.
+                    for slot in old_base..old_base + have {
+                        self.hot_list[slot] = HotNbr::dead_gap();
+                        self.cold_list[slot] = ColdStamps::dead_gap();
+                    }
                 }
             }
             return;

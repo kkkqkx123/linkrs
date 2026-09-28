@@ -291,6 +291,13 @@ impl MutableCsr {
             }
         }
         self.rows.degrees[idx] = keep as u32;
+        // Tightening shifts kept entries forward, duplicating them into
+        // the vacated tail outside the shrunk window; the tail stays live
+        // unless killed here.
+        for slot in offset + keep..offset + degree {
+            self.hot_list[slot] = HotNbr::dead_gap();
+            self.cold_list[slot] = ColdStamps::dead_gap();
+        }
         self.invalidate_reuse_hint(idx);
 
         if self.overflow_chunks.get(vid).is_some() {
