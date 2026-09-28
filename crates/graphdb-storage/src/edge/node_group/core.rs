@@ -41,6 +41,13 @@ impl CsrShardSet {
         self.route_cache.hit_rate()
     }
 
+    /// Routing-cache collision count since creation. Collisions share the
+    /// miss counter; this separates true empty misses from evictions so
+    /// operators can tell whether 128 slots still cover the working set.
+    pub fn route_collision_count(&self) -> usize {
+        self.route_cache.collision_count()
+    }
+
     pub fn new(
         strategy: EdgeStrategy,
         group_bits: u32,

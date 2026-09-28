@@ -39,8 +39,9 @@ impl PureOverflowChunk {
 
     #[inline]
     pub(crate) fn remove(&mut self, index: usize) {
-        self.endpoints.remove(index);
-        self.edge_ids.remove(index);
+        // Overflow order is unspecified; swap removal avoids the linear shift.
+        self.endpoints.swap_remove(index);
+        self.edge_ids.swap_remove(index);
     }
 
     #[inline]

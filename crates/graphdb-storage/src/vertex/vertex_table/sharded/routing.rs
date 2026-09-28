@@ -89,21 +89,55 @@ pub(super) fn default_num_shards() -> usize {
 // slightly larger ID tail for fewer segments and lower fragmentation rate;
 // combined with lazy ID recycling, the effective reclaimed space stays high.
 pub(super) fn encode_id(shard: usize, local_id: u32, layout: ShardLayout) -> u32 {
-    debug_assert!(shard < layout.num_shards);
+    try_encode_id(shard, local_id, layout).expect("shard id encoding out of range")
+}
+
+pub(super) fn try_encode_id(
+    shard: usize,
+    local_id: u32,
+    layout: ShardLayout,
+) -> Result<u32, String> {
+    if !layout.is_consistent() {
+        return Err("shard layout is inconsistent".to_string());
+    }
+    if shard >= layout.num_shards {
+        return Err(format!(
+            "shard {} out of range for {} shards",
+            shard, layout.num_shards
+        ));
+    }
     let segment = shard as u32 + (local_id >> layout.segment_slots_bits) * layout.num_shards as u32;
-    debug_assert!(
-        segment < layout.total_segments,
-        "local_id {local_id} in shard {shard} exceeds the segment address space"
-    );
-    (segment << layout.segment_slots_bits) | (local_id & layout.segment_slots_mask())
+    if segment >= layout.total_segments {
+        return Err(format!(
+            "local_id {} in shard {} exceeds the segment address space",
+            local_id, shard
+        ));
+    }
+    Ok((segment << layout.segment_slots_bits) | (local_id & layout.segment_slots_mask()))
 }
 
 pub(super) fn decode_id(global_id: u32, layout: ShardLayout) -> (usize, u32) {
+    try_decode_id(global_id, layout).expect("global id decoding out of range")
+}
+
+pub(super) fn try_decode_id(
+    global_id: u32,
+    layout: ShardLayout,
+) -> Result<(usize, u32), String> {
+    if !layout.is_consistent() {
+        return Err("shard layout is inconsistent".to_string());
+    }
     let segment = global_id >> layout.segment_slots_bits;
+    if segment >= layout.total_segments {
+        return Err(format!(
+            "global id {} segment {} out of range",
+            global_id, segment
+        ));
+    }
     let shard = (segment % layout.num_shards as u32) as usize;
     let local_id = (segment / layout.num_shards as u32) << layout.segment_slots_bits
         | (global_id & layout.segment_slots_mask());
-    (shard, local_id)
+    Ok((shard, local_id))
 }
 
 /// External-key routing scheme version pinned in the table manifest.
@@ -154,7 +188,8 @@ impl ShardedVertexTable {
     /// Record an allocation of `local_id` in shard `idx` and encode it as a
     /// global id.
     pub(super) fn record_allocation(&self, idx: usize, local_id: u32) -> u32 {
-        encode_id(idx, local_id, self.layout)
+        self.try_record_allocation(idx, local_id)
+            .expect("shard id encoding out of range")
     }
 
     pub(super) fn decode_id(&self, global_id: u32) -> (usize, u32) {
@@ -163,6 +198,21 @@ impl ShardedVertexTable {
 
     pub(super) fn encode_id(&self, shard: usize, local_id: u32) -> u32 {
         encode_id(shard, local_id, self.layout)
+    }
+
+    /// Fallible allocation encoding for recovery and diagnostic paths that
+    /// must not panic on out-of-range ids.
+    pub(super) fn try_record_allocation(&self, idx: usize, local_id: u32) -> Result<u32, String> {
+        try_encode_id(idx, local_id, self.layout)
+    }
+
+    /// Fallible global-id decoding for batched scans that must skip malformed
+    /// ids instead of panicking. See `group_by_shard`.
+    pub(super) fn try_decode_global_id(
+        &self,
+        global_id: u32,
+    ) -> Result<(usize, u32), String> {
+        try_decode_id(global_id, self.layout)
     }
 
     pub fn num_shards(&self) -> usize {

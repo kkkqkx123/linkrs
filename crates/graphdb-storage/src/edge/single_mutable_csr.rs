@@ -290,4 +290,4 @@ impl Default for SingleMutableCsr {
     }
 }
 
-use super::{EdgeId, Timestamp, INVALID_EDGE_ID};
+use super::{Timestamp, INVALID_EDGE_ID};

@@ -19,6 +19,24 @@ impl MutableCsr {
         self.tombstone_reuse_count
     }
 
+    pub fn tombstone_reuse_hint_hits(&self) -> u64 {
+        self.tombstone_reuse_hint_hits
+    }
+
+    pub fn tombstone_reuse_hint_misses(&self) -> u64 {
+        self.tombstone_reuse_hint_misses
+    }
+
+    pub fn tombstone_reuse_hint_hit_rate(&self) -> f32 {
+        let hits = self.tombstone_reuse_hint_hits as f64;
+        let misses = self.tombstone_reuse_hint_misses as f64;
+        if hits + misses == 0.0 {
+            0.0
+        } else {
+            (hits / (hits + misses)) as f32
+        }
+    }
+
     pub fn live_set_rebuild_count(&self) -> u64 {
         self.live_set_rebuild_count
     }
@@ -29,6 +47,8 @@ impl MutableCsr {
         self.repack_count = 0;
         self.tombstone_reuse_count = 0;
         self.live_set_rebuild_count = 0;
+        self.tombstone_reuse_hint_hits = 0;
+        self.tombstone_reuse_hint_misses = 0;
     }
 }
 

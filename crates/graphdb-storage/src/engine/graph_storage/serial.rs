@@ -63,17 +63,20 @@ pub(crate) fn scan_vertex_serial_column(
     ctx: &GraphStorageContext,
     label: LabelId,
     prop_name: &str,
-) -> Option<SerialColumnScan> {
+) -> StorageResult<Option<SerialColumnScan>> {
     let ts = ctx.version_manager().write_timestamp();
     let guard = ctx.visibility_guard(ts);
     ctx.data_store().with_vertex_tables(|tables| {
-        let table = tables.get(&label)?;
+        let table = tables.get(&label);
+        let Some(table) = table else {
+            return Ok(None);
+        };
         let ids = table.live_ids(&guard);
         let mut present: Vec<i64> = Vec::new();
         let mut max_value: Option<i64> = None;
         if !ids.is_empty() {
             let projection = [prop_name.to_string()];
-            for record in table.resolve_projected_batch(&ids, &guard, Some(&projection)) {
+            for record in table.resolve_projected_batch(&ids, &guard, Some(&projection))? {
                 let Some(record) = record else {
                     continue;
                 };
@@ -106,7 +109,7 @@ pub(crate) fn scan_vertex_serial_column(
             }
         }
         present.sort_unstable();
-        Some(SerialColumnScan { max_value, present })
+        Ok(Some(SerialColumnScan { max_value, present }))
     })
 }
 
@@ -178,7 +181,7 @@ pub(crate) fn seed_serial_allocators(ctx: &GraphStorageContext) -> StorageResult
                     continue;
                 }
                 let key = SerialKey::new(space_id, tag.tag_name.clone());
-                if let Some(scan) = scan_vertex_serial_column(ctx, tag.tag_id, &prop.name) {
+                if let Some(scan) = scan_vertex_serial_column(ctx, tag.tag_id, &prop.name)? {
                     if let Some(max) = scan.max().filter(|max| *max >= 0) {
                         allocator.seed(&key, (max as u64).saturating_add(1));
                     }

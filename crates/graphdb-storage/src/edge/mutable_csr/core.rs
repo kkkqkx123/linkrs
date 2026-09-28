@@ -56,6 +56,8 @@ impl MutableCsr {
             repack_count: 0,
             tombstone_reuse_count: 0,
             live_set_rebuild_count: 0,
+            tombstone_reuse_hint_hits: 0,
+            tombstone_reuse_hint_misses: 0,
         }
     }
 

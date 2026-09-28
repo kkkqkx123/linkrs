@@ -31,6 +31,36 @@ struct RowVisibility {
     delete_ts: Option<Timestamp>,
 }
 
+/// Explicit row lifecycle replacing the bare zero-timestamp sentinel check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RowState {
+    Virgin,
+    Live,
+    Deleted,
+}
+
+impl RowVisibility {
+    fn state(&self) -> RowState {
+        if self.create_ts == graphdb_core::types::RESERVED_ZERO_TIMESTAMP
+            && self.delete_ts.is_none()
+        {
+            RowState::Virgin
+        } else if self.delete_ts.is_some() {
+            RowState::Deleted
+        } else {
+            RowState::Live
+        }
+    }
+
+    fn is_virgin(&self) -> bool {
+        self.state() == RowState::Virgin
+    }
+
+    fn is_live(&self) -> bool {
+        self.state() == RowState::Live
+    }
+}
+
 /// Columnar property storage keyed by edge id.
 ///
 /// Every edge owns exactly one row, including edges without properties.

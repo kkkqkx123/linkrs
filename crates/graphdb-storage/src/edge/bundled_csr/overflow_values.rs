@@ -27,7 +27,10 @@ impl BundledOverflowValues {
 
     #[inline]
     pub(crate) fn remove(&mut self, index: usize) {
-        self.values.remove(index);
+        // Overflow order is unspecified; swap removal avoids the linear shift.
+        self.values.swap_remove(index);
+        // BitVec has no swap_remove; remove is linear in bits but the paired
+        // values swap keeps alignment. Valid bits are tiny (1 bit/slot).
         self.valid.remove(index);
     }
 

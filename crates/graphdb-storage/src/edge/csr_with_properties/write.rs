@@ -75,7 +75,7 @@ impl CsrWithProperties {
             .get(&(prop_id.0 as i32))
             .copied()
             .ok_or_else(|| StorageError::column_not_found(format!("prop_id={}", prop_id.0)))?;
-        if pos >= self.visibility.len() || self.visibility[pos].create_ts == 0 {
+        if pos >= self.visibility.len() || self.visibility[pos].is_virgin() {
             return Err(StorageError::invalid_offset(pos as u32));
         }
         let col = &mut self.property_columns[idx];
@@ -97,7 +97,7 @@ impl CsrWithProperties {
                 ts
             )));
         }
-        if row_idx >= self.visibility.len() || self.visibility[row_idx].create_ts == 0 {
+        if row_idx >= self.visibility.len() || self.visibility[row_idx].is_virgin() {
             return Err(StorageError::invalid_offset(row_idx as u32));
         }
         let col_idx = self

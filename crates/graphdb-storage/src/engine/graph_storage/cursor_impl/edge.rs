@@ -212,6 +212,17 @@ impl GraphEdgeCursor {
                 let store: &EdgeStore = &guard;
                 let gate = ctx.pending_gate();
 
+                // Missing out leg reads as empty by contract, but distinguish
+                // it from a genuinely empty stored leg via the capability note.
+                if !store.is_direction_available(true) {
+                    if let Some(note) = store.direction_note(true) {
+                        log::debug!("{}", note);
+                    }
+                    self.table_idx += 1;
+                    self.table_state = TableScanState::new();
+                    continue;
+                }
+
                 if !matches!(self.table_state.phase, TablePhase::Mutable) {
                     self.table_idx += 1;
                     self.table_state = TableScanState::new();
@@ -645,6 +656,15 @@ impl EdgeCursor for GraphEdgeCursor {
                 let guard = arc.read();
                 let store: &EdgeStore = &guard;
 
+                if !store.is_direction_available(true) {
+                    if let Some(note) = store.direction_note(true) {
+                        log::debug!("{}", note);
+                    }
+                    *table_idx += 1;
+                    *table_state = TableScanState::new();
+                    continue 'outer;
+                }
+
                 match table_state.phase {
                     TablePhase::Mutable => {
                         scan_mutable(ScanArgs {
@@ -840,18 +860,47 @@ fn scan_mutable(args: ScanArgs) {
             // set afterwards; misses never materialize a record and nulls
             // use bitmap semantics (missing never matches).
             if !args.predicate.is_empty() {
-                let probe = decode_edge_properties(
+                match try_decode_edge_properties(
                     args.store,
                     nbr.edge_id,
                     args.ts,
                     Some(args.predicate_columns),
-                );
-                if !args.predicate.iter().all(|p| p.matches(probe.as_slice())) {
-                    continue;
+                ) {
+                    None => continue,
+                    Some(Err(e)) => {
+                        log::warn!(
+                            "edge {:?} predicate decode failed: {}; counting as malformed",
+                            nbr.edge_id,
+                            e
+                        );
+                        *args.malformed += 1;
+                        continue;
+                    }
+                    Some(Ok(probe)) => {
+                        if !args.predicate.iter().all(|p| p.matches(probe.as_slice())) {
+                            continue;
+                        }
+                    }
                 }
             }
-            let mut properties =
-                decode_edge_properties(args.store, nbr.edge_id, args.ts, fetch_columns.as_deref());
+            let mut properties = match try_decode_edge_properties(
+                args.store,
+                nbr.edge_id,
+                args.ts,
+                fetch_columns.as_deref(),
+            ) {
+                None => Vec::new(),
+                Some(Ok(props)) => props,
+                Some(Err(e)) => {
+                    log::warn!(
+                        "edge {:?} property decode failed: {}; counting as malformed",
+                        nbr.edge_id,
+                        e
+                    );
+                    *args.malformed += 1;
+                    continue;
+                }
+            };
             if !args
                 .predicate
                 .iter()
@@ -958,29 +1007,32 @@ fn materialize_edge(
 ///
 /// MVCCManager is the single visibility authority; the property row
 /// timestamps are physical replicas and must not decide visibility here.
-fn decode_edge_properties(
+/// Strict property decode distinguishing invisible rows from corrupt payloads.
+///
+/// `None` means invisible or unmapped (normal empty). `Some(Ok)` carries the
+/// projected properties. `Some(Err)` means the row is visible but the payload
+/// is corrupt or below the history floor: callers must count it as malformed
+/// instead of serving it as null.
+fn try_decode_edge_properties(
     store: &EdgeStore,
     edge_id: graphdb_core::types::EdgeId,
     ts: Timestamp,
     fetch: Option<&[String]>,
-) -> Vec<(String, Value)> {
+) -> Option<StorageResult<Vec<(String, Value)>>> {
     if !store.is_visible(edge_id, ts) {
-        return Vec::new();
+        return None;
     }
-    // Snapshot read through the property version chain so old readers see
-    // the before-image instead of the latest write. Row stamps never filter;
-    // authority above already decided visibility.
-    let props_opt = store
+    match store
         .properties
-        .get_projected_physical_by_edge_id(edge_id, ts, fetch);
-    props_opt
-        .map(|props| {
-            props
-                .into_iter()
-                .filter_map(|(k, v)| v.map(|value| (k, value)))
-                .collect()
-        })
-        .unwrap_or_default()
+        .try_get_projected_physical_by_edge_id(edge_id, ts, fetch)
+    {
+        Ok(None) => None,
+        Ok(Some(cells)) => Some(Ok(cells
+            .into_iter()
+            .filter_map(|(k, v)| v.map(|value| (k, value)))
+            .collect())),
+        Err(e) => Some(Err(e)),
+    }
 }
 
 /// Drop predicate-only columns so emitted rows carry projected properties.

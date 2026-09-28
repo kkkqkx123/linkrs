@@ -449,75 +449,9 @@ impl VertexTable {
             .collect()
     }
 
-    /// Batch variant of [`get_projected_by_internal_id`].
-    ///
-    /// Validity is checked once per id, then all requested rows are decoded
-    /// column-at-a-time in a single pass. The output is aligned with the
-    /// input order; invalid or missing ids yield `None`.
-    pub fn get_projected_batch(
-        &self,
-        internal_ids: &[u32],
-        ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Vec<Option<VertexRecord>> {
-        if !self.is_open.load(Ordering::Acquire) {
-            return internal_ids.iter().map(|_| None).collect();
-        }
-
-        let mut positions: Vec<(usize, u32)> = Vec::with_capacity(internal_ids.len());
-        for (pos, &id) in internal_ids.iter().enumerate() {
-            if self.is_row_live_at(id, ts) {
-                positions.push((pos, id));
-            }
-        }
-
-        let mut out: Vec<Option<VertexRecord>> = internal_ids.iter().map(|_| None).collect();
-        if positions.is_empty() {
-            return out;
-        }
-
-        let row_indices: Vec<usize> = positions.iter().map(|&(_, id)| id as usize).collect();
-        let props = match projection {
-            Some(names) => self
-                .columns
-                .get_projected_batch_at_ts(&row_indices, names, ts),
-            None => self.columns.get_batch_at_ts(&row_indices, ts),
-        };
-
-        for ((pos, id), prop_row) in positions.into_iter().zip(props) {
-            let key = match self.id_indexer.get_key(id) {
-                Some(key) => key,
-                None => continue,
-            };
-            // Index keys are length-checked at insert, so a decode failure
-            // surfaces as a missing row under the existing absence contract.
-            let vid = match key {
-                IdKey::Int(i) => match VertexId::try_from_int64(i).ok() {
-                    Some(vid) => vid,
-                    None => continue,
-                },
-                IdKey::Text(s) => match VertexId::try_from_string(&s).ok() {
-                    Some(vid) => vid,
-                    None => continue,
-                },
-            };
-            let properties: Vec<(String, Value)> = prop_row
-                .into_iter()
-                .filter_map(|(name, opt_val)| opt_val.map(|v| (name, v)))
-                .collect();
-            out[pos] = Some(VertexRecord {
-                vid,
-                internal_id: id,
-                properties,
-            });
-        }
-        out
-    }
-
     /// Strict fenced batch read with explicit decode errors.
     ///
-    /// Same shape as [`Self::get_projected_batch`] but corrupt payloads
-    /// fail instead of reading as missing. Attribute time travel ends at
+    /// Corrupt payloads fail instead of reading as missing. Attribute time travel ends at
     /// the last load: version chains do not survive checkpoints, so a
     /// query below [`Self::history_floor`] for a row created at or below
     /// the query timestamp may need dropped before-images and fails

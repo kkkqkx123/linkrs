@@ -1109,7 +1109,7 @@ pub(crate) fn batch_insert_vertices(
                 v.tag.name == tag.tag_name && v.tag.properties.keys().any(|k| k == &prop_def.name)
             });
             if needs_scan {
-                if let Some(scan) = scan_vertex_serial_column(ctx, tag.tag_id, &prop_def.name) {
+                if let Some(scan) = scan_vertex_serial_column(ctx, tag.tag_id, &prop_def.name)? {
                     serial_state.add_present(tag.tag_id, &prop_def.name, scan);
                 }
             }
@@ -1520,7 +1520,7 @@ fn batch_insert_vertices_online_chunked(
                 v.tag.name == tag.tag_name && v.tag.properties.keys().any(|k| k == &prop_def.name)
             });
             if needs_scan {
-                if let Some(scan) = scan_vertex_serial_column(ctx, tag.tag_id, &prop_def.name) {
+                if let Some(scan) = scan_vertex_serial_column(ctx, tag.tag_id, &prop_def.name)? {
                     serial_state.add_present(tag.tag_id, &prop_def.name, scan);
                 }
             }

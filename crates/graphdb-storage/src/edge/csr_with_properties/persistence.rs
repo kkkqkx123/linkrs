@@ -129,8 +129,8 @@ impl CsrWithProperties {
                 )));
             };
             // Free slots persist as zero creation with no deletion mark;
-            // any deletion-marked row must carry an allocator stamp, since
-            // zero doubles as the free-row marker in release and reclaim.
+            // any deletion-marked row must carry an allocator stamp. Zero is
+            // reserved and marks virgin rows in the explicit state machine.
             if del.is_some() && !graphdb_core::types::is_allocatable_timestamp(create) {
                 return Err(StorageError::deserialize_error(format!(
                     "property row carries reserved creation stamp {} with a deletion mark",

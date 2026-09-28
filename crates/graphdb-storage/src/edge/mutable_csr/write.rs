@@ -175,6 +175,7 @@ impl MutableCsr {
                             .cold_at(base + slot)
                             .is_some_and(|cold| is_reclaimable_cold(&cold, cutoff));
                         if reclaimable {
+                            self.tombstone_reuse_hint_hits += 1;
                             self.set_slot(base + slot, nbr_with_ts);
                             self.mark_primary_unsorted(src_idx);
                             self.invalidate_reuse_hint(src_idx);
@@ -192,6 +193,7 @@ impl MutableCsr {
                             return Ok(());
                         }
                     }
+                    self.tombstone_reuse_hint_misses += 1;
                     self.invalidate_reuse_hint(src_idx);
                 }
             }

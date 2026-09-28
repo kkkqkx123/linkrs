@@ -119,6 +119,23 @@ impl EdgeIdBitSet {
             .get((id.0 / 64) as usize)
             .is_some_and(|word| word & (1u64 << (id.0 % 64)) != 0)
     }
+
+    pub(crate) fn extend(&mut self, ids: impl IntoIterator<Item = super::EdgeId>) {
+        for id in ids {
+            self.insert(id);
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.words
+            .iter()
+            .map(|word| word.count_ones() as usize)
+            .sum()
+    }
+
+    pub(crate) fn memory_bytes(&self) -> usize {
+        self.words.len() * std::mem::size_of::<u64>()
+    }
 }
 
 /// Per-vertex row bookkeeping shared by `MutableCsr` and `PureTopologyCsr`.

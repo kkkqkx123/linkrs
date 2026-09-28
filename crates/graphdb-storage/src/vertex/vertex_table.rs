@@ -78,19 +78,9 @@ mod bench_coverage_tests {
             reason: "scaled scans drive residency and eviction",
         },
         CoverageEntry {
-            threshold: "max_lease_ttl_ms",
-            bench_fn: Some("bench_vertex_churn_reuse"),
-            reason: "lease pressure under churn plus version load; issuance and renewal are transaction-driven with injected-clock tests",
-        },
-        CoverageEntry {
             threshold: "default_lease_ttl/long_read_max_live_leases/long_read_max_pin_secs",
             bench_fn: Some("bench_vertex_churn_reuse"),
             reason: "transaction-side lease terms and admission thresholds under the stuck-watermark load",
-        },
-        CoverageEntry {
-            threshold: "DEFAULT_DRAIN_TIMEOUT_MS",
-            bench_fn: None,
-            reason: "online-migration drain bound; overrun rollback is covered by migration session unit tests with no steady-state bench signal",
         },
         CoverageEntry {
             threshold: "ROUTER_VERSION/generation",
@@ -141,8 +131,6 @@ mod bench_coverage_tests {
         let _ = super::sharded::maintenance::SHARD_FRAGMENTATION_THRESHOLD;
         let _ = crate::vertex::column::EVICTION_SEGMENT_BYTES;
         let _ = crate::vertex::column::MAX_BACKGROUND_LOAD_CHUNKS;
-        let _ = crate::vertex::gc_manager::VertexGcConfig::default().max_lease_ttl_ms;
-        let _ = crate::vertex::vertex_table::sharded::migration::DEFAULT_DRAIN_TIMEOUT_MS;
         let _ = graphdb_transaction::TransactionManagerConfig::default().default_lease_ttl;
         let _ = graphdb_transaction::TransactionManagerConfig::default().long_read_max_live_leases;
         let _ = graphdb_transaction::TransactionManagerConfig::default().long_read_max_pin_secs;

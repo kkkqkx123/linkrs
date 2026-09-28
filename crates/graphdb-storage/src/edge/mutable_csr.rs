@@ -138,6 +138,8 @@ pub struct MutableCsr {
     repack_count: u64,
     tombstone_reuse_count: u64,
     live_set_rebuild_count: u64,
+    tombstone_reuse_hint_hits: u64,
+    tombstone_reuse_hint_misses: u64,
 }
 
 impl MutableCsr {
@@ -193,6 +195,8 @@ impl Clone for MutableCsr {
             repack_count: self.repack_count,
             tombstone_reuse_count: self.tombstone_reuse_count,
             live_set_rebuild_count: self.live_set_rebuild_count,
+            tombstone_reuse_hint_hits: self.tombstone_reuse_hint_hits,
+            tombstone_reuse_hint_misses: self.tombstone_reuse_hint_misses,
         }
     }
 }

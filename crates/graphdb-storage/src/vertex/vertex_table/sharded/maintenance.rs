@@ -346,17 +346,7 @@ impl ShardedVertexTable {
     /// evicted_bytes, resident_bytes)` across shards, all from the unified
     /// buffer ledger (resident includes the overflow side store).
     pub fn eviction_stats(&self) -> (usize, usize, usize, usize) {
-        let mut acc = crate::vertex::column::BufferLedger::default();
-        for shard in &self.shards {
-            let table = shard.read();
-            let ledger = table.columns.buffer_ledger();
-            acc.resident_bytes += ledger.resident_bytes;
-            acc.evicted_bytes += ledger.evicted_bytes;
-            acc.overflow_bytes += ledger.overflow_bytes;
-            acc.dirty_pages += ledger.dirty_pages;
-            acc.resident_chunks += ledger.resident_chunks;
-            acc.evicted_chunks += ledger.evicted_chunks;
-        }
+        let acc = self.buffer_ledger();
         (
             acc.resident_chunks,
             acc.evicted_chunks,

@@ -528,8 +528,10 @@ impl MutableCsr {
 
     /// Get edges of a vertex at a given timestamp.
     ///
-    /// Test and offline use; production traversals use the visitor or
-    /// caller-buffer fill paths instead of this allocating accessor.
+    /// UNFILTERED single-predicate read for tests and offline tools only:
+    /// filters by row delete stamp without consulting the version authority
+    /// (no creation-stamp or authority verdict). Production traversals must
+    /// use the visitor or caller-buffer fill paths with the authority gate.
     pub fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr> {
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
@@ -566,6 +568,7 @@ impl MutableCsr {
 
     /// Get a specific edge
     ///
+    /// UNFILTERED single-predicate read for tests and offline tools only.
     /// Wide rows consult the endpoint location index first: a present key
     /// addresses its slot directly when the live entry covers `ts`. Absent
     /// keys at the maximum timestamp return without scanning; any other

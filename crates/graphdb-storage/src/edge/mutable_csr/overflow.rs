@@ -83,10 +83,13 @@ impl OverflowChunk {
     }
 
     /// Remove and return the assembled record at `index`.
+    ///
+    /// Overflow order is unspecified; swap removal avoids the linear shift.
+    /// Both halves swap the same index so hot/cold alignment is preserved.
     #[inline]
     pub fn remove(&mut self, index: usize) -> Nbr {
-        let hot = self.hot.remove(index);
-        let cold = self.cold.remove(index);
+        let hot = self.hot.swap_remove(index);
+        let cold = self.cold.swap_remove(index);
         Nbr::from_parts(hot, cold)
     }
 

@@ -11,6 +11,10 @@ pub const ZONE_MAP_CHUNK_ROWS: usize = 1024;
 /// still covers retained version chains.
 pub const ZONE_STALE_REBUILD_THRESHOLD: u64 = 1024;
 
+pub fn zone_stale_rebuild_threshold() -> u64 {
+    ZONE_STALE_REBUILD_THRESHOLD
+}
+
 /// Conservative min/max bounds over the non-null values of one chunk.
 #[derive(Debug, Clone, Default)]
 pub struct ZoneBounds {
@@ -459,7 +463,7 @@ impl Column {
     pub fn zone_needs_exact_rebuild(&self) -> bool {
         self.zone_stale_writes
             .load(std::sync::atomic::Ordering::Relaxed)
-            >= ZONE_STALE_REBUILD_THRESHOLD
+            >= zone_stale_rebuild_threshold()
     }
 
     /// Rebuild exactly when the stale-write threshold is crossed. Returns
@@ -482,12 +486,30 @@ impl Column {
         self.zone.read().maps.get(chunk).cloned()
     }
 
-    /// Length summary of one zone chunk, if the zone exists.
+    /// Borrow one zone chunk under the lock without cloning.
     ///
-    /// Length summary of one zone chunk: pruning probes one chunk at a time
-    /// and must not clone the whole summary vector per probe.
-    pub fn zone_complex_for_chunk(&self, chunk: usize) -> Option<ComplexZoneSummary> {
-        self.zone.read().complex.get(chunk).cloned()
+    /// Hot pruning probes prefer this over `zone_for_chunk` when they only
+    /// need a predicate test: no `ZoneBounds` clone crosses the probe.
+    pub fn with_zone_for_chunk<T>(
+        &self,
+        chunk: usize,
+        f: impl FnOnce(Option<&ZoneBounds>) -> T,
+    ) -> T {
+        let guard = self.zone.read();
+        f(guard.maps.get(chunk))
+    }
+
+    /// Borrow one complex summary under the lock without cloning.
+    ///
+    /// Equality probes use this together with [`Self::with_zone_for_chunk`]
+    /// so the full prune path stays borrow-based.
+    pub fn with_zone_complex_for_chunk<T>(
+        &self,
+        chunk: usize,
+        f: impl FnOnce(Option<&ComplexZoneSummary>) -> T,
+    ) -> T {
+        let guard = self.zone.read();
+        f(guard.complex.get(chunk))
     }
 
     /// Length interval of one zone chunk, if any measured value exists.

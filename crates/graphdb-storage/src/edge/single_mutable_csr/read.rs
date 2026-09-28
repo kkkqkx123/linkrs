@@ -168,7 +168,8 @@ impl SingleMutableCsr {
             .is_some_and(|hot| hot.edge_id == edge_id)
     }
 
-    /// Test and offline use; production reads use `iter_edges_of` directly
+    /// UNFILTERED single-predicate read for tests and offline tools only.
+    /// Production reads must use `iter_edges_of` with the authority gate
     /// instead of collecting through this allocating accessor.
     pub fn edges_of(&self, src: u32, ts: Timestamp) -> Vec<Nbr> {
         self.iter_edges_of(src, ts).into_iter().collect()

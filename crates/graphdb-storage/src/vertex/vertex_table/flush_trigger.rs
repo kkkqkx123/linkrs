@@ -67,18 +67,6 @@ impl FlushReason {
             Self::PageFragmentation => "page_fragmentation",
         }
     }
-
-    /// All variants in stable order for reason-distribution counting.
-    pub fn all() -> [Self; 6] {
-        [
-            Self::Idle,
-            Self::DeltaPending,
-            Self::CompactionMovedRows,
-            Self::DeltaThreshold,
-            Self::BaselineAge,
-            Self::PageFragmentation,
-        ]
-    }
 }
 
 /// Observed table state feeding [`decide`].

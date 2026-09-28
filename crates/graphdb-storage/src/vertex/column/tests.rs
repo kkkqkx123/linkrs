@@ -62,7 +62,9 @@ mod tests {
             .unwrap();
 
         // Full batch read, aligned with input order.
-        let all = store.get_batch_at_ts(&[1, 0, 2], 100);
+        let all = store
+            .try_get_batch_at_ts(&[1, 0, 2], 100)
+            .expect("strict batch");
         assert_eq!(all.len(), 3);
         assert_eq!(
             all[0].iter().find(|(n, _)| n == "name").unwrap().1,
@@ -72,7 +74,9 @@ mod tests {
         assert_eq!(all[2][1], ("age".to_string(), None));
 
         // Projected batch read only touches the requested columns.
-        let projected = store.get_projected_batch_at_ts(&[0, 1], &["age".to_string()], 100);
+        let projected = store
+            .try_get_projected_batch_at_ts(&[0, 1], &["age".to_string()], 100)
+            .expect("strict batch");
         assert_eq!(projected.len(), 2);
         assert_eq!(
             projected[0],
@@ -1046,19 +1050,19 @@ mod tests {
         let (evicted, freed) = col.evict_cold_chunks(u64::MAX);
         assert_eq!(evicted, 2);
         assert!(freed > 0);
-        assert_eq!(col.evicted_chunk_count(), 2);
-        assert_eq!(col.resident_chunk_count(), 0);
-        assert!(col.evicted_bytes() > 0);
+        assert_eq!(col.buffer_ledger().evicted_chunks, 2);
+        assert_eq!(col.buffer_ledger().resident_chunks, 0);
+        assert!(col.buffer_ledger().evicted_bytes > 0);
         for i in 0..8 {
             assert_eq!(col.get(i), Some(Value::Int((i % 4) as i32)));
         }
         // Served from snapshots: still evicted, stats still resident.
-        assert_eq!(col.evicted_chunk_count(), 2);
+        assert_eq!(col.buffer_ledger().evicted_chunks, 2);
         assert!(col.compute_stats().is_ok());
         // Batch promotion loads each covered chunk exactly once.
         let loaded = col.ensure_resident_range(&[0, 1, 6, 7]).unwrap();
         assert_eq!(loaded, 2);
-        assert_eq!(col.evicted_chunk_count(), 0);
+        assert_eq!(col.buffer_ledger().evicted_chunks, 0);
         for i in 0..8 {
             assert_eq!(col.get(i), Some(Value::Int((i % 4) as i32)));
         }
@@ -1074,7 +1078,7 @@ mod tests {
         assert!(col.chunk_evictable(1));
         let (evicted, _) = col.evict_cold_chunks(u64::MAX);
         assert_eq!(evicted, 1);
-        assert_eq!(col.evicted_chunk_count(), 1);
+        assert_eq!(col.buffer_ledger().evicted_chunks, 1);
         assert_eq!(col.get(1), Some(Value::Int(1000)));
     }
 
@@ -1082,9 +1086,9 @@ mod tests {
     fn test_write_before_load_preserves_point_write_semantics() {
         let col = encoded_two_chunk_column();
         col.evict_cold_chunks(u64::MAX);
-        assert_eq!(col.evicted_chunk_count(), 2);
+        assert_eq!(col.buffer_ledger().evicted_chunks, 2);
         col.set(3, Some(&Value::Int(42))).unwrap();
-        assert_eq!(col.evicted_chunk_count(), 1);
+        assert_eq!(col.buffer_ledger().evicted_chunks, 1);
         assert_eq!(col.get(3), Some(Value::Int(42)));
         assert_eq!(col.get(0), Some(Value::Int(0)));
     }
@@ -1092,13 +1096,13 @@ mod tests {
     #[test]
     fn test_resident_accounting_splits_snapshot_bytes() {
         let col = encoded_two_chunk_column();
-        let resident_before = col.resident_memory_usage();
+        let resident_before = col.buffer_ledger().resident_bytes;
         col.evict_cold_chunks(u64::MAX);
-        assert!(col.resident_memory_usage() < resident_before);
+        assert!(col.buffer_ledger().resident_bytes < resident_before);
         // Spilled snapshots leave the heap: heap memory drops while the
         // evicted payload footprint stays observable.
         assert!(col.memory_usage() < resident_before);
-        assert!(col.evicted_bytes() > 0);
+        assert!(col.buffer_ledger().evicted_bytes > 0);
     }
 
     #[test]
@@ -1113,7 +1117,7 @@ mod tests {
         assert_eq!(col.evict_chunk(0).unwrap(), 0);
         let (evicted, _) = col.evict_cold_chunks(u64::MAX);
         assert_eq!(evicted, 1);
-        assert_eq!(col.evicted_chunk_count(), 1);
+        assert_eq!(col.buffer_ledger().evicted_chunks, 1);
         assert_eq!(col.get(1), Some(Value::Int(1000)));
     }
 
@@ -1164,7 +1168,7 @@ mod tests {
             remaining = rest;
         }
         assert!(loaded_total >= 4);
-        assert_eq!(col.evicted_chunk_count(), 0);
+        assert_eq!(col.buffer_ledger().evicted_chunks, 0);
         for (i, value) in expected.iter().enumerate() {
             assert_eq!(col.get(i).as_ref(), value.as_ref());
         }
@@ -1313,14 +1317,14 @@ mod tests {
         let store = store_with_list_rows(vec![list_of(vec![Value::Int(1), Value::Int(2)])]);
         let probe = list_of(vec![Value::Int(3), Value::Int(4)]);
         assert_eq!(point_range("v", probe.clone()).equality_len(), Some(2));
-        assert!(!store.zone_prunes_in(0, &point_range("v", probe)));
+        assert!(!store.zone_prunes_in_borrowed(0, &point_range("v", probe)));
     }
 
     #[test]
     fn nested_list_equality_keeps_matching_chunk() {
         let present = list_of(vec![Value::Int(1), Value::Int(2)]);
         let store = store_with_list_rows(vec![present.clone()]);
-        assert!(store.zone_prunes_in(0, &point_range("v", present)));
+        assert!(store.zone_prunes_in_borrowed(0, &point_range("v", present)));
     }
 
     #[test]
@@ -1340,7 +1344,7 @@ mod tests {
         let mut probe_fields = HashMap::new();
         probe_fields.insert(Value::string("zzz-no-such-key"), Value::Int(999));
         let probe = Value::Map(Box::new(probe_fields));
-        assert!(!store.zone_prunes_in(0, &point_range("v", probe)));
+        assert!(!store.zone_prunes_in_borrowed(0, &point_range("v", probe)));
     }
 
     #[test]
@@ -1379,7 +1383,7 @@ mod tests {
             probe_name,
             Value::Int(1),
         )])));
-        assert!(!store.zone_prunes_in(0, &point_range("v", probe)));
+        assert!(!store.zone_prunes_in_borrowed(0, &point_range("v", probe)));
     }
 
     #[test]
@@ -1397,7 +1401,7 @@ mod tests {
         ));
         let range = point_range("v", probe.clone());
         assert_eq!(range.equality_len(), Some(7));
-        assert!(!store.zone_prunes_in(0, &range));
+        assert!(!store.zone_prunes_in_borrowed(0, &range));
     }
 
     fn unique_snapshot_dir(tag: &str) -> std::path::PathBuf {
@@ -1533,7 +1537,7 @@ mod tests {
         for idx in 0..col.chunk_count() {
             released += col.evict_chunk(idx).unwrap();
         }
-        assert_eq!(col.evicted_chunk_count(), col.chunk_count());
+        assert_eq!(col.buffer_ledger().evicted_chunks, col.chunk_count());
         // The whole raw payload left the heap...
         assert!(
             released >= raw_bytes as u64,

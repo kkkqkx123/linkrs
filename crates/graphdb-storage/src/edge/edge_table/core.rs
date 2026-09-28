@@ -173,6 +173,12 @@ pub struct EdgeStore {
     /// WAL redo is fenced at switch time and must never replay onto the new
     /// form, so the next checkpoint is mandatory, not advisory. Memory-only.
     pub(crate) migration_pending_checkpoint: bool,
+    /// Maintenance skip counters for observability. Reclaim skips count audit
+    /// refusals; migrate skips count guard failures; index skips are logged
+    /// with the reason. Retried on the next watermark-driven pass.
+    pub(crate) maintenance_reclaim_skips: u64,
+    pub(crate) maintenance_migrate_skips: u64,
+    pub(crate) maintenance_index_skips: u64,
 }
 
 impl std::fmt::Debug for EdgeStore {

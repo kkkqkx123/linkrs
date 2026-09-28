@@ -199,7 +199,7 @@ impl VertexTable {
         if delta_path.exists() {
             match Self::decode_pk_delta(&delta_path) {
                 Ok(entries) => {
-                    if let Some(mut manager) = baseline {
+                    if let Some(manager) = baseline {
                         if base_path.exists() {
                             issues.push(format!(
                                 "pk delta present alongside baseline at {}: superseded files must not linger",

@@ -4,7 +4,6 @@ use super::core::{VertexTable, VertexTableConfig};
 use super::sharded::routing::ShardLayout;
 
 pub(crate) mod maintenance;
-pub(crate) mod migration;
 pub(crate) mod persistence;
 mod read;
 pub(crate) mod routing;

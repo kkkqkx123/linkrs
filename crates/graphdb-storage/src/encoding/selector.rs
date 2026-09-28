@@ -65,7 +65,7 @@ pub fn data_type_family(data_type: &DataType) -> DataTypeFamily {
 
 #[derive(Debug, Clone, Default)]
 struct EncodingFeedback {
-    observations: Vec<FeedbackObservation>,
+    observations: std::collections::VecDeque<FeedbackObservation>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -86,9 +86,9 @@ impl EncodingFeedback {
         compression_ratio: f64,
     ) {
         if self.observations.len() >= Self::MAX_OBSERVATIONS {
-            self.observations.remove(0);
+            self.observations.pop_front();
         }
-        self.observations.push(FeedbackObservation {
+        self.observations.push_back(FeedbackObservation {
             encoding_type,
             family,
             compression_ratio,

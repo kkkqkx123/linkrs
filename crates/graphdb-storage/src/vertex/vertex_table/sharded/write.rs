@@ -109,6 +109,10 @@ impl ShardedVertexTable {
         ts: Timestamp,
         sorted: bool,
     ) -> StorageResult<usize> {
+        // Empty-table gate runs quiescently (no concurrent writers during
+        // bulk import), so the approximate total — which includes tombstones —
+        // is exact here: non-zero means definitely non-empty, zero means
+        // definitely empty.
         if self.approximate_total_count() != 0 {
             return Err(StorageError::invalid_operation(
                 "bulk import requires an empty table: use insert_batch for incremental writes"
@@ -155,6 +159,7 @@ impl ShardedVertexTable {
         ts: Timestamp,
         sorted: bool,
     ) -> StorageResult<usize> {
+        // Same quiescent empty-table gate as `bulk_import_str`.
         if self.approximate_total_count() != 0 {
             return Err(StorageError::invalid_operation(
                 "bulk import requires an empty table: use insert_batch for incremental writes"

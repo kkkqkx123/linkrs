@@ -172,7 +172,9 @@ fn test_batch_projected_read() {
     assert_eq!(ids, vec![0, 1, 2]);
 
     // Full read, aligned with input order.
-    let all = table.get_projected_batch(&[1, 0, 2], 100, None);
+    let all = table
+        .try_get_projected_batch(&[1, 0, 2], 100, None)
+        .expect("strict batch");
     let names: Vec<Option<Value>> = all
         .iter()
         .map(|r| {
@@ -191,7 +193,9 @@ fn test_batch_projected_read() {
     );
 
     // Projection only decodes the requested column.
-    let projected = table.get_projected_batch(&[0, 1], 100, Some(&["age".to_string()]));
+    let projected = table
+        .try_get_projected_batch(&[0, 1], 100, Some(&["age".to_string()]))
+        .expect("strict batch");
     let projected: Vec<Vec<String>> = projected
         .into_iter()
         .flatten()
@@ -209,7 +213,9 @@ fn test_batch_projected_read() {
 
     // Invalid (deleted) id yields None in its input position.
     assert_eq!(table.batch_delete(&["v2"], 100).unwrap(), 1);
-    let with_gap = table.get_projected_batch(&[0, 1, 2], 100, None);
+    let with_gap = table
+        .try_get_projected_batch(&[0, 1, 2], 100, None)
+        .expect("strict batch");
     assert!(with_gap[0].is_some());
     assert!(with_gap[1].is_none());
     assert!(with_gap[2].is_some());

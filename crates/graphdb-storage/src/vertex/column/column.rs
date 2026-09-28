@@ -189,6 +189,9 @@ pub struct Column {
     /// Large-string overflow area for this column. Append-only in the point
     /// path; rebuilds happen under the shard write lock.
     pub(super) overflow_store: Mutex<OverflowStore>,
+    /// Cached null count invalidated on every write. Reads populate it on
+    /// the slow path so repeated statistics passes pay one scan per epoch.
+    pub(super) null_count_cache: parking_lot::RwLock<Option<usize>>,
     /// High-water page count backing the dirty-ratio pre-pass. Monotonic
     /// maximum; reset only by exclusive `clear`.
     pub(super) total_dirty_pages: AtomicUsize,
@@ -214,6 +217,7 @@ impl Clone for Column {
             hll: Mutex::new(self.hll.lock().clone()),
             zone: RwLock::new(self.zone.read().clone()),
             overflow_store: Mutex::new(self.overflow_store.lock().clone()),
+            null_count_cache: parking_lot::RwLock::new(*self.null_count_cache.read()),
             total_dirty_pages: AtomicUsize::new(self.total_dirty_pages.load(Ordering::Relaxed)),
             chunks: RwLock::new(self.chunks.read().clone()),
         }
@@ -234,6 +238,7 @@ impl Column {
             hll: Mutex::new(Some(HyperLogLog::new())),
             zone: RwLock::new(super::zone_map::ZoneMaps::default()),
             overflow_store: Mutex::new(OverflowStore::new(DEFAULT_OVERFLOW_THRESHOLD)),
+            null_count_cache: parking_lot::RwLock::new(None),
             total_dirty_pages: AtomicUsize::new(0),
             chunks: RwLock::new(Vec::new()),
         }
@@ -467,19 +472,27 @@ impl Column {
 
     /// Mark the page containing `row_idx` as dirty. The mark lives in the
     /// owning chunk's segment state; the page id is global so flush
-    /// aggregation stays a plain union.
+    /// aggregation stays a plain union. Owning chunk is located by row-offset
+    /// range, never by dividing with the current chunk capacity, so a
+    /// mid-flight capacity change cannot misroute the mark.
     #[inline]
     pub fn mark_dirty(&self, row_idx: usize) {
         let page_id = crate::persistence::dirty_page::row_to_page(row_idx);
         self.total_dirty_pages
             .fetch_max(page_id + 1, Ordering::Relaxed);
         let chunks = self.chunks.read();
-        if let Some(chunk) = Self::chunk_for_row_in(&chunks, row_idx, self.chunk_capacity()) {
-            chunk.write_state().dirty_pages.insert(page_id as u32);
+        for chunk in chunks.iter() {
+            if row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count {
+                chunk.write_state().dirty_pages.insert(page_id as u32);
+                break;
+            }
         }
     }
 
-    /// High-water page count backing the dirty-ratio pre-pass.
+    /// High-water page count backing the dirty-ratio pre-pass. Monotonic
+    /// maximum recording the largest page id ever dirtied; reset only by
+    /// exclusive `clear`. Table-level ratios use actual row-count pages, so
+    /// this high-water mark is an observability hint, not routing state.
     pub fn total_pages(&self) -> usize {
         self.total_dirty_pages.load(Ordering::Relaxed)
     }
@@ -506,6 +519,7 @@ impl Column {
         for chunk in chunks.iter() {
             chunk.write_state().dirty_pages.clear();
         }
+        self.total_dirty_pages.store(0, Ordering::Relaxed);
     }
 
     /// Clear the dirty mark for a single row-page (keeps other dirty pages).
@@ -525,22 +539,6 @@ impl Column {
                 break;
             }
         }
-    }
-
-    /// Locate the chunk owning `row_idx` inside an already-locked chunk
-    /// vector, without re-locking the container.
-    fn chunk_for_row_in(
-        chunks: &[ColumnChunk],
-        row_idx: usize,
-        capacity: usize,
-    ) -> Option<&ColumnChunk> {
-        if chunks.is_empty() {
-            return None;
-        }
-        let idx = row_idx / capacity.max(1);
-        chunks.get(idx).filter(|chunk| {
-            row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count
-        })
     }
 
     /// Serialize a single page for incremental checkpoint.
@@ -1091,6 +1089,7 @@ impl Column {
     pub(super) fn observe_write(&self, row_idx: usize, value: Option<&Value>) {
         self.update_zone_maps(row_idx, value);
         self.zone_stale_writes.fetch_add(1, Ordering::Relaxed);
+        *self.null_count_cache.write() = None;
         if let Some(v) = value {
             if !v.is_null() {
                 if let Some(hll) = self.hll.lock().as_mut() {
@@ -1339,7 +1338,17 @@ impl Column {
                 .map(|snapshot| snapshot.decode_row(row_idx))
             {
                 Some(Ok(value)) => return value.is_none(),
-                Some(Err(_)) => return false,
+                // Corrupt snapshots must not prune: report non-null so the
+                // row survives to the strict projection path which errors.
+                Some(Err(e)) => {
+                    log::warn!(
+                        "column {} row {} evicted snapshot decode failed in null check: {}; treating as non-null",
+                        column.name,
+                        row_idx,
+                        e
+                    );
+                    return false;
+                }
                 None => return true,
             }
         }
@@ -1350,6 +1359,9 @@ impl Column {
     }
 
     pub fn null_count(&self) -> usize {
+        if let Some(cached) = *self.null_count_cache.read() {
+            return cached;
+        }
         let chunks = self.chunks.read();
         let mut total = 0usize;
         for chunk in chunks.iter() {
@@ -1369,6 +1381,7 @@ impl Column {
                 }
             }
         }
+        *self.null_count_cache.write() = Some(total);
         total
     }
 
@@ -1430,6 +1443,7 @@ impl Column {
         self.zone.write().complex.clear();
         self.chunks.write().clear();
         self.total_dirty_pages.store(0, Ordering::Relaxed);
+        *self.null_count_cache.write() = Some(0);
         *self.hll.lock() = Some(HyperLogLog::new());
         *self.overflow_store.lock() = OverflowStore::new(self.overflow_threshold());
     }
@@ -1497,6 +1511,7 @@ impl Column {
     /// still referenced by active snapshots and refuse the shrink so history
     /// is never dropped silently. Returns false when the shrink is refused.
     pub fn resize(&self, new_count: usize) -> bool {
+        *self.null_count_cache.write() = None;
         let current = self.len();
         if new_count > current {
             // Grow through the coverage path so windows stay
@@ -2180,11 +2195,6 @@ impl Column {
         }
     }
 
-    /// Resident decoded bytes (excludes retained eviction snapshots).
-    pub fn resident_memory_usage(&self) -> usize {
-        self.buffer_ledger().resident_bytes
-    }
-
     /// Chunk indexes whose overlay load makes them recode candidates.
     pub fn pending_recode_chunks(&self) -> Vec<usize> {
         let chunks = self.chunks.read();
@@ -2280,23 +2290,6 @@ impl Column {
             }
         }
         false
-    }
-
-    /// Compressed snapshot payload bytes for evicted chunks, wherever they
-    /// live (heap or spill files). Used for eviction observability; spilled
-    /// bytes no longer count toward heap memory.
-    pub fn evicted_bytes(&self) -> usize {
-        self.buffer_ledger().evicted_bytes
-    }
-
-    /// Chunks with decoded data in memory.
-    pub fn resident_chunk_count(&self) -> usize {
-        self.buffer_ledger().resident_chunks
-    }
-
-    /// Chunks released with only the snapshot retained.
-    pub fn evicted_chunk_count(&self) -> usize {
-        self.buffer_ledger().evicted_chunks
     }
 
     /// Base value for encoding inputs and persisted buffers: overflow rows

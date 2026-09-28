@@ -189,6 +189,9 @@ impl EdgeStore {
             wal_dir: None,
             property_fallback_rewrites: 0,
             migration_pending_checkpoint: false,
+            maintenance_reclaim_skips: 0,
+            maintenance_migrate_skips: 0,
+            maintenance_index_skips: 0,
         })
     }
 

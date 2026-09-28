@@ -71,7 +71,7 @@ impl EdgeStore {
             self.out_csr.clear_tombstone_reuse_cutoff();
             self.in_csr.clear_tombstone_reuse_cutoff();
         }
-        let mut removed_edges = std::collections::HashSet::new();
+        let mut removed_edges = crate::edge::csr_shared::EdgeIdBitSet::default();
         for gid in self.out_csr.existing_group_ids() {
             self.out_csr.compact_group_with_reporting(
                 gid,
@@ -101,6 +101,11 @@ impl EdgeStore {
                 drift.join("; ")
             )));
         }
+        log::debug!(
+            "compact_csr_only reclaimed {} edges (removal bitmap {} bytes)",
+            removed_edges.len(),
+            removed_edges.memory_bytes()
+        );
         Ok(removed_edges.len())
     }
 
@@ -125,7 +130,7 @@ impl EdgeStore {
         }
         gids.sort_unstable();
         let group_bits = self.out_csr.group_bits();
-        let mut removed_edges = std::collections::HashSet::new();
+        let mut removed_edges = crate::edge::csr_shared::EdgeIdBitSet::default();
         let mut visited = 0usize;
         for gid in gids {
             if visited >= max_vertices {
@@ -214,6 +219,11 @@ impl EdgeStore {
                 }
             }
         }
+        log::debug!(
+            "compact_reclaimable_vertices reclaimed {} edges (removal bitmap {} bytes)",
+            removed_edges.len(),
+            removed_edges.memory_bytes()
+        );
         removed_edges.len()
     }
 
@@ -231,7 +241,7 @@ impl EdgeStore {
         budget: usize,
         do_out: bool,
         do_in: bool,
-        removed_edges: &mut std::collections::HashSet<graphdb_core::types::EdgeId>,
+        removed_edges: &mut crate::edge::csr_shared::EdgeIdBitSet,
     ) -> usize {
         if bound == Timestamp::MAX || budget == 0 || (!do_out && !do_in) {
             return 0;

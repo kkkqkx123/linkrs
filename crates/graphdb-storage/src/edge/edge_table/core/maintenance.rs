@@ -138,11 +138,21 @@ impl EdgeStore {
     /// tables pay single. The authority, property and index shares stay
     /// single-copy either way. Prefer `OutOnly`/`InOnly` at creation when
     /// the missing direction is never traversed.
-    pub fn topology_write_amplification(&self) -> u32 {
-        match self.schema.storage_direction() {
+    pub fn topology_write_amplification(&self) -> u32 {        match self.schema.storage_direction() {
             crate::edge::StorageDirection::Both => 2,
             crate::edge::StorageDirection::OutOnly | crate::edge::StorageDirection::InOnly => 1,
         }
+    }
+
+    /// Bytes per live edge split into topology, authority, property mapping
+    /// and row bookkeeping. Sums only; the denominator is live edges so an
+    /// empty table reports zeros instead of dividing by zero.
+    pub fn bytes_per_edge_breakdown(&self) -> (f64, f64, f64, f64) {
+        let live = self.out_csr.edge_count().max(1) as f64;
+        let topo = (self.out_csr.used_memory_size() + self.in_csr.used_memory_size()) as f64 / live;
+        let authority = self.mvcc.edge_timestamps.memory_bytes() as f64 / live;
+        let (mapping, rows) = self.properties.mapping_row_bytes();
+        (topo, authority, mapping as f64 / live, rows as f64 / live)
     }
 
     /// Suggest narrowing a dual-direction table to one leg.
@@ -399,11 +409,23 @@ impl EdgeStore {
                 Ok(false) => {}
                 Err(e) => {
                     log::debug!("automatic index rebuild skipped: {}", e);
+                    self.maintenance_index_skips = self.maintenance_index_skips.saturating_add(1);
                 }
             }
         }
 
         maintenance_ran
+    }
+
+    /// Maintenance skip counters for observability. All three retry on the
+    /// next watermark-driven pass; growth without bound points at a stuck
+    /// watermark or a permanently failing guard.
+    pub fn maintenance_skip_counts(&self) -> (u64, u64, u64) {
+        (
+            self.maintenance_reclaim_skips,
+            self.maintenance_migrate_skips,
+            self.maintenance_index_skips,
+        )
     }
 
     /// Background variant: bound comes from one per-pass watermark capture
@@ -434,6 +456,8 @@ impl EdgeStore {
             }
             Err(e) => {
                 log::warn!("authority reclaim refused on audit drift: {}", e);
+                self.maintenance_reclaim_skips =
+                    self.maintenance_reclaim_skips.saturating_add(1);
             }
         }
         // Opt-in record-form migration (background only, never the write
@@ -453,6 +477,8 @@ impl EdgeStore {
                 Ok(None) => {}
                 Err(e) => {
                     log::debug!("automatic record-form migration skipped: {}", e);
+                    self.maintenance_migrate_skips =
+                        self.maintenance_migrate_skips.saturating_add(1);
                 }
             }
         }

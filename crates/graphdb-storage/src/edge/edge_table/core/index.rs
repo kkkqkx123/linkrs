@@ -167,10 +167,10 @@ impl EdgeStore {
     ///
     /// Returns true when a rebuild ran. Uses the capacity recorded at the
     /// last build so automatic maintenance needs no caller capacity. This is
-    /// the shared background rebuild task: both the write-path auto
-    /// maintenance and idle-time timer passes call here, so lag clears
-    /// without new writes once the policy trips. Refreshes the lag gauges
-    /// on both paths so alerts clear together with the lag.
+    /// the shared rebuild entry called by write-path maintenance passes;
+    /// idle tables with no writes need an external timer to invoke it, since
+    /// no background thread is spawned inside the store. Refreshes the lag
+    /// gauges on both paths so alerts clear together with the lag.
     pub fn rebuild_index_if_needed(
         &mut self,
         failure_threshold: u64,
@@ -311,6 +311,11 @@ impl EdgeStore {
         predicates: &[ScanPredicate],
         query_ts: Timestamp,
     ) -> Option<Vec<EdgeId>> {
+        // Large-hit cutover: point-lookup back-checks cost O(hits × row_width)
+        // while a segment scan costs O(rows). Past the cutover the index wins
+        // nothing, so fall back to the segment path instead of materializing
+        // a huge candidate set.
+        const INDEX_SEGMENT_CUTOVER: usize = 8192;
         if predicates.is_empty() {
             return None;
         }
@@ -371,11 +376,17 @@ impl EdgeStore {
             // One physical row fill per touched source instead of one point
             // lookup per hit: hits sharing a source resolve against a single
             // authority-filtered row instead of rescanning it per hit.
+            // Cut over to the segment scan past the hit threshold.
             let mut hits = HashSet::new();
             if self.schema.has_out() {
                 let mut by_src: HashMap<u32, Vec<(u32, i64)>> = HashMap::new();
+                let mut total = 0usize;
                 for ((src, dst, rank), _) in index.lookup(column, &lower, &upper) {
                     by_src.entry(src).or_default().push((dst, rank));
+                    total += 1;
+                    if total > INDEX_SEGMENT_CUTOVER {
+                        return None;
+                    }
                 }
                 let mut scratch = Vec::new();
                 for (src, keys) in &by_src {
@@ -391,8 +402,13 @@ impl EdgeStore {
                 }
             } else if self.schema.has_in() {
                 let mut by_dst: HashMap<u32, Vec<(u32, i64)>> = HashMap::new();
+                let mut total = 0usize;
                 for ((src, dst, rank), _) in index.lookup(column, &lower, &upper) {
                     by_dst.entry(dst).or_default().push((src, rank));
+                    total += 1;
+                    if total > INDEX_SEGMENT_CUTOVER {
+                        return None;
+                    }
                 }
                 let mut scratch = Vec::new();
                 for (dst, keys) in &by_dst {
@@ -440,7 +456,15 @@ impl EdgeStore {
         let mut build_failures: u64 = 0;
         let space_id = self.label as u64;
         let stats_manager = self.stats_manager.clone();
+        // Backpressure: yield periodically so a huge rebuild does not starve
+        // other work on the same thread pool. No memory bound needed since
+        // the scan already streams one record at a time.
+        let mut scanned = 0usize;
         for edge in iter {
+            scanned += 1;
+            if scanned % 4096 == 0 {
+                std::thread::yield_now();
+            }
             let src_u32 = edge.src_vid.as_internal_u32().unwrap_or(u32::MAX);
             let dst_u32 = edge.dst_vid.as_internal_u32().unwrap_or(u32::MAX);
             for (prop_name, prop_value) in &edge.properties {

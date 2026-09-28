@@ -412,7 +412,7 @@ fn test_delta_roundtrip_restores_exact_ids() {
     // Replay onto an empty loader plus the baseline snapshot.
     let restored_base = IdIndexer::deserialize(&baseline).unwrap();
     assert_eq!(restored_base.len(), 3);
-    let mut replay = IdManager::new();
+    let replay = IdManager::new();
     replay.apply_delta_entries(&entries).unwrap();
     for (key, id) in indexer.iter() {
         assert_eq!(replay.get_id(&key), Some(id));
@@ -465,7 +465,7 @@ fn test_delta_rejects_impossible_count() {
 
 #[test]
 fn test_delta_apply_rejects_divergence() {
-    let mut base = IdManager::new();
+    let base = IdManager::new();
     base.apply_delta_entries(&[(0, 7, IdKey::Int(3))]).unwrap();
     let divergent = vec![(0u8, 9u32, IdKey::Int(3))];
     assert!(base.apply_delta_entries(&divergent).is_err());

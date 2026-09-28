@@ -17,6 +17,11 @@ use crate::{DataType, Value};
 /// Timestamp type for MVCC
 pub type Timestamp = u64;
 
+/// Reserved zero timestamp: never allocated, doubles as the free-row marker
+/// in edge property stores. Keeping it unallocatable makes the virgin-row
+/// check explicit instead of relying on the allocator never emitting zero.
+pub const RESERVED_ZERO_TIMESTAMP: Timestamp = 0;
+
 /// Invalid timestamp sentinel value (u64::MAX indicates "deleted" or "not set")
 ///
 /// Timestamp allocator invariant: `write_ts` starts at 1 and only grows by 1
@@ -34,11 +39,11 @@ pub const MAX_TIMESTAMP: Timestamp = u64::MAX - 1;
 
 /// Whether `ts` may be handed out by the MVCC timestamp allocator.
 ///
-/// Only values strictly below both sentinels are allocatable. This is the
-/// single choke point for the "allocator never touches a sentinel" invariant.
+/// Zero and both top sentinels are reserved. This is the single choke point
+/// for the allocator invariant.
 #[inline]
 pub fn is_allocatable_timestamp(ts: Timestamp) -> bool {
-    ts != INVALID_TIMESTAMP && ts != MAX_TIMESTAMP
+    ts != RESERVED_ZERO_TIMESTAMP && ts != INVALID_TIMESTAMP && ts != MAX_TIMESTAMP
 }
 
 /// Label ID type for vertex and edge type identification

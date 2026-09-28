@@ -352,11 +352,6 @@ impl CommitHealthReport {
             && self.pk_index_ok
             && self.lineage_issues.is_empty()
     }
-
-    /// Discardable sidecar defects observable without failing the open.
-    pub fn sidecar_discards(&self) -> usize {
-        self.sidecar_issues.len()
-    }
 }
 
 /// Aggregated health across label directories under one vertices root.
@@ -386,34 +381,6 @@ impl CorruptionClass {
             Self::Fatal => "fatal",
             Self::Isolatable => "isolatable",
         }
-    }
-}
-
-/// One shard-level damage record for offline repair tooling. Carries the
-/// machine-readable classification plus file location so scripts parse
-/// fields instead of matching log text.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ShardDamage {
-    pub shard: usize,
-    pub file: String,
-    pub class: CorruptionClass,
-    pub reason: String,
-}
-
-/// Offline repair-mode open report. Healthy shards are loaded and
-/// diagnosable; damaged shards are skipped. The handle is diagnostic
-/// read-only: callers must not serve writes from a partially opened table.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct RepairReport {
-    pub healthy_shards: Vec<usize>,
-    pub damaged_shards: Vec<ShardDamage>,
-    /// Epoch pinned by the manifest when lineage proved, if any.
-    pub epoch: Option<u64>,
-}
-
-impl RepairReport {
-    pub fn is_complete(&self) -> bool {
-        self.damaged_shards.is_empty()
     }
 }
 
@@ -623,149 +590,6 @@ pub(crate) struct ManifestLineage {
     pub(crate) layout: super::routing::ShardLayout,
     pub(crate) router_version: u8,
     pub(crate) generation: u64,
-}
-
-/// Staging receipt for one offline redistribution, written beside the
-/// rebuilt checkpoint it describes. Binds the source and target lineage
-/// generations so the adopt step can prove continuity (target is exactly
-/// source plus one) instead of trusting directory placement.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-// Staging/adopt protocol primitive: the online adopt driver consumes the
-// receipt before swapping generations. Retained as the reuse target for
-// that driver; exercised by the staging tests below.
-#[allow(dead_code)]
-pub(crate) struct RedistributionReceipt {
-    pub(crate) source_generation: u64,
-    pub(crate) target_generation: u64,
-    pub(crate) source_shards: usize,
-    pub(crate) target_shards: usize,
-    pub(crate) rows: usize,
-    pub(crate) mappings: usize,
-}
-
-/// Receipt file pinning the lineage handoff of a staged redistribution.
-#[allow(dead_code)]
-const RESHARD_RECEIPT_FILE_NAME: &str = "reshard_receipt.json";
-
-impl ShardedVertexTable {
-    /// Rebuild this table under `new_num_shards` into a staging directory.
-    ///
-    /// Runs the fenced [`ShardedVertexTable::reshard_to`] rebuild, flushes
-    /// the new generation as a full checkpoint into `staging`, and writes a
-    /// receipt binding the source and target generations. The caller swaps
-    /// the staging directory into place (online protocol) or retires the
-    /// old directory (offline runbook) only after
-    /// [`Self::check_staged_redistribution`] proves lineage continuity.
-    /// The source table and its directory stay untouched.
-    // See the receipt-type note: staging entry point for the adopt driver.
-    #[allow(dead_code)]
-    pub fn redistribute_to_staging<P: AsRef<Path>>(
-        &self,
-        staging: P,
-        new_num_shards: usize,
-        compression: CompressionType,
-    ) -> StorageResult<RedistributionReceipt> {
-        let (rebuilt, mapping) = self.reshard_to(new_num_shards)?;
-        rebuilt.flush(&staging, compression)?;
-        let receipt = RedistributionReceipt {
-            source_generation: self.generation,
-            target_generation: rebuilt.generation,
-            source_shards: self.layout.num_shards,
-            target_shards: rebuilt.layout.num_shards,
-            rows: rebuilt.approximate_total_count(),
-            mappings: mapping.len(),
-        };
-        let payload = serde_json::to_vec(&receipt)
-            .map_err(|e| graphdb_core::StorageError::serialize_error(e.to_string()))?;
-        crate::compression::write_shadow_file(
-            staging.as_ref().join(RESHARD_RECEIPT_FILE_NAME),
-            &payload,
-        )?;
-        Ok(receipt)
-    }
-
-    /// Prove a staged redistribution is safe to adopt for a source table at
-    /// `source_generation`: the receipt must exist and decode, its source
-    /// must be the caller, its target must be exactly source plus one, and
-    /// the staged table manifest must pin that same target generation.
-    /// Anything else refuses the adopt instead of swapping in a foreign
-    /// checkpoint.
-    // See the receipt-type note: adoption gate for the adopt driver.
-    #[allow(dead_code)]
-    pub fn check_staged_redistribution<P: AsRef<Path>>(
-        staging: P,
-        source_generation: u64,
-    ) -> StorageResult<RedistributionReceipt> {
-        let staging = staging.as_ref();
-        let receipt_path = staging.join(RESHARD_RECEIPT_FILE_NAME);
-        let payload = std::fs::read(&receipt_path).map_err(|e| {
-            graphdb_core::StorageError::deserialize_error(format!(
-                "staged redistribution at {} has no readable receipt {}: {e}",
-                staging.display(),
-                receipt_path.display(),
-            ))
-        })?;
-        let receipt: RedistributionReceipt = serde_json::from_slice(&payload).map_err(|e| {
-            graphdb_core::StorageError::deserialize_error(format!(
-                "invalid redistribution receipt {}: {e}",
-                receipt_path.display(),
-            ))
-        })?;
-        if receipt.source_generation != source_generation
-            || receipt.target_generation != source_generation.saturating_add(1)
-        {
-            return Err(graphdb_core::StorageError::invalid_operation(format!(
-                "staged redistribution at {} breaks lineage continuity: receipt hands \
-                 generation {} to {}, but the source table is at generation {}",
-                staging.display(),
-                receipt.source_generation,
-                receipt.target_generation,
-                source_generation,
-            )));
-        }
-        let lineage = Self::manifest_layout(staging)?.ok_or_else(|| {
-            graphdb_core::StorageError::deserialize_error(format!(
-                "staged redistribution at {} is missing its table manifest",
-                staging.display(),
-            ))
-        })?;
-        if lineage.generation != receipt.target_generation {
-            return Err(graphdb_core::StorageError::invalid_operation(format!(
-                "staged redistribution at {} mixes generations: receipt promises {} \
-                 but the staged manifest pins {}",
-                staging.display(),
-                receipt.target_generation,
-                lineage.generation,
-            )));
-        }
-        // Continuity alone does not prove the staged files decode: refuse
-        // the adopt when the staged checkpoint itself is unhealthy so a
-        // half-written or tampered staging never swaps into place.
-        let report = Self::inspect_commit_health(staging).map_err(|e| {
-            graphdb_core::StorageError::deserialize_error(format!(
-                "staged redistribution at {} failed health inspection: {e}",
-                staging.display(),
-            ))
-        })?;
-        if !report.is_healthy() {
-            let mut defects = report.lineage_issues.clone();
-            if !report.manifest_present {
-                defects.push("commit manifest missing".to_string());
-            } else if !report.manifest_decodable {
-                defects.push("commit manifest undecodable".to_string());
-            }
-            for missing in &report.missing_files {
-                defects.push(format!("listed file missing: {missing}"));
-            }
-            defects.extend(report.pk_issues.clone());
-            return Err(graphdb_core::StorageError::invalid_operation(format!(
-                "staged redistribution at {} unhealthy, refusing adopt: {}",
-                staging.display(),
-                defects.join("; "),
-            )));
-        }
-        Ok(receipt)
-    }
 }
 
 impl ShardedVertexTable {
@@ -1584,80 +1408,6 @@ impl ShardedVertexTable {
         }
     }
 
-    /// Offline repair-mode open: fatal defects (table/commit manifest,
-    /// lineage) still refuse with `class=fatal`; per-shard data defects
-    /// load healthy shards read-only and report damaged ones with
-    /// `class=isolatable` plus file location for script parsing.
-    ///
-    /// Reuses the strict manifest decoding and per-shard `load` entry, not
-    /// a separate parser. The returned handle holds only healthy shards;
-    /// callers must treat it as diagnostic read-only and never serve
-    /// writes from it. Sidecar defects never appear here: they are pruned
-    /// as discardable caches on the strict path.
-    pub fn load_for_repair<P: AsRef<Path>>(&self, path: P) -> StorageResult<RepairReport> {
-        let dir = path.as_ref();
-        self.check_table_manifest(path.as_ref()).map_err(|e| {
-            graphdb_core::StorageError::deserialize_error(format!(
-                "class={} {}",
-                CorruptionClass::Fatal.as_str(),
-                e.message()
-            ))
-        })?;
-        let manifest = Self::read_commit_manifest(dir)?.ok_or_else(|| {
-            graphdb_core::StorageError::deserialize_error(format!(
-                "class={} vertex table '{}' missing commit manifest at file={}",
-                CorruptionClass::Fatal.as_str(),
-                self.label_name,
-                dir.join(COMMIT_MANIFEST_FILE_NAME).display(),
-            ))
-        })?;
-        // Repair mode proves lineage only (fatal); missing or corrupt
-        // per-shard files become isolatable shard damages below instead of
-        // refusing the whole open.
-        if manifest.generation != self.generation {
-            return Err(graphdb_core::StorageError::deserialize_error(format!(
-                "class={} checkpoint epoch {} kind={} belongs to redistribution generation {} but the table opens generation {}",
-                CorruptionClass::Fatal.as_str(),
-                manifest.epoch,
-                manifest.kind.as_str(),
-                manifest.generation,
-                self.generation,
-            )));
-        }
-        let _ = Self::prune_tampered_sidecars(dir, &manifest);
-        let mut healthy_shards = Vec::new();
-        let mut damaged_shards = Vec::new();
-        for (i, shard) in self.shards.iter().enumerate() {
-            let shard_dir = dir.join(format!("shard_{}", i));
-            if !shard_dir.exists() {
-                damaged_shards.push(ShardDamage {
-                    shard: i,
-                    file: shard_dir.display().to_string(),
-                    class: CorruptionClass::Isolatable,
-                    reason: format!(
-                        "checkpoint epoch {} shard directory missing",
-                        manifest.epoch
-                    ),
-                });
-                continue;
-            }
-            match shard.write().load(&shard_dir) {
-                Ok(()) => healthy_shards.push(i),
-                Err(e) => damaged_shards.push(ShardDamage {
-                    shard: i,
-                    file: shard_dir.display().to_string(),
-                    class: CorruptionClass::Isolatable,
-                    reason: format!("checkpoint epoch {} shard corrupt: {}", manifest.epoch, e),
-                }),
-            }
-        }
-        Ok(RepairReport {
-            healthy_shards,
-            damaged_shards,
-            epoch: Some(manifest.epoch),
-        })
-    }
-
     pub fn apply_delta_pages<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
         let path = path.as_ref();
         match Self::read_commit_manifest(path)? {
@@ -2324,7 +2074,7 @@ mod commit_tests {
     }
 
     #[test]
-    fn staged_redistribution_adopt_checks_lineage() {
+    fn reshard_rebuild_opens_under_new_layout() {
         let staging = unique_dir("reshard-stage");
         let _ = std::fs::remove_dir_all(&staging);
         let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
@@ -2337,17 +2087,11 @@ mod commit_tests {
                 )
                 .unwrap();
         }
-        let receipt = table
-            .redistribute_to_staging(&staging, 4, CompressionType::Zstd { level: 0 })
-            .expect("staging succeeds");
-        assert_eq!(receipt.source_generation, 0);
-        assert_eq!(receipt.target_generation, 1);
-        assert_eq!((receipt.source_shards, receipt.target_shards), (2, 4));
-        assert_eq!(receipt.rows, 10);
-        assert_eq!(receipt.mappings, 10);
-        let checked = ShardedVertexTable::check_staged_redistribution(&staging, 0)
-            .expect("lineage continuity proves");
-        assert_eq!(checked, receipt);
+        let (rebuilt, mapping) = table.reshard_to(4).expect("reshard succeeds");
+        assert_eq!(mapping.len(), 10);
+        rebuilt
+            .flush(&staging, CompressionType::Zstd { level: 0 })
+            .expect("rebuilt checkpoint flushes");
         let adopted = ShardedVertexTable::with_layout(
             1,
             "t".to_string(),
@@ -2360,70 +2104,6 @@ mod commit_tests {
         let rebuilt_ts = graphdb_core::types::MAX_TIMESTAMP - 1;
         assert!(adopted.get_internal_id("s_3", rebuilt_ts).is_some());
         let _ = std::fs::remove_dir_all(&staging);
-    }
-
-    #[test]
-    fn staged_redistribution_refuses_broken_lineage() {
-        let staging = unique_dir("reshard-broken");
-        let _ = std::fs::remove_dir_all(&staging);
-        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
-        table
-            .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
-            .unwrap();
-        table
-            .redistribute_to_staging(&staging, 4, CompressionType::Zstd { level: 0 })
-            .expect("staging succeeds");
-        let err = ShardedVertexTable::check_staged_redistribution(&staging, 5)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("lineage continuity"),
-            "wrong source generation must refuse adopt: {err}"
-        );
-        let receipt_path = staging.join(RESHARD_RECEIPT_FILE_NAME);
-        let mut receipt: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&receipt_path).unwrap()).unwrap();
-        receipt["target_generation"] = serde_json::Value::from(9u64);
-        std::fs::write(&receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
-        let err = ShardedVertexTable::check_staged_redistribution(&staging, 0)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("lineage continuity"),
-            "tampered target generation must refuse adopt: {err}"
-        );
-        let _ = std::fs::remove_dir_all(&staging);
-    }
-
-    #[test]
-    fn staged_redistribution_refuses_unhealthy_staging() {
-        for (tag, tamper) in [
-            ("missing-manifest", "commit manifest missing"),
-            ("corrupt-pk", "shard_0"),
-        ] {
-            let staging = unique_dir(&format!("reshard-sick-{tag}"));
-            let _ = std::fs::remove_dir_all(&staging);
-            let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
-            table
-                .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
-                .unwrap();
-            table
-                .redistribute_to_staging(&staging, 4, CompressionType::Zstd { level: 0 })
-                .expect("staging succeeds");
-            if tag == "missing-manifest" {
-                std::fs::remove_file(staging.join(COMMIT_MANIFEST_FILE_NAME)).unwrap();
-            } else {
-                std::fs::write(staging.join("shard_0").join("id_indexer.bin"), b"corrupt").unwrap();
-            }
-            let err = ShardedVertexTable::check_staged_redistribution(&staging, 0)
-                .unwrap_err()
-                .to_string();
-            assert!(
-                err.contains("unhealthy") && err.contains(tamper),
-                "damaged staging must refuse adopt with located cause: {err}"
-            );
-            let _ = std::fs::remove_dir_all(&staging);
-        }
     }
 
     #[test]
@@ -2789,7 +2469,7 @@ mod commit_tests {
             .flush_incremental_with_epoch(&incr, CompressionType::Zstd { level: 0 }, 43, Some(42))
             .unwrap();
 
-        let mut mgr = IdManager::new();
+        let mgr = IdManager::new();
         mgr.insert(IdKey::Text("v1".to_string())).unwrap();
         let mut raw = mgr.serialize_delta();
         raw[5..9].copy_from_slice(&7u32.to_le_bytes());
@@ -2831,7 +2511,7 @@ mod commit_tests {
             )
             .unwrap();
 
-        let mut mgr = IdManager::new();
+        let mgr = IdManager::new();
         mgr.insert(IdKey::Text("v1".to_string())).unwrap();
         let mut raw = mgr.serialize_delta();
         raw[5..9].copy_from_slice(&7u32.to_le_bytes());
@@ -2876,7 +2556,6 @@ mod commit_tests {
         // a sidecar issue for observability.
         assert!(report.is_healthy());
         assert!(!report.sidecar_issues.is_empty());
-        assert_eq!(report.sidecar_discards(), report.sidecar_issues.len());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2963,8 +2642,8 @@ mod commit_tests {
     }
 
     #[test]
-    fn repair_mode_isolates_single_shard_damage() {
-        let dir = unique_dir("repair-isolate");
+    fn strict_open_reports_shard_damage_class() {
+        let dir = unique_dir("strict-shard-damage");
         let _ = std::fs::remove_dir_all(&dir);
         let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
         let ts: Timestamp = 10;
@@ -2981,32 +2660,13 @@ mod commit_tests {
             )
             .unwrap();
         // Corrupt one shard's authoritative pages: strict open refuses with
-        // a machine-readable isolatable class, repair opens the healthy
-        // shard and reports the damaged one.
+        // a machine-readable isolatable class naming the shard.
         std::fs::write(dir.join("shard_0").join("columns.bin"), b"corrupt").unwrap();
         let strict = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
         let err = strict.load(&dir).unwrap_err().to_string();
         assert!(
             err.contains("class=isolatable") && err.contains("shard"),
             "strict shard failure must carry machine-readable class and shard: {err}"
-        );
-        let probe = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
-        let report = probe.load_for_repair(&dir).unwrap();
-        assert_eq!(report.healthy_shards, vec![1]);
-        assert_eq!(report.damaged_shards.len(), 1);
-        assert_eq!(report.damaged_shards[0].shard, 0);
-        assert_eq!(
-            report.damaged_shards[0].class,
-            super::CorruptionClass::Isolatable
-        );
-        assert!(!report.is_complete());
-        // Fatal defects still refuse repair mode with class=fatal.
-        std::fs::remove_file(dir.join(COMMIT_MANIFEST_FILE_NAME)).unwrap();
-        let fatal_probe = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
-        let err = fatal_probe.load_for_repair(&dir).unwrap_err().to_string();
-        assert!(
-            err.contains("class=fatal"),
-            "missing manifest must refuse repair with fatal class: {err}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -38,8 +38,10 @@ impl ImmutableCsr {
 
     /// Timestamp-filtered read of one row.
     ///
-    /// Test and offline use; production traversals use the row iterator or
-    /// caller-buffer fill paths instead of this allocating accessor.
+    /// UNFILTERED single-predicate read for tests and offline tools only:
+    /// filters by row delete stamp without consulting the version authority.
+    /// Production traversals must use the row iterator or caller-buffer fill
+    /// paths with the authority gate.
     pub fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr> {
         let Some((start, end)) = self.row_window(src_vid) else {
             return Vec::new();

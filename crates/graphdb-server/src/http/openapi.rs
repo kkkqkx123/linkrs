@@ -530,7 +530,7 @@ mod tests {
     fn fn_bodies(src: &str, name: &str) -> Vec<String> {
         fn_spans(src, name)
             .into_iter()
-            .filter_map(|(start, end)| {
+            .filter_map(|(start, _)| {
                 block_span(src.as_bytes(), start).map(|(open, close)| src[open..close].to_string())
             })
             .collect()

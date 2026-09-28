@@ -111,8 +111,8 @@ impl CsrWithProperties {
     /// no provided value take their default. An out-of-range position is a
     /// caller bug and fails loudly instead of writing the wrong column.
     /// The creation stamp must come from the timestamp allocator: zero and
-    /// the two top sentinels are reserved, and zero doubles as the free-row
-    /// marker checked by release and reclaim paths.
+    /// the two top sentinels are reserved and rejected here. Row lifecycle
+    /// follows the explicit virgin/live/deleted state machine.
     pub(crate) fn allocate_row_at(
         &mut self,
         positioned: &[(usize, Value)],
@@ -183,15 +183,15 @@ impl CsrWithProperties {
     /// Clears the visibility stamp so the slot is skipped by reads and GC
     /// scans, drops the edge mapping via the reverse index, and queues the
     /// slot for reuse. Reused slots are fully overwritten by `allocate_row`.
-    /// Idempotent: releasing an already-free or out-of-range row is a no-op.
+    /// Idempotent via the explicit state machine: releasing an already-free
+    /// or out-of-range row is a no-op, and virgin slots never enter the free
+    /// list twice so no separate membership set is needed.
     /// Slots that were never used are never admitted to the free list.
     pub fn release_row(&mut self, row_idx: usize) {
         if row_idx >= self.visibility.len() {
             return;
         }
-        let virgin =
-            self.visibility[row_idx].create_ts == 0 && self.visibility[row_idx].delete_ts.is_none();
-        if virgin {
+        if self.visibility[row_idx].is_virgin() {
             if let Some(slot) = self.row_to_edge.get_mut(row_idx) {
                 if let Some(edge_id) = slot.take() {
                     self.map_remove(edge_id);

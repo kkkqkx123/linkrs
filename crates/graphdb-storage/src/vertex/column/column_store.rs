@@ -241,8 +241,7 @@ impl ColumnStore {
         self.get_column(name).map(|col| col.zone_maps())
     }
 
-    /// Whether the zone chunk covering `chunk` may contain rows matching
-    /// `range`. Returns true unless the chunk provably lies outside.
+    /// Borrow-based zone prune covering range and equality probes.
     ///
     /// Equality probes on length-carrying values first check the per-chunk
     /// length summary; a probe length outside the recorded interval skips
@@ -251,41 +250,54 @@ impl ColumnStore {
     /// probe key bits outside the chunk fingerprint skip the chunk even
     /// when outer lengths coincide. All probes then fall back to
     /// whole-value min/max ordering, preserving the conservative contract.
-    pub fn zone_prunes_in(&self, chunk: usize, range: &crate::cursor::PredicateRange) -> bool {
+    /// No `ZoneBounds` or summary clone crosses the probe.
+    pub fn zone_prunes_in_borrowed(
+        &self,
+        chunk: usize,
+        range: &crate::cursor::PredicateRange,
+    ) -> bool {
         let Some(column) = self.get_column(&range.column) else {
             return true;
         };
         if let Some(probe_len) = range.equality_len() {
-            if let Some(summary) = column.zone_complex_for_chunk(chunk) {
+            let complex_prunes = column.with_zone_complex_for_chunk(chunk, |summary| {
+                let Some(summary) = summary else {
+                    return false;
+                };
                 if let (Some(lo), Some(hi)) = (summary.len_min, summary.len_max) {
                     if probe_len < lo || probe_len > hi {
-                        return false;
+                        return true;
                     }
                 }
                 if let Some((probe_lo, probe_hi)) = range.equality_leaf_range() {
                     if let (Some(lo), Some(hi)) = (&summary.leaf_min, &summary.leaf_max) {
-                        use super::zone_map::compare_values;
-                        if compare_values(&probe_hi, lo) == std::cmp::Ordering::Less
-                            || compare_values(&probe_lo, hi) == std::cmp::Ordering::Greater
+                        if super::zone_map::compare_values(&probe_hi, lo)
+                            == std::cmp::Ordering::Less
+                            || super::zone_map::compare_values(&probe_lo, hi)
+                                == std::cmp::Ordering::Greater
                         {
-                            return false;
+                            return true;
                         }
                     }
                 }
                 if let Some(probe_fp) = range.equality_key_fp() {
                     if summary.key_fp & probe_fp != probe_fp {
-                        return false;
+                        return true;
                     }
                 }
+                false
+            });
+            if complex_prunes {
+                return false;
             }
         }
-        let Some(zb) = column.zone_for_chunk(chunk) else {
-            return true;
-        };
-        let (Some(min), Some(max)) = (&zb.min, &zb.max) else {
-            return true;
-        };
-        range.overlaps(min, max)
+        column.with_zone_for_chunk(chunk, |zb| {
+            let Some(zb) = zb else { return true };
+            let (Some(min), Some(max)) = (&zb.min, &zb.max) else {
+                return true;
+            };
+            range.overlaps(min, max)
+        })
     }
 
     /// Global min/max bounds of one column, merged across all chunks with the
@@ -421,22 +433,6 @@ impl ColumnStore {
             .collect()
     }
 
-    /// Batch read of all columns for multiple rows at `query_ts`.
-    pub fn get_batch_at_ts(
-        &self,
-        rows: &[usize],
-        query_ts: Timestamp,
-    ) -> Vec<Vec<(String, Option<Value>)>> {
-        let columns = self.columns.read();
-        let mut out = vec![Vec::with_capacity(columns.len()); rows.len()];
-        for col in columns.iter() {
-            for (ri, &row) in rows.iter().enumerate() {
-                out[ri].push((col.name.clone(), col.get_at_ts(row, query_ts)));
-            }
-        }
-        out
-    }
-
     /// Strict batch read: corrupt payloads fail with column and row context.
     ///
     /// Query entry for explicit failure semantics. Never-written windows
@@ -487,24 +483,6 @@ impl ColumnStore {
             }
         }
         Ok(out)
-    }
-
-    /// Batch variant of [`get_projected_at_ts`].
-    pub fn get_projected_batch_at_ts(
-        &self,
-        rows: &[usize],
-        projection: &[String],
-        query_ts: Timestamp,
-    ) -> Vec<Vec<(String, Option<Value>)>> {
-        let mut out = vec![Vec::with_capacity(projection.len()); rows.len()];
-        for name in projection {
-            if let Some(column) = self.get_column(name) {
-                for (ri, &row) in rows.iter().enumerate() {
-                    out[ri].push((name.clone(), column.get_at_ts(row, query_ts)));
-                }
-            }
-        }
-        out
     }
 
     /// Column-major batch decode at `query_ts` (A1 column-block path).
@@ -948,31 +926,6 @@ impl ColumnStore {
             acc.evicted_chunks += ledger.evicted_chunks;
         }
         acc
-    }
-
-    /// Resident decoded bytes across columns.
-    pub fn resident_memory_usage(&self) -> usize {
-        self.buffer_ledger().resident_bytes
-    }
-
-    /// Compressed snapshot bytes retained for evicted chunks.
-    pub fn evicted_bytes(&self) -> usize {
-        self.buffer_ledger().evicted_bytes
-    }
-
-    /// Overflow side-store bytes across columns (subset of resident).
-    pub fn overflow_bytes(&self) -> usize {
-        self.buffer_ledger().overflow_bytes
-    }
-
-    /// Chunks with decoded data in memory.
-    pub fn resident_chunk_count(&self) -> usize {
-        self.buffer_ledger().resident_chunks
-    }
-
-    /// Chunks released with only the snapshot retained.
-    pub fn evicted_chunk_count(&self) -> usize {
-        self.buffer_ledger().evicted_chunks
     }
 
     pub fn mark_row_dirty(&self, row_idx: usize) {

@@ -94,6 +94,27 @@ impl EdgeStore {
         }
     }
 
+    /// Unattended single-node restart entry: truncates a torn WAL tail (if
+    /// any), loads, and logs the repair report for audit ingestion.
+    ///
+    /// Server restart paths without an operator call this instead of
+    /// [`Self::load`]. The report is logged at warn level when a repair ran
+    /// and returned to the caller for audit storage; `Strict` behavior is
+    /// unchanged for attended opens.
+    pub fn load_for_unattended_restart<P: AsRef<std::path::Path>>(
+        &mut self,
+        path: P,
+    ) -> StorageResult<Option<super::super::wal::EdgeWalRepairReport>> {
+        let report = self.load_with_wal_recovery(path, EdgeWalRecoveryMode::TruncateTornTail)?;
+        if let Some(ref r) = report {
+            log::warn!(
+                "edge WAL torn tail truncated on unattended restart: {:?}",
+                r
+            );
+        }
+        Ok(report)
+    }
+
     /// Fail-closed cross-copy audit used by [`EdgeStore::load`].
     ///
     /// Damage detection only: returns `(orphan property mappings, orphan CSR
@@ -224,14 +245,14 @@ impl EdgeStore {
         drift
     }
 
-    /// Periodic authority-versus-projection audit with metric emission.
+    /// On-demand authority-versus-projection audit with metric emission.
     ///
     /// Runs the same [`EdgeStore::audit_copy_drift`] report the load,
     /// freeze and reclaim paths enforce, and additionally emits the three
     /// orphan counters through the table metrics registry so drift is
-    /// observable between those gates. Read-only: never mutates table
-    /// state. Callers are the watermark-driven maintenance passes; the
-    /// write path itself stays free of full-table walks.
+    /// observable when operators trigger it. Read-only: never mutates table
+    /// state. Callers are manual diagnostics and tests; maintenance passes
+    /// only refresh lag gauges and never run this full-table walk on a timer.
     pub fn audit_and_report(&self) -> Vec<String> {
         let drift = self.audit_copy_drift();
         if let Some(stats) = &self.stats_manager {

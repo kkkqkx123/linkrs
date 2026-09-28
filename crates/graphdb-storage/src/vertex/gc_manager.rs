@@ -25,10 +25,6 @@ pub struct VertexGcConfig {
     pub min_interval_between_gc_ms: u64,
     /// Safety margin for GC timestamp (subtract from safe_ts)
     pub timestamp_margin: Timestamp,
-    /// Upper bound for any single snapshot lease TTL in milliseconds.
-    /// The transaction layer negotiates longer holds by renewing, so an
-    /// unbounded TTL can never silently pin the watermark forever.
-    pub max_lease_ttl_ms: u64,
 }
 
 impl Default for VertexGcConfig {
@@ -37,7 +33,6 @@ impl Default for VertexGcConfig {
             interval_ms: 5000,
             min_interval_between_gc_ms: 500,
             timestamp_margin: 1,
-            max_lease_ttl_ms: 300_000,
         }
     }
 }
@@ -56,68 +51,6 @@ impl VertexGcConfig {
         self.timestamp_margin = margin;
         self
     }
-
-    pub fn with_max_lease_ttl(mut self, ttl_ms: u64) -> Self {
-        self.max_lease_ttl_ms = ttl_ms.max(1);
-        self
-    }
-}
-
-/// A snapshot lease: the transaction layer declares that `holder` needs
-/// reads at or after `floor_ts` until `deadline_ms` (wall clock). Storage
-/// never reclaims below a live lease floor; an expired lease stops pinning
-/// the watermark and is counted, so holders that overrun their lease are
-/// visible instead of silently freezing reclamation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SnapshotLease {
-    /// Transaction-layer holder id (transaction or cursor id).
-    pub holder: u64,
-    /// Oldest timestamp the holder may still read.
-    pub floor_ts: Timestamp,
-    /// Wall-clock expiry in milliseconds since the Unix epoch.
-    pub deadline_ms: u64,
-}
-
-impl SnapshotLease {
-    /// Whether the lease still pins the watermark at `now_ms`.
-    pub fn is_live(&self, now_ms: u64) -> bool {
-        now_ms < self.deadline_ms
-    }
-}
-
-/// Point-in-time backpressure view for snapshot admission control.
-///
-/// Read-only and clock-injected: the transaction layer polls this to decide
-/// whether new long-lived snapshots are still admissible. It never kills
-/// holders; expiry stays a storage-side reclaim precondition plus an
-/// observable counter, never a cross-layer verdict.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SnapshotBackpressure {
-    /// Live leases pinning the watermark at the sampled instant.
-    pub live_leases: usize,
-    /// Deepest floor across live leases, if any.
-    pub deepest_floor: Option<Timestamp>,
-    /// Nearest live-lease deadline in wall-clock milliseconds, if any.
-    pub nearest_deadline_ms: Option<u64>,
-    /// Leases issued since creation.
-    pub leases_issued: u64,
-    /// Successful renewals since creation.
-    pub leases_renewed: u64,
-    /// Expired leases reaped since creation.
-    pub leases_expired: u64,
-    /// Passes that reclaimed nothing because the watermark was pinned.
-    pub blocked_passes: u64,
-    /// Passes that triggered version-chain pressure mitigation (cold-chunk
-    /// eviction while the watermark was pinned by live snapshots).
-    pub pressure_mitigations: u64,
-}
-
-fn wall_now_ms() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// Vertex Table GC Manager
@@ -164,17 +97,6 @@ pub struct VertexGcManager {
     /// writes, no live chains) are externalized, so pinned reads stay
     /// correct while memory converges.
     pressure_mitigations: Arc<AtomicU64>,
-    /// Live snapshot leases by holder id, shared across clones so issuance
-    /// on any handle pins every pass. Guarded by a mutex because issuance
-    /// is rare (transaction boundaries) while reads take the fast floor
-    /// snapshot under the same lock.
-    leases: Arc<parking_lot::Mutex<std::collections::HashMap<u64, SnapshotLease>>>,
-    /// Leases issued since creation.
-    leases_issued: Arc<AtomicU64>,
-    /// Successful lease renewals since creation.
-    leases_renewed: Arc<AtomicU64>,
-    /// Leases found expired and reaped since creation.
-    leases_expired: Arc<AtomicU64>,
     gc_event_sink: Arc<RwLock<Option<GcEventSink>>>,
     /// Record cache to invalidate when a GC pass remaps internal IDs.
     /// Compaction re-densifies the ID space, so cached ID mappings and
@@ -202,10 +124,6 @@ impl VertexGcManager {
             blocked_passes: Arc::new(AtomicU64::new(0)),
             cache_invalidations: Arc::new(AtomicU64::new(0)),
             pressure_mitigations: Arc::new(AtomicU64::new(0)),
-            leases: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
-            leases_issued: Arc::new(AtomicU64::new(0)),
-            leases_renewed: Arc::new(AtomicU64::new(0)),
-            leases_expired: Arc::new(AtomicU64::new(0)),
             gc_event_sink: Arc::new(RwLock::new(None)),
             record_cache: Arc::new(RwLock::new(None)),
         }
@@ -287,112 +205,6 @@ impl VertexGcManager {
         }
     }
 
-    /// Issue (or replace) a snapshot lease for `holder` starting at
-    /// `now_ms` with the requested TTL, clamped to the configured maximum.
-    /// `now_ms` is a parameter (not read from the clock) so expiry is
-    /// unit-testable without time mocking; production passes
-    /// wall-clock time.
-    ///
-    /// Cross-layer interface: the transaction layer is the designated
-    /// issuer, storage only reaps expired leases and floors the cutoff.
-    /// An empty lease map pins nothing; expiry and flooring are covered
-    /// by the lease tests below.
-    pub fn issue_lease(
-        &self,
-        holder: u64,
-        floor_ts: Timestamp,
-        ttl_ms: u64,
-        now_ms: u64,
-    ) -> SnapshotLease {
-        let ttl = ttl_ms.min(self.config.max_lease_ttl_ms).max(1);
-        let lease = SnapshotLease {
-            holder,
-            floor_ts,
-            deadline_ms: now_ms.saturating_add(ttl),
-        };
-        self.leases.lock().insert(holder, lease);
-        self.leases_issued.fetch_add(1, Ordering::Release);
-        lease
-    }
-
-    /// Extend `holder`'s lease by `ttl_ms` from `now_ms`. Returns false
-    /// when no lease exists (the holder must issue rather than renew).
-    pub fn renew_lease(&self, holder: u64, ttl_ms: u64, now_ms: u64) -> bool {
-        let ttl = ttl_ms.min(self.config.max_lease_ttl_ms).max(1);
-        let mut leases = self.leases.lock();
-        match leases.get_mut(&holder) {
-            Some(lease) => {
-                lease.deadline_ms = now_ms.saturating_add(ttl);
-                self.leases_renewed.fetch_add(1, Ordering::Release);
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// Drop `holder`'s lease. Returns false when none existed.
-    pub fn release_lease(&self, holder: u64) -> bool {
-        self.leases.lock().remove(&holder).is_some()
-    }
-
-    /// Remove leases expired at `now_ms`, counting each one. Expired
-    /// leases stop pinning the watermark; the count keeps overrunning
-    /// holders observable.
-    pub fn reap_expired_leases(&self, now_ms: u64) -> usize {
-        let mut leases = self.leases.lock();
-        let before = leases.len();
-        leases.retain(|_, lease| lease.is_live(now_ms));
-        let reaped = before - leases.len();
-        if reaped > 0 {
-            self.leases_expired
-                .fetch_add(reaped as u64, Ordering::Release);
-        }
-        reaped
-    }
-
-    /// Deepest (minimum) floor across live leases, if any. Leases only pin
-    /// downward: the GC cutoff is the minimum of the version-manager safe
-    /// timestamp and this floor, never above it.
-    pub fn lease_floor(&self, now_ms: u64) -> Option<Timestamp> {
-        self.leases
-            .lock()
-            .values()
-            .filter(|lease| lease.is_live(now_ms))
-            .map(|lease| lease.floor_ts)
-            .min()
-    }
-
-    /// Capture the backpressure view in one lock hold: live-lease pressure
-    /// plus the counters a reviewer crosses against `blocked_passes` to
-    /// tell a stuck snapshot from idle GC.
-    pub fn backpressure_snapshot(&self, now_ms: u64) -> SnapshotBackpressure {
-        let leases = self.leases.lock();
-        let mut live_leases = 0usize;
-        let mut deepest_floor: Option<Timestamp> = None;
-        let mut nearest_deadline_ms: Option<u64> = None;
-        for lease in leases.values().filter(|lease| lease.is_live(now_ms)) {
-            live_leases += 1;
-            deepest_floor = Some(match deepest_floor {
-                Some(floor) => floor.min(lease.floor_ts),
-                None => lease.floor_ts,
-            });
-            nearest_deadline_ms = Some(match nearest_deadline_ms {
-                Some(deadline) => deadline.min(lease.deadline_ms),
-                None => lease.deadline_ms,
-            });
-        }
-        SnapshotBackpressure {
-            live_leases,
-            deepest_floor,
-            nearest_deadline_ms,
-            leases_issued: self.leases_issued.load(Ordering::Acquire),
-            leases_renewed: self.leases_renewed.load(Ordering::Acquire),
-            leases_expired: self.leases_expired.load(Ordering::Acquire),
-            blocked_passes: self.blocked_passes.load(Ordering::Acquire),
-            pressure_mitigations: self.pressure_mitigations.load(Ordering::Acquire),
-        }
-    }
-
     /// Run a single GC pass across all vertex tables.
     ///
     /// Returns the total number of vertex entries removed. Uses the unified
@@ -406,15 +218,11 @@ impl VertexGcManager {
         let watermarks = diagnostics.watermarks;
         let safe_ts = diagnostics.safe_gc_timestamp;
 
-        // Snapshot leases pin the cutoff downward only: a live lease floor
-        // below the version-manager safe timestamp holds reclamation back,
-        // and expired leases are reaped first so overrunning holders cannot
-        // freeze the watermark. No leases means no behavior change.
-        self.reap_expired_leases(wall_now_ms());
-        let cutoff = match self.lease_floor(wall_now_ms()) {
-            Some(floor) => safe_ts.min(floor),
-            None => safe_ts,
-        };
+        // The version-manager safe timestamp is the single cutoff
+        // authority: transaction-side long reads already pin it through
+        // the transaction layer's own lease manager, so storage applies
+        // no second floor here.
+        let cutoff = safe_ts;
 
         if cutoff == 0 {
             self.blocked_passes.fetch_add(1, Ordering::Release);
@@ -424,20 +232,12 @@ impl VertexGcManager {
             if let Some(age) = watermarks.oldest_age(&self.version_manager) {
                 if is_snapshot_stuck(age.as_secs()) {
                     self.blocked_passes.fetch_add(1, Ordering::Release);
-                    // Surface the lease backpressure view beside the stuck
-                    // warning so reviewers can cross-check blocked passes
-                    // against lease issuance, renewal, and expiry counts.
-                    let backpressure = self.backpressure_snapshot(wall_now_ms());
                     log::warn!(
-                        "GC blocked by long-lived snapshot age={:?} safe_gc={} oldest_active={} live_leases={} leases_issued={} leases_renewed={} leases_expired={} blocked_passes={}",
+                        "GC blocked by long-lived snapshot age={:?} safe_gc={} oldest_active={} blocked_passes={}",
                         age,
                         safe_ts,
                         watermarks.oldest_active_snapshot,
-                        backpressure.live_leases,
-                        backpressure.leases_issued,
-                        backpressure.leases_renewed,
-                        backpressure.leases_expired,
-                        backpressure.blocked_passes,
+                        self.blocked_passes.load(Ordering::Acquire),
                     );
                 }
             }
@@ -598,10 +398,10 @@ impl VertexGcManager {
 }
 
 impl Clone for VertexGcManager {
-    /// Clones share every counter and the lease map: the background task
-    /// runs on a clone (`start_background_gc`), so snapshotting counters
-    /// here would leave the originating handle's `pass_count`,
-    /// `total_removed` and backpressure view permanently stale.
+    /// Clones share every counter: the background task runs on a clone
+    /// (`start_background_gc`), so snapshotting counters here would leave
+    /// the originating handle's `pass_count` and `total_removed`
+    /// permanently stale.
     fn clone(&self) -> Self {
         Self {
             data_store: self.data_store.clone(),
@@ -614,10 +414,6 @@ impl Clone for VertexGcManager {
             blocked_passes: self.blocked_passes.clone(),
             cache_invalidations: self.cache_invalidations.clone(),
             pressure_mitigations: self.pressure_mitigations.clone(),
-            leases: self.leases.clone(),
-            leases_issued: self.leases_issued.clone(),
-            leases_renewed: self.leases_renewed.clone(),
-            leases_expired: self.leases_expired.clone(),
             gc_event_sink: self.gc_event_sink.clone(),
             record_cache: self.record_cache.clone(),
         }
@@ -652,7 +448,6 @@ mod tests {
         let gc = VertexGcManager::new(data_store, version_manager, VertexGcConfig::default(), pool);
         assert!(!gc.is_running());
         assert_eq!(gc.total_removed(), 0);
-        assert_eq!(gc.backpressure_snapshot(0).blocked_passes, 0);
     }
 
     #[test]
@@ -668,7 +463,6 @@ mod tests {
         assert_eq!(VertexTable::VERSION_CHAIN_PRESSURE_WARN_LEN, 1024);
         let gc = test_manager();
         assert_eq!(gc.pressure_mitigations(), 0);
-        assert_eq!(gc.backpressure_snapshot(0).pressure_mitigations, 0);
         assert_eq!(gc.clone().pressure_mitigations(), 0);
     }
 
@@ -682,83 +476,19 @@ mod tests {
     }
 
     #[test]
-    fn test_lease_lifecycle_pins_floor_downward_only() {
-        let gc = test_manager();
-        assert_eq!(gc.lease_floor(1_000), None);
-        let lease = gc.issue_lease(7, 500, 10_000, 1_000);
-        assert_eq!(lease.deadline_ms, 11_000);
-        assert_eq!(gc.backpressure_snapshot(2_000).leases_issued, 1);
-        assert_eq!(gc.lease_floor(2_000), Some(500));
-        assert!(gc.renew_lease(7, 10_000, 2_000));
-        assert_eq!(gc.lease_floor(11_500), Some(500));
-        assert!(gc.release_lease(7));
-        assert!(!gc.release_lease(7));
-        assert_eq!(gc.lease_floor(11_500), None);
-        assert!(!gc.renew_lease(7, 10_000, 11_500));
-    }
-
-    #[test]
-    fn test_lease_ttl_clamped_to_config_maximum() {
-        let gc = test_manager();
-        let lease = gc.issue_lease(1, 100, u64::MAX, 0);
-        assert_eq!(
-            lease.deadline_ms,
-            VertexGcConfig::default().max_lease_ttl_ms
-        );
-    }
-
-    #[test]
-    fn test_lease_renewals_counted_and_backpressure_snapshot() {
-        let gc = test_manager();
-        gc.issue_lease(1, 100, 1_000, 0);
-        gc.issue_lease(2, 50, 5_000, 0);
-        assert!(gc.renew_lease(1, 2_000, 500));
-        assert!(gc.renew_lease(1, 2_000, 600));
-        assert!(!gc.renew_lease(9, 1_000, 600));
-        assert_eq!(gc.backpressure_snapshot(600).leases_renewed, 2);
-        assert_eq!(gc.clone().backpressure_snapshot(600).leases_renewed, 2);
-        let backpressure = gc.backpressure_snapshot(700);
-        assert_eq!(backpressure.live_leases, 2);
-        assert_eq!(backpressure.deepest_floor, Some(50));
-        assert_eq!(backpressure.nearest_deadline_ms, Some(2_600));
-        assert_eq!(backpressure.leases_issued, 2);
-        assert_eq!(backpressure.leases_renewed, 2);
-        assert_eq!(backpressure.leases_expired, 0);
-        assert_eq!(backpressure.blocked_passes, 0);
-        let aged = gc.backpressure_snapshot(6_000);
-        assert_eq!(aged.live_leases, 0);
-        assert_eq!(aged.deepest_floor, None);
-        assert_eq!(aged.nearest_deadline_ms, None);
-    }
-
-    #[test]
-    fn test_expired_leases_reaped_and_counted() {
-        let gc = test_manager();
-        gc.issue_lease(1, 100, 1_000, 0);
-        gc.issue_lease(2, 50, 1_000, 0);
-        gc.issue_lease(3, 300, 60_000, 0);
-        assert_eq!(gc.lease_floor(500), Some(50));
-        assert_eq!(gc.reap_expired_leases(2_000), 2);
-        assert_eq!(gc.backpressure_snapshot(2_000).leases_expired, 2);
-        assert_eq!(gc.lease_floor(2_000), Some(300));
-        assert_eq!(gc.reap_expired_leases(70_000), 1);
-        assert_eq!(gc.lease_floor(70_000), None);
-    }
-
-    #[test]
-    fn test_clone_shares_counters_and_leases_with_background_handle() {
-        // The background task runs on a clone; issuance, renewal and
-        // reap counts on either handle must observe the other, otherwise
-        // the originating handle reports permanently stale observability.
+    fn test_clone_shares_counters_with_background_handle() {
+        // The background task runs on a clone; counter writes on either
+        // handle must be visible from the other, otherwise the originating
+        // handle reports permanently stale observability.
         let gc = test_manager();
         let worker = gc.clone();
-        worker.issue_lease(7, 500, 10_000, 1_000);
-        assert_eq!(gc.lease_floor(2_000), Some(500));
-        assert!(worker.renew_lease(7, 10_000, 2_000));
-        assert_eq!(gc.backpressure_snapshot(2_500).leases_issued, 1);
-        assert_eq!(gc.backpressure_snapshot(2_500).leases_renewed, 1);
-        assert_eq!(gc.reap_expired_leases(20_000), 1);
-        assert_eq!(worker.backpressure_snapshot(20_000).leases_expired, 1);
-        assert_eq!(worker.lease_floor(20_000), None);
+        worker
+            .stats
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+        assert_eq!(gc.pass_count(), 1);
+        worker
+            .total_removed
+            .fetch_add(7, std::sync::atomic::Ordering::Release);
+        assert_eq!(gc.total_removed(), 7);
     }
 }

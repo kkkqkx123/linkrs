@@ -1,10 +1,10 @@
 use super::super::core::VertexTable;
-use super::routing::decode_id;
 use super::ShardedVertexTable;
 use crate::cursor::ColumnValues;
 use crate::mvcc_visibility::VisibilityGuard;
 use crate::vertex::{IdKey, PkLookup, VertexRecord};
 use graphdb_core::types::{DataType, Timestamp, VertexId};
+use graphdb_core::StorageResult;
 
 /// Decode an ID-index key into the external vertex ID.
 ///
@@ -110,17 +110,19 @@ impl ShardedVertexTable {
             })
     }
 
-    /// Batch variant of [`Self::resolve_projected`].
+    /// Batch variant of [`Self::resolve_projected`] with fail-closed decode.
     ///
     /// Input ids are grouped by shard, resolved with one lock acquisition per
     /// shard and decoded in one column-major batch. The output is aligned with
-    /// the input order; rows with no visible version yield `None`.
+    /// the input order; rows with no visible version yield `None`. Corrupt
+    /// payloads or below-floor history abort the batch instead of reading
+    /// as missing, matching the edge cursor strict-decode contract.
     pub fn resolve_projected_batch(
         &self,
         global_ids: &[u32],
         guard: &VisibilityGuard<'_>,
         projection: Option<&[String]>,
-    ) -> Vec<Option<VertexRecord>> {
+    ) -> StorageResult<Vec<Option<VertexRecord>>> {
         let snapshot = guard.snapshot();
         let mut out: Vec<Option<VertexRecord>> = global_ids.iter().map(|_| None).collect();
         for (shard_idx, group) in self.group_by_shard(global_ids) {
@@ -133,7 +135,7 @@ impl ShardedVertexTable {
                 .filter(|&(_, local_id)| Self::shard_row_visible(&table, local_id, guard))
                 .collect();
             let locals: Vec<u32> = visible.iter().map(|&(_, local)| local).collect();
-            let records = table.get_projected_batch(&locals, snapshot, projection);
+            let records = table.try_get_projected_batch(&locals, snapshot, projection)?;
             for ((slot, _), record) in visible.into_iter().zip(records) {
                 out[slot] = record.map(|mut record| {
                     record.internal_id = self.encode_id(shard_idx, record.internal_id);
@@ -141,7 +143,7 @@ impl ShardedVertexTable {
                 });
             }
         }
-        out
+        Ok(out)
     }
 
     /// Full cross-shard scan at the guard's snapshot.
@@ -316,8 +318,22 @@ impl ShardedVertexTable {
     fn group_by_shard(&self, global_ids: &[u32]) -> Vec<(usize, Vec<(usize, u32)>)> {
         let mut by_shard: Vec<Vec<(usize, u32)>> = vec![Vec::new(); self.layout.num_shards];
         for (slot, &global_id) in global_ids.iter().enumerate() {
-            let (shard_idx, local_id) = decode_id(global_id, self.layout);
-            by_shard[shard_idx].push((slot, local_id));
+            match self.try_decode_global_id(global_id) {
+                Ok((shard_idx, local_id)) => {
+                    if let Some(group) = by_shard.get_mut(shard_idx) {
+                        group.push((slot, local_id));
+                    } else {
+                        log::warn!(
+                            "skipping global id {} with out-of-range shard {}",
+                            global_id,
+                            shard_idx
+                        );
+                    }
+                }
+                Err(e) => {
+                    log::warn!("skipping malformed global id {}: {}", global_id, e);
+                }
+            }
         }
         by_shard.into_iter().enumerate().collect()
     }
@@ -375,7 +391,7 @@ impl ShardedVertexTable {
             for (slot, local_id) in group {
                 let chunk = local_id as usize / crate::vertex::column_store::ZONE_MAP_CHUNK_ROWS;
                 for range in ranges {
-                    if !table.columns.zone_prunes_in(chunk, range) {
+                    if !table.columns.zone_prunes_in_borrowed(chunk, range) {
                         mask[slot] = false;
                         break;
                     }

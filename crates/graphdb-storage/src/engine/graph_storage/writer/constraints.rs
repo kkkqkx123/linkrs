@@ -130,7 +130,11 @@ pub(super) fn apply_edge_type_constraints(
                     et.edge_type_id,
                     &prop_def.name,
                     value,
-                    super::super::serial::scan_edge_serial_column,
+                    |ctx, label, prop_name| {
+                        Ok(super::super::serial::scan_edge_serial_column(
+                            ctx, label, prop_name,
+                        ))
+                    },
                 )?;
             }
             continue;
@@ -163,18 +167,18 @@ fn validate_explicit_serial_value(
     label: LabelId,
     prop_name: &str,
     value: &Value,
-    scan_column: fn(
+    scan_column: impl FnOnce(
         &GraphStorageContext,
         LabelId,
         &str,
-    ) -> Option<super::super::serial::SerialColumnScan>,
+    ) -> StorageResult<Option<super::super::serial::SerialColumnScan>>,
 ) -> StorageResult<()> {
     let Some(integer) = serial_value_as_i64(value) else {
         // Non-integer values are rejected later by the column type coercion.
         return Ok(());
     };
     if integer >= 0 {
-        if let Some(scan) = scan_column(ctx, label, prop_name) {
+        if let Some(scan) = scan_column(ctx, label, prop_name)? {
             if scan.contains(integer) {
                 return Err(StorageError::invalid_operation(format!(
                     "Duplicate value {} for SERIAL column '{}': the value is already allocated",

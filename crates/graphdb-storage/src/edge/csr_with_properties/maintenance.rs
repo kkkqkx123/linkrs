@@ -27,11 +27,7 @@ impl CsrWithProperties {
             .iter()
             .filter(|v| v.delete_ts.is_some())
             .count();
-        let live_records = self
-            .visibility
-            .iter()
-            .filter(|v| v.create_ts != 0 && v.delete_ts.is_none())
-            .count();
+        let live_records = self.visibility.iter().filter(|v| v.is_live()).count();
         let mut reclaimable_bytes = 0usize;
         for v in &self.visibility {
             if v.delete_ts.is_some() {
@@ -70,6 +66,20 @@ impl CsrWithProperties {
         total
     }
 
+    /// Split property memory into mapping bytes (edge map plus reverse index
+    /// plus free list) and row bytes (visibility plus columns). Caliber for
+    /// per-edge accounting without walking rows.
+    pub fn mapping_row_bytes(&self) -> (usize, usize) {
+        let mapping = self.edge_map_memory_bytes()
+            + self.row_to_edge.capacity() * std::mem::size_of::<Option<EdgeId>>()
+            + self.free_list.capacity() * std::mem::size_of::<u32>();
+        let mut rows = self.visibility.capacity() * std::mem::size_of::<RowVisibility>();
+        for col in &self.property_columns {
+            rows += col.memory_size();
+        }
+        (mapping, rows)
+    }
+
     pub(crate) fn reclaim_slots(
         &mut self,
         valid_edge_ids: &EdgeIdBitSet,
@@ -80,7 +90,7 @@ impl CsrWithProperties {
         }
         let mut to_reclaim = Vec::new();
         for (idx, vis) in self.visibility.iter().enumerate() {
-            if vis.create_ts == 0 {
+            if vis.is_virgin() {
                 continue;
             }
             // O(1) ownership check via the reverse index instead of scanning

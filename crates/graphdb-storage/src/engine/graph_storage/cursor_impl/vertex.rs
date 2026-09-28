@@ -123,6 +123,10 @@ impl GraphVertexCursor {
 
         // A transaction with staged rows must scan even when every global
         // table is empty: its own rows only exist in staging until commit.
+        // Exhaustiveness must never rely on cross-shard approximate counts:
+        // a concurrent insert could be missed between shard reads and an
+        // approximate zero would incorrectly skip the scan. Only a missing
+        // table short-circuits; empty tables simply scan to zero rows.
         let staged_active = ctx
             .active_txn_staging()
             .is_some_and(|buffer| !buffer.lock().is_empty());
@@ -131,11 +135,7 @@ impl GraphVertexCursor {
             None => {
                 !staged_active
                     && ctx.data_store().with_vertex_tables(|tables| {
-                        tags.labels.iter().all(|label_id| {
-                            tables
-                                .get(label_id)
-                                .is_none_or(|t| t.approximate_id_hole_stats(ts).0 == 0)
-                        })
+                        tags.labels.iter().all(|label_id| tables.get(label_id).is_none())
                     })
             }
         };
@@ -641,7 +641,7 @@ impl GraphVertexCursor {
         let names = self.tags.names.clone();
         let (gate_vm, gate_own) = self.ctx.gate_inputs();
         let ts = self.ts;
-        let batch = data_store.with_vertex_tables(|tables| {
+        let batch = data_store.with_vertex_tables(|tables| -> Result<Vec<T>, StorageError> {
             let guard = crate::mvcc_visibility::VisibilityGuard::new(
                 ts,
                 crate::mvcc_visibility::PendingGate::new(&gate_vm, gate_own),
@@ -723,7 +723,7 @@ impl GraphVertexCursor {
                 };
                 let label_id = self.current_label;
                 let records =
-                    table.resolve_projected_batch(ids, &guard, self.projection.as_deref());
+                    table.resolve_projected_batch(ids, &guard, self.projection.as_deref())?;
                 let tag_name = label_id
                     .and_then(|l| names.get(&l))
                     .map(|s| s.as_str())
@@ -765,8 +765,8 @@ impl GraphVertexCursor {
                     }
                 }
             }
-            batch
-        });
+            Ok(batch)
+        })?;
 
         Ok(batch)
     }

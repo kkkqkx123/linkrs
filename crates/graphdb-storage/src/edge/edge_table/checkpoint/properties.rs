@@ -367,9 +367,11 @@ impl EdgeStore {
         if shard.load(&data).is_err() {
             return Ok(None);
         }
-        let shard_edges: HashSet<graphdb_core::types::EdgeId> = shard.edge_ids().collect();
-        let live_set: HashSet<graphdb_core::types::EdgeId> = edges.iter().copied().collect();
-        if shard_edges != live_set {
+        let mut shard_edges = crate::edge::csr_shared::EdgeIdBitSet::default();
+        shard_edges.extend(shard.edge_ids());
+        let mut live_set = crate::edge::csr_shared::EdgeIdBitSet::default();
+        live_set.extend(edges.iter().copied());
+        if shard_edges.len() != live_set.len() || !edges.iter().all(|id| shard_edges.contains(id)) {
             return Ok(None);
         }
         let shard_cols: HashSet<String> = shard
