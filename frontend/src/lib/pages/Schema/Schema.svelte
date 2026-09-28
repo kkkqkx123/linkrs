@@ -352,11 +352,24 @@
 
 <!-- Create Space Modal -->
 {#if showCreateSpace}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="fixed inset-0 z-50 flex items-center justify-center" onclick={() => showCreateSpace = false}>
-    <div class="absolute inset-0 bg-black/20"></div>
-    <div class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96" onclick={(e) => e.stopPropagation()}>
-      <h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-4">{$t('schema.createSpace')}</h3>
+  <div class="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-labelledby="create-space-title">
+    <div 
+      class="absolute inset-0 bg-black/20 cursor-pointer" 
+      role="button" 
+      tabindex="0"
+      aria-label={$t('common.close')}
+      onclick={() => showCreateSpace = false}
+      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showCreateSpace = false; }}
+    ></div>
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div 
+      class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96" 
+      role="application" 
+      tabindex="-1"
+      onkeydown={(e) => e.stopPropagation()}
+      onclick={(e) => e.stopPropagation()}
+    >
+      <h3 id="create-space-title" class="font-semibold text-gray-800 dark:text-gray-100 mb-4">{$t('schema.createSpace')}</h3>
       <div class="space-y-3">
         <div>
           <label for="space-name" class="block text-sm text-gray-600 dark:text-gray-400 mb-1">{$t('common.name')}</label>
@@ -388,11 +401,24 @@
 
 <!-- Create Tag Modal -->
 {#if showCreateTag}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="fixed inset-0 z-50 flex items-center justify-center" onclick={() => showCreateTag = false}>
-    <div class="absolute inset-0 bg-black/20"></div>
-    <div class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto" onclick={(e) => e.stopPropagation()}>
-      <h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-4">{$t('schema.createTag')}</h3>
+  <div class="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-labelledby="create-tag-title">
+    <div 
+      class="absolute inset-0 bg-black/20 cursor-pointer" 
+      role="button" 
+      tabindex="0"
+      aria-label={$t('common.close')}
+      onclick={() => showCreateTag = false}
+      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showCreateTag = false; }}
+    ></div>
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div 
+      class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto" 
+      role="application" 
+      tabindex="-1"
+      onkeydown={(e) => e.stopPropagation()}
+      onclick={(e) => e.stopPropagation()}
+    >
+      <h3 id="create-tag-title" class="font-semibold text-gray-800 dark:text-gray-100 mb-4">{$t('schema.createTag')}</h3>
       <div class="space-y-3">
         <div>
           <label for="tag-name" class="block text-sm text-gray-600 dark:text-gray-400 mb-1">{$t('common.name')}</label>
@@ -425,11 +451,24 @@
 
 <!-- Create Edge Modal -->
 {#if showCreateEdge}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="fixed inset-0 z-50 flex items-center justify-center" onclick={() => showCreateEdge = false}>
-    <div class="absolute inset-0 bg-black/20"></div>
-    <div class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto" onclick={(e) => e.stopPropagation()}>
-      <h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-4">{$t('schema.createEdge')}</h3>
+  <div class="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-labelledby="create-edge-title">
+    <div 
+      class="absolute inset-0 bg-black/20 cursor-pointer" 
+      role="button" 
+      tabindex="0"
+      aria-label={$t('common.close')}
+      onclick={() => showCreateEdge = false}
+      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') showCreateEdge = false; }}
+    ></div>
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div 
+      class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto" 
+      role="application" 
+      tabindex="-1"
+      onkeydown={(e) => e.stopPropagation()}
+      onclick={(e) => e.stopPropagation()}
+    >
+      <h3 id="create-edge-title" class="font-semibold text-gray-800 dark:text-gray-100 mb-4">{$t('schema.createEdge')}</h3>
       <div class="space-y-3">
         <div>
           <label for="edge-name" class="block text-sm text-gray-600 dark:text-gray-400 mb-1">{$t('common.name')}</label>

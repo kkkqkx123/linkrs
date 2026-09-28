@@ -278,12 +278,11 @@
 <!-- History Panel -->
 {#if historyOpen}
   <div class="fixed inset-0 z-50 flex justify-end">
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="absolute inset-0 bg-black/20" onclick={() => historyOpen = false}></div>
-    <div class="relative w-96 bg-white dark:bg-[#1C2333] shadow-lg h-full overflow-y-auto">
-      <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+    <div class="absolute inset-0 bg-black/20" role="presentation" onclick={() => historyOpen = false}></div>
+    <div class="relative w-96 bg-white dark:bg-[#1C2333] shadow-lg h-full overflow-y-auto" role="dialog" aria-labelledby="history-panel-title">
+      <div id="history-panel-title" class="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
         <h3 class="font-semibold text-gray-800 dark:text-gray-100">{$t('console.history')}</h3>
-        <button class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer text-lg" onclick={() => historyOpen = false}>✕</button>
+        <button class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer text-lg" onclick={() => historyOpen = false} aria-label={$t('common.close')}>✕</button>
       </div>
       <div class="p-4">
         {#if history.length === 0}
@@ -314,12 +313,11 @@
 <!-- Favorites Panel -->
 {#if favoritesOpen}
   <div class="fixed inset-0 z-50 flex justify-end">
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="absolute inset-0 bg-black/20" onclick={() => favoritesOpen = false}></div>
-    <div class="relative w-96 bg-white dark:bg-[#1C2333] shadow-lg h-full overflow-y-auto">
-      <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+    <div class="absolute inset-0 bg-black/20" role="presentation" onclick={() => favoritesOpen = false}></div>
+    <div class="relative w-96 bg-white dark:bg-[#1C2333] shadow-lg h-full overflow-y-auto" role="dialog" aria-labelledby="favorites-panel-title">
+      <div id="favorites-panel-title" class="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
         <h3 class="font-semibold text-gray-800 dark:text-gray-100">{$t('console.favorites')}</h3>
-        <button class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer text-lg" onclick={() => favoritesOpen = false}>✕</button>
+        <button class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer text-lg" onclick={() => favoritesOpen = false} aria-label={$t('common.close')}>✕</button>
       </div>
       <div class="p-4">
         {#if favorites.length === 0}
@@ -346,11 +344,10 @@
 
 <!-- Save Favorite Modal -->
 {#if saveModalOpen}
-  <div class="fixed inset-0 z-50 flex items-center justify-center">
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="absolute inset-0 bg-black/20" onclick={() => saveModalOpen = false}></div>
-    <div class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96">
-      <h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-4">{$t('console.saveFavorite')}</h3>
+  <div class="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-labelledby="save-modal-title">
+    <div class="absolute inset-0 bg-black/20" role="presentation" onclick={() => saveModalOpen = false}></div>
+    <div id="save-modal-title" class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96">
+      <h3>{$t('console.saveFavorite')}</h3>
       {#if saveModalError}
         <div class="mb-3 p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-red-600 dark:text-red-400 text-xs">{saveModalError}</div>
       {/if}

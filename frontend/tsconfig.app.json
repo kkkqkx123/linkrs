@@ -5,7 +5,7 @@
     "target": "es2023",
     "module": "esnext",
     "types": ["svelte", "vite/client"],
-    "allowArbitraryExtensions": true,
+    "ignoreDeprecations": "6.0",
     "noEmit": true,
     "allowJs": true,
     "checkJs": true,
