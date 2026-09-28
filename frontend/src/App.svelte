@@ -11,6 +11,13 @@
   import Graph from '$pages/Graph/Graph.svelte';
   import DataBrowser from '$pages/DataBrowser/DataBrowser.svelte';
   import Toast from '$components/common/Toast.svelte';
+  import type { Component } from 'svelte';
+  import type { SvelteComponent } from 'svelte';
+
+  // svelte-routing's typings expect legacy Svelte 4 component constructors;
+  // cast Svelte 5 components to satisfy Route's `component` prop type.
+  type LegacyComponent = typeof SvelteComponent<any>;
+  const asLegacy = (c: Component<any>) => c as unknown as LegacyComponent;
 
   setUnauthorizedHandler(() => {
     navigate('/login');
@@ -22,17 +29,17 @@
 
 <div class={currentTheme === 'dark' ? 'dark' : ''}>
   <Router>
-    <Route path="/login" component={Login} />
+    <Route path="/login" component={asLegacy(Login)} />
     <Route path="/">
       <ProtectedRoute>
         <MainLayout>
-          <Route path="/" component={MainPage} />
-          <Route path="console" component={Console} />
+          <Route path="/" component={asLegacy(MainPage)} />
+          <Route path="console" component={asLegacy(Console)} />
           <Route path="schema" let:params>
             <Schema />
           </Route>
-          <Route path="graph" component={Graph} />
-          <Route path="data-browser" component={DataBrowser} />
+          <Route path="graph" component={asLegacy(Graph)} />
+          <Route path="data-browser" component={asLegacy(DataBrowser)} />
         </MainLayout>
       </ProtectedRoute>
     </Route>

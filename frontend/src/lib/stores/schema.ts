@@ -44,7 +44,7 @@ function createSchemaStore() {
     indexes: [], isLoadingIndexes: false, indexesError: null,
   });
 
-  return {
+  const store = {
     subscribe,
     fetchSpaces: async () => {
       update(s => ({ ...s, isLoadingSpaces: true, spacesError: null }));
@@ -67,12 +67,12 @@ function createSchemaStore() {
       const vidTypeStr = params.vidType === 'FIXED_STRING(32)' ? 'FIXED_STRING(32)' : 'INT64';
       const query = `CREATE SPACE IF NOT EXISTS ${params.name} (vid_type = ${vidTypeStr}, partition_num = ${params.partitionNum}, replica_factor = ${params.replicaFactor})`;
       await queryService.execute({ query });
-      await this.fetchSpaces();
+      await store.fetchSpaces();
     },
     deleteSpace: async (name: string) => {
       const query = `DROP SPACE IF EXISTS ${name}`;
       await queryService.execute({ query });
-      await this.fetchSpaces();
+      await store.fetchSpaces();
     },
     setCurrentSpace: (name: string | null) => {
       update(s => ({ ...s, currentSpace: name }));
@@ -103,7 +103,7 @@ function createSchemaStore() {
     },
     createTag: async (spaceName: string, params: CreateTagParams) => {
       await schemaService.tags.create(spaceName, params);
-      await this.fetchTags(spaceName);
+      await store.fetchTags(spaceName);
     },
     updateTag: async (spaceName: string, tagName: string, params: UpdateTagParams) => {
       const queryParts: string[] = [];
@@ -114,12 +114,12 @@ function createSchemaStore() {
       if (params.drop_properties?.length) queryParts.push(`DROP (${params.drop_properties.join(', ')})`);
       if (queryParts.length > 0) {
         await queryService.execute({ query: `ALTER TAG ${tagName} ${queryParts.join(' ')}` });
-        await this.fetchTags(spaceName);
+        await store.fetchTags(spaceName);
       }
     },
     deleteTag: async (spaceName: string, tagName: string) => {
       await schemaService.tags.delete(spaceName, tagName);
-      await this.fetchTags(spaceName);
+      await store.fetchTags(spaceName);
     },
     clearTagsError: () => update(s => ({ ...s, tagsError: null })),
     fetchEdgeTypes: async (spaceName: string) => {
@@ -134,7 +134,7 @@ function createSchemaStore() {
     },
     createEdgeType: async (spaceName: string, params: CreateEdgeTypeParams) => {
       await schemaService.edgeTypes.create(spaceName, params);
-      await this.fetchEdgeTypes(spaceName);
+      await store.fetchEdgeTypes(spaceName);
     },
     updateEdgeType: async (spaceName: string, edgeName: string, params: UpdateEdgeTypeParams) => {
       const queryParts: string[] = [];
@@ -145,12 +145,12 @@ function createSchemaStore() {
       if (params.drop_properties?.length) queryParts.push(`DROP (${params.drop_properties.join(', ')})`);
       if (queryParts.length > 0) {
         await queryService.execute({ query: `ALTER EDGE ${edgeName} ${queryParts.join(' ')}` });
-        await this.fetchEdgeTypes(spaceName);
+        await store.fetchEdgeTypes(spaceName);
       }
     },
     deleteEdgeType: async (spaceName: string, edgeName: string) => {
       await schemaService.edgeTypes.delete(spaceName, edgeName);
-      await this.fetchEdgeTypes(spaceName);
+      await store.fetchEdgeTypes(spaceName);
     },
     clearEdgeTypesError: () => update(s => ({ ...s, edgeTypesError: null })),
     fetchIndexes: async (spaceName: string) => {
@@ -165,18 +165,19 @@ function createSchemaStore() {
     },
     createIndex: async (spaceName: string, params: CreateIndexParams) => {
       await schemaService.indexes.create(spaceName, params);
-      await this.fetchIndexes(spaceName);
+      await store.fetchIndexes(spaceName);
     },
     deleteIndex: async (spaceName: string, indexName: string) => {
       await schemaService.indexes.delete(spaceName, indexName);
-      await this.fetchIndexes(spaceName);
+      await store.fetchIndexes(spaceName);
     },
     rebuildIndex: async (spaceName: string, indexName: string) => {
       await schemaService.indexes.rebuild(spaceName, indexName);
-      await this.fetchIndexes(spaceName);
+      await store.fetchIndexes(spaceName);
     },
     clearIndexesError: () => update(s => ({ ...s, indexesError: null })),
   };
+  return store;
 }
 
 export const schemaStore = createSchemaStore();

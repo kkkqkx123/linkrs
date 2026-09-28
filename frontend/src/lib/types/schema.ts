@@ -1,5 +1,8 @@
 // Schema types - keep these as-is since OpenAPI generated types have many 'unknown' fields
 // These are frontend business domain types for schema operations
+// Generated OpenAPI types are re-exported below; local declarations take precedence
+// over same-named generated types (export * skips already-declared names).
+export type * from './schema.gen';
 
 export interface Space {
   id: number;

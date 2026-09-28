@@ -13,12 +13,12 @@ echo "✅ Codegen tool exists"
 
 echo ""
 echo "=== Checking generated schema.d.ts ==="
-if [ ! -f "/home/kkkqkx/code/linkrs/frontend/src/lib/types/schema.d.ts" ]; then
+if [ ! -f "/home/kkkqkx/code/linkrs/frontend/src/lib/types/schema.gen.d.ts" ]; then
     echo "❌ Generated schema file not found"
     exit 1
 fi
 
-SCHEMA_COUNT=$(grep -c "^export " /home/kkkqkx/code/linkrs/frontend/src/lib/types/schema.d.ts)
+SCHEMA_COUNT=$(grep -c "^export " /home/kkkqkx/code/linkrs/frontend/src/lib/types/schema.gen.d.ts)
 echo "Found $SCHEMA_COUNT exported types"
 
 if [ "$SCHEMA_COUNT" -eq 0 ]; then

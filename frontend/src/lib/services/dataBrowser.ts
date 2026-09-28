@@ -1,5 +1,5 @@
 import { get } from '$utils/http';
-import type { VertexListResponse, EdgeListResponse, FilterGroup, Statistics } from '$types/dataBrowser';
+import type { VertexListResponse, EdgeListResponse, FilterGroup, Statistics, VertexData, EdgeData } from '$types/dataBrowser';
 import type { ApiResponse_PaginatedResponse_Value } from '$types/schema';
 
 export const dataBrowserService = {
@@ -17,9 +17,12 @@ export const dataBrowserService = {
       `/api/v1/data/spaces/${space}/tags/${tag}/vertices`,
       params
     );
+    const data = (res.data ?? {}) as { items?: unknown[]; total?: number };
     return {
-      items: res.data?.items || [],
-      total: res.data?.total || 0,
+      data: (data.items || []) as VertexData[],
+      total: data.total || 0,
+      page,
+      pageSize,
     } as VertexListResponse;
   },
 
@@ -37,9 +40,12 @@ export const dataBrowserService = {
       `/api/v1/data/spaces/${space}/edge-types/${type}/edges`,
       params
     );
+    const data = (res.data ?? {}) as { items?: unknown[]; total?: number };
     return {
-      items: res.data?.items || [],
-      total: res.data?.total || 0,
+      data: (data.items || []) as EdgeData[],
+      total: data.total || 0,
+      page,
+      pageSize,
     } as EdgeListResponse;
   },
 

@@ -131,7 +131,7 @@ function createConsoleStore() {
         if (s.favorites.some(f => f.name.toLowerCase() === name.toLowerCase())) { result = { success: false, error: 'A favorite with this name already exists' }; return s; }
         if (s.favorites.length >= 30) { result = { success: false, error: 'Maximum 30 favorites allowed' }; return s; }
         const newFav: QueryFavoriteItem = { id: generateId(), name: name.trim(), query: query.trim(), createdAt: Date.now() };
-        result = { success: true };
+        result = { success: true, error: '' };
         return { ...s, favorites: [...s.favorites, newFav] };
       });
       return result;

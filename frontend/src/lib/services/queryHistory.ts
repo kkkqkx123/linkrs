@@ -6,9 +6,9 @@ export const queryHistoryService = {
   history: {
     add: async (params: Omit<AddHistoryRequest, 'query'>): Promise<HistoryItem> =>
       await post<HistoryItem>('/api/v1/queries/history', params as AddHistoryRequest),
-    list: async (): Promise<HistoryItem[]> => 
+    list: async (): Promise<HistoryItem[]> =>
       await get<ApiResponse_HistoryListResponse>('/api/v1/queries/history')
-        .then(res => res.data?.items || []),
+        .then(res => (res.data?.items || []) as HistoryItem[]),
     delete: async (id: string): Promise<void> => { 
       await _delete<void>(`/api/v1/queries/history/${id}`); 
     },
@@ -17,9 +17,9 @@ export const queryHistoryService = {
     },
   },
   favorites: {
-    list: async (): Promise<FavoriteItem[]> => 
+    list: async (): Promise<FavoriteItem[]> =>
       await get<ApiResponse_FavoriteListResponse>('/api/v1/queries/favorites')
-        .then(res => res.data?.items || []),
+        .then(res => (res.data?.items || []) as FavoriteItem[]),
     add: async (params: FavoriteParams): Promise<FavoriteItem> =>
       await post<FavoriteItem>('/api/v1/queries/favorites', params as any),
     get: async (id: string): Promise<FavoriteItem> => 

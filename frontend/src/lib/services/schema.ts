@@ -15,7 +15,7 @@ export const schemaService = {
       await get<{ space: SpaceDetail }>(`/api/v1/schema/spaces/${name}`),
     getDetail: async (name: string): Promise<SpaceDetail> =>
       await get<ApiResponse_SpaceDetail>(`/api/v1/schema/spaces/${name}/details`)
-        .then(res => res.data!),
+        .then(res => res.data as unknown as SpaceDetail),
     getStatistics: async (name: string): Promise<SpaceDetail['statistics']> =>
       await get<ApiResponse_SpaceStatistics>(`/api/v1/schema/spaces/${name}/statistics`)
         .then(res => res.data!),
@@ -29,7 +29,7 @@ export const schemaService = {
       await post<TagDetail>(`/api/v1/schema/spaces/${spaceName}/tags`, params),
     getDetail: async (spaceName: string, tagName: string): Promise<TagDetail> =>
       await get<ApiResponse_TagDetail>(`/api/v1/schema/spaces/${spaceName}/tags/${tagName}`)
-        .then(res => res.data!),
+        .then(res => res.data as unknown as TagDetail),
     delete: async (spaceName: string, tagName: string): Promise<void> => {
       await _delete<void>(`/api/v1/schema/spaces/${spaceName}/tags/${tagName}`);
     },
@@ -41,7 +41,7 @@ export const schemaService = {
       await post<EdgeTypeDetail>(`/api/v1/schema/spaces/${spaceName}/edge-types`, params),
     getDetail: async (spaceName: string, edgeName: string): Promise<EdgeTypeDetail> =>
       await get<ApiResponse_EdgeTypeDetail>(`/api/v1/schema/spaces/${spaceName}/edge-types/${edgeName}`)
-        .then(res => res.data!),
+        .then(res => res.data as unknown as EdgeTypeDetail),
     delete: async (spaceName: string, edgeName: string): Promise<void> => {
       await _delete<void>(`/api/v1/schema/spaces/${spaceName}/edge-types/${edgeName}`);
     },

@@ -1,5 +1,12 @@
 import { post, get, _delete } from '$utils/http';
-import type { LoginRequest, LogoutRequest, HealthResponse } from '$types/schema';
+import type { LoginRequest, LogoutRequest } from '$types/schema';
+
+export interface HealthResponse {
+  status?: string;
+  version?: string;
+  uptime?: number;
+  [key: string]: unknown;
+}
 
 export interface LoginParams {
   username: string;
