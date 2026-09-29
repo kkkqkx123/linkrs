@@ -28,10 +28,6 @@ pub enum MetaCommand {
     ShowEdges {
         pattern: Option<String>,
     },
-    ShowIndexes {
-        pattern: Option<String>,
-    },
-    ShowUsers,
     ShowFunctions,
     Describe {
         object: String,
@@ -134,18 +130,6 @@ pub enum MetaCommand {
         file_path: String,
         streaming: bool,
         chunk_size: Option<usize>,
-    },
-    Dump {
-        database: String,
-        output_path: String,
-        format: String,
-        compress: bool,
-    },
-    Restore {
-        source_path: String,
-        database: String,
-        overwrite: bool,
-        strict: bool,
     },
     ExportSpace {
         space_name: String,

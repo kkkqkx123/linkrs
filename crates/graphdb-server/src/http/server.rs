@@ -36,7 +36,12 @@ pub struct HttpServer<
     auth_service: PasswordAuthenticator,
     batch_manager: Arc<BatchManager<S>>,
     storage: Arc<RwLock<S>>,
-    config: Config,
+    /// Live configuration. Mutated by config-write endpoints and persisted
+    /// to `config_path` when one was retained at startup.
+    config: Arc<RwLock<Config>>,
+    /// Config file the running config was loaded from, if any. Updates are
+    /// written back here; `None` means memory-only updates.
+    config_path: Option<std::path::PathBuf>,
     function_registry: Arc<RwLock<FunctionRegistry>>,
     rebuild_tasks: super::handlers::rebuild::RebuildTaskRegistry,
 }
@@ -56,6 +61,7 @@ impl<
         storage: Arc<RwLock<S>>,
         txn_manager: Arc<TransactionManager>,
         config: &Config,
+        config_path: Option<std::path::PathBuf>,
     ) -> Self {
         // Use the shared StatsManager from GraphService
         let stats_manager = graph_service.get_stats_manager().clone();
@@ -68,7 +74,8 @@ impl<
             auth_service: PasswordAuthenticator::new_default(config.server.auth.clone()),
             batch_manager: Arc::new(BatchManager::new(storage.clone())),
             storage: storage.clone(),
-            config: config.clone(),
+            config: Arc::new(RwLock::new(config.clone())),
+            config_path,
             function_registry: Arc::new(RwLock::new(FunctionRegistry::new())),
             rebuild_tasks: super::handlers::rebuild::RebuildTaskRegistry::default(),
         }
@@ -124,14 +131,19 @@ impl<
         self.storage.clone()
     }
 
-    /// Get Configuration
-    pub fn get_config(&self) -> &Config {
-        &self.config
+    /// Get live configuration (read guard; reflects applied updates).
+    pub fn get_config(&self) -> parking_lot::RwLockReadGuard<'_, Config> {
+        self.config.read()
     }
 
-    /// Getting a variable reference to a configuration
-    pub fn get_config_mut(&mut self) -> &mut Config {
-        &mut self.config
+    /// Config file updates are written back to, if one was retained.
+    pub fn get_config_path(&self) -> Option<std::path::PathBuf> {
+        self.config_path.clone()
+    }
+
+    /// Live configuration store for config-write endpoints.
+    pub(crate) fn config_store(&self) -> Arc<RwLock<Config>> {
+        Arc::clone(&self.config)
     }
 
     /// Get function registry

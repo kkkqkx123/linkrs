@@ -314,16 +314,9 @@ pub fn plan_path_pattern(
                         };
                         i += 1;
                     }
-                    PathElement::Recursive(rc) => {
+                    PathElement::Recursive(_) => {
                         return Err(PlannerError::UnsupportedOperation(
-                            format!(
-                                "Recursive comprehension with variable binding and projection is not yet supported. Parsed: node var='{}', edge var={:?}, filter={}, node_proj={}, edge_proj={}",
-                                rc.variable,
-                                rc.edge_variable,
-                                rc.filter_predicate.is_some(),
-                                rc.node_projection.is_some(),
-                                rc.edge_projection.is_some()
-                            )
+                            "Recursive comprehension with variable binding and projection is rejected; rewrite with plain variable-length traversal".to_string(),
                         ));
                     }
                 }
@@ -467,15 +460,10 @@ pub fn plan_pattern_edge(
     _space_name: &str,
     expr_context: &Option<Arc<ExpressionAnalysisContext>>,
 ) -> Result<SubPlan, PlannerError> {
-    if let Some(rc) = edge.recursive_comprehension.as_ref() {
-        return Err(PlannerError::UnsupportedOperation(format!(
-            "Recursive comprehension with variable binding and projection is not yet supported. Parsed: node var='{}', edge var={:?}, filter={}, node_proj={}, edge_proj={}",
-            rc.variable,
-            rc.edge_variable,
-            rc.filter_predicate.is_some(),
-            rc.node_projection.is_some(),
-            rc.edge_projection.is_some()
-        )));
+    if edge.recursive_comprehension.is_some() {
+        return Err(PlannerError::UnsupportedOperation(
+            "Recursive comprehension with variable binding and projection is rejected; rewrite with plain variable-length traversal".to_string(),
+        ));
     }
     let direction = match edge.direction {
         crate::parser::ast::types::EdgeDirection::Out => "out",
@@ -575,15 +563,10 @@ pub fn plan_pattern_edge_with_input(
     dst_labels: &[String],
     expr_context: &Option<Arc<ExpressionAnalysisContext>>,
 ) -> Result<SubPlan, PlannerError> {
-    if let Some(rc) = edge.recursive_comprehension.as_ref() {
-        return Err(PlannerError::UnsupportedOperation(format!(
-            "Recursive comprehension with variable binding and projection is not yet supported. Parsed: node var='{}', edge var={:?}, filter={}, node_proj={}, edge_proj={}",
-            rc.variable,
-            rc.edge_variable,
-            rc.filter_predicate.is_some(),
-            rc.node_projection.is_some(),
-            rc.edge_projection.is_some()
-        )));
+    if edge.recursive_comprehension.is_some() {
+        return Err(PlannerError::UnsupportedOperation(
+            "Recursive comprehension with variable binding and projection is rejected; rewrite with plain variable-length traversal".to_string(),
+        ));
     }
     let direction = match edge.direction {
         crate::parser::ast::types::EdgeDirection::Out => "out",

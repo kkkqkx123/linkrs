@@ -167,6 +167,24 @@ impl OutputFormatter {
         format!("{}\n\n({} edge types)", table, edge_types.len())
     }
 
+    pub fn format_functions(&self, functions: &[String]) -> String {
+        if functions.is_empty() {
+            return "(0 functions)".to_string();
+        }
+
+        let mut builder = tabled::builder::Builder::default();
+        builder.push_record(["Function Name"]);
+
+        for name in functions {
+            builder.push_record([name.clone()]);
+        }
+
+        let mut table = builder.build();
+        table.with(tabled::settings::Style::rounded());
+
+        format!("{}\n\n({} functions)", table, functions.len())
+    }
+
     pub fn format_describe_tag(&self, tag: &crate::client::TagInfo) -> String {
         let mut output = format!("Tag: {}\n", tag.name);
 

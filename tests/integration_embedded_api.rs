@@ -1339,7 +1339,7 @@ fn test_recursive_comprehension_rejected_explicitly() {
         .execute("MATCH (a:person)-[e*(v, r | WHERE v.age > 20)]->(b:person) RETURN b")
         .expect_err("recursive comprehension must not silently degrade");
     assert!(
-        err.to_string().contains("not yet supported"),
+        err.to_string().contains("rejected"),
         "unexpected error: {err}"
     );
 }

@@ -52,4 +52,6 @@ pub use web::WebState;
 pub use http_server::start_http_and_grpc_servers;
 pub use http_server::start_http_server;
 pub use shutdown::shutdown_signal;
-pub use startup::{execute_query, start_service, start_service_with_config};
+pub use startup::{
+    execute_query, start_service, start_service_with_config, start_service_with_config_path,
+};

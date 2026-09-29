@@ -72,6 +72,10 @@ pub enum BatchItemType {
     Vertex,
     /// Edge item
     Edge,
+    /// Vertex/edge update item
+    Update,
+    /// Vertex/edge delete item
+    Delete,
 }
 
 impl fmt::Display for BatchItemType {
@@ -79,6 +83,8 @@ impl fmt::Display for BatchItemType {
         let name = match self {
             BatchItemType::Vertex => "vertex",
             BatchItemType::Edge => "edge",
+            BatchItemType::Update => "update",
+            BatchItemType::Delete => "delete",
         };
         write!(f, "{}", name)
     }
@@ -92,6 +98,14 @@ pub enum BatchItem {
     Vertex(VertexData),
     #[serde(rename = "edge")]
     Edge(EdgeData),
+    #[serde(rename = "update_vertex")]
+    UpdateVertex(VertexData),
+    #[serde(rename = "update_edge")]
+    UpdateEdgeData(UpdateEdgeData),
+    #[serde(rename = "delete_vertex")]
+    DeleteVertex(DeleteVertexData),
+    #[serde(rename = "delete_edge")]
+    DeleteEdgeData(DeleteEdgeData),
 }
 
 /// Vertex data
@@ -118,6 +132,47 @@ pub struct EdgeData {
     /// Properties
     #[serde(default)]
     pub properties: HashMap<String, serde_json::Value>,
+}
+
+/// Edge update data (edge identity includes rank, unlike inserts)
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct UpdateEdgeData {
+    /// Edge type
+    pub edge_type: String,
+    /// Source vertex ID
+    pub src_vid: serde_json::Value,
+    /// Target vertex ID
+    pub dst_vid: serde_json::Value,
+    /// Edge rank within (src, dst, type)
+    #[serde(default)]
+    pub rank: i64,
+    /// Properties
+    #[serde(default)]
+    pub properties: HashMap<String, serde_json::Value>,
+}
+
+/// Vertex delete data
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DeleteVertexData {
+    /// Vertex ID
+    pub vid: serde_json::Value,
+    /// Tag names to delete the vertex from (incident edges are removed too)
+    #[serde(default)]
+    pub tag_names: Vec<String>,
+}
+
+/// Edge delete data
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DeleteEdgeData {
+    /// Edge type
+    pub edge_type: String,
+    /// Source vertex ID
+    pub src_vid: serde_json::Value,
+    /// Target vertex ID
+    pub dst_vid: serde_json::Value,
+    /// Edge rank within (src, dst, type)
+    #[serde(default)]
+    pub rank: i64,
 }
 
 /// Create batch task request
@@ -188,6 +243,18 @@ pub struct BatchResultData {
     pub vertices_inserted: usize,
     /// Number of edges inserted
     pub edges_inserted: usize,
+    /// Number of vertices updated
+    #[serde(default)]
+    pub vertices_updated: usize,
+    /// Number of edges updated
+    #[serde(default)]
+    pub edges_updated: usize,
+    /// Number of vertices deleted
+    #[serde(default)]
+    pub vertices_deleted: usize,
+    /// Number of edges deleted
+    #[serde(default)]
+    pub edges_deleted: usize,
     /// Error message
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<BatchErrorData>,
@@ -313,6 +380,10 @@ mod tests {
             result: BatchResultData {
                 vertices_inserted: 2,
                 edges_inserted: 0,
+                vertices_updated: 0,
+                edges_updated: 0,
+                vertices_deleted: 0,
+                edges_deleted: 0,
                 errors: Vec::new(),
             },
             completed_at: Some("now".to_string()),

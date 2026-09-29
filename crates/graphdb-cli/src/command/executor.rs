@@ -230,11 +230,9 @@ impl CommandExecutor {
             MetaCommand::ShowEdges { .. } => {
                 meta::schema::execute_show_edges(self, session_mgr).await
             }
-            MetaCommand::ShowIndexes { .. } => {
-                meta::schema::execute_show_indexes(self, session_mgr).await
+            MetaCommand::ShowFunctions => {
+                meta::schema::execute_show_functions(self, session_mgr).await
             }
-            MetaCommand::ShowUsers => meta::schema::execute_show_users(self),
-            MetaCommand::ShowFunctions => meta::schema::execute_show_functions(self),
             MetaCommand::Describe { object } => {
                 meta::schema::execute_describe(self, &object, session_mgr).await
             }
@@ -363,18 +361,6 @@ impl CommandExecutor {
                 )
                 .await
             }
-            MetaCommand::Dump {
-                database,
-                output_path,
-                format,
-                compress,
-            } => meta::io::execute_dump(self, database, output_path, format, compress).await,
-            MetaCommand::Restore {
-                source_path,
-                database,
-                overwrite,
-                strict,
-            } => meta::io::execute_restore(self, source_path, database, overwrite, strict).await,
             MetaCommand::ExportSpace {
                 space_name,
                 output_path,

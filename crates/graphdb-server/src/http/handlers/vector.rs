@@ -75,6 +75,18 @@ fn default_limit() -> usize {
     10
 }
 
+/// Parse the gRPC `SearchFilter.expression` wire string.
+///
+/// The wire carries a JSON-encoded `VectorFilter` with the same shape as the
+/// HTTP search filter. There is no expression language; arbitrary strings
+/// fail with the underlying JSON error.
+#[allow(dead_code)]
+pub(crate) fn parse_vector_filter_expression(expression: &str) -> Result<VectorFilter, String> {
+    serde_json::from_str(expression).map_err(|e| {
+        format!("filter.expression must be a JSON VectorFilter with the same shape as the HTTP search filter: {e}")
+    })
+}
+
 /// Vector search result
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct VectorSearchResponse {

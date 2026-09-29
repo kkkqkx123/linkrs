@@ -46,14 +46,6 @@ fn show_general_help() -> String {
     ));
     output.push_str(&format!(
         "  {:25} {}\n",
-        "\\show_indexes or \\di", "List all indexes"
-    ));
-    output.push_str(&format!(
-        "  {:25} {}\n",
-        "\\show_users  or \\du", "List all users"
-    ));
-    output.push_str(&format!(
-        "  {:25} {}\n",
         "\\show_functions or \\df", "List all functions"
     ));
     output.push_str(&format!(
@@ -133,14 +125,6 @@ fn show_general_help() -> String {
     output.push_str(&format!(
         "  {:25} {}\n",
         "\\import-schema <file>", "Import schema definitions from file"
-    ));
-    output.push_str(&format!(
-        "  {:25} {}\n",
-        "\\dump <db> <path>", "Dump database to directory"
-    ));
-    output.push_str(&format!(
-        "  {:25} {}",
-        "\\restore <path> <db>", "Restore database from dump"
     ));
 
     output.push_str(&format!("\n{}\n", "Query Buffer".yellow().bold()));
@@ -365,26 +349,6 @@ Import schema definitions from a file.
 
 Example:
   \import-schema /backup/mydb_schema.json"#.to_string()
-          }
-          "dump" => {
-              r#"\dump <database> <output_path> [--format binary|jsonl] [--no-compress]
-
-Dump a database to a directory.
-  --format binary|jsonl   Output format (default: binary)
-  --no-compress           Disable compression
-
-Example:
-  \dump mydb /backup/mydb_dump"#.to_string()
-          }
-          "restore" => {
-              r#"\restore <source_path> <database> [--overwrite] [--strict]
-
-Restore a database from a dump directory.
-  --overwrite    Overwrite existing data
-  --strict       Strict mode (fail on schema conflicts)
-
-Example:
-  \restore /backup/mydb_dump mydb --overwrite"#.to_string()
           }
         "variables" | "set" => {
             let mut s = String::new();
@@ -641,8 +605,6 @@ mod tests {
         assert!(help.contains("\\show_spaces") || help.contains("\\l"));
         assert!(help.contains("\\show_tags") || help.contains("\\dt"));
         assert!(help.contains("\\show_edges") || help.contains("\\de"));
-        assert!(help.contains("\\show_indexes") || help.contains("\\di"));
-        assert!(help.contains("\\show_users") || help.contains("\\du"));
         assert!(help.contains("\\show_functions") || help.contains("\\df"));
         assert!(help.contains("\\describe") || help.contains("\\d"));
         assert!(help.contains("\\format"));

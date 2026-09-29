@@ -532,12 +532,10 @@ message DropEdgeTypeResponse {
 
 message CreateBatchRequest {
   string space_name = 1;
-  optional BatchOptions options = 2;
-}
-
-message BatchOptions {
-  int64 timeout_ms = 1;
-  bool atomic = 2;
+  // Field 2 (batch options with atomic/timeout flags) was removed: the
+  // batch executor is continue-on-error best-effort with no transaction or
+  // timeout support, so no such options exist to set.
+  reserved 2;
 }
 
 message CreateBatchResponse {
@@ -616,6 +614,12 @@ message ExecuteBatchResponse {
   bool success = 1;
   repeated BatchResult results = 2;
   string error = 3;
+  int64 vertices_inserted = 4;
+  int64 edges_inserted = 5;
+  int64 vertices_updated = 6;
+  int64 edges_updated = 7;
+  int64 vertices_deleted = 8;
+  int64 edges_deleted = 9;
 }
 
 message BatchResult {
@@ -735,6 +739,8 @@ message UpdateConfigRequest {
 message UpdateConfigResponse {
   bool success = 1;
   string error = 2;
+  bool requires_restart = 3;
+  bool persisted = 4;
 }
 
 message ResetConfigRequest {
@@ -745,6 +751,8 @@ message ResetConfigRequest {
 message ResetConfigResponse {
   bool success = 1;
   string error = 2;
+  bool requires_restart = 3;
+  bool persisted = 4;
 }
 
 // ============================================================
@@ -757,7 +765,9 @@ message RegisterFunctionRequest {
   repeated string parameters = 3;
   string return_type = 4;
   string description = 5;
-  string implementation = 6;  // Function implementation (e.g., Lua code or WASM binary)
+  // UDF source: local dynamic-library path loaded by the dynamic UDF
+  // loader. Remote sources and embedded code (Lua/WASM) are not supported.
+  string implementation = 6;
 }
 
 message RegisterFunctionResponse {
@@ -886,7 +896,10 @@ message SearchVectorRequest {
 }
 
 message SearchFilter {
-  string expression = 1;  // Filter expression
+  // JSON-encoded VectorFilter with the same shape as the HTTP search
+  // filter (must/must_not/should/min_should over payload conditions).
+  // There is no expression language; arbitrary strings fail to parse.
+  string expression = 1;
 }
 
 message SearchOptions {

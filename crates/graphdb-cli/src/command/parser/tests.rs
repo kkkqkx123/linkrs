@@ -647,55 +647,13 @@ fn test_history_action_enum() {
 }
 
 #[test]
-fn test_parse_meta_command_dump() {
-    let result = crate::command::parser::parse_command("\\dump mydb /backup/dump");
+fn test_parse_meta_command_export_space() {
+    let result =
+        crate::command::parser::parse_command("\\export-space mydb /backup/mydb --format csv");
     match result {
-        Command::MetaCommand(MetaCommand::Dump {
-            database,
-            output_path,
-            format,
-            compress,
-        }) => {
-            assert_eq!(database, "mydb");
-            assert_eq!(output_path, "/backup/dump");
-            assert_eq!(format, "binary");
-            assert!(compress);
+        Command::MetaCommand(MetaCommand::ExportSpace { space_name, .. }) => {
+            assert_eq!(space_name, "mydb");
         }
-        _ => panic!("Expected Dump command"),
-    }
-}
-
-#[test]
-fn test_parse_meta_command_dump_jsonl() {
-    let result = crate::command::parser::parse_command(
-        "\\dump mydb /backup/dump --format jsonl --no-compress",
-    );
-    match result {
-        Command::MetaCommand(MetaCommand::Dump {
-            format, compress, ..
-        }) => {
-            assert_eq!(format, "jsonl");
-            assert!(!compress);
-        }
-        _ => panic!("Expected Dump command"),
-    }
-}
-
-#[test]
-fn test_parse_meta_command_restore() {
-    let result = crate::command::parser::parse_command("\\restore /backup/dump mydb --overwrite");
-    match result {
-        Command::MetaCommand(MetaCommand::Restore {
-            source_path,
-            database,
-            overwrite,
-            strict,
-        }) => {
-            assert_eq!(source_path, "/backup/dump");
-            assert_eq!(database, "mydb");
-            assert!(overwrite);
-            assert!(!strict);
-        }
-        _ => panic!("Expected Restore command"),
+        _ => panic!("Expected ExportSpace command"),
     }
 }

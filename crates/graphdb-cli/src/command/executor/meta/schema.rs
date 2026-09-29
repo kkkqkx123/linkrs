@@ -41,24 +41,16 @@ pub async fn execute_show_edges(
     Ok(true)
 }
 
-pub async fn execute_show_indexes(
+pub async fn execute_show_functions(
     executor: &mut CommandExecutor,
-    _session_mgr: &mut SessionManager,
+    session_mgr: &mut SessionManager,
 ) -> Result<bool> {
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
-    executor.write_output("Index listing is not yet supported via CLI.")?;
-    Ok(true)
-}
-
-pub fn execute_show_users(_executor: &mut CommandExecutor) -> Result<bool> {
-    // executor.write_output("User listing is not yet supported via CLI.")?;
-    Ok(true)
-}
-
-pub fn execute_show_functions(_executor: &mut CommandExecutor) -> Result<bool> {
-    // executor.write_output("Function listing is not yet supported via CLI.")?;
+    let functions = session_mgr.list_functions().await?;
+    let output = executor.formatter().format_functions(&functions);
+    executor.write_output(&output)?;
     Ok(true)
 }
 

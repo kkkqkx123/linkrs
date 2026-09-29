@@ -54,6 +54,7 @@ async fn create_test_web_state() -> (
         storage_mutex,
         txn_manager,
         &config,
+        None,
     ));
 
     // Create a valid session for testing

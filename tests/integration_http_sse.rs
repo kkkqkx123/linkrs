@@ -133,6 +133,7 @@ async fn build_sse_app() -> (Router, i64, Arc<RwLock<GraphStorage>>) {
         storage_rwlock.clone(),
         txn_manager,
         &config,
+        None,
     ));
 
     // 7. AppState

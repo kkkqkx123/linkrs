@@ -320,7 +320,7 @@ impl Binder {
                 if ep.recursive_comprehension.is_some() {
                     return Err(DBError::from(
                         graphdb_core::error::QueryError::invalid_query(
-                            "Recursive comprehension with variable binding and projection is not yet supported; only plain variable-length traversal is executed"
+                            "Recursive comprehension with variable binding and projection is rejected; rewrite with plain variable-length traversal"
                                 .to_string(),
                         ),
                     ));
@@ -390,7 +390,7 @@ impl Binder {
                 if ep.recursive_comprehension.is_some() {
                     return Err(DBError::from(
                         graphdb_core::error::QueryError::invalid_query(
-                            "Recursive comprehension with variable binding and projection is not yet supported; only plain variable-length traversal is executed"
+                            "Recursive comprehension with variable binding and projection is rejected; rewrite with plain variable-length traversal"
                                 .to_string(),
                         ),
                     ));
@@ -427,7 +427,7 @@ impl Binder {
             }
             PathElement::Recursive(_) => Err(DBError::from(
                 graphdb_core::error::QueryError::invalid_query(
-                    "Recursive comprehension is not yet supported".to_string(),
+                    "Recursive comprehension with variable binding and projection is rejected; rewrite with plain variable-length traversal".to_string(),
                 ),
             )),
         }

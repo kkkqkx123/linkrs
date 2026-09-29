@@ -268,8 +268,8 @@ impl MemoryTracker {
 
 /// Trait for operators that can spill intermediate data to disk.
 ///
-/// Each blocking operator that may exceed the memory budget should implement
-/// this trait. The initial implementation may return `Err(QueryError::execution("spill not implemented"))`.
+/// Each blocking operator that may exceed the memory budget implements
+/// spill by partitioning buffered rows to managed spill files.
 pub trait Spillable {
     /// Spill in-memory data to disk to free memory.
     fn spill_to_disk(&mut self) -> Result<(), QueryError>;

@@ -456,6 +456,11 @@ impl Config {
         Self::load(config_dir.join(file_name))
     }
 
+    /// Canonical user configuration file path (`<user_config_dir>/config.toml`).
+    pub fn user_config_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+        Ok(Self::user_config_dir()?.join("config.toml"))
+    }
+
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
         let content = toml::to_string_pretty(self)?;
         fs::write(path, content)?;

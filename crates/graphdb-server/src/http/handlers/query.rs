@@ -155,15 +155,63 @@ pub async fn validate<
     State(_state): State<AppState<S>>,
     Json(request): Json<QueryRequest>,
 ) -> Result<JsonResponse<ValidateResponse>, HttpError> {
-    // Simple validation: check if query is not empty
-    let valid = !request.query.trim().is_empty();
-    let message = if valid {
-        "Query is valid".to_string()
-    } else {
-        "Query cannot be empty".to_string()
-    };
+    // Real validation: parse plus binder name resolution, without executing.
+    match validate_gql(&request.query) {
+        Ok(_) => Ok(JsonResponse(ValidateResponse {
+            valid: true,
+            message: "Query is valid".to_string(),
+        })),
+        Err(e) => Ok(JsonResponse(ValidateResponse {
+            valid: false,
+            message: e,
+        })),
+    }
+}
 
-    Ok(JsonResponse(ValidateResponse { valid, message }))
+/// Validate query text by parsing and binding it, without executing.
+///
+/// Returns the declared parameter names on success, or a human-readable
+/// reason on failure. Binding runs without a schema manager, so checks
+/// that need live schema (e.g. tag existence) are skipped while syntax,
+/// name resolution, and function resolution still apply.
+pub(crate) fn validate_gql(query: &str) -> Result<Vec<String>, String> {
+    if query.trim().is_empty() {
+        return Err("query must not be empty".to_string());
+    }
+    let mut parser = crate::query::parser::Parser::new(query);
+    let result = parser.parse().map_err(|e| format!("syntax error: {e}"))?;
+    if parser.has_errors() {
+        return Err(format!("syntax error: {}", parser.take_errors()));
+    }
+    crate::query::binder::Binder::new()
+        .bind(result.ast)
+        .map_err(|e| format!("semantic error: {e}"))?;
+    Ok(extract_parameter_names(query))
+}
+
+/// Collect `@name` parameter references from query text.
+pub(crate) fn extract_parameter_names(query: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let bytes = query.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'@' {
+            let mut j = i + 1;
+            while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                j += 1;
+            }
+            if j > i + 1 {
+                let name = &query[i + 1..j];
+                if !names.iter().any(|n: &String| n == name) {
+                    names.push(name.to_string());
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    names
 }
 
 /// Convert a core-layer [`QueryResult`] into the wire `QueryResponse`.

@@ -34,16 +34,13 @@ pub async fn login<
     State(state): State<AppState<S>>,
     Json(request): Json<LoginRequest>,
 ) -> Result<JsonResponse<LoginResponse>, HttpError> {
-    // TODO: Implement proper authentication with password verification
-    // For now, accept any username/password and create a session
-
-    let session_manager = state.server.get_session_manager();
-
-    // Create a new session for the user
-    let session = session_manager
-        .create_session(request.username.clone(), "127.0.0.1".to_string())
+    // Verify the password through the shared authenticator before creating
+    // a session; failures surface as 401 instead of minting a session.
+    let graph_service = state.server.get_graph_service();
+    let session = graph_service
+        .authenticate(&request.username, &request.password)
         .await
-        .map_err(|e| HttpError::InternalError(format!("Failed to create session: {}", e)))?;
+        .map_err(HttpError::unauthorized)?;
 
     let session_id = session.id();
     info!(

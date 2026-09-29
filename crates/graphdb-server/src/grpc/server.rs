@@ -2,8 +2,9 @@
 //!
 //! Provides a gRPC-based interface to GraphDB services.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio_stream::StreamExt;
 use tonic::{transport::Server, Request, Response, Status};
 
@@ -107,24 +108,39 @@ impl<
 
     async fn login(
         &self,
-        _request: Request<LoginRequest>,
+        request: Request<LoginRequest>,
     ) -> Result<Response<LoginResponse>, Status> {
-        // TODO: Implement authentication logic
-        // This should integrate with the existing auth service
-
+        let req = request.into_inner();
+        if req.username.is_empty() || req.password.is_empty() {
+            return Err(Status::unauthenticated(
+                "username and password must not be empty",
+            ));
+        }
+        let graph_service = self.app_state.server.get_graph_service();
+        let session = graph_service
+            .authenticate(&req.username, &req.password)
+            .await
+            .map_err(Status::unauthenticated)?;
+        if let Some(space) = req.space.filter(|s| !s.is_empty()) {
+            attach_session_space(&self.app_state, &session, &space)?;
+        }
         Ok(Response::new(LoginResponse {
             success: true,
-            session_id: "session_id".to_string(),
+            session_id: session.id().to_string(),
             error: String::new(),
         }))
     }
 
     async fn logout(
         &self,
-        _request: Request<LogoutRequest>,
+        request: Request<LogoutRequest>,
     ) -> Result<Response<LogoutResponse>, Status> {
-        // TODO: Implement logout logic
-
+        let session_id = parse_session_id(&request.into_inner().session_id)?;
+        self.app_state
+            .server
+            .get_session_manager()
+            .remove_session(session_id)
+            .await;
         Ok(Response::new(LogoutResponse {
             success: true,
             error: String::new(),
@@ -133,14 +149,33 @@ impl<
 
     async fn create_session(
         &self,
-        _request: Request<CreateSessionRequest>,
+        request: Request<CreateSessionRequest>,
     ) -> Result<Response<CreateSessionResponse>, Status> {
-        // TODO: Implement session creation logic
-
+        let req = request.into_inner();
+        if req.username.is_empty() {
+            return Err(Status::invalid_argument("username must not be empty"));
+        }
+        let session_manager = self.app_state.server.get_session_manager();
+        let session = if req.password.is_empty() {
+            session_manager
+                .create_session(req.username.clone(), "127.0.0.1".to_string())
+                .await
+                .map_err(|e| Status::internal(format!("failed to create session: {e}")))?
+        } else {
+            let graph_service = self.app_state.server.get_graph_service();
+            graph_service
+                .authenticate(&req.username, &req.password)
+                .await
+                .map_err(Status::unauthenticated)?
+        };
+        if let Some(space) = req.space.filter(|s| !s.is_empty()) {
+            attach_session_space(&self.app_state, &session, &space)?;
+        }
+        let space_id = session.space().map(|s| s.id as i32).unwrap_or(0);
         Ok(Response::new(CreateSessionResponse {
             success: true,
-            session_id: "session_id".to_string(),
-            space_id: 0,
+            session_id: session.id().to_string(),
+            space_id,
             error: String::new(),
         }))
     }
@@ -149,26 +184,46 @@ impl<
         &self,
         request: Request<GetSessionRequest>,
     ) -> Result<Response<GetSessionResponse>, Status> {
-        let session_id = request.into_inner().session_id;
-
-        // TODO: Implement session retrieval logic
-
-        Ok(Response::new(GetSessionResponse {
-            exists: true,
-            session_id,
-            username: "user".to_string(),
-            space_id: 0,
-            created_at: 0,
-            last_accessed: 0,
-        }))
+        let raw_id = request.into_inner().session_id;
+        let session_id = parse_session_id(&raw_id)?;
+        let session_manager = self.app_state.server.get_session_manager();
+        match session_manager.get_session_info(session_id).await {
+            None => Ok(Response::new(GetSessionResponse {
+                exists: false,
+                session_id: raw_id,
+                username: String::new(),
+                space_id: 0,
+                created_at: 0,
+                last_accessed: 0,
+            })),
+            Some(info) => {
+                let space_id = session_manager
+                    .find_session(session_id)
+                    .and_then(|s| s.space())
+                    .map(|s| s.id as i32)
+                    .unwrap_or(0);
+                Ok(Response::new(GetSessionResponse {
+                    exists: true,
+                    session_id: raw_id,
+                    username: info.user_name,
+                    space_id,
+                    created_at: system_time_secs(&info.create_time),
+                    last_accessed: system_time_secs(&info.last_access_time),
+                }))
+            }
+        }
     }
 
     async fn close_session(
         &self,
-        _request: Request<CloseSessionRequest>,
+        request: Request<CloseSessionRequest>,
     ) -> Result<Response<CloseSessionResponse>, Status> {
-        // TODO: Implement session close logic
-
+        let session_id = parse_session_id(&request.into_inner().session_id)?;
+        self.app_state
+            .server
+            .get_session_manager()
+            .remove_session(session_id)
+            .await;
         Ok(Response::new(CloseSessionResponse {
             success: true,
             error: String::new(),
@@ -177,30 +232,63 @@ impl<
 
     async fn execute_query(
         &self,
-        _request: Request<ExecuteQueryRequest>,
+        request: Request<ExecuteQueryRequest>,
     ) -> Result<Response<ExecuteQueryResponse>, Status> {
-        // TODO: Implement query execution logic
-        // This should integrate with the existing QueryApi
-
-        Ok(Response::new(ExecuteQueryResponse {
-            success: true,
-            result: None,
-            error: String::new(),
-            metadata: None,
-        }))
+        let req = request.into_inner();
+        if req.query.trim().is_empty() {
+            return Err(Status::invalid_argument("query must not be empty"));
+        }
+        let session_id = match req.session_id {
+            Some(raw) => parse_session_id(&raw)?,
+            None => return Err(Status::unauthenticated("session_id is required")),
+        };
+        let parameters = req.parameters.map(|p| {
+            p.params
+                .into_iter()
+                .map(|(k, v)| (k, proto_value_to_core(v)))
+                .collect::<HashMap<String, graphdb_core::Value>>()
+        });
+        let graph_service = self.app_state.server.get_graph_service();
+        match graph_service
+            .execute_with_params(session_id, &req.query, parameters, None)
+            .await
+        {
+            Ok(result) => {
+                let (query_result, metadata) = query_result_to_proto(&result);
+                Ok(Response::new(ExecuteQueryResponse {
+                    success: true,
+                    result: query_result,
+                    error: String::new(),
+                    metadata,
+                }))
+            }
+            Err(e) if e.contains("Invalid session ID") => Err(Status::unauthenticated(e)),
+            Err(e) => Ok(Response::new(ExecuteQueryResponse {
+                success: false,
+                result: None,
+                error: e,
+                metadata: None,
+            })),
+        }
     }
 
     async fn validate_query(
         &self,
-        _request: Request<ValidateQueryRequest>,
+        request: Request<ValidateQueryRequest>,
     ) -> Result<Response<ValidateQueryResponse>, Status> {
-        // TODO: Implement query validation logic
-
-        Ok(Response::new(ValidateQueryResponse {
-            valid: true,
-            error: String::new(),
-            parameter_names: vec![],
-        }))
+        let query = request.into_inner().query;
+        match crate::http::handlers::query::validate_gql(&query) {
+            Ok(parameter_names) => Ok(Response::new(ValidateQueryResponse {
+                valid: true,
+                error: String::new(),
+                parameter_names,
+            })),
+            Err(e) => Ok(Response::new(ValidateQueryResponse {
+                valid: false,
+                error: e,
+                parameter_names: vec![],
+            })),
+        }
     }
 
     async fn execute_query_stream(
@@ -467,59 +555,200 @@ impl<
     // Schema Management - Space
     async fn create_space(
         &self,
-        _request: Request<CreateSpaceRequest>,
+        request: Request<CreateSpaceRequest>,
     ) -> Result<Response<CreateSpaceResponse>, Status> {
-        unimplemented!("CreateSpace not yet implemented")
+        let req = request.into_inner();
+        if req.name.is_empty() {
+            return Err(Status::invalid_argument("space name must not be empty"));
+        }
+        let mut info = graphdb_core::types::SpaceInfo::new(req.name.clone());
+        if let Some(options) = req.options {
+            if options.partition_num > 0 {
+                info.partition_num = options.partition_num;
+            }
+            if options.replica_num > 0 {
+                info.replica_factor = options.replica_num;
+            }
+        }
+        let storage = self.app_state.server.get_storage();
+        let mut storage_guard = storage.write();
+        let created = storage_guard
+            .create_space(&mut info)
+            .map_err(|e| Status::internal(format!("failed to create space: {e}")))?;
+        if !created {
+            return Err(Status::already_exists(format!(
+                "space '{}' already exists",
+                req.name
+            )));
+        }
+        let space_id = storage_guard
+            .get_space_id(&req.name)
+            .map_err(|e| Status::internal(format!("failed to resolve new space: {e}")))?;
+        Ok(Response::new(CreateSpaceResponse {
+            success: true,
+            space_id: space_id as i32,
+            error: String::new(),
+        }))
     }
 
     async fn get_space(
         &self,
-        _request: Request<GetSpaceRequest>,
+        request: Request<GetSpaceRequest>,
     ) -> Result<Response<GetSpaceResponse>, Status> {
-        unimplemented!("GetSpace not yet implemented")
+        let req = request.into_inner();
+        let storage = self.app_state.server.get_storage();
+        let storage_guard = storage.read();
+        let space = storage_guard
+            .get_space(&req.name)
+            .map_err(|e| Status::internal(format!("failed to get space: {e}")))?;
+        match space {
+            Some(info) => Ok(Response::new(GetSpaceResponse {
+                exists: true,
+                space: Some(core_space_to_proto(&info)),
+                error: String::new(),
+            })),
+            None => Ok(Response::new(GetSpaceResponse {
+                exists: false,
+                space: None,
+                error: String::new(),
+            })),
+        }
     }
 
     async fn drop_space(
         &self,
-        _request: Request<DropSpaceRequest>,
+        request: Request<DropSpaceRequest>,
     ) -> Result<Response<DropSpaceResponse>, Status> {
-        unimplemented!("DropSpace not yet implemented")
+        let req = request.into_inner();
+        let storage = self.app_state.server.get_storage();
+        let mut storage_guard = storage.write();
+        let dropped = storage_guard
+            .drop_space(&req.name)
+            .map_err(|e| Status::internal(format!("failed to drop space: {e}")))?;
+        if dropped || req.if_exists {
+            Ok(Response::new(DropSpaceResponse {
+                success: true,
+                error: String::new(),
+            }))
+        } else {
+            Err(Status::not_found(format!(
+                "space '{}' does not exist",
+                req.name
+            )))
+        }
     }
 
     async fn list_spaces(
         &self,
         _request: Request<ListSpacesRequest>,
     ) -> Result<Response<ListSpacesResponse>, Status> {
-        unimplemented!("ListSpaces not yet implemented")
+        let storage = self.app_state.server.get_storage();
+        let storage_guard = storage.read();
+        let spaces = storage_guard
+            .list_spaces()
+            .map_err(|e| Status::internal(format!("failed to list spaces: {e}")))?;
+        Ok(Response::new(ListSpacesResponse {
+            spaces: spaces.iter().map(core_space_to_proto).collect(),
+            error: String::new(),
+        }))
     }
 
     // Schema Management - Tag
     async fn create_tag(
         &self,
-        _request: Request<CreateTagRequest>,
+        request: Request<CreateTagRequest>,
     ) -> Result<Response<CreateTagResponse>, Status> {
-        unimplemented!("CreateTag not yet implemented")
+        let req = request.into_inner();
+        if req.space_name.is_empty() || req.tag_name.is_empty() {
+            return Err(Status::invalid_argument(
+                "space_name and tag_name must not be empty",
+            ));
+        }
+        let properties = req
+            .properties
+            .into_iter()
+            .map(proto_property_to_core)
+            .collect::<Vec<_>>();
+        let mut tag_info =
+            graphdb_core::types::TagInfo::new(req.tag_name.clone()).with_properties(properties);
+        if let Some(options) = req.options {
+            let ttl = (options.ttl_seconds > 0).then_some(options.ttl_seconds);
+            let col = (!options.ttl_column.is_empty()).then(|| options.ttl_column.clone());
+            tag_info = tag_info.with_ttl(ttl, col);
+        }
+        let storage = self.app_state.server.get_storage();
+        let mut storage_guard = storage.write();
+        let tag_id = storage_guard
+            .create_tag(&req.space_name, &tag_info)
+            .map_err(|e| Status::internal(format!("failed to create tag: {e}")))?;
+        Ok(Response::new(CreateTagResponse {
+            success: true,
+            tag_id: tag_id as i32,
+            error: String::new(),
+        }))
     }
 
     async fn get_tag(
         &self,
-        _request: Request<GetTagRequest>,
+        request: Request<GetTagRequest>,
     ) -> Result<Response<GetTagResponse>, Status> {
-        unimplemented!("GetTag not yet implemented")
+        let req = request.into_inner();
+        let storage = self.app_state.server.get_storage();
+        let storage_guard = storage.read();
+        let tag = storage_guard
+            .get_tag(&req.space_name, &req.tag_name)
+            .map_err(|e| Status::internal(format!("failed to get tag: {e}")))?;
+        match tag {
+            Some(info) => Ok(Response::new(GetTagResponse {
+                exists: true,
+                tag: Some(core_tag_to_proto(&info)),
+                error: String::new(),
+            })),
+            None => Ok(Response::new(GetTagResponse {
+                exists: false,
+                tag: None,
+                error: String::new(),
+            })),
+        }
     }
 
     async fn list_tags(
         &self,
-        _request: Request<ListTagsRequest>,
+        request: Request<ListTagsRequest>,
     ) -> Result<Response<ListTagsResponse>, Status> {
-        unimplemented!("ListTags not yet implemented")
+        let req = request.into_inner();
+        let storage = self.app_state.server.get_storage();
+        let storage_guard = storage.read();
+        let tags = storage_guard
+            .list_tags(&req.space_name)
+            .map_err(|e| Status::internal(format!("failed to list tags: {e}")))?;
+        Ok(Response::new(ListTagsResponse {
+            tags: tags.iter().map(core_tag_to_proto).collect(),
+            error: String::new(),
+        }))
     }
 
     async fn drop_tag(
         &self,
-        _request: Request<DropTagRequest>,
+        request: Request<DropTagRequest>,
     ) -> Result<Response<DropTagResponse>, Status> {
-        unimplemented!("DropTag not yet implemented")
+        let req = request.into_inner();
+        let storage = self.app_state.server.get_storage();
+        let mut storage_guard = storage.write();
+        let dropped = storage_guard
+            .drop_tag(&req.space_name, &req.tag_name)
+            .map_err(|e| Status::internal(format!("failed to drop tag: {e}")))?;
+        if dropped || req.if_exists {
+            Ok(Response::new(DropTagResponse {
+                success: true,
+                error: String::new(),
+            }))
+        } else {
+            Err(Status::not_found(format!(
+                "tag '{}' does not exist",
+                req.tag_name
+            )))
+        }
     }
 
     // Schema Management - Edge Type
@@ -616,119 +845,483 @@ impl<
     }
 
     // Batch Operations
+    //
+    // Batch tasks buffer items per space and flush continue-on-error:
+    // inserts go through the core batch operation, updates and deletes run
+    // against storage writer calls with per-item error capture.
     async fn create_batch(
         &self,
-        _request: Request<CreateBatchRequest>,
+        request: Request<CreateBatchRequest>,
     ) -> Result<Response<CreateBatchResponse>, Status> {
-        unimplemented!("CreateBatch not yet implemented")
+        let req = request.into_inner();
+        if req.space_name.is_empty() {
+            return Err(Status::invalid_argument("space_name must not be empty"));
+        }
+        let storage = self.app_state.server.get_storage();
+        let space_id = storage
+            .read()
+            .get_space_id(&req.space_name)
+            .map_err(|_| Status::not_found(format!("space '{}' not found", req.space_name)))?;
+        let batch_manager = self.app_state.server.get_batch_manager();
+        let task = batch_manager
+            .create_task(space_id, crate::batch::BatchType::Mixed, 1000)
+            .map_err(|e| Status::internal(format!("failed to create batch task: {e}")))?;
+        Ok(Response::new(CreateBatchResponse {
+            success: true,
+            batch_id: task.id,
+            error: String::new(),
+        }))
     }
 
     async fn add_batch_items(
         &self,
-        _request: Request<AddBatchItemsRequest>,
+        request: Request<AddBatchItemsRequest>,
     ) -> Result<Response<AddBatchItemsResponse>, Status> {
-        unimplemented!("AddBatchItems not yet implemented")
+        let req = request.into_inner();
+        if req.items.is_empty() {
+            return Err(Status::invalid_argument("batch items must not be empty"));
+        }
+        let mut wire_items = Vec::with_capacity(req.items.len());
+        for item in req.items {
+            wire_items.push(proto_batch_item_to_wire(item)?);
+        }
+        let batch_manager = self.app_state.server.get_batch_manager();
+        let accepted = batch_manager
+            .add_items(&req.batch_id, wire_items)
+            .map_err(|e| {
+                let message = e.to_string();
+                if message.contains("does not exist") {
+                    Status::not_found(message)
+                } else {
+                    Status::failed_precondition(message)
+                }
+            })?;
+        Ok(Response::new(AddBatchItemsResponse {
+            success: true,
+            items_added: accepted as i32,
+            error: String::new(),
+        }))
     }
 
     async fn execute_batch(
         &self,
-        _request: Request<ExecuteBatchRequest>,
+        request: Request<ExecuteBatchRequest>,
     ) -> Result<Response<ExecuteBatchResponse>, Status> {
-        unimplemented!("ExecuteBatch not yet implemented")
+        let req = request.into_inner();
+        let batch_manager = self.app_state.server.get_batch_manager();
+        let task = batch_manager
+            .get_task(&req.batch_id)
+            .ok_or_else(|| Status::not_found(format!("batch task '{}' not found", req.batch_id)))?;
+        let space_name = {
+            let storage = self.app_state.server.get_storage();
+            let storage_guard = storage.read();
+            storage_guard
+                .get_space_by_id(task.space_id)
+                .map_err(|e| Status::internal(format!("failed to resolve batch space: {e}")))?
+                .map(|info| info.space_name)
+                .ok_or_else(|| Status::not_found(format!("space id {} not found", task.space_id)))?
+        };
+        let result = batch_manager
+            .execute_task(&req.batch_id, &space_name)
+            .await
+            .map_err(|e| Status::internal(format!("failed to execute batch task: {e}")))?;
+        let success = result.errors.is_empty();
+        let mut results: Vec<BatchResult> = result
+            .errors
+            .iter()
+            .map(|e| BatchResult {
+                success: false,
+                error: e.error.clone(),
+            })
+            .collect();
+        if success {
+            results.push(BatchResult {
+                success: true,
+                error: String::new(),
+            });
+        }
+        Ok(Response::new(ExecuteBatchResponse {
+            success,
+            results,
+            error: result
+                .errors
+                .iter()
+                .map(|e| e.error.clone())
+                .collect::<Vec<_>>()
+                .join("; "),
+            vertices_inserted: result.vertices_inserted as i64,
+            edges_inserted: result.edges_inserted as i64,
+            vertices_updated: result.vertices_updated as i64,
+            edges_updated: result.edges_updated as i64,
+            vertices_deleted: result.vertices_deleted as i64,
+            edges_deleted: result.edges_deleted as i64,
+        }))
     }
 
     async fn get_batch_status(
         &self,
-        _request: Request<GetBatchStatusRequest>,
+        request: Request<GetBatchStatusRequest>,
     ) -> Result<Response<GetBatchStatusResponse>, Status> {
-        unimplemented!("GetBatchStatus not yet implemented")
+        let req = request.into_inner();
+        let batch_manager = self.app_state.server.get_batch_manager();
+        let task = batch_manager
+            .get_task(&req.batch_id)
+            .ok_or_else(|| Status::not_found(format!("batch task '{}' not found", req.batch_id)))?;
+        Ok(Response::new(GetBatchStatusResponse {
+            status: batch_status_name(&task.status),
+            total_items: task.progress.total as i32,
+            processed_items: task.progress.processed as i32,
+            failed_items: task.progress.failed as i32,
+            error: String::new(),
+        }))
     }
 
     async fn cancel_batch(
         &self,
-        _request: Request<CancelBatchRequest>,
+        request: Request<CancelBatchRequest>,
     ) -> Result<Response<CancelBatchResponse>, Status> {
-        unimplemented!("CancelBatch not yet implemented")
+        let req = request.into_inner();
+        let batch_manager = self.app_state.server.get_batch_manager();
+        match batch_manager.cancel_task(&req.batch_id) {
+            Ok(()) => Ok(Response::new(CancelBatchResponse {
+                success: true,
+                error: String::new(),
+            })),
+            Err(e) => {
+                let message = e.to_string();
+                if message.contains("does not exist") {
+                    Err(Status::not_found(message))
+                } else {
+                    Err(Status::failed_precondition(message))
+                }
+            }
+        }
     }
 
     // Statistics
     async fn get_session_statistics(
         &self,
-        _request: Request<GetSessionStatisticsRequest>,
+        request: Request<GetSessionStatisticsRequest>,
     ) -> Result<Response<GetSessionStatisticsResponse>, Status> {
-        unimplemented!("GetSessionStatistics not yet implemented")
+        let req = request.into_inner();
+        let session_manager = self.app_state.server.get_session_manager();
+        if let Some(raw) = req.session_id.filter(|s| !s.is_empty()) {
+            let session_id = parse_session_id(&raw)?;
+            if session_manager.find_session(session_id).is_none() {
+                return Err(Status::not_found(format!("session '{raw}' not found")));
+            }
+        }
+        let sessions = session_manager.list_sessions().await;
+        let mut by_user: HashMap<String, i64> = HashMap::new();
+        for session in &sessions {
+            *by_user.entry(session.user_name.clone()).or_insert(0) += 1;
+        }
+        let failed = self
+            .app_state
+            .server
+            .get_stats_manager()
+            .get_value(graphdb_metrics::MetricType::NumAuthFailedSessions)
+            .unwrap_or(0) as i64;
+        let total = session_manager.total_sessions_created() as i64;
+        Ok(Response::new(GetSessionStatisticsResponse {
+            active_sessions: sessions.len() as i64,
+            total_sessions: total,
+            failed_sessions: failed,
+            session_by_user: by_user,
+        }))
     }
 
     async fn get_query_statistics(
         &self,
-        _request: Request<GetQueryStatisticsRequest>,
+        request: Request<GetQueryStatisticsRequest>,
     ) -> Result<Response<GetQueryStatisticsResponse>, Status> {
-        unimplemented!("GetQueryStatistics not yet implemented")
+        let req = request.into_inner();
+        // from/to_timestamp are epoch millis; the profile buffer only keeps
+        // monotonic start times, so wall time is derived as now - elapsed.
+        let from_ms = req.from_timestamp.unwrap_or(0);
+        let to_ms = req.to_timestamp.unwrap_or(i64::MAX);
+        if from_ms < 0 || to_ms < 0 || from_ms > to_ms {
+            return Err(Status::invalid_argument(
+                "from_timestamp/to_timestamp must be non-negative epoch millis with from <= to",
+            ));
+        }
+        let in_window = |q: &graphdb_metrics::QueryProfile| {
+            let ts = profile_start_ms(q);
+            ts >= from_ms && ts <= to_ms
+        };
+        let stats_manager = self.app_state.server.get_stats_manager();
+        let total = stats_manager
+            .get_value(graphdb_metrics::MetricType::NumQueries)
+            .unwrap_or(0) as i64;
+        let slow: Vec<graphdb_metrics::QueryProfile> = stats_manager
+            .get_slow_queries(10)
+            .into_iter()
+            .filter(in_window)
+            .collect();
+        let recent: Vec<graphdb_metrics::QueryProfile> = stats_manager
+            .get_recent_queries(200)
+            .into_iter()
+            .filter(in_window)
+            .collect();
+        let failed = recent
+            .iter()
+            .filter(|q| q.status == graphdb_metrics::QueryStatus::Failed)
+            .count() as i64;
+        let (avg_ms, max_ms) = if recent.is_empty() {
+            (0, 0)
+        } else {
+            let sum_ms: u64 = recent.iter().map(|q| q.total_duration_us / 1000).sum();
+            let max_ms: u64 = recent
+                .iter()
+                .map(|q| q.total_duration_us / 1000)
+                .max()
+                .unwrap_or(0);
+            ((sum_ms / recent.len() as u64) as i64, max_ms as i64)
+        };
+        Ok(Response::new(GetQueryStatisticsResponse {
+            total_queries: total,
+            slow_queries: slow.len() as i64,
+            failed_queries: failed,
+            avg_execution_time_ms: avg_ms,
+            max_execution_time_ms: max_ms,
+            slow_query_list: slow
+                .into_iter()
+                .map(|q| {
+                    let timestamp = profile_start_ms(&q);
+                    SlowQuery {
+                        query: q.query_text,
+                        execution_time_ms: (q.total_duration_us / 1000) as i64,
+                        timestamp,
+                        session_id: Some(q.session_id.to_string()),
+                    }
+                })
+                .collect(),
+        }))
     }
 
     async fn get_database_statistics(
         &self,
         _request: Request<GetDatabaseStatisticsRequest>,
     ) -> Result<Response<GetDatabaseStatisticsResponse>, Status> {
-        unimplemented!("GetDatabaseStatistics not yet implemented")
+        let storage = self.app_state.server.get_storage();
+        let storage_guard = storage.read();
+        let stats = storage_guard.get_storage_stats();
+        Ok(Response::new(GetDatabaseStatisticsResponse {
+            total_spaces: stats.total_spaces as i32,
+            total_vertices: stats.total_vertices as i64,
+            total_edges: stats.total_edges as i64,
+            storage_size_bytes: stats.total_size_bytes as i64,
+        }))
     }
 
     async fn get_system_statistics(
         &self,
         _request: Request<GetSystemStatisticsRequest>,
     ) -> Result<Response<GetSystemStatisticsResponse>, Status> {
-        unimplemented!("GetSystemStatistics not yet implemented")
+        let (memory_used, memory_total) = {
+            let mut sys = sysinfo::System::new();
+            sys.refresh_memory();
+            (sys.used_memory() * 1024, sys.total_memory() * 1024)
+        };
+        let cpu_usage = {
+            let mut sys = sysinfo::System::new();
+            sys.refresh_cpu_usage();
+            let cpus = sys.cpus();
+            if cpus.is_empty() {
+                0.0
+            } else {
+                let avg: f32 =
+                    cpus.iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / cpus.len() as f32;
+                avg as f64
+            }
+        };
+        let active = self
+            .app_state
+            .server
+            .get_session_manager()
+            .active_session_count()
+            .await as i32;
+        let (disk_used_bytes, disk_total_bytes) = {
+            let disks = sysinfo::Disks::new_with_refreshed_list();
+            disks
+                .list()
+                .iter()
+                .fold((0u64, 0u64), |(used, total), disk| {
+                    (
+                        used + disk.total_space().saturating_sub(disk.available_space()),
+                        total + disk.total_space(),
+                    )
+                })
+        };
+        let disk_usage_percent = if disk_total_bytes > 0 {
+            disk_used_bytes as f64 / disk_total_bytes as f64 * 100.0
+        } else {
+            0.0
+        };
+        // Cumulative interface counters since boot.
+        let (network_rx_bytes, network_tx_bytes) = {
+            let networks = sysinfo::Networks::new_with_refreshed_list();
+            networks
+                .list()
+                .values()
+                .fold((0u64, 0u64), |(rx, tx), data| {
+                    (rx + data.received(), tx + data.transmitted())
+                })
+        };
+        Ok(Response::new(GetSystemStatisticsResponse {
+            cpu_usage_percent: cpu_usage,
+            memory_used_bytes: memory_used as i64,
+            memory_total_bytes: memory_total as i64,
+            disk_usage_percent,
+            active_connections: active,
+            network_rx_bytes: network_rx_bytes as i64,
+            network_tx_bytes: network_tx_bytes as i64,
+        }))
     }
 
     // Configuration
+    //
+    // Reads serve the live configuration. Updates and resets are validated,
+    // applied to live config, and persisted to the retained config file when
+    // one exists; keys consumed from construction snapshots report
+    // requires_restart.
     async fn get_config(
         &self,
         _request: Request<GetConfigRequest>,
     ) -> Result<Response<GetConfigResponse>, Status> {
-        unimplemented!("GetConfig not yet implemented")
+        let config = self.app_state.server.get_config();
+        Ok(Response::new(GetConfigResponse {
+            config: build_config_map(&config),
+            error: String::new(),
+        }))
     }
 
     async fn update_config(
         &self,
-        _request: Request<UpdateConfigRequest>,
+        request: Request<UpdateConfigRequest>,
     ) -> Result<Response<UpdateConfigResponse>, Status> {
-        unimplemented!("UpdateConfig not yet implemented")
+        let req = request.into_inner();
+        let value = proto_config_value_to_json(req.value);
+        let store = self.app_state.server.config_store();
+        let config_path = self.app_state.server.get_config_path();
+        let (requires_restart, persisted) = crate::http::handlers::config::apply_config_update(
+            &store,
+            config_path.as_deref(),
+            &req.section,
+            &req.key,
+            &value,
+        )
+        .map_err(Status::invalid_argument)?;
+        Ok(Response::new(UpdateConfigResponse {
+            success: true,
+            error: String::new(),
+            requires_restart,
+            persisted,
+        }))
     }
 
     async fn reset_config(
         &self,
-        _request: Request<ResetConfigRequest>,
+        request: Request<ResetConfigRequest>,
     ) -> Result<Response<ResetConfigResponse>, Status> {
-        unimplemented!("ResetConfig not yet implemented")
+        let req = request.into_inner();
+        // Reset funnels the default snapshot through the same typed
+        // apply path as updates, so unknown keys fail identically.
+        let default_config = crate::config::Config::default();
+        let value = crate::http::handlers::config::get_config_value(
+            &default_config,
+            &req.section,
+            &req.key,
+        );
+        let store = self.app_state.server.config_store();
+        let config_path = self.app_state.server.get_config_path();
+        let (requires_restart, persisted) = crate::http::handlers::config::apply_config_update(
+            &store,
+            config_path.as_deref(),
+            &req.section,
+            &req.key,
+            &value,
+        )
+        .map_err(Status::invalid_argument)?;
+        Ok(Response::new(ResetConfigResponse {
+            success: true,
+            error: String::new(),
+            requires_restart,
+            persisted,
+        }))
     }
 
     // Custom Functions
+    //
+    // Registration loads the requested UDF library into the shared
+    // registry, so a registered function is immediately listable and
+    // executable. Only library-backed implementations can run.
     async fn register_function(
         &self,
-        _request: Request<RegisterFunctionRequest>,
+        request: Request<RegisterFunctionRequest>,
     ) -> Result<Response<RegisterFunctionResponse>, Status> {
-        unimplemented!("RegisterFunction not yet implemented")
+        use crate::http::handlers::function::register_udf_from_source;
+        let req = request.into_inner();
+        let registry = self.app_state.server.get_function_registry();
+        let registered_name = register_udf_from_source(&registry, &req.name, &req.implementation)
+            .map_err(op_error_to_status)?;
+        Ok(Response::new(RegisterFunctionResponse {
+            success: true,
+            function_id: registered_name,
+            error: String::new(),
+        }))
     }
 
     async fn unregister_function(
         &self,
-        _request: Request<UnregisterFunctionRequest>,
+        request: Request<UnregisterFunctionRequest>,
     ) -> Result<Response<UnregisterFunctionResponse>, Status> {
-        unimplemented!("UnregisterFunction not yet implemented")
+        use crate::http::handlers::function::unregister_udf_by_name;
+        let req = request.into_inner();
+        let registry = self.app_state.server.get_function_registry();
+        unregister_udf_by_name(&registry, &req.name).map_err(op_error_to_status)?;
+        Ok(Response::new(UnregisterFunctionResponse {
+            success: true,
+            error: String::new(),
+        }))
     }
 
     async fn list_functions(
         &self,
         _request: Request<ListFunctionsRequest>,
     ) -> Result<Response<ListFunctionsResponse>, Status> {
-        unimplemented!("ListFunctions not yet implemented")
+        let registry = self.app_state.server.get_function_registry();
+        let registry_guard = registry.read();
+        let functions = registry_guard
+            .function_names()
+            .into_iter()
+            .map(|name| function_info_for(&registry_guard, name))
+            .collect();
+        Ok(Response::new(ListFunctionsResponse {
+            functions,
+            error: String::new(),
+        }))
     }
 
     async fn get_function_info(
         &self,
-        _request: Request<GetFunctionInfoRequest>,
+        request: Request<GetFunctionInfoRequest>,
     ) -> Result<Response<GetFunctionInfoResponse>, Status> {
-        unimplemented!("GetFunctionInfo not yet implemented")
+        let req = request.into_inner();
+        let registry = self.app_state.server.get_function_registry();
+        let registry_guard = registry.read();
+        match registry_guard.contains(&req.name) {
+            true => Ok(Response::new(GetFunctionInfoResponse {
+                exists: true,
+                function: Some(function_info_for(&registry_guard, &req.name)),
+                error: String::new(),
+            })),
+            false => Ok(Response::new(GetFunctionInfoResponse {
+                exists: false,
+                function: None,
+                error: String::new(),
+            })),
+        }
     }
 
     // Vector Index
@@ -969,13 +1562,6 @@ impl<
             if req.limit <= 0 {
                 return Err(Status::invalid_argument("limit must be greater than 0"));
             }
-            if let Some(filter) = &req.filter {
-                if !filter.expression.is_empty() {
-                    return Err(Status::invalid_argument(
-                        "filter expressions are not supported over gRPC; use the HTTP search endpoint with a structured filter",
-                    ));
-                }
-            }
             // `ef_search` only tunes HNSW recall, never result correctness, so
             // it stays on server defaults until the search options carry it.
             let with_vector = req.options.as_ref().is_some_and(|o| o.with_vector);
@@ -991,13 +1577,22 @@ impl<
                 .read()
                 .get_space_id(&req.space_name)
                 .map_err(|_| Status::not_found(format!("space '{}' not found", req.space_name)))?;
-            let options = graphdb_sync::vector_sync::SearchOptions::new(
+            let mut options = graphdb_sync::vector_sync::SearchOptions::new(
                 space_id,
                 req.tag_name,
                 req.field_name,
                 req.vector,
                 req.limit as usize,
             );
+            if let Some(filter) = &req.filter {
+                if !filter.expression.is_empty() {
+                    let parsed = crate::http::handlers::vector::parse_vector_filter_expression(
+                        &filter.expression,
+                    )
+                    .map_err(Status::invalid_argument)?;
+                    options = options.with_filter(parsed);
+                }
+            }
             let results = vector_api
                 .search_with_options(options)
                 .await
@@ -1064,11 +1659,17 @@ impl<
                     .get_versions()
                     .iter()
                     .map(|&version| {
-                        let changes = h
+                        let version_changes = h
                             .change_log
                             .get_version_changes(version)
                             .cloned()
-                            .unwrap_or_default()
+                            .unwrap_or_default();
+                        let timestamp_ms = version_changes
+                            .iter()
+                            .map(|c| c.timestamp_ms)
+                            .max()
+                            .unwrap_or(0) as i64;
+                        let changes = version_changes
                             .into_iter()
                             .map(|change| PropertyChangeEvent {
                                 change_type: format!("{:?}", change.details),
@@ -1087,7 +1688,7 @@ impl<
 
                         SchemaVersion {
                             version,
-                            timestamp_ms: 0, // TODO: extract from PropertyChange
+                            timestamp_ms,
                             changes,
                         }
                     })
@@ -1508,6 +2109,393 @@ pub async fn run_server_with_grpc_service<
         .await?;
 
     Ok(())
+}
+
+/// Parse a string session id carried on the wire into the numeric id.
+fn parse_session_id(value: &str) -> Result<i64, Status> {
+    value
+        .parse::<i64>()
+        .map_err(|_| Status::invalid_argument("session_id must be an integer"))
+}
+
+/// Seconds since the Unix epoch for a `SystemTime`, saturating at zero.
+fn system_time_secs(time: &SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Wall-clock start of a query profile in epoch millis.
+///
+/// Profiles only record a monotonic `Instant`; wall time is derived as
+/// now minus elapsed, which is exact up to clock adjustments.
+fn profile_start_ms(profile: &graphdb_metrics::QueryProfile) -> i64 {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    now_ms.saturating_sub(profile.start_time.elapsed().as_millis() as i64)
+}
+
+/// Attach an authenticated session to a space by name.
+fn attach_session_space<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + 'static,
+>(
+    app_state: &AppState<S>,
+    session: &std::sync::Arc<crate::client::ClientSession>,
+    space: &str,
+) -> Result<(), Status> {
+    let storage = app_state.server.get_storage();
+    let info = storage
+        .read()
+        .get_space(space)
+        .map_err(|e| Status::internal(format!("failed to resolve space: {e}")))?
+        .ok_or_else(|| Status::not_found(format!("space '{space}' not found")))?;
+    session.set_space(graphdb_core::types::SpaceSummary::new(
+        info.space_id,
+        info.space_name,
+        info.vid_type,
+    ));
+    Ok(())
+}
+
+/// Convert a proto `Value` to a core `Value`.
+///
+/// The wire value vocabulary is intentionally narrow; complex core types
+/// have no proto spelling and never appear here. Timestamps cross the wire
+/// as epoch millis and stay `BigInt` so no timezone interpretation is
+/// smuggled in.
+fn proto_value_to_core(value: super::proto::Value) -> graphdb_core::Value {
+    use super::proto::value::Value as ProtoValue;
+    match value.value {
+        None => graphdb_core::Value::Empty,
+        Some(ProtoValue::StringValue(s)) => graphdb_core::Value::string(s),
+        Some(ProtoValue::IntValue(i)) => {
+            if i >= i64::from(i32::MIN) && i <= i64::from(i32::MAX) {
+                graphdb_core::Value::Int(i as i32)
+            } else {
+                graphdb_core::Value::BigInt(i)
+            }
+        }
+        Some(ProtoValue::DoubleValue(d)) => graphdb_core::Value::Double(d),
+        Some(ProtoValue::FloatValue(f)) => graphdb_core::Value::Float(f as f32),
+        Some(ProtoValue::BoolValue(b)) => graphdb_core::Value::Bool(b),
+        Some(ProtoValue::BytesValue(b)) => graphdb_core::Value::Blob(b),
+        Some(ProtoValue::TimestampValue(t)) => graphdb_core::Value::BigInt(t),
+    }
+}
+
+/// Render a core `QueryResult` into the proto result/metadata pair.
+///
+/// Rows come from the engine `ExecutionResult` unchanged (column order
+/// preserved); non-dataset results yield empty columns and rows.
+fn query_result_to_proto(
+    result: &graphdb_api::api_core::QueryResult,
+) -> (
+    Option<super::proto::QueryResult>,
+    Option<super::proto::ExecutionMetadata>,
+) {
+    let rows: Vec<super::proto::Row> = result
+        .rows()
+        .iter()
+        .map(|row| super::proto::Row {
+            values: row.iter().cloned().map(value_to_proto_value).collect(),
+        })
+        .collect();
+    let query_result = super::proto::QueryResult {
+        column_names: result.columns().to_vec(),
+        rows,
+        plan_descriptions: HashMap::new(),
+    };
+    let metadata = super::proto::ExecutionMetadata {
+        rows_returned: result.rows().len() as u64,
+        execution_time_ms: result.metadata.execution_time_ms,
+        rows_scanned: result.metadata.rows_scanned,
+        custom_stats: HashMap::new(),
+    };
+    (Some(query_result), Some(metadata))
+}
+
+fn core_space_to_proto(info: &graphdb_core::types::SpaceInfo) -> super::proto::SpaceInfo {
+    super::proto::SpaceInfo {
+        id: info.space_id as i32,
+        name: info.space_name.clone(),
+        options: Some(super::proto::SpaceOptions {
+            partition_num: info.partition_num,
+            replica_num: info.replica_factor,
+            charset: String::new(),
+            collate: String::new(),
+            vid_fixed_length: false,
+            vid_length: 0,
+        }),
+        created_at: 0,
+    }
+}
+
+fn core_tag_to_proto(info: &graphdb_core::types::TagInfo) -> super::proto::TagInfo {
+    super::proto::TagInfo {
+        id: info.tag_id as i32,
+        name: info.tag_name.clone(),
+        properties: info.properties.iter().map(core_property_to_proto).collect(),
+        options: Some(super::proto::TagOptions {
+            ttl_seconds: info.ttl_duration.unwrap_or(0),
+            ttl_column: info.ttl_col.clone().unwrap_or_default(),
+        }),
+        created_at: 0,
+    }
+}
+
+/// Map a proto batch item onto the wire batch item.
+///
+/// Inserts run through the core batch operation while updates and deletes
+/// run as direct storage mutations in the batch manager; all variants have
+/// a wire representation and are reported with per-item error indexes.
+fn proto_batch_item_to_wire(
+    item: super::proto::BatchItem,
+) -> Result<crate::batch::BatchItem, Status> {
+    use super::proto::batch_item::Operation;
+    let operation = item
+        .operation
+        .ok_or_else(|| Status::invalid_argument("batch item operation is required"))?;
+    match operation {
+        Operation::InsertVertex(v) => {
+            Ok(crate::batch::BatchItem::Vertex(crate::batch::VertexData {
+                vid: serde_json::Value::String(v.vid),
+                tag: v.tag_name,
+                properties: proto_properties_to_json(v.properties),
+            }))
+        }
+        Operation::InsertEdge(e) => Ok(crate::batch::BatchItem::Edge(crate::batch::EdgeData {
+            edge_type: e.edge_type,
+            src_vid: serde_json::Value::String(e.src),
+            dst_vid: serde_json::Value::String(e.dst),
+            properties: proto_properties_to_json(e.properties),
+        })),
+        Operation::UpdateVertex(v) => Ok(crate::batch::BatchItem::UpdateVertex(
+            crate::batch::VertexData {
+                vid: serde_json::Value::String(v.vid),
+                tag: v.tag_name,
+                properties: proto_properties_to_json(v.properties),
+            },
+        )),
+        Operation::UpdateEdge(e) => Ok(crate::batch::BatchItem::UpdateEdgeData(
+            crate::batch::UpdateEdgeData {
+                edge_type: e.edge_type,
+                src_vid: serde_json::Value::String(e.src),
+                dst_vid: serde_json::Value::String(e.dst),
+                rank: e.ranking,
+                properties: proto_properties_to_json(e.properties),
+            },
+        )),
+        Operation::DeleteVertex(v) => Ok(crate::batch::BatchItem::DeleteVertex(
+            crate::batch::DeleteVertexData {
+                vid: serde_json::Value::String(v.vid),
+                tag_names: v.tag_names,
+            },
+        )),
+        Operation::DeleteEdge(e) => Ok(crate::batch::BatchItem::DeleteEdgeData(
+            crate::batch::DeleteEdgeData {
+                edge_type: e.edge_type,
+                src_vid: serde_json::Value::String(e.src),
+                dst_vid: serde_json::Value::String(e.dst),
+                rank: e.ranking,
+            },
+        )),
+    }
+}
+
+fn proto_properties_to_json(
+    properties: HashMap<String, super::proto::Value>,
+) -> HashMap<String, serde_json::Value> {
+    properties
+        .into_iter()
+        .map(|(k, v)| (k, crate::value::to_json(proto_value_to_core(v))))
+        .collect()
+}
+
+/// Render the internal batch status with its proto spelling.
+fn batch_status_name(status: &crate::batch::BatchStatus) -> String {
+    use crate::batch::BatchStatus;
+    match status {
+        BatchStatus::Created => "PENDING",
+        BatchStatus::Running => "RUNNING",
+        BatchStatus::Completed => "COMPLETED",
+        BatchStatus::Failed => "FAILED",
+        BatchStatus::Cancelled => "CANCELLED",
+    }
+    .to_string()
+}
+
+/// Build the proto config map from the live server configuration.
+///
+/// The section/key shape mirrors the HTTP config endpoint; values convert
+/// through JSON so numeric widths and enums never need manual casting.
+fn build_config_map(
+    config: &crate::config::Config,
+) -> HashMap<String, super::proto::ConfigSection> {
+    let snapshot = serde_json::json!({
+        "database": {
+            "host": config.common.database.host,
+            "port": config.common.database.port,
+            "storage_path": config.common.database.storage_path,
+            "max_connections": config.common.database.max_connections,
+        },
+        "transaction": {
+            "default_timeout": config.common.transaction.default_timeout,
+            "max_concurrent_transactions": config.common.transaction.max_concurrent_transactions,
+            "auto_commit": config.common.transaction.auto_commit,
+        },
+        "log": {
+            "level": config.common.log.level,
+            "dir": config.common.log.dir,
+            "file": config.common.log.file,
+            "max_file_size": config.common.log.max_file_size,
+            "max_files": config.common.log.max_files,
+        },
+        "auth": {
+            "enable_authorize": config.server.auth.enable_authorize,
+            "failed_login_attempts": config.server.auth.failed_login_attempts,
+            "session_idle_timeout_secs": config.server.auth.session_idle_timeout_secs,
+            "force_change_default_password": config.server.auth.force_change_default_password,
+            "default_username": config.server.auth.default_username,
+            "bcrypt_cost": config.server.auth.bcrypt_cost,
+        },
+        "bootstrap": {
+            "auto_create_default_space": config.server.bootstrap.auto_create_default_space,
+            "default_space_name": config.server.bootstrap.default_space_name,
+            "single_user_mode": config.server.bootstrap.single_user_mode,
+        },
+        "optimizer": {
+            "max_iteration_rounds": config.common.optimizer.max_iteration_rounds,
+            "max_exploration_rounds": config.common.optimizer.max_exploration_rounds,
+            "enable_cost_model": config.common.optimizer.enable_cost_model,
+            "enable_multi_plan": config.common.optimizer.enable_multi_plan,
+            "enable_property_pruning": config.common.optimizer.enable_property_pruning,
+            "enable_adaptive_iteration": config.common.optimizer.enable_adaptive_iteration,
+            "stable_threshold": config.common.optimizer.stable_threshold,
+            "min_iteration_rounds": config.common.optimizer.min_iteration_rounds,
+            "statistics_sample_limit": config.common.optimizer.statistics_sample_limit,
+            "statistics_min_epoch_delta": config.common.optimizer.statistics_min_epoch_delta,
+            "storage_cost_profile": format!("{:?}", config.common.optimizer.storage_cost_profile),
+            "space_cost_profiles": format!("{:?}", config.common.optimizer.space_cost_profiles),
+        },
+        "monitoring": {
+            "enabled": config.common.monitoring.enabled,
+            "memory_cache_size": config.common.monitoring.memory_cache_size,
+            "slow_query_threshold_ms": config.common.monitoring.slow_query_threshold_ms,
+        },
+    });
+    snapshot
+        .as_object()
+        .map(|sections| {
+            sections
+                .iter()
+                .map(|(section, values)| {
+                    let entries = values
+                        .as_object()
+                        .map(|keys| {
+                            keys.iter()
+                                .map(|(key, value)| (key.clone(), json_to_config_value(value)))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    (
+                        section.clone(),
+                        super::proto::ConfigSection { values: entries },
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn json_to_config_value(value: &serde_json::Value) -> super::proto::ConfigValue {
+    use super::proto::config_value::Value as ConfigPrimitive;
+    let primitive = match value {
+        serde_json::Value::String(s) => Some(ConfigPrimitive::StringValue(s.clone())),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(ConfigPrimitive::IntValue(i))
+            } else if let Some(u) = n.as_u64() {
+                Some(ConfigPrimitive::IntValue(u as i64))
+            } else {
+                n.as_f64().map(ConfigPrimitive::DoubleValue)
+            }
+        }
+        serde_json::Value::Bool(b) => Some(ConfigPrimitive::BoolValue(*b)),
+        _ => None,
+    };
+    super::proto::ConfigValue { value: primitive }
+}
+
+/// Proto config value back to JSON for the typed config setter.
+fn proto_config_value_to_json(value: Option<super::proto::ConfigValue>) -> serde_json::Value {
+    use super::proto::config_value::Value as ConfigPrimitive;
+    match value.and_then(|v| v.value) {
+        Some(ConfigPrimitive::StringValue(s)) => serde_json::Value::String(s),
+        Some(ConfigPrimitive::IntValue(i)) => serde_json::Value::from(i),
+        Some(ConfigPrimitive::DoubleValue(f)) => serde_json::Number::from_f64(f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        Some(ConfigPrimitive::BoolValue(b)) => serde_json::Value::Bool(b),
+        None => serde_json::Value::Null,
+    }
+}
+
+/// Describe a registered function for the wire.
+//
+// Descriptions and return types come from the registry; parameter names
+// are not modeled anywhere, so the list stays empty instead of carrying
+// invented names.
+fn op_error_to_status(error: crate::http::handlers::function::FunctionOpError) -> Status {
+    use crate::http::handlers::function::FunctionOpError;
+    match error {
+        FunctionOpError::NotFound(message) => Status::not_found(message),
+        FunctionOpError::Conflict(message) => Status::already_exists(message),
+        FunctionOpError::Invalid(message) => Status::invalid_argument(message),
+        FunctionOpError::Failed(message) => Status::internal(message),
+    }
+}
+fn function_info_for(
+    registry: &crate::query::executor::expression::functions::FunctionRegistry,
+    name: &str,
+) -> super::proto::FunctionInfo {
+    let builtin = registry.get_builtin(name);
+    let custom = registry.get_custom(name);
+    let (function_type, description) = match (&builtin, &custom) {
+        (Some(function), _) => ("builtin", function.description().to_string()),
+        (None, Some(function)) => {
+            let arity = if function.is_variadic {
+                format!("variadic from {}", function.arity)
+            } else {
+                format!("arity {}", function.arity)
+            };
+            (
+                "custom",
+                if function.description.is_empty() {
+                    arity
+                } else {
+                    format!("{} ({arity})", function.description)
+                },
+            )
+        }
+        (None, None) => ("unknown", String::new()),
+    };
+    super::proto::FunctionInfo {
+        name: name.to_string(),
+        function_type: function_type.to_string(),
+        parameters: vec![],
+        return_type: registry
+            .get_return_type(name)
+            .map(|t| format!("{t:?}"))
+            .unwrap_or_else(|| "unknown".to_string()),
+        description,
+    }
 }
 
 #[allow(clippy::result_large_err)]

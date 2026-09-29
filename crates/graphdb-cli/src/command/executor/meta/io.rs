@@ -164,32 +164,6 @@ pub async fn execute_copy(
     Ok(true)
 }
 
-pub async fn execute_dump(
-    executor: &mut CommandExecutor,
-    database: String,
-    output_path: String,
-    format: String,
-    compress: bool,
-) -> Result<bool> {
-    let _ = (executor, database, output_path, format, compress);
-    Err(crate::utils::error::CliError::Other(
-        "Database dump is not implemented; use the server backup API when available".to_string(),
-    ))
-}
-
-pub async fn execute_restore(
-    executor: &mut CommandExecutor,
-    source_path: String,
-    database: String,
-    overwrite: bool,
-    strict: bool,
-) -> Result<bool> {
-    let _ = (executor, source_path, database, overwrite, strict);
-    Err(crate::utils::error::CliError::Other(
-        "Database restore is not implemented; use the server backup API when available".to_string(),
-    ))
-}
-
 pub async fn execute_export_space(
     executor: &mut CommandExecutor,
     space_name: String,

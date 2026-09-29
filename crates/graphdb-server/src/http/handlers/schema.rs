@@ -515,11 +515,17 @@ pub async fn get_version_history<
                     .get_versions()
                     .iter()
                     .map(|&version| {
-                        let changes: Vec<_> = h
+                        let version_changes = h
                             .change_log
                             .get_version_changes(version)
                             .cloned()
-                            .unwrap_or_default()
+                            .unwrap_or_default();
+                        let timestamp_ms = version_changes
+                            .iter()
+                            .map(|c| c.timestamp_ms)
+                            .max()
+                            .unwrap_or(0);
+                        let changes: Vec<_> = version_changes
                             .into_iter()
                             .map(|change| ChangeInfo {
                                 change_type: format!("{:?}", change.details),
@@ -537,7 +543,7 @@ pub async fn get_version_history<
 
                         serde_json::json!({
                             "version": version,
-                            "timestamp_ms": 0,
+                            "timestamp_ms": timestamp_ms,
                             "changes": changes,
                         })
                     })

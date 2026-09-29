@@ -18,15 +18,6 @@ pub fn parse_show_edges(arg: &str) -> Result<MetaCommand, String> {
     Ok(MetaCommand::ShowEdges { pattern })
 }
 
-pub fn parse_show_indexes(arg: &str) -> Result<MetaCommand, String> {
-    let pattern = if arg.is_empty() {
-        None
-    } else {
-        Some(arg.to_string())
-    };
-    Ok(MetaCommand::ShowIndexes { pattern })
-}
-
 pub fn parse_describe(arg: &str) -> Result<MetaCommand, String> {
     if arg.is_empty() {
         Err("Usage: \\describe <tag_name>".to_string())

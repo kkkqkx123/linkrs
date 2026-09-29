@@ -229,6 +229,14 @@ impl SessionManager {
         self.client.list_edge_types(space).await
     }
 
+    /// List all functions registered on the server.
+    pub async fn list_functions(&self) -> Result<Vec<String>> {
+        if self.session.is_none() {
+            return Err(CliError::NotConnected);
+        }
+        self.client.list_functions().await
+    }
+
     /// Get current session reference
     pub fn session(&self) -> Option<&Session> {
         self.session.as_ref()

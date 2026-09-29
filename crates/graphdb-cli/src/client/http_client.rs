@@ -690,6 +690,41 @@ impl HttpClient {
         Ok(())
     }
 
+    /// List all functions registered on the server.
+    ///
+    /// The server exposes the live function registry; names include both
+    /// builtins and loaded custom UDFs.
+    pub async fn list_functions(&self) -> Result<Vec<String>> {
+        let url = format!("{}/functions", self.base_url);
+        let response = self.inner.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Failed to list functions ({}): {}",
+                status, body
+            )));
+        }
+
+        let body: serde_json::Value = response.json().await?;
+        let names = body
+            .get("functions")
+            .and_then(|v| v.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        item.get("name")
+                            .and_then(|n| n.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(names)
+    }
+
     // ── Auth ──
 
     /// Login and authenticate (low-level API)

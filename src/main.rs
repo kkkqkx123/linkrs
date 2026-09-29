@@ -3,7 +3,7 @@ mod server_main {
     use clap::Parser;
     use graphdb::config::logging;
     use graphdb::config::Config;
-    use graphdb_server::{execute_query, start_service_with_config};
+    use graphdb_server::{execute_query, start_service_with_config_path};
 
     #[derive(Parser)]
     #[clap(version = "0.1.0", author = "GraphDB Contributors")]
@@ -28,26 +28,33 @@ mod server_main {
                 println!("Starting GraphDB service");
                 println!("Process ID: {}", std::process::id());
 
-                // Load configuration
-                let cfg = match config {
-                    Some(config_path) => match Config::load(&config_path) {
-                        Ok(cfg) => cfg,
-                        Err(e) => {
-                            eprintln!(
-                                "Failed to load configuration file: {}, using default configuration",
-                                e
-                            );
-                            Config::default()
+                // Load configuration, retaining the file path for
+                // config-write endpoints only when the file exists.
+                let (cfg, config_path) = match config {
+                    Some(config_path) => {
+                        let path = std::path::PathBuf::from(&config_path);
+                        match Config::load(&config_path) {
+                            Ok(cfg) => (cfg, path.exists().then_some(path)),
+                            Err(e) => {
+                                eprintln!(
+                                    "Failed to load configuration file: {}, using default configuration",
+                                    e
+                                );
+                                (Config::default(), None)
+                            }
                         }
-                    },
+                    }
                     None => match Config::load_user_config() {
-                        Ok(cfg) => cfg,
+                        Ok(cfg) => {
+                            let path = Config::user_config_path().ok().filter(|p| p.exists());
+                            (cfg, path)
+                        }
                         Err(e) => {
                             eprintln!(
                                 "Failed to load user configuration file, using default configuration: {}",
                                 e
                             );
-                            Config::default()
+                            (Config::default(), None)
                         }
                     },
                 };
@@ -65,7 +72,8 @@ mod server_main {
                         return;
                     }
                 };
-                let result = rt.block_on(async { start_service_with_config(cfg).await });
+                let result =
+                    rt.block_on(async { start_service_with_config_path(cfg, config_path).await });
 
                 // Ensure logging is flushed before exiting
                 logging::shutdown();

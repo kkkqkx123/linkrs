@@ -956,23 +956,3 @@ pub(super) fn spill_groupby(
     }
     Ok(())
 }
-
-pub(super) fn spill_partial_aggregate(
-    state: &Option<PartialAggregateState>,
-) -> Result<(), QueryError> {
-    if state.as_ref().is_some_and(|s| !s.group_map.is_empty()) {
-        return Err(QueryError::execution(
-            "Partial aggregate spill is not implemented; query memory budget exceeded".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-pub(super) fn spill_final_aggregate(state: &Option<FinalAggregateState>) -> Result<(), QueryError> {
-    if state.as_ref().is_some_and(|s| !s.group_map.is_empty()) {
-        return Err(QueryError::execution(
-            "Final aggregate spill is not implemented; query memory budget exceeded".to_string(),
-        ));
-    }
-    Ok(())
-}

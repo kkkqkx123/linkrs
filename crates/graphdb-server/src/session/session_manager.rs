@@ -93,6 +93,8 @@ pub struct GraphSessionManager {
     session_idle_timeout: Duration,
     /// Is the background cleanup task currently running?
     cleanup_task_running: Arc<AtomicBool>,
+    /// Cumulative number of sessions created (monotonic, never decremented).
+    total_sessions_created: Arc<AtomicU64>,
     // Shared with `QueryManager` when co-located: single enum dual emission
     // source (`SessionCreated/Destroyed` here, `Query*` there).
     session_callbacks: Arc<EventSubscriptions<SessionEvent>>,
@@ -142,6 +144,7 @@ impl GraphSessionManager {
             max_connections,
             session_idle_timeout,
             cleanup_task_running: Arc::new(AtomicBool::new(false)),
+            total_sessions_created: Arc::new(AtomicU64::new(0)),
             session_callbacks: shared,
         })
     }
@@ -261,6 +264,7 @@ impl GraphSessionManager {
         self.sessions
             .insert(session_id, Arc::clone(&client_session));
         self.active_sessions.insert(session_id, Instant::now());
+        self.total_sessions_created.fetch_add(1, Ordering::Relaxed);
 
         // Write lock protection creation time
         {
@@ -429,6 +433,11 @@ impl GraphSessionManager {
     /// Obtain the number of active sessions
     pub async fn active_session_count(&self) -> usize {
         self.active_sessions.len()
+    }
+
+    /// Cumulative number of sessions created since process start.
+    pub fn total_sessions_created(&self) -> u64 {
+        self.total_sessions_created.load(Ordering::Relaxed)
     }
 
     /// Obtaining the maximum limit for the number of connections

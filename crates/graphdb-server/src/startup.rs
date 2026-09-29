@@ -28,18 +28,30 @@ use graphdb_transaction::{TransactionConfig, TransactionManager, TransactionMana
 
 /// Start the service using the user configuration directory.
 pub async fn start_service() -> DBResult<()> {
-    let config = match Config::load_user_config() {
-        Ok(config) => config,
+    let (config, config_path) = match Config::load_user_config() {
+        Ok(config) => {
+            let path = Config::user_config_path().ok().filter(|p| p.exists());
+            (config, path)
+        }
         Err(e) => {
             error!("Failed to load user config, using default config: {}", e);
-            Config::default()
+            (Config::default(), None)
         }
     };
-    start_service_with_config(config).await
+    start_service_with_config_path(config, config_path).await
 }
 
 /// Start the service using the configuration object.
 pub async fn start_service_with_config(config: Config) -> DBResult<()> {
+    start_service_with_config_path(config, None).await
+}
+
+/// Start the service using the configuration object, retaining the config
+/// file path so config-write endpoints can persist updates.
+pub async fn start_service_with_config_path(
+    config: Config,
+    config_path: Option<PathBuf>,
+) -> DBResult<()> {
     info!("Initializing GraphDB service...");
     info!("Configuration loaded: {:?}", config);
 
@@ -453,6 +465,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
         Arc::new(parking_lot::RwLock::new((*storage).clone())),
         transaction_manager,
         &config,
+        config_path,
     ));
     info!("HTTP server created");
 

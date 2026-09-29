@@ -79,6 +79,7 @@ async fn build_query_app() -> (Router, i64) {
         storage_rwlock.clone(),
         txn_manager,
         &config,
+        None,
     ));
     let state = AppState::new(http_server);
 

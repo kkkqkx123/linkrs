@@ -693,7 +693,12 @@ impl BlockingOperator {
                 memory_tracker,
             ),
             BlockingOperatorKind::PartialAggregate { state, .. } => {
-                aggregate_operator::spill_partial_aggregate(state)
+                if state.as_ref().is_some_and(|s| !s.group_map.is_empty()) {
+                    return Err(QueryError::execution(
+                        "Query memory budget exceeded during partial aggregation. Reduce GROUP BY cardinality (add LIMIT or narrower filters) or raise the query memory budget".to_string(),
+                    ));
+                }
+                Ok(())
             }
             BlockingOperatorKind::RollUpApply {
                 state,
@@ -705,7 +710,12 @@ impl BlockingOperator {
                 memory_tracker,
             ),
             BlockingOperatorKind::FinalAggregate { state, .. } => {
-                aggregate_operator::spill_final_aggregate(state)
+                if state.as_ref().is_some_and(|s| !s.group_map.is_empty()) {
+                    return Err(QueryError::execution(
+                        "Query memory budget exceeded during final aggregation. Reduce GROUP BY cardinality (add LIMIT or narrower filters) or raise the query memory budget".to_string(),
+                    ));
+                }
+                Ok(())
             }
         }
     }
