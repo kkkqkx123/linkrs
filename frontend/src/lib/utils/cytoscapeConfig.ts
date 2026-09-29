@@ -167,7 +167,7 @@ export function generateCytoscapeStyle(config: GraphStyleConfig, dark = false): 
     selector: `edge[_type="${escapeSelector(type)}"]`,
     css: {
       'line-color': style.color, 'width': getEdgeWidth(style.width),
-      'label': style.labelProperty === 'type' ? 'data(label)' : `data(label)`,
+      'label': 'data(label)',
       'target-arrow-color': style.color,
     } as cytoscape.Css.Edge,
   }));

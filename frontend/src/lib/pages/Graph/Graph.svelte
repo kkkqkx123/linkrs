@@ -1,10 +1,15 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import { t } from 'svelte-i18n';
   import { graphStore, type EdgeDetail, type NodeDetail } from '$stores/graph';
+  import { schemaStore } from '$stores/schema';
+  import { notificationStore } from '$stores/notification';
+  import { graphService } from '$services/graph';
   import { theme } from '$stores/theme';
-  import { getLayoutOptions, applyLayout } from '$utils/graphLayout';
-  import { convertToCytoscapeElements, generateCytoscapeStyle } from '$utils/cytoscapeConfig';
+  import { getLayoutOptions } from '$utils/graphLayout';
+  import { makeEdgeId } from '$utils/cytoscapeConfig';
+  import CytoscapeCanvas from '$components/common/CytoscapeCanvas.svelte';
   import type { GraphData, GraphStyleConfig, LayoutType } from '$types/graph';
   import type cytoscape from 'cytoscape';
 
@@ -21,9 +26,9 @@
   let storeZoom = $state(1);
   let stylePanelOpen = $state(false);
   let cyInstance = $state<cytoscape.Core | null>(null);
-  let containerEl = $state<HTMLDivElement>();
-  let cyInitialized = $state(false);
-  let eventsBound = $state(false);
+  let relayoutToken = $state(0);
+  let isExpanding = $state(false);
+  const expandedNodes = new Set<string>();
 
   const layoutOptions = getLayoutOptions();
 
@@ -37,6 +42,8 @@
       ),
     };
   }
+
+  const styleConfig = $derived(buildStyleConfig());
 
   onMount(() => {
     const unsubGraph = graphStore.subscribe(s => {
@@ -72,148 +79,87 @@
     return () => { unsubGraph(); unsubTheme(); };
   });
 
-  onDestroy(() => {
-    if (cyInstance) {
-      cyInstance.destroy();
-      cyInstance = null;
-    }
-    cyInitialized = false;
-    eventsBound = false;
-  });
-
-  $effect(() => {
-    if (!containerEl || !graphData) return;
-    if (!cyInitialized) {
-      void initCytoscape();
-    } else {
-      refreshStyle();
-    }
-  });
-
-  function bindEvents(cy: cytoscape.Core) {
-    if (eventsBound) return;
-    cy.on('tap', 'node', (evt) => {
-      const data = evt.target.data() as { id: string; _tag?: string; label?: string; props?: Record<string, unknown> };
-      graphStore.selectNode(data.id);
-      const detail: NodeDetail = { id: data.id, tag: data._tag || 'unknown', properties: data.props ?? {} };
-      graphStore.showDetail(detail, 'node');
-    });
-    cy.on('tap', 'edge', (evt) => {
-      const data = evt.target.data() as { id: string; source: string; target: string; _type?: string; _rank?: number; props?: Record<string, unknown> };
-      graphStore.selectEdge(data.id);
-      const detail: EdgeDetail = {
-        id: data.id,
-        type: data._type || 'unknown',
-        source: data.source,
-        target: data.target,
-        rank: data._rank || 0,
-        properties: data.props ?? {},
-      };
-      graphStore.showDetail(detail, 'edge');
-    });
-    cy.on('tap', (evt) => {
-      if (evt.target === cy) {
-        cy.elements().unselect();
-        graphStore.clearSelection();
-      }
-    });
-    cy.on('zoom', () => {
-      graphStore.setZoom(cy.zoom());
-    });
-    eventsBound = true;
+  function handleNodeTap(data: { id: string; _tag?: string; label?: string; props?: Record<string, unknown> }) {
+    graphStore.selectNode(data.id);
+    const detail: NodeDetail = { id: data.id, tag: data._tag || 'unknown', properties: data.props ?? {} };
+    graphStore.showDetail(detail, 'node');
+    void expandNode(data.id);
   }
 
-  async function initCytoscape() {
-    if (!containerEl || !graphData) return;
-    const cytoscape = (await import('cytoscape')).default;
-
-    if (cyInstance) {
-      cyInstance.destroy();
-      cyInstance = null;
-      eventsBound = false;
-    }
-
-    const styleConfig = buildStyleConfig();
-    const cy = cytoscape({
-      container: containerEl,
-      elements: convertToCytoscapeElements(graphData, styleConfig),
-      style: generateCytoscapeStyle(styleConfig, isDark),
-      layout: { name: 'preset' },
-      minZoom: 0.1,
-      maxZoom: 10,
-      wheelSensitivity: 0.3,
-    });
-
-    bindEvents(cy);
-    cyInstance = cy;
-    cyInitialized = true;
-    applyLayout(cy, layout, cy.elements().length);
-    if (storeZoom > 0 && storeZoom !== 1) {
-      cy.zoom(storeZoom);
-    }
+  function handleEdgeTap(data: { id: string; source: string; target: string; _type?: string; _rank?: number; props?: Record<string, unknown> }) {
+    graphStore.selectEdge(data.id);
+    const detail: EdgeDetail = {
+      id: data.id,
+      type: data._type || 'unknown',
+      source: data.source,
+      target: data.target,
+      rank: data._rank || 0,
+      properties: data.props ?? {},
+    };
+    graphStore.showDetail(detail, 'edge');
   }
 
-  function syncElements(relayout: boolean) {
-    if (!cyInstance || !graphData) return;
-    const styleConfig = buildStyleConfig();
-    const elements = convertToCytoscapeElements(graphData, styleConfig);
-    const savedZoom = cyInstance.zoom();
-    const savedPan = { ...cyInstance.pan() };
-    const existingIds = new Set(cyInstance.elements().map((el) => el.id()));
-    const nextIds = new Set(elements.map((el) => String((el.data as { id: string }).id)));
-    cyInstance.batch(() => {
-      cyInstance?.elements().filter((el) => !nextIds.has(el.id())).remove();
-      const toAdd = elements.filter((el) => !existingIds.has(String((el.data as { id: string }).id)));
-      if (toAdd.length > 0) cyInstance?.add(toAdd);
-      for (const el of elements) {
-        const id = String((el.data as { id: string }).id);
-        const existing = cyInstance?.getElementById(id);
-        if (existing && existing.nonempty()) {
-          existing.data('label', (el.data as { label: string }).label);
-        }
-      }
-    });
-    cyInstance.zoom(savedZoom);
-    cyInstance.pan(savedPan);
-    if (relayout) {
-      applyLayout(cyInstance, layout, cyInstance.elements().length);
-    }
+  function handleBackgroundTap() {
+    if (cyInstance) cyInstance.elements().unselect();
+    graphStore.clearSelection();
   }
 
-  function refreshStyle() {
-    if (!cyInstance) return;
-    cyInstance.style(generateCytoscapeStyle(buildStyleConfig(), isDark));
-    syncElements(false);
+  async function expandNode(id: string) {
+    if (expandedNodes.has(id)) return;
+    const space = get(schemaStore).currentSpace;
+    if (!space) {
+      notificationStore.warning('Select a space before expanding neighbors');
+      return;
+    }
+    expandedNodes.add(id);
+    isExpanding = true;
+    try {
+      const neighbors = await graphService.vertices.getNeighbors(id, space);
+      const nodes = neighbors.map((n) => ({ id: String(n.vid), tag: 'unknown', properties: {} }));
+      const edges = neighbors.map((n) => {
+        const source = n.direction === 'OUT' ? id : String(n.vid);
+        const target = n.direction === 'OUT' ? String(n.vid) : id;
+        return {
+          id: makeEdgeId(source, target, n.edge_type, n.rank),
+          type: n.edge_type,
+          source,
+          target,
+          rank: n.rank,
+          properties: {},
+        };
+      });
+      graphStore.mergeGraphData({ nodes, edges });
+      relayoutToken += 1;
+    } catch (err) {
+      expandedNodes.delete(id);
+      notificationStore.error('Failed to load neighbors', err instanceof Error ? err.message : undefined);
+    } finally {
+      isExpanding = false;
+    }
   }
 
   function handleLayoutChange(e: Event) {
     const val = (e.target as HTMLSelectElement).value as LayoutType;
     graphStore.setLayout(val);
     layout = val;
-    if (cyInstance) {
-      applyLayout(cyInstance, val, cyInstance.elements().length);
-    }
   }
 
   function handleClearGraph() {
     graphStore.clearGraphData();
     graphStore.hideDetail();
+    expandedNodes.clear();
     if (cyInstance) {
       cyInstance.elements().remove();
     }
   }
 
   function handleFitToScreen() {
-    if (cyInstance) {
-      cyInstance.fit(undefined, 30);
-    }
+    cyInstance?.fit(undefined, 30);
   }
 
   function handleResetZoom() {
-    if (cyInstance) {
-      cyInstance.zoom(1);
-      cyInstance.center();
-    }
+    cyInstance?.zoom(1);
+    cyInstance?.center();
   }
 
   function handleExportPng() {
@@ -243,6 +189,9 @@
       <span>🔗</span> {$t('graph.title')}
       {#if graphData}
         <span class="text-xs font-normal text-gray-500 dark:text-gray-400">{graphData.nodes.length} nodes / {graphData.edges.length} edges</span>
+      {/if}
+      {#if isExpanding}
+        <span class="text-xs font-normal text-blue-500 dark:text-blue-400">Expanding…</span>
       {/if}
     </h2>
     <div class="flex items-center gap-3">
@@ -291,7 +240,7 @@
         {/each}
       </select>
       <button
-        class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer disabled:opacity-50"
+        class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer disabled:opacity-50"
         onclick={handleClearGraph}
         disabled={!graphData}
       >
@@ -346,7 +295,19 @@
   <div class="flex-1 bg-white dark:bg-[#1C2333] rounded-lg shadow-sm flex overflow-hidden">
     <div class="flex-1 relative">
       {#if graphData}
-        <div bind:this={containerEl} class="absolute inset-0" style="min-height: 400px;"></div>
+        <CytoscapeCanvas
+          bind:cyInstance
+          data={graphData}
+          {styleConfig}
+          {layout}
+          {isDark}
+          zoom={storeZoom}
+          {relayoutToken}
+          onNodeTap={handleNodeTap}
+          onEdgeTap={handleEdgeTap}
+          onBackgroundTap={handleBackgroundTap}
+          onZoom={(z) => graphStore.setZoom(z)}
+        />
       {:else}
         <div class="absolute inset-0 flex items-center justify-center">
           <div class="text-center text-gray-400 dark:text-gray-500">

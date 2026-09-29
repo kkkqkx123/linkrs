@@ -20,7 +20,7 @@ A **lightweight single-node graph database** implemented in Rust, focusing on lo
   - **gRPC** (tonic/prost) — 77+ RPCs for high-performance access
   - **Embedded API** — Direct Rust library integration
   - **C API** — SQLite-like bindings for foreign languages (cbindgen)
-- **Web Management UI** — React + TypeScript dashboard (graphdb-studio)
+- **Web Management UI** — Svelte + TypeScript dashboard (graphdb-studio)
 - **CLI Client** — Interactive REPL via graphdb-cli
 - **Comprehensive Benchmark** — Criterion.rs-based performance measurement
 
@@ -128,7 +128,7 @@ Configuration is managed via `config.toml`:
 |------|-------------|
 | `crates/` | 11 sub-crates (8 core + migration + vector-client + cli) |
 | `src/` | Root crate: server binary, C API, library re-exports |
-| `frontend/` | graphdb-studio: React + TypeScript web UI |
+| `frontend/` | graphdb-studio: Svelte + TypeScript web UI |
 | `crates/graphdb-cli/` | Interactive CLI client |
 | `proto/` | gRPC protobuf definitions |
 | `tests/` | Integration + C API + E2E tests |
@@ -201,7 +201,7 @@ npm install
 npm run dev
 ```
 
-React + TypeScript dashboard with graph visualization (Cytoscape), Ant Design components, and i18n support.
+Svelte 5 + Vite + TypeScript dashboard with graph visualization (Cytoscape.js), Tailwind CSS styling, and i18n support.
 
 ---
 

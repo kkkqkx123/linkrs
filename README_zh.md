@@ -20,7 +20,7 @@
   - **gRPC** (tonic/prost) — 77+ RPC，高性能访问
   - **嵌入式 API** — 直接作为 Rust 库集成
   - **C API** — 类似 SQLite 的外语绑定（cbindgen）
-- **Web 管理界面** — React + TypeScript 仪表盘 (graphdb-studio)
+- **Web 管理界面** — Svelte + TypeScript 仪表盘 (graphdb-studio)
 - **CLI 客户端** — 交互式 REPL (graphdb-cli)
 - **全面基准测试** — 基于 Criterion.rs 的性能测量
 
@@ -127,7 +127,7 @@ cargo test --lib
 |------|------|
 | `crates/` | 11 个子 crate（8 个核心 + migration + vector-client + cli） |
 | `src/` | 根 crate：服务端二进制、C API、库重新导出 |
-| `frontend/` | graphdb-studio：React + TypeScript Web 界面 |
+| `frontend/` | graphdb-studio：Svelte + TypeScript Web 界面 |
 | `crates/graphdb-cli/` | 交互式 CLI 客户端 |
 | `proto/` | gRPC protobuf 定义 |
 | `tests/` | 集成测试 + C API 测试 + E2E 测试 |
@@ -200,7 +200,7 @@ npm install
 npm run dev
 ```
 
-React + TypeScript 仪表盘，支持图可视化（Cytoscape）、Ant Design 组件和国际化。
+Svelte 5 + Vite + TypeScript 仪表盘，支持图可视化（Cytoscape.js）、Tailwind CSS 样式与国际化。
 
 ---
 

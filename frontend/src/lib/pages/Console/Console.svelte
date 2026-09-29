@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
   import { get } from 'svelte/store';
   import { navigate } from 'svelte-routing';
   import { consoleStore, type QueryHistoryItem, type QueryFavoriteItem } from '$stores/console';
   import { graphStore } from '$stores/graph';
   import { formatExecutionTime, formatRowCount, formatCellValue } from '$utils/parseData';
-  import { queryResultToGraph, convertToCytoscapeElements, generateCytoscapeStyle } from '$utils/cytoscapeConfig';
-  import type cytoscape from 'cytoscape';
+  import { queryResultToGraph } from '$utils/cytoscapeConfig';
+  import CytoscapeCanvas from '$components/common/CytoscapeCanvas.svelte';
   import { exportToCSV, exportToJSON } from '$utils/export';
   import type { QueryResult, QueryError } from '$types/query';
 
@@ -36,44 +36,11 @@
     return queryResultToGraph(currentResult);
   });
 
-  let previewContainer = $state<HTMLDivElement>();
-  let previewCy = $state<cytoscape.Core | null>(null);
   let previewActive = $state(false);
-
-  const destroyPreview = () => {
-    if (previewCy) {
-      previewCy.destroy();
-      previewCy = null;
-    }
-  };
-
-  const mountPreview = async () => {
-    if (!previewContainer || !graph) return;
-    destroyPreview();
-    const cytoscape = (await import('cytoscape')).default;
-    if (!previewContainer || !graph) return;
-    previewCy = cytoscape({
-      container: previewContainer,
-      elements: convertToCytoscapeElements(graph),
-      style: generateCytoscapeStyle({ nodes: {}, edges: {} }),
-      layout: { name: 'cose', animate: false, numIter: graph.nodes.length > 200 ? 300 : 1000 },
-      minZoom: 0.1,
-      maxZoom: 10,
-      wheelSensitivity: 0.3,
-    });
-    previewCy.on('tap', (evt) => { if (evt.target === previewCy) previewCy?.elements().unselect(); });
-  };
 
   function handlePreviewToggle(open: boolean) {
     previewActive = open;
-    if (!open) destroyPreview();
   }
-
-  $effect(() => {
-    if (previewActive && previewContainer && !previewCy) {
-      void mountPreview();
-    }
-  });
 
   onMount(() => {
     const unsub = consoleStore.subscribe(s => {
@@ -122,10 +89,6 @@
     graphStore.setGraphData({ nodes: parsed.nodes, edges: parsed.edges });
     navigate('/graph');
   }
-
-  onDestroy(() => {
-    destroyPreview();
-  });
 </script>
 
 <div class="flex flex-col h-full gap-4 animate-fade-in">
@@ -258,11 +221,11 @@
                   </button>
                 </div>
               </div>
-              {#if previewActive}
-                <div class="h-80 rounded border border-gray-200 dark:border-gray-700 relative overflow-hidden">
-                  <div bind:this={previewContainer} class="absolute inset-0"></div>
-                </div>
-              {/if}
+          {#if previewActive && graph}
+            <div class="h-80 rounded border border-gray-200 dark:border-gray-700 relative overflow-hidden">
+              <CytoscapeCanvas data={graph} isDark={false} />
+            </div>
+          {/if}
             </div>
           {:else}
             <div class="flex items-center justify-center h-48 text-gray-400 text-sm">{$t('console.viewGraph')} - {$t('graph.noData')}</div>
