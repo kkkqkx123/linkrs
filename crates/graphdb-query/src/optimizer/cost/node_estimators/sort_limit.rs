@@ -36,9 +36,27 @@ impl<'a> SortLimitEstimator<'a> {
     ///
     /// Single group-count source shared with row estimation and memory
     /// budgeting. Empty keys mean global aggregation with one output row.
-    fn estimate_group_by_cardinality(&self, group_keys: &[String], input_rows: u64) -> u64 {
+    fn estimate_group_by_cardinality(
+        &self,
+        stats: &StatsView,
+        group_keys: &[String],
+        input_rows: u64,
+    ) -> u64 {
         if group_keys.is_empty() {
             return 1;
+        }
+        if let Some(space) = stats.space() {
+            let mut best: Option<u64> = None;
+            for tag in stats.manager().get_all_tags() {
+                if let Some(card) =
+                    stats.manager().get_combined_cardinality(space, Some(&tag), group_keys)
+                {
+                    best = Some(best.map_or(card, |b: u64| b.max(card)));
+                }
+            }
+            if let Some(card) = best {
+                return card.clamp(1, input_rows.max(1));
+            }
         }
         crate::optimizer::cost_based::ndv::estimate_group_count(input_rows, group_keys.len())
     }
@@ -47,7 +65,7 @@ impl<'a> SortLimitEstimator<'a> {
 impl<'a> NodeEstimator for SortLimitEstimator<'a> {
     fn estimate(
         &self,
-        _stats: &StatsView,
+        stats: &StatsView,
         node: &PlanNodeEnum,
         child_estimates: &[NodeCostEstimate],
     ) -> Result<(f64, u64), CostError> {
@@ -100,7 +118,7 @@ impl<'a> NodeEstimator for SortLimitEstimator<'a> {
 
                 // The number of aggregated output rows is based on the cardinality of the GROUP BY key (the number of keys in the HashMap).
                 let output_rows =
-                    self.estimate_group_by_cardinality(n.group_keys(), input_rows_val);
+                    self.estimate_group_by_cardinality(stats, n.group_keys(), input_rows_val);
                 Ok((cost, output_rows))
             }
             PlanNodeEnum::Dedup(_) => {
@@ -525,7 +543,11 @@ mod tests {
         let estimator = SortLimitEstimator::new(&calculator);
 
         let group_keys: Vec<String> = vec![];
-        let cardinality = estimator.estimate_group_by_cardinality(&group_keys, 100);
+        let cardinality = estimator.estimate_group_by_cardinality(
+            &calculator.stats_view(Some("test")),
+            &group_keys,
+            100,
+        );
         assert_eq!(cardinality, 1);
     }
 
@@ -535,7 +557,11 @@ mod tests {
         let estimator = SortLimitEstimator::new(&calculator);
 
         let group_keys = vec!["category".to_string()];
-        let cardinality = estimator.estimate_group_by_cardinality(&group_keys, 1000);
+        let cardinality = estimator.estimate_group_by_cardinality(
+            &calculator.stats_view(Some("test")),
+            &group_keys,
+            1000,
+        );
         assert!(cardinality >= 10);
         assert!(cardinality <= 1000);
     }
@@ -546,7 +572,11 @@ mod tests {
         let estimator = SortLimitEstimator::new(&calculator);
 
         let group_keys = vec!["category".to_string(), "type".to_string()];
-        let cardinality = estimator.estimate_group_by_cardinality(&group_keys, 1000);
+        let cardinality = estimator.estimate_group_by_cardinality(
+            &calculator.stats_view(Some("test")),
+            &group_keys,
+            1000,
+        );
         assert!(cardinality >= 10);
         assert!(cardinality <= 1000);
     }

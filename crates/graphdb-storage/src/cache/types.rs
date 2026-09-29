@@ -70,11 +70,15 @@ impl CachedVertex {
     pub fn estimated_size(&self) -> u32 {
         let mut size = std::mem::size_of::<Self>();
 
-        size += self.external_id.capacity();
+        size += self.external_id.len();
         size += self.column_starts.len() * std::mem::size_of::<Timestamp>();
+        size += self
+            .properties
+            .capacity()
+            .saturating_mul(std::mem::size_of::<(String, Value)>());
 
         for (name, value) in &self.properties {
-            size += name.capacity();
+            size += name.len();
             size += value.estimated_size();
         }
 

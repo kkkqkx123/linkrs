@@ -102,10 +102,10 @@ impl TDigest {
         let mut inserted = false;
         for i in 0..self.centroids.len() {
             if value <= self.centroids[i].0 {
-                // Merge with existing centroid
-                let (mean, weight) = self.centroids[i];
-                let new_weight = weight + weight;
-                let new_mean = (mean * weight + value * weight) / new_weight;
+                // Merge with existing centroid using the incoming weight.
+                let (mean, centroid_weight) = self.centroids[i];
+                let new_weight = centroid_weight + weight;
+                let new_mean = (mean * centroid_weight + value * weight) / new_weight;
                 self.centroids[i] = (new_mean, new_weight);
                 inserted = true;
                 break;

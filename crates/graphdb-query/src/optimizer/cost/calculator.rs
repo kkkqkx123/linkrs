@@ -524,10 +524,60 @@ impl CostCalculator {
 
     // ==================== Graph Algorithms ====================
 
+    /// Average branching factor for the given edge types.
+    ///
+    /// Averages observed average out-degrees; falls back to the configured
+    /// default when no statistics are available.
+    pub fn average_branching_factor(&self, space: Option<&str>, edge_types: &[String]) -> f64 {
+        let Some(space) = space else {
+            return self.config.strategy_thresholds.default_branching_factor;
+        };
+        if edge_types.is_empty() {
+            return self.config.strategy_thresholds.default_branching_factor;
+        }
+        let mut total = 0.0;
+        let mut count = 0u32;
+        for edge_type in edge_types {
+            if let Some(stats) = self.stats_manager.get_edge_stats(space, edge_type) {
+                if stats.avg_out_degree > 0.0 {
+                    total += stats.avg_out_degree;
+                    count += 1;
+                }
+            }
+        }
+        if count > 0 {
+            total / f64::from(count)
+        } else {
+            self.config.strategy_thresholds.default_branching_factor
+        }
+    }
+
     /// Calculating the cost of the shortest path
     pub fn calculate_shortest_path_cost(&self, start_nodes: u64, max_depth: u32) -> f64 {
-        // Complexity estimation based on BFS; single branching-factor source.
         let avg_branching = self.config.strategy_thresholds.default_branching_factor;
+        self.calculate_shortest_path_cost_with_branching(start_nodes, max_depth, avg_branching)
+    }
+
+    /// Shortest path cost for explicit edge types using observed degrees.
+    pub fn calculate_shortest_path_cost_for_edges(
+        &self,
+        space: Option<&str>,
+        edge_types: &[String],
+        start_nodes: u64,
+        max_depth: u32,
+    ) -> f64 {
+        let avg_branching = self.average_branching_factor(space, edge_types);
+        self.calculate_shortest_path_cost_with_branching(start_nodes, max_depth, avg_branching)
+    }
+
+    /// Calculating the cost of the shortest path with an explicit branching factor.
+    pub fn calculate_shortest_path_cost_with_branching(
+        &self,
+        start_nodes: u64,
+        max_depth: u32,
+        avg_branching: f64,
+    ) -> f64 {
+        // Complexity estimation based on BFS; single branching-factor source.
         let explored_nodes = start_nodes as f64 * avg_branching.powf(max_depth as f64);
         let traversal_cost = explored_nodes * self.config.edge_traversal_cost;
         let io_cost = self.calculate_io_cost(explored_nodes as u64);
@@ -540,6 +590,19 @@ impl CostCalculator {
     pub fn calculate_all_paths_cost(&self, start_nodes: u64, max_depth: u32) -> f64 {
         // The complexity of all paths is much higher than that of the shortest path.
         let base_cost = self.calculate_shortest_path_cost(start_nodes, max_depth);
+        base_cost * self.config.path_enumeration_factor
+    }
+
+    /// All paths cost for explicit edge types using observed degrees.
+    pub fn calculate_all_paths_cost_for_edges(
+        &self,
+        space: Option<&str>,
+        edge_types: &[String],
+        start_nodes: u64,
+        max_depth: u32,
+    ) -> f64 {
+        let base_cost =
+            self.calculate_shortest_path_cost_for_edges(space, edge_types, start_nodes, max_depth);
         base_cost * self.config.path_enumeration_factor
     }
 

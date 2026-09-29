@@ -108,7 +108,15 @@ impl ColumnStatsSnapshot {
                 self.distinct_count = Some(a.estimate());
                 self.hll = Some(a);
             }
-            _ => {
+            (Some(a), None) => {
+                self.distinct_count = Some(a.estimate());
+                self.hll = Some(a);
+            }
+            (None, Some(b)) => {
+                self.distinct_count = Some(b.estimate());
+                self.hll = Some(b);
+            }
+            (None, None) => {
                 self.distinct_count = None;
                 self.hll = None;
             }
@@ -242,8 +250,9 @@ mod tests {
     fn absorb_drops_partial_distinct_counts() {
         let mut acc = snap(4, None, None);
         acc.set_hll(hll_with(&[1, 2, 3]));
+        let expected = acc.distinct_count;
         acc.absorb(&snap(2, None, None));
-        assert_eq!(acc.distinct_count, None);
+        assert_eq!(acc.distinct_count, expected);
     }
 
     #[test]

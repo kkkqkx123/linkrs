@@ -375,14 +375,19 @@ fn test_estimated_size_accuracy() {
 
     let estimated = vertex.estimated_size();
     let base_size = std::mem::size_of::<CachedVertex>() as u32;
-    let external_cap = vertex.external_id.capacity() as u32;
+    let external_len = vertex.external_id.len() as u32;
+    let vec_backing =
+        vertex.properties.capacity() as u32 * std::mem::size_of::<(String, Value)>() as u32;
     let mut property_size = 0u32;
     for (name, value) in &vertex.properties {
-        property_size += name.capacity() as u32;
+        property_size += name.len() as u32;
         property_size += value.estimated_size() as u32;
     }
 
-    assert_eq!(estimated, base_size + external_cap + property_size);
+    assert_eq!(
+        estimated,
+        base_size + external_len + vec_backing + property_size
+    );
     assert!(estimated > 0);
     assert!(
         estimated < 1000,

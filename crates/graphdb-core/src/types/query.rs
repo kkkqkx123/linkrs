@@ -135,51 +135,6 @@ impl QueryStatus {
     }
 }
 
-/// Query execution statistics
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct QueryStats {
-    /// Total execution time in milliseconds
-    pub execution_time_ms: u64,
-    /// Time spent in planning phase
-    pub planning_time_ms: u64,
-    /// Time spent in execution phase
-    pub query_time_ms: u64,
-    /// Number of rows returned
-    pub rows_returned: usize,
-    /// Number of rows scanned
-    pub rows_scanned: usize,
-    /// Number of index hits
-    pub index_hits: usize,
-    /// Memory usage in bytes
-    pub memory_usage: usize,
-    /// Number of cache hits
-    pub cache_hits: usize,
-    /// Number of cache misses
-    pub cache_misses: usize,
-}
-
-impl QueryStats {
-    /// Create a new query stats
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Calculate cache hit ratio
-    pub fn cache_hit_ratio(&self) -> f64 {
-        let total = self.cache_hits + self.cache_misses;
-        if total == 0 {
-            0.0
-        } else {
-            self.cache_hits as f64 / total as f64
-        }
-    }
-
-    /// Get total cache accesses
-    pub fn total_cache_accesses(&self) -> usize {
-        self.cache_hits + self.cache_misses
-    }
-}
-
 /// Query plan type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PlanType {

@@ -199,12 +199,32 @@ impl IndexSelector {
                         value.as_ref(),
                     )
                 }
-                PredicateOperator::LessThan | PredicateOperator::LessThanOrEqual => self
-                    .selectivity_estimator
-                    .estimate_less_than_selectivity(None),
-                PredicateOperator::GreaterThan | PredicateOperator::GreaterThanOrEqual => self
-                    .selectivity_estimator
-                    .estimate_greater_than_selectivity(None),
+                PredicateOperator::LessThan | PredicateOperator::LessThanOrEqual => {
+                    let bound = match &predicate.value {
+                        Expression::Literal(v) => numeric_literal_as_f64(v),
+                        _ => None,
+                    };
+                    self.selectivity_estimator.estimate_ordered_comparison(
+                        Some(space),
+                        Some(&index.schema_name),
+                        &predicate.property_name,
+                        bound,
+                        false,
+                    )
+                }
+                PredicateOperator::GreaterThan | PredicateOperator::GreaterThanOrEqual => {
+                    let bound = match &predicate.value {
+                        Expression::Literal(v) => numeric_literal_as_f64(v),
+                        _ => None,
+                    };
+                    self.selectivity_estimator.estimate_ordered_comparison(
+                        Some(space),
+                        Some(&index.schema_name),
+                        &predicate.property_name,
+                        bound,
+                        true,
+                    )
+                }
                 PredicateOperator::Like => {
                     // Try to extract patterns from the expression.
                     if let Expression::Literal(graphdb_core::value::Value::String(pattern)) =
@@ -291,6 +311,17 @@ impl Clone for IndexSelector {
             cost_calculator: self.cost_calculator.clone(),
             selectivity_estimator: self.selectivity_estimator.clone(),
         }
+    }
+}
+
+fn numeric_literal_as_f64(value: &graphdb_core::Value) -> Option<f64> {
+    match value {
+        graphdb_core::Value::SmallInt(v) => Some(*v as f64),
+        graphdb_core::Value::Int(v) => Some(*v as f64),
+        graphdb_core::Value::BigInt(v) => Some(*v as f64),
+        graphdb_core::Value::Float(v) => Some((*v).into()),
+        graphdb_core::Value::Double(v) => Some(*v),
+        _ => None,
     }
 }
 

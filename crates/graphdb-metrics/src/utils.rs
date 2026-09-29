@@ -104,10 +104,6 @@ impl CacheStats {
         self.hits() + self.misses()
     }
 
-    pub fn total(&self) -> u64 {
-        self.hits() + self.misses()
-    }
-
     pub fn hit_rate(&self) -> f64 {
         calculate_cache_hit_rate(self.hits(), self.misses())
     }

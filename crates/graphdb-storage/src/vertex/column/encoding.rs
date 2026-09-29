@@ -78,21 +78,19 @@ impl Column {
                     .unwrap_or(0),
             ) as u64;
 
-        // Compressed footprint is the sum of the per-chunk encoding
-        // metadata that the chunked record form persists.
-        let mut encoded_metadata = 0u64;
+        // Compressed footprint is the resident encoding memory across
+        // chunks, covering dictionaries, codebooks and encoded payloads.
+        let mut encoded_bytes = 0u64;
         let mut any_encoded = false;
         for chunk in self.chunks.read().iter() {
             let state = chunk.read_state();
             if state.encoding.is_encoded() {
                 any_encoded = true;
-                let mut metadata = Vec::new();
-                state.encoding.serialize_meta(&mut metadata)?;
-                encoded_metadata = encoded_metadata.saturating_add(metadata.len() as u64);
+                encoded_bytes = encoded_bytes.saturating_add(state.encoding.memory_usage() as u64);
             }
         }
         let compressed_size = if any_encoded {
-            encoded_metadata
+            encoded_bytes
         } else {
             raw_size
         };

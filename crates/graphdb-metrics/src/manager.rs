@@ -70,19 +70,12 @@ pub enum MetricType {
     StorageReadLatencyUs,
     StorageWriteLatencyUs,
     StorageErrors,
-    StorageCacheHitCount,
-    StorageCacheMissCount,
     // Transaction metrics
     TxnBeginCount,
     TxnCommitCount,
     TxnRollbackCount,
     TxnActiveCount,
     TxnConflictCount,
-    TxnConflictWriteWrite,
-    TxnConflictReadWrite,
-    TxnConflictPhantom,
-    TxnConflictSchemaGeneration,
-    TxnConflictIndexGeneration,
     TxnTimeoutCount,
     TxnDisconnectCount,
     TxnRecoveryAbortCount,
@@ -187,7 +180,6 @@ pub enum MetricType {
     DirtyPagesTotal,
     DirtyPagesCount,
     DirtyPageRatioPermille,
-    CheckpointDirtyPages,
     CheckpointStrategyIncremental,
     CheckpointStrategyHybrid,
     CheckpointStrategyFull,
@@ -677,6 +669,22 @@ impl StatsManager {
         metric.add(amount);
     }
 
+    pub fn set_space_metric_with_amount(
+        &self,
+        space_name: &str,
+        metric_type: MetricType,
+        amount: u64,
+    ) {
+        let space_map = self
+            .space_metrics
+            .entry(space_name.to_string())
+            .or_insert_with(|| Arc::new(DashMap::new()));
+        let metric = space_map
+            .entry(metric_type)
+            .or_insert_with(|| Arc::new(MetricValue::new(0)));
+        metric.set(amount);
+    }
+
     pub fn add_index_metric(&self, index_name: &str, metric_type: MetricType) {
         let index_map = self
             .index_metrics
@@ -799,7 +807,8 @@ impl StatsManager {
 
     pub fn record_failed_query(&self, mut profile: QueryProfile, error_info: ErrorInfo) {
         profile.mark_failed_with_info(error_info.clone());
-        self.record_error(error_info.error_type, error_info.error_phase);
+        self.error_stats
+            .record_error_with_context(&error_info, Some(profile.query_text.clone()));
         self.record_query_profile(profile);
     }
 
@@ -1113,16 +1122,6 @@ impl StatsManager {
 
     // ========== Storage Metrics ==========
 
-    /// Record storage cache hit or miss
-    pub fn record_storage_cache_hit(&self, hit: bool) {
-        if hit {
-            self.add_value(MetricType::StorageCacheHitCount);
-        } else {
-            self.add_value(MetricType::StorageCacheMissCount);
-        }
-    }
-
-    /// Record a storage read with latency so means are computable.
     pub fn record_storage_read(&self, latency_us: u64) {
         self.add_value(MetricType::StorageReadOps);
         self.add_value_with_amount(MetricType::StorageReadLatencyUs, latency_us);
@@ -1263,7 +1262,6 @@ impl StatsManager {
             state.oldest_event_age_ms,
         );
         self.set_value(MetricType::OutboxFrontierLag, state.frontier_lag);
-        self.set_value(MetricType::TargetFrontierLag, state.frontier_lag);
         self.set_value(MetricType::OutboxDegraded, u64::from(state.degraded));
     }
 
@@ -1273,9 +1271,10 @@ impl StatsManager {
 
     pub fn record_target_frontier_lag(&self, target: &str, lag: u64) {
         // Per-target lag uses the `target:{name}` namespace so it never
-        // collides with `space_{id}` buckets.
+        // collides with `space_{id}` buckets. Both global and per-target
+        // values are point-in-time gauges and use overwrite semantics.
         self.set_value(MetricType::TargetFrontierLag, lag);
-        self.add_space_metric_with_amount(
+        self.set_space_metric_with_amount(
             &Self::target_key(target),
             MetricType::TargetFrontierLag,
             lag,
@@ -1484,7 +1483,6 @@ impl StatsManager {
             MetricType::CheckpointTriggeredExplicit,
             MetricType::CheckpointRequestsDeduplicated,
             MetricType::CheckpointRequestsBlocked,
-            MetricType::CheckpointDirtyPages,
             MetricType::CheckpointStrategyIncremental,
             MetricType::CheckpointStrategyHybrid,
             MetricType::CheckpointStrategyFull,
@@ -1509,7 +1507,6 @@ impl StatsManager {
             (dirty as f64 / total as f64 * 1000.0) as u64
         };
         self.set_value(MetricType::DirtyPageRatioPermille, ratio_permille);
-        self.set_value(MetricType::CheckpointDirtyPages, dirty);
     }
 
     pub fn record_checkpoint_strategy_by_name(&self, strategy: &str) {
@@ -1535,7 +1532,6 @@ impl StatsManager {
             MetricType::DirtyPagesTotal,
             MetricType::DirtyPagesCount,
             MetricType::DirtyPageRatioPermille,
-            MetricType::CheckpointDirtyPages,
         ] {
             if let Some(v) = self.get_value(mt) {
                 out.insert(mt, v);

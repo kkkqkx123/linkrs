@@ -505,6 +505,8 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     /// The engine result is carried through unchanged (no row conversion):
     /// the API core layer adds only timing / count metadata. `ExecutionResult::Error`
     /// is surfaced as an internal error, all other variants pass through.
+    /// Scanned rows stay zero here because the true scan volume is owned by
+    /// executor statistics, not by the returned row count.
     fn attach_metadata(
         execution: graphdb_query::executor::base::ExecutionResult,
     ) -> CoreResult<QueryResult> {
@@ -522,7 +524,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
                 other,
                 ExecutionMetadata {
                     execution_time_ms: 0,
-                    rows_scanned: rows_returned as u64,
+                    rows_scanned: 0,
                     rows_returned: rows_returned as u64,
                     cache_hit: false,
                 },

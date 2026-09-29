@@ -158,8 +158,10 @@ impl RecordCache {
             cached_at_ts: ts,
             generation: self.label_generation(label_id),
         };
-        self.id_index_pool
-            .insert(key, value, std::mem::size_of::<IdIndexCacheValue>());
+        let weight = std::mem::size_of::<IdIndexCacheKey>()
+            .saturating_add(std::mem::size_of::<IdIndexCacheValue>())
+            .saturating_add(key.external_id.len());
+        self.id_index_pool.insert(key, value, weight);
     }
 
     pub fn remove_id_index(&self, label_id: u32, external_id: &str) {

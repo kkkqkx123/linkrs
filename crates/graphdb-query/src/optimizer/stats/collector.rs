@@ -613,7 +613,9 @@ impl StatisticsCollector {
                 }
                 for (prop_name, bucket) in distinct_per_prop.iter_mut() {
                     if let Some(v) = tag_props.get(prop_name.as_str()) {
-                        bucket.insert(ndv_key(v));
+                        if !v.is_null() {
+                            bucket.insert(ndv_key(v));
+                        }
                         if let Some(stat) = stats_per_prop.get_mut(prop_name) {
                             stat.observe_value(v);
                         }
@@ -731,7 +733,9 @@ impl StatisticsCollector {
                 }
                 for (prop_name, bucket) in distinct_per_prop.iter_mut() {
                     if let Some(v) = edge.get_property(prop_name.as_str()) {
-                        bucket.insert(ndv_key(v));
+                        if !v.is_null() {
+                            bucket.insert(ndv_key(v));
+                        }
                         if let Some(stat) = stats_per_prop.get_mut(prop_name) {
                             stat.observe_value(v);
                         }

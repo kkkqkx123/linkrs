@@ -28,22 +28,30 @@ impl<'a> GraphAlgorithmEstimator<'a> {
 impl<'a> NodeEstimator for GraphAlgorithmEstimator<'a> {
     fn estimate(
         &self,
-        _stats: &StatsView,
+        stats: &StatsView,
         node: &PlanNodeEnum,
         _child_estimates: &[NodeCostEstimate],
     ) -> Result<(f64, u64), CostError> {
         match node {
             PlanNodeEnum::ShortestPath(n) => {
                 let max_depth = n.max_step() as u32;
-                let cost = self
-                    .cost_calculator
-                    .calculate_shortest_path_cost(1, max_depth);
+                let cost = self.cost_calculator.calculate_shortest_path_cost_for_edges(
+                    stats.space(),
+                    n.edge_types(),
+                    1,
+                    max_depth,
+                );
                 // The “shortest path” function returns a single path.
                 Ok((cost, 1))
             }
             PlanNodeEnum::AllPaths(n) => {
                 let max_depth = n.max_hop() as u32;
-                let cost = self.cost_calculator.calculate_all_paths_cost(1, max_depth);
+                let cost = self.cost_calculator.calculate_all_paths_cost_for_edges(
+                    stats.space(),
+                    n.edge_types(),
+                    1,
+                    max_depth,
+                );
                 // All paths may return multiple results (estimated).
                 let output_rows = 2_u64.pow(max_depth.min(10));
                 Ok((cost, output_rows))
@@ -59,9 +67,12 @@ impl<'a> NodeEstimator for GraphAlgorithmEstimator<'a> {
             }
             PlanNodeEnum::BFSShortest(n) => {
                 let max_depth = n.steps() as u32;
-                let cost = self
-                    .cost_calculator
-                    .calculate_shortest_path_cost(1, max_depth);
+                let cost = self.cost_calculator.calculate_shortest_path_cost_for_edges(
+                    stats.space(),
+                    n.edge_types(),
+                    1,
+                    max_depth,
+                );
                 Ok((cost, 1))
             }
             _ => Err(CostError::UnsupportedNodeType(format!(

@@ -50,6 +50,21 @@ impl<S: StorageClient> MetricsStorage<S> {
             stats.record_storage_write(start.elapsed().as_micros() as u64);
         }
     }
+
+    fn timed_read<T>(
+        &self,
+        run: impl FnOnce() -> Result<T, StorageError>,
+    ) -> Result<T, StorageError> {
+        let start = std::time::Instant::now();
+        let result = run();
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_read(start);
+        result
+    }
 }
 
 impl<S: StorageClient> crate::stats_reader::ColumnStatsReader for MetricsStorage<S> {
@@ -143,25 +158,74 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         result
     }
 
+    fn get_vertex_projected(
+        &self,
+        space: &str,
+        tag: &str,
+        id: &VertexId,
+        projection: &[String],
+    ) -> Result<Option<Vertex>, StorageError> {
+        self.timed_read(|| {
+            self.inner
+                .get_vertex_projected(space, tag, id, projection)
+        })
+    }
+
+    fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError> {
+        self.timed_read(|| self.inner.scan_vertices(space))
+    }
+
+    fn get_edge(
+        &self,
+        space: &str,
+        src: &VertexId,
+        dst: &VertexId,
+        edge_type: &str,
+        rank: i64,
+    ) -> Result<Option<Edge>, StorageError> {
+        self.timed_read(|| self.inner.get_edge(space, src, dst, edge_type, rank))
+    }
+
+    fn get_node_edges(
+        &self,
+        space: &str,
+        node_id: &VertexId,
+        direction: EdgeDirection,
+        edge_types: &[String],
+    ) -> Result<Vec<Edge>, StorageError> {
+        self.timed_read(|| {
+            self.inner
+                .get_node_edges(space, node_id, direction, edge_types)
+        })
+    }
+
+    fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError> {
+        self.timed_read(|| self.inner.scan_edges_by_type(space, edge_type))
+    }
+
+    fn scan_all_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError> {
+        self.timed_read(|| self.inner.scan_all_edges(space))
+    }
+
+    fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError> {
+        self.timed_read(|| self.inner.count_vertices_by_tag(space, tag))
+    }
+
+    fn count_edges_by_type(&self, space: &str, edge_type: &str) -> Result<u64, StorageError> {
+        self.timed_read(|| self.inner.count_edges_by_type(space, edge_type))
+    }
+
     forward_methods!(inner;
         fn layout_version(&self) -> u64;
         fn vertex_id_domain(&self, space: &str) -> Option<std::ops::Range<i64>>;
-        fn get_vertex_projected(&self, space: &str, tag: &str, id: &VertexId, projection: &[String]) -> Result<Option<Vertex>, StorageError>;
-        fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError>;
         fn scan_vertices_by_tag_paginated(&self, space: &str, tag: &str, offset: usize, limit: usize) -> Result<Vec<Vertex>, StorageError>;
         fn scan_vertices_by_prop(&self, space: &str, tag: &str, prop: &str, value: &Value) -> Result<Vec<Vertex>, StorageError>;
-        fn get_edge(&self, space: &str, src: &VertexId, dst: &VertexId, edge_type: &str, rank: i64) -> Result<Option<Edge>, StorageError>;
         fn get_edge_projected(&self, space: &str, src: &VertexId, dst: &VertexId, edge_type: &str, rank: i64, projection: &[String]) -> Result<Option<Edge>, StorageError>;
-        fn get_node_edges(&self, space: &str, node_id: &VertexId, direction: EdgeDirection, edge_types: &[String]) -> Result<Vec<Edge>, StorageError>;
         fn get_node_edges_projected(&self, space: &str, node_id: &VertexId, direction: EdgeDirection, edge_types: &[String], projection: Option<&[String]>, limit: Option<usize>) -> Result<Vec<Edge>, StorageError>;
         fn get_vertices_batch(&self, space: &str, tag: &str, ids: &[VertexId]) -> Result<Vec<Option<Vertex>>, StorageError>;
         fn neighbor_dst_ids_batch(&self, space: &str, src_ids: &[VertexId], direction: EdgeDirection, edge_types: &[String]) -> Result<Vec<Vec<VertexId>>, StorageError>;
         fn out_degree_batch(&self, space: &str, src_ids: &[VertexId], direction: EdgeDirection, edge_types: &[String]) -> Result<Vec<usize>, StorageError>;
-        fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>;
-        fn scan_all_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
         fn scan_edges_by_type_paginated(&self, space: &str, edge_type: &str, offset: usize, limit: usize) -> Result<Vec<Edge>, StorageError>;
-        fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError>;
-        fn count_edges_by_type(&self, space: &str, edge_type: &str) -> Result<u64, StorageError>;
         fn enable_edge_property_index(&self, space: &str, edge_type: &str, pool_capacity: u64) -> Result<bool, StorageError>;
         fn has_edge_property_index(&self, space: &str, edge_type: &str) -> Result<bool, StorageError>;
         fn disable_edge_property_index(&self, space: &str, edge_type: &str) -> Result<(), StorageError>;
@@ -253,7 +317,15 @@ impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
     );
 
     fn delete_vertex(&mut self, space: &str, tag: &str, id: &VertexId) -> Result<(), StorageError> {
-        StorageWriter::delete_vertex(&mut self.inner, space, tag, id)
+        let start = std::time::Instant::now();
+        let result = StorageWriter::delete_vertex(&mut self.inner, space, tag, id);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
     }
 
     fn delete_edge(
@@ -264,7 +336,16 @@ impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
         edge_type: &str,
         rank: i64,
     ) -> Result<(), StorageError> {
-        StorageWriter::delete_edge(&mut self.inner, space, src, dst, edge_type, rank)
+        let start = std::time::Instant::now();
+        let result =
+            StorageWriter::delete_edge(&mut self.inner, space, src, dst, edge_type, rank);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
     }
 }
 

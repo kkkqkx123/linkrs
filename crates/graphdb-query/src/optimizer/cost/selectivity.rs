@@ -197,7 +197,7 @@ impl SelectivityEstimator {
     /// Linear interpolation over `[min, max]` assuming uniform distribution:
     /// `prop > bound` covers `(max - bound) / (max - min)` of the range.
     /// Falls back to the fixed heuristics when no envelope is available.
-    fn estimate_ordered_comparison(
+    pub fn estimate_ordered_comparison(
         &self,
         space: Option<&str>,
         tag_name: Option<&str>,

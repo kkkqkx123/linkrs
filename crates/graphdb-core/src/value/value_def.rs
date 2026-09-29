@@ -341,9 +341,9 @@ impl Value {
             Value::Float(_) => std::mem::size_of::<Self>(),
             Value::Double(_) => std::mem::size_of::<Self>(),
             Value::Decimal128(_) => std::mem::size_of::<Self>(),
-            Value::String(s) => std::mem::size_of::<Self>() + s.capacity(),
-            Value::FixedString(data) => std::mem::size_of::<Self>() + data.capacity(),
-            Value::Blob(b) => std::mem::size_of::<Self>() + b.capacity(),
+            Value::String(s) => std::mem::size_of::<Self>() + s.len(),
+            Value::FixedString(data) => std::mem::size_of::<Self>() + data.len(),
+            Value::Blob(b) => std::mem::size_of::<Self>() + b.len(),
             Value::Date(_) => std::mem::size_of::<Self>(),
             Value::Time(_) => std::mem::size_of::<Self>(),
             Value::DateTime(_) => std::mem::size_of::<Self>(),
@@ -353,9 +353,7 @@ impl Value {
             Value::List(l) => std::mem::size_of::<Self>() + l.estimated_size(),
             Value::Map(m) => {
                 let mut size = std::mem::size_of::<Self>();
-                // Hash table bucket array overhead: u64 hash per entry
-                size += m.capacity()
-                    * (8 + std::mem::size_of::<Value>() + std::mem::size_of::<Value>());
+                size += m.capacity() * 8;
                 for (k, v) in m.as_ref() {
                     size += k.estimated_size();
                     size += v.estimated_size();
@@ -364,8 +362,7 @@ impl Value {
             }
             Value::Set(s) => {
                 let mut size = std::mem::size_of::<Self>();
-                // Hash table bucket array overhead: u64 hash per entry
-                size += s.capacity() * (8 + std::mem::size_of::<Value>());
+                size += s.capacity() * 8;
                 for v in s.as_ref() {
                     size += v.estimated_size();
                 }
@@ -383,7 +380,7 @@ impl Value {
             Value::Struct(s) => {
                 let mut size = std::mem::size_of::<Self>();
                 for (name, value) in &s.fields {
-                    size += name.capacity();
+                    size += name.len();
                     size += value.estimated_size();
                 }
                 size

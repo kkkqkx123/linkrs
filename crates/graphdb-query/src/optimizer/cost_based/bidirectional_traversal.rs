@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use crate::optimizer::cost::CostCalculator;
+use crate::optimizer::cost::config::DEFAULT_DEGREE_FALLBACK;
 use crate::optimizer::stats::{EdgeTypeStatistics, StatisticsManager};
 use graphdb_core::types::EdgeDirection;
 
@@ -226,8 +227,7 @@ impl BidirectionalTraversalOptimizer {
     /// Estimate the average branching factor
     fn estimate_average_branching(&self, space: &str, edge_types: &[String]) -> f64 {
         if edge_types.is_empty() {
-            // Default branching factor
-            return 2.0;
+            return DEFAULT_DEGREE_FALLBACK;
         }
 
         let mut total_branching = 0.0;
@@ -245,7 +245,7 @@ impl BidirectionalTraversalOptimizer {
         if count > 0 {
             total_branching / count as f64
         } else {
-            2.0 // Default value
+            DEFAULT_DEGREE_FALLBACK
         }
     }
 
