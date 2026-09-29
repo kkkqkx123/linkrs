@@ -4,6 +4,7 @@
 //! It is reused by the embedded layer and the network service layer.
 
 pub mod batch;
+pub mod cost_profile;
 pub mod error;
 #[cfg(feature = "fulltext")]
 pub mod fulltext_api;
@@ -21,6 +22,7 @@ pub use batch::{
     BatchConfig, BatchError, BatchItem, BatchItemType, BatchOperation, BatchOperationBuilder,
     BatchResult,
 };
+pub use cost_profile::{cost_config_for_profile, resolve_space_cost_configs};
 pub use error::{CoreError, CoreResult, ExtendedErrorCode};
 #[cfg(feature = "fulltext")]
 pub use fulltext_api::FulltextApi;

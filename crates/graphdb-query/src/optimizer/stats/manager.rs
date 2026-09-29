@@ -18,7 +18,7 @@ pub struct StatisticsManager {
     /// Tag statistics information, keyed by `"{space}.{tag_name}"`.
     tag_stats: Arc<DashMap<String, TagStatistics>>,
     /// Mapping from Tag ID to Tag Name
-    tag_id_to_name: Arc<DashMap<i32, String>>,
+    tag_id_to_name: Arc<DashMap<String, String>>,
     /// Type statistics information for edges, keyed by `"{space}.{edge_type}"`.
     edge_stats: Arc<DashMap<String, EdgeTypeStatistics>>,
     /// Attribute statistics information, keyed by `"{space}.{tag}.{property}"`.
@@ -121,19 +121,25 @@ impl StatisticsManager {
             .map(|entry| entry.clone())
     }
 
-    /// Mapping of registered tag IDs to their corresponding names
-    pub fn register_tag_id(&self, tag_id: i32, tag_name: String) {
-        self.tag_id_to_name.insert(tag_id, tag_name);
+    /// Mapping of registered tag IDs to their corresponding names.
+    ///
+    /// Scoped by space (`"{space}:{id}"`) so tag ids reused across spaces
+    /// cannot overwrite each other.
+    pub fn register_tag_id(&self, space: &str, tag_id: i32, tag_name: String) {
+        self.tag_id_to_name
+            .insert(format!("{space}:{tag_id}"), tag_name);
     }
 
-    /// Retrieve the tag name based on the tag ID.
-    pub fn get_tag_name_by_id(&self, tag_id: i32) -> Option<String> {
-        self.tag_id_to_name.get(&tag_id).map(|v| v.clone())
+    /// Retrieve the tag name for a tag ID in a specific space.
+    pub fn get_tag_name_by_id(&self, space: &str, tag_id: i32) -> Option<String> {
+        self.tag_id_to_name
+            .get(&format!("{space}:{tag_id}"))
+            .map(|v| v.clone())
     }
 
     /// Retrieve tag statistics based on the tag ID in a specific space.
     pub fn get_tag_stats_by_id(&self, space: &str, tag_id: i32) -> Option<TagStatistics> {
-        let tag_name = self.get_tag_name_by_id(tag_id)?;
+        let tag_name = self.get_tag_name_by_id(space, tag_id)?;
         self.get_tag_stats(space, &tag_name)
     }
 
@@ -330,10 +336,13 @@ mod tests {
     #[test]
     fn test_register_and_get_tag_id() {
         let manager = StatisticsManager::new();
-        manager.register_tag_id(1, "person".to_string());
+        manager.register_tag_id(TEST_SPACE, 1, "person".to_string());
 
-        assert_eq!(manager.get_tag_name_by_id(1), Some("person".to_string()));
-        assert_eq!(manager.get_tag_name_by_id(2), None);
+        assert_eq!(
+            manager.get_tag_name_by_id(TEST_SPACE, 1),
+            Some("person".to_string())
+        );
+        assert_eq!(manager.get_tag_name_by_id(TEST_SPACE, 2), None);
     }
 
     #[test]
@@ -368,7 +377,7 @@ mod tests {
     #[test]
     fn test_get_tag_stats_by_id() {
         let manager = StatisticsManager::new();
-        manager.register_tag_id(10, "product".to_string());
+        manager.register_tag_id(TEST_SPACE, 10, "product".to_string());
 
         let mut stats = TagStatistics::new("product".to_string());
         stats.vertex_count = 2000;
@@ -383,7 +392,7 @@ mod tests {
     #[test]
     fn test_get_vertex_count_by_id() {
         let manager = StatisticsManager::new();
-        manager.register_tag_id(5, "category".to_string());
+        manager.register_tag_id(TEST_SPACE, 5, "category".to_string());
 
         let mut stats = TagStatistics::new("category".to_string());
         stats.vertex_count = 100;
@@ -574,6 +583,22 @@ mod tests {
         assert_eq!(all_edge_types.len(), 2);
         assert!(all_edge_types.contains(&"follows".to_string()));
         assert!(all_edge_types.contains(&"works_at".to_string()));
+    }
+
+    #[test]
+    fn test_tag_id_isolated_by_space() {
+        let manager = StatisticsManager::new();
+        manager.register_tag_id("a", 7, "person".to_string());
+        manager.register_tag_id("b", 7, "company".to_string());
+
+        assert_eq!(
+            manager.get_tag_name_by_id("a", 7),
+            Some("person".to_string())
+        );
+        assert_eq!(
+            manager.get_tag_name_by_id("b", 7),
+            Some("company".to_string())
+        );
     }
 
     #[test]

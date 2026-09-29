@@ -91,6 +91,11 @@ pub struct PhysicalPlanBuildContext {
     /// EXPLAIN diagnostics can surface why the optimizer chose a shape.
     pub cbo_notes: Vec<String>,
 
+    /// Effective statistics collection settings (sampling window and
+    /// refresh threshold) copied from the pipeline into the built
+    /// [`PhysicalPlan`] so EXPLAIN diagnostics can surface them.
+    pub statistics_summary: String,
+
     // ── Allocators ──
     pub(crate) operator_id_alloc: PhysicalOperatorIdAllocator,
     pub(crate) fragment_id_alloc: FragmentIdAllocator,
@@ -120,6 +125,7 @@ impl PhysicalPlanBuildContext {
             partition_spec: None,
             parallel_fallback_reason: String::new(),
             cbo_notes: Vec::new(),
+            statistics_summary: String::new(),
             operator_id_alloc: PhysicalOperatorIdAllocator::new(),
             fragment_id_alloc: FragmentIdAllocator::new(),
         }
@@ -136,6 +142,7 @@ impl PhysicalPlanBuildContext {
             partition_spec: None,
             parallel_fallback_reason: String::new(),
             cbo_notes: Vec::new(),
+            statistics_summary: String::new(),
             operator_id_alloc: PhysicalOperatorIdAllocator::new(),
             fragment_id_alloc: FragmentIdAllocator::new(),
         }

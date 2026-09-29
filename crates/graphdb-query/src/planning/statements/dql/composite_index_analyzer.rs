@@ -257,16 +257,11 @@ impl ColumnStats {
 }
 
 impl CompositeIndexAnalyzer {
-    pub fn new() -> Self {
+    pub fn new(cost_config: CostModelConfig) -> Self {
         Self {
-            cost_config: CostModelConfig::default(),
+            cost_config,
             column_stats: HashMap::new(),
         }
-    }
-
-    pub fn with_cost_config(mut self, config: CostModelConfig) -> Self {
-        self.cost_config = config;
-        self
     }
 
     pub fn add_column_stats(&mut self, stats: ColumnStats) {
@@ -507,12 +502,6 @@ impl CompositeIndexAnalyzer {
     }
 }
 
-impl Default for CompositeIndexAnalyzer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub fn extract_predicates_from_expression(expr: &Expression) -> Vec<PredicateInfo> {
     let mut predicates = Vec::new();
     extract_predicates_recursive(expr, &mut predicates);
@@ -681,7 +670,7 @@ mod tests {
 
     #[test]
     fn test_composite_index_full_match() {
-        let analyzer = CompositeIndexAnalyzer::new();
+        let analyzer = CompositeIndexAnalyzer::new(CostModelConfig::default());
         let index = create_composite_index("idx_name_age", vec!["name", "age"]);
         let predicates = vec![
             PredicateInfo::equal("name".to_string(), Value::string("Alice")),
@@ -697,7 +686,7 @@ mod tests {
 
     #[test]
     fn test_composite_index_prefix_range() {
-        let analyzer = CompositeIndexAnalyzer::new();
+        let analyzer = CompositeIndexAnalyzer::new(CostModelConfig::default());
         let index = create_composite_index("idx_name_age", vec!["name", "age"]);
         let predicates = vec![
             PredicateInfo::equal("name".to_string(), Value::string("Alice")),
@@ -716,7 +705,7 @@ mod tests {
 
     #[test]
     fn test_composite_index_partial() {
-        let analyzer = CompositeIndexAnalyzer::new();
+        let analyzer = CompositeIndexAnalyzer::new(CostModelConfig::default());
         let index = create_composite_index("idx_name_age_city", vec!["name", "age", "city"]);
         let predicates = vec![
             PredicateInfo::equal("name".to_string(), Value::string("Alice")),
@@ -732,7 +721,7 @@ mod tests {
 
     #[test]
     fn test_select_optimal_index() {
-        let analyzer = CompositeIndexAnalyzer::new();
+        let analyzer = CompositeIndexAnalyzer::new(CostModelConfig::default());
         let indexes = vec![
             create_composite_index("idx_name_age", vec!["name", "age"]),
             create_single_index("idx_name", "name"),
@@ -748,7 +737,7 @@ mod tests {
 
     #[test]
     fn test_single_column_selection() {
-        let analyzer = CompositeIndexAnalyzer::new();
+        let analyzer = CompositeIndexAnalyzer::new(CostModelConfig::default());
         let indexes = vec![create_single_index("idx_name", "name")];
         let predicates = vec![PredicateInfo::equal(
             "name".to_string(),
@@ -767,7 +756,7 @@ mod tests {
 
     #[test]
     fn test_prune_null_only_column() {
-        let mut analyzer = CompositeIndexAnalyzer::new();
+        let mut analyzer = CompositeIndexAnalyzer::new(CostModelConfig::default());
         let mut stats = ColumnStats::new("status".to_string(), 0, 100);
         stats.null_count = 100;
         analyzer.add_column_stats(stats);
@@ -786,7 +775,7 @@ mod tests {
 
     #[test]
     fn test_prune_range_no_overlap() {
-        let mut analyzer = CompositeIndexAnalyzer::new();
+        let mut analyzer = CompositeIndexAnalyzer::new(CostModelConfig::default());
         let mut stats = ColumnStats::new("age".to_string(), 50, 100);
         stats.min_value = Some(Value::Int(20));
         stats.max_value = Some(Value::Int(30));

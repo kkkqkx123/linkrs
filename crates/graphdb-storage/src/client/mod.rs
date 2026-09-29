@@ -852,6 +852,14 @@ pub trait StorageSnapshotOps: Send + Sync + std::fmt::Debug {
 }
 
 /// Storing statistical information
+///
+/// Size semantics: `total_size_bytes` is allocated bytes (vertex tables plus
+/// edge tables, including holes and encoding overhead); `data_size_bytes` is
+/// the live-data estimate; `index_size_bytes` is the derived residual
+/// `total - data` (fragmentation plus overhead), not an independent index
+/// measurement. Row counts mix censuses: vertices count allocated slots while
+/// edges count live rows; use the optimizer snapshots for consistent live
+/// counts.
 #[derive(Debug, Clone)]
 pub struct StorageStats {
     pub total_vertices: usize,

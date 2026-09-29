@@ -2,17 +2,20 @@
 //!
 //! Provides transport layer independent query execution
 
+use super::cost_profile::cost_config_for_profile;
 use crate::api_core::error::{CoreError, CoreResult};
 use crate::api_core::types::{ExecutionMetadata, QueryRequest, QueryResult};
 use crate::storage::{
     AutoCommitBatchOps, AutoCommitGroupOps, QueryStorage, StorageClient, StorageOperationContext,
 };
+use graphdb_config::{RuntimeConfig, StorageCostProfile};
 use graphdb_core::metadata::SchemaManager;
 use graphdb_metrics::StatsManager;
 use graphdb_query::executor::streaming::pool::SharedScheduler;
 use graphdb_query::executor::streaming::query_registry::QueryRegistry;
 use graphdb_query::executor::streaming::StreamingQueryResult;
 use graphdb_query::experimental_pipeline_extensions::ExtensionRegistry;
+use graphdb_query::optimizer::CostModelConfig;
 use graphdb_query::query_manager::QueryManager;
 use graphdb_query::{OptimizerEngine, QueryPipelineManager};
 #[cfg(feature = "vector")]
@@ -20,6 +23,7 @@ use graphdb_sync::backend::VectorBackend;
 use graphdb_sync::SyncManager;
 use graphdb_transaction::TransactionExecution;
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -29,15 +33,21 @@ pub struct QueryApi<S: StorageClient + 'static> {
 }
 
 impl<S: StorageClient + Clone + 'static> QueryApi<S> {
+    /// Shared assembly core: every public constructor delegates here so the
+    /// optimizer engine wiring cannot drift between constructors.
+    fn pipeline_with_engine(
+        storage: Arc<RwLock<S>>,
+        stats_manager: Arc<StatsManager>,
+        optimizer_engine: Arc<OptimizerEngine>,
+    ) -> QueryPipelineManager<S> {
+        QueryPipelineManager::with_optimizer(storage, stats_manager, optimizer_engine)
+    }
+
     /// Create a new QueryApi instance with external StatsManager
     pub fn new(storage: Arc<RwLock<S>>, stats_manager: Arc<StatsManager>) -> Self {
         let optimizer_engine = Arc::new(OptimizerEngine::default());
         Self {
-            pipeline_manager: QueryPipelineManager::with_optimizer(
-                storage,
-                stats_manager,
-                optimizer_engine,
-            ),
+            pipeline_manager: Self::pipeline_with_engine(storage, stats_manager, optimizer_engine),
         }
     }
 
@@ -49,12 +59,8 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     ) -> Self {
         let optimizer_engine = Arc::new(OptimizerEngine::default());
         Self {
-            pipeline_manager: QueryPipelineManager::with_optimizer(
-                storage,
-                stats_manager,
-                optimizer_engine,
-            )
-            .with_sync_manager(sync_manager),
+            pipeline_manager: Self::pipeline_with_engine(storage, stats_manager, optimizer_engine)
+                .with_sync_manager(sync_manager),
         }
     }
 
@@ -67,12 +73,8 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         let optimizer_engine = Arc::new(OptimizerEngine::default());
 
         Self {
-            pipeline_manager: QueryPipelineManager::with_optimizer(
-                storage,
-                stats_manager,
-                optimizer_engine,
-            )
-            .with_schema_manager(schema_manager),
+            pipeline_manager: Self::pipeline_with_engine(storage, stats_manager, optimizer_engine)
+                .with_schema_manager(schema_manager),
         }
     }
 
@@ -86,13 +88,9 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         let optimizer_engine = Arc::new(OptimizerEngine::default());
 
         Self {
-            pipeline_manager: QueryPipelineManager::with_optimizer(
-                storage,
-                stats_manager,
-                optimizer_engine,
-            )
-            .with_schema_manager(schema_manager)
-            .with_sync_manager(sync_manager),
+            pipeline_manager: Self::pipeline_with_engine(storage, stats_manager, optimizer_engine)
+                .with_schema_manager(schema_manager)
+                .with_sync_manager(sync_manager),
         }
     }
 
@@ -105,8 +103,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         optimizer_engine: Arc<OptimizerEngine>,
         schema_manager: Option<Arc<SchemaManager>>,
     ) -> Self {
-        let pipeline =
-            QueryPipelineManager::with_optimizer(storage, stats_manager, optimizer_engine);
+        let pipeline = Self::pipeline_with_engine(storage, stats_manager, optimizer_engine);
         let pipeline = match schema_manager {
             Some(sm) => pipeline.with_schema_manager(sm),
             None => pipeline,
@@ -114,6 +111,95 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         Self {
             pipeline_manager: pipeline,
         }
+    }
+
+    /// Apply an explicit cost model configuration, replacing the default
+    /// engine built by the constructors.
+    ///
+    /// Assembly-time only: call before the first query. The replacement
+    /// engine is freshly built, exactly like the constructor default;
+    /// previously installed per-space overrides are carried over.
+    pub fn with_cost_config(mut self, config: CostModelConfig) -> Self {
+        let spaces = self
+            .pipeline_manager
+            .optimizer_engine()
+            .space_cost_configs();
+        let engine = OptimizerEngine::new(config);
+        engine.set_space_cost_configs(spaces);
+        self.pipeline_manager.set_optimizer_engine(Arc::new(engine));
+        self
+    }
+
+    /// Apply a storage cost profile with runtime knowledge.
+    ///
+    /// Memory-mode deployments short-circuit to the in-memory preset without
+    /// touching the filesystem; embedded in-memory users must call this (or
+    /// [`Self::with_cost_config`]), otherwise the constructor default prices
+    /// queries with mechanical-drive costs.
+    pub fn with_cost_profile(
+        mut self,
+        profile: StorageCostProfile,
+        runtime: &RuntimeConfig,
+    ) -> Self {
+        let resolved = profile.resolve_for_runtime(runtime);
+        self = self.with_cost_config(cost_config_for_profile(resolved));
+        self.pipeline_manager
+            .set_default_cost_profile_label(format!("{resolved:?}"));
+        self
+    }
+
+    /// Apply per-space storage cost profile overrides.
+    ///
+    /// Spaces absent from the map keep the global profile; memory-mode
+    /// deployments short-circuit every space to the in-memory preset.
+    /// Assembly-time only: call before the first query.
+    pub fn with_space_cost_profiles(
+        mut self,
+        profiles: &HashMap<String, StorageCostProfile>,
+        runtime: &RuntimeConfig,
+    ) -> Self {
+        let (configs, labels) = super::cost_profile::resolve_space_cost_configs(profiles, runtime);
+        self.pipeline_manager
+            .set_space_cost_configs(configs, labels);
+        self
+    }
+
+    /// Override the global cost profile display label (assembly-time only).
+    ///
+    /// Used by assemblies that build their own engine (e.g. the network
+    /// server with extra engine settings) so EXPLAIN still names the
+    /// effective profile.
+    pub fn with_default_cost_profile_label(mut self, label: String) -> Self {
+        self.pipeline_manager.set_default_cost_profile_label(label);
+        self
+    }
+
+    /// Effective cost model configuration currently in force.
+    pub fn cost_config(&self) -> CostModelConfig {
+        *self.pipeline_manager.optimizer_engine().cost_config()
+    }
+
+    /// Apply the server-configured statistics collection settings to the
+    /// pipeline (sampling window and automatic-refresh epoch delta).
+    ///
+    /// The pipeline keeps fallback defaults when this is never called, so
+    /// embedded users without server config are unaffected.
+    pub fn with_statistics_settings(mut self, sample_limit: usize, min_epoch_delta: u64) -> Self {
+        self.pipeline_manager = self
+            .pipeline_manager
+            .with_statistics_sample_limit(sample_limit)
+            .with_statistics_min_epoch_delta(min_epoch_delta);
+        self
+    }
+
+    /// Effective statistics sampling window currently in force.
+    pub fn statistics_sample_limit(&self) -> usize {
+        self.pipeline_manager.statistics_sample_limit()
+    }
+
+    /// Effective statistics refresh epoch delta currently in force.
+    pub fn statistics_min_epoch_delta(&self) -> u64 {
+        self.pipeline_manager.statistics_min_epoch_delta()
     }
 
     /// Install a shared scheduler and query registry into an existing
@@ -196,7 +282,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
 
         // Create pipeline manager with vector coordinator and optional schema manager
         let mut pipeline_manager =
-            QueryPipelineManager::with_optimizer(storage, stats_manager, optimizer_engine);
+            Self::pipeline_with_engine(storage, stats_manager, optimizer_engine);
 
         if let Some(sm) = schema_manager {
             pipeline_manager = pipeline_manager
@@ -657,5 +743,127 @@ where
             }
         }
         results
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::MockStorage;
+
+    fn create_mock_storage() -> Arc<RwLock<MockStorage>> {
+        Arc::new(RwLock::new(
+            MockStorage::new().expect("Failed to create MockStorage"),
+        ))
+    }
+
+    #[test]
+    fn statistics_settings_default_to_pipeline_fallbacks() {
+        let api = QueryApi::new(create_mock_storage(), Arc::new(StatsManager::new()));
+        assert_eq!(
+            api.statistics_sample_limit(),
+            graphdb_query::QueryPipelineManager::<MockStorage>::DEFAULT_STATISTICS_SAMPLE_LIMIT
+        );
+        assert_eq!(
+            api.statistics_min_epoch_delta(),
+            graphdb_query::QueryPipelineManager::<MockStorage>::DEFAULT_STATISTICS_MIN_EPOCH_DELTA
+        );
+    }
+
+    #[test]
+    fn statistics_settings_override_reaches_pipeline() {
+        let api = QueryApi::new(create_mock_storage(), Arc::new(StatsManager::new()))
+            .with_statistics_settings(500, 10);
+        assert_eq!(api.statistics_sample_limit(), 500);
+        assert_eq!(api.statistics_min_epoch_delta(), 10);
+    }
+
+    #[test]
+    fn statistics_sample_limit_clamps_to_one() {
+        let api = QueryApi::new(create_mock_storage(), Arc::new(StatsManager::new()))
+            .with_statistics_settings(0, 0);
+        assert_eq!(api.statistics_sample_limit(), 1);
+        assert_eq!(api.statistics_min_epoch_delta(), 0);
+    }
+
+    #[test]
+    fn cost_config_defaults_to_engine_default() {
+        let api = QueryApi::new(create_mock_storage(), Arc::new(StatsManager::new()));
+        assert_eq!(
+            api.cost_config().random_page_cost,
+            graphdb_query::optimizer::CostModelConfig::default().random_page_cost
+        );
+    }
+
+    #[test]
+    fn cost_profile_memory_runtime_reaches_engine() {
+        let api = QueryApi::new(create_mock_storage(), Arc::new(StatsManager::new()))
+            .with_cost_profile(StorageCostProfile::Auto, &RuntimeConfig::memory());
+        assert_eq!(
+            api.cost_config().random_page_cost,
+            graphdb_query::optimizer::CostModelConfig::for_in_memory().random_page_cost
+        );
+    }
+
+    #[test]
+    fn space_overrides_reach_engine_calculators() {
+        use std::collections::HashMap;
+
+        let mut profiles = HashMap::new();
+        profiles.insert("cold".to_string(), StorageCostProfile::Hdd);
+        let api = QueryApi::new(create_mock_storage(), Arc::new(StatsManager::new()))
+            .with_cost_profile(StorageCostProfile::Ssd, &RuntimeConfig::memory())
+            .with_space_cost_profiles(&profiles, &RuntimeConfig::memory());
+        // Memory runtime short-circuits the Hdd override to in-memory.
+        assert_eq!(
+            api.cost_config().random_page_cost,
+            graphdb_query::optimizer::CostModelConfig::for_in_memory().random_page_cost
+        );
+        let engine = api.pipeline_manager.optimizer_engine();
+        assert_eq!(
+            engine
+                .cost_calculator_for(Some("cold"))
+                .config()
+                .random_page_cost,
+            graphdb_query::optimizer::CostModelConfig::for_in_memory().random_page_cost
+        );
+    }
+
+    #[test]
+    fn cost_config_rebuild_preserves_space_overrides() {
+        use std::collections::HashMap;
+
+        let mut profiles = HashMap::new();
+        profiles.insert("cold".to_string(), StorageCostProfile::Hdd);
+        let runtime = RuntimeConfig::file("/tmp/linkrs-test-data");
+        let api = QueryApi::new(create_mock_storage(), Arc::new(StatsManager::new()))
+            .with_space_cost_profiles(&profiles, &runtime)
+            .with_cost_config(graphdb_query::optimizer::CostModelConfig::for_ssd());
+        let engine = api.pipeline_manager.optimizer_engine();
+        // Undetectable dir falls back to Ssd; the Hdd space override survives
+        // the engine rebuild and still prices random pages at 4.0.
+        assert_eq!(
+            engine
+                .cost_calculator_for(Some("cold"))
+                .config()
+                .random_page_cost,
+            graphdb_query::optimizer::CostModelConfig::for_hdd().random_page_cost
+        );
+        assert_eq!(
+            engine
+                .cost_calculator_for(Some("hot"))
+                .config()
+                .random_page_cost,
+            graphdb_query::optimizer::CostModelConfig::for_ssd().random_page_cost
+        );
+    }
+    #[test]
+    fn memory_runtime_short_circuits_explicit_preset() {
+        let api = QueryApi::new(create_mock_storage(), Arc::new(StatsManager::new()))
+            .with_cost_profile(StorageCostProfile::Hdd, &RuntimeConfig::memory());
+        assert_eq!(
+            api.cost_config().random_page_cost,
+            graphdb_query::optimizer::CostModelConfig::for_in_memory().random_page_cost
+        );
     }
 }

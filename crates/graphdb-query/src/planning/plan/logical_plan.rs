@@ -32,6 +32,12 @@ pub struct LogicalPlan {
     pub kind: StatementKind,
     /// Logical output schema: column names visible after this plan.
     pub output_column_names: Vec<String>,
+    /// The query carried a user `USING JOIN` hint.
+    ///
+    /// The planning join-order enumerator honors the hinted shape; the
+    /// cost-based reviewer must never overturn it, so the engine skips
+    /// join-order review for flagged plans.
+    pub join_order_hinted: bool,
 }
 
 impl LogicalPlan {
@@ -41,6 +47,7 @@ impl LogicalPlan {
             root,
             kind: StatementKind::Other,
             output_column_names,
+            join_order_hinted: false,
         }
     }
 

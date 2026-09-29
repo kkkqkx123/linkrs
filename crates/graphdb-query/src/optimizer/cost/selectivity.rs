@@ -485,10 +485,29 @@ impl SelectivityEstimator {
                 let inner = self.estimate_from_expression(space, expr, tag_name);
                 self.estimate_not_selectivity(inner)
             }
-            UnaryOperator::IsNull => defaults::IS_NULL,
-            UnaryOperator::IsNotNull => defaults::IS_NOT_NULL,
+            UnaryOperator::IsNull => self
+                .null_fraction_for(space, tag_name, expr)
+                .unwrap_or(defaults::IS_NULL),
+            UnaryOperator::IsNotNull => self
+                .null_fraction_for(space, tag_name, expr)
+                .map(|f| 1.0 - f)
+                .unwrap_or(defaults::IS_NOT_NULL),
             _ => defaults::EQUALITY,
         }
+    }
+
+    /// Null fraction for the column referenced by a unary operand, if tracked.
+    fn null_fraction_for(
+        &self,
+        space: Option<&str>,
+        tag_name: Option<&str>,
+        expr: &Expression,
+    ) -> Option<f64> {
+        let space = space?;
+        let property = self.extract_property_name(expr)?;
+        self.stats_manager
+            .get_property_stats(space, tag_name, &property)
+            .and_then(|s| s.null_fraction())
     }
 
     /// Estimating the selectivity of function expressions

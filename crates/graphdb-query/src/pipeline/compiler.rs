@@ -41,6 +41,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .optimizer_engine
             .optimize_with_layout(plan, space_name, &layout_info)
             .map_err(|e| DBError::from(QueryError::pipeline_optimization_error(e)))?;
+        // Record the effective cost profile so EXPLAIN shows which pricing
+        // produced the plan. Unassembled pipelines carry no label and stay
+        // silent.
+        if let Some(label) = self.cost_profile_label_for(space_name) {
+            optimized.cbo_notes.push(format!(
+                "cost_profile: {} (space '{}')",
+                label,
+                space_name.unwrap_or_default()
+            ));
+        }
         let cfg = self.optimizer_engine.partitioning_config();
         optimized.set_max_workers(cfg.max_workers.max(1));
         optimized.set_max_buffered_chunks(cfg.max_buffered_chunks.max(1));
@@ -139,9 +149,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // one. Physical-only plans are left as-is here; the optimizer owns
         // the single reverse-conversion bridge and records its decision.
         if let Some(logical_root) = sub_plan.logical_root().cloned() {
-            execution_plan.set_logical_plan(crate::planning::plan::logical_plan::LogicalPlan::new(
-                logical_root,
-            ));
+            let mut logical = crate::planning::plan::logical_plan::LogicalPlan::new(logical_root);
+            // A user join hint pins the join shape: flag the logical plan so
+            // the cost-based reviewer skips it instead of overturning the
+            // requested order.
+            if let crate::binder::BoundStatement::Match(match_stmt) = bound {
+                logical.join_order_hinted = match_stmt.join_hint.is_some();
+            }
+            execution_plan.set_logical_plan(logical);
         }
 
         Ok(execution_plan)
@@ -645,6 +660,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         build_ctx.partition_spec = plan.partition_spec().cloned();
         build_ctx.parallel_fallback_reason = plan.parallel_fallback_reason.clone();
         build_ctx.cbo_notes = plan.cbo_notes.clone();
+        build_ctx.statistics_summary = self.statistics_settings_summary();
         build_ctx.statistics.per_node_row_estimates = plan.row_estimates.clone();
         let physical_plan = PhysicalPlanBuilder::build(root_node, &mut build_ctx, &exec_ctx)
             .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;

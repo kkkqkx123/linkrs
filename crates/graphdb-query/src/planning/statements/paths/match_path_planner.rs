@@ -2,6 +2,7 @@
 //!
 //! Responsible for planning the path patterns in MATCH queries and generating the traversal plans.
 
+use crate::optimizer::cost::CostModelConfig;
 use crate::planning::statements::seeks::seek_strategy_base::{
     NodePattern, SeekStrategyContext, SeekStrategySelector, SeekStrategyType,
 };
@@ -112,7 +113,7 @@ impl MatchPathPlanner {
         space_id: u64,
     ) -> Result<StartVidFinder, PlannerError> {
         let context = SeekStrategyContext::new(space_id, pattern.clone(), vec![]);
-        let selector = SeekStrategySelector::new();
+        let selector = SeekStrategySelector::new(CostModelConfig::default());
         let strategy_type = selector.select_strategy(&context);
 
         let finder = match strategy_type {

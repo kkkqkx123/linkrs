@@ -306,19 +306,38 @@ fn try_optimize_join_tree(
     let optimizer = JoinOrderOptimizer::new(std::sync::Arc::new(cost_calculator.clone()));
     let result = optimizer.optimize_join_order(&tables, &conditions);
 
+    let current_order: Vec<String> = chain.leaves.iter().map(|leaf| leaf.id.clone()).collect();
+    let min_improvement = cost_calculator
+        .config()
+        .strategy_thresholds
+        .join_reorder_min_improvement;
+    let Some(current_cost) = review_accepts_order(
+        &optimizer,
+        &tables,
+        &conditions,
+        &current_order,
+        &result,
+        min_improvement,
+    ) else {
+        return OptResult::Unchanged;
+    };
+
     log::debug!(
-        "Join order optimization: {} tables, cost={}, method={:?}, order={:?}",
+        "Join order optimization: {} tables, cost {} -> {}, method={:?}, order={:?}",
         chain.leaves.len(),
+        current_cost,
         result.total_cost,
         result.optimization_method,
         result.order,
     );
 
     let note = format!(
-        "join_order: {} tables, method={:?}, order=[{}]",
+        "join_order: {} tables, method={:?}, order=[{}], cost {:.1}->{:.1} (reviewer)",
         chain.leaves.len(),
         result.optimization_method,
-        result.order.join(", ")
+        result.order.join(", "),
+        current_cost,
+        result.total_cost,
     );
     OptResult::Changed(
         Box::new(reconstruct_join_tree_with_decisions(
@@ -732,6 +751,46 @@ fn normalize_join_algorithm(
     }
 }
 
+/// Review gate shared by the physical and logical join-chain walkers.
+///
+/// Returns the current order's cost when the proposal replaces the chain,
+/// `None` when the current shape is kept: unpriceable or non-finite costs,
+/// identical orders, and improvements within the configured review
+/// threshold (ties keep current so plans never flap between equal-cost
+/// alternatives).
+///
+/// Chains with no cost signal at all (zero row estimates) keep the legacy
+/// rebuild so algorithm decisions are still recorded for the arena builder.
+fn review_accepts_order(
+    optimizer: &JoinOrderOptimizer,
+    tables: &[TableInfo],
+    conditions: &[JoinCondition],
+    current_order: &[String],
+    result: &JoinOrderResult,
+    min_improvement: f64,
+) -> Option<f64> {
+    let current_cost = optimizer.cost_of_order(tables, conditions, current_order)?;
+    if !current_cost.is_finite() || !result.total_cost.is_finite() {
+        return None;
+    }
+    if current_cost <= 0.0 {
+        return (result.order != current_order).then_some(current_cost);
+    }
+    if result.order == current_order {
+        return None;
+    }
+    let gate = if min_improvement.is_finite() {
+        min_improvement.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    if result.total_cost < current_cost * (1.0 - gate) {
+        Some(current_cost)
+    } else {
+        None
+    }
+}
+
 fn resolve_keys_for_pair_logical(
     pair_key: &(String, String),
     pred_map: &PredMap,
@@ -829,11 +888,29 @@ fn try_optimize_join_tree_logical(
     let optimizer = JoinOrderOptimizer::new(std::sync::Arc::new(cost_calculator.clone()));
     let result = optimizer.optimize_join_order(&tables, &conditions);
 
+    let current_order: Vec<String> = chain.leaves.iter().map(|leaf| leaf.id.clone()).collect();
+    let min_improvement = cost_calculator
+        .config()
+        .strategy_thresholds
+        .join_reorder_min_improvement;
+    let Some(current_cost) = review_accepts_order(
+        &optimizer,
+        &tables,
+        &conditions,
+        &current_order,
+        &result,
+        min_improvement,
+    ) else {
+        return OptResultLogical::Unchanged;
+    };
+
     let note = format!(
-        "join_order: {} tables, method={:?}, order=[{}]",
+        "join_order: {} tables, method={:?}, order=[{}], cost {:.1}->{:.1} (reviewer)",
         chain.leaves.len(),
         result.optimization_method,
-        result.order.join(", ")
+        result.order.join(", "),
+        current_cost,
+        result.total_cost,
     );
     OptResultLogical::Changed(
         Box::new(reconstruct_join_tree_logical(root, &chain, &result)),
@@ -1098,13 +1175,26 @@ mod tests {
 
     #[test]
     fn test_keyed_chain_records_join_decision() {
-        let a = make_scan("a", 1000);
-        let b = make_scan("b", 10);
-        let join = make_hash_join(a, b, vec!["a.id"], vec!["b.id"]);
+        use crate::optimizer::stats::TagStatistics;
+        use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
 
+        // Informative leaves: the small table sorts first, so the reviewer
+        // strictly improves the order and records the algorithm decision.
         let stats = StatisticsManager::new();
+        let mut tag_scan = |tag: &str, rows: u64| {
+            let mut tag_stats = TagStatistics::new(tag.to_string());
+            tag_stats.vertex_count = rows;
+            stats.update_tag_stats("test", tag_stats);
+            let mut scan = ScanVerticesNode::new(1, "test");
+            scan.set_tag(tag);
+            PlanNodeEnum::ScanVertices(scan)
+        };
+        let a = tag_scan("a", 1000);
+        let b = tag_scan("b", 10);
+        let join = make_hash_join(a, b, vec!["scan_a.id"], vec!["scan_b.id"]);
+
         let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
-        let stats_view = StatsView::new(&stats, None);
+        let stats_view = StatsView::new(&stats, Some("test"));
         let mut notes = Vec::new();
         let mut decisions = HashMap::new();
         let optimized = walk_and_optimize_joins_with_decisions(
@@ -1130,6 +1220,139 @@ mod tests {
             "expected an executable join algorithm, got {:?}",
             algorithm
         );
+    }
+
+    #[test]
+    fn test_already_optimal_order_is_kept_without_notes() {
+        use crate::optimizer::stats::TagStatistics;
+        use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
+
+        fn tag_scan(stats: &StatisticsManager, space: &str, tag: &str, rows: u64) -> PlanNodeEnum {
+            let mut tag_stats = TagStatistics::new(tag.to_string());
+            tag_stats.vertex_count = rows;
+            stats.update_tag_stats(space, tag_stats);
+            let mut scan = ScanVerticesNode::new(1, space);
+            scan.set_tag(tag);
+            PlanNodeEnum::ScanVertices(scan)
+        }
+
+        // Small table first already: the proposal matches the chain, so the
+        // reviewer must not rebuild (pure churn) and must stay silent.
+        let stats = StatisticsManager::new();
+        let small = tag_scan(&stats, "test", "small", 10);
+        let big = tag_scan(&stats, "test", "big", 1000);
+        let join = make_hash_join(small, big, vec!["scan_small.id"], vec!["scan_big.id"]);
+
+        let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
+        let stats_view = StatsView::new(&stats, Some("test"));
+        let mut notes = Vec::new();
+        let mut decisions = HashMap::new();
+        let result = walk_and_optimize_joins_with_decisions(
+            &join,
+            &stats_view,
+            &cost_calc,
+            &mut notes,
+            &mut Some(&mut decisions),
+        );
+        assert!(matches!(result, PlanNodeEnum::InnerJoin(_)));
+        assert!(notes.is_empty(), "no-op review must stay silent: {notes:?}");
+        assert!(decisions.is_empty());
+        // Leaf order preserved: small table still leftmost.
+        match &result {
+            PlanNodeEnum::InnerJoin(n) => match n.left_input() {
+                PlanNodeEnum::ScanVertices(s) => {
+                    assert_eq!(s.tag().map(String::as_str), Some("small"))
+                }
+                other => panic!("expected left ScanVertices leaf, got {other:?}"),
+            },
+            other => panic!("expected InnerJoin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_tied_costs_keep_current_order() {
+        // Symmetric cross join: both orders cost exactly the same, so the
+        // reviewer keeps the current shape instead of flapping.
+        let a = make_scan("a", 100);
+        let b = make_scan("b", 100);
+        let join = make_hash_join(a, b, vec![], vec![]);
+
+        let stats = StatisticsManager::new();
+        let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
+        let stats_view = StatsView::new(&stats, None);
+        let mut notes = Vec::new();
+        let optimized = walk_and_optimize_joins_with_decisions(
+            &join,
+            &stats_view,
+            &cost_calc,
+            &mut notes,
+            &mut None,
+        );
+        assert!(matches!(optimized, PlanNodeEnum::InnerJoin(_)));
+        assert!(notes.is_empty(), "tied review must stay silent: {notes:?}");
+    }
+
+    #[test]
+    fn test_min_improvement_threshold_blocks_marginal_rewrite() {
+        use crate::optimizer::cost::config::CostModelConfig;
+        use crate::optimizer::stats::TagStatistics;
+        use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
+
+        fn tag_scan(stats: &StatisticsManager, space: &str, tag: &str, rows: u64) -> PlanNodeEnum {
+            let mut tag_stats = TagStatistics::new(tag.to_string());
+            tag_stats.vertex_count = rows;
+            stats.update_tag_stats(space, tag_stats);
+            let mut scan = ScanVerticesNode::new(1, space);
+            scan.set_tag(tag);
+            PlanNodeEnum::ScanVertices(scan)
+        }
+
+        let build = |stats: &StatisticsManager| {
+            let a = tag_scan(stats, "test", "a", 1000);
+            let b = tag_scan(stats, "test", "b", 10);
+            let c = tag_scan(stats, "test", "c", 2000);
+            let join1 = make_hash_join(a, b, vec!["scan_a.id"], vec!["scan_b.id"]);
+            make_hash_join(join1, c, vec!["scan_b.id"], vec!["scan_c.id"])
+        };
+
+        let stats = StatisticsManager::new();
+        let stats_view = StatsView::new(&stats, Some("test"));
+
+        // Default threshold (zero): any strict improvement rewrites.
+        let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
+        let mut notes = Vec::new();
+        let rewritten = walk_and_optimize_joins_with_decisions(
+            &build(&stats),
+            &stats_view,
+            &cost_calc,
+            &mut notes,
+            &mut None,
+        );
+        assert_eq!(notes.len(), 1, "expected one rewrite note: {notes:?}");
+        assert!(
+            notes[0].contains("cost "),
+            "rewrite note carries the cost ratio: {}",
+            notes[0]
+        );
+        let _ = rewritten;
+
+        // A demanding threshold blocks the same marginal rewrite.
+        let mut config = CostModelConfig::default();
+        config.strategy_thresholds.join_reorder_min_improvement = 0.5;
+        let cost_calc = CostCalculator::with_config(std::sync::Arc::new(stats.clone()), config);
+        let mut notes = Vec::new();
+        let kept = walk_and_optimize_joins_with_decisions(
+            &build(&stats),
+            &stats_view,
+            &cost_calc,
+            &mut notes,
+            &mut None,
+        );
+        assert!(
+            notes.is_empty(),
+            "blocked review must stay silent: {notes:?}"
+        );
+        assert!(matches!(kept, PlanNodeEnum::InnerJoin(_)));
     }
 
     #[test]
@@ -1313,15 +1536,40 @@ mod tests {
 
     #[test]
     fn test_logical_three_table_reorder_emits_note() {
-        let a = make_logical_scan("a");
-        let b = make_logical_scan("b");
-        let c = make_logical_scan("c");
-        let join1 = make_logical_hash_join(a, b, vec!["a.id"], vec!["b.id"]);
-        let join2 = make_logical_hash_join(join1, c, vec!["b.id"], vec!["c.id"]);
+        use crate::optimizer::stats::TagStatistics;
+        use crate::planning::plan::core::node_id_generator::next_node_id;
+        use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
 
+        // Informative leaves: row counts differ, so the reviewer strictly
+        // improves the order and emits its decision note.
         let stats = StatisticsManager::new();
+        let mut tag_scan = |tag: &str, rows: u64| {
+            let mut tag_stats = TagStatistics::new(tag.to_string());
+            tag_stats.vertex_count = rows;
+            stats.update_tag_stats("test", tag_stats);
+            LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+                id: next_node_id(),
+                space_id: 1,
+                space_name: "test".to_string(),
+                tag: Some(tag.to_string()),
+                expression: None,
+                limit: None,
+                projected_properties: Vec::new(),
+                index_hint: None,
+                estimated_cardinality: None,
+                output_var: None,
+                col_names: Vec::new(),
+                column_types: Vec::new(),
+            })
+        };
+        let a = tag_scan("a", 1000);
+        let b = tag_scan("b", 10);
+        let c = tag_scan("c", 2000);
+        let join1 = make_logical_hash_join(a, b, vec!["scan_a.id"], vec!["scan_b.id"]);
+        let join2 = make_logical_hash_join(join1, c, vec!["scan_b.id"], vec!["scan_c.id"]);
+
         let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
-        let stats_view = StatsView::new(&stats, None);
+        let stats_view = StatsView::new(&stats, Some("test"));
         let mut notes = Vec::new();
         let optimized =
             walk_and_optimize_joins_logical(&join2, &stats_view, &cost_calc, &mut notes);

@@ -209,6 +209,60 @@ impl JoinOrderOptimizer {
         }
     }
 
+    /// Price a given table order with the same left-deep accumulation the
+    /// DP minimizes, so the reviewer can compare the current chain against
+    /// the proposed optimum apples-to-apples.
+    ///
+    /// Returns `None` when `order` is not a permutation of `tables`
+    /// (unpriceable — the caller must keep the current shape).
+    pub fn cost_of_order(
+        &self,
+        tables: &[TableInfo],
+        conditions: &[JoinCondition],
+        order: &[String],
+    ) -> Option<f64> {
+        if order.len() != tables.len() {
+            return None;
+        }
+        let bit_to_table: HashMap<u32, &TableInfo> =
+            tables.iter().map(|t| (1u32 << t.bit_id, t)).collect();
+        let id_to_table: HashMap<&str, &TableInfo> =
+            tables.iter().map(|t| (t.id.as_str(), t)).collect();
+        let condition_map = self.build_condition_map(conditions);
+
+        let mut accumulated_mask = 0u32;
+        let mut accumulated_rows = 0u64;
+        let mut total_cost = 0.0;
+        for (position, id) in order.iter().enumerate() {
+            let Some(table) = id_to_table.get(id.as_str()) else {
+                return None;
+            };
+            if position == 0 {
+                accumulated_mask |= 1 << table.bit_id;
+                accumulated_rows = table.estimated_rows;
+                continue;
+            }
+            let table_bit = 1 << table.bit_id;
+            if accumulated_mask & table_bit != 0 {
+                return None;
+            }
+            let selectivity = self.estimate_selectivity_for_sets(
+                accumulated_mask,
+                table_bit,
+                &bit_to_table,
+                &condition_map,
+            );
+            total_cost += self
+                .cost_calculator
+                .calculate_hash_join_cost(accumulated_rows, table.estimated_rows);
+            accumulated_rows =
+                ((accumulated_rows as f64 * table.estimated_rows as f64 * selectivity) as u64)
+                    .max(1);
+            accumulated_mask |= table_bit;
+        }
+        Some(total_cost)
+    }
+
     /// Optimize the connection order using dynamic programming.
     fn optimize_with_dp(
         &self,
@@ -828,6 +882,52 @@ mod tests {
 
         assert_eq!(table.selectivity, 0.5);
         assert!(table.has_index);
+    }
+
+    #[test]
+    fn test_cost_of_order_matches_dp_total_and_rejects_non_permutation() {
+        let optimizer = create_test_optimizer();
+        let tables = vec![
+            TableInfo::new("A".to_string(), 10000).with_bit_id(0),
+            TableInfo::new("B".to_string(), 800).with_bit_id(1),
+            TableInfo::new("C".to_string(), 5000).with_bit_id(2),
+        ];
+        let conditions = vec![
+            JoinCondition::new("A".to_string(), "B".to_string()).with_selectivity(0.1),
+            JoinCondition::new("B".to_string(), "C".to_string()).with_selectivity(0.05),
+        ];
+
+        let result = optimizer.optimize_join_order(&tables, &conditions);
+        let priced = optimizer
+            .cost_of_order(&tables, &conditions, &result.order)
+            .expect("emitted order is priceable");
+        assert!((priced - result.total_cost).abs() < 1e-6 * result.total_cost.max(1.0));
+
+        // Reversed input order prices independently of the optimum.
+        let reversed = vec!["C".to_string(), "B".to_string(), "A".to_string()];
+        let reversed_cost = optimizer
+            .cost_of_order(&tables, &conditions, &reversed)
+            .expect("permutation is priceable");
+        assert!(reversed_cost >= result.total_cost);
+
+        // Unknown ids and duplicates are unpriceable, never silently priced.
+        assert!(optimizer
+            .cost_of_order(&tables, &conditions, &["A".to_string(), "B".to_string()])
+            .is_none());
+        assert!(optimizer
+            .cost_of_order(
+                &tables,
+                &conditions,
+                &["A".to_string(), "B".to_string(), "Z".to_string()]
+            )
+            .is_none());
+        assert!(optimizer
+            .cost_of_order(
+                &tables,
+                &conditions,
+                &["A".to_string(), "B".to_string(), "A".to_string()]
+            )
+            .is_none());
     }
 
     #[test]

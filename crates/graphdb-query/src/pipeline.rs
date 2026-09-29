@@ -22,6 +22,7 @@ use graphdb_metrics::StatsManager;
 use graphdb_sync::vector_sync::VectorSyncCoordinator;
 use graphdb_sync::SyncManager;
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -69,6 +70,18 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) statistics_collect_lock: Arc<parking_lot::Mutex<()>>,
     /// Sample cap for per-tag/per-edge-type degree estimation during collection.
     pub(crate) statistics_sample_limit: usize,
+    /// Minimum data-epoch advance that triggers an automatic refresh.
+    ///
+    /// The epoch bumps on every write, so without a threshold any commit
+    /// invalidates statistics and the next query pays a full re-collection.
+    /// Smaller advances reuse the last collection; explicit ANALYZE still
+    /// forces a refresh.
+    pub(crate) statistics_min_epoch_delta: u64,
+    /// Display label of the global cost profile (e.g. `Ssd`); empty until
+    /// the assembly provides one. Only used for EXPLAIN observability.
+    pub(crate) default_cost_profile_label: String,
+    /// Display labels of per-space cost profile overrides (space -> label).
+    pub(crate) space_cost_profile_labels: HashMap<String, String>,
     pub(crate) dml_shape_cache_enabled: bool,
     /// Fast path for repeated same-shape DML: skips bind and serves the last
     /// compiled physical plans directly. Bounded multi-entry map keyed by
@@ -114,6 +127,13 @@ pub(crate) struct DmlPlanMemoEntry {
 }
 
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
+    /// Fallback sampling window used when the server assembly did not pass
+    /// an explicit `statistics_sample_limit` (mirrors the config default).
+    pub const DEFAULT_STATISTICS_SAMPLE_LIMIT: usize = 10_000;
+    /// Fallback epoch delta used when the server assembly did not pass an
+    /// explicit `statistics_min_epoch_delta` (mirrors the config default).
+    pub const DEFAULT_STATISTICS_MIN_EPOCH_DELTA: u64 = 100;
+
     pub fn with_optimizer(
         storage: Arc<RwLock<S>>,
         stats_manager: Arc<StatsManager>,
@@ -149,7 +169,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             type_alias_manager: Arc::new(graphdb_core::metadata::TypeAliasManager::new()),
             session_controller: parking_lot::RwLock::new(None),
             statistics_collect_lock: Arc::new(parking_lot::Mutex::new(())),
-            statistics_sample_limit: 10_000,
+            statistics_sample_limit: Self::DEFAULT_STATISTICS_SAMPLE_LIMIT,
+            statistics_min_epoch_delta: Self::DEFAULT_STATISTICS_MIN_EPOCH_DELTA,
+            default_cost_profile_label: String::new(),
+            space_cost_profile_labels: HashMap::new(),
             dml_shape_cache_enabled: true,
             dml_plan_memo: parking_lot::Mutex::new(Vec::new()),
             last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
@@ -164,6 +187,71 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub fn with_statistics_sample_limit(mut self, sample_limit: usize) -> Self {
         self.statistics_sample_limit = sample_limit.max(1);
         self
+    }
+
+    pub fn with_statistics_min_epoch_delta(mut self, delta: u64) -> Self {
+        self.statistics_min_epoch_delta = delta;
+        self
+    }
+
+    /// Replace the optimizer engine (assembly-time only).
+    ///
+    /// Re-runs the post-construction injection so the replacement behaves
+    /// like an engine passed to [`Self::with_optimizer`]. Callers must swap
+    /// before the first query; execution-time replacement is unsupported.
+    pub fn set_optimizer_engine(&mut self, optimizer_engine: Arc<OptimizerEngine>) {
+        optimizer_engine.set_cte_cache_stats_manager(self.stats_manager.clone());
+        self.optimizer_engine = optimizer_engine;
+    }
+
+    /// Effective sampling window currently in force for statistics
+    /// collection (server config value or the fallback default).
+    pub fn statistics_sample_limit(&self) -> usize {
+        self.statistics_sample_limit
+    }
+
+    /// Effective epoch delta currently in force for automatic refresh.
+    pub fn statistics_min_epoch_delta(&self) -> u64 {
+        self.statistics_min_epoch_delta
+    }
+
+    /// One-line summary of the effective statistics settings, surfaced in
+    /// EXPLAIN diagnostics so operators can verify which sampling window
+    /// and refresh threshold produced the statistics behind a plan.
+    pub fn statistics_settings_summary(&self) -> String {
+        format!(
+            "sample_limit={}, min_epoch_delta={}",
+            self.statistics_sample_limit, self.statistics_min_epoch_delta
+        )
+    }
+
+    /// Install per-space cost model overrides on the engine, with display
+    /// labels for EXPLAIN observability (assembly-time only).
+    pub fn set_space_cost_configs(
+        &mut self,
+        configs: HashMap<String, crate::optimizer::CostModelConfig>,
+        labels: HashMap<String, String>,
+    ) {
+        self.optimizer_engine.set_space_cost_configs(configs);
+        self.space_cost_profile_labels = labels;
+    }
+
+    /// Display label of the global cost profile (assembly-time only).
+    pub fn set_default_cost_profile_label(&mut self, label: String) {
+        self.default_cost_profile_label = label;
+    }
+
+    /// Effective cost profile label for a space, if the assembly provided
+    /// one: the space override when present, else the global label.
+    /// Empty global label means unassembled: no label at all.
+    pub fn cost_profile_label_for(&self, space: Option<&str>) -> Option<String> {
+        if self.default_cost_profile_label.is_empty() {
+            return None;
+        }
+        let label = space
+            .and_then(|name| self.space_cost_profile_labels.get(name))
+            .unwrap_or(&self.default_cost_profile_label);
+        Some(label.clone())
     }
 
     /// Collect (or serve cached) statistics for a space into the optimizer's
@@ -222,10 +310,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
     /// Ensure statistics for `space` are fresh before planning.
     ///
-    /// Missing or version-mismatched stamps trigger one best-effort
-    /// collection; failures degrade to no-statistics fallbacks and never
-    /// block the query. Explicit ANALYZE remains the manual forced-refresh
-    /// entry via `collect_statistics(space, true)`.
+    /// Missing stamps trigger one best-effort collection; small data-epoch
+    /// advances below `statistics_min_epoch_delta` reuse the last collection
+    /// so write-heavy workloads do not re-sample on every commit. Failures
+    /// degrade to no-statistics fallbacks and never block the query. Explicit
+    /// ANALYZE remains the manual forced-refresh entry via
+    /// `collect_statistics(space, true)`.
     pub(crate) fn ensure_statistics(&self, space: &str) {
         let stats_manager = self.optimizer_engine.stats_manager();
         let schema_version = self
@@ -236,8 +326,21 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             None => return,
         };
         if schema_version != 0 && data_epoch != 0 {
-            if stats_manager.space_stamp(space) == Some((schema_version, data_epoch)) {
-                return;
+            match stats_manager.space_stamp(space) {
+                None => {}
+                Some((stamped_schema, stamped_epoch))
+                    if stamped_schema == schema_version && stamped_epoch == data_epoch =>
+                {
+                    return;
+                }
+                Some((stamped_schema, stamped_epoch))
+                    if stamped_schema == schema_version
+                        && data_epoch > stamped_epoch
+                        && data_epoch - stamped_epoch < self.statistics_min_epoch_delta =>
+                {
+                    return;
+                }
+                _ => {}
             }
         }
         if let Err(error) = self.collect_statistics(space, false) {
@@ -331,7 +434,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             type_alias_manager: Arc::new(graphdb_core::metadata::TypeAliasManager::new()),
             session_controller: parking_lot::RwLock::new(None),
             statistics_collect_lock: Arc::new(parking_lot::Mutex::new(())),
-            statistics_sample_limit: 10_000,
+            statistics_sample_limit: Self::DEFAULT_STATISTICS_SAMPLE_LIMIT,
+            statistics_min_epoch_delta: Self::DEFAULT_STATISTICS_MIN_EPOCH_DELTA,
+            default_cost_profile_label: String::new(),
+            space_cost_profile_labels: HashMap::new(),
             dml_shape_cache_enabled: true,
             dml_plan_memo: parking_lot::Mutex::new(Vec::new()),
             last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
@@ -461,6 +567,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             config_hash: Self::partitioning_config_hash(
                 self.optimizer_engine.partitioning_config(),
             ),
+            // Any cost configuration change (global or per-space) retires
+            // cached plans priced under the old configuration.
+            optimizer_version: self.optimizer_engine.cost_epoch(),
             ..Default::default()
         }
     }

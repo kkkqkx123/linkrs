@@ -338,6 +338,7 @@ fn empty_plan_with_hash(hash: u64) -> Arc<PhysicalPlan> {
         },
         parallel_fallback_reason: String::new(),
         cbo_notes: Vec::new(),
+        statistics_summary: String::new(),
         partition_spec: None,
     })
 }

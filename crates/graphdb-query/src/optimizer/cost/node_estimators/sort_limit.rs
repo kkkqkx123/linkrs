@@ -49,7 +49,9 @@ impl<'a> SortLimitEstimator<'a> {
             let mut best: Option<u64> = None;
             for tag in stats.manager().get_all_tags() {
                 if let Some(card) =
-                    stats.manager().get_combined_cardinality(space, Some(&tag), group_keys)
+                    stats
+                        .manager()
+                        .get_combined_cardinality(space, Some(&tag), group_keys)
                 {
                     best = Some(best.map_or(card, |b: u64| b.max(card)));
                 }

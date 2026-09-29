@@ -139,17 +139,12 @@ pub struct MultiLabelIndexSelector {
 }
 
 impl MultiLabelIndexSelector {
-    pub fn new() -> Self {
+    pub fn with_cost_model(config: CostModelConfig) -> Self {
         Self {
             label_stats: HashMap::new(),
-            cost_model: CostModelConfig::default(),
+            cost_model: config,
             total_vertices: 10000,
         }
-    }
-
-    pub fn with_cost_model(mut self, config: CostModelConfig) -> Self {
-        self.cost_model = config;
-        self
     }
 
     pub fn with_total_vertices(mut self, total: usize) -> Self {
@@ -343,12 +338,6 @@ impl MultiLabelIndexSelector {
     }
 }
 
-impl Default for MultiLabelIndexSelector {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub struct IndexRegistry {
     single_label_indexes: HashMap<String, IndexInfo>,
     composite_indexes: Vec<IndexInfo>,
@@ -450,7 +439,7 @@ mod tests {
 
     #[test]
     fn test_single_label_strategy() {
-        let selector = MultiLabelIndexSelector::new();
+        let selector = MultiLabelIndexSelector::with_cost_model(CostModelConfig::default());
         let indexes = vec![create_test_index("person_idx", "Person", 0.1)];
         let labels = vec!["Person".to_string()];
 
@@ -464,7 +453,7 @@ mod tests {
 
     #[test]
     fn test_composite_index_strategy() {
-        let selector = MultiLabelIndexSelector::new();
+        let selector = MultiLabelIndexSelector::with_cost_model(CostModelConfig::default());
         let indexes = vec![create_composite_index(
             "person_emp_idx",
             vec!["Person".to_string(), "Employee".to_string()],
@@ -482,7 +471,7 @@ mod tests {
 
     #[test]
     fn test_full_scan_strategy() {
-        let selector = MultiLabelIndexSelector::new();
+        let selector = MultiLabelIndexSelector::with_cost_model(CostModelConfig::default());
         let labels = vec!["UnknownLabel".to_string()];
 
         let strategy = selector.select_strategy(&labels, &[], &[]).unwrap();

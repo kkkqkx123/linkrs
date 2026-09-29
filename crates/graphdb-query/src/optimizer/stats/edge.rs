@@ -33,6 +33,10 @@ pub struct EdgeTypeStatistics {
     pub edge_type: String,
     /// Total number of edges
     pub edge_count: u64,
+    /// Allocated slots including deleted-but-unreclaimed holes, when the
+    /// storage engine exposes a table cardinality snapshot. `None` means
+    /// unknown and costs fall back to the live count (zero holes).
+    pub allocated_slots: Option<u64>,
     /// Average frequency of use
     pub avg_out_degree: f64,
     /// Average Indegree
@@ -63,6 +67,7 @@ impl EdgeTypeStatistics {
         Self {
             edge_type,
             edge_count: 0,
+            allocated_slots: None,
             avg_out_degree: 0.0,
             avg_in_degree: 0.0,
             max_out_degree: 0,
@@ -87,6 +92,35 @@ impl EdgeTypeStatistics {
     /// Estimate the cost of expansion
     pub fn estimate_expand_cost(&self, start_nodes: u64) -> f64 {
         start_nodes as f64 * self.avg_out_degree
+    }
+
+    /// Hole rate `1 - live / allocated`, clamped to `[0, 1)`.
+    ///
+    /// Same contract as the tag-level helper: unknown or inconsistent
+    /// snapshots report zero.
+    pub fn hole_rate(&self) -> f64 {
+        match self.allocated_slots {
+            Some(allocated)
+                if allocated > 0 && allocated > self.edge_count && self.edge_count > 0 =>
+            {
+                1.0 - (self.edge_count as f64 / allocated as f64)
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// Fill the allocated slot count from a storage table snapshot.
+    /// Snapshots that carry no rows leave the field unknown.
+    pub fn apply_table_snapshot(
+        &mut self,
+        snapshot: Option<&crate::storage::stats_reader::TableCardinalitySnapshot>,
+    ) {
+        let Some(snapshot) = snapshot else {
+            return;
+        };
+        if snapshot.allocated_slots > 0 {
+            self.allocated_slots = Some(snapshot.allocated_slots);
+        }
     }
 
     /// Determine whether there is a significant inclination.
@@ -155,5 +189,23 @@ impl EdgeTypeStatistics {
 impl Default for EdgeTypeStatistics {
     fn default() -> Self {
         Self::new(String::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hole_rate_clamps_unknown_and_inconsistent() {
+        let mut stats = EdgeTypeStatistics::new("knows".to_string());
+        assert_eq!(stats.hole_rate(), 0.0);
+
+        stats.edge_count = 1000;
+        stats.allocated_slots = Some(4000);
+        assert!((stats.hole_rate() - 0.75).abs() < 1e-9);
+
+        stats.allocated_slots = Some(10);
+        assert_eq!(stats.hole_rate(), 0.0);
     }
 }

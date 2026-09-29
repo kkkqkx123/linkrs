@@ -281,11 +281,20 @@ pub struct StrategyThresholds {
     ///
     /// TopN selectivity threshold below which TopN optimization is used. Default value 0.1
     pub topn_threshold: f64,
-
     /// TopN default limit
     ///
     /// TopN defaults to limiting the number of rows. Default value 100
     pub topn_default_limit: u64,
+
+    // ==================== Join reorder review ====================
+    /// Minimum relative improvement for the join-order reviewer.
+    ///
+    /// The reviewer rewrites a join chain only when the proposed order
+    /// costs less than `current * (1 - this)`. Zero keeps model authority
+    /// (any strict improvement wins, exact ties keep the current order so
+    /// plans never flap between equal-cost shapes); raise it to calm
+    /// replanning churn when statistics wobble. Clamped to `[0, 1)`.
+    pub join_reorder_min_improvement: f64,
 
     // ==================== Materialization Strategy ====================
     /// Maximum result rows for CTE materialization
@@ -314,9 +323,12 @@ impl Default for StrategyThresholds {
             // Traversal strategy: super-node uses CostModelConfig::super_node_threshold.
             bidirectional_savings_threshold: 0.3,
             default_branching_factor: DEFAULT_DEGREE_FALLBACK,
-            // TopN strategy: ratio 0.1 == 1/TOPN_RATIO, min rows == TOPN_MIN_ROWS.
-            topn_threshold: 0.1,
+            // TopN strategy: threshold derives from the sort-to-TopN ratio so
+            // the two spellings cannot drift apart.
+            topn_threshold: 1.0 / TOPN_RATIO as f64,
             topn_default_limit: 100,
+            // Join reorder review: any strict improvement wins by default.
+            join_reorder_min_improvement: 0.0,
             // Materialization strategy
             max_result_rows: 10000,
             min_reference_count: 2,
@@ -499,5 +511,11 @@ mod tests {
         assert_eq!(config.random_page_cost, 2.0);
         assert_eq!(config.cpu_tuple_cost, 0.02);
         assert_eq!(config.cpu_index_tuple_cost, 0.005); // “Default”
+    }
+
+    #[test]
+    fn test_join_reorder_min_improvement_defaults_to_zero() {
+        let config = CostModelConfig::default();
+        assert_eq!(config.strategy_thresholds.join_reorder_min_improvement, 0.0);
     }
 }

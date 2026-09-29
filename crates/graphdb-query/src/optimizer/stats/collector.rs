@@ -143,8 +143,7 @@ impl StatisticsCollector {
             sample_limit,
         )?;
         let properties =
-            Self::collect_property_stats(manager, &*storage, space, data_epoch, sample_limit)
-                .unwrap_or(0);
+            Self::collect_property_stats(manager, &*storage, space, data_epoch, sample_limit)?;
 
         manager.set_space_stamp(space, schema_version, data_epoch);
         // set_space_stamp drops unknown (zero) versions internally so a
@@ -166,7 +165,7 @@ impl StatisticsCollector {
             .list_tags(space)
             .map_err(|e| format!("Failed to list tags for space '{}': {}", space, e))?;
         for tag_info in &tag_infos {
-            manager.register_tag_id(tag_info.tag_id as i32, tag_info.tag_name.clone());
+            manager.register_tag_id(space, tag_info.tag_id as i32, tag_info.tag_name.clone());
         }
 
         let mut collected = 0usize;
@@ -197,6 +196,13 @@ impl StatisticsCollector {
             stats.vertex_count = vertex_count;
             stats.avg_out_degree = avg_out_degree;
             stats.avg_in_degree = avg_in_degree;
+            // Table snapshot carries allocated slots (holes included);
+            // missing snapshots leave the field unknown (zero holes).
+            stats.apply_table_snapshot(
+                storage
+                    .vertex_table_stats(space, &tag_info.tag_name)
+                    .as_deref(),
+            );
             manager.update_tag_stats(space, stats.with_version(space.to_string(), schema_version));
             collected += 1;
         }
@@ -352,6 +358,13 @@ impl StatisticsCollector {
             stats.in_degree_std_dev = sample.in_std;
             stats.degree_gini_coefficient = sample.gini.max(sample.gini_in);
             stats.hot_vertices = sample.hot_vertices;
+            // No engine serves edge table snapshots yet; the call stays so
+            // the fill activates automatically once one does.
+            stats.apply_table_snapshot(
+                storage
+                    .edge_table_stats(space, &info.edge_type_name)
+                    .as_deref(),
+            );
             manager.update_edge_stats(space, stats.with_version(space.to_string(), schema_version));
             collected += 1;
         }
@@ -489,6 +502,23 @@ impl StatisticsCollector {
         })
     }
 
+    /// Window NDV projected to the full relation.
+    ///
+    /// A fully-distinct window implies a high-cardinality column, so the
+    /// estimate scales to the relation size; otherwise the sampled distinct
+    /// count is kept as a conservative lower bound (scaling a low-cardinality
+    /// sample such as a boolean would explode the estimate).
+    fn window_ndv_estimate(sampled_distinct: u64, window_len: usize, total_rows: usize) -> u64 {
+        if total_rows == 0 || window_len == 0 {
+            return sampled_distinct;
+        }
+        if sampled_distinct as usize >= window_len {
+            (total_rows as u64).max(sampled_distinct)
+        } else {
+            sampled_distinct
+        }
+    }
+
     /// Merge storage-level snapshot bounds and cardinality into a property
     /// statistics entry, overriding the sampled envelope when the snapshot
     /// carries usable bounds. Returns `true` when the snapshot provides
@@ -507,6 +537,14 @@ impl StatisticsCollector {
             // is always preferred when available.
             stat.min_value.clone_from(&snap.min_value);
             stat.max_value.clone_from(&snap.max_value);
+            useful = true;
+        }
+        if snap.row_count > 0 {
+            stat.total_rows = Some(snap.row_count);
+            useful = true;
+        }
+        if let Some(nulls) = snap.null_count {
+            stat.null_count = Some(nulls);
             useful = true;
         }
         // The snapshot HLL estimate covers the full column while sampling
@@ -653,7 +691,8 @@ impl StatisticsCollector {
                 let mut stat = stats_per_prop.remove(&prop_def.name).unwrap_or_else(|| {
                     PropertyStatistics::new(prop_def.name.clone(), Some(tag_name.clone()))
                 });
-                stat.distinct_values = sampled_distinct.max(1);
+                stat.distinct_values =
+                    Self::window_ndv_estimate(sampled_distinct, vertices.len(), total).max(1);
                 // Histogram from the same sample window (10 buckets).
                 if let Some(samples) = samples_per_prop.remove(&prop_def.name) {
                     if samples.len() >= 10 {
@@ -765,7 +804,8 @@ impl StatisticsCollector {
                 let mut stat = stats_per_prop.remove(&prop_def.name).unwrap_or_else(|| {
                     PropertyStatistics::new(prop_def.name.clone(), Some(edge_type.clone()))
                 });
-                stat.distinct_values = sampled_distinct.max(1);
+                stat.distinct_values =
+                    Self::window_ndv_estimate(sampled_distinct, edges.len(), total).max(1);
                 if let Some(samples) = samples_per_prop.remove(&prop_def.name) {
                     if samples.len() >= 10 {
                         let hist = super::histogram::Histogram::from_samples(
@@ -785,5 +825,27 @@ impl StatisticsCollector {
         }
 
         Ok(collected)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StatisticsCollector;
+
+    #[test]
+    fn window_ndv_scales_only_fully_distinct_windows() {
+        // Unique column: window fully distinct, project to the relation size.
+        assert_eq!(
+            StatisticsCollector::window_ndv_estimate(100, 100, 10_000),
+            10_000
+        );
+        // Low-cardinality column: keep the sampled count, never explode.
+        assert_eq!(
+            StatisticsCollector::window_ndv_estimate(2, 100, 1_000_000),
+            2
+        );
+        // Degenerate inputs pass through.
+        assert_eq!(StatisticsCollector::window_ndv_estimate(7, 0, 100), 7);
+        assert_eq!(StatisticsCollector::window_ndv_estimate(7, 10, 0), 7);
     }
 }

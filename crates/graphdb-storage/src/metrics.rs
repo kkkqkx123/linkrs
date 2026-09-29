@@ -165,10 +165,7 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         id: &VertexId,
         projection: &[String],
     ) -> Result<Option<Vertex>, StorageError> {
-        self.timed_read(|| {
-            self.inner
-                .get_vertex_projected(space, tag, id, projection)
-        })
+        self.timed_read(|| self.inner.get_vertex_projected(space, tag, id, projection))
     }
 
     fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError> {
@@ -263,9 +260,8 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         limit: Option<usize>,
     ) -> Result<Vec<Edge>, StorageError> {
         self.timed_read(|| {
-            self.inner.get_node_edges_projected(
-                space, node_id, direction, edge_types, projection, limit,
-            )
+            self.inner
+                .get_node_edges_projected(space, node_id, direction, edge_types, projection, limit)
         })
     }
 
@@ -484,8 +480,7 @@ impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
         id: &VertexId,
     ) -> Result<(), StorageError> {
         let start = std::time::Instant::now();
-        let result =
-            StorageWriter::delete_vertex_with_edges(&mut self.inner, space, tag, id);
+        let result = StorageWriter::delete_vertex_with_edges(&mut self.inner, space, tag, id);
         if result.is_err() {
             if let Some(stats) = &self.stats {
                 stats.record_storage_error();
@@ -541,11 +536,7 @@ impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
         result
     }
 
-    fn batch_insert_edges(
-        &mut self,
-        space: &str,
-        edges: Vec<Edge>,
-    ) -> Result<(), StorageError> {
+    fn batch_insert_edges(&mut self, space: &str, edges: Vec<Edge>) -> Result<(), StorageError> {
         let start = std::time::Instant::now();
         let result = StorageWriter::batch_insert_edges(&mut self.inner, space, edges);
         if result.is_err() {
@@ -612,8 +603,7 @@ impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
         vertex_id: &str,
     ) -> Result<bool, StorageError> {
         let start = std::time::Instant::now();
-        let result =
-            StorageWriter::delete_vertex_data(&mut self.inner, space, tag, vertex_id);
+        let result = StorageWriter::delete_vertex_data(&mut self.inner, space, tag, vertex_id);
         if result.is_err() {
             if let Some(stats) = &self.stats {
                 stats.record_storage_error();
@@ -631,8 +621,7 @@ impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
         rank: i64,
     ) -> Result<bool, StorageError> {
         let start = std::time::Instant::now();
-        let result =
-            StorageWriter::delete_edge_data(&mut self.inner, space, src, dst, rank);
+        let result = StorageWriter::delete_edge_data(&mut self.inner, space, src, dst, rank);
         if result.is_err() {
             if let Some(stats) = &self.stats {
                 stats.record_storage_error();
@@ -680,8 +669,7 @@ impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
         rank: i64,
     ) -> Result<(), StorageError> {
         let start = std::time::Instant::now();
-        let result =
-            StorageWriter::delete_edge(&mut self.inner, space, src, dst, edge_type, rank);
+        let result = StorageWriter::delete_edge(&mut self.inner, space, src, dst, edge_type, rank);
         if result.is_err() {
             if let Some(stats) = &self.stats {
                 stats.record_storage_error();

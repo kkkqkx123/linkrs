@@ -516,9 +516,7 @@ pub use self::graph_schema::{
     PropertyType, VertexType,
 };
 pub use self::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
-pub use self::query::{
-    ExecutionMode, PlanType, QueryHint, QueryOptions, QueryStatus, QueryType,
-};
+pub use self::query::{ExecutionMode, PlanType, QueryHint, QueryOptions, QueryStatus, QueryType};
 pub use self::semantic::{AliasType, ColumnDef, ValueType};
 pub use self::span::{Position, Span, ToSpan};
 

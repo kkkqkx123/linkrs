@@ -1448,8 +1448,13 @@ impl Column {
     }
 
     pub fn used_memory_size(&self) -> usize {
-        let non_null_count = self.len() - self.null_count();
         let elem_size = super::element_size(&self.data_type);
+        if elem_size == 0 {
+            // Variable-length encodings have no fixed element size; fall back
+            // to allocated bytes instead of reporting zero live bytes.
+            return self.memory_usage() + std::mem::size_of::<Self>();
+        }
+        let non_null_count = self.len() - self.null_count();
         non_null_count * elem_size + std::mem::size_of::<Self>()
     }
 

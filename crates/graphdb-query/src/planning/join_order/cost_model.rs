@@ -5,6 +5,11 @@
 //! follow the reference design: a hash join pays the probe scan plus a build
 //! penalty scaled by the flat cardinality of the join keys, while an
 //! intersect pays the probe scan plus every build side once.
+//!
+//! Division of labor: this integer model prices MATCH query-graph DP splits;
+//! the generic join-tree DP in `optimizer::cost_based::join_order` uses the
+//! floating-point `CostCalculator`. Both share the no-statistics row/degree
+//! constants from `optimizer::cost::config`; keep new constants there.
 
 /// Penalty multiplier applied to build-side key cardinalities.
 pub const BUILD_PENALTY: u64 = 2;

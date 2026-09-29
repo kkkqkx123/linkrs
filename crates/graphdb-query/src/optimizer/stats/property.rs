@@ -84,6 +84,10 @@ pub struct PropertyStatistics {
     pub histogram: Option<Histogram>,
     /// Is it appropriate to use a histogram? (Histograms are not necessary for attributes with a low cardinality.)
     pub use_histogram: bool,
+    /// Null count from the storage snapshot, when tracked.
+    pub null_count: Option<u64>,
+    /// Owning relation row count from the storage snapshot, when known.
+    pub total_rows: Option<u64>,
 }
 
 impl PropertyStatistics {
@@ -97,6 +101,8 @@ impl PropertyStatistics {
             max_value: None,
             histogram: None,
             use_histogram: false,
+            null_count: None,
+            total_rows: None,
         }
     }
 
@@ -110,6 +116,13 @@ impl PropertyStatistics {
     /// Determine whether to use a histogram.
     pub fn should_use_histogram(&self) -> bool {
         self.use_histogram && self.histogram.is_some()
+    }
+
+    /// Null fraction `nulls / rows` when both sides are tracked.
+    pub fn null_fraction(&self) -> Option<f64> {
+        let total = self.total_rows.filter(|&n| n > 0)?;
+        let nulls = self.null_count?;
+        Some((nulls.min(total) as f64 / total as f64).clamp(0.0, 1.0))
     }
 
     /// Record one observed value into the min/max envelope.
@@ -260,5 +273,19 @@ mod tests {
         }
         assert_eq!(stat.min_value, Some(Value::string("apple")));
         assert_eq!(stat.max_value, Some(Value::string("zebra")));
+    }
+
+    #[test]
+    fn null_fraction_clamps_and_requires_rows() {
+        let mut stat = PropertyStatistics::new("age".to_string(), None);
+        assert_eq!(stat.null_fraction(), None);
+        stat.total_rows = Some(0);
+        stat.null_count = Some(0);
+        assert_eq!(stat.null_fraction(), None);
+        stat.total_rows = Some(100);
+        stat.null_count = Some(5);
+        assert_eq!(stat.null_fraction(), Some(0.05));
+        stat.null_count = Some(200);
+        assert_eq!(stat.null_fraction(), Some(1.0));
     }
 }

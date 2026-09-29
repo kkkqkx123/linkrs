@@ -590,6 +590,40 @@ pub fn estimate_node_output_rows_logical(
             }
         }
 
+        // ── Traversal operators (mirror the physical fanout arms so logical
+        // decisions such as aggregate strategy price the same expansion) ──
+        Expand(n) => {
+            let fanout = stats_fanout(stats, &n.edge_types);
+            child_rows_of_logical(node, stats, selectivity).saturating_mul(fanout)
+        }
+        ExpandAll(n) => {
+            let fanout = stats_fanout(stats, &n.edge_types);
+            child_rows_of_logical(node, stats, selectivity).saturating_mul(fanout)
+        }
+        Traverse(n) => {
+            let fanout = stats_fanout(stats, &n.edge_types);
+            child_rows_of_logical(node, stats, selectivity).saturating_mul(fanout)
+        }
+        BiExpand(n) => {
+            let fanout = stats_fanout(stats, &n.edge_types);
+            child_rows_of_logical(node, stats, selectivity).saturating_mul(fanout)
+        }
+        BiTraverse(n) => {
+            let fanout = stats_fanout(stats, &n.edge_types);
+            child_rows_of_logical(node, stats, selectivity).saturating_mul(fanout)
+        }
+        AppendVertices(_) => child_rows_of_logical(node, stats, selectivity)
+            .saturating_mul(DEFAULT_NEIGHBORHOOD_FANOUT),
+        PatternApply(_) | Apply(_) | CorrelatedApply(_) => {
+            if let Some((left, right)) = logical_binary_inputs(node) {
+                let left_rows = estimate_node_output_rows_logical(left, stats, selectivity);
+                let right_rows = estimate_node_output_rows_logical(right, stats, selectivity);
+                left_rows.saturating_mul(right_rows).max(1)
+            } else {
+                child_rows_of_logical(node, stats, selectivity)
+            }
+        }
+
         // ── Unsupported nodes: fall back to the child or a constant ──
         node => child_rows_of_logical(node, stats, selectivity),
     }
@@ -628,6 +662,16 @@ fn logical_first_child(node: &LogicalNodeEnum) -> Option<&LogicalNodeEnum> {
         LogicalNodeEnum::WcoIntersect(n) => Some(n.probe_side()),
         LogicalNodeEnum::GetVertices(n) => n.dependencies().first(),
         LogicalNodeEnum::GetNeighbors(n) => n.dependencies().first(),
+        LogicalNodeEnum::Expand(n) => n.dependencies().first(),
+        LogicalNodeEnum::ExpandAll(n) => n.dependencies().first(),
+        LogicalNodeEnum::Traverse(n) => n.dependencies().first(),
+        LogicalNodeEnum::AppendVertices(n) => n.dependencies().first(),
+        LogicalNodeEnum::BiExpand(n) => Some(n.left_input()),
+        LogicalNodeEnum::BiTraverse(n) => Some(n.left_input()),
+        LogicalNodeEnum::PatternApply(n) => Some(n.left_input()),
+        LogicalNodeEnum::CorrelatedApply(n) => Some(n.left_input()),
+        LogicalNodeEnum::Apply(n) => Some(n.left_input()),
+        LogicalNodeEnum::RollUpApply(n) => n.dependencies().first(),
         _ => None,
     }
 }
@@ -645,6 +689,9 @@ fn logical_binary_inputs(node: &LogicalNodeEnum) -> Option<(&LogicalNodeEnum, &L
         LogicalNodeEnum::CrossJoin(n) => Some((n.left_input(), n.right_input())),
         LogicalNodeEnum::FullOuterJoin(n) => Some((n.left_input(), n.right_input())),
         LogicalNodeEnum::SemiJoin(n) => Some((n.left_input(), n.right_input())),
+        LogicalNodeEnum::PatternApply(n) => Some((n.left_input(), n.right_input())),
+        LogicalNodeEnum::CorrelatedApply(n) => Some((n.left_input(), n.right_input())),
+        LogicalNodeEnum::Apply(n) => Some((n.left_input(), n.right_input())),
         LogicalNodeEnum::WcoIntersect(_) => None,
         _ => None,
     }
@@ -940,6 +987,55 @@ mod tests {
             corrected > 150,
             "corrected={} should inherit the factor",
             corrected
+        );
+    }
+
+    #[test]
+    fn logical_expand_applies_stats_fanout_like_physical() {
+        use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+        use crate::planning::plan::logical::logical_nodes::traversal::LogicalExpandNode;
+        use crate::planning::plan::logical::LogicalNodeEnum;
+        use graphdb_core::types::EdgeDirection;
+
+        let (manager, selectivity) = setup();
+        let mut tag_stats = crate::optimizer::stats::TagStatistics::new("person".to_string());
+        tag_stats.vertex_count = 100;
+        manager.update_tag_stats("test", tag_stats);
+        let mut edge_stats = crate::optimizer::stats::EdgeTypeStatistics::new("knows".to_string());
+        edge_stats.avg_out_degree = 5.0;
+        manager.update_edge_stats("test", edge_stats);
+        let view = StatsView::new(&manager, Some("test"));
+
+        let scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+            id: 1,
+            space_id: 1,
+            space_name: "test".to_string(),
+            tag: Some("person".to_string()),
+            expression: None,
+            limit: None,
+            projected_properties: vec![],
+            index_hint: None,
+            estimated_cardinality: None,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+        let expand = LogicalNodeEnum::Expand(LogicalExpandNode {
+            id: 2,
+            deps: vec![scan],
+            space_id: 1,
+            edge_types: vec!["knows".to_string()],
+            direction: EdgeDirection::Out,
+            step_limit: None,
+            filter: None,
+            dst_tag: None,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+        assert_eq!(
+            estimate_node_output_rows_logical(&expand, &view, &selectivity),
+            500
         );
     }
 

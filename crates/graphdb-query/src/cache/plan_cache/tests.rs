@@ -185,6 +185,7 @@ fn partitioned_plan_is_isolated_from_plain_text_lookup() {
         },
         parallel_fallback_reason: String::new(),
         cbo_notes: Vec::new(),
+        statistics_summary: String::new(),
         partition_spec: Some(spec.clone()),
     });
 
@@ -248,6 +249,7 @@ fn partitioned_plan_hit_respects_compatibility_context() {
         },
         parallel_fallback_reason: String::new(),
         cbo_notes: Vec::new(),
+        statistics_summary: String::new(),
         partition_spec: Some(spec.clone()),
     });
 

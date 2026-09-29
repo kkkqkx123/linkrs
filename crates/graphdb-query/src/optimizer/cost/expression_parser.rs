@@ -604,19 +604,13 @@ impl ExpressionParser {
     }
 }
 
-impl Default for ExpressionParser {
-    fn default() -> Self {
-        Self::new(CostModelConfig::default())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_parse_array_literal() {
-        let parser = ExpressionParser::default();
+        let parser = ExpressionParser::new(CostModelConfig::default());
         assert_eq!(parser.parse_list_size("[1, 2, 3]"), Some(3.0));
         assert_eq!(parser.parse_list_size("[]"), Some(0.0));
         assert_eq!(parser.parse_list_size("[a]"), Some(1.0));
@@ -624,28 +618,28 @@ mod tests {
 
     #[test]
     fn test_parse_range_function() {
-        let parser = ExpressionParser::default();
+        let parser = ExpressionParser::new(CostModelConfig::default());
         assert_eq!(parser.parse_list_size("range(1, 10)"), Some(9.0));
         assert_eq!(parser.parse_list_size("range(1, 10, 2)"), Some(4.0));
     }
 
     #[test]
     fn test_parse_range_expression() {
-        let parser = ExpressionParser::default();
+        let parser = ExpressionParser::new(CostModelConfig::default());
         assert_eq!(parser.parse_list_size("1..10"), Some(9.0));
         assert_eq!(parser.parse_list_size("0..=5"), Some(6.0));
     }
 
     #[test]
     fn test_parse_loop_iterations_number() {
-        let parser = ExpressionParser::default();
+        let parser = ExpressionParser::new(CostModelConfig::default());
         assert_eq!(parser.parse_loop_iterations("10"), Some(10)); // At least once
         assert_eq!(parser.parse_loop_iterations("0"), Some(1)); // At least 1
     }
 
     #[test]
     fn test_parse_loop_iterations_comparison() {
-        let parser = ExpressionParser::default();
+        let parser = ExpressionParser::new(CostModelConfig::default());
         assert_eq!(parser.parse_loop_iterations("i < 10"), Some(20));
         assert_eq!(parser.parse_loop_iterations("i <= 5"), Some(15));
     }

@@ -240,7 +240,23 @@ impl<
 
         // Engine-level shared scheduler + query registry, created once at
         // startup and reused across all queries (worker threads persist).
-        let mut optimizer_engine = crate::query::OptimizerEngine::default();
+        // The optimizer cost preset follows the storage medium: an explicit
+        // profile setting wins, otherwise the data directory's block device
+        // is probed (SSD when undetectable). The profile-to-config mapping
+        // is shared with the embedded assembly path. The runtime value is
+        // reused below so per-space overrides resolve identically.
+        let runtime = crate::config::RuntimeConfig::file(config.storage_path());
+        let cost_profile = config
+            .common
+            .optimizer
+            .storage_cost_profile
+            .resolve_for_runtime(&runtime);
+        let cost_config = graphdb_api::api_core::cost_config_for_profile(cost_profile);
+        info!(
+            "Optimizer cost profile resolved to {:?} (random_page_cost={})",
+            cost_profile, cost_config.random_page_cost,
+        );
+        let mut optimizer_engine = crate::query::OptimizerEngine::new(cost_config);
         optimizer_engine.set_partitioning_config(Self::partitioning_config_from(&config));
         let shared_scheduler = Arc::new(SharedScheduler::new(
             optimizer_engine.partitioning_config().max_workers.max(1),
@@ -291,6 +307,16 @@ impl<
             .await
             {
                 Ok(mut api) => {
+                    api = api
+                        .with_statistics_settings(
+                            config.common.optimizer.statistics_sample_limit,
+                            config.common.optimizer.statistics_min_epoch_delta,
+                        )
+                        .with_default_cost_profile_label(format!("{cost_profile:?}"))
+                        .with_space_cost_profiles(
+                            &config.common.optimizer.space_cost_profiles,
+                            &runtime,
+                        );
                     api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
                     api.install_query_manager(Arc::clone(&query_manager));
                     let vector_api = Arc::new(VectorApi::new(backend));
@@ -306,6 +332,9 @@ impl<
                         &stats_manager,
                         schema_manager.as_ref(),
                         optimizer_engine.clone(),
+                        &config.common.optimizer,
+                        cost_profile,
+                        &runtime,
                     );
                     api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
                     api.install_query_manager(Arc::clone(&query_manager));
@@ -318,6 +347,9 @@ impl<
                 &stats_manager,
                 schema_manager.as_ref(),
                 optimizer_engine.clone(),
+                &config.common.optimizer,
+                cost_profile,
+                &runtime,
             );
             api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
             api.install_query_manager(Arc::clone(&query_manager));
@@ -331,6 +363,9 @@ impl<
                 &stats_manager,
                 schema_manager.as_ref(),
                 optimizer_engine.clone(),
+                &config.common.optimizer,
+                cost_profile,
+                &runtime,
             );
             api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
             api.install_query_manager(Arc::clone(&query_manager));
@@ -380,11 +415,17 @@ impl<
 
     /// Shared helper: build a QueryApi with optional SchemaManager, reusing the
     /// server-level optimizer engine so `[parallel]` settings take effect.
+    /// Statistics collection settings come from `[optimizer]` the same way,
+    /// and per-space cost overrides plus the global profile label are
+    /// installed for EXPLAIN observability.
     fn build_query_api(
         storage: &Arc<S>,
         stats_manager: &Arc<StatsManager>,
         schema_manager: Option<&Arc<SchemaManager>>,
         optimizer_engine: Arc<crate::query::OptimizerEngine>,
+        optimizer_config: &crate::config::OptimizerConfig,
+        cost_profile: crate::config::StorageCostProfile,
+        runtime: &crate::config::RuntimeConfig,
     ) -> QueryApi<S> {
         let inner = Arc::new(RwLock::new((**storage).clone()));
         QueryApi::with_optimizer_engine(
@@ -393,6 +434,12 @@ impl<
             optimizer_engine,
             schema_manager.cloned(),
         )
+        .with_statistics_settings(
+            optimizer_config.statistics_sample_limit,
+            optimizer_config.statistics_min_epoch_delta,
+        )
+        .with_default_cost_profile_label(format!("{cost_profile:?}"))
+        .with_space_cost_profiles(&optimizer_config.space_cost_profiles, runtime)
     }
 
     /// Map the `[parallel]` config section onto the query optimizer's

@@ -1,4 +1,5 @@
 pub mod columnar;
+pub mod cost_profile;
 pub mod database;
 pub mod fulltext;
 pub mod log;
@@ -24,6 +25,7 @@ pub mod http;
 pub mod security;
 
 pub use columnar::*;
+pub use cost_profile::*;
 pub use database::*;
 pub use fulltext::*;
 pub use log::*;

@@ -89,11 +89,7 @@ impl Column {
                 encoded_bytes = encoded_bytes.saturating_add(state.encoding.memory_usage() as u64);
             }
         }
-        let compressed_size = if any_encoded {
-            encoded_bytes
-        } else {
-            raw_size
-        };
+        let compressed_size = if any_encoded { encoded_bytes } else { raw_size };
 
         let encoding_type = self.encoding_type();
         let iter = (0..self.len()).map(|row_idx| self.get(row_idx));

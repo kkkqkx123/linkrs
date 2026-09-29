@@ -475,6 +475,9 @@ pub struct PhysicalPlan {
     /// Cost-based decision notes (subquery unnest / join order) recorded by
     /// the optimizer. Surfaced in EXPLAIN / PROFILE diagnostics.
     pub cbo_notes: Vec<String>,
+    /// Effective statistics collection settings recorded at plan build.
+    /// Surfaced in EXPLAIN / PROFILE diagnostics.
+    pub statistics_summary: String,
     /// Physical partition layout selected for this plan (absent for
     /// single-tree execution). Retained so the plan cache can key on the
     /// layout and EXPLAIN/PROFILE can describe it without re-planning.

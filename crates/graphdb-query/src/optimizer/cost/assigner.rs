@@ -6,11 +6,12 @@
 //!
 //! ```rust
 //! use graphdb_query::optimizer::cost::CostAssigner;
+//! use graphdb_query::optimizer::cost::CostModelConfig;
 //! use graphdb_query::optimizer::stats::StatisticsManager;
 //! use std::sync::Arc;
 //!
 //! let stats_manager = Arc::new(StatisticsManager::new());
-//! let assigner = CostAssigner::new(stats_manager);
+//! let assigner = CostAssigner::with_config(stats_manager, CostModelConfig::default());
 //! let stats = assigner.cost_calculator().stats_view(Some("my_space"));
 //!
 //! // Calculate the cost of the execution plan (only for optimization decisions)
@@ -50,15 +51,6 @@ pub struct CostAssigner {
 }
 
 impl CostAssigner {
-    /// Create a new cost allocator (using the default configuration).
-    pub fn new(stats_manager: Arc<StatisticsManager>) -> Self {
-        Self {
-            cost_calculator: CostCalculator::new(stats_manager.clone()),
-            selectivity_estimator: SelectivityEstimator::new(stats_manager),
-            config: CostModelConfig::default(),
-        }
-    }
-
     /// Create a new cost assigner (using the specified configuration).
     pub fn with_config(stats_manager: Arc<StatisticsManager>, config: CostModelConfig) -> Self {
         Self {
@@ -260,18 +252,6 @@ impl CostAssigner {
     }
 }
 
-impl Default for CostAssigner {
-    fn default() -> Self {
-        let stats_manager = Arc::new(StatisticsManager::new());
-        let config = CostModelConfig::default();
-        Self {
-            cost_calculator: CostCalculator::with_config(stats_manager.clone(), config),
-            selectivity_estimator: SelectivityEstimator::new(stats_manager),
-            config,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,7 +259,7 @@ mod tests {
     #[test]
     fn test_cost_assigner_creation() {
         let stats_manager = Arc::new(StatisticsManager::new());
-        let assigner = CostAssigner::new(stats_manager);
+        let assigner = CostAssigner::with_config(stats_manager, CostModelConfig::default());
         assert_eq!(assigner.cost_calculator().config().seq_page_cost, 1.0);
     }
 

@@ -153,6 +153,9 @@ pub struct PlanDescription {
     // ── Cost-based decision notes (populated at plan build) ──
     pub cbo_notes: Vec<String>,
 
+    // ── Statistics settings behind the plan (populated at plan build) ──
+    pub statistics_summary: String,
+
     // ── Columnar fast-path counters (populated at runtime, PROFILE only) ──
     pub columnar_summary: String,
 }
@@ -173,6 +176,7 @@ impl PlanDescription {
             parallel_buffered_bytes_peak: 0,
             parallel_fallback_reason: String::new(),
             cbo_notes: Vec::new(),
+            statistics_summary: String::new(),
             columnar_summary: String::new(),
         }
     }

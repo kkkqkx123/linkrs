@@ -189,6 +189,18 @@ pub trait ColumnStatsReader: Send + Sync {
         None
     }
 
+    /// Table-level cardinality of edge type `edge_type` inside `space`.
+    ///
+    /// No engine implements this yet; the default keeps the field unknown
+    /// so costing falls back to live edge counts.
+    fn edge_table_stats(
+        &self,
+        _space: &str,
+        _edge_type: &str,
+    ) -> Option<Arc<TableCardinalitySnapshot>> {
+        None
+    }
+
     /// Monotonic data-version stamp: changes whenever data has been written,
     /// independent of schema changes. Used by the optimizer's statistics
     /// cache to detect stale estimates after DML.

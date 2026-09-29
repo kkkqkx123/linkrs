@@ -44,12 +44,12 @@ impl<'a> ScanEstimator<'a> {
     }
 
     /// Obtain the tag name from the IndexScan node.
-    fn get_tag_name_from_index_scan(&self, node: &IndexScanNode) -> String {
-        // Try to obtain the tag name using the `tag_id`.
+    fn get_tag_name_from_index_scan(&self, space: &str, node: &IndexScanNode) -> String {
+        // Resolve the tag name in the query space; ids are space-scoped.
         if let Some(tag_name) = self
             .cost_calculator
             .statistics_manager()
-            .get_tag_name_by_id(node.tag_id())
+            .get_tag_name_by_id(space, node.tag_id())
         {
             return tag_name;
         }
@@ -108,7 +108,7 @@ impl<'a> NodeEstimator for ScanEstimator<'a> {
             }
             PlanNodeEnum::IndexScan(n) => {
                 let selectivity = self.estimate_index_scan_selectivity(n);
-                let tag_name = self.get_tag_name_from_index_scan(n);
+                let tag_name = self.get_tag_name_from_index_scan(space, n);
                 let property_name = self.get_property_name_from_index_scan(n);
                 let table_rows = self
                     .cost_calculator
@@ -428,7 +428,7 @@ mod tests {
             "test_schema".to_string(),
             ScanType::Unique,
         );
-        let tag_name = estimator.get_tag_name_from_index_scan(&node);
+        let tag_name = estimator.get_tag_name_from_index_scan("test", &node);
         assert_eq!(tag_name, "default");
     }
 

@@ -196,11 +196,11 @@ pub struct SeekStrategySelector {
 }
 
 impl SeekStrategySelector {
-    pub fn new() -> Self {
+    pub fn new(cost_config: CostModelConfig) -> Self {
         Self {
             use_index_threshold: 1000,
             scan_threshold: 10000,
-            cost_config: CostModelConfig::default(),
+            cost_config,
             selectivity_estimator: None,
         }
     }
@@ -208,11 +208,6 @@ impl SeekStrategySelector {
     pub fn with_thresholds(mut self, use_index: usize, scan: usize) -> Self {
         self.use_index_threshold = use_index;
         self.scan_threshold = scan;
-        self
-    }
-
-    pub fn with_cost_config(mut self, config: CostModelConfig) -> Self {
-        self.cost_config = config;
         self
     }
 
@@ -401,12 +396,6 @@ pub struct StrategySelection {
     pub estimated_rows: usize,
 }
 
-impl Default for SeekStrategySelector {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,7 +444,7 @@ mod tests {
 
     #[test]
     fn test_seek_strategy_selector_vertex_seek() {
-        let selector = SeekStrategySelector::new();
+        let selector = SeekStrategySelector::new(CostModelConfig::default());
 
         let node_pattern = NodePattern {
             vid: Some(Value::Int(1)),
@@ -470,7 +459,7 @@ mod tests {
 
     #[test]
     fn test_seek_strategy_selector_scan_seek() {
-        let selector = SeekStrategySelector::new();
+        let selector = SeekStrategySelector::new(CostModelConfig::default());
 
         let node_pattern = NodePattern {
             vid: None,

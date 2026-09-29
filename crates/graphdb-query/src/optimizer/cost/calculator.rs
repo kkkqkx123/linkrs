@@ -67,18 +67,38 @@ impl CostCalculator {
 
     /// Calculate the cost of vertex operations for a full table scan
     ///
-    /// Formula: Number of rows × Cost of CPU processing
+    /// Formula: rows x CPU cost + cache-aware sequential I/O for the pages read.
+    /// Page count derives from allocated slots (holes included) so tables
+    /// with heavy deletes cost their physical pages; CPU still counts live
+    /// rows only.
     pub fn calculate_scan_vertices_cost(&self, space: &str, tag_name: &str) -> f64 {
         let row_count = self.stats_manager.get_vertex_count(space, tag_name);
+        if row_count == 0 {
+            return 0.0;
+        }
+        let allocated = self
+            .stats_manager
+            .get_tag_stats(space, tag_name)
+            .and_then(|s| s.allocated_slots);
         row_count as f64 * self.config.cpu_tuple_cost
+            + self.calculate_io_cost_with_allocated(row_count, allocated)
     }
 
     /// Calculate the cost of scanning the entire table
     ///
-    /// Formula: Number of edges × Cost of CPU processing
+    /// Formula: edges x CPU cost + cache-aware sequential I/O for the pages read.
+    /// Page count derives from allocated slots when the snapshot exists.
     pub fn calculate_scan_edges_cost(&self, space: &str, edge_type: &str) -> f64 {
         let edge_count = self.stats_manager.get_edge_count(space, edge_type);
+        if edge_count == 0 {
+            return 0.0;
+        }
+        let allocated = self
+            .stats_manager
+            .get_edge_stats(space, edge_type)
+            .and_then(|s| s.allocated_slots);
         edge_count as f64 * self.config.cpu_tuple_cost
+            + self.calculate_io_cost_with_allocated(edge_count, allocated)
     }
 
     /// Calculating the cost of index scans
@@ -104,9 +124,17 @@ impl CostCalculator {
         let index_access_cost = index_pages as f64 * self.config.seq_page_cost
             + matching_rows as f64 * self.config.cpu_index_tuple_cost;
 
-        // The cost of retrieving data from the table (random I/O operations)
-        let table_access_cost = matching_rows as f64 * self.config.random_page_cost
-            + matching_rows as f64 * self.config.cpu_tuple_cost;
+        // The cost of retrieving data from the table (random I/O operations).
+        // Holes spread live rows over more heap pages, so the revisit cost
+        // grows with the hole rate (bounded by 2x since the rate is below 1).
+        let hole_rate = self
+            .stats_manager
+            .get_tag_stats(space, tag_name)
+            .map(|s| s.hole_rate())
+            .unwrap_or(0.0);
+        let table_access_cost =
+            matching_rows as f64 * self.config.random_page_cost * (1.0 + hole_rate)
+                + matching_rows as f64 * self.config.cpu_tuple_cost;
 
         index_access_cost + table_access_cost
     }
@@ -125,8 +153,14 @@ impl CostCalculator {
         let index_access_cost = index_pages as f64 * self.config.seq_page_cost
             + matching_rows as f64 * self.config.cpu_index_tuple_cost;
 
-        let table_access_cost = matching_rows as f64 * self.config.random_page_cost
-            + matching_rows as f64 * self.config.cpu_tuple_cost;
+        let hole_rate = self
+            .stats_manager
+            .get_edge_stats(space, edge_type)
+            .map(|s| s.hole_rate())
+            .unwrap_or(0.0);
+        let table_access_cost =
+            matching_rows as f64 * self.config.random_page_cost * (1.0 + hole_rate)
+                + matching_rows as f64 * self.config.cpu_tuple_cost;
 
         index_access_cost + table_access_cost
     }
@@ -254,13 +288,27 @@ impl CostCalculator {
     }
 
     /// Calculate the cost of obtaining the vertices.
+    ///
+    /// Point lookups hit the id index: one index probe plus row materialization
+    /// per vid, sharing a single baseline page rather than one random page
+    /// per row.
     pub fn calculate_get_vertices_cost(&self, vid_count: u64) -> f64 {
-        vid_count as f64 * self.config.random_page_cost
+        if vid_count == 0 {
+            return 0.0;
+        }
+        vid_count as f64 * (self.config.cpu_index_tuple_cost + self.config.cpu_tuple_cost)
+            + self.config.seq_page_cost
     }
 
     /// Calculate the cost of the edges.
+    ///
+    /// Same index-probe model as vertex point lookups.
     pub fn calculate_get_edges_cost(&self, edge_count: u64) -> f64 {
-        edge_count as f64 * self.config.random_page_cost
+        if edge_count == 0 {
+            return 0.0;
+        }
+        edge_count as f64 * (self.config.cpu_index_tuple_cost + self.config.cpu_tuple_cost)
+            + self.config.seq_page_cost
     }
 
     // ==================== Filtering and Projection ====================
@@ -627,25 +675,42 @@ impl CostCalculator {
     }
 
     /// Estimating the selectivity of tag selection
+    ///
+    /// Share of the tag within its space; falls back to 0.1 when the space
+    /// census is unavailable so callers share one code path.
     pub fn estimate_tag_selectivity(&self, space: &str, tag_name: &str) -> f64 {
         let vertex_count = self.stats_manager.get_vertex_count(space, tag_name);
         if vertex_count == 0 {
-            1.0
-        } else {
-            // Simplify the estimation: Assume that the tag distribution is uniform.
+            return 1.0;
+        }
+        let mut total: u64 = 0;
+        for tag in self.stats_manager.get_all_tags() {
+            total += self.stats_manager.get_vertex_count(space, &tag);
+        }
+        if total == 0 {
             0.1
+        } else {
+            (vertex_count as f64 / total as f64).clamp(0.001, 1.0)
         }
     }
 
     /// Estimating the selectivity of edge type choices
+    ///
+    /// Share of the edge type within its space; same fallback discipline.
     pub fn estimate_edge_selectivity(&self, space: &str, edge_type: &str) -> f64 {
         let edge_stats = self.stats_manager.get_edge_stats(space, edge_type);
-        match edge_stats {
-            Some(stats) if stats.edge_count > 0 => {
-                // Estimation based on the number of edges
-                (1.0 / (stats.edge_count as f64).sqrt()).clamp(0.001, 1.0)
-            }
-            _ => 0.1,
+        let count = edge_stats.map(|s| s.edge_count).unwrap_or(0);
+        if count == 0 {
+            return 0.1;
+        }
+        let mut total: u64 = 0;
+        for et in self.stats_manager.get_all_edge_types() {
+            total += self.stats_manager.get_edge_count(space, &et);
+        }
+        if total == 0 {
+            0.1
+        } else {
+            (count as f64 / total as f64).clamp(0.001, 1.0)
         }
     }
 
@@ -831,9 +896,27 @@ impl CostCalculator {
     /// - If the number of data pages accessed is < effective_cache_pages: Most of the pages are already in the cache.
     /// - Otherwise: Some operations require disk I/O (input/output).
     fn calculate_io_cost(&self, rows: u64) -> f64 {
+        self.calculate_io_cost_with_allocated(rows, None)
+    }
+
+    /// Cache-aware I/O cost with physical sizing.
+    ///
+    /// `live_rows` sizes nothing by itself; page count derives from
+    /// `allocated_slots` (holes included) when the snapshot exists, else
+    /// from live rows. CPU costing stays with callers on live rows.
+    fn calculate_io_cost_with_allocated(
+        &self,
+        live_rows: u64,
+        allocated_slots: Option<u64>,
+    ) -> f64 {
         // Single page/row source: ROWS_PER_PAGE rows per page.
         // `effective_cache_pages` counts pages; callers pass rows.
-        let pages = (rows / ROWS_PER_PAGE).max(1);
+        // Snapshots below the live count are inconsistent (shard skew);
+        // fall back to live rows rather than shrinking the page count.
+        let sized = allocated_slots
+            .filter(|allocated| *allocated >= live_rows)
+            .unwrap_or(live_rows);
+        let pages = (sized / ROWS_PER_PAGE).max(1);
 
         if pages <= self.config.effective_cache_pages {
             // The data may be in the cache.
@@ -873,6 +956,114 @@ mod tests {
         // When no statistical information is available, a value of 0 should be returned.
         let cost = calculator.calculate_scan_vertices_cost("test", "NonExistent");
         assert_eq!(cost, 0.0);
+    }
+
+    #[test]
+    fn scan_cost_includes_io_and_point_lookup_is_cheaper() {
+        use crate::optimizer::stats::TagStatistics;
+        let stats_manager = Arc::new(StatisticsManager::new());
+        let mut tag_stats = TagStatistics::new("person".to_string());
+        tag_stats.vertex_count = 1000;
+        stats_manager.update_tag_stats("test", tag_stats);
+        let calculator = CostCalculator::new(stats_manager);
+
+        let scan = calculator.calculate_scan_vertices_cost("test", "person");
+        // CPU alone would be 10.0; cache-aware I/O must add a positive term.
+        assert!(scan > 10.0, "scan={scan} should include I/O");
+        let point = calculator.calculate_get_vertices_cost(1);
+        assert!(point < scan, "point={point} scan={scan}");
+        assert_eq!(calculator.calculate_get_vertices_cost(0), 0.0);
+    }
+
+    #[test]
+    fn scan_cost_grows_with_allocated_slots() {
+        use crate::optimizer::stats::TagStatistics;
+        let stats_manager = Arc::new(StatisticsManager::new());
+        let mut tag_stats = TagStatistics::new("person".to_string());
+        tag_stats.vertex_count = 1000;
+        stats_manager.update_tag_stats("test", tag_stats);
+        let calculator = CostCalculator::new(stats_manager);
+        let no_holes = calculator.calculate_scan_vertices_cost("test", "person");
+
+        let stats_manager = Arc::new(StatisticsManager::new());
+        let mut tag_stats = TagStatistics::new("person".to_string());
+        tag_stats.vertex_count = 1000;
+        tag_stats.allocated_slots = Some(5000);
+        stats_manager.update_tag_stats("test", tag_stats);
+        let calculator = CostCalculator::new(stats_manager);
+        let with_holes = calculator.calculate_scan_vertices_cost("test", "person");
+        assert!(
+            with_holes > no_holes,
+            "with_holes={with_holes} no_holes={no_holes}"
+        );
+
+        // Inconsistent snapshots (allocated below live) fall back to live.
+        let stats_manager = Arc::new(StatisticsManager::new());
+        let mut tag_stats = TagStatistics::new("person".to_string());
+        tag_stats.vertex_count = 1000;
+        tag_stats.allocated_slots = Some(10);
+        stats_manager.update_tag_stats("test", tag_stats);
+        let calculator = CostCalculator::new(stats_manager);
+        assert_eq!(
+            calculator.calculate_scan_vertices_cost("test", "person"),
+            no_holes
+        );
+    }
+
+    #[test]
+    fn index_scan_heap_cost_grows_with_hole_rate() {
+        use crate::optimizer::stats::TagStatistics;
+        let stats_manager = Arc::new(StatisticsManager::new());
+        let mut tag_stats = TagStatistics::new("person".to_string());
+        tag_stats.vertex_count = 10_000;
+        stats_manager.update_tag_stats("test", tag_stats);
+        let calculator = CostCalculator::new(stats_manager);
+        let no_holes = calculator.calculate_index_scan_cost("test", "person", "name", 0.1);
+
+        let stats_manager = Arc::new(StatisticsManager::new());
+        let mut tag_stats = TagStatistics::new("person".to_string());
+        tag_stats.vertex_count = 10_000;
+        tag_stats.allocated_slots = Some(20_000);
+        stats_manager.update_tag_stats("test", tag_stats);
+        let calculator = CostCalculator::new(stats_manager);
+        let with_holes = calculator.calculate_index_scan_cost("test", "person", "name", 0.1);
+        // Hole rate 0.5 inflates only the heap revisit term: total must
+        // grow but stay below a full doubling.
+        assert!(
+            with_holes > no_holes,
+            "with_holes={with_holes} no_holes={no_holes}"
+        );
+        assert!(
+            with_holes < 2.0 * no_holes,
+            "with_holes={with_holes} no_holes={no_holes}"
+        );
+    }
+
+    #[test]
+    fn tag_and_edge_selectivity_share_space_census() {
+        use crate::optimizer::stats::{EdgeTypeStatistics, TagStatistics};
+        let stats_manager = Arc::new(StatisticsManager::new());
+        let mut a = TagStatistics::new("a".to_string());
+        a.vertex_count = 750;
+        stats_manager.update_tag_stats("s", a);
+        let mut b = TagStatistics::new("b".to_string());
+        b.vertex_count = 250;
+        stats_manager.update_tag_stats("s", b);
+        let calculator = CostCalculator::new(stats_manager);
+        let sel = calculator.estimate_tag_selectivity("s", "a");
+        assert!((sel - 0.75).abs() < 1e-9, "selectivity={sel}");
+        assert_eq!(calculator.estimate_tag_selectivity("s", "missing"), 1.0);
+
+        let stats_manager = Arc::new(StatisticsManager::new());
+        let mut e = EdgeTypeStatistics::new("knows".to_string());
+        e.edge_count = 900;
+        stats_manager.update_edge_stats("s", e);
+        let mut f = EdgeTypeStatistics::new("likes".to_string());
+        f.edge_count = 100;
+        stats_manager.update_edge_stats("s", f);
+        let calculator = CostCalculator::new(stats_manager);
+        let sel = calculator.estimate_edge_selectivity("s", "knows");
+        assert!((sel - 0.9).abs() < 1e-9, "selectivity={sel}");
     }
 
     #[test]

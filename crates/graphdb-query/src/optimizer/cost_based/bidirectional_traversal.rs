@@ -5,10 +5,10 @@
 
 use std::sync::Arc;
 
-use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::cost::config::{
     DEFAULT_DEGREE_FALLBACK, SKEW_MODERATE_GINI, SKEW_SEVERE_GINI,
 };
+use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::stats::{EdgeTypeStatistics, StatisticsManager};
 use graphdb_core::types::EdgeDirection;
 

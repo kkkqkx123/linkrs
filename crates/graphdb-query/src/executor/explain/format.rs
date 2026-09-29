@@ -41,6 +41,9 @@ pub fn format_plan_as_table(plan_desc: &PlanDescription) -> String {
         output.push_str("\nCBO decisions: ");
         output.push_str(&plan_desc.cbo_notes.join("; "));
     }
+    if !plan_desc.statistics_summary.is_empty() {
+        output.push_str(&format!("\nStatistics: {}", plan_desc.statistics_summary));
+    }
     if !plan_desc.columnar_summary.is_empty() {
         output.push_str(&format!("\nColumnar: {}", plan_desc.columnar_summary));
     }
@@ -427,6 +430,9 @@ pub fn format_plan_with_output_table(
             plan_desc.parallel_fallback_reason,
         ));
     }
+    if !plan_desc.statistics_summary.is_empty() {
+        output.push_str(&format!("\nStatistics: {}", plan_desc.statistics_summary));
+    }
     output.push('\n');
     output.push('\n');
 
@@ -582,6 +588,7 @@ pub fn format_plan_as_json(
         parallel_buffered_chunks_peak: usize,
         parallel_buffered_bytes_peak: usize,
         parallel_fallback_reason: String,
+        statistics_summary: String,
         plan_node_descs: Vec<SerializablePlanNodeDescription>,
     }
 
@@ -667,6 +674,7 @@ pub fn format_plan_as_json(
         parallel_buffered_chunks_peak: plan_desc.parallel_buffered_chunks_peak,
         parallel_buffered_bytes_peak: plan_desc.parallel_buffered_bytes_peak,
         parallel_fallback_reason: plan_desc.parallel_fallback_reason.clone(),
+        statistics_summary: plan_desc.statistics_summary.clone(),
         plan_node_descs: serializable_nodes,
     };
 
@@ -774,6 +782,20 @@ mod tests {
         assert!(json.contains("\"parallel_work_time_us\":200"));
         assert!(json.contains("\"parallel_buffered_chunks_peak\":3"));
         assert!(json.contains("\"parallel_buffered_bytes_peak\":4096"));
+    }
+
+    #[test]
+    fn test_format_plan_as_table_with_statistics_summary() {
+        let mut plan_desc = PlanDescription::new();
+        plan_desc.statistics_summary = "sample_limit=500, min_epoch_delta=10".to_string();
+        let node = PlanNodeDescription::new("ScanVertices", 1);
+        plan_desc.add_node_desc(node);
+
+        let output = format_plan_as_table(&plan_desc);
+        assert!(output.contains("Statistics: sample_limit=500, min_epoch_delta=10"));
+
+        let empty = format_plan_as_table(&PlanDescription::new());
+        assert!(!empty.contains("Statistics:"));
     }
 
     #[test]

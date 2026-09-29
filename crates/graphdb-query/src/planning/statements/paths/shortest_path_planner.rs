@@ -2,6 +2,7 @@
 //!
 //! Responsible for planning shortest path queries, supporting algorithms such as BFS (Breadth-First Search).
 
+use crate::optimizer::cost::CostModelConfig;
 use crate::planning::statements::seeks::seek_strategy_base::{
     NodePattern, SeekStrategyContext, SeekStrategySelector, SeekStrategyType,
 };
@@ -51,7 +52,7 @@ impl ShortestPathPlanner {
         };
 
         let start_context = SeekStrategyContext::new(space_id, start.clone(), vec![]);
-        let selector = SeekStrategySelector::new();
+        let selector = SeekStrategySelector::new(CostModelConfig::default());
         let start_strategy = selector.select_strategy(&start_context);
 
         let start_finder = match start_strategy {

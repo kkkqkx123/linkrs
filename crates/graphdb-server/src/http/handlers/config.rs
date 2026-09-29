@@ -77,6 +77,10 @@ pub async fn get<
             "enable_adaptive_iteration": config.common.optimizer.enable_adaptive_iteration,
             "stable_threshold": config.common.optimizer.stable_threshold,
             "min_iteration_rounds": config.common.optimizer.min_iteration_rounds,
+            "statistics_sample_limit": config.common.optimizer.statistics_sample_limit,
+            "statistics_min_epoch_delta": config.common.optimizer.statistics_min_epoch_delta,
+            "storage_cost_profile": config.common.optimizer.storage_cost_profile,
+            "space_cost_profiles": config.common.optimizer.space_cost_profiles,
         },
         "monitoring": {
             "enabled": config.common.monitoring.enabled,
@@ -326,6 +330,18 @@ fn get_config_value(config: &crate::config::Config, section: &str, key: &str) ->
             "stable_threshold" => serde_json::json!(config.common.optimizer.stable_threshold),
             "min_iteration_rounds" => {
                 serde_json::json!(config.common.optimizer.min_iteration_rounds)
+            }
+            "statistics_sample_limit" => {
+                serde_json::json!(config.common.optimizer.statistics_sample_limit)
+            }
+            "statistics_min_epoch_delta" => {
+                serde_json::json!(config.common.optimizer.statistics_min_epoch_delta)
+            }
+            "storage_cost_profile" => {
+                serde_json::json!(config.common.optimizer.storage_cost_profile)
+            }
+            "space_cost_profiles" => {
+                serde_json::json!(config.common.optimizer.space_cost_profiles)
             }
             _ => serde_json::Value::Null,
         },

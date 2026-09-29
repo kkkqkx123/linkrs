@@ -521,8 +521,10 @@ pub fn compute_stats_streaming(
     let mut stats = ColumnStats::new(encoding_type, compressed_size, raw_size);
     let mut hll = HyperLogLog::new();
     let mut total = 0u64;
+    let mut seen = 0u64;
 
     for v in values {
+        seen += 1;
         match v {
             Some(val) => {
                 total += 1;
@@ -552,8 +554,8 @@ pub fn compute_stats_streaming(
 
     stats.distinct_count = Some(hll.estimate());
     stats.hll = Some(hll);
-    stats.all_null = total == 0 && stats.null_count > 0;
-    stats.guaranteed_no_nulls = stats.null_count == 0;
+    stats.all_null = seen > 0 && total == 0;
+    stats.guaranteed_no_nulls = seen > 0 && stats.null_count == 0;
     stats
 }
 

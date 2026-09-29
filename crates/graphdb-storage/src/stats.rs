@@ -3,9 +3,10 @@
 //! Precision target is P=6 (M=64 registers): a small 64-byte footprint per
 //! column with an expected relative error around 13%. Callers needing
 //! tighter bounds should document the measured error next to the estimate.
+//!
+//! Hashing is deterministic FNV-1a so persisted registers stay comparable
+//! across processes and restarts.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 
 use graphdb_core::{StorageResult, Value};
@@ -39,9 +40,7 @@ impl HyperLogLog {
             Value::Double(f) => self.add_hash(f.to_bits()),
             Value::Float(f) => self.add_hash(f.to_bits() as u64),
             _ => {
-                let mut hasher = DefaultHasher::new();
-                hash_value(value, &mut hasher);
-                self.add_hash(hasher.finish());
+                self.add_hash(fnv1a_value(value));
             }
         }
     }
@@ -99,33 +98,99 @@ impl HyperLogLog {
     }
 }
 
-fn hash_value(value: &Value, hasher: &mut DefaultHasher) {
+/// Deterministic 64-bit FNV-1a over a stable per-type encoding.
+///
+/// Replaces the process-seeded default hasher so HyperLogLog registers can be
+/// persisted and merged across restarts without changing the estimate.
+fn fnv1a_value(value: &Value) -> u64 {
+    const OFFSET: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+    let mut hash = OFFSET;
+    let mut mix = |bytes: &[u8]| {
+        for b in bytes {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(PRIME);
+        }
+    };
+    // Discriminant first so different types never collide on equal payloads.
+    mix(&[value_discriminant(value)]);
     match value {
-        Value::Bool(b) => b.hash(hasher),
-        Value::SmallInt(v) => v.hash(hasher),
-        Value::Int(v) => v.hash(hasher),
-        Value::BigInt(v) => v.hash(hasher),
-        Value::String(s) => s.as_str().hash(hasher),
-        Value::FixedString(s) => s.hash(hasher),
-        Value::Blob(b) => b.hash(hasher),
-        Value::Date(d) => d.hash(hasher),
-        Value::Time(t) => t.hash(hasher),
-        Value::DateTime(dt) => dt.hash(hasher),
-        Value::Uuid(u) => u.hash(hasher),
-        Value::Json(j) => j.as_str().hash(hasher),
-        Value::JsonB(j) => j.to_json_string().hash(hasher),
+        Value::Bool(b) => mix(&[*b as u8]),
+        Value::SmallInt(v) => mix(&v.to_le_bytes()),
+        Value::Int(v) => mix(&v.to_le_bytes()),
+        Value::BigInt(v) => mix(&v.to_le_bytes()),
+        Value::String(s) => mix(s.as_bytes()),
+        Value::FixedString(s) => mix(s.as_bytes()),
+        Value::Blob(b) => mix(b),
+        Value::Date(d) => {
+            mix(&d.year.to_le_bytes());
+            mix(&d.month.to_le_bytes());
+            mix(&d.day.to_le_bytes());
+        }
+        Value::Time(t) => {
+            mix(&t.hour.to_le_bytes());
+            mix(&t.minute.to_le_bytes());
+            mix(&t.sec.to_le_bytes());
+            mix(&t.microsec.to_le_bytes());
+        }
+        Value::DateTime(dt) => {
+            mix(&dt.year.to_le_bytes());
+            mix(&dt.month.to_le_bytes());
+            mix(&dt.day.to_le_bytes());
+            mix(&dt.hour.to_le_bytes());
+            mix(&dt.minute.to_le_bytes());
+            mix(&dt.sec.to_le_bytes());
+            mix(&dt.microsec.to_le_bytes());
+        }
+        Value::Uuid(u) => mix(u.as_bytes()),
+        Value::Json(j) => mix(j.as_str().as_bytes()),
+        Value::JsonB(j) => mix(j.to_json_string().as_bytes()),
         _ => {
-            // Complex values must hash their content, not just the
-            // discriminant plus an estimated size: equal-sized but
-            // different lists otherwise collide and poison the distinct
-            // estimate. Postcard gives the canonical payload bytes.
             if let Ok(bytes) = postcard::to_allocvec(value) {
-                bytes.hash(hasher);
+                mix(&bytes);
             } else {
-                std::mem::discriminant(value).hash(hasher);
-                value.estimated_size().hash(hasher);
+                mix(&value.estimated_size().to_le_bytes());
             }
         }
+    }
+    // FNV-1a leaves sequential inputs correlated in the low bits that back
+    // the register index, so run a splitmix64 finalizer for avalanche while
+    // staying dependency-free and deterministic.
+    mix64(hash)
+}
+
+/// SplitMix64 finalizer: strong bit avalanche for a 64-bit hash.
+fn mix64(mut x: u64) -> u64 {
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58476d1ce4e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d049bb133111eb);
+    x ^= x >> 31;
+    x
+}
+
+/// Stable per-type discriminant for the FNV-1a encoding.
+fn value_discriminant(value: &Value) -> u8 {
+    use graphdb_core::value::Value::*;
+    match value {
+        Null(_) => 0,
+        Empty => 1,
+        Bool(_) => 2,
+        SmallInt(_) => 3,
+        Int(_) => 4,
+        BigInt(_) => 5,
+        Float(_) => 6,
+        Double(_) => 7,
+        String(_) => 8,
+        FixedString(_) => 9,
+        Blob(_) => 10,
+        Date(_) => 11,
+        Time(_) => 12,
+        DateTime(_) => 13,
+        Uuid(_) => 14,
+        Json(_) => 15,
+        JsonB(_) => 16,
+        _ => 255,
     }
 }
 
@@ -183,5 +248,20 @@ mod tests {
         let mut hll = HyperLogLog::new();
         hll.add_value(&Value::Double(f64::NAN));
         assert_eq!(hll.estimate(), 0);
+    }
+
+    #[test]
+    fn deterministic_registers_across_instances() {
+        let values: Vec<Value> = (0..200i32).map(Value::Int).collect();
+        let mut a = HyperLogLog::new();
+        let mut b = HyperLogLog::new();
+        for v in &values {
+            a.add_value(v);
+        }
+        for v in values.iter().rev() {
+            b.add_value(v);
+        }
+        assert_eq!(a.registers(), b.registers());
+        assert_eq!(a.estimate(), b.estimate());
     }
 }

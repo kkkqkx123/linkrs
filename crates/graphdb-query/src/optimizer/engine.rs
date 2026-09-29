@@ -37,6 +37,9 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::optimizer::cost_based::subquery_unnesting::UnnestDecision;
 use crate::optimizer::cost_based::{
     AggregateContext, AggregateStrategySelector, IndexSelector, SortEliminationOptimizer,
@@ -89,6 +92,12 @@ pub struct OptimizerEngine {
     subquery_unnesting_optimizer: SubqueryUnnestingOptimizer,
     /// Cost model configuration
     cost_config: CostModelConfig,
+    /// Per-space cost model overrides (space name -> config).
+    space_cost_configs: parking_lot::RwLock<HashMap<String, CostModelConfig>>,
+    /// Lazily built per-space calculators, keyed by space name.
+    space_calculators: parking_lot::RwLock<HashMap<String, Arc<CostCalculator>>>,
+    /// Bumped on every cost configuration change; feeds the plan-cache key.
+    cost_epoch: AtomicU64,
     /// Logical heuristic optimizer (operates on LogicalNodeEnum, pre-CBO)
     logical_heuristic: LogicalBatchOptimizer,
     /// Physical heuristic optimizer (operates on PlanNodeEnum, post-mapping)
@@ -223,6 +232,9 @@ impl OptimizerEngine {
             batch_plan_analyzer,
             subquery_unnesting_optimizer,
             cost_config,
+            space_cost_configs: parking_lot::RwLock::new(HashMap::new()),
+            space_calculators: parking_lot::RwLock::new(HashMap::new()),
+            cost_epoch: AtomicU64::new(0),
             logical_heuristic,
             physical_heuristic,
             last_batch_statistics: Mutex::new(Vec::new()),
@@ -258,6 +270,51 @@ impl OptimizerEngine {
     /// Obtain the Cost Calculator
     pub fn cost_calculator(&self) -> &Arc<CostCalculator> {
         &self.cost_calculator
+    }
+
+    /// Calculator for a space: the per-space override when configured,
+    /// otherwise the base calculator. Unknown spaces fall back to base.
+    pub fn cost_calculator_for(&self, space: Option<&str>) -> Arc<CostCalculator> {
+        let Some(space) = space else {
+            return self.cost_calculator.clone();
+        };
+        if let Some(cached) = self.space_calculators.read().get(space) {
+            return cached.clone();
+        }
+        let config = self
+            .space_cost_configs
+            .read()
+            .get(space)
+            .copied()
+            .unwrap_or(self.cost_config);
+        let calculator = Arc::new(CostCalculator::with_config(
+            self.stats_manager.clone(),
+            config,
+        ));
+        self.space_calculators
+            .write()
+            .insert(space.to_string(), calculator.clone());
+        calculator
+    }
+
+    /// Snapshot of the per-space cost overrides currently in force.
+    pub fn space_cost_configs(&self) -> HashMap<String, CostModelConfig> {
+        self.space_cost_configs.read().clone()
+    }
+
+    /// Replace the per-space cost overrides wholesale.
+    ///
+    /// Clears the calculator cache and bumps the cost epoch so cached plans
+    /// priced under the old overrides are never reused.
+    pub fn set_space_cost_configs(&self, configs: HashMap<String, CostModelConfig>) {
+        *self.space_cost_configs.write() = configs;
+        self.space_calculators.write().clear();
+        self.cost_epoch.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Cost configuration generation; part of the plan-cache key.
+    pub fn cost_epoch(&self) -> u64 {
+        self.cost_epoch.load(Ordering::Relaxed)
     }
 
     /// Statistics Information Manager
@@ -374,6 +431,9 @@ impl OptimizerEngine {
             self.stats_manager.clone(),
             self.cost_config,
         ));
+        // The base changed: per-space calculators built on it are stale.
+        self.space_calculators.write().clear();
+        self.cost_epoch.fetch_add(1, Ordering::Relaxed);
         // Re-create batch plan analyzer
         self.batch_plan_analyzer = BatchPlanAnalyzer::new();
         // Re-create the subquery to de-associate the optimizer.
@@ -709,29 +769,29 @@ impl OptimizerEngine {
 
         // Join order — decision and rewrite on the logical tree, rewrite
         // mirrored on the physical root.
-        self.apply_join_order_logical(stats, plan);
+        self.apply_join_order_logical(stats, space, plan);
 
         // Cost-based index selection — decision stamped as hints on the
         // logical tree, structural rewrite on the physical root.
         self.apply_index_selection_logical(space, plan);
 
         // Sort + Limit → TopN conversion (residual patterns, cost-based).
-        self.apply_topn_wiring(plan, stats);
+        self.apply_topn_wiring(space, plan, stats);
 
         // Sort + Limit → TopN conversion on the logical tree.
-        self.apply_topn_wiring_logical(stats, plan);
+        self.apply_topn_wiring_logical(stats, space, plan);
 
         // Aggregate strategy selection — decision on the logical
         // tree (the strategy is consumed by the physical planner via the
         // notes).
-        self.apply_aggregate_strategy_logical(stats, plan);
+        self.apply_aggregate_strategy_logical(stats, space, plan);
 
         // Collect per-node row estimates for estimated_rows writeback.
         self.apply_row_estimates(plan, stats);
 
         // Expression precomputation decisions (note-only; EXPLAIN
         // observability for expressions worth precomputing).
-        self.apply_precompute_notes(plan);
+        self.apply_precompute_notes(space, plan);
 
         Ok(())
     }
@@ -752,13 +812,14 @@ impl OptimizerEngine {
 
         // Join order optimization
         if let Some(root) = plan.root.take() {
+            let calculator = self.cost_calculator_for(space);
             let mut notes = Vec::new();
             let mut decisions = std::collections::HashMap::new();
             let rewritten = crate::optimizer::cost_based::join_order_rewriter::
                 walk_and_optimize_joins_with_decisions(
                     &root,
                     stats,
-                    &self.cost_calculator,
+                    &calculator,
                     &mut notes,
                     &mut Some(&mut decisions),
                 );
@@ -770,7 +831,7 @@ impl OptimizerEngine {
         // Cost-based index selection (ScanVertices → IndexScan)
         if let Some(root) = plan.root.take() {
             let selector = IndexSelector::new(
-                self.cost_calculator.clone(),
+                self.cost_calculator_for(space),
                 self.selectivity_estimator.clone(),
             );
             let mut notes = Vec::new();
@@ -786,11 +847,11 @@ impl OptimizerEngine {
         }
 
         // Sort + Limit → TopN conversion (residual patterns)
-        self.apply_topn_wiring(plan, stats);
+        self.apply_topn_wiring(space, plan, stats);
 
         // Aggregate strategy selection (decision notes)
         if let Some(root) = plan.root.take() {
-            let selector = AggregateStrategySelector::new(self.cost_calculator.clone());
+            let selector = AggregateStrategySelector::new(self.cost_calculator_for(space));
             let mut notes = Vec::new();
             let rewritten = self.select_aggregate_strategies(&root, stats, &selector, &mut notes);
             plan.set_root(rewritten);
@@ -801,7 +862,7 @@ impl OptimizerEngine {
         self.apply_row_estimates(plan, stats);
 
         // Expression precomputation decisions (note-only)
-        self.apply_precompute_notes(plan);
+        self.apply_precompute_notes(space, plan);
 
         Ok(())
     }
@@ -834,21 +895,32 @@ impl OptimizerEngine {
 
     /// Join order decision on the logical tree; structural rewrite applied
     /// to the physical root.
-    fn apply_join_order_logical(&self, stats: &StatsView, plan: &mut ExecutionPlan) {
+    fn apply_join_order_logical(
+        &self,
+        stats: &StatsView,
+        space: Option<&str>,
+        plan: &mut ExecutionPlan,
+    ) {
         use crate::optimizer::cost_based::join_order_rewriter::walk_and_optimize_joins_logical;
 
         let Some(logical) = plan.logical_plan().cloned() else {
             return;
         };
 
+        // A user `USING JOIN` hint pins the join shape: the planning
+        // enumerator honored it, so the reviewer stays out entirely (both
+        // the logical decision and its physical mirror).
+        if logical.join_order_hinted {
+            plan.cbo_notes
+                .push("join_order: kept planning order (user hint, reviewer skipped)".to_string());
+            return;
+        }
+
         // Decision on the logical tree.
+        let calculator = self.cost_calculator_for(space);
         let mut notes = Vec::new();
-        let rewritten_logical = walk_and_optimize_joins_logical(
-            logical.root(),
-            stats,
-            &self.cost_calculator,
-            &mut notes,
-        );
+        let rewritten_logical =
+            walk_and_optimize_joins_logical(logical.root(), stats, &calculator, &mut notes);
         plan.cbo_notes.extend(notes);
 
         // Keep the attached logical plan in sync with the join order decision.
@@ -866,7 +938,7 @@ impl OptimizerEngine {
                 walk_and_optimize_joins_with_decisions(
                     &root,
                     stats,
-                    &self.cost_calculator,
+                    &calculator,
                     &mut scratch,
                     &mut Some(&mut decisions),
                 );
@@ -885,7 +957,7 @@ impl OptimizerEngine {
         };
 
         let selector = IndexSelector::new(
-            self.cost_calculator.clone(),
+            self.cost_calculator_for(space),
             self.selectivity_estimator.clone(),
         );
 
@@ -922,13 +994,18 @@ impl OptimizerEngine {
     }
 
     /// Aggregate strategy decision on the logical tree (note-only).
-    fn apply_aggregate_strategy_logical(&self, stats: &StatsView, plan: &mut ExecutionPlan) {
+    fn apply_aggregate_strategy_logical(
+        &self,
+        stats: &StatsView,
+        space: Option<&str>,
+        plan: &mut ExecutionPlan,
+    ) {
         use crate::optimizer::cost_based::aggregate_strategy::walk_aggregate_strategies_logical;
 
         let Some(logical) = plan.logical_plan().cloned() else {
             return;
         };
-        let selector = AggregateStrategySelector::new(self.cost_calculator.clone());
+        let selector = AggregateStrategySelector::new(self.cost_calculator_for(space));
         let mut notes = Vec::new();
         walk_aggregate_strategies_logical(
             logical.root(),
@@ -942,13 +1019,18 @@ impl OptimizerEngine {
 
     /// Sort + Limit → TopN conversion on the logical tree (residual
     /// patterns, cost-based).
-    fn apply_topn_wiring_logical(&self, stats: &StatsView, plan: &mut ExecutionPlan) {
+    fn apply_topn_wiring_logical(
+        &self,
+        stats: &StatsView,
+        space: Option<&str>,
+        plan: &mut ExecutionPlan,
+    ) {
         use crate::optimizer::cost_based::topn_wiring::rewrite_sort_with_limits_logical;
 
         let Some(logical) = plan.logical_plan().cloned() else {
             return;
         };
-        let optimizer = SortEliminationOptimizer::new(self.cost_calculator.clone());
+        let optimizer = SortEliminationOptimizer::new(self.cost_calculator_for(space));
         let mut notes = Vec::new();
         let rewritten = rewrite_sort_with_limits_logical(
             logical.root(),
@@ -964,9 +1046,9 @@ impl OptimizerEngine {
     }
 
     /// Sort + Limit → TopN conversion (residual patterns, cost-based).
-    fn apply_topn_wiring(&self, plan: &mut ExecutionPlan, stats: &StatsView) {
+    fn apply_topn_wiring(&self, space: Option<&str>, plan: &mut ExecutionPlan, stats: &StatsView) {
         if let Some(root) = plan.root.take() {
-            let optimizer = SortEliminationOptimizer::new(self.cost_calculator.clone());
+            let optimizer = SortEliminationOptimizer::new(self.cost_calculator_for(space));
             let mut notes = Vec::new();
             let rewritten = crate::optimizer::cost_based::topn_wiring::rewrite_sort_with_limits(
                 &root,
@@ -995,9 +1077,9 @@ impl OptimizerEngine {
 
     /// Expression precomputation decisions (note-only; EXPLAIN observability
     /// for expressions worth precomputing).
-    fn apply_precompute_notes(&self, plan: &mut ExecutionPlan) {
+    fn apply_precompute_notes(&self, space: Option<&str>, plan: &mut ExecutionPlan) {
         if let Some(root) = plan.root.as_ref() {
-            let optimizer = crate::optimizer::cost_based::expression_precomputation::ExpressionPrecomputationOptimizer::new(self.cost_calculator.clone());
+            let optimizer = crate::optimizer::cost_based::expression_precomputation::ExpressionPrecomputationOptimizer::new(self.cost_calculator_for(space));
             let notes =
                 crate::optimizer::cost_based::precomputation_wiring::collect_precompute_notes(
                     root, &optimizer,
