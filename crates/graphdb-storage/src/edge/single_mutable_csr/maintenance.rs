@@ -3,7 +3,9 @@
 
 use graphdb_core::StorageResult;
 
-use super::super::csr_shared::{can_revert_delete, decide_slot_delete, is_reclaimable_cold, DeleteSlotOutcome};
+use super::super::csr_shared::{
+    can_revert_delete, decide_slot_delete, is_reclaimable_cold, DeleteSlotOutcome,
+};
 use super::super::{EdgeId, EdgePosition, Timestamp, INVALID_EDGE_ID};
 use super::{empty_slot, SingleMutableCsr};
 
@@ -111,8 +113,12 @@ impl SingleMutableCsr {
         if cutoff == Timestamp::MAX {
             return 0;
         }
-        let hot = self.hot_at(vid as usize).unwrap_or(super::super::HotNbr::dead_gap());
-        let cold = self.cold_at(vid as usize).unwrap_or(super::super::ColdStamps::dead_gap());
+        let hot = self
+            .hot_at(vid as usize)
+            .unwrap_or(super::super::HotNbr::dead_gap());
+        let cold = self
+            .cold_at(vid as usize)
+            .unwrap_or(super::super::ColdStamps::dead_gap());
         if hot.edge_id != INVALID_EDGE_ID && is_reclaimable_cold(&cold, cutoff) {
             1
         } else {
@@ -125,7 +131,9 @@ impl SingleMutableCsr {
             Some(h) => h,
             None => return (0, 0, 0),
         };
-        let cold = self.cold_at(vid as usize).unwrap_or(super::super::ColdStamps::dead_gap());
+        let cold = self
+            .cold_at(vid as usize)
+            .unwrap_or(super::super::ColdStamps::dead_gap());
         if hot.edge_id == INVALID_EDGE_ID {
             return (0, 0, 0);
         }
@@ -142,7 +150,9 @@ impl SingleMutableCsr {
             Some(h) => h,
             None => return (0, 0),
         };
-        let cold = self.cold_at(vid as usize).unwrap_or(super::super::ColdStamps::dead_gap());
+        let cold = self
+            .cold_at(vid as usize)
+            .unwrap_or(super::super::ColdStamps::dead_gap());
         if hot.edge_id == INVALID_EDGE_ID || cold.is_live() {
             return (0, 0);
         }

@@ -135,7 +135,9 @@ impl GraphVertexCursor {
             None => {
                 !staged_active
                     && ctx.data_store().with_vertex_tables(|tables| {
-                        tags.labels.iter().all(|label_id| tables.get(label_id).is_none())
+                        tags.labels
+                            .iter()
+                            .all(|label_id| tables.get(label_id).is_none())
                     })
             }
         };

@@ -313,16 +313,26 @@ impl SeekStrategySelector {
         let index = context.get_index_for_labels(&context.node_pattern.labels)?;
         let total_rows = context.total_vertices;
         let selectivity = index.selectivity as f64;
-
-        let cost = self.cost_config.random_page_cost * (total_rows as f64 * selectivity)
-            + self.cost_config.cpu_index_tuple_cost * total_rows as f64 * selectivity;
-        let estimated_rows = (total_rows as f64 * selectivity) as usize;
+        let matching = ((total_rows as f64 * selectivity).max(1.0)) as u64;
+        let cost = Self::shared_index_seek_cost(&self.cost_config, matching);
+        let estimated_rows = matching as usize;
 
         Some(StrategyEvaluation {
             strategy_type: SeekStrategyType::IndexSeek,
             cost,
             estimated_rows,
         })
+    }
+
+    /// Shared index-seek cost matching the optimizer calculator:
+    /// sequential index pages plus per-tuple index and table costs.
+    fn shared_index_seek_cost(cost_config: &CostModelConfig, matching_rows: u64) -> f64 {
+        use crate::optimizer::cost::config::ROWS_PER_PAGE;
+        let pages = (matching_rows / ROWS_PER_PAGE).max(1);
+        pages as f64 * cost_config.seq_page_cost
+            + matching_rows as f64 * cost_config.cpu_index_tuple_cost
+            + matching_rows as f64 * cost_config.random_page_cost
+            + matching_rows as f64 * cost_config.cpu_tuple_cost
     }
 
     fn evaluate_prop_index_seek(
@@ -333,16 +343,13 @@ impl SeekStrategySelector {
             return None;
         }
 
-        let index = self.select_best_index(&context.available_indexes, &context.predicates)?;
+        let _index = self.select_best_index(&context.available_indexes, &context.predicates)?;
         let selectivity = self.estimate_predicate_selectivity(context);
         let total_rows = context.total_vertices;
+        let matching = ((total_rows as f64 * selectivity).max(1.0)) as u64;
 
-        let cost = self.cost_config.random_page_cost * (total_rows as f64 * selectivity)
-            + self.cost_config.cpu_operator_cost
-                * index.field_count as f64
-                * total_rows as f64
-                * selectivity;
-        let estimated_rows = (total_rows as f64 * selectivity) as usize;
+        let cost = Self::shared_index_seek_cost(&self.cost_config, matching);
+        let estimated_rows = matching as usize;
 
         Some(StrategyEvaluation {
             strategy_type: SeekStrategyType::PropIndexSeek,

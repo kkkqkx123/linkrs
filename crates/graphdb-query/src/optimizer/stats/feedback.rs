@@ -22,9 +22,8 @@ pub mod query;
 pub mod selectivity;
 pub mod trigger;
 
-// Re-export the main types while maintaining backward compatibility.
+// Re-export the main types.
 pub use cardinality::CardinalityFeedbackManager;
-pub use collector::{ExecutionFeedbackCollector, SimpleExecutionFeedback, SimpleFeedbackCollector};
 pub use decision::{DecisionFeedbackStore, DecorrelationAdvice};
 pub use factor::FeedbackDrivenFactor;
 pub use fingerprint::{generate_query_fingerprint, normalize_query};
@@ -39,12 +38,6 @@ mod tests {
 
     #[test]
     fn test_module_integration() {
-        // Integration of the testing module
-        let collector = ExecutionFeedbackCollector::new();
-        collector.start();
-        collector.record_rows(100);
-        collector.finish();
-
         let mut selectivity = FeedbackDrivenSelectivity::new(0.1);
         selectivity.update_with_feedback(0.15);
 
@@ -56,8 +49,6 @@ mod tests {
 
         let config = AutoFeedbackConfig::new();
 
-        // All modules are functioning properly.
-        assert_eq!(collector.get_actual_rows(), 100);
         assert!(selectivity.corrected_selectivity() > 0.0);
         assert_eq!(query_feedback.query_fingerprint, "fp_123");
         assert_eq!(history.total_feedback_count(), 1);

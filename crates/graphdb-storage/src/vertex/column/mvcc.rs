@@ -157,12 +157,10 @@ impl Column {
                 if let Some(chain) = chains.get(&local) {
                     if let Some(tail) = chain.last() {
                         if tail.start_ts >= ts || tail.end_ts > ts {
-                            return Err(graphdb_core::StorageError::invalid_operation(
-                                format!(
-                                    "out-of-order version write on column {} row {}",
-                                    self.name, row_idx
-                                ),
-                            ));
+                            return Err(graphdb_core::StorageError::invalid_operation(format!(
+                                "out-of-order version write on column {} row {}",
+                                self.name, row_idx
+                            )));
                         }
                     }
                 }
@@ -441,7 +439,11 @@ impl Column {
     ///
     /// Merges the `get_at_ts` and `start_ts_at` passes so fenced point reads
     /// locate the chunk once instead of twice.
-    pub fn get_with_stamp(&self, row_idx: usize, query_ts: Timestamp) -> (Timestamp, Option<Value>) {
+    pub fn get_with_stamp(
+        &self,
+        row_idx: usize,
+        query_ts: Timestamp,
+    ) -> (Timestamp, Option<Value>) {
         let chunks = self.chunks.read();
         let capacity = self.chunk_capacity();
         let Some(chunk) = chunks.get(row_idx / capacity.max(1)) else {
@@ -550,9 +552,7 @@ impl Column {
                 chains.remove(&local);
             }
             state.visibility.ensure_len(chunk.row_count);
-            state
-                .visibility
-                .mark_created(local, entry.start_ts);
+            state.visibility.mark_created(local, entry.start_ts);
             let restore = entry.value.clone();
             self.write_core(chunk, state, row_idx, restore.as_ref(), use_chunk_layer)?;
             Ok(())

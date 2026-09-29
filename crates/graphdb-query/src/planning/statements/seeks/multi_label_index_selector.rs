@@ -39,15 +39,23 @@ pub enum MultiLabelStrategy {
 }
 
 impl MultiLabelStrategy {
+    fn shared_index_cost(cost_model: &CostModelConfig, matching_rows: u64) -> f64 {
+        use crate::optimizer::cost::config::ROWS_PER_PAGE;
+        let pages = (matching_rows / ROWS_PER_PAGE).max(1);
+        pages as f64 * cost_model.seq_page_cost
+            + matching_rows as f64 * cost_model.cpu_index_tuple_cost
+            + matching_rows as f64 * cost_model.random_page_cost
+            + matching_rows as f64 * cost_model.cpu_tuple_cost
+    }
+
     pub fn estimate_cost(&self, cost_model: &CostModelConfig, total_vertices: usize) -> f64 {
         match self {
             Self::CompositeIndex {
                 index,
                 covered_labels: _,
             } => {
-                let selectivity = index.selectivity as f64;
-                cost_model.random_page_cost * (total_vertices as f64 * selectivity)
-                    + cost_model.cpu_index_tuple_cost * total_vertices as f64 * selectivity
+                let matching = ((total_vertices as f64 * index.selectivity as f64).max(1.0)) as u64;
+                Self::shared_index_cost(cost_model, matching)
             }
 
             Self::SingleIndexWithFilter {
@@ -56,11 +64,8 @@ impl MultiLabelStrategy {
                 estimated_selectivity,
                 ..
             } => {
-                let base_cost = cost_model.random_page_cost
-                    * (total_vertices as f64 * index.selectivity as f64)
-                    + cost_model.cpu_index_tuple_cost
-                        * total_vertices as f64
-                        * index.selectivity as f64;
+                let matching = ((total_vertices as f64 * index.selectivity as f64).max(1.0)) as u64;
+                let base_cost = Self::shared_index_cost(cost_model, matching);
                 let filter_cost = cost_model.cpu_tuple_cost
                     * filter_labels.len() as f64
                     * (total_vertices as f64 * estimated_selectivity);
@@ -71,11 +76,9 @@ impl MultiLabelStrategy {
                 let scan_cost: f64 = indexes
                     .iter()
                     .map(|idx| {
-                        cost_model.random_page_cost
-                            * (total_vertices as f64 * idx.selectivity as f64)
-                            + cost_model.cpu_index_tuple_cost
-                                * total_vertices as f64
-                                * idx.selectivity as f64
+                        let matching =
+                            ((total_vertices as f64 * idx.selectivity as f64).max(1.0)) as u64;
+                        Self::shared_index_cost(cost_model, matching)
                     })
                     .sum();
                 let intersection_cost =

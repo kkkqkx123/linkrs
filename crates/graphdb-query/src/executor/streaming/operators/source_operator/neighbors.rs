@@ -88,10 +88,8 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
         }
         match state {
             NeighborScanState::Init => {
-                let dir: EdgeDirection = direction
-                    .as_str()
-                    .parse()
-                    .map_err(QueryError::execution)?;
+                let dir: EdgeDirection =
+                    direction.as_str().parse().map_err(QueryError::execution)?;
                 let guard = storage_ref.read();
                 let vertices = guard
                     .scan_vertices_by_tag(space_name, tag)
@@ -168,12 +166,7 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
                     let vertices = guard
                         .get_vertices_batch(space_name, tag, &neighbor_ids[*position..end])
                         .map_err(|error| {
-                            storage_error(
-                                "GetNeighbors",
-                                "get neighbor vertex",
-                                space_name,
-                                error,
-                            )
+                            storage_error("GetNeighbors", "get neighbor vertex", space_name, error)
                         })?;
                     for vertex in vertices.into_iter().flatten() {
                         rows.push(make_flat_vertex_row(vertex, projected_properties));

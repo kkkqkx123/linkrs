@@ -174,11 +174,6 @@ impl SelectivityEstimator {
         }
     }
 
-    /// Estimated Range Condition Selectivity (simplified version)
-    pub fn estimate_range_selectivity_simple(&self) -> f64 {
-        defaults::RANGE
-    }
-
     /// Conditional Selectivity of Estimation Ranges (with Boundary Values)
     ///
     /// Adjust the selectivity based on the size of the scope.

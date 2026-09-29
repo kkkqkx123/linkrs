@@ -535,8 +535,7 @@ impl Certifier {
                 let read_size = txn_read_set.size() + txn_read_set.read_ranges.len();
                 if read_size >= threshold {
                     let has_conflicting_commit = committed.iter().any(|(commit_ts, ws)| {
-                        *commit_ts > ctx.start_timestamp
-                            && txn_read_set.has_read_conflict_with(ws)
+                        *commit_ts > ctx.start_timestamp && txn_read_set.has_read_conflict_with(ws)
                     });
                     if has_conflicting_commit {
                         drop(committed);
@@ -757,13 +756,7 @@ impl Certifier {
         }
         let mut edge_idx = self.committed_edge_writes.lock();
         for edge in write_set.edges.iter() {
-            push_index_entry(
-                edge_idx
-                    .entry(*edge)
-                    .or_default(),
-                commit_timestamp,
-                txn_id,
-            );
+            push_index_entry(edge_idx.entry(*edge).or_default(), commit_timestamp, txn_id);
         }
         let mut schema_idx = self.committed_schema_writes.lock();
         for resource in write_set.schema_resources.iter() {

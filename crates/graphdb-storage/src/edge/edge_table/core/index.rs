@@ -226,13 +226,15 @@ impl EdgeStore {
             );
         }
         if let Some(stats) = &self.stats_manager {
-            stats.record_index_operation(self.label as u64, prop_name, latency_ms, false);
+            // Edge tables lack space context (label != space); record without
+            // polluting real `space_{id}` buckets.
+            stats.record_index_operation_unknown_space(prop_name, latency_ms, false);
         }
     }
 
     fn record_index_write_success(&self, prop_name: &str, latency_ms: u64) {
         if let Some(stats) = &self.stats_manager {
-            stats.record_index_operation(self.label as u64, prop_name, latency_ms, true);
+            stats.record_index_operation_unknown_space(prop_name, latency_ms, true);
         }
     }
 
@@ -454,7 +456,6 @@ impl EdgeStore {
 
         let iter = EdgeTableScanIterator::new(self, all_ts);
         let mut build_failures: u64 = 0;
-        let space_id = self.label as u64;
         let stats_manager = self.stats_manager.clone();
         // Backpressure: yield periodically so a huge rebuild does not starve
         // other work on the same thread pool. No memory bound needed since
@@ -476,10 +477,10 @@ impl EdgeStore {
                 if result.is_err() {
                     build_failures = build_failures.saturating_add(1);
                     if let Some(stats) = &stats_manager {
-                        stats.record_index_operation(space_id, prop_name, latency, false);
+                        stats.record_index_operation_unknown_space(prop_name, latency, false);
                     }
                 } else if let Some(stats) = &stats_manager {
-                    stats.record_index_operation(space_id, prop_name, latency, true);
+                    stats.record_index_operation_unknown_space(prop_name, latency, true);
                 }
             }
         }

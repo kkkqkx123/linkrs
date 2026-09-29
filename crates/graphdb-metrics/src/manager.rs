@@ -125,6 +125,7 @@ pub enum MetricType {
     GenerationRebuildFailures,
     InconsistentIndexCount,
     RebuildPhaseLatencyMs,
+    RebuildPhaseOps,
     SplitCount,
     SplitFailures,
     ReclaimedIndexFiles,
@@ -132,7 +133,9 @@ pub enum MetricType {
     ManifestRetiredGenerations,
     FenceFailures,
     TransportLatencyMs,
+    TransportOps,
     MaterializerLatencyMs,
+    MaterializerOps,
     SnapshotLag,
     // Index metrics
     IndexScanCount,
@@ -305,6 +308,8 @@ pub struct StatsManager {
     space_metrics: Arc<DashMap<String, SpaceMetrics>>,
     index_metrics: Arc<DashMap<String, SpaceMetrics>>,
     last_query_metrics: Arc<RwLock<Option<QueryMetrics>>>,
+    query_metrics_history: Arc<RwLock<VecDeque<QueryMetrics>>>,
+    bloom_lock: Arc<parking_lot::Mutex<()>>,
     query_profiles: Arc<RwLock<VecDeque<QueryProfile>>>,
     query_latency_histogram: Arc<RwLock<LatencyHistogram>>,
     search_latency_histogram: Arc<RwLock<LatencyHistogram>>,
@@ -317,12 +322,44 @@ pub struct StatsManager {
 }
 
 impl StatsManager {
+    /// Single key rule: `space_{id}` for numeric spaces, `space_name:{name}`
+    /// for named collections, `target:{name}` for sync targets,
+    /// `rebuild:{target}:{phase}` for rebuild phases, and
+    /// `space_{id}.{index}` for per-space indexes. Distinct prefixes keep
+    /// same-named entities in different subsystems from polluting each other
+    /// while identical spaces share one key.
+    pub fn space_key(space_id: u64) -> String {
+        format!("space_{}", space_id)
+    }
+
+    pub fn space_key_for_name(name: &str) -> String {
+        format!("space_name:{name}")
+    }
+
+    pub fn target_key(target: &str) -> String {
+        format!("target:{target}")
+    }
+
+    pub fn rebuild_key(target: &str, phase: &str) -> String {
+        format!("rebuild:{target}:{phase}")
+    }
+
+    pub fn index_key(space_id: u64, index_name: &str) -> String {
+        format!("space_{}.{}", space_id, index_name)
+    }
+
+    pub fn unknown_index_key(index_name: &str) -> String {
+        format!("unknown.{}", index_name)
+    }
+
     pub fn new() -> Self {
         Self {
             metrics: Arc::new(DashMap::new()),
             space_metrics: Arc::new(DashMap::new()),
             index_metrics: Arc::new(DashMap::new()),
             last_query_metrics: Arc::new(RwLock::new(None)),
+            query_metrics_history: Arc::new(RwLock::new(VecDeque::with_capacity(1000))),
+            bloom_lock: Arc::new(parking_lot::Mutex::new(())),
             query_profiles: Arc::new(RwLock::new(VecDeque::with_capacity(1000))),
             query_latency_histogram: Arc::new(RwLock::new(LatencyHistogram::new(10000))),
             search_latency_histogram: Arc::new(RwLock::new(LatencyHistogram::new(10000))),
@@ -345,6 +382,8 @@ impl StatsManager {
             space_metrics: Arc::new(DashMap::new()),
             index_metrics: Arc::new(DashMap::new()),
             last_query_metrics: Arc::new(RwLock::new(None)),
+            query_metrics_history: Arc::new(RwLock::new(VecDeque::with_capacity(1000))),
+            bloom_lock: Arc::new(parking_lot::Mutex::new(())),
             query_profiles: Arc::new(RwLock::new(VecDeque::with_capacity(profile_cache_size))),
             query_latency_histogram: Arc::new(RwLock::new(LatencyHistogram::new(10000))),
             search_latency_histogram: Arc::new(RwLock::new(LatencyHistogram::new(10000))),
@@ -371,6 +410,8 @@ impl StatsManager {
             space_metrics: Arc::new(DashMap::new()),
             index_metrics: Arc::new(DashMap::new()),
             last_query_metrics: Arc::new(RwLock::new(None)),
+            query_metrics_history: Arc::new(RwLock::new(VecDeque::with_capacity(1000))),
+            bloom_lock: Arc::new(parking_lot::Mutex::new(())),
             query_profiles: Arc::new(RwLock::new(VecDeque::with_capacity(profile_cache_size))),
             query_latency_histogram: Arc::new(RwLock::new(LatencyHistogram::new(10000))),
             search_latency_histogram: Arc::new(RwLock::new(LatencyHistogram::new(10000))),
@@ -771,9 +812,19 @@ impl StatsManager {
     }
 
     pub fn record_query_metrics(&self, metrics: &QueryMetrics) {
-        let mut last_metrics = self.last_query_metrics.write();
-        *last_metrics = Some(metrics.clone());
-        drop(last_metrics);
+        // Per-instance history instead of single-slot overwrite: concurrent
+        // queries append under the lock so no instance is lost.
+        {
+            let mut last_metrics = self.last_query_metrics.write();
+            *last_metrics = Some(metrics.clone());
+        }
+        {
+            let mut history = self.query_metrics_history.write();
+            if history.len() >= 1000 {
+                history.pop_front();
+            }
+            history.push_back(metrics.clone());
+        }
 
         // Record latency histogram
         {
@@ -781,6 +832,8 @@ impl StatsManager {
             histogram.record_micros(metrics.total_time_us);
         }
 
+        // Cumulative sums plus a query count so means are computable;
+        // never overwrite with a single query's values.
         let updates = [
             (MetricType::QueryParseTimeUs, metrics.parse_time_us),
             (MetricType::QueryValidateTimeUs, metrics.validate_time_us),
@@ -803,8 +856,9 @@ impl StatsManager {
                 .metrics
                 .entry(metric_type)
                 .or_insert_with(|| Arc::new(MetricValue::new(0)));
-            metric.set(value);
+            metric.add(value);
         }
+        self.add_value(MetricType::NumQueries);
     }
 
     /// Get latency percentiles (avg, p50, p95, p99) in microseconds
@@ -842,8 +896,13 @@ impl StatsManager {
     }
 
     pub fn get_last_query_metrics(&self) -> Option<QueryMetrics> {
-        let last_metrics = self.last_query_metrics.write();
+        let last_metrics = self.last_query_metrics.read();
         last_metrics.clone()
+    }
+
+    /// Recent per-instance query metrics (up to 1000), newest last.
+    pub fn get_query_metrics_history(&self) -> Vec<QueryMetrics> {
+        self.query_metrics_history.read().iter().cloned().collect()
     }
 
     pub fn get_query_metrics(&self) -> Option<QueryMetrics> {
@@ -926,22 +985,25 @@ impl StatsManager {
     // Search Metrics
     // ============================================================================
 
-    /// Record a search query operation
+    /// Record a search query operation.
+    /// Index metrics are keyed per-space (`space_{id}.{index}`) so same-named
+    /// indexes in different spaces no longer pollute each other.
     pub fn record_search(&self, space_id: u64, index_name: &str, latency_ms: u64, success: bool) {
-        let space_key = format!("space_{}", space_id);
+        let space_key = Self::space_key(space_id);
+        let index_key = Self::index_key(space_id, index_name);
         self.add_value(MetricType::NumSearchQueries);
         self.add_space_metric(&space_key, MetricType::NumSearchQueries);
-        self.add_index_metric(index_name, MetricType::NumSearchQueries);
+        self.add_index_metric(&index_key, MetricType::NumSearchQueries);
 
         if !success {
             self.add_value(MetricType::NumSearchErrors);
             self.add_space_metric(&space_key, MetricType::NumSearchErrors);
-            self.add_index_metric(index_name, MetricType::NumSearchErrors);
+            self.add_index_metric(&index_key, MetricType::NumSearchErrors);
         }
 
         self.add_value_with_amount(MetricType::SearchLatencyMs, latency_ms);
         self.add_space_metric_with_amount(&space_key, MetricType::SearchLatencyMs, latency_ms);
-        self.add_index_metric_with_amount(index_name, MetricType::SearchLatencyMs, latency_ms);
+        self.add_index_metric_with_amount(&index_key, MetricType::SearchLatencyMs, latency_ms);
 
         {
             let mut histogram = self.search_latency_histogram.write();
@@ -957,20 +1019,41 @@ impl StatsManager {
         latency_ms: u64,
         success: bool,
     ) {
-        let space_key = format!("space_{}", space_id);
+        let space_key = Self::space_key(space_id);
+        let index_key = Self::index_key(space_id, index_name);
         self.add_value(MetricType::NumIndexOperations);
         self.add_space_metric(&space_key, MetricType::NumIndexOperations);
-        self.add_index_metric(index_name, MetricType::NumIndexOperations);
+        self.add_index_metric(&index_key, MetricType::NumIndexOperations);
 
         if !success {
             self.add_value(MetricType::NumIndexErrors);
             self.add_space_metric(&space_key, MetricType::NumIndexErrors);
-            self.add_index_metric(index_name, MetricType::NumIndexErrors);
+            self.add_index_metric(&index_key, MetricType::NumIndexErrors);
         }
 
         self.add_value_with_amount(MetricType::IndexLatencyMs, latency_ms);
         self.add_space_metric_with_amount(&space_key, MetricType::IndexLatencyMs, latency_ms);
-        self.add_index_metric_with_amount(index_name, MetricType::IndexLatencyMs, latency_ms);
+        self.add_index_metric_with_amount(&index_key, MetricType::IndexLatencyMs, latency_ms);
+    }
+
+    /// Record an index operation without a known space.
+    /// Used by storage paths that lack space context; records global and
+    /// `unknown.{index}` buckets only, never polluting real `space_{id}` keys.
+    pub fn record_index_operation_unknown_space(
+        &self,
+        index_name: &str,
+        latency_ms: u64,
+        success: bool,
+    ) {
+        let index_key = Self::unknown_index_key(index_name);
+        self.add_value(MetricType::NumIndexOperations);
+        self.add_index_metric(&index_key, MetricType::NumIndexOperations);
+        if !success {
+            self.add_value(MetricType::NumIndexErrors);
+            self.add_index_metric(&index_key, MetricType::NumIndexErrors);
+        }
+        self.add_value_with_amount(MetricType::IndexLatencyMs, latency_ms);
+        self.add_index_metric_with_amount(&index_key, MetricType::IndexLatencyMs, latency_ms);
     }
 
     /// Record a delete operation
@@ -981,32 +1064,33 @@ impl StatsManager {
         latency_ms: u64,
         success: bool,
     ) {
-        let space_key = format!("space_{}", space_id);
+        let space_key = Self::space_key(space_id);
+        let index_key = Self::index_key(space_id, index_name);
         self.add_value(MetricType::NumDeleteOperations);
         self.add_space_metric(&space_key, MetricType::NumDeleteOperations);
-        self.add_index_metric(index_name, MetricType::NumDeleteOperations);
+        self.add_index_metric(&index_key, MetricType::NumDeleteOperations);
 
         if !success {
             self.add_value(MetricType::NumDeleteErrors);
             self.add_space_metric(&space_key, MetricType::NumDeleteErrors);
-            self.add_index_metric(index_name, MetricType::NumDeleteErrors);
+            self.add_index_metric(&index_key, MetricType::NumDeleteErrors);
         }
 
         self.add_value_with_amount(MetricType::DeleteLatencyMs, latency_ms);
         self.add_space_metric_with_amount(&space_key, MetricType::DeleteLatencyMs, latency_ms);
-        self.add_index_metric_with_amount(index_name, MetricType::DeleteLatencyMs, latency_ms);
+        self.add_index_metric_with_amount(&index_key, MetricType::DeleteLatencyMs, latency_ms);
     }
 
     /// Record search result count
     pub fn record_search_result_count(&self, space_id: u64, count: u64) {
-        let space_key = format!("space_{}", space_id);
+        let space_key = Self::space_key(space_id);
         self.add_value_with_amount(MetricType::SearchResultCount, count);
         self.add_space_metric_with_amount(&space_key, MetricType::SearchResultCount, count);
     }
 
-    /// Record cache hit or miss
+    /// Record cache hit or miss for a known space.
     pub fn record_cache_hit(&self, space_id: u64, hit: bool) {
-        let space_key = format!("space_{}", space_id);
+        let space_key = Self::space_key(space_id);
         if hit {
             self.add_value(MetricType::SearchCacheHitCount);
             self.add_space_metric(&space_key, MetricType::SearchCacheHitCount);
@@ -1016,25 +1100,18 @@ impl StatsManager {
         }
     }
 
+    /// Record cache hit or miss without a known space (global only).
+    /// Replaces the legacy `record_cache_hit(0, …)` unknown-space bucket
+    /// that polluted `space_0`.
+    pub fn record_cache_hit_global(&self, hit: bool) {
+        if hit {
+            self.add_value(MetricType::SearchCacheHitCount);
+        } else {
+            self.add_value(MetricType::SearchCacheMissCount);
+        }
+    }
+
     // ========== Storage Metrics ==========
-
-    /// Record a storage read operation
-    pub fn record_storage_read(&self, latency_us: u64, success: bool) {
-        self.add_value(MetricType::StorageReadOps);
-        self.add_value_with_amount(MetricType::StorageReadLatencyUs, latency_us);
-        if !success {
-            self.add_value(MetricType::StorageErrors);
-        }
-    }
-
-    /// Record a storage write operation
-    pub fn record_storage_write(&self, latency_us: u64, success: bool) {
-        self.add_value(MetricType::StorageWriteOps);
-        self.add_value_with_amount(MetricType::StorageWriteLatencyUs, latency_us);
-        if !success {
-            self.add_value(MetricType::StorageErrors);
-        }
-    }
 
     /// Record storage cache hit or miss
     pub fn record_storage_cache_hit(&self, hit: bool) {
@@ -1045,10 +1122,29 @@ impl StatsManager {
         }
     }
 
+    /// Record a storage read with latency so means are computable.
+    pub fn record_storage_read(&self, latency_us: u64) {
+        self.add_value(MetricType::StorageReadOps);
+        self.add_value_with_amount(MetricType::StorageReadLatencyUs, latency_us);
+    }
+
+    /// Record a storage write with latency so means are computable.
+    pub fn record_storage_write(&self, latency_us: u64) {
+        self.add_value(MetricType::StorageWriteOps);
+        self.add_value_with_amount(MetricType::StorageWriteLatencyUs, latency_us);
+    }
+
+    /// Record a storage error.
+    pub fn record_storage_error(&self) {
+        self.add_value(MetricType::StorageErrors);
+    }
+
     /// Record a bloom pre-check query and whether it was positive.
     /// Hit rate derives from `BloomHits / BloomQueries`; permille is exported
-    /// for dashboards via `BloomHitRatePermille`.
+    /// for dashboards via `BloomHitRatePermille`. The triple update holds
+    /// `bloom_lock` so queries/hits/permille stay atomic under concurrency.
     pub fn record_bloom_query(&self, hit: bool) {
+        let _guard = self.bloom_lock.lock();
         self.add_value(MetricType::BloomQueries);
         if hit {
             self.add_value(MetricType::BloomHits);
@@ -1065,7 +1161,11 @@ impl StatsManager {
     }
 
     /// Snapshot-export bloom counters from a shard runtime.
+    /// Holds `bloom_lock` for the same atomicity as `record_bloom_query`.
+    /// Callers must pass deltas since the last export, not cumulative
+    /// totals, to avoid double counting.
     pub fn record_bloom_snapshot(&self, queries: u64, hits: u64) {
+        let _guard = self.bloom_lock.lock();
         self.add_value_with_amount(MetricType::BloomQueries, queries);
         self.add_value_with_amount(MetricType::BloomHits, hits);
         let total_queries = self.get_value(MetricType::BloomQueries).unwrap_or(0);
@@ -1103,18 +1203,22 @@ impl StatsManager {
         self.add_value(MetricType::TxnConflictCount);
     }
 
+    /// Record transaction timeout.
     pub fn record_txn_timeout(&self) {
         self.add_value(MetricType::TxnTimeoutCount);
     }
 
+    /// Record transaction disconnect.
     pub fn record_txn_disconnect(&self) {
         self.add_value(MetricType::TxnDisconnectCount);
     }
 
+    /// Record transaction recovery abort.
     pub fn record_txn_recovery_abort(&self) {
         self.add_value(MetricType::TxnRecoveryAbortCount);
     }
 
+    /// Record transaction cleanup failure.
     pub fn record_txn_cleanup_failure(&self) {
         self.add_value(MetricType::TxnCleanupFailureCount);
     }
@@ -1168,10 +1272,14 @@ impl StatsManager {
     }
 
     pub fn record_target_frontier_lag(&self, target: &str, lag: u64) {
-        // Per-target lag is exported as a tagged metric via the space_metrics
-        // map using the target name as the space key.
+        // Per-target lag uses the `target:{name}` namespace so it never
+        // collides with `space_{id}` buckets.
         self.set_value(MetricType::TargetFrontierLag, lag);
-        self.add_space_metric_with_amount(target, MetricType::TargetFrontierLag, lag);
+        self.add_space_metric_with_amount(
+            &Self::target_key(target),
+            MetricType::TargetFrontierLag,
+            lag,
+        );
     }
 
     pub fn record_generation_build(&self) {
@@ -1191,12 +1299,13 @@ impl StatsManager {
     }
 
     pub fn record_rebuild_phase_latency(&self, target: &str, phase: &str, latency_ms: u64) {
+        // `rebuild:{target}:{phase}` namespace plus an ops count so means
+        // are computable.
+        self.add_value(MetricType::RebuildPhaseOps);
         self.add_value_with_amount(MetricType::RebuildPhaseLatencyMs, latency_ms);
-        self.add_space_metric_with_amount(
-            &format!("{target}:{phase}"),
-            MetricType::RebuildPhaseLatencyMs,
-            latency_ms,
-        );
+        let key = Self::rebuild_key(target, phase);
+        self.add_space_metric(&key, MetricType::RebuildPhaseOps);
+        self.add_space_metric_with_amount(&key, MetricType::RebuildPhaseLatencyMs, latency_ms);
     }
 
     pub fn record_split(&self, success: bool) {
@@ -1221,10 +1330,13 @@ impl StatsManager {
     }
 
     pub fn record_transport_latency(&self, latency_ms: u64) {
+        // Sum plus count so the mean is computable.
+        self.add_value(MetricType::TransportOps);
         self.add_value_with_amount(MetricType::TransportLatencyMs, latency_ms);
     }
 
     pub fn record_materializer_latency(&self, latency_ms: u64) {
+        self.add_value(MetricType::MaterializerOps);
         self.add_value_with_amount(MetricType::MaterializerLatencyMs, latency_ms);
     }
 
@@ -1232,15 +1344,9 @@ impl StatsManager {
         self.set_value(MetricType::SnapshotLag, lag);
     }
 
-    pub fn record_index_scan(&self, latency_us: u64) {
-        self.add_value(MetricType::IndexScanCount);
-        self.add_value_with_amount(MetricType::IndexLookupLatencyUs, latency_us);
-    }
-
-    pub fn record_index_write(&self, latency_us: u64) {
-        self.add_value(MetricType::IndexWriteOps);
-        self.add_value_with_amount(MetricType::IndexWriteLatencyUs, latency_us);
-    }
+    // Index scan/write timing is covered by `record_index_operation`
+    // (per-space isolated); the global-only variants are removed to avoid
+    // implying a second uncovered path.
 
     pub fn set_index_memory_usage(&self, bytes: u64) {
         self.set_value(MetricType::IndexMemoryUsage, bytes);

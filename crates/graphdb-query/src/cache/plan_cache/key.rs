@@ -213,6 +213,9 @@ impl PlanCacheKey {
 
     /// Canonicalize insignificant whitespace for cache identity while retaining
     /// the original query text for collision diagnostics.
+    /// Intentionally distinct from pattern normalization (`?` grouping used
+    /// by feedback/slow-query): cache keys must distinguish literal values
+    /// because different constants can yield different optimal plans.
     fn normalize_query(query: &str) -> String {
         query.split_whitespace().collect::<Vec<_>>().join(" ")
     }

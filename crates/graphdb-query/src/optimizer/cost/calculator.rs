@@ -23,7 +23,9 @@ use crate::optimizer::stats::{StatisticsManager, StatsView};
 use graphdb_core::types::expr::Expression;
 use graphdb_core::value::Value;
 
-use super::config::CostModelConfig;
+use super::config::{
+    CostModelConfig, DEFAULT_DEGREE_FALLBACK, ESTIMATED_ROW_WIDTH_BYTES, ROWS_PER_PAGE, TOPN_RATIO,
+};
 
 /// Cost Calculator
 ///
@@ -97,8 +99,8 @@ impl CostCalculator {
         let table_rows = self.stats_manager.get_vertex_count(space, tag_name);
         let matching_rows = (selectivity * table_rows as f64).max(1.0) as u64;
 
-        // Index access cost (sequential I/O)
-        let index_pages = (matching_rows / 10).max(1);
+        // Index access cost (sequential I/O); single page/row source.
+        let index_pages = (matching_rows / ROWS_PER_PAGE).max(1);
         let index_access_cost = index_pages as f64 * self.config.seq_page_cost
             + matching_rows as f64 * self.config.cpu_index_tuple_cost;
 
@@ -119,7 +121,7 @@ impl CostCalculator {
         let edge_count = self.stats_manager.get_edge_count(space, edge_type);
         let matching_rows = (selectivity * edge_count as f64).max(1.0) as u64;
 
-        let index_pages = (matching_rows / 10).max(1);
+        let index_pages = (matching_rows / ROWS_PER_PAGE).max(1);
         let index_access_cost = index_pages as f64 * self.config.seq_page_cost
             + matching_rows as f64 * self.config.cpu_index_tuple_cost;
 
@@ -150,8 +152,8 @@ impl CostCalculator {
                     let is_super = s.avg_out_degree > self.config.super_node_threshold as f64;
                     (s.avg_out_degree, is_super)
                 })
-                .unwrap_or((2.0, false)),
-            None => (2.0, false), // Default average degree
+                .unwrap_or((DEFAULT_DEGREE_FALLBACK, false)),
+            None => (DEFAULT_DEGREE_FALLBACK, false),
         };
 
         let output_rows = (start_nodes as f64 * avg_degree) as u64;
@@ -202,8 +204,8 @@ impl CostCalculator {
                 .stats_manager
                 .get_edge_stats(space, et)
                 .map(|s| (s.avg_out_degree + s.avg_in_degree) / 2.0)
-                .unwrap_or(2.0),
-            None => 2.0,
+                .unwrap_or(DEFAULT_DEGREE_FALLBACK),
+            None => DEFAULT_DEGREE_FALLBACK,
         };
 
         // Calculate the cumulative number of output lines for each step (taking into account the penalty for multiple skips).
@@ -240,8 +242,8 @@ impl CostCalculator {
                 .stats_manager
                 .get_edge_stats(space, et)
                 .map(|s| s.avg_out_degree)
-                .unwrap_or(2.0),
-            None => 2.0,
+                .unwrap_or(DEFAULT_DEGREE_FALLBACK),
+            None => DEFAULT_DEGREE_FALLBACK,
         };
 
         let neighbor_count = (start_nodes as f64 * avg_degree) as u64;
@@ -366,10 +368,10 @@ impl CostCalculator {
         let rows = input_rows as f64;
 
         // Check whether Top-N optimization can be used.
-        // Refer to SortExecutor: If the amount of data exceeds limit * 10, use the Top-N algorithm.
+        // Single TopN rule: input exceeds limit * TOPN_RATIO.
         if let Some(limit_val) = limit {
             let limit_u = limit_val.max(0) as u64;
-            if limit_u > 0 && input_rows > limit_u * 10 {
+            if limit_u > 0 && input_rows > limit_u.saturating_mul(TOPN_RATIO) {
                 // Top-N algorithm: uses a heap sort, complexity O(n log k)
                 let k = limit_u as f64;
                 return rows
@@ -390,7 +392,7 @@ impl CostCalculator {
         // Determine whether to use external sorting.
         if input_rows > self.config.memory_sort_threshold {
             // External sorting: Temporary files need to be read from and written to.
-            let pages = (input_rows / 100).max(1); // Assume there are 100 lines on each page.
+            let pages = (input_rows / ROWS_PER_PAGE).max(1);
             let io_cost = pages as f64 * self.config.external_sort_page_cost * 2.0; // Read and write twice
             cpu_cost + io_cost
         } else {
@@ -524,8 +526,8 @@ impl CostCalculator {
 
     /// Calculating the cost of the shortest path
     pub fn calculate_shortest_path_cost(&self, start_nodes: u64, max_depth: u32) -> f64 {
-        // Complexity estimation based on BFS (Breadth-First Search)
-        let avg_branching = 2.0_f64; // Assume the average branching factor…
+        // Complexity estimation based on BFS; single branching-factor source.
+        let avg_branching = self.config.strategy_thresholds.default_branching_factor;
         let explored_nodes = start_nodes as f64 * avg_branching.powf(max_depth as f64);
         let traversal_cost = explored_nodes * self.config.edge_traversal_cost;
         let io_cost = self.calculate_io_cost(explored_nodes as u64);
@@ -641,23 +643,24 @@ impl CostCalculator {
     }
 
     /// Estimate memory usage for aggregate operations
+    /// Single row-width source (`ESTIMATED_ROW_WIDTH_BYTES`) and single
+    /// group-count source (`ndv::estimate_group_count`).
     pub fn estimate_aggregate_memory(&self, input_rows: u64, group_by_keys: usize) -> usize {
-        // Estimate number of groups based on input rows and key count
-        let estimated_groups = (input_rows / 2_u64.pow(group_by_keys as u32).max(1)).max(10);
-        // Assume average row size of 64 bytes
-        estimated_groups as usize * 64
+        let estimated_groups =
+            crate::optimizer::cost_based::ndv::estimate_group_count(input_rows, group_by_keys);
+        estimated_groups as usize * ESTIMATED_ROW_WIDTH_BYTES
     }
 
     /// Estimate memory usage for sort operations
     pub fn estimate_sort_memory(&self, input_rows: u64, _sort_columns: usize) -> usize {
-        // Sorting needs to buffer all input rows
-        input_rows as usize * 64 // Assume 64 bytes per row
+        // Sorting needs to buffer all input rows; width from real Value layout.
+        input_rows as usize * ESTIMATED_ROW_WIDTH_BYTES
     }
 
     /// Estimate memory usage for hash join operations
     pub fn estimate_hash_join_memory(&self, left_rows: u64) -> usize {
-        // Hash table needs to store the smaller (left) table
-        left_rows as usize * 64 // Assume 64 bytes per row
+        // Hash table needs to store the smaller (left) table.
+        left_rows as usize * ESTIMATED_ROW_WIDTH_BYTES
     }
 
     /// Calculate aggregate cost with memory awareness
@@ -765,8 +768,9 @@ impl CostCalculator {
     /// - If the number of data pages accessed is < effective_cache_pages: Most of the pages are already in the cache.
     /// - Otherwise: Some operations require disk I/O (input/output).
     fn calculate_io_cost(&self, rows: u64) -> f64 {
-        // Assume there are 100 lines on each page.
-        let pages = (rows / 100).max(1);
+        // Single page/row source: ROWS_PER_PAGE rows per page.
+        // `effective_cache_pages` counts pages; callers pass rows.
+        let pages = (rows / ROWS_PER_PAGE).max(1);
 
         if pages <= self.config.effective_cache_pages {
             // The data may be in the cache.
@@ -913,7 +917,7 @@ mod tests {
         let calculator = CostCalculator::new(stats_manager);
 
         let memory = calculator.estimate_sort_memory(1000, 2);
-        assert_eq!(memory, 1000 * 64); // 1000 rows * 64 bytes
+        assert_eq!(memory, 1000 * ESTIMATED_ROW_WIDTH_BYTES);
     }
 
     #[test]
@@ -922,7 +926,7 @@ mod tests {
         let calculator = CostCalculator::new(stats_manager);
 
         let memory = calculator.estimate_hash_join_memory(500);
-        assert_eq!(memory, 500 * 64); // 500 rows * 64 bytes
+        assert_eq!(memory, 500 * ESTIMATED_ROW_WIDTH_BYTES);
     }
 
     #[test]
@@ -942,7 +946,7 @@ mod tests {
 
         let (cost, memory) = calculator.calculate_sort_cost_enhanced(1000, 2, None);
         assert!(cost > 0.0);
-        assert_eq!(memory, 1000 * 64);
+        assert_eq!(memory, 1000 * ESTIMATED_ROW_WIDTH_BYTES);
     }
 
     #[test]
@@ -952,7 +956,7 @@ mod tests {
 
         let (cost, memory) = calculator.calculate_hash_join_cost_enhanced(100, 200);
         assert!(cost > 0.0);
-        assert_eq!(memory, 100 * 64);
+        assert_eq!(memory, 100 * ESTIMATED_ROW_WIDTH_BYTES);
     }
 
     #[test]

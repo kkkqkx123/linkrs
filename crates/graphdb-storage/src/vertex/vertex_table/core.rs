@@ -244,10 +244,7 @@ impl VertexTable {
                     if let Some(id) = reserved {
                         self.id_indexer.release_reserved(id);
                     }
-                    return Err(StorageError::vertex_already_exists(format!(
-                        "{:?}",
-                        key
-                    )));
+                    return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
                 }
                 if stamps.is_valid(existing, ts) {
                     if let Some(id) = reserved {
@@ -427,7 +424,11 @@ impl VertexTable {
         Ok(properties)
     }
 
-    pub fn get_by_internal_id_offline(&self, internal_id: u32, ts: Timestamp) -> Option<VertexRecord> {
+    pub fn get_by_internal_id_offline(
+        &self,
+        internal_id: u32,
+        ts: Timestamp,
+    ) -> Option<VertexRecord> {
         self.get_projected_by_internal_id(internal_id, ts, None)
     }
 
@@ -649,11 +650,9 @@ impl VertexTable {
                 .map(|prop| prop.name.clone())
                 .collect(),
         };
-        let (props, stamps) = self.columns.get_projected_with_stamps_at_ts(
-            internal_id as usize,
-            &names,
-            ts,
-        );
+        let (props, stamps) =
+            self.columns
+                .get_projected_with_stamps_at_ts(internal_id as usize, &names, ts);
         let properties: Vec<(String, Value)> = props
             .into_iter()
             .filter_map(|(name, opt_val)| opt_val.map(|v| (name, v)))
@@ -818,7 +817,12 @@ impl VertexTable {
         self.columns.backdate_row(internal_id as usize, create_ts);
     }
 
-    pub fn undo_update(&self, internal_id: u32, col_name: &str, ts: Timestamp) -> StorageResult<()> {
+    pub fn undo_update(
+        &self,
+        internal_id: u32,
+        col_name: &str,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
         self.columns
             .undo_last_versioned_write(internal_id as usize, col_name, ts)
     }
@@ -898,7 +902,10 @@ impl VertexTable {
         let stamps = self.timestamps.read();
         let deleted = stamps.iter_deleted(ts).count();
         let pending = stamps.pending_len();
-        (bound.saturating_sub(deleted).saturating_sub(pending), allocated)
+        (
+            bound.saturating_sub(deleted).saturating_sub(pending),
+            allocated,
+        )
     }
 
     /// Mark all columns' page containing `row_idx` as dirty.

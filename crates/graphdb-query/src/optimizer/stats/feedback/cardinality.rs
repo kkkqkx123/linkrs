@@ -15,6 +15,21 @@ use parking_lot::RwLock;
 
 use super::factor::FeedbackDrivenFactor;
 
+/// Single shape-key formatter shared by plan-side and executor-side key
+/// generators: `"{space}:{Type}[:discriminator]"`. All cardinality keys
+/// must go through this helper instead of mirroring the format by hand.
+pub fn format_shape_key(space: Option<&str>, kind: &str, discriminator: Option<&str>) -> String {
+    let prefix = space.unwrap_or("").to_string();
+    let mut key = format!("{prefix}:{kind}");
+    if let Some(discriminator) = discriminator {
+        if !discriminator.is_empty() {
+            key.push(':');
+            key.push_str(discriminator);
+        }
+    }
+    key
+}
+
 /// Row-count correction manager shared across query executions.
 #[derive(Debug, Default)]
 pub struct CardinalityFeedbackManager {

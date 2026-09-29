@@ -10,8 +10,13 @@
 
 use std::collections::HashMap;
 
+use crate::optimizer::cost::config::{
+    DEDUP_SELECTIVITY, DEFAULT_FANOUT, GET_EDGES_DEFAULT_ROWS, GET_VERTICES_DEFAULT_ROWS,
+    UNKNOWN_SCAN_ROWS,
+};
 use crate::optimizer::cost::SelectivityEstimator;
 use crate::optimizer::cost_based::ndv as factor_cost;
+use crate::optimizer::cost_based::ndv::DEFAULT_JOIN_SELECTIVITY;
 use crate::optimizer::stats::feedback::cardinality::CardinalityFeedbackManager;
 use crate::optimizer::stats::StatsView;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
@@ -19,37 +24,38 @@ use crate::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::PlanNodeEnum;
 
-/// Fallback row count for scans whose statistics are unknown.
-const UNKNOWN_SCAN_ROWS: u64 = 100;
 /// Fallback row multiplier for neighborhood / expansion operators.
-const DEFAULT_NEIGHBORHOOD_FANOUT: u64 = 10;
+/// Single source: `DEFAULT_FANOUT` in cost config.
+const DEFAULT_NEIGHBORHOOD_FANOUT: u64 = DEFAULT_FANOUT;
 /// Default selectivity applied to a filter when the expression gives none.
 const DEFAULT_FILTER_SELECTIVITY: f64 = 0.1;
-/// Row multiplier applied to dedup.
-const DEDUP_SELECTIVITY: f64 = 0.8;
-/// Row multiplier applied to aggregation with group keys.
-const AGGREGATE_SELECTIVITY: f64 = 0.1;
+
+/// Average neighborhood fanout for an edge-type list, preferring collected
+/// average degrees and falling back to the single no-statistics default.
+fn stats_fanout(stats: &StatsView, edge_types: &[String]) -> u64 {
+    edge_types
+        .iter()
+        .find_map(|edge_type| {
+            stats
+                .edge_stats(edge_type)
+                .map(|s| (s.avg_out_degree.max(0.0)) as u64)
+        })
+        .filter(|fanout| *fanout > 0)
+        .unwrap_or(DEFAULT_NEIGHBORHOOD_FANOUT)
+}
 
 /// Normalized shape key of a plan node's output cardinality.
 ///
-/// Mirrors the physical-side generator
-/// `spec::operator_cardinality_shape_key` (same `"{space}:{Type}:{discriminator}"`
-/// format) so feedback recorded against executed operators corrects the
-/// same shapes during cost-based estimation.  Returns `None` for nodes whose
-/// cardinality is derived (pass-through operators and filters — filters are
-/// corrected per predicate by the selectivity feedback loop).
+/// Plan-side shape key; delegates to the shared
+/// `feedback::cardinality::format_shape_key` so plan and executor keys
+/// cannot drift. Returns `None` for nodes whose cardinality is derived
+/// (pass-through operators and filters — filters are corrected per
+/// predicate by the selectivity feedback loop).
 fn cardinality_shape_key(space: Option<&str>, node: &PlanNodeEnum) -> Option<String> {
+    use crate::optimizer::stats::feedback::cardinality::format_shape_key;
     use PlanNodeEnum::*;
-    let prefix = space.unwrap_or("").to_string();
     let key = |kind: &str, discriminator: Option<&str>| {
-        let mut key = format!("{prefix}:{kind}");
-        if let Some(discriminator) = discriminator {
-            if !discriminator.is_empty() {
-                key.push(':');
-                key.push_str(discriminator);
-            }
-        }
-        Some(key)
+        Some(format_shape_key(space, kind, discriminator))
     };
     match node {
         ScanVertices(n) => key("ScanVertices", n.tag().map(String::as_str)),
@@ -168,13 +174,13 @@ fn estimate_node_output_rows_impl(
         }
         GetVertices(n) => corrected_rows(
             node,
-            n.limit().unwrap_or(1).max(1) as u64,
+            n.limit().unwrap_or(GET_VERTICES_DEFAULT_ROWS as i64).max(1) as u64,
             stats.space(),
             cardinality,
         ),
         GetEdges(n) => corrected_rows(
             node,
-            n.limit().unwrap_or(10).max(1) as u64,
+            n.limit().unwrap_or(GET_EDGES_DEFAULT_ROWS as i64).max(1) as u64,
             stats.space(),
             cardinality,
         ),
@@ -242,24 +248,23 @@ fn estimate_node_output_rows_impl(
                 1
             } else {
                 // Columnar NDV-aware group cardinality: prefer joint NDV from
-                // `PropertyCombinationStats` (exact GROUP BY cardinality when
-                // sampled), else the product of per-column NDVs. Fall back to
-                // the fixed selectivity heuristic only when no statistics are
-                // available. Capped by input rows.
+                // `PropertyCombinationStats`, else the single shared
+                // `estimate_group_count` fallback. Capped by input rows.
                 let tag_for_ndv = first_tag_of_input(n.input());
                 let ndv =
                     factor_cost::ndv_for_group_keys(stats, tag_for_ndv.as_deref(), n.group_keys());
                 if let Some(distinct) = ndv {
                     distinct.min(input_rows).max(1)
                 } else {
-                    (input_rows as f64 * AGGREGATE_SELECTIVITY).max(1.0) as u64
+                    factor_cost::estimate_group_count(input_rows, n.group_keys().len())
                 }
             };
             corrected_rows(node, raw, stats.space(), cardinality)
         }
 
         // ── Binary operators ──
-        // Joins use containment selectivity when NDV is known, else cross product.
+        // Joins use containment selectivity when NDV is known, else the
+        // shared default fallback so logical and physical tracks agree.
         InnerJoin(n) => {
             let children = node.children();
             let raw = if children.len() >= 2 {
@@ -268,7 +273,7 @@ fn estimate_node_output_rows_impl(
                 let right =
                     estimate_node_output_rows_impl(children[1], stats, selectivity, cardinality);
                 let sel = factor_cost::join_selectivity(stats, n.hash_keys(), n.probe_keys())
-                    .unwrap_or(1.0);
+                    .unwrap_or(DEFAULT_JOIN_SELECTIVITY);
                 factor_cost::join_output_rows(left, right, sel)
             } else {
                 child_rows_of_impl(node, stats, selectivity, cardinality)
@@ -329,8 +334,37 @@ fn estimate_node_output_rows_impl(
         }
 
         // ── Traversal / apply operators ──
-        Expand(_) | ExpandAll(_) | Traverse(_) | BiExpand(_) | BiTraverse(_)
-        | AppendVertices(_) => {
+        Expand(n) => {
+            let fanout = stats_fanout(stats, n.edge_types());
+            let raw =
+                child_rows_of_impl(node, stats, selectivity, cardinality).saturating_mul(fanout);
+            corrected_rows(node, raw, stats.space(), cardinality)
+        }
+        ExpandAll(n) => {
+            let fanout = stats_fanout(stats, n.edge_types());
+            let raw =
+                child_rows_of_impl(node, stats, selectivity, cardinality).saturating_mul(fanout);
+            corrected_rows(node, raw, stats.space(), cardinality)
+        }
+        Traverse(n) => {
+            let fanout = stats_fanout(stats, n.edge_types());
+            let raw =
+                child_rows_of_impl(node, stats, selectivity, cardinality).saturating_mul(fanout);
+            corrected_rows(node, raw, stats.space(), cardinality)
+        }
+        BiExpand(n) => {
+            let fanout = stats_fanout(stats, n.edge_types());
+            let raw =
+                child_rows_of_impl(node, stats, selectivity, cardinality).saturating_mul(fanout);
+            corrected_rows(node, raw, stats.space(), cardinality)
+        }
+        BiTraverse(n) => {
+            let fanout = stats_fanout(stats, n.edge_types());
+            let raw =
+                child_rows_of_impl(node, stats, selectivity, cardinality).saturating_mul(fanout);
+            corrected_rows(node, raw, stats.space(), cardinality)
+        }
+        AppendVertices(_) => {
             // Flat estimate: input rows times the average neighborhood fanout.
             // No factorized discount is applied here — factorized execution is
             // not wired into the executor, so claiming compressed row counts
@@ -419,8 +453,8 @@ pub fn estimate_node_output_rows_logical(
                 .map(|limit| edge_rows.min(limit as u64))
                 .unwrap_or(edge_rows)
         }
-        GetVertices(n) => n.limit.unwrap_or(1).max(1) as u64,
-        GetEdges(n) => n.limit.unwrap_or(10).max(1) as u64,
+        GetVertices(n) => n.limit.unwrap_or(GET_VERTICES_DEFAULT_ROWS as i64).max(1) as u64,
+        GetEdges(n) => n.limit.unwrap_or(GET_EDGES_DEFAULT_ROWS as i64).max(1) as u64,
         GetNeighbors(n) => {
             let fanout = n
                 .edge_types
@@ -486,13 +520,23 @@ pub fn estimate_node_output_rows_logical(
                 if let Some(distinct) = ndv {
                     distinct.min(input_rows).max(1)
                 } else {
-                    (input_rows as f64 * AGGREGATE_SELECTIVITY).max(1.0) as u64
+                    factor_cost::estimate_group_count(input_rows, keys.len())
                 }
             }
         }
 
         // ── Binary operators ──
-        InnerJoin(_) | LeftJoin(_) | RightJoin(_) | CrossJoin(_) => {
+        InnerJoin(n) => {
+            let Some((left_node, right_node)) = logical_binary_inputs(node) else {
+                return child_rows_of_logical(node, stats, selectivity);
+            };
+            let left = estimate_node_output_rows_logical(left_node, stats, selectivity);
+            let right = estimate_node_output_rows_logical(right_node, stats, selectivity);
+            let sel = factor_cost::join_selectivity(stats, n.hash_keys(), n.probe_keys())
+                .unwrap_or(DEFAULT_JOIN_SELECTIVITY);
+            factor_cost::join_output_rows(left, right, sel)
+        }
+        LeftJoin(_) | RightJoin(_) | CrossJoin(_) => {
             let Some((left, right)) = logical_binary_inputs(node) else {
                 return child_rows_of_logical(node, stats, selectivity);
             };
@@ -825,8 +869,8 @@ mod tests {
             column_types: vec![],
         });
         let estimate = estimate_node_output_rows_logical(&aggregate, &view, &selectivity);
-        // 1000 * AGGREGATE_SELECTIVITY (0.1), floored at 1.
-        assert_eq!(estimate, 100);
+        // Single group-count source: estimate_group_count(1000, 1) = 500.
+        assert_eq!(estimate, 500);
     }
 
     #[test]

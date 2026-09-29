@@ -2154,9 +2154,8 @@ mod commit_tests {
         assert_eq!(adopted.approximate_total_count(), 10);
         let rebuilt_ts = graphdb_core::types::MAX_TIMESTAMP - 1;
         assert!(adopted.get_internal_id("s_3", rebuilt_ts).is_some());
-        let via_open_at =
-            ShardedVertexTable::open_at(1, "t".to_string(), test_schema(), &staging)
-                .expect("open adopts manifest layout and generation");
+        let via_open_at = ShardedVertexTable::open_at(1, "t".to_string(), test_schema(), &staging)
+            .expect("open adopts manifest layout and generation");
         assert_eq!(via_open_at.num_shards(), 4);
         assert_eq!(via_open_at.generation(), 1);
         assert_eq!(via_open_at.approximate_total_count(), 10);

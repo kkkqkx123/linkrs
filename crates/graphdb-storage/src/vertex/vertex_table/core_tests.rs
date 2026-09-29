@@ -629,9 +629,9 @@ fn test_compact_multiple_cycles() {
             if i % 2 == 0 {
                 let key = format!("v{}_{}", cycle, i);
                 let id = table.get_internal_id_raw(&key).unwrap();
-                table.delete_by_internal_id(id, ts_delete).unwrap_or_else(|_| {
-                    panic!("delete cycle {} should succeed", cycle)
-                });
+                table
+                    .delete_by_internal_id(id, ts_delete)
+                    .unwrap_or_else(|_| panic!("delete cycle {} should succeed", cycle));
             }
         }
 

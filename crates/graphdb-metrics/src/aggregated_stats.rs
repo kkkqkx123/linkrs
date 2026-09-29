@@ -598,6 +598,20 @@ impl Default for AggregatedStatsManager {
     }
 }
 
+/// Single query-text normalization for pattern grouping.
+///
+/// Lowercases, collapses whitespace, and replaces string/numeric literals
+/// with `?`. Shared by slow-query patterns and optimizer feedback
+/// fingerprints so identical shapes map to identical keys.
+pub fn normalize_query_text(query: &str) -> String {
+    let re_string = get_string_regex();
+    let mut normalized = re_string.replace_all(query, "?").to_string();
+    let re_number = get_number_regex();
+    normalized = re_number.replace_all(&normalized, "?").to_string();
+    normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    normalized.to_ascii_lowercase()
+}
+
 /// Normalize a query by replacing literals with placeholders
 pub fn normalize_query(query: &str) -> QueryPattern {
     // Extract query type first
@@ -606,16 +620,7 @@ pub fn normalize_query(query: &str) -> QueryPattern {
     // Extract labels
     let labels = extract_labels(query);
 
-    // Replace string literals
-    let re_string = get_string_regex();
-    let mut normalized = re_string.replace_all(query, "?").to_string();
-
-    // Replace numeric literals
-    let re_number = get_number_regex();
-    normalized = re_number.replace_all(&normalized, "?").to_string();
-
-    // Normalize whitespace
-    normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = normalize_query_text(query);
 
     QueryPattern::new(normalized, query_type, labels)
 }

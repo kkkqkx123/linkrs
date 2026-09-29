@@ -543,8 +543,7 @@ impl Column {
         let first_row = page_id * crate::persistence::dirty_page::ROWS_PER_PAGE;
         let direct = first_row / self.chunk_capacity().max(1);
         if let Some(chunk) = chunks.get(direct) {
-            if first_row >= chunk.row_offset && first_row < chunk.row_offset + chunk.row_count
-            {
+            if first_row >= chunk.row_offset && first_row < chunk.row_offset + chunk.row_count {
                 if chunk.write_state().dirty_pages.remove(&mark) {
                     return;
                 }
@@ -723,7 +722,9 @@ impl Column {
         let is_fixed = elem > 0;
         for i in 0..count {
             let row_idx = start + i;
-            let is_null = null_bits.get(i / 8).is_some_and(|b| (b >> (i % 8)) & 1 == 1);
+            let is_null = null_bits
+                .get(i / 8)
+                .is_some_and(|b| (b >> (i % 8)) & 1 == 1);
             if is_null {
                 self.write_value_without_dirty(row_idx, None)?;
                 if is_fixed {
@@ -860,9 +861,10 @@ impl Column {
         }
         let bytes = &tmp[8..8 + len];
         if matches!(self.data_type, DataType::Geography) {
-            let geo = postcard::from_bytes::<graphdb_core::value::Geography>(bytes).map_err(|e| {
-                StorageError::deserialize_error(format!("compact geography: {}", e))
-            })?;
+            let geo =
+                postcard::from_bytes::<graphdb_core::value::Geography>(bytes).map_err(|e| {
+                    StorageError::deserialize_error(format!("compact geography: {}", e))
+                })?;
             return Ok(Value::Geography(geo));
         } else if matches!(
             self.data_type,
@@ -893,8 +895,9 @@ impl Column {
             }
             return Ok(Value::Vector(VectorValue::dense(out)));
         } else if matches!(self.data_type, DataType::Json) {
-            let s = String::from_utf8(bytes.to_vec())
-                .map_err(|e| StorageError::deserialize_error(format!("compact JSON UTF-8: {}", e)))?;
+            let s = String::from_utf8(bytes.to_vec()).map_err(|e| {
+                StorageError::deserialize_error(format!("compact JSON UTF-8: {}", e))
+            })?;
             let j = graphdb_core::value::Json::parse(&s)
                 .map_err(|e| StorageError::deserialize_error(format!("compact JSON: {}", e)))?;
             return Ok(Value::Json(Box::new(j)));
@@ -932,8 +935,9 @@ impl Column {
         } else if matches!(self.data_type, DataType::Blob) {
             return Ok(Value::Blob(bytes.to_vec()));
         } else {
-            let s = String::from_utf8(bytes.to_vec())
-                .map_err(|e| StorageError::deserialize_error(format!("compact string UTF-8: {}", e)))?;
+            let s = String::from_utf8(bytes.to_vec()).map_err(|e| {
+                StorageError::deserialize_error(format!("compact string UTF-8: {}", e))
+            })?;
             return Ok(Value::string(s));
         }
     }
@@ -1250,15 +1254,13 @@ impl Column {
                         self.name, row_idx
                     ))
                 })?;
-                let value =
-                    super::overflow::decode_overflow_payload(&self.data_type, bytes).map_err(
-                        |e| {
-                            StorageError::deserialize_error(format!(
-                                "column {} overflow decode failed at row {}: {}",
-                                self.name, row_idx, e
-                            ))
-                        },
-                    )?;
+                let value = super::overflow::decode_overflow_payload(&self.data_type, bytes)
+                    .map_err(|e| {
+                        StorageError::deserialize_error(format!(
+                            "column {} overflow decode failed at row {}: {}",
+                            self.name, row_idx, e
+                        ))
+                    })?;
                 return Ok(Some(value));
             }
         }

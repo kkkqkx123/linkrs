@@ -1,5 +1,14 @@
 use super::OptimizerEngine;
 impl OptimizerEngine {
+    /// Fold execution feedback into selectivity/cardinality corrections.
+    ///
+    /// Consumes actual row counts from `feedback_history`, which execution
+    /// populates via `collect_execution_feedback` from runtime operator
+    /// profiles (estimated vs actual per shape/predicate). Observability
+    /// portraits (`QueryProfile` in metrics) and optimizer corrections
+    /// (`QueryExecutionFeedback` here) serve separate roles — human-facing
+    /// diagnostics vs EWMA estimate correction — and are both fed from the
+    /// same runtime profiles.
     pub fn maybe_apply_feedback(&self) {
         if !self.enable_feedback {
             return;

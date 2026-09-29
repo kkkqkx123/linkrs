@@ -120,10 +120,7 @@ pub(super) fn decode_id(global_id: u32, layout: ShardLayout) -> (usize, u32) {
     try_decode_id(global_id, layout).expect("global id decoding out of range")
 }
 
-pub(super) fn try_decode_id(
-    global_id: u32,
-    layout: ShardLayout,
-) -> Result<(usize, u32), String> {
+pub(super) fn try_decode_id(global_id: u32, layout: ShardLayout) -> Result<(usize, u32), String> {
     if !layout.is_consistent() {
         return Err("shard layout is inconsistent".to_string());
     }
@@ -211,10 +208,7 @@ impl ShardedVertexTable {
 
     /// Fallible global-id decoding for batched scans that must skip malformed
     /// ids instead of panicking. See `group_by_shard`.
-    pub(super) fn try_decode_global_id(
-        &self,
-        global_id: u32,
-    ) -> Result<(usize, u32), String> {
+    pub(super) fn try_decode_global_id(&self, global_id: u32) -> Result<(usize, u32), String> {
         try_decode_id(global_id, self.layout)
     }
 

@@ -26,6 +26,10 @@
 /// Define the cost parameters for various operations, which are used to calculate the execution cost of the query plan.
 /// Refer to the design of the PostgreSQL cost model and extend it to take into account the characteristics of graph databases.
 /// These parameters can be adjusted according to the hardware environment.
+///
+/// Unit notes: `effective_cache_pages` counts pages (`ROWS_PER_PAGE` rows
+/// per page); `memory_sort_threshold` counts rows. The two must not be
+/// compared directly without converting via `ROWS_PER_PAGE`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CostModelConfig {
     // ==================== Basic I/O Cost Parameters (Consistent with PostgreSQL) ====================
@@ -199,6 +203,45 @@ pub struct CostModelConfig {
     pub strategy_thresholds: StrategyThresholds,
 }
 
+/// Single source for estimation fallbacks shared by cost and planning layers.
+///
+/// `UNKNOWN_SCAN_ROWS` (1000) is the only no-statistics scan default;
+/// `DEFAULT_FANOUT` (10) is the only neighborhood fanout default;
+/// `DEFAULT_DEGREE_FALLBACK` (2.0) is the only per-edge average-degree
+/// fallback; `ROWS_PER_PAGE` (100) is the only page/row conversion;
+/// `SUPER_NODE_THRESHOLD` (10000) is the only super-node degree threshold;
+/// `TOPN_RATIO` (10) with `TOPN_MIN_ROWS` is the only sort-to-TopN rule.
+/// Point lookups use `GET_VERTICES_DEFAULT_ROWS` (1) and
+/// `GET_EDGES_DEFAULT_ROWS` (10); dedup uses `DEDUP_SELECTIVITY` (0.8).
+/// Skew judgments use the `SKEW_*` thresholds so edge statistics and
+/// traversal estimation share one definition.
+/// Row width is derived from the real `Value` layout so memory estimates
+/// track column types instead of a hardcoded 64.
+pub const UNKNOWN_SCAN_ROWS: u64 = 1_000;
+pub const DEFAULT_FANOUT: u64 = 10;
+pub const DEFAULT_DEGREE_FALLBACK: f64 = 2.0;
+pub const ROWS_PER_PAGE: u64 = 100;
+pub const SUPER_NODE_THRESHOLD: u64 = 10_000;
+pub const TOPN_RATIO: u64 = 10;
+pub const TOPN_MIN_ROWS: u64 = 10_000;
+pub const GET_VERTICES_DEFAULT_ROWS: u64 = 1;
+pub const GET_EDGES_DEFAULT_ROWS: u64 = 10;
+pub const DEDUP_SELECTIVITY: f64 = 0.8;
+pub const SKEW_HEAVY_GINI: f64 = 0.5;
+pub const SKEW_SEVERE_GINI: f64 = 0.7;
+pub const SKEW_MODERATE_GINI: f64 = 0.5;
+pub const SKEW_MILD_GINI: f64 = 0.3;
+pub const SKEW_MAX_DEGREE_RATIO: f64 = 10.0;
+pub const SKEW_DIRECTION_RATIO: f64 = 5.0;
+pub const SKEW_SEVERE_PENALTY: f64 = 2.0;
+pub const SKEW_MODERATE_PENALTY: f64 = 1.5;
+pub const SKEW_MILD_PENALTY: f64 = 1.2;
+pub const SKEW_SEVERE_ROW_FACTOR: f64 = 1.5;
+pub const SKEW_MODERATE_ROW_FACTOR: f64 = 1.3;
+pub const SKEW_MILD_ROW_FACTOR: f64 = 1.1;
+/// Row width derived from the real value layout.
+pub const ESTIMATED_ROW_WIDTH_BYTES: usize = std::mem::size_of::<graphdb_core::Value>();
+
 /// Strategy Threshold Configuration
 ///
 /// Define threshold parameters for various optimization strategies that are used to control the strategy selection behavior.
@@ -222,11 +265,8 @@ pub struct StrategyThresholds {
     pub high_cardinality_ratio: f64,
 
     // ==================== Traversal Strategy ====================
-    /// Super node threshold (degree)
-    ///
-    /// Supernode threshold (in degrees) above which a node is considered a supernode. Default value 1000.0
-    pub traversal_super_node_threshold: f64,
-
+    // Super-node threshold is the single `CostModelConfig::super_node_threshold`
+    // (`SUPER_NODE_THRESHOLD`); no separate traversal copy is kept.
     /// Bidirectional traversal savings threshold
     ///
     /// Bidirectional traversal savings threshold above which bidirectional traversal is used. Default value 0.3
@@ -272,11 +312,10 @@ impl Default for StrategyThresholds {
             small_dataset_threshold: 1000,
             low_cardinality_threshold: 100,
             high_cardinality_ratio: 0.1,
-            // Traversal strategy
-            traversal_super_node_threshold: 1000.0,
+            // Traversal strategy: super-node uses CostModelConfig::super_node_threshold.
             bidirectional_savings_threshold: 0.3,
-            default_branching_factor: 2.0,
-            // TopN strategy
+            default_branching_factor: DEFAULT_DEGREE_FALLBACK,
+            // TopN strategy: ratio 0.1 == 1/TOPN_RATIO, min rows == TOPN_MIN_ROWS.
             topn_threshold: 0.1,
             topn_default_limit: 100,
             // Materialization strategy
@@ -296,10 +335,10 @@ impl Default for CostModelConfig {
             cpu_tuple_cost: 0.01,
             cpu_index_tuple_cost: 0.005,
             cpu_operator_cost: 0.0025,
-            // Algorithm-related parameters
+            // Algorithm-related parameters: row-count threshold.
             hash_build_overhead: 0.1,
             sort_comparison_cost: 1.0,
-            memory_sort_threshold: 10000,
+            memory_sort_threshold: TOPN_MIN_ROWS,
             external_sort_page_cost: 2.0,
             // Parameter specific to graph databases
             edge_traversal_cost: 0.02,
@@ -309,7 +348,7 @@ impl Default for CostModelConfig {
             cache_hit_cost_factor: 0.1,
             shortest_path_base_cost: 10.0,
             path_enumeration_factor: 2.0,
-            super_node_threshold: 10000,
+            super_node_threshold: SUPER_NODE_THRESHOLD,
             super_node_penalty: 2.0,
             // Default parameters for control flow
             default_unwind_list_size: 3.0,

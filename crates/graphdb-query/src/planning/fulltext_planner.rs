@@ -857,8 +857,11 @@ mod tests {
         assert!(planner
             .transform_lookup_fulltext_with_metadata(&lookup("WROTE"), "default", &metadata)
             .is_ok());
-        let unknown =
-            planner.transform_lookup_fulltext_with_metadata(&lookup("Missing"), "default", &metadata);
+        let unknown = planner.transform_lookup_fulltext_with_metadata(
+            &lookup("Missing"),
+            "default",
+            &metadata,
+        );
         assert!(matches!(unknown, Err(PlannerError::TagNotFound(_))));
     }
 

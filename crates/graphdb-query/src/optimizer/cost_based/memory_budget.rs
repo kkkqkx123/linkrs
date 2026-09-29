@@ -19,7 +19,9 @@
 
 use std::collections::HashMap;
 
+use crate::optimizer::cost::config::{ESTIMATED_ROW_WIDTH_BYTES, UNKNOWN_SCAN_ROWS};
 use crate::optimizer::cost::CostModelConfig;
+use crate::optimizer::cost_based::ndv::estimate_group_count;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::core::nodes::PlanNodeEnum;
 
@@ -70,7 +72,7 @@ impl MemoryBudgetAllocator {
         Self {
             total_budget,
             config: CostModelConfig::default(),
-            default_row_size: 64,
+            default_row_size: ESTIMATED_ROW_WIDTH_BYTES,
         }
     }
 
@@ -79,7 +81,7 @@ impl MemoryBudgetAllocator {
         Self {
             total_budget,
             config,
-            default_row_size: 64,
+            default_row_size: ESTIMATED_ROW_WIDTH_BYTES,
         }
     }
 
@@ -142,25 +144,43 @@ impl MemoryBudgetAllocator {
     }
 
     /// Estimate memory requirement for a single node
+    /// Row width comes from the shared `ESTIMATED_ROW_WIDTH_BYTES` source;
+    /// group counts come from the shared `estimate_group_count` helper.
     fn estimate_node_memory(&self, plan: &PlanNodeEnum) -> (usize, u32) {
+        self.estimate_node_memory_with_rows(plan, None)
+    }
+
+    /// Estimate memory with an optional row-estimate override.
+    /// When `row_override` is present it replaces the fixed fallback so
+    /// budgeting consumes real row estimates instead of constants.
+    fn estimate_node_memory_with_rows(
+        &self,
+        plan: &PlanNodeEnum,
+        row_override: Option<usize>,
+    ) -> (usize, u32) {
+        let input_rows = |default_node: &PlanNodeEnum| {
+            row_override.unwrap_or_else(|| self.estimate_input_rows(default_node))
+        };
         match plan {
-            PlanNodeEnum::Sort(_node) => {
+            PlanNodeEnum::Sort(node) => {
                 // Sorting needs to buffer all input rows
-                let rows = self.estimate_input_rows(plan);
+                let rows = input_rows(plan);
+                let _ = node;
                 let memory = rows * self.default_row_size;
                 (memory, 100) // High priority - sorting is memory-intensive
             }
             PlanNodeEnum::InnerJoin(_) | PlanNodeEnum::LeftJoin(_) => {
                 // Hash join needs hash table for left input
-                let rows = self.estimate_input_rows(plan);
+                let rows = input_rows(plan);
                 let memory = rows * self.default_row_size * 2; // Hash table overhead
                 (memory, 90)
             }
-            PlanNodeEnum::Aggregate(_) => {
-                // Aggregation needs hash table or sort buffer
-                let rows = self.estimate_input_rows(plan);
-                // Estimate number of groups (heuristic: 10% of input)
-                let groups = (rows / 10).max(10);
+            PlanNodeEnum::Aggregate(node) => {
+                // Aggregation needs hash table or sort buffer; group count
+                // shares the single estimate_group_count source.
+                let rows = input_rows(plan);
+                let groups =
+                    estimate_group_count(rows as u64, node.group_keys().len().max(1)) as usize;
                 let memory = groups * self.default_row_size * 2;
                 (memory, 80)
             }
@@ -193,16 +213,59 @@ impl MemoryBudgetAllocator {
         }
     }
 
-    /// Estimate input rows for a node
-    fn estimate_input_rows(&self, plan: &PlanNodeEnum) -> usize {
-        // This is a simplified estimation
-        // In practice, this would use statistics
-        match plan {
-            PlanNodeEnum::Sort(_) => 10000,
-            PlanNodeEnum::InnerJoin(_) => 10000,
-            PlanNodeEnum::LeftJoin(_) => 10000,
-            PlanNodeEnum::Aggregate(_) => 10000,
-            _ => 1000,
+    /// Estimate input rows for a node.
+    /// Single fallback source (`UNKNOWN_SCAN_ROWS`); callers with real
+    /// row estimates should use `allocate_budget_with_row_estimates`.
+    fn estimate_input_rows(&self, _plan: &PlanNodeEnum) -> usize {
+        UNKNOWN_SCAN_ROWS as usize
+    }
+
+    /// Allocate budgets using caller-provided row estimates keyed by node id.
+    /// Nodes missing from the map fall back to the single default.
+    pub fn allocate_budget_with_row_estimates(
+        &self,
+        plan: &PlanNodeEnum,
+        row_estimates: &HashMap<NodeId, u64>,
+    ) -> HashMap<NodeId, MemoryBudgetAllocation> {
+        let mut allocations = HashMap::new();
+        let mut requirements = Vec::new();
+        self.collect_requirements_with_rows(plan, row_estimates, &mut requirements);
+        let total_required: usize = requirements.iter().map(|r| r.estimated_requirement).sum();
+        if total_required <= self.total_budget {
+            for req in requirements {
+                allocations.insert(
+                    req.node_id,
+                    MemoryBudgetAllocation {
+                        node_id: req.node_id,
+                        budget_bytes: req.estimated_requirement,
+                        estimated_requirement: req.estimated_requirement,
+                        priority: req.priority,
+                    },
+                );
+            }
+        } else {
+            allocations = self.allocate_with_constraints(requirements, total_required);
+        }
+        allocations
+    }
+
+    /// Collect requirements honoring per-node row overrides.
+    fn collect_requirements_with_rows(
+        &self,
+        plan: &PlanNodeEnum,
+        row_estimates: &HashMap<NodeId, u64>,
+        requirements: &mut Vec<MemoryRequirement>,
+    ) {
+        let node_id = self.get_node_id(plan);
+        let override_rows = row_estimates.get(&node_id).copied().map(|v| v as usize);
+        let (requirement, priority) = self.estimate_node_memory_with_rows(plan, override_rows);
+        requirements.push(MemoryRequirement {
+            node_id,
+            estimated_requirement: requirement,
+            priority,
+        });
+        for child in self.get_children(plan) {
+            self.collect_requirements_with_rows(child, row_estimates, requirements);
         }
     }
 
@@ -279,9 +342,23 @@ impl MemoryBudgetAllocator {
         plan: &PlanNodeEnum,
         budget: usize,
     ) -> OperatorImplementation {
+        self.select_operator_implementation_with_rows(plan, budget, None)
+    }
+
+    /// Select operator implementation consuming a real row estimate when
+    /// available, otherwise the single no-statistics fallback.
+    pub fn select_operator_implementation_with_rows(
+        &self,
+        plan: &PlanNodeEnum,
+        budget: usize,
+        row_override: Option<usize>,
+    ) -> OperatorImplementation {
+        let rows = |default_node: &PlanNodeEnum| {
+            row_override.unwrap_or_else(|| self.estimate_input_rows(default_node))
+        };
         match plan {
             PlanNodeEnum::Sort(_) => {
-                let required = self.estimate_input_rows(plan) * self.default_row_size;
+                let required = rows(plan) * self.default_row_size;
                 if budget < required / 4 {
                     OperatorImplementation::External
                 } else if budget < required {
@@ -291,7 +368,7 @@ impl MemoryBudgetAllocator {
                 }
             }
             PlanNodeEnum::InnerJoin(_) | PlanNodeEnum::LeftJoin(_) => {
-                let required = self.estimate_input_rows(plan) * self.default_row_size * 2;
+                let required = rows(plan) * self.default_row_size * 2;
                 if budget < required / 2 {
                     // Fall back to nested loop join
                     OperatorImplementation::External
@@ -300,7 +377,7 @@ impl MemoryBudgetAllocator {
                 }
             }
             PlanNodeEnum::Aggregate(_) => {
-                let required = self.estimate_input_rows(plan) * self.default_row_size;
+                let required = rows(plan) * self.default_row_size;
                 if budget < required / 4 {
                     OperatorImplementation::External
                 } else {
@@ -314,6 +391,18 @@ impl MemoryBudgetAllocator {
     /// Check if plan can execute within budget
     pub fn can_execute_within_budget(&self, plan: &PlanNodeEnum) -> bool {
         let allocations = self.allocate_budget(plan);
+        allocations
+            .values()
+            .all(|a| a.budget_bytes >= a.estimated_requirement / 4)
+    }
+
+    /// Check executability consuming caller-provided row estimates.
+    pub fn can_execute_within_budget_with_rows(
+        &self,
+        plan: &PlanNodeEnum,
+        row_estimates: &HashMap<NodeId, u64>,
+    ) -> bool {
+        let allocations = self.allocate_budget_with_row_estimates(plan, row_estimates);
         allocations
             .values()
             .all(|a| a.budget_bytes >= a.estimated_requirement / 4)

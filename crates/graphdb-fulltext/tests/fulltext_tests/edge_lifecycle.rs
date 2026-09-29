@@ -39,7 +39,12 @@ impl EdgeScanSource {
         Self {
             docs: Some(vec![
                 edge("alice", "graphdb", 0, "alice wrote a graph database manual"),
-                edge("bob", "graphdb", 0, "bob reviewed the graph database manual"),
+                edge(
+                    "bob",
+                    "graphdb",
+                    0,
+                    "bob reviewed the graph database manual",
+                ),
             ]),
         }
     }

@@ -115,7 +115,11 @@ impl WriteSet {
     /// that actually touches the tracked footprint. Iterates the committed
     /// side, which is normally far smaller than a full-scan read set.
     pub fn has_read_conflict_with(&self, committed: &WriteSet) -> bool {
-        if committed.vertices.iter().any(|vid| self.vertices.contains(vid)) {
+        if committed
+            .vertices
+            .iter()
+            .any(|vid| self.vertices.contains(vid))
+        {
             return true;
         }
         if committed.edges.iter().any(|edge| self.edges.contains(edge)) {

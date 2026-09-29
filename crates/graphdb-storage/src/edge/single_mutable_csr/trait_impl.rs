@@ -1,6 +1,6 @@
 //! Trait adapters: `CsrBase` and `MutableCsrTrait` for `SingleMutableCsr`.
 
-use graphdb_core::{StorageResult};
+use graphdb_core::StorageResult;
 
 use super::super::{CsrBase, EdgeId, EdgePosition, MutableCsrTrait, Nbr, Timestamp, VertexId};
 use super::SingleMutableCsr;

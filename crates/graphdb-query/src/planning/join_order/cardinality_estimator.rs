@@ -11,10 +11,14 @@ use graphdb_core::types::expr::ExpressionId;
 pub const NON_EQUALITY_PREDICATE_SELECTIVITY: f64 = 0.2;
 
 /// Default cardinality assumed for a base table scan without statistics.
-pub const DEFAULT_SCAN_CARDINALITY: u64 = 1_000;
+/// Single source for all no-statistics scan defaults; the cost-based
+/// row-estimate layer references this constant instead of its own copy.
+pub const DEFAULT_SCAN_CARDINALITY: u64 = crate::optimizer::cost::config::UNKNOWN_SCAN_ROWS;
 
 /// Default average out-degree used for extend pricing without statistics.
-pub const DEFAULT_AVG_DEGREE: u64 = 16;
+/// Single source for neighborhood fanout; equals the cost-based
+/// `DEFAULT_FANOUT`.
+pub const DEFAULT_AVG_DEGREE: u64 = crate::optimizer::cost::config::DEFAULT_FANOUT;
 
 /// Owned statistics snapshot for join ordering.
 ///

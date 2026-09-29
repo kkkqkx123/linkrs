@@ -91,34 +91,54 @@ impl EdgeTypeStatistics {
 
     /// Determine whether there is a significant inclination.
     pub fn is_heavily_skewed(&self) -> bool {
-        // Gini coefficients > 0.5 are considered to be severely skewed
-        self.degree_gini_coefficient > 0.5
-            || self.max_out_degree as f64 > self.avg_out_degree * 10.0
+        use crate::optimizer::cost::config::{SKEW_HEAVY_GINI, SKEW_MAX_DEGREE_RATIO};
+        self.degree_gini_coefficient > SKEW_HEAVY_GINI
+            || self.max_out_degree as f64 > self.avg_out_degree * SKEW_MAX_DEGREE_RATIO
     }
 
     /// Obtaining the inclination level
     pub fn skewness_level(&self) -> SkewnessLevel {
+        use crate::optimizer::cost::config::{
+            SKEW_MILD_GINI, SKEW_MODERATE_GINI, SKEW_SEVERE_GINI,
+        };
         match self.degree_gini_coefficient {
-            g if g > 0.7 => SkewnessLevel::Severe,
-            g if g > 0.5 => SkewnessLevel::Moderate,
-            g if g > 0.3 => SkewnessLevel::Mild,
+            g if g > SKEW_SEVERE_GINI => SkewnessLevel::Severe,
+            g if g > SKEW_MODERATE_GINI => SkewnessLevel::Moderate,
+            g if g > SKEW_MILD_GINI => SkewnessLevel::Mild,
             _ => SkewnessLevel::None,
+        }
+    }
+
+    /// Shared skew penalty so cost and row estimation use one definition.
+    pub fn skew_penalty(&self) -> f64 {
+        use crate::optimizer::cost::config::{
+            SKEW_MILD_PENALTY, SKEW_MODERATE_PENALTY, SKEW_SEVERE_PENALTY,
+        };
+        match self.skewness_level() {
+            SkewnessLevel::Severe => SKEW_SEVERE_PENALTY,
+            SkewnessLevel::Moderate => SKEW_MODERATE_PENALTY,
+            SkewnessLevel::Mild => SKEW_MILD_PENALTY,
+            SkewnessLevel::None => 1.0,
+        }
+    }
+
+    /// Shared conservative row factor for skewed expansion.
+    pub fn skew_row_factor(&self) -> f64 {
+        use crate::optimizer::cost::config::{
+            SKEW_MILD_ROW_FACTOR, SKEW_MODERATE_ROW_FACTOR, SKEW_SEVERE_ROW_FACTOR,
+        };
+        match self.skewness_level() {
+            SkewnessLevel::Severe => SKEW_SEVERE_ROW_FACTOR,
+            SkewnessLevel::Moderate => SKEW_MODERATE_ROW_FACTOR,
+            SkewnessLevel::Mild => SKEW_MILD_ROW_FACTOR,
+            SkewnessLevel::None => 1.0,
         }
     }
 
     /// Calculate the cost of tilt perception (use a more conservative estimate for tilted data)
     pub fn calculate_skewed_expand_cost(&self, start_nodes: u64) -> f64 {
         let base_cost = self.estimate_expand_cost(start_nodes);
-
-        // The penalty increases with the increase in the inclination angle.
-        let penalty = match self.skewness_level() {
-            SkewnessLevel::Severe => 2.0,
-            SkewnessLevel::Moderate => 1.5,
-            SkewnessLevel::Mild => 1.2,
-            SkewnessLevel::None => 1.0,
-        };
-
-        base_cost * penalty
+        base_cost * self.skew_penalty()
     }
 
     /// Determine whether it contains a hot spot vertex.

@@ -14,6 +14,7 @@
 //! Limit: Simple memory operations; the cost is proportional to the sum of the offset and the limit value.
 
 use super::{get_input_rows, NodeEstimator};
+use crate::optimizer::cost::config::DEDUP_SELECTIVITY;
 use crate::optimizer::cost::estimate::NodeCostEstimate;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::error::CostError;
@@ -33,23 +34,13 @@ impl<'a> SortLimitEstimator<'a> {
 
     /// Estimating the cardinality of the GROUP BY column
     ///
-    /// Based on the actual implementation of AggregateExecutor (using a HashMap):
-    /// If there is no GROUP BY, return 1 (global aggregation).
-    /// Otherwise, the estimation is based on the number of keys and the number of input lines.
+    /// Single group-count source shared with row estimation and memory
+    /// budgeting. Empty keys mean global aggregation with one output row.
     fn estimate_group_by_cardinality(&self, group_keys: &[String], input_rows: u64) -> u64 {
         if group_keys.is_empty() {
-            // Global aggregate, returns only one row (e.g., COUNT(*))
             return 1;
         }
-
-        // Estimating the cardinality based on the number of GROUP BY keys
-        // The more keys there are, the more detailed the grouping will be, and the greater the number of output rows will be.
-        // Use a heuristic formula: min(input_rows, max(10, input_rows / (2 ^ key_count)))
-        let key_count = group_keys.len() as u32;
-        let divisor = 2_u64.saturating_pow(key_count).max(1);
-        let estimated = (input_rows / divisor).max(10);
-
-        estimated.min(input_rows).max(1)
+        crate::optimizer::cost_based::ndv::estimate_group_count(input_rows, group_keys.len())
     }
 }
 
@@ -115,8 +106,7 @@ impl<'a> NodeEstimator for SortLimitEstimator<'a> {
             PlanNodeEnum::Dedup(_) => {
                 let input_rows_val = get_input_rows(child_estimates, 0);
                 let cost = self.cost_calculator.calculate_dedup_cost(input_rows_val);
-                // The number of rows has decreased after deduplication (by approximately 70% of the original number of rows).
-                let output_rows = (input_rows_val as f64 * 0.7).max(1.0) as u64;
+                let output_rows = (input_rows_val as f64 * DEDUP_SELECTIVITY).max(1.0) as u64;
                 Ok((cost, output_rows))
             }
             PlanNodeEnum::Sample(n) => {
@@ -270,7 +260,10 @@ mod tests {
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
         assert!(cost > 0.0);
-        assert_eq!(output_rows, 70);
+        assert_eq!(
+            output_rows,
+            (100.0 * crate::optimizer::cost::config::DEDUP_SELECTIVITY).max(1.0) as u64
+        );
     }
 
     #[test]

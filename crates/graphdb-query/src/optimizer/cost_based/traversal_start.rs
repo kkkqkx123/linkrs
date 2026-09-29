@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::optimizer::cost::config::UNKNOWN_SCAN_ROWS;
 use crate::optimizer::cost::{CostCalculator, SelectivityEstimator};
 use crate::parser::ast::pattern::{
     EdgePattern, NodePattern, PathElement, PathPattern, Pattern, VariablePattern,
@@ -235,8 +236,8 @@ impl TraversalStartSelector {
 
         Some(CandidateStart {
             node_pattern: placeholder_node,
-            estimated_start_nodes: 1000, // Default estimate
-            estimated_cost: 1000.0,      // A high cost indicates uncertainty.
+            estimated_start_nodes: UNKNOWN_SCAN_ROWS,
+            estimated_cost: UNKNOWN_SCAN_ROWS as f64,
             reason: SelectionReason::VariableBinding {
                 variable_name: var.name.clone(),
             },

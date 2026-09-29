@@ -24,7 +24,10 @@ impl SingleMutableCsr {
 
         let (existing_hot, existing_cold) = match self.slot_at(src_idx) {
             Some(probe) => (probe.hot(), probe.cold()),
-            None => (super::super::HotNbr::dead_gap(), super::super::ColdStamps::dead_gap()),
+            None => (
+                super::super::HotNbr::dead_gap(),
+                super::super::ColdStamps::dead_gap(),
+            ),
         };
 
         // Physical uniqueness only: a live slot rejects the second insert

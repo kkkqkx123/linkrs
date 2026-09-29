@@ -220,6 +220,35 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         result
     }
 
+    /// Ensure statistics for `space` are fresh before planning.
+    ///
+    /// Missing or version-mismatched stamps trigger one best-effort
+    /// collection; failures degrade to no-statistics fallbacks and never
+    /// block the query. Explicit ANALYZE remains the manual forced-refresh
+    /// entry via `collect_statistics(space, true)`.
+    pub(crate) fn ensure_statistics(&self, space: &str) {
+        let stats_manager = self.optimizer_engine.stats_manager();
+        let schema_version = self
+            .schema_generation
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let data_epoch = match self.storage.as_ref() {
+            Some(storage) => storage.read().stats_epoch(),
+            None => return,
+        };
+        if schema_version != 0 && data_epoch != 0 {
+            if stats_manager.space_stamp(space) == Some((schema_version, data_epoch)) {
+                return;
+            }
+        }
+        if let Err(error) = self.collect_statistics(space, false) {
+            log::warn!(
+                "Statistics refresh for space '{}' failed, degrading to no-stats: {}",
+                space,
+                error
+            );
+        }
+    }
+
     pub fn with_query_registry(mut self, registry: Arc<QueryRegistry>) -> Self {
         self.query_registry = Some(registry);
         self

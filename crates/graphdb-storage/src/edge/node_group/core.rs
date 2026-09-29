@@ -507,8 +507,10 @@ impl CsrShardSet {
                             gid
                         )));
                     };
-                    let counts: Vec<(u32, usize)> =
-                        batch.iter().map(|(local, puts)| (*local, puts.len())).collect();
+                    let counts: Vec<(u32, usize)> = batch
+                        .iter()
+                        .map(|(local, puts)| (*local, puts.len()))
+                        .collect();
                     csr.reserve_for_batch(&counts);
                     inserted += csr.batch_put_edges(&batch, check_duplicates)?;
                 }
@@ -611,8 +613,10 @@ impl CsrShardSet {
                             gid
                         )));
                     };
-                    let counts: Vec<(u32, usize)> =
-                        batch.iter().map(|(local, puts)| (*local, puts.len())).collect();
+                    let counts: Vec<(u32, usize)> = batch
+                        .iter()
+                        .map(|(local, puts)| (*local, puts.len()))
+                        .collect();
                     csr.reserve_for_batch(&counts);
                     inserted += csr.batch_put_edges(&batch, check_duplicates)?;
                 }

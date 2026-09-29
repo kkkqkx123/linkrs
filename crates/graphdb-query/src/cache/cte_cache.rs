@@ -431,7 +431,7 @@ impl CteCacheManager {
             self.stats.counters.record_hit();
             if let Ok(ref sm_guard) = self.stats_manager.read() {
                 if let Some(ref sm) = **sm_guard {
-                    sm.record_cache_hit(0, true);
+                    sm.record_cache_hit_global(true);
                 }
             }
             Some(entry.data.clone())
@@ -439,7 +439,7 @@ impl CteCacheManager {
             self.stats.counters.record_miss();
             if let Ok(ref sm_guard) = self.stats_manager.read() {
                 if let Some(ref sm) = **sm_guard {
-                    sm.record_cache_hit(0, false);
+                    sm.record_cache_hit_global(false);
                 }
             }
             None

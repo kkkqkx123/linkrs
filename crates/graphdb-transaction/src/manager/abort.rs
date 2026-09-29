@@ -22,7 +22,16 @@ impl TransactionManager {
     /// checks and finalization cannot diverge.
     pub fn abort_transaction(&self, txn_id: TransactionId) -> Result<(), TransactionError> {
         let context = self.fetch_abortable_context(txn_id)?;
-        self.abort_without_target(&context)
+        let result = self.abort_without_target(&context);
+        if let Err(err) = &result {
+            use crate::error::TransactionErrorKind;
+            if matches!(err.kind(), TransactionErrorKind::RecoveryFailed) {
+                if let Some(observable) = &self.observable {
+                    observable.record_txn_recovery_abort();
+                }
+            }
+        }
+        result
     }
 
     /// Abort transaction with undo target (for rollback support).

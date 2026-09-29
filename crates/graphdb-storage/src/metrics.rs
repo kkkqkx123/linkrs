@@ -20,15 +20,35 @@ use graphdb_sync::SyncManager;
 
 pub struct MetricsStorage<S: StorageClient> {
     inner: S,
+    stats: Option<Arc<graphdb_metrics::StatsManager>>,
 }
 
 impl<S: StorageClient> MetricsStorage<S> {
     pub fn new(inner: S) -> Self {
-        Self { inner }
+        Self { inner, stats: None }
+    }
+
+    pub fn with_stats(inner: S, stats: Arc<graphdb_metrics::StatsManager>) -> Self {
+        Self {
+            inner,
+            stats: Some(stats),
+        }
     }
 
     pub fn into_inner(self) -> S {
         self.inner
+    }
+
+    fn record_read(&self, start: std::time::Instant) {
+        if let Some(stats) = &self.stats {
+            stats.record_storage_read(start.elapsed().as_micros() as u64);
+        }
+    }
+
+    fn record_write(&self, start: std::time::Instant) {
+        if let Some(stats) = &self.stats {
+            stats.record_storage_write(start.elapsed().as_micros() as u64);
+        }
     }
 }
 
@@ -66,7 +86,10 @@ impl<S: StorageClient + crate::AutoCommitBatchOps> crate::AutoCommitBatchOps for
         window: &Arc<crate::AutoCommitBatchWindow>,
     ) -> StorageResult<Self> {
         let inner = self.inner.bind_auto_commit_statement(window)?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            stats: self.stats.clone(),
+        })
     }
 
     fn finalize_auto_commit_batch(
@@ -91,13 +114,40 @@ impl<S: StorageClient + crate::AutoCommitGroupOps> crate::AutoCommitGroupOps for
 }
 
 impl<S: StorageClient> StorageReader for MetricsStorage<S> {
+    fn get_vertex(
+        &self,
+        space: &str,
+        tag: &str,
+        id: &VertexId,
+    ) -> Result<Option<Vertex>, StorageError> {
+        let start = std::time::Instant::now();
+        let result = self.inner.get_vertex(space, tag, id);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_read(start);
+        result
+    }
+
+    fn scan_vertices_by_tag(&self, space: &str, tag: &str) -> Result<Vec<Vertex>, StorageError> {
+        let start = std::time::Instant::now();
+        let result = self.inner.scan_vertices_by_tag(space, tag);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_read(start);
+        result
+    }
+
     forward_methods!(inner;
-        fn get_vertex(&self, space: &str, tag: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
         fn layout_version(&self) -> u64;
         fn vertex_id_domain(&self, space: &str) -> Option<std::ops::Range<i64>>;
         fn get_vertex_projected(&self, space: &str, tag: &str, id: &VertexId, projection: &[String]) -> Result<Option<Vertex>, StorageError>;
         fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError>;
-        fn scan_vertices_by_tag(&self, space: &str, tag: &str) -> Result<Vec<Vertex>, StorageError>;
         fn scan_vertices_by_tag_paginated(&self, space: &str, tag: &str, offset: usize, limit: usize) -> Result<Vec<Vertex>, StorageError>;
         fn scan_vertices_by_prop(&self, space: &str, tag: &str, prop: &str, value: &Value) -> Result<Vec<Vertex>, StorageError>;
         fn get_edge(&self, space: &str, src: &VertexId, dst: &VertexId, edge_type: &str, rank: i64) -> Result<Option<Edge>, StorageError>;
@@ -163,13 +213,35 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
 }
 
 impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
+    fn insert_vertex(&mut self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError> {
+        let start = std::time::Instant::now();
+        let result = StorageWriter::insert_vertex(&mut self.inner, space, vertex);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
+
+    fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
+        let start = std::time::Instant::now();
+        let result = StorageWriter::insert_edge(&mut self.inner, space, edge);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
+
     forward_methods!(inner;
-        fn insert_vertex(&mut self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError>;
         fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError>;
         fn delete_vertex_with_edges(&mut self, space: &str, tag: &str, id: &VertexId) -> Result<(), StorageError>;
         fn batch_delete_vertices_with_edges(&mut self, space: &str, tag: &str, ids: &[VertexId]) -> Result<usize, StorageError>;
         fn batch_insert_vertices(&mut self, space: &str, vertices: Vec<Vertex>) -> Result<Vec<VertexId>, StorageError>;
-        fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
         fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
         fn batch_insert_edges(&mut self, space: &str, edges: Vec<Edge>) -> Result<(), StorageError>;
         fn batch_delete_edges(&mut self, space: &str, deletes: &[EdgeDeleteKey]) -> Result<usize, StorageError>;
@@ -281,18 +353,21 @@ impl<S: StorageClient> StorageOperationContextOps for MetricsStorage<S> {
     fn bind_auto_commit_context(&self) -> StorageResult<Self> {
         Ok(Self {
             inner: self.inner.bind_auto_commit_context()?,
+            stats: self.stats.clone(),
         })
     }
 
     fn bind_operation_context(&self, context: StorageOperationContext) -> Self {
         Self {
             inner: self.inner.bind_operation_context(context),
+            stats: self.stats.clone(),
         }
     }
 
     fn bind_read_operation_context(&self) -> StorageResult<Self> {
         Ok(Self {
             inner: self.inner.bind_read_operation_context()?,
+            stats: self.stats.clone(),
         })
     }
 
@@ -357,6 +432,7 @@ where
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
+            stats: self.stats.clone(),
         }
     }
 }

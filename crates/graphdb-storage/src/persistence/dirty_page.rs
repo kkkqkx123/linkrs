@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Number of rows per dirty page.
+/// Storage physical page size, distinct from the optimizer cost-model
+/// page conversion factor.
 pub const ROWS_PER_PAGE: usize = 1024;
 
 // ---------------------------------------------------------------------------

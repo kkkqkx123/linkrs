@@ -5,29 +5,17 @@ use crate::executor::streaming::plan::types::OperatorKindSpec;
 
 /// Normalized shape key for an operator's output cardinality.
 ///
-/// Returns `"{space}:{Type}:{discriminator}"` for operators whose output row
-/// count is estimated independently (sources, graph traversals, joins,
-/// applies, aggregates).  Filter operators return `None`: they are corrected
-/// per predicate via `condition_key` in the selectivity feedback loop.
-///
-/// The string format must stay in sync with the plan-side key generator in
-/// `optimizer/cost_based/row_estimates.rs` (`cardinality_shape_key`), so
-/// corrections recorded against physical operators are applied to the same
-/// shapes during cost-based estimation.
+/// Delegates to the shared `feedback::cardinality::format_shape_key` so
+/// executor keys cannot drift from plan-side keys. Returns
+/// `"{space}:{Type}:{discriminator}"` for independently estimated operators;
+/// filters return `None` (corrected per predicate via `condition_key`).
 pub fn operator_cardinality_shape_key(
     space: Option<&str>,
     spec: &OperatorKindSpec,
 ) -> Option<String> {
-    let prefix = space.unwrap_or("").to_string();
+    use crate::optimizer::stats::feedback::cardinality::format_shape_key;
     let key = |kind: &str, discriminator: Option<&str>| {
-        let mut key = format!("{prefix}:{kind}");
-        if let Some(discriminator) = discriminator {
-            if !discriminator.is_empty() {
-                key.push(':');
-                key.push_str(discriminator);
-            }
-        }
-        Some(key)
+        Some(format_shape_key(space, kind, discriminator))
     };
     let join_types = |kind: &str| key(kind, None);
     match spec {

@@ -430,6 +430,9 @@ impl OptimizerEngine {
 
     /// Optimize with storage-provided layout information (layout version and
     /// self-proven vertex-id domain). See [`PartitioningLayoutInfo`].
+    /// Statistics freshness is ensured by the query pipeline before calling
+    /// here; direct engine callers without pipeline guarantees run on
+    /// no-statistics fallbacks.
     pub fn optimize_with_layout(
         &self,
         plan: ExecutionPlan,

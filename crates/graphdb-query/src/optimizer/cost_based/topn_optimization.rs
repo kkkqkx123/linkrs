@@ -241,10 +241,13 @@ impl SortEliminationOptimizer {
             return None;
         }
 
-        // Check whether the conditions for the TopN conversion are met.
+        // Single TopN rule: limit/input < topn_threshold (== 1/TOPN_RATIO)
+        // or input exceeds the shared sort-memory row threshold.
         let limit_ratio = limit as f64 / context.input_rows as f64;
 
-        if limit_ratio < self.topn_threshold || context.input_rows > 10000 {
+        if limit_ratio < self.topn_threshold
+            || context.input_rows > self.cost_calculator.config().memory_sort_threshold
+        {
             let original_cost = self.calculate_sort_cost(context.input_rows, sort_items.len());
             let topn_cost = self
                 .cost_calculator
@@ -293,7 +296,9 @@ impl SortEliminationOptimizer {
 
         let limit_ratio = limit as f64 / input_rows as f64;
 
-        if limit_ratio < self.topn_threshold || input_rows > 10000 {
+        if limit_ratio < self.topn_threshold
+            || input_rows > self.cost_calculator.config().memory_sort_threshold
+        {
             let original_cost = self.calculate_sort_cost(input_rows, sort_items.len());
             let topn_cost = self.cost_calculator.calculate_topn_cost(input_rows, limit);
 

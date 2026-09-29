@@ -4,7 +4,7 @@ use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::cost_based::join_order::{
     JoinCondition, JoinOrderOptimizer, JoinOrderResult, TableInfo,
 };
-use crate::optimizer::cost_based::ndv::refine_join_selectivity;
+use crate::optimizer::cost_based::ndv::{refine_join_selectivity, DEFAULT_JOIN_SELECTIVITY};
 use crate::optimizer::stats::StatsView;
 use crate::optimizer::JoinAlgorithm;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
@@ -172,7 +172,7 @@ fn reconstruct_join_tree_with_decisions(
                 }
                 step += 1;
                 // Output estimate mirrors the join-order cost model's
-                // `calculate_join_cost` (default selectivity 0.3).
+                // default join selectivity.
                 let selectivity = chain
                     .predicates
                     .iter()
@@ -182,7 +182,7 @@ fn reconstruct_join_tree_with_decisions(
                         (a == lid && b == rid) || (a == rid && b == lid)
                     })
                     .map(|p| p.selectivity)
-                    .unwrap_or(0.3);
+                    .unwrap_or(DEFAULT_JOIN_SELECTIVITY);
                 accumulated_rows =
                     ((accumulated_rows as f64 * right_rows as f64 * selectivity) as u64).max(1);
                 Some(joined)
@@ -673,7 +673,7 @@ pub fn reconstruct_join_tree_logical(
                     recommended_algorithm,
                 );
                 // Output estimate mirrors the join-order cost model's
-                // `calculate_join_cost` (default selectivity 0.3).
+                // default join selectivity.
                 let selectivity = chain
                     .predicates
                     .iter()
@@ -683,7 +683,7 @@ pub fn reconstruct_join_tree_logical(
                         (a == lid && b == rid) || (a == rid && b == lid)
                     })
                     .map(|p| p.selectivity)
-                    .unwrap_or(0.3);
+                    .unwrap_or(DEFAULT_JOIN_SELECTIVITY);
                 accumulated_rows =
                     ((accumulated_rows as f64 * right_rows as f64 * selectivity) as u64).max(1);
                 Some(joined)

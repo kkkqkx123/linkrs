@@ -747,7 +747,9 @@ impl Planner for MaintainPlanner {
 
         if let Stmt::Create(create_stmt) = stmt {
             match &create_stmt.target {
-                CreateTarget::Node { .. } | CreateTarget::Edge { .. } | CreateTarget::Path { .. } => {
+                CreateTarget::Node { .. }
+                | CreateTarget::Edge { .. }
+                | CreateTarget::Path { .. } => {
                     let mut data_planner =
                         crate::planning::statements::dml::create_planner::CreatePlanner::new();
                     return data_planner.transform(validated, qctx);

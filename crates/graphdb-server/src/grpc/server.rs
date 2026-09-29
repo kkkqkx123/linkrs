@@ -1313,16 +1313,11 @@ fn data_type_to_proto_property_type(data_type: &graphdb_core::DataType) -> i32 {
 }
 
 fn proto_property_to_core(prop: super::proto::PropertyDef) -> graphdb_core::types::PropertyDef {
-    graphdb_core::types::PropertyDef::new(
-        prop.name,
-        proto_property_type_to_data_type(prop.r#type),
-    )
-    .with_nullable(prop.nullable)
+    graphdb_core::types::PropertyDef::new(prop.name, proto_property_type_to_data_type(prop.r#type))
+        .with_nullable(prop.nullable)
 }
 
-fn core_property_to_proto(
-    prop: &graphdb_core::types::PropertyDef,
-) -> super::proto::PropertyDef {
+fn core_property_to_proto(prop: &graphdb_core::types::PropertyDef) -> super::proto::PropertyDef {
     super::proto::PropertyDef {
         name: prop.name.clone(),
         r#type: data_type_to_proto_property_type(&prop.data_type),
@@ -1332,9 +1327,7 @@ fn core_property_to_proto(
     }
 }
 
-fn core_edge_info_to_proto(
-    info: &graphdb_core::types::EdgeTypeInfo,
-) -> super::proto::EdgeTypeInfo {
+fn core_edge_info_to_proto(info: &graphdb_core::types::EdgeTypeInfo) -> super::proto::EdgeTypeInfo {
     super::proto::EdgeTypeInfo {
         id: info.edge_type_id as i32,
         name: info.edge_type_name.clone(),

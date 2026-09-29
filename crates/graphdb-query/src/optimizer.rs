@@ -65,9 +65,8 @@ pub use partitioning::{PartitioningConfig, PartitioningDecision, PartitioningPla
 
 pub use stats::{
     CardinalityFeedbackManager, DecisionFeedbackStore, DecorrelationAdvice, EdgeTypeStatistics,
-    ExecutionFeedbackCollector, FeedbackDrivenSelectivity, OperatorFeedback, PropertyStatistics,
-    QueryExecutionFeedback, QueryFeedbackHistory, SelectivityFeedbackManager, StatisticsManager,
-    TagStatistics,
+    FeedbackDrivenSelectivity, OperatorFeedback, PropertyStatistics, QueryExecutionFeedback,
+    QueryFeedbackHistory, SelectivityFeedbackManager, StatisticsManager, TagStatistics,
 };
 
 pub use cost::{CostAssigner, CostCalculator, CostModelConfig, SelectivityEstimator};

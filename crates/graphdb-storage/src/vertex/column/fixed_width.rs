@@ -54,7 +54,11 @@ impl ColumnStorage for FixedWidthColumn {
         match self.try_get(row_idx) {
             Ok(value) => value,
             Err(e) => {
-                log::warn!("fixed column row {} lenient read failed: {}; reading as missing", row_idx, e);
+                log::warn!(
+                    "fixed column row {} lenient read failed: {}; reading as missing",
+                    row_idx,
+                    e
+                );
                 None
             }
         }
@@ -360,10 +364,7 @@ pub(crate) fn try_read_fixed_vector(
         let chunk: [u8; 4] = data[offset + i * 4..offset + (i + 1) * 4]
             .try_into()
             .map_err(|_| {
-                StorageError::deserialize_error(format!(
-                    "fixed vector component {} undecodable",
-                    i
-                ))
+                StorageError::deserialize_error(format!("fixed vector component {} undecodable", i))
             })?;
         out.push(f32::from_le_bytes(chunk));
     }

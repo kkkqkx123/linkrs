@@ -86,7 +86,14 @@ impl StatisticsManager {
     }
 
     /// Record the composite stamp at which `space` was last collected.
+    /// Unknown versions (`0`) are never cached: a zero schema or data
+    /// version means cacheability is unknown, so the stamp is not stored
+    /// and the next collection always re-samples.
     pub fn set_space_stamp(&self, space: &str, schema_version: u64, data_epoch: u64) {
+        if schema_version == 0 || data_epoch == 0 {
+            self.space_versions.remove(space);
+            return;
+        }
         self.space_versions
             .insert(space.to_string(), (schema_version, data_epoch));
     }
@@ -223,10 +230,16 @@ impl StatisticsManager {
     }
 
     /// Update property combination statistics for a specific space.
+    /// Existing entries merge via exponential moving average so repeated
+    /// collections refine rather than replace the estimate.
     pub fn update_property_combo_stats(&self, space: &str, stats: PropertyCombinationStats) {
         let tag = stats.tag_name.as_deref().unwrap_or("");
         let key = format!("{}.{}.{}", space, tag, stats.properties.join("."));
-        self.property_combo_stats.insert(key, stats);
+        if let Some(mut existing) = self.property_combo_stats.get_mut(&key) {
+            existing.update(stats.combined_distinct_values, stats.sample_count);
+        } else {
+            self.property_combo_stats.insert(key, stats);
+        }
     }
 
     /// Get combined cardinality for a set of properties.

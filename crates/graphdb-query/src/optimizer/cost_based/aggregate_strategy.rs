@@ -19,8 +19,10 @@
 
 use std::sync::Arc;
 
+use crate::optimizer::cost::config::ESTIMATED_ROW_WIDTH_BYTES;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::cost::SelectivityEstimator;
+use crate::optimizer::cost_based::ndv::estimate_group_count;
 use crate::optimizer::cost_based::row_estimates::estimate_node_output_rows_logical;
 use crate::optimizer::cost_based::traversal_logical::rewrite_children_logical;
 use crate::optimizer::decision::OptimizationDecision;
@@ -374,14 +376,15 @@ impl AggregateStrategySelector {
         group_key_count: usize,
         _agg_function_count: usize,
     ) -> AggregateStrategy {
-        if input_rows < 1000 {
+        let thresholds = self.cost_calculator.config().strategy_thresholds;
+        if input_rows < thresholds.small_dataset_threshold {
             return AggregateStrategy::HashAggregate;
         }
 
         // Estimating the cardinality of the grouping key
         let cardinality = self.estimate_cardinality_quick(input_rows, group_key_count);
 
-        if cardinality < 100 {
+        if cardinality < thresholds.low_cardinality_threshold {
             AggregateStrategy::SortAggregate
         } else {
             AggregateStrategy::HashAggregate
@@ -416,16 +419,7 @@ impl AggregateStrategySelector {
 
     /// Quick estimation of the base number
     fn estimate_cardinality_quick(&self, input_rows: u64, key_count: usize) -> u64 {
-        if key_count == 0 {
-            return 1;
-        }
-
-        // Heuristic formula: The base number decreases as the number of keys increases.
-        // Assume that for each additional key added, the base value is divided by 2.
-        let divisor = 2_u64.saturating_pow(key_count as u32).max(1);
-        let estimated = (input_rows / divisor).max(10);
-
-        estimated.min(input_rows).max(1)
+        estimate_group_count(input_rows, key_count)
     }
 
     /// Calculating the cost of hash aggregation
@@ -470,31 +464,25 @@ impl AggregateStrategySelector {
     /// Estimating the memory usage of hash aggregation
     fn estimate_hash_memory_usage(
         &self,
-        context: &AggregateContext,
+        _context: &AggregateContext,
         group_by_cardinality: u64,
     ) -> u64 {
-        // Estimation of the size of a hash table entry (key + aggregation state)
-        let key_size = context.group_keys.len() as u64 * 16; // Assume that each key is 16 bytes in size.
-        let agg_state_size = context.agg_function_count as u64 * 24; // Assume that each aggregated state occupies 24 bytes.
-        let entry_overhead = 16; // Hash table overhead
-
-        let entry_size = key_size + agg_state_size + entry_overhead;
-        group_by_cardinality * entry_size.max(64)
+        // Single row-width source shared with the cost calculator and the
+        // memory budget allocator; hash overhead is a fixed factor.
+        group_by_cardinality * ESTIMATED_ROW_WIDTH_BYTES as u64 * 2
     }
 
     /// Estimating the memory usage for sorting and aggregation operations
     fn estimate_sort_memory_usage(&self, context: &AggregateContext) -> u64 {
-        // Sorting may require caching all the data.
-        let row_size = 64; // Assume that each line contains 64 bytes.
+        // Sorting may require caching all the data; width from real Value layout.
+        let row_size = ESTIMATED_ROW_WIDTH_BYTES as u64;
         context.input_rows * row_size
     }
 
     /// Estimating the memory usage of stream aggregation
-    fn estimate_streaming_memory_usage(&self, context: &AggregateContext) -> u64 {
-        // Stream aggregation only requires maintaining the state of the current group.
-        let key_size = context.group_keys.len() as u64 * 16;
-        let agg_state_size = context.agg_function_count as u64 * 24;
-        (key_size + agg_state_size) * 2 // Double buffering
+    fn estimate_streaming_memory_usage(&self, _context: &AggregateContext) -> u64 {
+        // Streaming keeps a small window; width still from the shared source.
+        ESTIMATED_ROW_WIDTH_BYTES as u64 * 2
     }
 
     /// Creating streaming aggregation decisions

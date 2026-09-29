@@ -40,6 +40,10 @@ pub struct IndexDataManagerImpl {
     /// and resynced by the (rare) GC/retirement/compaction paths. Keeps the
     /// per-statement admission check from scanning every generation.
     pub(crate) cached_tombstone_count: Arc<AtomicU64>,
+    /// Last exported bloom totals for delta computation (avoids double
+    /// counting cumulative shard counters on every periodic export).
+    pub(crate) last_bloom_queries: Arc<AtomicU64>,
+    pub(crate) last_bloom_hits: Arc<AtomicU64>,
     /// per-index deltas awaiting publication into a new generation.
     ///
     /// Writes accumulate here (O(1) per statement) instead of publishing a new
@@ -149,6 +153,8 @@ impl IndexDataManagerImpl {
             eviction_high_ratio: Arc::new(AtomicU64::new(8500)),
             eviction_low_ratio: Arc::new(AtomicU64::new(6500)),
             cached_tombstone_count: Arc::new(AtomicU64::new(0)),
+            last_bloom_queries: Arc::new(AtomicU64::new(0)),
+            last_bloom_hits: Arc::new(AtomicU64::new(0)),
             pending_deltas: Arc::new(Mutex::new(HashMap::new())),
             delta_publish_threshold: Arc::new(AtomicUsize::new(512)),
         }

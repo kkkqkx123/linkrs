@@ -26,8 +26,8 @@
 //! reads are safe while no mutation is in flight; concurrent writers must be
 //! serialized by the caller.
 
-pub(crate) use super::INVALID_EDGE_ID;
 use super::csr_shared::VertexBookkeeping;
+pub(crate) use super::INVALID_EDGE_ID;
 
 pub(crate) mod core;
 pub(crate) mod iter;

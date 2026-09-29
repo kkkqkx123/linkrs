@@ -527,8 +527,7 @@ pub use self::storage_ids::{
     is_allocatable_timestamp, ColumnId, EdgeDeletionContext, EdgeDeletionContextParams, EdgeId,
     EdgeIdentifier, EdgeKey, EdgeOperationContext, EdgePropertyUpdateContext, LabelId,
     SnapshotHandle, Timestamp, TransactionId, VertexId, VertexIdKind, VertexIdentifier,
-    INVALID_EDGE_ID, INVALID_TIMESTAMP, MAX_TIMESTAMP, RESERVED_ZERO_TIMESTAMP,
-    VERTEX_ID_MAX_SIZE,
+    INVALID_EDGE_ID, INVALID_TIMESTAMP, MAX_TIMESTAMP, RESERVED_ZERO_TIMESTAMP, VERTEX_ID_MAX_SIZE,
 };
 pub use self::sync_protocol::{
     CommitLsn, IdempotencyKey, IndexGeneration, LeaseEpoch, OrderingKey, ReadYourWritesConfig,

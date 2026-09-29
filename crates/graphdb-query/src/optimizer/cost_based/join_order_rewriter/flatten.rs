@@ -11,6 +11,11 @@ use super::types::{
     FlattenedJoinChain, FlattenedJoinChainLogical, JoinNodeType, JoinPredicate, LeafInfo,
     LeafInfoLogical,
 };
+use crate::optimizer::cost::config::{
+    DEDUP_SELECTIVITY, DEFAULT_FANOUT, GET_EDGES_DEFAULT_ROWS, GET_VERTICES_DEFAULT_ROWS,
+    UNKNOWN_SCAN_ROWS,
+};
+use crate::optimizer::cost_based::ndv::estimate_group_count;
 use crate::optimizer::stats::StatsView;
 
 pub(super) fn classify_join(node: &PlanNodeEnum) -> JoinNodeType {
@@ -75,6 +80,20 @@ pub(super) fn leaf_id(node: &PlanNodeEnum) -> String {
 }
 
 fn estimate_leaf_rows(node: &PlanNodeEnum, stats: &StatsView) -> u64 {
+    // Single no-statistics source: UNKNOWN_SCAN_ROWS. Filter/dedup/group
+    // ratios mirror the row-estimate layer; expansion prefers collected
+    // average degrees and falls back to DEFAULT_FANOUT.
+    let stats_fanout = |edge_types: &[String]| -> u64 {
+        edge_types
+            .iter()
+            .find_map(|edge_type| {
+                stats
+                    .edge_stats(edge_type)
+                    .map(|s| (s.avg_out_degree.max(0.0)) as u64)
+            })
+            .filter(|fanout| *fanout > 0)
+            .unwrap_or(DEFAULT_FANOUT)
+    };
     match node {
         PlanNodeEnum::ScanVertices(n) => {
             if let Some(tag) = n.tag() {
@@ -83,7 +102,7 @@ fn estimate_leaf_rows(node: &PlanNodeEnum, stats: &StatsView) -> u64 {
                     return count;
                 }
             }
-            10000
+            UNKNOWN_SCAN_ROWS
         }
         PlanNodeEnum::ScanEdges(n) => {
             if let Some(et) = n.edge_type() {
@@ -92,9 +111,9 @@ fn estimate_leaf_rows(node: &PlanNodeEnum, stats: &StatsView) -> u64 {
                     return count;
                 }
             }
-            50000
+            UNKNOWN_SCAN_ROWS
         }
-        PlanNodeEnum::IndexScan(_) => 5000,
+        PlanNodeEnum::IndexScan(_) => UNKNOWN_SCAN_ROWS,
         PlanNodeEnum::Filter(n) => {
             let child = estimate_leaf_rows(n.input(), stats);
             (child / 10).max(1)
@@ -102,7 +121,7 @@ fn estimate_leaf_rows(node: &PlanNodeEnum, stats: &StatsView) -> u64 {
         PlanNodeEnum::Project(n) => estimate_leaf_rows(n.input(), stats),
         PlanNodeEnum::Aggregate(n) => {
             let child = estimate_leaf_rows(n.input(), stats);
-            (child / 5).max(1)
+            estimate_group_count(child, n.group_keys().len().max(1))
         }
         PlanNodeEnum::Sort(n) => estimate_leaf_rows(n.input(), stats),
         PlanNodeEnum::TopN(n) => estimate_leaf_rows(n.input(), stats),
@@ -113,24 +132,32 @@ fn estimate_leaf_rows(node: &PlanNodeEnum, stats: &StatsView) -> u64 {
         }
         PlanNodeEnum::Dedup(n) => {
             let child = estimate_leaf_rows(n.input(), stats);
-            (child / 2).max(1)
+            ((child as f64 * DEDUP_SELECTIVITY).max(1.0)) as u64
         }
-        PlanNodeEnum::GetVertices(_) => 1000,
-        PlanNodeEnum::GetEdges(_) => 1000,
-        PlanNodeEnum::GetNeighbors(_) => 5000,
+        PlanNodeEnum::GetVertices(n) => {
+            n.limit().unwrap_or(GET_VERTICES_DEFAULT_ROWS as i64).max(1) as u64
+        }
+        PlanNodeEnum::GetEdges(n) => {
+            n.limit().unwrap_or(GET_EDGES_DEFAULT_ROWS as i64).max(1) as u64
+        }
+        PlanNodeEnum::GetNeighbors(n) => {
+            let fanout = stats_fanout(n.edge_types());
+            let base = n.limit().unwrap_or(fanout as i64).max(1) as u64;
+            base.max(fanout)
+        }
         PlanNodeEnum::Traverse(n) => {
             let child = estimate_leaf_rows(n.input(), stats);
-            child * 2
+            child.saturating_mul(stats_fanout(n.edge_types()))
         }
         PlanNodeEnum::Expand(n) => {
             let child = n
                 .dependencies()
                 .first()
                 .map(|c| estimate_leaf_rows(c, stats))
-                .unwrap_or(10000);
-            child * 3
+                .unwrap_or(UNKNOWN_SCAN_ROWS);
+            child.saturating_mul(stats_fanout(n.edge_types()))
         }
-        _ => 10000,
+        _ => UNKNOWN_SCAN_ROWS,
     }
 }
 
@@ -394,6 +421,7 @@ pub(super) fn logical_column_types(node: &LogicalNodeEnum) -> Vec<graphdb_core::
 }
 
 fn estimate_leaf_rows_logical(node: &LogicalNodeEnum, stats: &StatsView) -> u64 {
+    // Mirrors the physical fallback: single UNKNOWN_SCAN_ROWS source.
     match node {
         LogicalNodeEnum::ScanVertices(n) => {
             if let Some(tag) = n.tag.as_deref() {
@@ -402,7 +430,7 @@ fn estimate_leaf_rows_logical(node: &LogicalNodeEnum, stats: &StatsView) -> u64 
                     return count;
                 }
             }
-            10000
+            UNKNOWN_SCAN_ROWS
         }
         LogicalNodeEnum::ScanEdges(n) => {
             if let Some(et) = n.edge_type.as_deref() {
@@ -411,7 +439,7 @@ fn estimate_leaf_rows_logical(node: &LogicalNodeEnum, stats: &StatsView) -> u64 
                     return count;
                 }
             }
-            50000
+            UNKNOWN_SCAN_ROWS
         }
         LogicalNodeEnum::Filter(n) => {
             let child = estimate_leaf_rows_logical(n.input(), stats);
@@ -420,7 +448,7 @@ fn estimate_leaf_rows_logical(node: &LogicalNodeEnum, stats: &StatsView) -> u64 
         LogicalNodeEnum::Project(n) => estimate_leaf_rows_logical(n.input(), stats),
         LogicalNodeEnum::Aggregate(n) => {
             let child = estimate_leaf_rows_logical(n.input(), stats);
-            (child / 5).max(1)
+            estimate_group_count(child, n.group_key_exprs.len().max(1))
         }
         LogicalNodeEnum::Sort(n) => estimate_leaf_rows_logical(n.input(), stats),
         LogicalNodeEnum::TopN(n) => estimate_leaf_rows_logical(n.input(), stats),
@@ -431,24 +459,61 @@ fn estimate_leaf_rows_logical(node: &LogicalNodeEnum, stats: &StatsView) -> u64 
         }
         LogicalNodeEnum::Dedup(n) => {
             let child = estimate_leaf_rows_logical(n.input(), stats);
-            (child / 2).max(1)
+            ((child as f64 * DEDUP_SELECTIVITY).max(1.0)) as u64
         }
-        LogicalNodeEnum::GetVertices(_) => 1000,
-        LogicalNodeEnum::GetEdges(_) => 1000,
-        LogicalNodeEnum::GetNeighbors(_) => 5000,
+        LogicalNodeEnum::GetVertices(n) => {
+            n.limit.unwrap_or(GET_VERTICES_DEFAULT_ROWS as i64).max(1) as u64
+        }
+        LogicalNodeEnum::GetEdges(n) => {
+            n.limit.unwrap_or(GET_EDGES_DEFAULT_ROWS as i64).max(1) as u64
+        }
+        LogicalNodeEnum::GetNeighbors(n) => {
+            let fanout = n
+                .edge_types
+                .iter()
+                .find_map(|edge_type| {
+                    stats
+                        .edge_stats(edge_type)
+                        .map(|s| (s.avg_out_degree.max(0.0)) as u64)
+                })
+                .filter(|fanout| *fanout > 0)
+                .unwrap_or(DEFAULT_FANOUT);
+            let base = n.limit.unwrap_or(fanout as i64).max(1) as u64;
+            base.max(fanout)
+        }
         LogicalNodeEnum::Traverse(n) => {
             let child = estimate_leaf_rows_logical(n.input(), stats);
-            child * 2
+            let fanout = n
+                .edge_types
+                .iter()
+                .find_map(|edge_type| {
+                    stats
+                        .edge_stats(edge_type)
+                        .map(|s| (s.avg_out_degree.max(0.0)) as u64)
+                })
+                .filter(|fanout| *fanout > 0)
+                .unwrap_or(DEFAULT_FANOUT);
+            child.saturating_mul(fanout)
         }
         LogicalNodeEnum::Expand(n) => {
             let child = n
                 .dependencies()
                 .first()
                 .map(|c| estimate_leaf_rows_logical(c, stats))
-                .unwrap_or(10000);
-            child * 3
+                .unwrap_or(UNKNOWN_SCAN_ROWS);
+            let fanout = n
+                .edge_types
+                .iter()
+                .find_map(|edge_type| {
+                    stats
+                        .edge_stats(edge_type)
+                        .map(|s| (s.avg_out_degree.max(0.0)) as u64)
+                })
+                .filter(|fanout| *fanout > 0)
+                .unwrap_or(DEFAULT_FANOUT);
+            child.saturating_mul(fanout)
         }
-        _ => 10000,
+        _ => UNKNOWN_SCAN_ROWS,
     }
 }
 

@@ -68,6 +68,21 @@ impl CollectedSummary {
 /// (exact, unbiased); otherwise the sampled envelope is used as a fallback.
 pub struct StatisticsCollector;
 
+/// Sampled edge-degree distribution with skew descriptors.
+struct EdgeDegreeSample {
+    avg_out: f64,
+    avg_in: f64,
+    max_out: u64,
+    max_in: u64,
+    distinct_out: u64,
+    distinct_in: u64,
+    out_std: f64,
+    in_std: f64,
+    gini: f64,
+    gini_in: f64,
+    hot_vertices: Vec<super::edge::HotVertexInfo>,
+}
+
 impl StatisticsCollector {
     /// Deterministic rotation seed derived from `data_epoch` and a string key
     /// (tag/edge type name).  The seed is used to offset the sample window so
@@ -105,7 +120,8 @@ impl StatisticsCollector {
         data_epoch: u64,
         sample_limit: usize,
     ) -> Result<CollectedSummary, String> {
-        if manager.space_stamp(space) == Some((schema_version, data_epoch)) {
+        let version_known = schema_version != 0 && data_epoch != 0;
+        if version_known && manager.space_stamp(space) == Some((schema_version, data_epoch)) {
             return Ok(CollectedSummary::cached());
         }
 
@@ -132,6 +148,8 @@ impl StatisticsCollector {
                 .unwrap_or(0);
 
         manager.set_space_stamp(space, schema_version, data_epoch);
+        // set_space_stamp drops unknown (zero) versions internally so a
+        // zero-version space is always re-collected on the next call.
         Ok(CollectedSummary::collected_with_props(
             tags, edge_types, properties,
         ))
@@ -142,7 +160,7 @@ impl StatisticsCollector {
         storage: &dyn QueryStorage,
         space: &str,
         schema_version: u64,
-        _data_epoch: u64,
+        data_epoch: u64,
         sample_limit: usize,
     ) -> Result<usize, String> {
         let tag_infos = storage
@@ -163,8 +181,18 @@ impl StatisticsCollector {
                     )
                 })?;
 
-            let (avg_out_degree, avg_in_degree) =
-                Self::sample_tag_degrees(storage, space, &tag_info.tag_name, sample_limit)?;
+            let (avg_out_degree, avg_in_degree) = Self::sample_tag_degrees(
+                storage,
+                space,
+                &tag_info.tag_name,
+                sample_limit,
+                Self::vertex_tag_offset(
+                    vertex_count as usize,
+                    sample_limit,
+                    data_epoch,
+                    &tag_info.tag_name,
+                ),
+            )?;
 
             let mut stats = TagStatistics::new(tag_info.tag_name.clone());
             stats.vertex_count = vertex_count;
@@ -182,8 +210,9 @@ impl StatisticsCollector {
         space: &str,
         tag_name: &str,
         sample_limit: usize,
+        offset: usize,
     ) -> Result<(f64, f64), String> {
-        let vertices = Self::sample_vertices_by_tag(storage, space, tag_name, sample_limit, 0);
+        let vertices = Self::sample_vertices_by_tag(storage, space, tag_name, sample_limit, offset);
         let sample_len = vertices.len();
         if sample_len == 0 {
             return Ok((0.0, 0.0));
@@ -282,7 +311,7 @@ impl StatisticsCollector {
         storage: &dyn QueryStorage,
         space: &str,
         schema_version: u64,
-        _data_epoch: u64,
+        data_epoch: u64,
         sample_limit: usize,
     ) -> Result<usize, String> {
         let edge_type_infos = storage
@@ -300,37 +329,110 @@ impl StatisticsCollector {
                     )
                 })?;
 
-            let (avg_out_degree, avg_in_degree) =
-                Self::sample_edge_degrees(storage, space, &info.edge_type_name, sample_limit)?;
+            let sample = Self::sample_edge_degrees(
+                storage,
+                space,
+                &info.edge_type_name,
+                sample_limit,
+                Self::edge_type_offset(
+                    edge_count as usize,
+                    sample_limit,
+                    data_epoch,
+                    &info.edge_type_name,
+                ),
+            )?;
 
             let mut stats = EdgeTypeStatistics::new(info.edge_type_name.clone());
             stats.edge_count = edge_count;
-            stats.avg_out_degree = avg_out_degree;
-            stats.avg_in_degree = avg_in_degree;
+            stats.avg_out_degree = sample.avg_out;
+            stats.avg_in_degree = sample.avg_in;
+            stats.max_out_degree = sample.max_out;
+            stats.max_in_degree = sample.max_in;
+            stats.unique_src_vertices = sample.distinct_out;
+            stats.out_degree_std_dev = sample.out_std;
+            stats.in_degree_std_dev = sample.in_std;
+            stats.degree_gini_coefficient = sample.gini.max(sample.gini_in);
+            stats.hot_vertices = sample.hot_vertices;
             manager.update_edge_stats(space, stats.with_version(space.to_string(), schema_version));
             collected += 1;
         }
         Ok(collected)
     }
 
+    /// Standard deviation of degree frequencies.
+    fn degree_std(freq: &HashMap<u64, u64>, mean: f64) -> f64 {
+        if freq.is_empty() {
+            return 0.0;
+        }
+        let n = freq.len() as f64;
+        let var = freq
+            .values()
+            .map(|&c| {
+                let d = c as f64 - mean;
+                d * d
+            })
+            .sum::<f64>()
+            / n.max(1.0);
+        var.sqrt()
+    }
+
+    /// Gini coefficient of degree frequencies (0 = equal, 1 = skewed).
+    fn degree_gini(freq: &HashMap<u64, u64>) -> f64 {
+        if freq.len() < 2 {
+            return 0.0;
+        }
+        let mut vals: Vec<f64> = freq.values().map(|&c| c as f64).collect();
+        vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let n = vals.len() as f64;
+        let total: f64 = vals.iter().sum();
+        if total <= 0.0 {
+            return 0.0;
+        }
+        let mut cum = 0.0;
+        let mut lorenz = 0.0;
+        for v in &vals {
+            cum += *v;
+            lorenz += cum;
+        }
+        let b = lorenz / (total * n);
+        (1.0 + 1.0 / n - 2.0 * b).clamp(0.0, 1.0)
+    }
+
     /// Estimate average out/in degree from a sampled page of edges.
+    /// Average degree is edges per distinct endpoint, matching the tag
+    /// sampling path (`total edges / sampled vertices`). Max, std, gini,
+    /// and hot vertices are derived from the same sample so skew
+    /// consumers always have a source.
     fn sample_edge_degrees(
         storage: &dyn QueryStorage,
         space: &str,
         edge_type: &str,
         sample_limit: usize,
-    ) -> Result<(f64, f64), String> {
+        offset: usize,
+    ) -> Result<EdgeDegreeSample, String> {
         let edges = storage
-            .scan_edges_by_type_paginated(space, edge_type, 0, sample_limit)
+            .scan_edges_by_type_paginated(space, edge_type, offset, sample_limit)
             .or_else(|_| {
                 storage
                     .scan_edges_by_type(space, edge_type)
-                    .map(|edges| edges.into_iter().take(sample_limit).collect())
+                    .map(|edges| edges.into_iter().skip(offset).take(sample_limit).collect())
             })
             .map_err(|e| format!("Failed to scan edges for edge type '{}': {}", edge_type, e))?;
 
         if edges.is_empty() {
-            return Ok((0.0, 0.0));
+            return Ok(EdgeDegreeSample {
+                avg_out: 0.0,
+                avg_in: 0.0,
+                max_out: 0,
+                max_in: 0,
+                distinct_out: 0,
+                distinct_in: 0,
+                out_std: 0.0,
+                in_std: 0.0,
+                gini: 0.0,
+                gini_in: 0.0,
+                hot_vertices: Vec::new(),
+            });
         }
 
         let mut out_freq: HashMap<u64, u64> = HashMap::new();
@@ -345,7 +447,49 @@ impl StatisticsCollector {
         }
 
         let n = edges.len() as f64;
-        Ok((out_freq.len() as f64 / n, in_freq.len() as f64 / n))
+        let distinct_out = out_freq.len().max(1) as f64;
+        let distinct_in = in_freq.len().max(1) as f64;
+        let avg_out = n / distinct_out;
+        let avg_in = n / distinct_in;
+        let max_out = out_freq.values().copied().max().unwrap_or(0);
+        let max_in = in_freq.values().copied().max().unwrap_or(0);
+        let out_std = Self::degree_std(&out_freq, avg_out);
+        let in_std = Self::degree_std(&in_freq, avg_in);
+        let gini = Self::degree_gini(&out_freq);
+        let gini_in = Self::degree_gini(&in_freq);
+        let mut hot: Vec<(u64, u64, u64)> = Vec::new();
+        for (vid, c) in out_freq.iter() {
+            let in_c = in_freq.get(vid).copied().unwrap_or(0);
+            hot.push((*vid, *c, in_c));
+        }
+        for (vid, c) in in_freq.iter() {
+            if !out_freq.contains_key(vid) {
+                hot.push((*vid, 0, *c));
+            }
+        }
+        hot.sort_by(|a, b| (b.1 + b.2).cmp(&(a.1 + a.2)));
+        hot.truncate(3);
+        let hot_vertices = hot
+            .into_iter()
+            .map(|(vid, out_c, in_c)| super::edge::HotVertexInfo {
+                vertex_id: vid as i64,
+                out_degree: out_c,
+                in_degree: in_c,
+            })
+            .collect();
+        Ok(EdgeDegreeSample {
+            avg_out,
+            avg_in,
+            max_out,
+            max_in,
+            distinct_out: out_freq.len() as u64,
+            distinct_in: in_freq.len() as u64,
+            out_std,
+            in_std,
+            gini,
+            gini_in,
+            hot_vertices,
+        })
     }
 
     /// Merge storage-level snapshot bounds and cardinality into a property
@@ -388,8 +532,10 @@ impl StatisticsCollector {
     ///
     /// Populates `PropertyStatistics` for both vertex tags and edge types,
     /// enabling column-narrow CBO (selectivity = 1/NDV) and range-predicate
-    /// interpolation.  Histograms are left disabled on the sampled path;
-    /// runtime execution feedback compensates for skew.
+    /// interpolation. Histograms are built from the same sample window
+    /// (10 buckets) so range selectivity has a production source; joint
+    /// combination stats for the full property set per tag/edge give
+    /// GROUP BY cardinality a source with NDV-product fallback.
     fn collect_property_stats(
         manager: &StatisticsManager,
         storage: &dyn QueryStorage,
@@ -434,27 +580,61 @@ impl StatisticsCollector {
             }
 
             // Build NDV per property via exact distinct count on the sample;
-            // the same pass maintains the per-column min/max envelope.
+            // the same pass maintains the per-column min/max envelope and
+            // retains sampled values for histogram construction.
             let mut distinct_per_prop: HashMap<String, std::collections::HashSet<String>> =
                 HashMap::new();
             let mut stats_per_prop: HashMap<String, PropertyStatistics> = HashMap::new();
+            let mut samples_per_prop: HashMap<String, Vec<graphdb_core::Value>> = HashMap::new();
             for prop in &tag_info.properties {
                 distinct_per_prop.insert(prop.name.clone(), std::collections::HashSet::new());
                 stats_per_prop.insert(
                     prop.name.clone(),
                     PropertyStatistics::new(prop.name.clone(), Some(tag_name.clone())),
                 );
+                samples_per_prop.insert(prop.name.clone(), Vec::new());
             }
+            let mut joint_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut prop_names: Vec<String> =
+                tag_info.properties.iter().map(|p| p.name.clone()).collect();
+            prop_names.sort();
             for vertex in &vertices {
                 let tag_props = &vertex.tag.properties;
+                let mut joint_parts: Vec<String> = Vec::with_capacity(prop_names.len());
+                for prop_name in &prop_names {
+                    if let Some(v) = tag_props.get(prop_name.as_str()) {
+                        joint_parts.push(ndv_key(v));
+                    } else {
+                        joint_parts.push("-".to_string());
+                    }
+                }
+                if !prop_names.is_empty() {
+                    joint_set.insert(joint_parts.join("|"));
+                }
                 for (prop_name, bucket) in distinct_per_prop.iter_mut() {
                     if let Some(v) = tag_props.get(prop_name.as_str()) {
                         bucket.insert(ndv_key(v));
                         if let Some(stat) = stats_per_prop.get_mut(prop_name) {
                             stat.observe_value(v);
                         }
+                        if let Some(samples) = samples_per_prop.get_mut(prop_name) {
+                            if samples.len() < sample_limit {
+                                samples.push(v.clone());
+                            }
+                        }
                     }
                 }
+            }
+            // Joint combination stat for the full property set (GROUP BY source).
+            if !prop_names.is_empty() && !joint_set.is_empty() {
+                use super::property::PropertyCombinationStats;
+                let mut combo = PropertyCombinationStats::new(
+                    String::new(),
+                    Some(tag_name.clone()),
+                    prop_names.clone(),
+                );
+                combo.update(joint_set.len() as u64, vertices.len() as u64);
+                manager.update_property_combo_stats(space, combo);
             }
             for prop_def in &tag_info.properties {
                 let sampled_distinct = distinct_per_prop
@@ -476,6 +656,19 @@ impl StatisticsCollector {
                     PropertyStatistics::new(prop_def.name.clone(), Some(tag_name.clone()))
                 });
                 stat.distinct_values = sampled_distinct.max(1);
+                // Histogram from the same sample window (10 buckets).
+                if let Some(samples) = samples_per_prop.remove(&prop_def.name) {
+                    if samples.len() >= 10 {
+                        let hist = super::histogram::Histogram::from_samples(
+                            samples,
+                            10,
+                            total.max(1) as u64,
+                        );
+                        if hist.bucket_count() > 0 {
+                            stat = stat.with_histogram(hist);
+                        }
+                    }
+                }
                 Self::merge_snapshot_bounds(&mut stat, snapshot.as_deref());
                 manager.update_property_stats(space, stat);
                 collected += 1;
@@ -508,22 +701,57 @@ impl StatisticsCollector {
             let mut distinct_per_prop: HashMap<String, std::collections::HashSet<String>> =
                 HashMap::new();
             let mut stats_per_prop: HashMap<String, PropertyStatistics> = HashMap::new();
+            let mut samples_per_prop: HashMap<String, Vec<graphdb_core::Value>> = HashMap::new();
             for prop in &edge_info.properties {
                 distinct_per_prop.insert(prop.name.clone(), std::collections::HashSet::new());
                 stats_per_prop.insert(
                     prop.name.clone(),
                     PropertyStatistics::new(prop.name.clone(), Some(edge_type.clone())),
                 );
+                samples_per_prop.insert(prop.name.clone(), Vec::new());
             }
+            let mut joint_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut prop_names: Vec<String> = edge_info
+                .properties
+                .iter()
+                .map(|p| p.name.clone())
+                .collect();
+            prop_names.sort();
             for edge in &edges {
+                let mut joint_parts: Vec<String> = Vec::with_capacity(prop_names.len());
+                for prop_name in &prop_names {
+                    if let Some(v) = edge.get_property(prop_name.as_str()) {
+                        joint_parts.push(ndv_key(v));
+                    } else {
+                        joint_parts.push("-".to_string());
+                    }
+                }
+                if !prop_names.is_empty() {
+                    joint_set.insert(joint_parts.join("|"));
+                }
                 for (prop_name, bucket) in distinct_per_prop.iter_mut() {
                     if let Some(v) = edge.get_property(prop_name.as_str()) {
                         bucket.insert(ndv_key(v));
                         if let Some(stat) = stats_per_prop.get_mut(prop_name) {
                             stat.observe_value(v);
                         }
+                        if let Some(samples) = samples_per_prop.get_mut(prop_name) {
+                            if samples.len() < sample_limit {
+                                samples.push(v.clone());
+                            }
+                        }
                     }
                 }
+            }
+            if !prop_names.is_empty() && !joint_set.is_empty() {
+                use super::property::PropertyCombinationStats;
+                let mut combo = PropertyCombinationStats::new(
+                    String::new(),
+                    Some(edge_type.clone()),
+                    prop_names.clone(),
+                );
+                combo.update(joint_set.len() as u64, edges.len() as u64);
+                manager.update_property_combo_stats(space, combo);
             }
             for prop_def in &edge_info.properties {
                 let sampled_distinct = distinct_per_prop
@@ -539,6 +767,18 @@ impl StatisticsCollector {
                     PropertyStatistics::new(prop_def.name.clone(), Some(edge_type.clone()))
                 });
                 stat.distinct_values = sampled_distinct.max(1);
+                if let Some(samples) = samples_per_prop.remove(&prop_def.name) {
+                    if samples.len() >= 10 {
+                        let hist = super::histogram::Histogram::from_samples(
+                            samples,
+                            10,
+                            total.max(1) as u64,
+                        );
+                        if hist.bucket_count() > 0 {
+                            stat = stat.with_histogram(hist);
+                        }
+                    }
+                }
                 Self::merge_snapshot_bounds(&mut stat, snapshot.as_deref());
                 manager.update_property_stats(space, stat);
                 collected += 1;

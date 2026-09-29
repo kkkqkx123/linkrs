@@ -18,6 +18,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         plan: crate::planning::plan::ExecutionPlan,
         space_name: Option<&str>,
     ) -> DBResult<crate::planning::plan::ExecutionPlan> {
+        // Statistics freshness gate: missing or stale stamps trigger one
+        // best-effort collection, never blocking the query on failure.
+        if let Some(space) = space_name {
+            self.ensure_statistics(space);
+        }
         // Read the storage-provided layout information (monotonic layout
         // version + self-proven vertex-id domain) so partitioning can be
         // enabled safely when evidence exists. Without storage access the

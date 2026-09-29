@@ -207,7 +207,8 @@ impl IndexDataManagerImpl {
 
     /// Export aggregated bloom counters from all runtimes into the
     /// StatsManager. Called by periodic metric refresh so the collected
-    /// per-shard pre-check counters reach dashboards.
+    /// per-shard pre-check counters reach dashboards. Exports deltas since
+    /// the last call to avoid double counting cumulative totals.
     pub fn export_bloom_stats(&self) {
         let Some(stats) = &self.stats_manager else {
             return;
@@ -219,7 +220,15 @@ impl IndexDataManagerImpl {
             queries = queries.saturating_add(q);
             hits = hits.saturating_add(h);
         }
-        stats.record_bloom_snapshot(queries, hits);
+        let last_q = self.last_bloom_queries.load(Ordering::Relaxed);
+        let last_h = self.last_bloom_hits.load(Ordering::Relaxed);
+        let delta_q = queries.saturating_sub(last_q);
+        let delta_h = hits.saturating_sub(last_h);
+        self.last_bloom_queries.store(queries, Ordering::Relaxed);
+        self.last_bloom_hits.store(hits, Ordering::Relaxed);
+        if delta_q > 0 || delta_h > 0 {
+            stats.record_bloom_snapshot(delta_q, delta_h);
+        }
     }
 
     /// Cheap O(1) snapshot of index memory usage maintained by

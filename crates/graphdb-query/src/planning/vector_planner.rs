@@ -743,11 +743,20 @@ mod tests {
         };
         // Vertex tags pass validation.
         assert!(planner
-            .transform_create_vector_index(&create("Article"), "default", 1, planner.metadata_context.as_deref())
+            .transform_create_vector_index(
+                &create("Article"),
+                "default",
+                1,
+                planner.metadata_context.as_deref()
+            )
             .is_ok());
         // Edge type names are rejected: vector indexes are vertex-only.
-        let rejected =
-            planner.transform_create_vector_index(&create("WROTE"), "default", 1, planner.metadata_context.as_deref());
+        let rejected = planner.transform_create_vector_index(
+            &create("WROTE"),
+            "default",
+            1,
+            planner.metadata_context.as_deref(),
+        );
         assert!(
             matches!(rejected, Err(PlannerError::InvalidOperation(_))),
             "edge type vector creation should be rejected, got: {:?}",
@@ -755,7 +764,12 @@ mod tests {
         );
         // Unknown schema names still pass the planner (resolved downstream).
         assert!(planner
-            .transform_create_vector_index(&create("Missing"), "default", 1, planner.metadata_context.as_deref())
+            .transform_create_vector_index(
+                &create("Missing"),
+                "default",
+                1,
+                planner.metadata_context.as_deref()
+            )
             .is_ok());
     }
 

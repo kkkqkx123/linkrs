@@ -746,9 +746,7 @@ mod tests {
                 insert_with_name(&table, &format!("row_{}", i), 100);
             }
             for i in 0..4 {
-                let gid = table
-                    .get_internal_id(&format!("row_{}", i), 200)
-                    .unwrap();
+                let gid = table.get_internal_id(&format!("row_{}", i), 200).unwrap();
                 table.delete_by_internal_id(gid, 200).unwrap();
             }
             table
@@ -781,7 +779,9 @@ mod tests {
             let stable_id = stable.get_internal_id(&name, 200).expect("stable survivor");
             assert_eq!(stable_id, stable_before);
             assert!(stable.get_by_internal_id_offline(stable_id, 200).is_some());
-            assert!(offline.get_by_internal_id_offline(offline_id, 200).is_some());
+            assert!(offline
+                .get_by_internal_id_offline(offline_id, 200)
+                .is_some());
         }
     }
 
@@ -997,8 +997,12 @@ mod tests {
             let old_id = table.get_internal_id(&name, ts).expect("old row");
             let new_id = rebuilt.get_internal_id(&name, ts).expect("rebuilt row");
             assert_eq!(mapping.get(&old_id), Some(&new_id));
-            let old_record = table.get_by_internal_id_offline(old_id, ts).expect("old record");
-            let new_record = rebuilt.get_by_internal_id_offline(new_id, ts).expect("new record");
+            let old_record = table
+                .get_by_internal_id_offline(old_id, ts)
+                .expect("old record");
+            let new_record = rebuilt
+                .get_by_internal_id_offline(new_id, ts)
+                .expect("new record");
             assert_eq!(old_record.properties, new_record.properties);
         }
         assert!(table.reshard_to(2).is_err());
@@ -1011,9 +1015,7 @@ mod tests {
             insert_with_name(&table, &format!("card_{}", i), 100);
         }
         for i in 0..3 {
-            let gid = table
-                .get_internal_id(&format!("card_{}", i), 200)
-                .unwrap();
+            let gid = table.get_internal_id(&format!("card_{}", i), 200).unwrap();
             table.delete_by_internal_id(gid, 200).unwrap();
         }
         let snapshot = table.table_cardinality_at(250);
@@ -1058,7 +1060,9 @@ mod tests {
         let (rebuilt, _) = table.reshard_to(8).expect("reshard succeeds");
         for i in 0..10 {
             let name = format!("aged_{}", i);
-            let new_id = rebuilt.get_internal_id(&name, TEST_TS).expect("rebuilt row");
+            let new_id = rebuilt
+                .get_internal_id(&name, TEST_TS)
+                .expect("rebuilt row");
             let (create, _) = rebuilt.row_timestamps(new_id).expect("stamps");
             assert_eq!(create, 100 + i as u64);
             if 100 + i <= 105 {

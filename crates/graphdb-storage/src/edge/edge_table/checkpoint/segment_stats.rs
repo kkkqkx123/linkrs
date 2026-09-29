@@ -110,11 +110,7 @@ impl EdgeStore {
         payload.extend_from_slice(&encoded);
         let path = form_profile_path(dir);
         super::super::persistence::write_pages_to_file_without_dir_sync(
-            &path,
-            &payload,
-            page_size,
-            level,
-            1,
+            &path, &payload, page_size, level, 1,
         )?;
         Ok(file_bytes(&path))
     }

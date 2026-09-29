@@ -11,6 +11,18 @@ use graphdb_core::types::ContextualExpression;
 /// Fallback join selectivity when no NDV is available for either side.
 pub const DEFAULT_JOIN_SELECTIVITY: f64 = 0.3;
 
+/// Single group-count estimate shared by row estimation, memory budgeting,
+/// and aggregate memory sizing: `input / 2^keys`, floored at 10 and capped
+/// by the input. Keeps one formula instead of competing `input*0.1` and
+/// `input/2^keys` variants.
+pub fn estimate_group_count(input_rows: u64, key_count: usize) -> u64 {
+    if key_count == 0 {
+        return 1;
+    }
+    let divisor = 2_u64.saturating_pow(key_count as u32).max(1);
+    (input_rows / divisor).max(10).min(input_rows.max(1)).max(1)
+}
+
 /// Try to obtain NDV for a column from `StatsView`.
 ///
 /// Preference order:

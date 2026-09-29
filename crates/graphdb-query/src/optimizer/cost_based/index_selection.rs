@@ -53,7 +53,7 @@ pub fn rewrite_index_scans(
         let input = filter.input();
         if let ScanVertices(scan) = input {
             if let Some((new_input, note)) =
-                try_rewrite_scan(scan, filter, selector, stats_manager, space_hint)
+                try_rewrite_scan(scan, filter, selector, stats_manager, space_hint, notes)
             {
                 notes.push(note);
                 let mut new_filter = filter.clone();
@@ -72,13 +72,16 @@ pub fn rewrite_index_scans(
 
 /// Try to rewrite a single `Filter -> ScanVertices` pair into
 /// `Filter -> IndexScan`. Returns `(new_input, note)` when an index scan
-/// is chosen; `None` when the rewrite does not apply.
+/// is chosen; `None` when the rewrite does not apply. When predicates
+/// exist but the per-query index catalog is missing, the no-index
+/// fallback is recorded in `notes` so the degradation is explicit.
 fn try_rewrite_scan(
     scan: &ScanVerticesNode,
     filter: &crate::planning::plan::core::nodes::operation::filter_node::FilterNode,
     selector: &IndexSelector,
     stats_manager: &Arc<StatisticsManager>,
     space_hint: Option<&str>,
+    notes: &mut Vec<String>,
 ) -> Option<(PlanNodeEnum, String)> {
     let tag = scan.tag().cloned()?;
     let space: String = if scan.space_name().is_empty() {
@@ -98,10 +101,19 @@ fn try_rewrite_scan(
         return None;
     }
 
-    let (tag_id, available_indexes) = stats_manager.get_tag_indexes(&space, &tag)?;
+    let Some((tag_id, available_indexes)) = stats_manager.get_tag_indexes(&space, &tag) else {
+        notes.push(format!(
+            "index: no catalog for tag '{tag}' in space '{space}', full scan fallback"
+        ));
+        return None;
+    };
     if available_indexes.is_empty() {
+        notes.push(format!(
+            "index: empty catalog for tag '{tag}' in space '{space}', full scan fallback"
+        ));
         return None;
     }
+    let _ = tag_id;
 
     let selection = selector.select_index(&space, &tag, &predicates, &available_indexes);
     let (index_name, selectivity, estimated_cost) = match selection {
@@ -372,9 +384,14 @@ pub fn rewrite_index_scans_logical(
     if let Filter(filter) = &rewritten {
         let input = filter.input();
         if let ScanVertices(scan) = input {
-            if let Some((hint, estimated, note)) =
-                try_decide_index_scan_logical(scan, filter, selector, stats_manager, space_hint)
-            {
+            if let Some((hint, estimated, note)) = try_decide_index_scan_logical(
+                scan,
+                filter,
+                selector,
+                stats_manager,
+                space_hint,
+                notes,
+            ) {
                 notes.push(note);
                 let mut marked = scan.clone();
                 marked.index_hint = Some(hint);
@@ -397,6 +414,7 @@ fn try_decide_index_scan_logical(
     selector: &IndexSelector,
     stats_manager: &Arc<StatisticsManager>,
     space_hint: Option<&str>,
+    notes: &mut Vec<String>,
 ) -> Option<(IndexHint, u64, String)> {
     let tag = scan.tag.clone()?;
     let space: String = if scan.space_name.is_empty() {
@@ -414,8 +432,16 @@ fn try_decide_index_scan_logical(
         return None;
     }
 
-    let (tag_id, available_indexes) = stats_manager.get_tag_indexes(&space, &tag)?;
+    let Some((tag_id, available_indexes)) = stats_manager.get_tag_indexes(&space, &tag) else {
+        notes.push(format!(
+            "index: no catalog for tag '{tag}' in space '{space}', full scan fallback"
+        ));
+        return None;
+    };
     if available_indexes.is_empty() {
+        notes.push(format!(
+            "index: empty catalog for tag '{tag}' in space '{space}', full scan fallback"
+        ));
         return None;
     }
 
@@ -558,7 +584,8 @@ mod tests {
             _ => panic!("expected filter"),
         };
         assert!(matches!(filter.input(), PlanNodeEnum::ScanVertices(_)));
-        assert!(notes.is_empty());
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("full scan fallback"));
     }
 
     #[test]
@@ -719,6 +746,8 @@ mod tests {
         let rewritten =
             rewrite_index_scans_logical(&plan, &selector, &manager, Some("test"), &mut notes);
         assert!(matches!(rewritten, LogicalNodeEnum::Filter(_)));
-        assert!(notes.is_empty());
+        // Explicit no-catalog fallback is recorded instead of staying silent.
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("full scan fallback"));
     }
 }

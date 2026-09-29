@@ -90,6 +90,8 @@ pub struct TransactionManager {
     /// Short transactions never appear here; every termination path
     /// (commit, abort, timeout) removes the entry.
     pub(super) long_read_leases: DashMap<TransactionId, crate::snapshot_lease::LongReadLease>,
+    /// Shared observability sink mirroring lifecycle events into metrics.
+    pub(super) observable: Option<Arc<StatsManager>>,
 }
 
 impl TransactionManager {
@@ -97,6 +99,15 @@ impl TransactionManager {
         config: TransactionManagerConfig,
         stats: Arc<TransactionStats>,
         version_manager: Arc<VersionManager>,
+    ) -> Self {
+        Self::with_components_and_observable(config, stats, version_manager, None)
+    }
+
+    pub(super) fn with_components_and_observable(
+        config: TransactionManagerConfig,
+        stats: Arc<TransactionStats>,
+        version_manager: Arc<VersionManager>,
+        observable: Option<Arc<StatsManager>>,
     ) -> Self {
         let monitor = TransactionMonitor::new(Arc::clone(&stats));
         let checkpoint_gate = Arc::new(CheckpointGate::new());
@@ -121,21 +132,36 @@ impl TransactionManager {
             recovery: RecoveryManager::new(),
             cleaner,
             long_read_leases: DashMap::new(),
+            observable,
         };
         let commit_stats = Arc::clone(&manager.stats);
+        let commit_observable = manager.observable.clone();
         manager.register_commit_callback(Arc::new(move |event| match event {
-            TransactionEvent::Committed { .. } => commit_stats.record_txn_commit(),
+            TransactionEvent::Committed { .. } => {
+                commit_stats.record_txn_commit();
+                if let Some(observable) = &commit_observable {
+                    observable.record_txn_commit();
+                }
+            }
             TransactionEvent::CommitDurableButUnfinalized { .. } => {
                 commit_stats.record_txn_commit();
                 commit_stats.increment_cleanup_failure();
+                if let Some(observable) = &commit_observable {
+                    observable.record_txn_commit();
+                    observable.record_txn_cleanup_failure();
+                }
             }
             TransactionEvent::Aborted { .. } => {}
             TransactionEvent::BudgetWarning { .. } => {}
         }));
         let rollback_stats = Arc::clone(&manager.stats);
+        let rollback_observable = manager.observable.clone();
         manager.register_rollback_callback(Arc::new(move |event| {
             if let TransactionEvent::Aborted { .. } = event {
                 rollback_stats.record_txn_rollback();
+                if let Some(observable) = &rollback_observable {
+                    observable.record_txn_rollback();
+                }
             }
         }));
         manager
@@ -402,20 +428,25 @@ impl TransactionManager {
     /// Create a new transaction manager with StatsManager integration
     pub fn with_stats_manager(
         config: TransactionManagerConfig,
-        _stats_manager: Arc<StatsManager>,
+        stats_manager: Arc<StatsManager>,
     ) -> Self {
         let stats = Arc::new(TransactionStats::new());
-        Self::with_components(config, stats, Arc::new(VersionManager::new()))
+        Self::with_components_and_observable(
+            config,
+            stats,
+            Arc::new(VersionManager::new()),
+            Some(stats_manager),
+        )
     }
 
     /// Create a transaction manager using the storage engine's MVCC clock.
     pub fn with_shared_version_manager(
         config: TransactionManagerConfig,
-        _stats_manager: Arc<StatsManager>,
+        stats_manager: Arc<StatsManager>,
         version_manager: Arc<VersionManager>,
     ) -> Self {
         let stats = Arc::new(TransactionStats::new());
-        Self::with_components(config, stats, version_manager)
+        Self::with_components_and_observable(config, stats, version_manager, Some(stats_manager))
     }
 
     /// Attach a sync manager after construction.
@@ -523,6 +554,9 @@ impl TransactionManager {
 
         self.active_transactions.insert(txn_id, context);
         self.stats.record_txn_begin();
+        if let Some(observable) = &self.observable {
+            observable.record_txn_begin();
+        }
 
         Ok(txn_id)
     }
@@ -606,6 +640,9 @@ impl TransactionManager {
 
         self.active_transactions.insert(txn_id, context);
         self.stats.record_txn_begin();
+        if let Some(observable) = &self.observable {
+            observable.record_txn_begin();
+        }
 
         log::info!(
             "write transaction began: txn={:?} write_ts={} max_concurrent={}",
@@ -758,6 +795,20 @@ impl TransactionManager {
         let result = context.finish_statement(statement_start);
         self.release_statement_snapshot_pin(context);
         self.stats.end_statement();
+        if let Err(err) = &result {
+            use crate::error::TransactionErrorKind;
+            if matches!(
+                err.kind(),
+                TransactionErrorKind::TransactionTimeout
+                    | TransactionErrorKind::TransactionExpired
+                    | TransactionErrorKind::CheckpointTimeout
+            ) {
+                self.stats.record_timeout();
+                if let Some(observable) = &self.observable {
+                    observable.record_txn_timeout();
+                }
+            }
+        }
         result
     }
 
@@ -766,6 +817,9 @@ impl TransactionManager {
         let context = self.get_context(txn_id)?;
         context.mark_rollback_only();
         self.stats.increment_disconnect();
+        if let Some(observable) = &self.observable {
+            observable.record_txn_disconnect();
+        }
         Ok(())
     }
 

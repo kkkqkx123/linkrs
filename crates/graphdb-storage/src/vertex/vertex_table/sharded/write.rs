@@ -27,9 +27,7 @@ impl CommitApplied {
             mapping,
             updates: applied_updates
                 .into_iter()
-                .map(|(shard_idx, local_id, col)| {
-                    (table.encode_id(shard_idx, local_id), col)
-                })
+                .map(|(shard_idx, local_id, col)| (table.encode_id(shard_idx, local_id), col))
                 .collect(),
             deletes: applied_deletes
                 .into_iter()
@@ -624,9 +622,7 @@ impl ShardedVertexTable {
         }
         for (global_id, col_name) in applied.updates.iter().rev() {
             let (idx, local_id) = self.decode_id(*global_id);
-            let _ = self.shards[idx]
-                .read()
-                .undo_update(local_id, col_name, ts);
+            let _ = self.shards[idx].read().undo_update(local_id, col_name, ts);
         }
         self.undo_applied_ids(&applied.inserts);
     }
@@ -1000,9 +996,7 @@ mod scoped_tests {
                 table
                     .insert_with_scope("race", &props("race"), ts, &mut scope)
                     .expect("staging never touches global state");
-                table
-                    .commit_write_scope_tracked(&mut scope, ts)
-                    .map(|_| ())
+                table.commit_write_scope_tracked(&mut scope, ts).map(|_| ())
             }));
         }
         let mut oks = 0usize;
@@ -1102,9 +1096,7 @@ mod scoped_tests {
                 &mut scope,
             )
             .unwrap();
-        table
-            .commit_write_scope_tracked(&mut scope, ts)
-            .unwrap();
+        table.commit_write_scope_tracked(&mut scope, ts).unwrap();
         let global = table.get_internal_id("row", ts).expect("applied");
 
         let mut scope = WriteScope::new(ts + 1);

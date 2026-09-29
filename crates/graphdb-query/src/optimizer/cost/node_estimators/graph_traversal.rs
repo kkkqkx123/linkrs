@@ -10,11 +10,15 @@
 //! - GetEdges
 
 use super::{get_input_rows, NodeEstimator};
+use crate::optimizer::cost::config::{
+    DEFAULT_DEGREE_FALLBACK, GET_EDGES_DEFAULT_ROWS, GET_VERTICES_DEFAULT_ROWS,
+    SKEW_DIRECTION_RATIO,
+};
 use crate::optimizer::cost::estimate::NodeCostEstimate;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::error::CostError;
+use crate::optimizer::stats::EdgeTypeStatistics;
 use crate::optimizer::stats::StatsView;
-use crate::optimizer::stats::{EdgeTypeStatistics, SkewnessLevel};
 use crate::planning::plan::PlanNodeEnum;
 use graphdb_core::types::EdgeDirection;
 
@@ -38,7 +42,7 @@ impl<'a> GraphTraversalEstimator<'a> {
                     .get_edge_stats(space, et)
             })
             .map(|s| s.avg_out_degree)
-            .unwrap_or(2.0)
+            .unwrap_or(DEFAULT_DEGREE_FALLBACK)
     }
 
     /// Obtain the average in-degree for each edge type.
@@ -50,7 +54,7 @@ impl<'a> GraphTraversalEstimator<'a> {
                     .get_edge_stats(space, et)
             })
             .map(|s| s.avg_in_degree)
-            .unwrap_or(2.0)
+            .unwrap_or(DEFAULT_DEGREE_FALLBACK)
     }
 
     /// Obtain the average degree of the edge type (the average of in-degree and out-degree values).
@@ -62,7 +66,7 @@ impl<'a> GraphTraversalEstimator<'a> {
                     .get_edge_stats(space, et)
             })
             .map(|s| (s.avg_out_degree + s.avg_in_degree) / 2.0)
-            .unwrap_or(2.0)
+            .unwrap_or(DEFAULT_DEGREE_FALLBACK)
     }
 
     /// Obtain statistical information about the type of edges.
@@ -86,20 +90,18 @@ impl<'a> GraphTraversalEstimator<'a> {
 
         match stats {
             Some(s) if s.is_heavily_skewed() => {
-                // Calculate the cost based on the inclination and direction.
-                let penalty = match s.skewness_level() {
-                    SkewnessLevel::Severe => 2.0,
-                    SkewnessLevel::Moderate => 1.5,
-                    SkewnessLevel::Mild => 1.2,
-                    SkewnessLevel::None => 1.0,
-                };
+                let penalty = s.skew_penalty();
 
                 // Select the appropriate inclination angle based on the direction.
                 let direction_penalty = match direction {
-                    EdgeDirection::Out if s.max_out_degree as f64 > s.avg_out_degree * 5.0 => {
+                    EdgeDirection::Out
+                        if s.max_out_degree as f64 > s.avg_out_degree * SKEW_DIRECTION_RATIO =>
+                    {
                         penalty * 1.5
                     }
-                    EdgeDirection::In if s.max_in_degree as f64 > s.avg_in_degree * 5.0 => {
+                    EdgeDirection::In
+                        if s.max_in_degree as f64 > s.avg_in_degree * SKEW_DIRECTION_RATIO =>
+                    {
                         penalty * 1.5
                     }
                     _ => penalty,
@@ -133,18 +135,17 @@ impl<'a> GraphTraversalEstimator<'a> {
 
         match stats {
             Some(s) if s.is_heavily_skewed() => {
-                // For skewed data, it is advisable to use more conservative estimates.
-                // Consider the worst-case scenario: all starting nodes are hotspots.
-                let conservative_factor = match s.skewness_level() {
-                    SkewnessLevel::Severe => 1.5,
-                    SkewnessLevel::Moderate => 1.3,
-                    SkewnessLevel::Mild => 1.1,
-                    SkewnessLevel::None => 1.0,
-                };
-
-                (start_rows as f64 * avg_degree * conservative_factor) as u64
+                (start_rows as f64 * avg_degree * s.skew_row_factor()) as u64
             }
             _ => (start_rows as f64 * avg_degree) as u64,
+        }
+    }
+
+    fn parse_direction_str(direction: &str) -> EdgeDirection {
+        match direction {
+            "IN" | "in" | "In" => EdgeDirection::In,
+            "BOTH" | "both" | "Both" => EdgeDirection::Both,
+            _ => EdgeDirection::Out,
         }
     }
 }
@@ -174,34 +175,37 @@ impl<'a> NodeEstimator for GraphTraversalEstimator<'a> {
             PlanNodeEnum::ExpandAll(n) => {
                 let start_rows = get_input_rows(child_estimates, 0);
                 let edge_type = n.edge_types().first().map(|s| s.as_str());
-                // The ExpandAllNode function uses strings to represent directions, and these strings need to be parsed.
-                let avg_degree = match n.direction() {
-                    "IN" | "in" | "In" => self.get_avg_in_degree(space, edge_type),
-                    "BOTH" | "both" | "Both" => self.get_avg_degree(space, edge_type),
-                    _ => self.get_avg_out_degree(space, edge_type), // By default, it is displayed outside.
-                };
-                let output_rows = (start_rows as f64 * avg_degree) as u64;
-                let cost = self
-                    .cost_calculator
-                    .calculate_expand_all_cost(space, start_rows, edge_type);
+                let direction = Self::parse_direction_str(n.direction());
+                let output_rows =
+                    self.estimate_skew_aware_output_rows(space, start_rows, edge_type, direction);
+                let base =
+                    self.calculate_skew_aware_expand_cost(space, start_rows, edge_type, direction);
+                let cost = base * 1.5;
                 Ok((cost, output_rows.max(1)))
             }
             PlanNodeEnum::Traverse(n) => {
                 let start_rows = get_input_rows(child_estimates, 0);
                 let edge_type = n.edge_types().first().map(|s| s.as_str());
                 let steps = n.max_steps();
-                // Select the degree value based on the direction of the traversal.
                 let avg_degree = match n.direction() {
                     EdgeDirection::Out => self.get_avg_out_degree(space, edge_type),
                     EdgeDirection::In => self.get_avg_in_degree(space, edge_type),
                     EdgeDirection::Both => self.get_avg_degree(space, edge_type),
                 };
-                // Estimation of the number of output lines for a multi-step traversal
-                let output_rows = (start_rows as f64 * avg_degree.powi(steps as i32)) as u64;
+                let skew_factor = match self.get_edge_stats(space, edge_type) {
+                    Some(s) if s.is_heavily_skewed() => s.skew_row_factor(),
+                    _ => 1.0,
+                };
+                let output_rows =
+                    (start_rows as f64 * avg_degree.powi(steps as i32) * skew_factor) as u64;
                 let cost = self
                     .cost_calculator
                     .calculate_traverse_cost(space, start_rows, edge_type, steps);
-                Ok((cost, output_rows.max(1)))
+                let skewed_cost = match self.get_edge_stats(space, edge_type) {
+                    Some(s) if s.is_heavily_skewed() => cost * s.skew_penalty(),
+                    _ => cost,
+                };
+                Ok((skewed_cost, output_rows.max(1)))
             }
             PlanNodeEnum::AppendVertices(_) => {
                 let input_rows_val = get_input_rows(child_estimates, 0);
@@ -214,25 +218,25 @@ impl<'a> NodeEstimator for GraphTraversalEstimator<'a> {
             PlanNodeEnum::GetNeighbors(n) => {
                 let start_rows = get_input_rows(child_estimates, 0);
                 let edge_type = n.edge_types().first().map(|s| s.as_str());
-                // The `GetNeighborsNode` function uses strings to represent directions, and these strings need to be parsed.
-                let avg_degree = match n.direction() {
-                    "IN" | "in" | "In" => self.get_avg_in_degree(space, edge_type),
-                    "BOTH" | "both" | "Both" => self.get_avg_degree(space, edge_type),
-                    _ => self.get_avg_out_degree(space, edge_type), // By default, it is displayed outside.
-                };
-                let output_rows = (start_rows as f64 * avg_degree) as u64;
+                let direction = Self::parse_direction_str(n.direction());
+                let output_rows =
+                    self.estimate_skew_aware_output_rows(space, start_rows, edge_type, direction);
                 let cost = self
                     .cost_calculator
                     .calculate_get_neighbors_cost(space, start_rows, edge_type);
-                Ok((cost, output_rows.max(1)))
+                let skewed_cost = match self.get_edge_stats(space, edge_type) {
+                    Some(s) if s.is_heavily_skewed() => cost * s.skew_penalty(),
+                    _ => cost,
+                };
+                Ok((skewed_cost, output_rows.max(1)))
             }
             PlanNodeEnum::GetVertices(n) => {
-                let vid_count = n.limit().unwrap_or(100) as u64;
+                let vid_count = n.limit().unwrap_or(GET_VERTICES_DEFAULT_ROWS as i64).max(1) as u64;
                 let cost = self.cost_calculator.calculate_get_vertices_cost(vid_count);
                 Ok((cost, vid_count))
             }
             PlanNodeEnum::GetEdges(n) => {
-                let edge_count = n.limit().unwrap_or(100) as u64;
+                let edge_count = n.limit().unwrap_or(GET_EDGES_DEFAULT_ROWS as i64).max(1) as u64;
                 let cost = self.cost_calculator.calculate_get_edges_cost(edge_count);
                 Ok((cost, edge_count))
             }
@@ -570,7 +574,10 @@ mod tests {
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
         assert!(cost > 0.0);
-        assert_eq!(output_rows, 100);
+        assert_eq!(
+            output_rows,
+            crate::optimizer::cost::config::GET_VERTICES_DEFAULT_ROWS
+        );
     }
 
     #[test]
@@ -591,6 +598,9 @@ mod tests {
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
         assert!(cost > 0.0);
-        assert_eq!(output_rows, 100);
+        assert_eq!(
+            output_rows,
+            crate::optimizer::cost::config::GET_EDGES_DEFAULT_ROWS
+        );
     }
 }

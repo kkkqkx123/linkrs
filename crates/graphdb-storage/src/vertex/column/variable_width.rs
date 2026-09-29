@@ -63,9 +63,8 @@ impl VariableWidthColumn {
                 coerced += 1;
                 continue;
             }
-            let len = u64::from_le_bytes(
-                self.data[start..start + 8].try_into().unwrap_or([0u8; 8]),
-            ) as usize;
+            let len = u64::from_le_bytes(self.data[start..start + 8].try_into().unwrap_or([0u8; 8]))
+                as usize;
             if start + 8 + len > self.data.len() {
                 new_offsets.push(u32::MAX);
                 coerced += 1;
@@ -92,7 +91,11 @@ impl ColumnStorage for VariableWidthColumn {
         match self.try_get(row_idx) {
             Ok(value) => value,
             Err(e) => {
-                log::warn!("variable column row {} lenient read failed: {}; reading as missing", row_idx, e);
+                log::warn!(
+                    "variable column row {} lenient read failed: {}; reading as missing",
+                    row_idx,
+                    e
+                );
                 None
             }
         }
@@ -134,12 +137,13 @@ impl ColumnStorage for VariableWidthColumn {
         }
         let bytes = &self.data[start + 8..start + 8 + len];
         if matches!(self.data_type, DataType::Geography) {
-            let geo = postcard::from_bytes::<graphdb_core::value::Geography>(bytes).map_err(|e| {
-                StorageError::deserialize_error(format!(
-                    "geography payload undecodable at row {}: {}",
-                    row_idx, e
-                ))
-            })?;
+            let geo =
+                postcard::from_bytes::<graphdb_core::value::Geography>(bytes).map_err(|e| {
+                    StorageError::deserialize_error(format!(
+                        "geography payload undecodable at row {}: {}",
+                        row_idx, e
+                    ))
+                })?;
             return Ok(Some(Value::Geography(geo)));
         } else if matches!(
             self.data_type,
@@ -308,8 +312,7 @@ impl ColumnStorage for VariableWidthColumn {
                                 self.data[start..start + 8].try_into().unwrap_or([0u8; 8]),
                             ) as usize;
                             if start + 8 + len <= self.data.len() {
-                                self.wasted_bytes =
-                                    self.wasted_bytes.saturating_add(8 + len);
+                                self.wasted_bytes = self.wasted_bytes.saturating_add(8 + len);
                             }
                         }
                     }

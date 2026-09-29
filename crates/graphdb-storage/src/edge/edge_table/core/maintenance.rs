@@ -138,7 +138,8 @@ impl EdgeStore {
     /// tables pay single. The authority, property and index shares stay
     /// single-copy either way. Prefer `OutOnly`/`InOnly` at creation when
     /// the missing direction is never traversed.
-    pub fn topology_write_amplification(&self) -> u32 {        match self.schema.storage_direction() {
+    pub fn topology_write_amplification(&self) -> u32 {
+        match self.schema.storage_direction() {
             crate::edge::StorageDirection::Both => 2,
             crate::edge::StorageDirection::OutOnly | crate::edge::StorageDirection::InOnly => 1,
         }
@@ -456,8 +457,7 @@ impl EdgeStore {
             }
             Err(e) => {
                 log::warn!("authority reclaim refused on audit drift: {}", e);
-                self.maintenance_reclaim_skips =
-                    self.maintenance_reclaim_skips.saturating_add(1);
+                self.maintenance_reclaim_skips = self.maintenance_reclaim_skips.saturating_add(1);
             }
         }
         // Opt-in record-form migration (background only, never the write

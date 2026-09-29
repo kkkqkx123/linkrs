@@ -25,6 +25,7 @@
 
 use std::sync::Arc;
 
+use crate::optimizer::cost::config::DEFAULT_DEGREE_FALLBACK;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::stats::EdgeTypeStatistics;
 use graphdb_core::types::EdgeDirection;
@@ -146,12 +147,12 @@ pub struct DirectionContext {
 impl TraversalDirectionOptimizer {
     /// Create a new optimizer for optimizing traversal directions.
     pub fn new(cost_calculator: Arc<CostCalculator>) -> Self {
-        // Use thresholds from config if available
+        // Single super-node source: CostModelConfig::super_node_threshold.
         let thresholds = cost_calculator.config().strategy_thresholds;
         Self {
-            cost_calculator,
+            cost_calculator: Arc::clone(&cost_calculator),
             space: String::new(),
-            super_node_threshold: thresholds.traversal_super_node_threshold,
+            super_node_threshold: cost_calculator.config().super_node_threshold as f64,
             degree_equality_threshold: thresholds.bidirectional_savings_threshold,
         }
     }
@@ -390,7 +391,7 @@ impl TraversalDirectionOptimizer {
                 TraversalDirection::Backward => s.avg_in_degree,
                 TraversalDirection::Bidirectional => (s.avg_out_degree + s.avg_in_degree) / 2.0,
             })
-            .unwrap_or(2.0);
+            .unwrap_or(DEFAULT_DEGREE_FALLBACK);
 
         let is_super = avg_degree > self.super_node_threshold;
 
@@ -406,7 +407,7 @@ impl TraversalDirectionOptimizer {
 
     /// Create a default decision (statistical information not available).
     fn create_default_decision(&self, context: &DirectionContext) -> TraversalDirectionDecision {
-        let default_degree = 2.0;
+        let default_degree = DEFAULT_DEGREE_FALLBACK;
 
         TraversalDirectionDecision {
             direction: TraversalDirection::Forward, // Default forward direction

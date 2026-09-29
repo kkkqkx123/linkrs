@@ -26,13 +26,19 @@ impl ShardedVertexTable {
     // flight (WAL replay, reshard). Every entry point that hands row identity
     // or row data to a consumer takes a [`VisibilityGuard`] instead.
 
-    pub(crate) fn get_by_internal_id_offline(&self, global_id: u32, ts: Timestamp) -> Option<VertexRecord> {
+    pub(crate) fn get_by_internal_id_offline(
+        &self,
+        global_id: u32,
+        ts: Timestamp,
+    ) -> Option<VertexRecord> {
         let (idx, local_id) = self.decode_id(global_id);
         let table = self.shards[idx].read();
-        table.get_by_internal_id_offline(local_id, ts).map(|mut record| {
-            record.internal_id = global_id;
-            record
-        })
+        table
+            .get_by_internal_id_offline(local_id, ts)
+            .map(|mut record| {
+                record.internal_id = global_id;
+                record
+            })
     }
 
     /// Row survival stamps for visibility rechecks (shard-decoded).
@@ -236,7 +242,10 @@ impl ShardedVertexTable {
         names: &[String],
     ) -> (Vec<u32>, Vec<VertexId>, Vec<(String, ColumnValues)>) {
         if let Err(error) = self.verify_shard_schema_uniform() {
-            log::error!("scan_columns proceeding under shard schema divergence: {}", error);
+            log::error!(
+                "scan_columns proceeding under shard schema divergence: {}",
+                error
+            );
         }
         let snapshot = guard.snapshot();
         let (resolved_names, types) = self.column_layout(names);
@@ -272,7 +281,9 @@ impl ShardedVertexTable {
                 continue;
             }
             let locals: Vec<u32> = visible.iter().map(|&(_, local)| local).collect();
-            for (name, column) in table.get_projected_columns_offline(&locals, snapshot, &resolved_names) {
+            for (name, column) in
+                table.get_projected_columns_offline(&locals, snapshot, &resolved_names)
+            {
                 if let Some((_, target)) = merged.iter_mut().find(|(n, _)| *n == name) {
                     column.scatter(target, &visible);
                 }

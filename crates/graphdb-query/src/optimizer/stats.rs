@@ -25,9 +25,8 @@ pub use collector::{CollectedSummary, StatisticsCollector};
 pub use edge::{EdgeTypeStatistics, HotVertexInfo, SkewnessLevel};
 pub use feedback::{
     generate_query_fingerprint, normalize_query, CardinalityFeedbackManager, DecisionFeedbackStore,
-    DecorrelationAdvice, ExecutionFeedbackCollector, FeedbackDrivenSelectivity, OperatorFeedback,
-    QueryExecutionFeedback, QueryFeedbackHistory, SelectivityFeedbackManager,
-    SimpleExecutionFeedback, SimpleFeedbackCollector,
+    DecorrelationAdvice, FeedbackDrivenSelectivity, OperatorFeedback, QueryExecutionFeedback,
+    QueryFeedbackHistory, SelectivityFeedbackManager,
 };
 pub use histogram::{Histogram, HistogramBucket, RangeCondition};
 pub use manager::StatisticsManager;

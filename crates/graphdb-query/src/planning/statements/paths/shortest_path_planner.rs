@@ -280,8 +280,12 @@ impl ShortestPathPlanner {
 
             let current_vid = VertexId::try_from(&current)
                 .map_err(|e| StorageError::invalid_input(e.to_string()))?;
-            let edges =
-                storage.get_node_edges("default", &current_vid, config.direction, &config.edge_types)?;
+            let edges = storage.get_node_edges(
+                "default",
+                &current_vid,
+                config.direction,
+                &config.edge_types,
+            )?;
 
             for edge in edges {
                 let neighbor = if Value::from(edge.src) == current {

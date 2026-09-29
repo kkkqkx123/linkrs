@@ -847,7 +847,12 @@ fn execute_pagerank_with_storage(
     for vid in &vertex_ids {
         let reader = storage.storage.read();
         let edges = reader
-            .get_node_edges(&storage.space, vid, graphdb_core::types::EdgeDirection::Out, &[])
+            .get_node_edges(
+                &storage.space,
+                vid,
+                graphdb_core::types::EdgeDirection::Out,
+                &[],
+            )
             .map_err(|e| ExpressionError::function_error(format!("Storage error: {}", e)))?;
         drop(reader);
 

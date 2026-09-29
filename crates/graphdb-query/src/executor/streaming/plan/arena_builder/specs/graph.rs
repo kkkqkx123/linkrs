@@ -398,9 +398,8 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_expand_all_spec
 ) -> Result<GraphSpec, PlanBuildError> {
     Ok(GraphSpec::ExpandAll {
         edge_types: node.edge_types().to_vec(),
-        direction: graphdb_core::EdgeDirection::parse(node.direction()).map_err(|error| {
-            PlanBuildError::unsupported("ExpandAll", node.id(), error)
-        })?,
+        direction: graphdb_core::EdgeDirection::parse(node.direction())
+            .map_err(|error| PlanBuildError::unsupported("ExpandAll", node.id(), error))?,
         filter_expr: node.filter().map(contextual_to_expression).transpose()?,
         col_names: node.col_names().to_vec(),
         src_vids: node.src_vids().to_vec(),

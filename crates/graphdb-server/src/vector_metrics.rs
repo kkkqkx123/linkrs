@@ -123,18 +123,66 @@ impl VectorMetricsSampler {
         stats.add_value_with_amount(MetricType::VectorLockLatencyUs, lock_us);
         stats.add_value_with_amount(MetricType::VectorVersionReloads, version_reloads);
 
-        stats.add_space_metric_with_amount(name, MetricType::VectorSearchOps, search_total);
-        stats.add_space_metric_with_amount(name, MetricType::VectorSearchErrors, search_errors);
-        stats.add_space_metric_with_amount(name, MetricType::VectorSearchLatencyMs, search_ms);
-        stats.add_space_metric_with_amount(name, MetricType::VectorUpsertOps, upserts);
-        stats.add_space_metric_with_amount(name, MetricType::VectorUpsertErrors, upsert_errors);
-        stats.add_space_metric_with_amount(name, MetricType::VectorUpsertLatencyMs, apply_ms);
-        stats.add_space_metric_with_amount(name, MetricType::VectorDeleteOps, deletes);
-        stats.add_space_metric_with_amount(name, MetricType::VectorDeleteErrors, delete_errors);
-        stats.add_space_metric_with_amount(name, MetricType::VectorDeleteLatencyMs, apply_ms);
-        stats.add_space_metric_with_amount(name, MetricType::VectorLockOps, lock_ops);
-        stats.add_space_metric_with_amount(name, MetricType::VectorLockLatencyUs, lock_us);
-        stats.add_space_metric_with_amount(name, MetricType::VectorVersionReloads, version_reloads);
+        stats.add_space_metric_with_amount(
+            &StatsManager::space_key_for_name(name),
+            MetricType::VectorSearchOps,
+            search_total,
+        );
+        stats.add_space_metric_with_amount(
+            &StatsManager::space_key_for_name(name),
+            MetricType::VectorSearchErrors,
+            search_errors,
+        );
+        stats.add_space_metric_with_amount(
+            &StatsManager::space_key_for_name(name),
+            MetricType::VectorSearchLatencyMs,
+            search_ms,
+        );
+        stats.add_space_metric_with_amount(
+            &StatsManager::space_key_for_name(name),
+            MetricType::VectorUpsertOps,
+            upserts,
+        );
+        stats.add_space_metric_with_amount(
+            &StatsManager::space_key_for_name(name),
+            MetricType::VectorUpsertErrors,
+            upsert_errors,
+        );
+        stats.add_space_metric_with_amount(
+            &StatsManager::space_key_for_name(name),
+            MetricType::VectorUpsertLatencyMs,
+            apply_ms,
+        );
+        stats.add_space_metric_with_amount(
+            &StatsManager::space_key_for_name(name),
+            MetricType::VectorDeleteOps,
+            deletes,
+        );
+        stats.add_space_metric_with_amount(
+            &StatsManager::space_key_for_name(name),
+            MetricType::VectorDeleteErrors,
+            delete_errors,
+        );
+        stats.add_space_metric_with_amount(
+            &StatsManager::space_key_for_name(name),
+            MetricType::VectorDeleteLatencyMs,
+            apply_ms,
+        );
+        stats.add_space_metric_with_amount(
+            &StatsManager::space_key_for_name(name),
+            MetricType::VectorLockOps,
+            lock_ops,
+        );
+        stats.add_space_metric_with_amount(
+            &StatsManager::space_key_for_name(name),
+            MetricType::VectorLockLatencyUs,
+            lock_us,
+        );
+        stats.add_space_metric_with_amount(
+            &StatsManager::space_key_for_name(name),
+            MetricType::VectorVersionReloads,
+            version_reloads,
+        );
     }
 }
 

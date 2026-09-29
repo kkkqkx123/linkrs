@@ -226,7 +226,6 @@ pub(super) fn expand_single_step(
         let edges = reader.get_node_edges(space_name, vid, direction, edge_types)?;
 
         for edge in &edges {
-
             let dst_vid = match direction {
                 EdgeDirection::Out => *edge.dst(),
                 EdgeDirection::In => *edge.src(),

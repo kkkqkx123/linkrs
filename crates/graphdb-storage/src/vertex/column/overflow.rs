@@ -137,13 +137,13 @@ pub(crate) fn decode_overflow_payload(
             let mut out = Vec::with_capacity(dim);
             for i in 0..dim {
                 let chunk: [u8; 4] = bytes[i * 4..(i + 1) * 4].try_into().map_err(|_| {
-                    StorageError::deserialize_error("overflow vector component undecodable".to_string())
+                    StorageError::deserialize_error(
+                        "overflow vector component undecodable".to_string(),
+                    )
                 })?;
                 out.push(f32::from_le_bytes(chunk));
             }
-            Ok(Value::Vector(
-                graphdb_core::value::VectorValue::dense(out),
-            ))
+            Ok(Value::Vector(graphdb_core::value::VectorValue::dense(out)))
         }
         DataType::Json => {
             let s = String::from_utf8(bytes).map_err(|e| {
