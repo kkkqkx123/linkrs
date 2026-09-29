@@ -3,12 +3,15 @@
   import { t } from 'svelte-i18n';
   import { get } from 'svelte/store';
   import { schemaStore } from '$stores/schema';
+  import { theme } from '$stores/theme';
   import { DATA_TYPE_LABELS, VID_TYPES } from '$config/constants';
   import { formatDate } from '$utils/function';
   import PageSkeleton from '$components/common/PageSkeleton.svelte';
+  import SchemaErGraph from './SchemaErGraph.svelte';
 
-  let activeTab = $state<'spaces' | 'tags' | 'edges' | 'indexes'>('spaces');
+  let activeTab = $state<'spaces' | 'tags' | 'edges' | 'indexes' | 'er'>('spaces');
   let pageInitialized = $state(false);
+  let isDark = $state(false);
 
   // Spaces
   let spaces = $state<Array<any>>([]);
@@ -58,8 +61,9 @@
       indexes = s.indexes;
       isLoadingIndexes = s.isLoadingIndexes;
     });
+    const unsubTheme = theme.subscribe(v => { isDark = v === 'dark'; });
     schemaStore.fetchSpaces().finally(() => { pageInitialized = true; });
-    return unsub;
+    return () => { unsub(); unsubTheme(); };
   });
 
   function selectSpace(name: string) {
@@ -67,13 +71,22 @@
     if (activeTab === 'tags') schemaStore.fetchTags(name);
     if (activeTab === 'edges') schemaStore.fetchEdgeTypes(name);
     if (activeTab === 'indexes') schemaStore.fetchIndexes(name);
+    if (activeTab === 'er') { schemaStore.fetchTags(name); schemaStore.fetchEdgeTypes(name); }
   }
 
-  async function handleTabChange(tab: 'spaces' | 'tags' | 'edges' | 'indexes') {
+  async function handleTabChange(tab: 'spaces' | 'tags' | 'edges' | 'indexes' | 'er') {
     activeTab = tab;
     if (tab === 'tags' && currentSpace) schemaStore.fetchTags(currentSpace);
     if (tab === 'edges' && currentSpace) schemaStore.fetchEdgeTypes(currentSpace);
     if (tab === 'indexes' && currentSpace) schemaStore.fetchIndexes(currentSpace);
+    if (tab === 'er') {
+      if (currentSpace) {
+        schemaStore.fetchTags(currentSpace);
+        schemaStore.fetchEdgeTypes(currentSpace);
+      } else {
+        schemaStore.fetchSpaces();
+      }
+    }
   }
 
   async function createSpace() {
@@ -188,13 +201,13 @@
   <!-- Tabs -->
   <div class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm flex flex-col flex-1 overflow-hidden">
     <div class="flex border-b border-gray-200 dark:border-gray-700">
-      {#each ['spaces', 'tags', 'edges', 'indexes'] as tab}
+      {#each ['spaces', 'tags', 'edges', 'indexes', 'er'] as tab}
         <button
           class="px-5 py-3 text-sm font-medium cursor-pointer transition-colors {activeTab === tab ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-500' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
-          onclick={() => handleTabChange(tab as 'spaces' | 'tags' | 'edges' | 'indexes')}
-          disabled={tab !== 'spaces' && !currentSpace}
+          onclick={() => handleTabChange(tab as 'spaces' | 'tags' | 'edges' | 'indexes' | 'er')}
+          disabled={tab !== 'spaces' && tab !== 'er' && !currentSpace}
         >
-          {tab === 'spaces' ? $t('schema.spaces') : tab === 'tags' ? $t('schema.tags') : tab === 'edges' ? $t('schema.edges') : $t('schema.indexes')}
+          {tab === 'spaces' ? $t('schema.spaces') : tab === 'tags' ? $t('schema.tags') : tab === 'edges' ? $t('schema.edges') : tab === 'indexes' ? $t('schema.indexes') : $t('schema.erGraph')}
         </button>
       {/each}
     </div>
@@ -344,6 +357,8 @@
             </table>
           </div>
         {/if}
+      {:else if activeTab === 'er'}
+        <SchemaErGraph {tags} {edgeTypes} {isDark} />
       {/if}
     </div>
   </div>

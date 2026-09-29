@@ -5,9 +5,11 @@
   import { navigate } from 'svelte-routing';
   import { consoleStore, type QueryHistoryItem, type QueryFavoriteItem } from '$stores/console';
   import { graphStore } from '$stores/graph';
+  import { theme } from '$stores/theme';
   import { formatExecutionTime, formatRowCount, formatCellValue } from '$utils/parseData';
   import { queryResultToGraph } from '$utils/cytoscapeConfig';
   import CytoscapeCanvas from '$components/common/CytoscapeCanvas.svelte';
+  import CypherEditor from '$components/common/CypherEditor.svelte';
   import { exportToCSV, exportToJSON } from '$utils/export';
   import type { QueryResult, QueryError } from '$types/query';
 
@@ -17,6 +19,7 @@
   let executionTime = $state(0);
   let error = $state<QueryError | null>(null);
   let activeView = $state<'table' | 'json' | 'graph'>('table');
+  let isDark = $state(false);
   let history = $state<QueryHistoryItem[]>([]);
   let favorites = $state<QueryFavoriteItem[]>([]);
   let historyOpen = $state(false);
@@ -53,17 +56,22 @@
       history = s.history;
       favorites = s.favorites;
     });
-    return unsub;
+    const unsubTheme = theme.subscribe(v => { isDark = v === 'dark'; });
+    return () => { unsub(); unsubTheme(); };
   });
 
-  function handleKeydown(e: KeyboardEvent) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      consoleStore.executeQuery();
-    }
-  }
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Persist editor content into the store after the user pauses typing, so the
+  // draft survives reloads without writing to localStorage on every keystroke.
+  $effect(() => {
+    const content = editorContent;
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => consoleStore.setEditorContent(content), 300);
+  });
 
   function handleExecute() {
+    if (saveTimer) clearTimeout(saveTimer);
     consoleStore.setEditorContent(editorContent);
     consoleStore.executeQuery();
   }
@@ -102,12 +110,12 @@
   <!-- Editor Section -->
   <div class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm flex flex-col">
     <div class="p-4 pb-2">
-      <textarea
-        class="w-full h-32 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm font-mono focus:outline-none focus:border-blue-500 resize-y bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200 transition-colors"
-        placeholder="{$t('console.queryPlaceholder')} {$t('console.executeHint')}"
+      <CypherEditor
         bind:value={editorContent}
-        onkeydown={handleKeydown}
-      ></textarea>
+        {isDark}
+        placeholder="{$t('console.queryPlaceholder')} {$t('console.executeHint')}"
+        onExecute={handleExecute}
+      />
     </div>
     <div class="px-4 pb-3 flex items-center gap-2">
       <button
@@ -223,7 +231,7 @@
               </div>
           {#if previewActive && graph}
             <div class="h-80 rounded border border-gray-200 dark:border-gray-700 relative overflow-hidden">
-              <CytoscapeCanvas data={graph} isDark={false} />
+              <CytoscapeCanvas data={graph} {isDark} />
             </div>
           {/if}
             </div>

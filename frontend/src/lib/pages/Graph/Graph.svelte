@@ -115,10 +115,10 @@
     isExpanding = true;
     try {
       const neighbors = await graphService.vertices.getNeighbors(id, space);
-      const nodes = neighbors.map((n) => ({ id: String(n.vid), tag: 'unknown', properties: {} }));
+      const nodes = neighbors.map((n) => ({ id: n.vid, tag: n.tag, properties: n.properties }));
       const edges = neighbors.map((n) => {
-        const source = n.direction === 'OUT' ? id : String(n.vid);
-        const target = n.direction === 'OUT' ? String(n.vid) : id;
+        const source = n.direction === 'OUT' ? id : n.vid;
+        const target = n.direction === 'OUT' ? n.vid : id;
         return {
           id: makeEdgeId(source, target, n.edge_type, n.rank),
           type: n.edge_type,

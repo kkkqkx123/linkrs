@@ -1,294 +1,154 @@
 # GraphDB 前端技术栈
 
-**文档版本**: v1.0  
+**文档版本**: v2.0  
 **创建日期**: 2026-03-29  
-**最后更新**: 2026-03-29
+**最后更新**: 2026-04-15
+
+> 本文档描述前端**实际采用**的技术栈。v1.0 曾按 React 生态规划（React 18 / Ant Design / Zustand / React Router），但工程实现阶段改为 Svelte 生态；本版已按 `frontend/package.json` 与 `frontend/src/**` 的真实代码全面修订，消除文档与代码的偏差。
 
 ---
 
 ## 1. 技术选型概述
 
-基于项目需求分析和 nebula-studio-3.10.0 的参考实现，GraphDB 前端采用以下技术栈：
-
 | 类别 | 技术选择 | 版本 | 说明 |
 |------|---------|------|------|
-| **前端框架** | React | 18.x | 现代化组件化开发 |
-| **开发语言** | TypeScript | 5.x | 类型安全，提升开发体验 |
-| **构建工具** | Vite | 5.x | 快速冷启动，HMR 支持 |
-| **UI 组件库** | Ant Design | 5.x | 企业级 UI 设计 |
-| **状态管理** | Zustand | 4.x | 轻量级状态管理 |
-| **路由** | React Router | 6.x | 官方推荐路由方案 |
-| **HTTP 客户端** | Axios | 1.x | 成熟的 HTTP 请求库 |
-| **代码编辑器** | Ant Design Input.TextArea | 5.x | 基础文本编辑（简化实现） |
-| **图可视化** | Cytoscape.js | 3.x | 高性能图可视化（阶段 6 实现） |
-| **样式方案** | CSS Modules + Less | - | 组件级样式隔离 |
-| **国际化** | react-i18next | 13.x | 多语言支持 |
+| **前端框架** | Svelte | ^5.56.8 | 基于 Runes（`$state`/`$props`/`$effect`）的响应式组件模型 |
+| **开发语言** | TypeScript | ~6.0.2 | 类型安全，`svelte-check` + `tsc` 校验 |
+| **构建工具** | Vite | ^8.2.0 | rolldown 内核，含 HMR 与生产构建优化 |
+| **样式方案** | Tailwind CSS | ^4.3.3 | 通过 `@tailwindcss/vite` 插件接入，原子化类名 |
+| **状态管理** | Svelte Store | 内置 | `writable` store（`$stores/*`），无需额外依赖 |
+| **路由** | svelte-routing | ^2.13.0 | 声明式 `<Router>` / `<Route>` |
+| **HTTP 客户端** | Axios | ^1.19.0 | 统一封装于 `$utils/http.ts`，含拦截器与 BigInt 解析 |
+| **代码编辑器** | Monaco Editor | ^0.57.0 | Cypher 语法高亮 + 关键字/Schema 自动补全 |
+| **图可视化** | Cytoscape.js | ^3.34.0 | 力导向/环形/网格/层级布局，样式与交互定制 |
+| **国际化** | svelte-i18n | ^4.0.1 | `en` / `zh` 两套词条，`$t()` 取词 |
+| **工具库** | clsx / lodash-es / dayjs / json-bigint | 见依赖清单 | 类名组合、工具函数、时间处理、大整数 JSON |
 
 ---
 
 ## 2. 核心技术详解
 
-### 2.1 前端框架: React 18
+### 2.1 前端框架: Svelte 5（Runes）
 
 **选型理由**:
-- 成熟稳定的生态系统
-- 组件化开发模式
-- 优秀的性能表现
-- 与 nebula-studio 技术栈一致，便于参考实现
+- 编译期生成高效更新代码，运行时体量小
+- Runes 提供细粒度响应式，无需手动依赖追踪
+- 组件即文件（`.svelte`），模板与脚本同处
 
-**关键特性**:
-- Concurrent Features (并发特性)
-- Automatic Batching (自动批处理)
-- Suspense 改进
-- React Server Components (可选)
+**关键用法**:
+- `$state` 声明响应式局部状态
+- `$props` 声明组件入参，`$bindable` 支持双向绑定
+- `$effect` 处理副作用（订阅、DOM 操作、主题切换）
+- `$derived` / `$derived.by` 声明派生值
+
+**Store 结构示例**（本仓库 `$stores/*`）:
+```typescript
+// stores/graph.ts
+import { writable } from 'svelte/store';
+
+function createGraphStore() {
+  const { subscribe, set, update } = writable<GraphState>({ /* ... */ });
+  return {
+    subscribe,
+    setGraphData: (data: GraphData) => update(s => ({ ...s, graphData: data })),
+    setLayout: (layout: LayoutType) => update(s => ({ ...s, layout })),
+  };
+}
+
+export const graphStore = createGraphStore();
+```
 
 ### 2.2 开发语言: TypeScript
 
-**选型理由**:
-- 静态类型检查，减少运行时错误
-- 优秀的 IDE 支持（自动补全、重构）
-- 更好的代码可维护性
-- 与 nebula-studio 保持一致
+**配置**: `tsconfig.app.json` 继承 `@tsconfig/svelte`，开启 `noEmit`、`allowJs`、`checkJs`，并配置路径别名（`$lib` / `$types` / `$utils` / `$services` / `$stores` / `$config` / `$components` / `$pages`）。
 
-**配置要求**:
-- 启用严格模式 (`strict: true`)
-- 配置路径别名 (`@/*`)
-- 启用装饰器支持（如需要）
-
-### 2.3 构建工具: Vite
-
-**选型理由**:
-- 极速冷启动（基于 ES Modules）
-- 快速热更新（HMR）
-- 开箱即用的 TypeScript 支持
-- 优化的生产构建
-
-**对比 Create React App**:
-| 特性 | Vite | CRA |
-|------|------|-----|
-| 冷启动 | < 300ms | ~10s |
-| HMR | 即时 | 较慢 |
-| 配置复杂度 | 低 | 高 |
-| 构建速度 | 快 | 一般 |
-
-### 2.4 UI 组件库: Ant Design 5.x
-
-**选型理由**:
-- 企业级设计规范
-- 丰富的组件生态
-- 完善的 TypeScript 支持
-- 与 nebula-studio 完全一致
-
-**主题定制**:
-```typescript
-// theme.config.ts
-export const themeConfig = {
-  token: {
-    colorPrimary: '#345EDA',
-    colorSuccess: '#52C41A',
-    colorWarning: '#FAAD14',
-    colorError: '#F5222D',
-    borderRadius: 4,
-  },
-};
+**校验命令**:
+```shell
+npm run check   # svelte-check + tsc
 ```
 
-### 2.5 状态管理: Zustand
+### 2.3 构建工具: Vite 8（rolldown）
 
 **选型理由**:
-- 轻量级（~1KB）
-- 简单易用的 API
-- 支持 TypeScript
-- 无需 Provider 包裹
-- 相比 MobX 更简洁
+- 极速冷启动（基于 ESM）
+- 与 `@sveltejs/vite-plugin-svelte` 深度集成
+- 生产构建支持 `manualChunks` 分块
 
-**对比 MobX**:
-| 特性 | Zustand | MobX |
-|------|---------|------|
-| 学习曲线 | 低 | 中 |
-| 包大小 | ~1KB | ~20KB |
-| 样板代码 | 极少 | 较多 |
-| 调试工具 | 良好 | 优秀 |
+**分块策略**（`vite.config.ts`）:
+- `monaco-vendor` —— Monaco Editor（懒加载）
+- `cytoscape-vendor` —— Cytoscape.js
+- `utils-vendor` —— axios / lodash / dayjs / json-bigint
 
-**Store 结构示例**:
-```typescript
-// stores/connection.ts
-import { create } from 'zustand';
+**开发代理**: `/v1` 与 `/api` 转发至 `http://localhost:9758`。
 
-interface ConnectionState {
-  isConnected: boolean;
-  host: string;
-  username: string;
-  connect: (host: string, username: string) => void;
-  disconnect: () => void;
-}
-
-export const useConnectionStore = create<ConnectionState>((set) => ({
-  isConnected: false,
-  host: '',
-  username: '',
-  connect: (host, username) => set({ isConnected: true, host, username }),
-  disconnect: () => set({ isConnected: false, host: '', username: '' }),
-}));
-```
-
-### 2.6 路由: React Router v6
+### 2.4 样式方案: Tailwind CSS 4
 
 **选型理由**:
-- React 官方推荐
-- 声明式路由配置
-- 支持嵌套路由
-- 与 nebula-studio 保持一致
+- 原子化类名，减少手写 CSS
+- 原生支持暗色模式（`dark:` 前缀）
+- 通过 `@tailwindcss/vite` 与构建流程集成
 
-**路由结构**:
-```typescript
-// router/index.tsx
-const router = createBrowserRouter([
-  {
-    path: '/login',
-    element: <LoginPage />,
-  },
-  {
-    path: '/',
-    element: <MainLayout />,
-    children: [
-      { path: 'console', element: <ConsolePage /> },
-      { path: 'schema', element: <SchemaPage /> },
-      { path: 'graph', element: <GraphPage /> },
-    ],
-  },
-]);
-```
+**暗色模式**: 由 `$stores/theme.ts` 的 `theme` 控制，切换 `document.documentElement` 的 `dark` class。
+
+### 2.5 状态管理: Svelte Store
+
+**选型理由**:
+- 框架内置，零额外依赖
+- 与组件订阅天然契合（`onMount` 内 `store.subscribe`）
+- 类型友好
+
+**现有 store**: `connection` / `console` / `schema` / `graph` / `dataBrowser` / `theme` / `notification`。
+
+### 2.6 路由: svelte-routing
+
+**路由结构**（`App.svelte`）:
+- `/login` —— 登录页
+- `/` —— 主布局（受 `ProtectedRoute` 保护）
+  - `/console` —— 查询控制台
+  - `/schema` —— Schema 管理（含 ER 关系图）
+  - `/graph` —— 图可视化
+  - `/data-browser` —— 数据浏览
 
 ### 2.7 HTTP 客户端: Axios
 
-**选型理由**:
-- 成熟的错误处理机制
-- 请求/响应拦截器
-- 支持请求取消
-- 与 nebula-studio 保持一致
+**封装**（`$utils/http.ts`）: 统一 `get`/`post`/`put`/`_delete`，请求拦截注入 `X-Session-ID`，响应拦截统一取 `data`，`transformResponse` 使用 `json-bigint` 处理大整数，401 触发登出跳转。
 
-**封装设计**:
-```typescript
-// utils/http.ts
-import axios from 'axios';
-import JSONBigint from 'json-bigint';
+### 2.8 查询编辑器: Monaco Editor
 
-const service = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL,
-  timeout: 30000,
-  transformResponse: [
-    (data) => {
-      try {
-        return JSONBigint.parse(data);
-      } catch {
-        return data;
-      }
-    },
-  ],
-});
+**实现**:
+- 自定义 Cypher 语言（`$utils/monacoCypher.ts`）：Monarch tokenizer 提供注释/字符串/数字/关键字/函数/标点高亮。
+- 自动补全：关键字、内置函数、当前 Space 的 Tag / EdgeType 名称与属性。
+- 快捷键：`Ctrl/Cmd + Enter` 执行查询。
+- 主题：跟随 `$stores/theme`，在 `vs` / `vs-dark` 间切换。
+- **按需引入**（`$utils/monacoSetup.ts`）：仅引入 editor API 与必要 contribution，避免打包 json/css/html/typescript 语言服务及其 worker；Monaco 包在用户首次进入控制台时**懒加载**。
 
-// 请求拦截器
-service.interceptors.request.use((config) => {
-  const sessionId = localStorage.getItem('sessionId');
-  if (sessionId) {
-    config.headers['X-Session-ID'] = sessionId;
-  }
-  return config;
-});
-
-// 响应拦截器
-service.interceptors.response.use(
-  (response) => response.data,
-  (error) => {
-    if (error.response?.status === 401) {
-      // 处理未授权
-      window.location.href = '/login';
-    }
-    return Promise.reject(error);
-  }
-);
-```
-
-### 2.8 查询编辑器: Ant Design TextArea（简化实现）
-
-**选型理由**:
-- 优先保证基础功能快速实现
-- 减少复杂依赖（Monaco Editor ~3MB）
-- 满足核心需求：文本输入、查询执行、结果显示
-- 后续可平滑升级到 Monaco Editor
-
-**阶段 1 实现功能**:
-- 基础多行文本输入
-- 支持 Tab 键缩进
-- 查询执行（Ctrl/Cmd + Enter 快捷键）
-- 执行结果显示（表格/JSON/错误信息）
-
-**后续升级路径**:
-- 阶段 3+ 可替换为 Monaco Editor
-- 添加 Cypher 语法高亮
-- 添加关键字自动补全
-- 添加语法错误提示
+**封装组件**: `$components/common/CypherEditor.svelte`。
 
 ### 2.9 图可视化: Cytoscape.js
 
-**选型理由**:
-- 高性能图渲染
-- 丰富的布局算法
-- 支持大规模图数据
-- 灵活的样式定制
+**能力**:
+- 布局：力导向（cose）/ 环形 / 网格 / 层级
+- 节点/边样式自定义（颜色、尺寸、标签字段）
+- 交互：缩放、拖拽、选择、详情面板
+- 导出：PNG / JSON
+- 展开邻居、暗色模式样式
+- 大数据保护：`MAX_GRAPH_NODES` / `MAX_GRAPH_EDGES` 截断统计
 
-**对比其他方案**:
-| 库 | 性能 | 功能 | 学习曲线 |
-|----|------|------|----------|
-| Cytoscape.js | 优秀 | 丰富 | 中 |
-| D3.js | 良好 | 极丰富 | 高 |
-| React Flow | 良好 | 中等 | 低 |
-| Force Graph | 良好 | 基础 | 低 |
+**封装组件**: `$components/common/CytoscapeCanvas.svelte`，配置与解析在 `$utils/cytoscapeConfig.ts`、`$utils/graphLayout.ts`。
 
-### 2.10 样式方案: CSS Modules + Less
+### 2.10 国际化: svelte-i18n
 
-**选型理由**:
-- CSS Modules 提供组件级样式隔离
-- Less 提供变量、嵌套等增强功能
-- 与 nebula-studio 保持一致
-
-**文件命名规范**:
-```
-ComponentName/
-  ├── index.tsx
-  └── index.module.less
-```
+词条位于 `src/lib/i18n/locales/{en,zh}.json`（扁平 key），组件中通过 `$t('...')` 取词，`LanguageSwitcher` 组件切换语言。
 
 ---
 
 ## 3. 开发工具链
 
-### 3.1 代码质量工具
-
-| 工具 | 用途 | 配置 |
-|------|------|------|
-| ESLint | 代码规范检查 | 使用 @typescript-eslint |
-| Prettier | 代码格式化 | 统一代码风格 |
-| Stylelint | CSS 规范检查 | 检查 Less 文件 |
-| Husky | Git 钩子 | 提交前检查 |
-| lint-staged | 暂存区检查 | 仅检查修改的文件 |
-
-### 3.2 测试工具
-
 | 工具 | 用途 |
 |------|------|
-| Vitest | 单元测试 |
-| React Testing Library | 组件测试 |
-| Playwright | E2E 测试 |
-
-### 3.3 开发辅助工具
-
-| 工具 | 用途 |
-|------|------|
-| Vite Plugin SVG | SVG 组件化 |
-| Vite Plugin Checker | 类型检查 |
-| vite-tsconfig-paths | 路径别名支持 |
+| svelte-check | Svelte + TypeScript 类型检查 |
+| tsc | TypeScript 编译校验（`tsconfig.node.json`） |
+| Vite | 开发服务器与生产构建 |
 
 ---
 
@@ -299,18 +159,15 @@ ComponentName/
 ```json
 {
   "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-router-dom": "^6.20.0",
-    "antd": "^5.12.0",
-    "zustand": "^4.4.7",
-    "axios": "^1.6.2",
-    "react-i18next": "^13.5.0",
-    "i18next": "^23.7.6",
+    "axios": "^1.19.0",
+    "clsx": "^2.1.1",
+    "cytoscape": "^3.34.0",
+    "dayjs": "^1.11.21",
     "json-bigint": "^1.0.0",
-    "dayjs": "^1.11.10",
-    "lodash-es": "^4.17.21",
-    "clsx": "^2.0.0"
+    "lodash-es": "^4.18.1",
+    "monaco-editor": "^0.57.0",
+    "svelte-i18n": "^4.0.1",
+    "svelte-routing": "^2.13.0"
   }
 }
 ```
@@ -320,30 +177,17 @@ ComponentName/
 ```json
 {
   "devDependencies": {
-    "@types/react": "^18.2.43",
-    "@types/react-dom": "^18.2.17",
-    "@types/node": "^20.10.4",
+    "@dvaji/vite-plugin-monaco-editor": "^2.0.0",
+    "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@tsconfig/svelte": "^5.0.8",
     "@types/json-bigint": "^1.0.4",
-    "@types/lodash-es": "^4.17.12",
-    "@typescript-eslint/eslint-plugin": "^6.14.0",
-    "@typescript-eslint/parser": "^6.14.0",
-    "eslint": "^8.55.0",
-    "eslint-plugin-react": "^7.33.2",
-    "eslint-plugin-react-hooks": "^4.6.0",
-    "prettier": "^3.1.1",
-    "stylelint": "^16.0.2",
-    "stylelint-config-standard": "^36.0.0",
-    "typescript": "^5.3.3",
-    "vite": "^5.0.8",
-    "@vitejs/plugin-react": "^4.2.1",
-    "vite-tsconfig-paths": "^4.2.2",
-    "vitest": "^1.0.4",
-    "@testing-library/react": "^14.1.2",
-    "@testing-library/jest-dom": "^6.1.5",
-    "playwright": "^1.40.1",
-    "husky": "^8.0.3",
-    "lint-staged": "^15.2.0",
-    "less": "^4.2.0"
+    "@types/node": "^24.13.3",
+    "svelte": "^5.56.8",
+    "svelte-check": "^4.7.3",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.0"
   }
 }
 ```
@@ -356,83 +200,38 @@ ComponentName/
 
 ```bash
 # .env.development
-VITE_API_BASE_URL=http://localhost:7001
-VITE_APP_TITLE=GraphDB Studio
-VITE_APP_VERSION=1.0.0
-
-# .env.production
-VITE_API_BASE_URL=/api
-VITE_APP_TITLE=GraphDB Studio
-VITE_APP_VERSION=1.0.0
+VITE_API_BASE_URL=http://localhost:9758
 ```
 
-### 5.2 TypeScript 配置
+### 5.2 TypeScript 路径别名
 
-```json
-// tsconfig.json
-{
-  "compilerOptions": {
-    "target": "ES2020",
-    "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "skipLibCheck": true,
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react-jsx",
-    "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/*"],
-      "@components/*": ["src/components/*"],
-      "@pages/*": ["src/pages/*"],
-      "@stores/*": ["src/stores/*"],
-      "@utils/*": ["src/utils/*"],
-      "@services/*": ["src/services/*"],
-      "@hooks/*": ["src/hooks/*"],
-      "@types/*": ["src/types/*"],
-      "@assets/*": ["src/assets/*"]
-    }
-  },
-  "include": ["src"],
-  "references": [{ "path": "./tsconfig.node.json" }]
-}
-```
+`tsconfig.app.json` 与 `vite.config.ts` 保持一致的别名映射：`$lib` / `$types` / `$utils` / `$services` / `$stores` / `$config` / `$components` / `$pages`。
 
 ---
 
-## 6. 与 nebula-studio 的差异
+## 6. 架构决策记录
 
-| 方面 | nebula-studio | GraphDB |
-|------|---------------|---------|
-| 状态管理 | MobX | Zustand |
-| 国际化 | @vesoft-inc/i18n | react-i18next |
-| 查询语言 | nGQL | Cypher |
-| 后端通信 | WebSocket + HTTP | HTTP |
-| 查询编辑器 | Monaco Editor | Ant Design TextArea（简化） |
-| 数据导入 | 完整功能 | 简化/暂不实现 |
-| LLM 集成 | 有 | 无 |
-| 图可视化 | 有 | 阶段 6 实现 |
+| 方面 | 规划（v1.0） | 实现（现状） | 决策原因 |
+|------|-------------|-------------|----------|
+| 框架 | React 18 | Svelte 5 | 更小的运行时、编译期优化、Runes 细粒度响应式 |
+| UI 组件库 | Ant Design 5 | Tailwind CSS 4 | 原子化样式，避免重型组件库依赖 |
+| 状态管理 | Zustand | Svelte Store | 框架内置，零额外依赖 |
+| 路由 | React Router v6 | svelte-routing | 与 Svelte 生态一致 |
+| 国际化 | react-i18next | svelte-i18n | 与 Svelte 生态一致 |
+| 查询编辑器 | Ant Design TextArea | Monaco Editor | 满足 Cypher 高亮与补全的完整体验 |
 
 ---
 
 ## 7. 参考文档
 
-- [React 官方文档](https://react.dev/)
+- [Svelte 官方文档](https://svelte.dev/)
 - [TypeScript 官方文档](https://www.typescriptlang.org/)
-- [Vite 官方文档](https://vitejs.dev/)
-- [Ant Design 官方文档](https://ant.design/)
-- [Zustand 文档](https://docs.pmnd.rs/zustand)
-- [React Router 文档](https://reactrouter.com/)
-- [Ant Design Input 文档](https://ant.design/components/input)
-- [Monaco Editor 文档](https://microsoft.github.io/monaco-editor/)（后续升级参考）
-- [Cytoscape.js 文档](https://js.cytoscape.org/)（阶段 6 参考）
+- [Vite 官方文档](https://vite.dev/)
+- [Tailwind CSS 文档](https://tailwindcss.com/)
+- [svelte-routing 文档](https://github.com/EmilTholin/svelte-routing)
+- [svelte-i18n 文档](https://github.com/kaisermann/svelte-i18n)
+- [Monaco Editor 文档](https://microsoft.github.io/monaco-editor/)
+- [Cytoscape.js 文档](https://js.cytoscape.org/)
 
 ---
 

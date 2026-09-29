@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
+  import { get } from 'svelte/store';
   import { navigate } from 'svelte-routing';
   import { dataBrowserStore } from '$stores/dataBrowser';
   import { graphStore } from '$stores/graph';
@@ -8,6 +9,8 @@
   import { dataBrowserService } from '$services/dataBrowser';
   import { formatCellValue } from '$utils/parseData';
   import PageSkeleton from '$components/common/PageSkeleton.svelte';
+  import FilterPanel from './FilterPanel.svelte';
+  import type { FilterGroup } from '$types/dataBrowser';
 
   let currentSpace = $state<string | null>(null);
   let tags = $state<Array<any>>([]);
@@ -28,6 +31,7 @@
   let error = $state<string | null>(null);
   let statistics = $state<any>(null);
   let filterPanelVisible = $state(false);
+  let filters = $state<FilterGroup>({ conditions: [], logic: 'AND' });
   let detailModalVisible = $state(false);
   let detailData = $state<any>(null);
   let detailType = $state<string | null>(null);
@@ -58,6 +62,7 @@
       error = s.error;
       statistics = s.statistics;
       filterPanelVisible = s.filterPanelVisible;
+      filters = s.filters;
       detailModalVisible = s.detailModalVisible;
       detailData = s.detailData;
       detailType = s.detailType;
@@ -72,7 +77,8 @@
     dataBrowserStore.setLoading(true);
     dataBrowserStore.setError(null);
     try {
-      const response = await dataBrowserService.getVertices(currentSpace, selectedTag, vertexPage, vertexPageSize, { field: 'id', order: 'asc' }, { conditions: [], logic: 'AND' });
+      const activeFilters = get(dataBrowserStore).filters;
+      const response = await dataBrowserService.getVertices(currentSpace, selectedTag, vertexPage, vertexPageSize, { field: 'id', order: 'asc' }, activeFilters);
       dataBrowserStore.setVertices(response.data, response.total);
       if (response.data.length > 0) vertexProperties = Object.keys(response.data[0].properties);
     } catch (err) {
@@ -87,13 +93,24 @@
     dataBrowserStore.setLoading(true);
     dataBrowserStore.setError(null);
     try {
-      const response = await dataBrowserService.getEdges(currentSpace, selectedEdgeType, edgePage, edgePageSize, { field: 'id', order: 'asc' }, { conditions: [], logic: 'AND' });
+      const activeFilters = get(dataBrowserStore).filters;
+      const response = await dataBrowserService.getEdges(currentSpace, selectedEdgeType, edgePage, edgePageSize, { field: 'id', order: 'asc' }, activeFilters);
       dataBrowserStore.setEdges(response.data, response.total);
       if (response.data.length > 0) edgeProperties = Object.keys(response.data[0].properties);
     } catch (err) {
       dataBrowserStore.setError(err instanceof Error ? err.message : 'Failed to load edges');
     } finally {
       dataBrowserStore.setLoading(false);
+    }
+  }
+
+  function applyFilters() {
+    if (activeTab === 'vertices') {
+      dataBrowserStore.setVertexPage(1);
+      loadVertices();
+    } else {
+      dataBrowserStore.setEdgePage(1);
+      loadEdges();
     }
   }
 
@@ -166,6 +183,10 @@
         </button>
       </div>
     </div>
+
+    {#if filterPanelVisible}
+      <FilterPanel {activeTab} onApply={applyFilters} />
+    {/if}
 
     {#if error}
       <div class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded p-3 text-red-600 dark:text-red-400 text-sm">{error}</div>

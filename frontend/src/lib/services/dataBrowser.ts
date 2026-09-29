@@ -1,18 +1,20 @@
 import { get } from '$utils/http';
+import { compileFilter } from '$utils/filterExpression';
 import type { VertexListResponse, EdgeListResponse, FilterGroup, Statistics, VertexData, EdgeData } from '$types/dataBrowser';
 import type { ApiResponse_PaginatedResponse_Value } from '$types/schema';
 
 export const dataBrowserService = {
   getVertices: async (
     space: string, tag: string, page: number, pageSize: number,
-    sort: { field: string; order: 'asc' | 'desc' }, filters: any,
+    sort: { field: string; order: 'asc' | 'desc' }, filters: FilterGroup,
   ): Promise<VertexListResponse> => {
     const params: Record<string, string | number> = {
       limit: pageSize, offset: (page - 1) * pageSize,
       sort_by: sort.field, sort_order: sort.order.toUpperCase(),
     };
-    if (filters && filters.conditions.length > 0) params.filter = JSON.stringify(filters);
-    
+    const filterExpression = compileFilter(filters);
+    if (filterExpression) params.filter = filterExpression;
+
     const res = await get<ApiResponse_PaginatedResponse_Value>(
       `/api/v1/data/spaces/${space}/tags/${tag}/vertices`,
       params
@@ -28,14 +30,15 @@ export const dataBrowserService = {
 
   getEdges: async (
     space: string, type: string, page: number, pageSize: number,
-    sort: { field: string; order: 'asc' | 'desc' }, filters: any,
+    sort: { field: string; order: 'asc' | 'desc' }, filters: FilterGroup,
   ): Promise<EdgeListResponse> => {
     const params: Record<string, string | number> = {
       limit: pageSize, offset: (page - 1) * pageSize,
       sort_by: sort.field, sort_order: sort.order.toUpperCase(),
     };
-    if (filters && filters.conditions.length > 0) params.filter = JSON.stringify(filters);
-    
+    const filterExpression = compileFilter(filters);
+    if (filterExpression) params.filter = filterExpression;
+
     const res = await get<ApiResponse_PaginatedResponse_Value>(
       `/api/v1/data/spaces/${space}/edge-types/${type}/edges`,
       params

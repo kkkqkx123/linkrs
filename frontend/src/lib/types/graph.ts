@@ -16,6 +16,21 @@ export interface NeighborParams {
   edge_type?: string;
 }
 
+/// A neighbor vertex resolved from the graph API.
+///
+/// The raw API response nests each neighbor as `{ vertex: { vid, tag } }`;
+/// the service normalizes that into this flat shape so callers can build
+/// graph nodes and edges directly.
+export interface NeighborInfo {
+  vid: string;
+  tag: string;
+  properties: Record<string, unknown>;
+  edge_type: string;
+  direction: 'OUT' | 'IN' | 'BOTH';
+  rank: number;
+}
+
+/// Legacy flat neighbor shape kept for API compatibility.
 export interface Neighbor {
   vid: string | number;
   edge_type: string;

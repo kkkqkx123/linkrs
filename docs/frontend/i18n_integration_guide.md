@@ -1,507 +1,235 @@
 # 前端 i18n 集成指南
 
-## 当前项目状态分析
+**文档版本**: v2.0  
+**最后更新**: 2026-04-15
 
-### 已安装的依赖
-- `i18next` (v26.0.1) - i18n 核心库
-- `react-i18next` (v17.0.1) - React 集成
-
-### 当前存在的问题
-1. 项目中没有任何 i18n 配置文件或初始化代码
-2. 所有 UI 文本都是硬编码的字符串（如 "Login"、"Username"、"Query Console" 等）
-3. 没有语言切换功能
-
-### 硬编码字符串分布
-通过代码扫描，发现以下文件包含大量硬编码字符串：
-
-| 文件路径 | 主要字符串 |
-|---------|-----------|
-| `src/pages/Login/index.tsx` | "GraphDB Studio", "Username", "Password", "Remember me", "Login", "Logged in successfully", "Login failed" |
-| `src/components/layout/Header/index.tsx` | "GraphDB Studio", "Connected", "Disconnected", "Logout" |
-| `src/pages/Console/index.tsx` | "Query Console", "Executing query..." |
-| `src/config/routes.tsx` | 路由相关文本 |
+> 本文档描述前端**实际采用**的国际化方案（`svelte-i18n`）。v1.0 曾按 React 生态规划（`i18next` + `react-i18next`），工程实现阶段改为 Svelte 生态；本版已按 `frontend/src/lib/i18n/**` 与真实组件代码全面修订。
 
 ---
 
-## i18n 集成方案
+## 1. 当前实现状态
 
-### 1. 创建 i18n 配置文件
+### 1.1 采用方案
 
-**文件路径**: `src/i18n/index.ts`
+| 项目 | 实现 |
+|------|------|
+| i18n 库 | `svelte-i18n` (^4.0.1) |
+| 初始化入口 | `src/lib/i18n/index.ts`（在 `src/main.ts` 中 `import './lib/i18n'`） |
+| 词条资源 | `src/lib/i18n/locales/en.json` / `zh.json`（**扁平 key**，各 146 条） |
+| 语言切换 | `$components/common/LanguageSwitcher.svelte` |
+| 取词方式 | 组件内 `import { t } from 'svelte-i18n'`，模板中用 `$t('key')` |
+| 语言持久化 | `localStorage['graphdb_language']` |
+
+### 1.2 初始化代码
+
+**文件路径**: `src/lib/i18n/index.ts`
 
 ```typescript
-import i18n from 'i18next';
-import { initReactI18next } from 'react-i18next';
-import en from './locales/en.json';
-import zh from './locales/zh.json';
+import { register, init, getLocaleFromNavigator } from 'svelte-i18n';
 
-const resources = {
-  en: {
-    translation: en,
-  },
-  zh: {
-    translation: zh,
-  },
-};
+register('en', () => import('./locales/en.json'));
+register('zh', () => import('./locales/zh.json'));
 
-i18n
-  .use(initReactI18next)
-  .init({
-    resources,
-    lng: localStorage.getItem('graphdb_language') || 'en',
-    fallbackLng: 'en',
-    interpolation: {
-      escapeValue: false,
-    },
-  });
-
-export default i18n;
+init({
+  fallbackLocale: 'en',
+  initialLocale: localStorage.getItem('graphdb_language') || getLocaleFromNavigator() || 'en',
+});
 ```
 
-### 2. 创建语言文件
+**入口接入**: `src/main.ts`
 
-#### 英文语言文件
+```typescript
+import './lib/i18n';
+```
 
-**文件路径**: `src/i18n/locales/en.json`
+---
 
-```json
+## 2. 词条资源
+
+### 2.1 结构规范
+
+词条采用**扁平 key**（非嵌套 JSON），以 `.` 分隔命名空间：
+
+```
+# en.json / zh.json 节选
 {
-  "common": {
-    "login": "Login",
-    "logout": "Logout",
-    "username": "Username",
-    "password": "Password",
-    "rememberMe": "Remember me",
-    "submit": "Submit",
-    "cancel": "Cancel",
-    "save": "Save",
-    "delete": "Delete",
-    "edit": "Edit",
-    "create": "Create",
-    "search": "Search",
-    "loading": "Loading...",
-    "error": "Error",
-    "success": "Success",
-    "confirm": "Confirm",
-    "back": "Back",
-    "close": "Close",
-    "refresh": "Refresh",
-    "settings": "Settings",
-    "connected": "Connected",
-    "disconnected": "Disconnected"
-  },
-  "login": {
-    "title": "GraphDB Studio",
-    "usernamePlaceholder": "Enter username",
-    "passwordPlaceholder": "Enter password",
-    "usernameRequired": "Please enter username",
-    "passwordRequired": "Please enter password",
-    "loginSuccess": "Logged in successfully",
-    "loginFailed": "Login failed"
-  },
-  "header": {
-    "title": "GraphDB Studio"
-  },
-  "console": {
-    "title": "Query Console",
-    "executing": "Executing query...",
-    "history": "History",
-    "favorites": "Favorites",
-    "saveFavorite": "Save Favorite"
-  },
-  "navigation": {
-    "home": "Home",
-    "console": "Console",
-    "schema": "Schema",
-    "graph": "Graph",
-    "dataBrowser": "Data Browser"
-  }
+  "app.title": "GraphDB Studio",
+  "common.login": "Login",
+  "common.logout": "Logout",
+  "common.username": "Username",
+  "common.password": "Password",
+  "common.rememberMe": "Remember me",
+  "common.connected": "Connected",
+  "common.disconnected": "Disconnected"
 }
 ```
 
-#### 中文语言文件
+> v1.0 曾采用嵌套结构（`{ "common": { "login": "Login" } }`）；现已改为扁平 key，`$t('common.login')` 取值方式不变。
 
-**文件路径**: `src/i18n/locales/zh.json`
+### 2.2 命名空间约定
 
-```json
-{
-  "common": {
-    "login": "登录",
-    "logout": "退出登录",
-    "username": "用户名",
-    "password": "密码",
-    "rememberMe": "记住我",
-    "submit": "提交",
-    "cancel": "取消",
-    "save": "保存",
-    "delete": "删除",
-    "edit": "编辑",
-    "create": "创建",
-    "search": "搜索",
-    "loading": "加载中...",
-    "error": "错误",
-    "success": "成功",
-    "confirm": "确认",
-    "back": "返回",
-    "close": "关闭",
-    "refresh": "刷新",
-    "settings": "设置",
-    "connected": "已连接",
-    "disconnected": "未连接"
-  },
-  "login": {
-    "title": "GraphDB Studio",
-    "usernamePlaceholder": "请输入用户名",
-    "passwordPlaceholder": "请输入密码",
-    "usernameRequired": "请输入用户名",
-    "passwordRequired": "请输入密码",
-    "loginSuccess": "登录成功",
-    "loginFailed": "登录失败"
-  },
-  "header": {
-    "title": "GraphDB Studio"
-  },
-  "console": {
-    "title": "查询控制台",
-    "executing": "正在执行查询...",
-    "history": "历史记录",
-    "favorites": "收藏夹",
-    "saveFavorite": "保存收藏"
-  },
-  "navigation": {
-    "home": "首页",
-    "console": "控制台",
-    "schema": "模式",
-    "graph": "图",
-    "dataBrowser": "数据浏览器"
-  }
-}
+| 前缀 | 用途 | 示例 |
+|------|------|------|
+| `app.*` | 应用级标题 | `app.title` |
+| `common.*` | 通用词汇 | `common.login`、`common.cancel` |
+| `login.*` | 登录页 | `login.usernamePlaceholder` |
+| `header.*` | 头部组件 | `header.title` |
+| `navigation.*` | 导航菜单 | `navigation.console` |
+| `console.*` | 查询控制台 | `console.executing` |
+| `schema.*` | Schema 页（含 ER 图） | `schema.erGraph`、`schema.erNoData` |
+| `graph.*` | 图可视化 | `graph.layout` |
+| `dataBrowser.*` | 数据浏览（含过滤面板） | `dataBrowser.filterPanel.title` |
+
+### 2.3 维护要求（重要）
+
+> **新增词条必须同时写入 `en.json` 与 `zh.json`**，两个文件 key 集合必须完全一致，否则会出现运行时缺词。
+
+---
+
+## 3. 组件中使用
+
+### 3.1 取词
+
+```svelte
+<script lang="ts">
+  import { t } from 'svelte-i18n';
+</script>
+
+<h1>{$t('console.title')}</h1>
+<button>{$t('common.refresh')}</button>
 ```
 
-### 3. 初始化 i18n
+> Svelte 中使用前缀 `$` 订阅 store：`$t`。带插值时用 `$t('key', { values: { name } })`。
 
-**修改文件**: `src/main.tsx`
+### 3.2 示例：Header 组件
 
-```typescript
-import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
-import './i18n'; // 导入 i18n 配置
-import './index.css';
-import App from './App.tsx';
+**文件路径**: `src/lib/components/layout/Header.svelte`（节选）
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
-```
+```svelte
+<script lang="ts">
+  import { t } from 'svelte-i18n';
+  import LanguageSwitcher from '$components/common/LanguageSwitcher.svelte';
+</script>
 
-### 4. 组件中使用示例
-
-#### Login 页面示例
-
-**文件路径**: `src/pages/Login/index.tsx`
-
-```typescript
-import React, { useEffect, useCallback } from 'react';
-import { Form, Input, Button, Card, Checkbox, Spin, message } from 'antd';
-import { useNavigate } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
-import { useConnectionStore } from '@/stores/connection';
-import styles from './index.module.less';
-
-const Login: React.FC = () => {
-  const { t } = useTranslation();
-  const navigate = useNavigate();
-  const { login, isLoading, loadSavedConnection } = useConnectionStore();
-  const [form] = Form.useForm();
-
-  useEffect(() => {
-    loadSavedConnection();
-    
-    const savedConnection = localStorage.getItem('graphdb_connection');
-    if (savedConnection) {
-      try {
-        const connectionInfo = JSON.parse(savedConnection);
-        form.setFieldsValue({
-          username: connectionInfo.username,
-          password: connectionInfo.password || '',
-          rememberMe: true,
-        });
-      } catch (e) {
-        console.error('Failed to parse saved connection', e);
-      }
-    }
-  }, [form, loadSavedConnection]);
-
-  const handleSubmit = async (values: {
-    username: string;
-    password: string;
-    rememberMe: boolean;
-  }) => {
-    const { username, password, rememberMe } = values;
-    
-    try {
-      await login(username, password, rememberMe);
-      message.success(t('login.loginSuccess'));
-      navigate('/');
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : t('login.loginFailed');
-      message.error(errorMessage);
-    }
-  };
-
-  const handleRememberMeChange = useCallback((checked: boolean) => {
-    console.log('Remember me:', checked);
-  }, []);
-
-  return (
-    <div className={styles.loginPage}>
-      <Card className={styles.loginCard} title={t('login.title')}>
-        <Spin spinning={isLoading}>
-          <Form
-            form={form}
-            name="login"
-            onFinish={handleSubmit}
-            layout="vertical"
-            initialValues={{
-              username: 'root',
-              rememberMe: false,
-            }}
-          >
-            <Form.Item
-              name="username"
-              label={t('common.username')}
-              rules={[{ required: true, message: t('login.usernameRequired') }]}
-            >
-              <Input placeholder={t('login.usernamePlaceholder')} />
-            </Form.Item>
-
-            <Form.Item
-              name="password"
-              label={t('common.password')}
-              rules={[{ required: true, message: t('login.passwordRequired') }]}
-            >
-              <Input.Password placeholder={t('login.passwordPlaceholder')} />
-            </Form.Item>
-
-            <Form.Item name="rememberMe" valuePropName="checked">
-              <Checkbox onChange={(e) => handleRememberMeChange(e.target.checked)}>
-                {t('common.rememberMe')}
-              </Checkbox>
-            </Form.Item>
-
-            <Form.Item>
-              <Button type="primary" htmlType="submit" block loading={isLoading}>
-                {t('common.login')}
-              </Button>
-            </Form.Item>
-          </Form>
-        </Spin>
-      </Card>
-    </div>
-  );
-};
-
-export default Login;
-```
-
-#### Header 组件示例
-
-**文件路径**: `src/components/layout/Header/index.tsx`
-
-```typescript
-import React from 'react';
-import { Layout, Button, Space, Badge, Dropdown, Divider } from 'antd';
-import { DatabaseOutlined, LogoutOutlined, UserOutlined, DisconnectOutlined } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
-import { useConnectionStore } from '@/stores/connection';
-import SpaceSelector from '@/components/business/SpaceSelector';
-import styles from './index.module.less';
-
-const { Header: AntHeader } = Layout;
-
-const Header: React.FC = () => {
-  const { t } = useTranslation();
-  const navigate = useNavigate();
-  const { isVerified, connectionInfo, logout, isLoading } = useConnectionStore();
-
-  const handleLogout = async () => {
-    try {
-      await logout();
-      navigate('/login');
-    } catch (error) {
-      console.error('Logout error:', error);
-    }
-  };
-
-  const menuItems = [
-    {
-      key: 'logout',
-      label: t('common.logout'),
-      icon: <LogoutOutlined />,
-      onClick: handleLogout,
-    },
-  ];
-
-  return (
-    <AntHeader className={styles.header}>
-      <div className={styles.headerLeft}>
-        <DatabaseOutlined className={styles.logo} />
-        <span className={styles.title}>{t('header.title')}</span>
-        {isVerified && (
-          <>
-            <Divider type="vertical" className={styles.divider} />
-            <SpaceSelector />
-          </>
-        )}
-      </div>
-
-      <div className={styles.headerRight}>
-        <Space size="large">
-          <Badge
-            status={isVerified ? 'success' : 'error'}
-            text={
-              <span className={styles.statusText}>
-                {isVerified ? t('common.connected') : t('common.disconnected')}
-              </span>
-            }
-          />
-
-          {isVerified && (
-            <>
-              <Space size="small" className={styles.connectionInfo}>
-                <UserOutlined />
-                <span>{connectionInfo.username}</span>
-              </Space>
-
-              <Dropdown menu={{ items: menuItems }} placement="bottomRight">
-                <Button
-                  type="text"
-                  icon={<DisconnectOutlined />}
-                  loading={isLoading}
-                  className={styles.disconnectBtn}
-                >
-                  {t('common.logout')}
-                </Button>
-              </Dropdown>
-            </>
-          )}
-        </Space>
-      </div>
-    </AntHeader>
-  );
-};
-
-export default Header;
-```
-
-### 5. 语言切换组件
-
-**文件路径**: `src/components/common/LanguageSwitcher/index.tsx`
-
-```typescript
-import React from 'react';
-import { Button, Dropdown } from 'antd';
-import { GlobalOutlined } from '@ant-design/icons';
-import { useTranslation } from 'react-i18next';
-
-const LanguageSwitcher: React.FC = () => {
-  const { i18n } = useTranslation();
-
-  const changeLanguage = (lng: string) => {
-    i18n.changeLanguage(lng);
-    localStorage.setItem('graphdb_language', lng);
-  };
-
-  const menuItems = [
-    {
-      key: 'en',
-      label: 'English',
-      onClick: () => changeLanguage('en'),
-    },
-    {
-      key: 'zh',
-      label: '中文',
-      onClick: () => changeLanguage('zh'),
-    },
-  ];
-
-  return (
-    <Dropdown menu={{ items: menuItems }} placement="bottomRight">
-      <Button type="text" icon={<GlobalOutlined />}>
-        {i18n.language === 'zh' ? '中文' : 'English'}
-      </Button>
-    </Dropdown>
-  );
-};
-
-export default LanguageSwitcher;
-```
-
-### 6. 在 Header 中集成语言切换器
-
-在 `src/components/layout/Header/index.tsx` 的 `headerRight` 部分添加：
-
-```typescript
-import LanguageSwitcher from '@/components/common/LanguageSwitcher';
-
-// 在 headerRight 的 Space 组件中添加
-<Space size="large">
+<header class="...">
+  <span>{$t('header.title')}</span>
   <LanguageSwitcher />
-  {/* 其他内容 */}
-</Space>
+</header>
+```
+
+### 3.3 示例：Login 页面
+
+**文件路径**: `src/lib/pages/Login/Login.svelte`（节选）
+
+```svelte
+<script lang="ts">
+  import { t } from 'svelte-i18n';
+  import { connectionStore } from '$stores/connection';
+
+  let username = $state('');
+  let password = $state('');
+
+  async function handleSubmit() {
+    // ...
+  }
+</script>
+
+<form onsubmit={handleSubmit}>
+  <input bind:value={username} placeholder={$t('login.usernamePlaceholder')} />
+  <input type="password" bind:value={password} placeholder={$t('login.passwordPlaceholder')} />
+  <button type="submit">{$t('common.login')}</button>
+</form>
 ```
 
 ---
 
-## 改进对比
+## 4. 语言切换组件
 
-| 方面 | 改进前 | 改进后 |
-|------|--------|--------|
-| 字符串管理 | 硬编码在组件中 | 集中管理在 JSON 文件 |
-| 多语言支持 | 单一语言 | 支持中英文切换 |
-| 维护性 | 修改需改动多处 | 修改语言文件即可 |
-| 扩展性 | 难以添加新语言 | 轻松添加新语言包 |
-| 用户体验 | 无语言切换 | 提供语言切换功能 |
+**文件路径**: `src/lib/components/common/LanguageSwitcher.svelte`
+
+```svelte
+<script lang="ts">
+  import { locale } from 'svelte-i18n';
+
+  const languages = [
+    { code: 'en', label: 'EN' },
+    { code: 'zh', label: '中文' },
+  ];
+
+  function switchLang(code: string) {
+    $locale = code;
+    localStorage.setItem('graphdb_language', code);
+  }
+</script>
+
+<div class="flex items-center gap-1 text-sm">
+  {#each languages as lang}
+    <button
+      class="px-2 py-0.5 rounded cursor-pointer transition-colors {$locale === lang.code ? 'bg-blue-100 text-blue-600 font-medium' : 'text-gray-500 hover:text-gray-700'}"
+      onclick={() => switchLang(lang.code)}
+    >
+      {lang.label}
+    </button>
+  {/each}
+</div>
+```
+
+> 直接对 `$locale` 赋值即可触发全应用语言切换；同步写入 `localStorage` 保证刷新后保持。
+> `LanguageSwitcher` 已在 `Header` 组件中集成。
 
 ---
 
-## 最佳实践建议
+## 5. 与 v1.0 规划的差异
+
+| 方面 | v1.0 规划（React） | 实现（Svelte） |
+|------|-------------------|----------------|
+| 核心库 | `i18next` | `svelte-i18n` |
+| 框架集成 | `react-i18next` + `initReactI18next` | `register` / `init` + `$t` |
+| 资源结构 | 嵌套 JSON（`common: { login }`） | 扁平 key（`common.login`） |
+| 词条路径 | `src/i18n/locales/*.json` | `src/lib/i18n/locales/*.json` |
+| 切换方式 | `i18n.changeLanguage()` | `$locale = code` |
+| 语言检测 | `i18next-browser-languagedetector` | `getLocaleFromNavigator()` |
+
+---
+
+## 6. 迁移状态
+
+规划中列出的待迁移文件**均已迁移完成**（当前组件已全量使用 `$t()`）。下列为已接入 i18n 的核心组件（真实 Svelte 路径）：
+
+- [x] `src/lib/pages/Login/Login.svelte`
+- [x] `src/lib/components/layout/Header.svelte`
+- [x] `src/lib/components/layout/Sidebar.svelte`
+- [x] `src/lib/pages/Console/Console.svelte`
+- [x] `src/lib/pages/Schema/Schema.svelte`
+- [x] `src/lib/pages/Schema/SchemaErGraph.svelte`
+- [x] `src/lib/pages/Graph/Graph.svelte`
+- [x] `src/lib/pages/DataBrowser/DataBrowser.svelte`
+- [x] `src/lib/pages/DataBrowser/FilterPanel.svelte`
+- [x] `src/lib/components/business/SpaceSelector.svelte`
+- [x] `src/lib/components/common/LoadingFallback.svelte`
+- [x] `src/lib/components/common/LoadingScreen.svelte`
+- [x] `src/lib/components/common/HealthMonitor.svelte`
+- [x] `src/lib/components/common/LanguageSwitcher.svelte`
+
+---
+
+## 7. 最佳实践
 
 1. **命名规范**：使用 `namespace.key` 格式（如 `login.title`、`common.submit`）
-2. **分类组织**：按功能模块组织翻译键（common、login、console 等）
-3. **默认值**：为所有字符串提供英文默认值
-4. **插值支持**：使用 `t('key', { name: value })` 支持动态内容
-5. **复数支持**：使用 `t('key', { count: 5 })` 支持复数形式
-6. **语言检测**：可以添加 `i18next-browser-languagedetector` 自动检测用户语言
+2. **分类组织**：按功能模块划分前缀（`common` / `console` / `schema` / `dataBrowser` 等）
+3. **双语同步**：新增 key 时同步更新 `en.json` 与 `zh.json`
+4. **插值支持**：`$t('key', { values: { name } })`
+5. **复数支持**：`$t('key', { values: { count: 5 } })`
+6. **默认回退**：`fallbackLocale` 设为 `en`，缺失词条时回退英文
 
 ---
 
-## 待迁移文件清单
+## 8. 参考文档
 
-以下文件需要逐步迁移到 i18n：
+- [svelte-i18n 官方文档](https://github.com/kaisermann/svelte-i18n)
+- [前端技术栈](./architecture/tech_stack.md)
+- [前端目录结构](./architecture/directory_structure.md)
 
-- [ ] `src/pages/Login/index.tsx`
-- [ ] `src/components/layout/Header/index.tsx`
-- [ ] `src/components/layout/Sidebar/index.tsx`
-- [ ] `src/pages/Console/index.tsx`
-- [ ] `src/pages/Console/components/QueryEditor/index.tsx`
-- [ ] `src/pages/Console/components/OutputBox/index.tsx`
-- [ ] `src/pages/Console/components/HistoryPanel/index.tsx`
-- [ ] `src/pages/Console/components/FavoritePanel/index.tsx`
-- [ ] `src/pages/Schema/index.tsx`
-- [ ] `src/pages/Schema/SpaceList/index.tsx`
-- [ ] `src/pages/Schema/TagList/index.tsx`
-- [ ] `src/pages/Schema/EdgeList/index.tsx`
-- [ ] `src/pages/Schema/IndexList/index.tsx`
-- [ ] `src/pages/Graph/index.tsx`
-- [ ] `src/pages/DataBrowser/index.tsx`
-- [ ] `src/components/business/DetailPanel/index.tsx`
-- [ ] `src/components/business/GraphToolbar/index.tsx`
-- [ ] `src/components/business/StylePanel/index.tsx`
-- [ ] `src/components/business/SpaceSelector/index.tsx`
-- [ ] `src/components/common/LoadingFallback/index.tsx`
-- [ ] `src/components/common/LoadingScreen/index.tsx`
-- [ ] `src/hooks/useHealthCheck.ts`
+---
+
+**文档结束**
