@@ -439,6 +439,66 @@ fn edge_column_stats_snapshot_matches_inserted_range() {
 }
 
 #[test]
+fn edge_table_stats_snapshot_tracks_live_and_holes() {
+    use crate::stats_reader::{ColumnStatsReader, TableCardinalitySnapshot};
+    use graphdb_core::vertex_edge_path::Edge;
+
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    setup_knows_edge(&mut storage);
+
+    for i in 1..=2i64 {
+        storage
+            .insert_vertex(
+                "test_space",
+                Vertex::new(
+                    VertexId::try_from_int64(i).expect("test vertex id"),
+                    Tag::new("Person".to_string(), Default::default()),
+                ),
+            )
+            .expect("insert should succeed");
+    }
+    let vids: Vec<VertexId> = (1..=2i64)
+        .map(|i| VertexId::try_from_int64(i).expect("test vertex id"))
+        .collect();
+    for (src, dst, rank) in [(&vids[0], &vids[1], 0), (&vids[1], &vids[0], 0), (&vids[0], &vids[1], 1)] {
+        storage
+            .insert_edge(
+                "test_space",
+                Edge::new(
+                    src.clone(),
+                    dst.clone(),
+                    "KNOWS".to_string(),
+                    rank,
+                    Default::default(),
+                ),
+            )
+            .expect("insert should succeed");
+    }
+
+    let snap: std::sync::Arc<TableCardinalitySnapshot> = storage
+        .edge_table_stats("test_space", "KNOWS")
+        .expect("edge table snapshot should be available");
+    assert_eq!(snap.live_rows, 3);
+    assert_eq!(snap.allocated_slots, 3);
+    assert_eq!(snap.hole_count(), 0);
+    assert!(!snap.is_empty());
+
+    storage
+        .delete_edge("test_space", &vids[0], &vids[1], "KNOWS", 0)
+        .expect("delete should succeed");
+
+    let snap: std::sync::Arc<TableCardinalitySnapshot> = storage
+        .edge_table_stats("test_space", "KNOWS")
+        .expect("edge table snapshot should be available");
+    assert_eq!(snap.live_rows, 2);
+    assert_eq!(snap.allocated_slots, 3);
+    assert_eq!(snap.hole_count(), 1);
+    assert!((snap.hole_rate() - 1.0 / 3.0).abs() < 1e-9);
+}
+
+#[test]
 fn cursor_allowlist_requires_tag_filter() {
     let mut storage = create_test_storage();
     setup_space(&mut storage);

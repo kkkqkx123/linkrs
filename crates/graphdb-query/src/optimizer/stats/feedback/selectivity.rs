@@ -93,6 +93,15 @@ impl FeedbackDrivenSelectivity {
         self.estimated_selectivity
     }
 
+    /// Track a fresh uncorrected estimate while preserving the learned
+    /// correction factor and feedback history.
+    pub fn set_estimated_selectivity(&mut self, estimated: f64) {
+        if estimated > 0.0 && estimated.is_finite() {
+            self.estimated_selectivity = estimated;
+            self.actual_selectivity_ewma = estimated * self.correction_factor;
+        }
+    }
+
     /// Obtain the corrected version of the selective content.
     pub fn corrected_selectivity(&self) -> f64 {
         (self.estimated_selectivity * self.correction_factor).clamp(
@@ -300,6 +309,20 @@ impl SelectivityFeedbackManager {
             self.default_max_correction,
         );
         self.feedbacks.write().entry(key).or_insert(feedback);
+    }
+
+    /// Update the baseline estimate of a registered condition while
+    /// preserving its learned correction factor, so baselines track fresh
+    /// statistics instead of freezing at first sight. Returns false when
+    /// the key is unknown.
+    pub fn refresh_estimated(&self, key: &str, estimated_selectivity: f64) -> bool {
+        let mut feedbacks = self.feedbacks.write();
+        if let Some(feedback) = feedbacks.get_mut(key) {
+            feedback.set_estimated_selectivity(estimated_selectivity);
+            true
+        } else {
+            false
+        }
     }
 
     /// Getting corrected selectivity

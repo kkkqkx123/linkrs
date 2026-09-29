@@ -1064,6 +1064,10 @@ impl OptimizerEngine {
     }
 
     /// Collect per-node row estimates for estimated_rows writeback.
+    ///
+    /// Raw estimates feed execution feedback as the denominator; the same
+    /// pass registers every shape-keyed operator as a feedback baseline so
+    /// later executions can correct it.
     fn apply_row_estimates(&self, plan: &mut ExecutionPlan, stats: &StatsView) {
         if let Some(root) = plan.root.as_ref() {
             plan.row_estimates =
@@ -1072,6 +1076,12 @@ impl OptimizerEngine {
                     stats,
                     &self.selectivity_estimator,
                 );
+            crate::optimizer::cost_based::row_estimates::register_plan_estimates(
+                &self.cardinality_feedback,
+                root,
+                stats,
+                &self.selectivity_estimator,
+            );
         }
     }
 

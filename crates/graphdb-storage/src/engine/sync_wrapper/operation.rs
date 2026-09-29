@@ -27,6 +27,22 @@ impl<S: StorageClient + 'static> crate::stats_reader::ColumnStatsReader for Sync
         self.inner.edge_column_stats(space, edge_type, column)
     }
 
+    fn vertex_table_stats(
+        &self,
+        space: &str,
+        tag: &str,
+    ) -> Option<std::sync::Arc<crate::stats_reader::TableCardinalitySnapshot>> {
+        self.inner.vertex_table_stats(space, tag)
+    }
+
+    fn edge_table_stats(
+        &self,
+        space: &str,
+        edge_type: &str,
+    ) -> Option<std::sync::Arc<crate::stats_reader::TableCardinalitySnapshot>> {
+        self.inner.edge_table_stats(space, edge_type)
+    }
+
     fn stats_epoch(&self) -> u64 {
         self.inner.stats_epoch()
     }

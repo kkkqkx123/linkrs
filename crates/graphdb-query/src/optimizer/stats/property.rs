@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use graphdb_core::value::Value;
 
-use super::histogram::Histogram;
+use super::histogram::ValueHistogram;
 
 /// Property combination statistics
 ///
@@ -81,7 +81,7 @@ pub struct PropertyStatistics {
     /// Observed maximum value in the sampled window (orderable types only).
     pub max_value: Option<Value>,
     /// Optional histograms (enabled for attributes with a high cardinality)
-    pub histogram: Option<Histogram>,
+    pub histogram: Option<ValueHistogram>,
     /// Is it appropriate to use a histogram? (Histograms are not necessary for attributes with a low cardinality.)
     pub use_histogram: bool,
     /// Null count from the storage snapshot, when tracked.
@@ -107,7 +107,7 @@ impl PropertyStatistics {
     }
 
     /// Setting up a histogram
-    pub fn with_histogram(mut self, histogram: Histogram) -> Self {
+    pub fn with_histogram(mut self, histogram: ValueHistogram) -> Self {
         self.histogram = Some(histogram);
         self.use_histogram = true;
         self

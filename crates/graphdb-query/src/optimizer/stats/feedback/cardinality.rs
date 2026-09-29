@@ -73,6 +73,19 @@ impl CardinalityFeedbackManager {
         self.feedbacks.write().entry(key).or_insert(feedback);
     }
 
+    /// Update the baseline estimate of a registered key while preserving
+    /// its learned correction factor, so baselines track fresh statistics
+    /// instead of freezing at first sight. Returns false when unknown.
+    pub fn refresh_estimated(&self, key: &str, estimated_rows: f64) -> bool {
+        let mut feedbacks = self.feedbacks.write();
+        if let Some(feedback) = feedbacks.get_mut(key) {
+            feedback.set_estimated(estimated_rows);
+            true
+        } else {
+            false
+        }
+    }
+
     /// The corrected row estimate for a shape key, if registered.
     pub fn corrected_rows(&self, key: &str) -> Option<f64> {
         self.feedbacks

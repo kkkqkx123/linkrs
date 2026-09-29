@@ -65,6 +65,14 @@ impl FeedbackDrivenFactor {
         self.estimated
     }
 
+    /// Track a fresh uncorrected estimate while preserving the learned
+    /// correction factor and feedback history.
+    pub fn set_estimated(&mut self, estimated: f64) {
+        if estimated > 0.0 && estimated.is_finite() {
+            self.estimated = estimated;
+        }
+    }
+
     /// The corrected value: `estimated * correction_factor`.
     pub fn corrected(&self) -> f64 {
         self.estimated * self.correction_factor

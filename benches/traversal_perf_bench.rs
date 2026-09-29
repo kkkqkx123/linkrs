@@ -8,7 +8,7 @@
 //! Run with:
 //!   cargo bench --bench traversal_perf_bench
 
-use graphdb::core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb::core::vertex_edge_path::Tag;
 use graphdb::core::{DataType, Edge, Value, Vertex};

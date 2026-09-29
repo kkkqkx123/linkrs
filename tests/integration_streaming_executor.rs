@@ -721,7 +721,7 @@ fn test_distinct_all_same() {
 
 #[cfg(test)]
 mod storage_backed {
-    use graphdb::core::stats::StatsManager;
+    use graphdb_metrics::StatsManager;
     use graphdb::core::types::VertexId;
     use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo};
     use graphdb::core::vertex_edge_path::{Tag, Vertex};

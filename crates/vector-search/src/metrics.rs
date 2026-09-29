@@ -26,29 +26,33 @@ use std::time::Duration;
 use parking_lot::{RwLock, RwLockWriteGuard};
 use serde::Serialize;
 
-/// Number of power-of-two buckets in [`LatencyHistogram`]. Bucket `i`
+/// Number of power-of-two buckets in [`PowerLatencyHistogram`]. Bucket `i`
 /// covers `[2^i, 2^(i+1))` nanoseconds; 64 buckets cover every `u64`.
 const LATENCY_BUCKETS: usize = 64;
 
 /// Wait-free latency histogram with power-of-two nanosecond buckets.
 ///
+/// Named apart from the exact `LatencyHistogram` in observability: this one
+/// trades percentile precision (factor-of-two bucket bounds) for wait-free
+/// recording on hot search paths.
+///
 /// Any duration fits without dynamic allocation. Percentile estimates are
 /// reported as the upper bound of the bucket holding the target rank, i.e.
 /// within a factor of two of the true value.
 #[derive(Debug)]
-pub struct LatencyHistogram {
+pub struct PowerLatencyHistogram {
     count: AtomicU64,
     total_nanos: AtomicU64,
     buckets: [AtomicU64; LATENCY_BUCKETS],
 }
 
-impl Default for LatencyHistogram {
+impl Default for PowerLatencyHistogram {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl LatencyHistogram {
+impl PowerLatencyHistogram {
     const fn new() -> Self {
         Self {
             count: AtomicU64::new(0),
@@ -179,7 +183,7 @@ pub struct Metrics {
     txns_applied: AtomicU64,
     points_upserted: AtomicU64,
     points_deleted: AtomicU64,
-    apply_txn_latency: LatencyHistogram,
+    apply_txn_latency: PowerLatencyHistogram,
 
     search_total: AtomicU64,
     search_exact: AtomicU64,
@@ -198,7 +202,7 @@ pub struct Metrics {
     /// Adjacency reads where the version double-read protocol detected a
     /// concurrent mutation and reloaded the neighborhood (HNSW only).
     search_version_reloads: AtomicU64,
-    search_latency: LatencyHistogram,
+    search_latency: PowerLatencyHistogram,
 
     /// Adjacency/list write-lock acquisitions. Only incremented with the
     /// `lock-metrics` feature enabled.
@@ -212,13 +216,13 @@ pub struct Metrics {
     hnsw_builds: AtomicU64,
     ivf_builds: AtomicU64,
     index_load_fallbacks: AtomicU64,
-    hnsw_build_latency: LatencyHistogram,
-    ivf_build_latency: LatencyHistogram,
+    hnsw_build_latency: PowerLatencyHistogram,
+    ivf_build_latency: PowerLatencyHistogram,
 
     compactions: AtomicU64,
     compaction_race_retries: AtomicU64,
     compaction_contended: AtomicU64,
-    compaction_latency: LatencyHistogram,
+    compaction_latency: PowerLatencyHistogram,
 }
 
 impl Metrics {
@@ -440,7 +444,7 @@ mod tests {
 
     #[test]
     fn histogram_percentiles_within_factor_of_two() {
-        let h = LatencyHistogram::new();
+        let h = PowerLatencyHistogram::new();
         for ns in [100u64, 200, 300] {
             h.record(ns);
         }
@@ -455,13 +459,13 @@ mod tests {
 
     #[test]
     fn histogram_empty_summary() {
-        let h = LatencyHistogram::new();
+        let h = PowerLatencyHistogram::new();
         assert_eq!(h.summary(), LatencySummary::default());
     }
 
     #[test]
     fn histogram_extreme_durations_stay_in_range() {
-        let h = LatencyHistogram::new();
+        let h = PowerLatencyHistogram::new();
         h.record(0);
         h.record(u64::MAX);
         let s = h.summary();

@@ -5,7 +5,7 @@
 //! bound handle exposes the snapshot via `QueryStorage::snapshot_handle()`
 //! without the query competing on the global storage lock per `next()`.
 
-use graphdb::core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb::core::vertex_edge_path::Tag;
 use graphdb::core::{DataType, Value, Vertex};

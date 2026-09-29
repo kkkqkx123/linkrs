@@ -89,6 +89,10 @@ fn cardinality_shape_key(space: Option<&str>, node: &PlanNodeEnum) -> Option<Str
 }
 
 /// Apply the learned cardinality correction for `node`, if registered.
+///
+/// The raw estimate is registered as the feedback baseline on first sight
+/// so execution feedback can correct it later; repeat visits refresh the
+/// baseline without resetting learned factors.
 fn corrected_rows(
     node: &PlanNodeEnum,
     raw: u64,
@@ -101,9 +105,35 @@ fn corrected_rows(
     let Some(key) = cardinality_shape_key(space, node) else {
         return raw;
     };
+    manager.register_key(key.clone(), raw as f64);
+    manager.refresh_estimated(&key, raw as f64);
     match manager.corrected_rows(&key) {
         Some(corrected) => (corrected.round().max(1.0)) as u64,
         None => raw,
+    }
+}
+
+/// Register raw per-node estimates as feedback baselines for a whole plan.
+///
+/// Called once per optimization so every shape-keyed operator has a
+/// baseline before execution feedback arrives. Idempotent: existing keys
+/// keep their learned factors while baselines track fresh statistics.
+pub(crate) fn register_plan_estimates(
+    manager: &CardinalityFeedbackManager,
+    root: &PlanNodeEnum,
+    stats: &StatsView,
+    selectivity: &SelectivityEstimator,
+) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        for child in node.children() {
+            stack.push(child);
+        }
+        if let Some(key) = cardinality_shape_key(stats.space(), node) {
+            let raw = estimate_node_output_rows(node, stats, selectivity);
+            manager.register_key(key.clone(), raw as f64);
+            manager.refresh_estimated(&key, raw as f64);
+        }
     }
 }
 
@@ -194,7 +224,13 @@ fn estimate_node_output_rows_impl(
                         .map(|s| (s.avg_out_degree.max(0.0)) as u64)
                 })
                 .unwrap_or(DEFAULT_NEIGHBORHOOD_FANOUT);
-            let raw = (n.limit().unwrap_or(fanout as i64).max(1) as u64).max(fanout);
+            // A limit truncates the neighborhood, so the estimate is capped
+            // by it instead of widened to the fanout.
+            let estimated = fanout.max(1);
+            let raw = match n.limit() {
+                Some(limit) => (limit.max(1) as u64).min(estimated),
+                None => estimated,
+            };
             corrected_rows(node, raw, stats.space(), cardinality)
         }
         IndexScan(n) => corrected_rows(
@@ -280,7 +316,25 @@ fn estimate_node_output_rows_impl(
             };
             corrected_rows(node, raw, stats.space(), cardinality)
         }
-        LeftJoin(_) | RightJoin(_) | CrossJoin(_) => {
+        LeftJoin(_) => {
+            let children = node.children();
+            let raw = if children.len() >= 2 {
+                estimate_node_output_rows_impl(children[0], stats, selectivity, cardinality)
+            } else {
+                child_rows_of_impl(node, stats, selectivity, cardinality)
+            };
+            corrected_rows(node, raw, stats.space(), cardinality)
+        }
+        RightJoin(_) => {
+            let children = node.children();
+            let raw = if children.len() >= 2 {
+                estimate_node_output_rows_impl(children[1], stats, selectivity, cardinality)
+            } else {
+                child_rows_of_impl(node, stats, selectivity, cardinality)
+            };
+            corrected_rows(node, raw, stats.space(), cardinality)
+        }
+        CrossJoin(_) => {
             let children = node.children();
             let raw = if children.len() >= 2 {
                 let left =
@@ -465,7 +519,13 @@ pub fn estimate_node_output_rows_logical(
                         .map(|s| (s.avg_out_degree.max(0.0)) as u64)
                 })
                 .unwrap_or(DEFAULT_NEIGHBORHOOD_FANOUT);
-            (n.limit.unwrap_or(fanout as i64).max(1) as u64).max(fanout)
+            // A limit truncates the neighborhood, so the estimate is capped
+            // by it instead of widened to the fanout.
+            let estimated = fanout.max(1);
+            match n.limit {
+                Some(limit) => (limit.max(1) as u64).min(estimated),
+                None => estimated,
+            }
         }
         Start(_) => 1,
 
@@ -536,7 +596,19 @@ pub fn estimate_node_output_rows_logical(
                 .unwrap_or(DEFAULT_JOIN_SELECTIVITY);
             factor_cost::join_output_rows(left, right, sel)
         }
-        LeftJoin(_) | RightJoin(_) | CrossJoin(_) => {
+        LeftJoin(_) => {
+            let Some((left, _)) = logical_binary_inputs(node) else {
+                return child_rows_of_logical(node, stats, selectivity);
+            };
+            estimate_node_output_rows_logical(left, stats, selectivity)
+        }
+        RightJoin(_) => {
+            let Some((_, right)) = logical_binary_inputs(node) else {
+                return child_rows_of_logical(node, stats, selectivity);
+            };
+            estimate_node_output_rows_logical(right, stats, selectivity)
+        }
+        CrossJoin(_) => {
             let Some((left, right)) = logical_binary_inputs(node) else {
                 return child_rows_of_logical(node, stats, selectivity);
             };

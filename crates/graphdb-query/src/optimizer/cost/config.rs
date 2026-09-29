@@ -196,6 +196,16 @@ pub struct CostModelConfig {
     /// Chart type processing cost factor. Default value 3.0
     pub graph_type_cost_factor: f64,
 
+    /// Average row width in bytes for memory estimates.
+    ///
+    /// Stack size of one `Value` (`ESTIMATED_ROW_WIDTH_BYTES`); heap
+    /// payloads of variable-length values are not included, so wide rows
+    /// are systematically underestimated. All memory estimates (sort,
+    /// hash join, aggregation, budget allocation) share this single
+    /// source instead of private copies; per-space overrides flow through
+    /// the existing cost-config mechanism.
+    pub row_width_bytes: usize,
+
     // ==================== Strategy Threshold Parameters ====================
     /// Strategy threshold configuration
     ///
@@ -239,6 +249,9 @@ pub const SKEW_SEVERE_ROW_FACTOR: f64 = 1.5;
 pub const SKEW_MODERATE_ROW_FACTOR: f64 = 1.3;
 pub const SKEW_MILD_ROW_FACTOR: f64 = 1.1;
 /// Row width derived from the real value layout.
+///
+/// Default for `CostModelConfig::row_width_bytes`; stack size only, heap
+/// payloads excluded.
 pub const ESTIMATED_ROW_WIDTH_BYTES: usize = std::mem::size_of::<graphdb_core::Value>();
 
 /// Strategy Threshold Configuration
@@ -376,6 +389,7 @@ impl Default for CostModelConfig {
             variable_type_cost_factor: 1.5,
             complex_type_cost_factor: 2.0,
             graph_type_cost_factor: 3.0,
+            row_width_bytes: ESTIMATED_ROW_WIDTH_BYTES,
             // Strategy thresholds
             strategy_thresholds: StrategyThresholds::default(),
         }

@@ -2,7 +2,7 @@
 //! storage column-block switch ON must return identical results to the
 //! row-based path (switch OFF).
 
-use graphdb::core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb::core::vertex_edge_path::Tag;
 use graphdb::core::{DataType, Value, Vertex};

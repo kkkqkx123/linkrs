@@ -1,4 +1,4 @@
-//! Histogram Statistics Module
+//! ValueHistogram Statistics Module
 //!
 //! Use an equi-depth histogram to record the distribution of attribute values.
 //! Each histogram contains a fixed number of bins, and each bin records the same number of tuples.
@@ -6,9 +6,9 @@
 use graphdb_core::value::Value;
 use std::time::Instant;
 
-/// Histogram bins
+/// ValueHistogram bins
 #[derive(Debug, Clone)]
-pub struct HistogramBucket {
+pub struct ValueHistogramBucket {
     /// Upper bound of the bucket (inclusive)
     pub upper_bound: Value,
     /// Number of tuples in the bucket
@@ -17,7 +17,7 @@ pub struct HistogramBucket {
     pub distinct_values: u64,
 }
 
-impl HistogramBucket {
+impl ValueHistogramBucket {
     /// Create new histogram buckets.
     pub fn new(upper_bound: Value, count: u64, distinct_values: u64) -> Self {
         Self {
@@ -45,9 +45,9 @@ pub enum RangeCondition {
 
 /// Isobathic histogram
 #[derive(Debug, Clone)]
-pub struct Histogram {
+pub struct ValueHistogram {
     /// Bucket list (sorted by upper bound)
-    buckets: Vec<HistogramBucket>,
+    buckets: Vec<ValueHistogramBucket>,
     /// Proportion of null values
     null_fraction: f64,
     /// Total number of different values
@@ -58,7 +58,7 @@ pub struct Histogram {
     last_updated: Instant,
 }
 
-impl Histogram {
+impl ValueHistogram {
     /// Create an empty histogram.
     pub fn empty() -> Self {
         Self {
@@ -125,7 +125,7 @@ impl Histogram {
             if let Some(upper_bound) = bucket_samples.last().cloned() {
                 let count = bucket_samples.len() as u64;
                 let bucket_distinct = calculate_distinct_values(bucket_samples);
-                buckets.push(HistogramBucket::new(upper_bound, count, bucket_distinct));
+                buckets.push(ValueHistogramBucket::new(upper_bound, count, bucket_distinct));
             }
 
             start_idx = end_idx;
@@ -318,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_histogram_empty() {
-        let hist = Histogram::empty();
+        let hist = ValueHistogram::empty();
         assert_eq!(hist.bucket_count(), 0);
         assert_eq!(hist.null_fraction(), 0.0);
     }
@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn test_histogram_from_samples() {
         let samples: Vec<Value> = (1..=100).map(Value::Int).collect();
-        let hist = Histogram::from_samples(samples, 10, 100);
+        let hist = ValueHistogram::from_samples(samples, 10, 100);
 
         assert_eq!(hist.bucket_count(), 10);
         assert_eq!(hist.total_count(), 100);
@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn test_estimate_equality_selectivity() {
         let samples: Vec<Value> = (1..=100).map(Value::Int).collect();
-        let hist = Histogram::from_samples(samples, 10, 100);
+        let hist = ValueHistogram::from_samples(samples, 10, 100);
 
         // For uniformly distributed data, the selectivity should be close to 1/100 = 0.01
         let selectivity = hist.estimate_equality_selectivity(&Value::Int(50));
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn test_estimate_range_selectivity() {
         let samples: Vec<Value> = (1..=100).map(Value::Int).collect();
-        let hist = Histogram::from_samples(samples, 10, 100);
+        let hist = ValueHistogram::from_samples(samples, 10, 100);
 
         // Estimates of selectivity less than 50 should be closer to 0.5
         let range = RangeCondition::Lt(Value::Int(50));
@@ -361,7 +361,7 @@ mod tests {
             samples.push(Value::Null(graphdb_core::value::NullType::Null));
         }
 
-        let hist = Histogram::from_samples(samples, 10, 100);
+        let hist = ValueHistogram::from_samples(samples, 10, 100);
         assert!((hist.null_fraction() - 0.1).abs() < 0.01);
 
         let null_selectivity =

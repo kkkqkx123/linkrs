@@ -9,7 +9,7 @@
 //! eta(n) = parallel_work_time/parallel_wall_time, actual worker count and
 //! fallback reason from `EXPLAIN ANALYZE`, plus storage-read share R.
 
-use graphdb::core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb::core::vertex_edge_path::Tag;
 use graphdb::core::{DataType, Edge, Value, Vertex};

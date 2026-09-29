@@ -28,7 +28,7 @@ pub use feedback::{
     DecorrelationAdvice, FeedbackDrivenSelectivity, OperatorFeedback, QueryExecutionFeedback,
     QueryFeedbackHistory, SelectivityFeedbackManager,
 };
-pub use histogram::{Histogram, HistogramBucket, RangeCondition};
+pub use histogram::{RangeCondition, ValueHistogram, ValueHistogramBucket};
 pub use manager::StatisticsManager;
 pub use property::{PropertyCombinationStats, PropertyStatistics};
 pub use tag::TagStatistics;

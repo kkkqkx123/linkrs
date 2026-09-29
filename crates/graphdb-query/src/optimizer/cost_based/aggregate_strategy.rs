@@ -19,7 +19,6 @@
 
 use std::sync::Arc;
 
-use crate::optimizer::cost::config::ESTIMATED_ROW_WIDTH_BYTES;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::cost::SelectivityEstimator;
 use crate::optimizer::cost_based::ndv::estimate_group_count;
@@ -469,20 +468,20 @@ impl AggregateStrategySelector {
     ) -> u64 {
         // Single row-width source shared with the cost calculator and the
         // memory budget allocator; hash overhead is a fixed factor.
-        group_by_cardinality * ESTIMATED_ROW_WIDTH_BYTES as u64 * 2
+        group_by_cardinality * self.cost_calculator.config().row_width_bytes as u64 * 2
     }
 
     /// Estimating the memory usage for sorting and aggregation operations
     fn estimate_sort_memory_usage(&self, context: &AggregateContext) -> u64 {
-        // Sorting may require caching all the data; width from real Value layout.
-        let row_size = ESTIMATED_ROW_WIDTH_BYTES as u64;
+        // Sorting may require caching all the data; width from shared config.
+        let row_size = self.cost_calculator.config().row_width_bytes as u64;
         context.input_rows * row_size
     }
 
     /// Estimating the memory usage of stream aggregation
     fn estimate_streaming_memory_usage(&self, _context: &AggregateContext) -> u64 {
         // Streaming keeps a small window; width still from the shared source.
-        ESTIMATED_ROW_WIDTH_BYTES as u64 * 2
+        self.cost_calculator.config().row_width_bytes as u64 * 2
     }
 
     /// Creating streaming aggregation decisions

@@ -358,8 +358,8 @@ impl StatisticsCollector {
             stats.in_degree_std_dev = sample.in_std;
             stats.degree_gini_coefficient = sample.gini.max(sample.gini_in);
             stats.hot_vertices = sample.hot_vertices;
-            // No engine serves edge table snapshots yet; the call stays so
-            // the fill activates automatically once one does.
+            // Table snapshot carries allocated slots (holes included);
+            // missing snapshots leave the field unknown (zero holes).
             stats.apply_table_snapshot(
                 storage
                     .edge_table_stats(space, &info.edge_type_name)
@@ -696,7 +696,7 @@ impl StatisticsCollector {
                 // Histogram from the same sample window (10 buckets).
                 if let Some(samples) = samples_per_prop.remove(&prop_def.name) {
                     if samples.len() >= 10 {
-                        let hist = super::histogram::Histogram::from_samples(
+                        let hist = super::histogram::ValueHistogram::from_samples(
                             samples,
                             10,
                             total.max(1) as u64,
@@ -808,7 +808,7 @@ impl StatisticsCollector {
                     Self::window_ndv_estimate(sampled_distinct, edges.len(), total).max(1);
                 if let Some(samples) = samples_per_prop.remove(&prop_def.name) {
                     if samples.len() >= 10 {
-                        let hist = super::histogram::Histogram::from_samples(
+                        let hist = super::histogram::ValueHistogram::from_samples(
                             samples,
                             10,
                             total.max(1) as u64,

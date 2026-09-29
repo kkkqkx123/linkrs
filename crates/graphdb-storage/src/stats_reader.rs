@@ -191,8 +191,10 @@ pub trait ColumnStatsReader: Send + Sync {
 
     /// Table-level cardinality of edge type `edge_type` inside `space`.
     ///
-    /// No engine implements this yet; the default keeps the field unknown
-    /// so costing falls back to live edge counts.
+    /// Served by the engine from per-partition snapshot counts merged with
+    /// [`TableCardinalitySnapshot::absorb`]; absent only when the edge type
+    /// has no partitions. Costing falls back to live edge counts when
+    /// unavailable.
     fn edge_table_stats(
         &self,
         _space: &str,

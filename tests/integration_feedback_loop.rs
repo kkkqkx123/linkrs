@@ -4,7 +4,7 @@
 //! feedback is recorded into the optimizer engine's shared
 //! `QueryFeedbackHistory`.
 
-use graphdb::core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb::core::vertex_edge_path::Tag;
 use graphdb::core::{DataType, Value, Vertex};

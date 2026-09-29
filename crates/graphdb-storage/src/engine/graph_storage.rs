@@ -89,6 +89,14 @@ impl crate::stats_reader::ColumnStatsReader for GraphStorage {
         stats_reader_impl::vertex_table_stats(&self.ctx, space, tag)
     }
 
+    fn edge_table_stats(
+        &self,
+        space: &str,
+        edge_type: &str,
+    ) -> Option<std::sync::Arc<crate::stats_reader::TableCardinalitySnapshot>> {
+        stats_reader_impl::edge_table_stats(&self.ctx, space, edge_type)
+    }
+
     fn stats_epoch(&self) -> u64 {
         // The MVCC write timestamp is monotonic and bumps on every write
         // allocation, making it a cheap data-version stamp for the

@@ -8,7 +8,7 @@
 
 use graphdb::test_utils::TestStorage;
 
-use graphdb::core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 use graphdb::query::optimizer::OptimizerEngine;
 use graphdb::query::parser::Parser;
 use graphdb::query::QueryPipelineManager;

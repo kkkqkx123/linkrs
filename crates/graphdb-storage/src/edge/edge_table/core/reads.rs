@@ -1359,6 +1359,29 @@ impl EdgeStore {
         self.out_csr.edge_count() + self.in_csr.edge_count()
     }
 
+    /// Snapshot cardinality for optimizer costing at `ts`.
+    ///
+    /// Live rows use the same visibility gate as scans so the estimate
+    /// matches what queries observe; allocated slots add the cached
+    /// tombstone count so tables with heavy deletes cost their physical
+    /// footprint. Tombstones are not timestamp-filtered, so uncommitted
+    /// deletes may widen the hole slightly; the result stays conservative
+    /// for sizing. Shard-inconsistent reads: sizing and costing only,
+    /// never a strongly consistent census.
+    pub fn table_cardinality_at(
+        &self,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) -> crate::stats_reader::TableCardinalitySnapshot {
+        let live = self.visible_edge_count(ts, gate);
+        let holes = self.mvcc.total_tombstone_count() as u64;
+        crate::stats_reader::TableCardinalitySnapshot {
+            live_rows: live,
+            allocated_slots: live.saturating_add(holes),
+            shard_count: 1,
+        }
+    }
+
     pub fn scan(&self, ts: Timestamp) -> Vec<EdgeRecord> {
         self.scan_projected(ts, None)
     }

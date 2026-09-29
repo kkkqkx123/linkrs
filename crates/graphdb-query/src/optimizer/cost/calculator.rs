@@ -771,24 +771,24 @@ impl CostCalculator {
     }
 
     /// Estimate memory usage for aggregate operations
-    /// Single row-width source (`ESTIMATED_ROW_WIDTH_BYTES`) and single
+    /// Single row-width source (`CostModelConfig::row_width_bytes`) and single
     /// group-count source (`ndv::estimate_group_count`).
     pub fn estimate_aggregate_memory(&self, input_rows: u64, group_by_keys: usize) -> usize {
         let estimated_groups =
             crate::optimizer::cost_based::ndv::estimate_group_count(input_rows, group_by_keys);
-        estimated_groups as usize * ESTIMATED_ROW_WIDTH_BYTES
+        estimated_groups as usize * self.config.row_width_bytes
     }
 
     /// Estimate memory usage for sort operations
     pub fn estimate_sort_memory(&self, input_rows: u64, _sort_columns: usize) -> usize {
-        // Sorting needs to buffer all input rows; width from real Value layout.
-        input_rows as usize * ESTIMATED_ROW_WIDTH_BYTES
+        // Sorting needs to buffer all input rows; width from the shared config.
+        input_rows as usize * self.config.row_width_bytes
     }
 
     /// Estimate memory usage for hash join operations
     pub fn estimate_hash_join_memory(&self, left_rows: u64) -> usize {
         // Hash table needs to store the smaller (left) table.
-        left_rows as usize * ESTIMATED_ROW_WIDTH_BYTES
+        left_rows as usize * self.config.row_width_bytes
     }
 
     /// Calculate aggregate cost with memory awareness

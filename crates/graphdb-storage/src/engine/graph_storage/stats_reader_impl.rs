@@ -47,6 +47,37 @@ pub(crate) fn vertex_table_stats(
     Some(Arc::new(snapshot))
 }
 
+pub(crate) fn edge_table_stats(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type: &str,
+) -> Option<Arc<TableCardinalitySnapshot>> {
+    let label = edge_label_id(ctx, space, edge_type).ok()??;
+    let keys = ctx.data_store().edge_partition_keys(label).ok()?;
+    if keys.is_empty() {
+        return None;
+    }
+
+    // Snapshot-consistent sizing: same read timestamp and pending gate as
+    // scans, merged across partitions. Per-partition snapshots carry
+    // shard_count 1 so the merged count equals the partition count.
+    let ts = ctx.get_read_timestamp();
+    let gate = ctx.pending_gate();
+    let mut acc = TableCardinalitySnapshot::default();
+    for key in &keys {
+        let snapshot = ctx
+            .data_store()
+            .with_single_edge_table(key, |store| Ok(store.table_cardinality_at(ts, &gate)))
+            .ok()?;
+        acc.absorb(&snapshot);
+    }
+    if acc.is_empty() {
+        return None;
+    }
+
+    Some(Arc::new(acc))
+}
+
 pub(crate) fn edge_column_stats(
     ctx: &GraphStorageContext,
     space: &str,

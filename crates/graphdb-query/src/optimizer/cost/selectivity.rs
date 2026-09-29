@@ -346,12 +346,6 @@ impl SelectivityEstimator {
         tag_name: Option<&str>,
     ) -> f64 {
         let key = condition_key(space, expr);
-        if let Some(feedback) = &self.feedback {
-            if let Some(corrected) = feedback.get_corrected_selectivity(&key) {
-                return corrected;
-            }
-        }
-
         let estimated = match expr {
             Expression::Binary { op, left, right } => {
                 self.estimate_binary_expression(space, op, left, right, tag_name)
@@ -375,8 +369,15 @@ impl SelectivityEstimator {
             _ => defaults::EQUALITY,
         };
 
+        // Register the estimate as the feedback baseline on first sight and
+        // keep tracking fresh statistics afterwards; a learned correction
+        // overrides the fresh estimate when present.
         if let Some(feedback) = &self.feedback {
-            feedback.register_condition(key, estimated);
+            feedback.register_condition(key.clone(), estimated);
+            feedback.refresh_estimated(&key, estimated);
+            if let Some(corrected) = feedback.get_corrected_selectivity(&key) {
+                return corrected;
+            }
         }
         estimated
     }

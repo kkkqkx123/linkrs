@@ -8,7 +8,7 @@
 
 use graphdb::api::api_core::QueryApi;
 use graphdb::config::Config;
-use graphdb::core::stats::StatsManager;
+use graphdb_metrics::StatsManager;
 use graphdb::query::optimizer::OptimizerEngine;
 use graphdb::query::QueryPipelineManager;
 use graphdb::storage::{GraphStorage, StorageSchemaContextOps, SyncWrapper};

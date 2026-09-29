@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use crate::optimizer::cost::config::{ESTIMATED_ROW_WIDTH_BYTES, UNKNOWN_SCAN_ROWS};
+use crate::optimizer::cost::config::UNKNOWN_SCAN_ROWS;
 use crate::optimizer::cost::CostModelConfig;
 use crate::optimizer::cost_based::ndv::estimate_group_count;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
@@ -69,19 +69,22 @@ pub struct MemoryBudgetAllocator {
 impl MemoryBudgetAllocator {
     /// Create a new memory budget allocator
     pub fn new(total_budget: usize) -> Self {
+        let config = CostModelConfig::default();
+        let default_row_size = config.row_width_bytes;
         Self {
             total_budget,
-            config: CostModelConfig::default(),
-            default_row_size: ESTIMATED_ROW_WIDTH_BYTES,
+            config,
+            default_row_size,
         }
     }
 
     /// Create with specific configuration
     pub fn with_config(total_budget: usize, config: CostModelConfig) -> Self {
+        let default_row_size = config.row_width_bytes;
         Self {
             total_budget,
             config,
-            default_row_size: ESTIMATED_ROW_WIDTH_BYTES,
+            default_row_size,
         }
     }
 
@@ -144,7 +147,7 @@ impl MemoryBudgetAllocator {
     }
 
     /// Estimate memory requirement for a single node
-    /// Row width comes from the shared `ESTIMATED_ROW_WIDTH_BYTES` source;
+    /// Row width comes from the shared cost-config source;
     /// group counts come from the shared `estimate_group_count` helper.
     fn estimate_node_memory(&self, plan: &PlanNodeEnum) -> (usize, u32) {
         self.estimate_node_memory_with_rows(plan, None)
