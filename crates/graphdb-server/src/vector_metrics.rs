@@ -498,7 +498,10 @@ mod tests {
         );
         // Per-collection breakdown lands under the collection name.
         assert_eq!(
-            stats.get_space_value("col", MetricType::VectorUpsertOps),
+            stats.get_space_value(
+                &StatsManager::space_key_for_name("col"),
+                MetricType::VectorUpsertOps
+            ),
             Some(5)
         );
 

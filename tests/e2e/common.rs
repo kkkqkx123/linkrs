@@ -7,7 +7,6 @@ use graphdb::api::api_core::query_api::QueryApi;
 use graphdb::api::api_core::types::QueryResult;
 use graphdb::api::api_core::CoreResult;
 use graphdb::core::metadata::SchemaManager;
-use graphdb_metrics::StatsManager;
 use graphdb::core::Value;
 use graphdb::query::executor::streaming::StreamingQueryResult;
 use graphdb::storage::{GraphStorage, StorageOperationContextOps, StorageSchemaContextOps};
@@ -15,6 +14,7 @@ use graphdb::sync::SyncManager;
 use graphdb::transaction::{
     TransactionId, TransactionManager, TransactionManagerConfig, TransactionOptions,
 };
+use graphdb_metrics::StatsManager;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use tempfile::TempDir;

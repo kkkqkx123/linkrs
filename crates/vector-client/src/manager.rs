@@ -4,14 +4,14 @@ use dashmap::{DashMap, DashSet};
 use tracing::{debug, info, warn};
 
 use crate::config::VectorClientConfig;
-use crate::engine::{create_engine as build_engine, DisabledEngine, VectorEngine};
+use crate::engine::{create_engine as build_engine, DisabledEngine, RemoteVectorEngine};
 use crate::error::{Result, VectorClientError};
 use crate::types::{
     CollectionConfig, IndexMetadata, SearchQuery, SearchResult, VectorFilter, VectorPoint,
 };
 
 pub struct VectorManager {
-    engine: Arc<dyn VectorEngine>,
+    engine: Arc<dyn RemoteVectorEngine>,
     config: VectorClientConfig,
     /// Indexes created through this manager, with full metadata.
     indexes: DashMap<String, IndexMetadata>,
@@ -35,12 +35,12 @@ impl VectorManager {
     pub async fn new(config: VectorClientConfig) -> Result<Self> {
         let enabled = config.enabled;
 
-        let engine: Arc<dyn VectorEngine> = if enabled {
+        let engine: Arc<dyn RemoteVectorEngine> = if enabled {
             let engine = build_engine(config.clone()).await?;
             engine
         } else {
             info!("Vector search is disabled, using no-op engine");
-            Arc::new(DisabledEngine) as Arc<dyn VectorEngine>
+            Arc::new(DisabledEngine) as Arc<dyn RemoteVectorEngine>
         };
 
         if enabled {
@@ -95,7 +95,7 @@ impl VectorManager {
         Ok(manager)
     }
 
-    pub fn engine(&self) -> &Arc<dyn VectorEngine> {
+    pub fn engine(&self) -> &Arc<dyn RemoteVectorEngine> {
         &self.engine
     }
 

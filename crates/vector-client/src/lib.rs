@@ -8,7 +8,7 @@ pub mod metrics;
 pub mod types;
 
 pub use config::*;
-pub use engine::VectorEngine;
+pub use engine::RemoteVectorEngine;
 pub use error::{Result, VectorClientError};
 pub use types::*;
 

@@ -18,6 +18,13 @@ pub use api_core::{CoreError, CoreResult, QueryApi, SchemaApi, SyncApi};
 #[cfg(feature = "vector")]
 pub use api_core::{VectorApi, VectorSearchResult};
 
+// Hybrid retrieval helpers shared by fulltext and vector callers. Vector
+// point IDs carry index suffixes while fulltext doc IDs do not, so fusion
+// requires explicit normalization first.
+pub use graphdb_core::fusion::{
+    normalize_vector_hits, normalize_vector_point_id, rrf_fuse, weighted_fuse, FusedHit, ScoredHit,
+};
+
 /// Mapping helpers between raw graphdb-config settings and vector-search
 /// types; keeps the two crates decoupled from each other.
 #[cfg(feature = "vector")]

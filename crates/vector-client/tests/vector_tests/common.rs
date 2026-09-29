@@ -10,7 +10,7 @@ use dashmap::DashMap;
 use graphdb_embedding::{EmbeddingError, EmbeddingProvider};
 use std::sync::RwLock;
 use tempfile::TempDir;
-use vector_client::engine::VectorEngine;
+use vector_client::engine::RemoteVectorEngine;
 use vector_client::error::{Result, VectorClientError};
 use vector_client::types::IndexMetadata;
 use vector_client::types::*;
@@ -19,7 +19,7 @@ const MOCK_ENGINE_VERSION: &str = "1.0.0-mock";
 
 /// Mock Vector Engine for testing
 ///
-/// Implements VectorEngine trait with in-memory storage
+/// Implements RemoteVectorEngine trait with in-memory storage
 pub struct MockVectorEngine {
     collections: RwLock<HashMap<String, MockCollection>>,
     default_dimension: usize,
@@ -54,7 +54,7 @@ impl MockVectorEngine {
 }
 
 #[async_trait]
-impl VectorEngine for MockVectorEngine {
+impl RemoteVectorEngine for MockVectorEngine {
     fn name(&self) -> &str {
         "mock"
     }
@@ -754,7 +754,7 @@ impl EmbeddingProvider for MockEmbeddingProvider {
 
 /// Mock Vector Manager for testing
 pub struct MockVectorManager {
-    engine: Arc<dyn VectorEngine>,
+    engine: Arc<dyn RemoteVectorEngine>,
     indexes: DashMap<String, IndexMetadata>,
 }
 
@@ -768,14 +768,14 @@ impl std::fmt::Debug for MockVectorManager {
 }
 
 impl MockVectorManager {
-    pub fn new(engine: Arc<dyn VectorEngine>) -> Self {
+    pub fn new(engine: Arc<dyn RemoteVectorEngine>) -> Self {
         Self {
             engine,
             indexes: DashMap::new(),
         }
     }
 
-    pub fn engine(&self) -> &Arc<dyn VectorEngine> {
+    pub fn engine(&self) -> &Arc<dyn RemoteVectorEngine> {
         &self.engine
     }
 

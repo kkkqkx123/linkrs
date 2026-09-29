@@ -81,7 +81,12 @@ impl EmbeddingConfig {
             return Err(EmbeddingError::Config(format!("Invalid base_url: {}", e)));
         }
 
-        Ok(())
+        match self.dimension {
+            Some(dim) if dim > 0 => Ok(()),
+            _ => Err(EmbeddingError::Config(
+                "dimension is required for offline startup validation; set it with EmbeddingConfig::with_dimension()".to_string(),
+            )),
+        }
     }
 }
 
@@ -144,29 +149,37 @@ mod tests {
 
     #[test]
     fn test_validate_valid() {
-        let cfg = EmbeddingConfig::new("http://localhost:11434/api/embeddings", "model");
+        let cfg = EmbeddingConfig::new("http://localhost:11434/api/embeddings", "model")
+            .with_dimension(384);
         assert!(cfg.validate().is_ok());
     }
 
     #[test]
     fn test_validate_empty_base_url() {
-        let cfg = EmbeddingConfig::new("", "model");
+        let cfg = EmbeddingConfig::new("", "model").with_dimension(384);
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("base_url"));
     }
 
     #[test]
     fn test_validate_empty_model() {
-        let cfg = EmbeddingConfig::new("http://example.com", "");
+        let cfg = EmbeddingConfig::new("http://example.com", "").with_dimension(384);
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("model"));
     }
 
     #[test]
     fn test_validate_invalid_url() {
-        let cfg = EmbeddingConfig::new("not-a-url", "model");
+        let cfg = EmbeddingConfig::new("not-a-url", "model").with_dimension(384);
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("Invalid base_url"));
+    }
+
+    #[test]
+    fn test_validate_missing_dimension() {
+        let cfg = EmbeddingConfig::new("http://example.com", "model");
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("dimension"));
     }
 
     #[test]

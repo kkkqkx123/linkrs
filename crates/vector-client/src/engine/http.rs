@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use super::VectorEngine;
+use super::RemoteVectorEngine;
 use crate::config::VectorClientConfig;
 use crate::error::{Result, VectorClientError};
 use crate::types::*;
@@ -411,7 +411,7 @@ impl QdrantEngine {
 }
 
 #[async_trait]
-impl VectorEngine for QdrantEngine {
+impl RemoteVectorEngine for QdrantEngine {
     fn name(&self) -> &str {
         "qdrant-http"
     }

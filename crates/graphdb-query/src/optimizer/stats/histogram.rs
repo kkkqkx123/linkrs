@@ -125,7 +125,11 @@ impl ValueHistogram {
             if let Some(upper_bound) = bucket_samples.last().cloned() {
                 let count = bucket_samples.len() as u64;
                 let bucket_distinct = calculate_distinct_values(bucket_samples);
-                buckets.push(ValueHistogramBucket::new(upper_bound, count, bucket_distinct));
+                buckets.push(ValueHistogramBucket::new(
+                    upper_bound,
+                    count,
+                    bucket_distinct,
+                ));
             }
 
             start_idx = end_idx;

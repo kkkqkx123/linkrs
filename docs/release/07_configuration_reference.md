@@ -455,10 +455,11 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| enabled | bool | true | 是否启用向量检索 |
+| enabled | bool | false | 是否启用向量检索（二级索引默认关闭，需显式开启） |
 | engine | String | `"local"` | 引擎类型：`local` 或 `qdrant` |
+| auto_embed_text | bool | false | 写时文本自动向量化（默认关闭；开启后写路径批量调用嵌入服务，失败则写事务失败） |
 | mvcc.ssi_read_set | bool | false | 向量搜索的 MVCC SSI 读集（默认关闭） |
-| collection.granularity | String | `"space"` | 向量集合粒度：`space` 或 `field` |
+| collection.granularity | String | `"space"` | 向量集合粒度：`space`（单空间单集合，按`group_id`隔离）或 `field`（单字段单集合，物理隔离） |
 | retention.* | - | 见下 | Outbox 保留策略 |
 
 ### 13.2 本地引擎 [vector.local]
@@ -493,7 +494,7 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 #### [vector.qdrant] 顶层
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| enabled | bool | true | 是否启用 qdrant 客户端 |
+| enabled | bool | false | 是否启用 qdrant 客户端（需与顶层`enabled`同时开启） |
 
 #### [vector.qdrant.connection]
 | 参数 | 类型 | 默认值 | 说明 |
@@ -515,7 +516,7 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 
 #### [vector.qdrant.embedding]（可选）
 
-若未配置，向量检索使用原始向量；若配置，GraphDB 会自动调用嵌入服务将文本转为向量。
+未配置时仅支持显式向量读写，`TEXT`向量查询返回明确错误；离线单机部署请保持未配置。已配置时读时文本查询为便利能力，写时自动向量化需另开`auto_embed_text`。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -523,7 +524,7 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | api_key | Option\<String\> | null | 嵌入 API 密钥（OpenAI 等需要） |
 | model | String | `"all-minilm"` | 嵌入模型名称 |
 | timeout_secs | u64 | 30 | 嵌入请求超时（秒） |
-| dimension | Option\<usize\> | null | 期望向量维度（不设则自动检测） |
+| dimension | usize | 必填 | 期望向量维度（启动期校验，缺失则启动失败；须与索引`vector_size`一致） |
 
 文本预处理器 `[vector.qdrant.embedding.preprocessor]`（可选）：
 
@@ -552,7 +553,9 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 
 ## 14. 全文检索配置 [fulltext]
 
-全文索引基于 BM25（tantivy 引擎）。
+全文索引基于 BM25（tantivy 引擎）。全文与向量同为默认关闭的二级索引，需显式开启；全文按字段建独立目录，向量按`space`/`field`粒度建集合，物理结构不强制统一。
+
+全文支持点与边文本，向量仅支持点；边变更永不产生向量点。混合检索首期仅提供应用层`rrf_fuse`/`weighted_fuse`辅助，调用前需将向量点 ID（`{vid}#tag#field`）归一化为全文文档 ID（点为`{vid}`，边为`{src}->{dst}#{ranking}`）。
 
 ### 14.1 顶层参数
 

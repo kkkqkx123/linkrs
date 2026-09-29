@@ -1,9 +1,8 @@
-//! Backend-agnostic trait for fulltext search engines.
+//! Local fulltext search engine interface.
 //!
-//! This trait abstracts the core operations shared by all fulltext backends
-//! (Tantivy, Elasticsearch, Meilisearch, etc.). The `FulltextIndexManager`
-//! operates on `Arc<dyn FulltextSearchEngine>` so new backends can be added
-//! without modifying the manager layer.
+//! The only production backend is the local Tantivy BM25 engine. The manager
+//! operates on `Arc<dyn FulltextSearchEngine>` so indexing, search, and
+//! lifecycle stay decoupled from the concrete Tantivy implementation.
 
 use crate::error::SearchError;
 use crate::query::FulltextQuery;
@@ -12,19 +11,15 @@ use crate::ConsistencyState;
 
 use async_trait::async_trait;
 
-/// Backend-agnostic fulltext search engine interface.
+/// Local fulltext search engine interface.
 ///
 /// # Implementors
 ///
 /// - [`TantivySearchEngine`](crate::tantivy_index::TantivySearchEngine) —
-///   default local BM25 engine backed by Tantivy.
-///
-/// Future backends (Elasticsearch, Meilisearch, etc.) implement this trait
-/// and are plugged into [`FulltextIndexManager`](crate::manager::FulltextIndexManager)
-/// at construction time.
+///   local BM25 engine backed by Tantivy.
 #[async_trait]
 pub trait FulltextSearchEngine: Send + Sync + std::fmt::Debug + 'static {
-    /// Engine name for logging and metrics (e.g., `"tantivy"`, `"elasticsearch"`).
+    /// Engine name for logging and metrics (e.g., `"tantivy"`).
     fn name(&self) -> &str;
 
     /// Engine version string.

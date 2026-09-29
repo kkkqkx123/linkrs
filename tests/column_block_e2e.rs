@@ -2,7 +2,6 @@
 //! storage column-block switch ON must return identical results to the
 //! row-based path (switch OFF).
 
-use graphdb_metrics::StatsManager;
 use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb::core::vertex_edge_path::Tag;
 use graphdb::core::{DataType, Value, Vertex};
@@ -13,6 +12,7 @@ use graphdb::query::optimizer::OptimizerEngine;
 use graphdb::query::QueryPipelineManager;
 use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 use graphdb::test_utils::TestStorage;
+use graphdb_metrics::StatsManager;
 use parking_lot::RwLock;
 use std::sync::Arc;
 

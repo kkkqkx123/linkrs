@@ -21,7 +21,7 @@ pub use grpc::QdrantGrpcEngine;
 pub struct DisabledEngine;
 
 #[async_trait]
-impl VectorEngine for DisabledEngine {
+impl RemoteVectorEngine for DisabledEngine {
     fn name(&self) -> &str {
         "disabled"
     }
@@ -151,8 +151,13 @@ impl DisabledEngine {
     }
 }
 
+/// Remote vector engine abstraction for the Qdrant service.
+///
+/// This trait covers the remote collection API only. The built-in local
+/// engine exposes its own interface in `vector-search`; the sync layer
+/// dispatches between the two through its backend enum.
 #[async_trait]
-pub trait VectorEngine: Send + Sync + std::fmt::Debug {
+pub trait RemoteVectorEngine: Send + Sync + std::fmt::Debug {
     fn name(&self) -> &str;
     fn version(&self) -> &str;
 
@@ -298,7 +303,7 @@ pub trait VectorEngine: Send + Sync + std::fmt::Debug {
 /// rather than a silent fallback.
 pub async fn create_engine(
     config: crate::config::VectorClientConfig,
-) -> Result<std::sync::Arc<dyn VectorEngine>> {
+) -> Result<std::sync::Arc<dyn RemoteVectorEngine>> {
     use crate::config::{EngineType, QdrantTransport};
 
     match config.engine {
@@ -326,7 +331,7 @@ pub async fn create_engine(
 #[cfg(test)]
 mod disabled_tests {
     use super::DisabledEngine;
-    use crate::engine::VectorEngine;
+    use crate::engine::RemoteVectorEngine;
     use crate::types::*;
 
     #[tokio::test]

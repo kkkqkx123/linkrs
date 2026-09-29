@@ -105,10 +105,12 @@ connection_timeout_secs = 10
 request_timeout_secs = 60
 
 [vector]
-# 是否启用向量搜索
-enabled = true
+# 是否启用向量搜索（二级索引默认关闭，需显式开启）
+enabled = false
 # 向量搜索引擎类型（local | qdrant）
 engine = "local"
+# 写时文本自动向量化（默认关闭；开启需配置嵌入服务，失败则写事务失败）
+auto_embed_text = false
 
 [vector.local]
 # 本地向量引擎数据目录（不填则默认使用 <storage_path>/vector）
@@ -118,7 +120,7 @@ engine = "local"
 
 [vector.qdrant]
 # 是否启用 qdrant 后端（仅当 engine = "qdrant" 时生效）
-enabled = true
+enabled = false
 
 [vector.qdrant.connection]
 # Qdrant 服务器地址
@@ -142,7 +144,7 @@ search_timeout_secs = 10
 # 插入/更新超时时间（秒）
 upsert_timeout_secs = 30
 
-# 嵌入服务配置（可选，不配置则使用原始向量）
+# 嵌入服务配置（可选，不配置则仅支持显式向量读写，TEXT 查询报错）
 # [vector.qdrant.embedding]
 # 嵌入 API 端点
 # base_url = "http://localhost:11434/api/embeddings"
@@ -152,7 +154,7 @@ upsert_timeout_secs = 30
 # model = "all-minilm"
 # 请求超时（秒，默认 30）
 # timeout_secs = 30
-# 向量维度（可选，不填则自动检测）
+# 向量维度（必填，启动期校验，须与索引 vector_size 一致）
 # dimension = 768
 
 # 文本预处理器配置（可选）

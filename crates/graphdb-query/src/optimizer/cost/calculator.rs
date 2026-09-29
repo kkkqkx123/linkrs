@@ -23,9 +23,7 @@ use crate::optimizer::stats::{StatisticsManager, StatsView};
 use graphdb_core::types::expr::Expression;
 use graphdb_core::value::Value;
 
-use super::config::{
-    CostModelConfig, DEFAULT_DEGREE_FALLBACK, ESTIMATED_ROW_WIDTH_BYTES, ROWS_PER_PAGE, TOPN_RATIO,
-};
+use super::config::{CostModelConfig, DEFAULT_DEGREE_FALLBACK, ROWS_PER_PAGE, TOPN_RATIO};
 
 /// Cost Calculator
 ///
@@ -946,6 +944,7 @@ impl Default for CostCalculator {
 
 #[cfg(test)]
 mod tests {
+    use super::super::config::ESTIMATED_ROW_WIDTH_BYTES;
     use super::*;
 
     #[test]

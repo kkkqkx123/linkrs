@@ -8,11 +8,11 @@
 
 use graphdb::api::api_core::QueryApi;
 use graphdb::config::Config;
-use graphdb_metrics::StatsManager;
 use graphdb::query::optimizer::OptimizerEngine;
 use graphdb::query::QueryPipelineManager;
 use graphdb::storage::{GraphStorage, StorageSchemaContextOps, SyncWrapper};
 use graphdb::test_utils::TestStorage;
+use graphdb_metrics::StatsManager;
 use graphdb_server::graph_service::GraphService;
 use std::sync::Arc;
 

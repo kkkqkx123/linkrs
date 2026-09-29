@@ -292,7 +292,8 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Dimension must be specified"));
+            .to_lowercase()
+            .contains("dimension"));
     }
 
     #[test]

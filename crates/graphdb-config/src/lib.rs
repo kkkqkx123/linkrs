@@ -319,6 +319,11 @@ pub struct VectorMvccConfig {
 }
 
 /// Collection granularity for vector indexes.
+///
+/// `Space` maps one space to one physical collection. `Field` keeps the
+/// space-level collection but isolates `(tag, field)` tenants through a
+/// group filter, matching the per-field isolation fulltext gets from
+/// per-field directories.
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum VectorCollectionGranularity {
@@ -377,7 +382,7 @@ impl Default for OutboxRetentionConfig {
 /// Vector search configuration
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct VectorConfig {
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
     pub engine: VectorEngineKind,
@@ -392,6 +397,17 @@ pub struct VectorConfig {
     pub collection: VectorCollectionConfig,
     #[serde(default)]
     pub retention: OutboxRetentionConfig,
+    /// Optional write-time text-to-vector conversion.
+    ///
+    /// The write path only persists explicit vector columns by default.
+    /// Text queries are a read-time convenience resolved through the
+    /// embedding service. When enabled, vertex writes embed text fields
+    /// that already have a vector index and stage the resulting vectors
+    /// alongside the original properties. Explicit vectors win over
+    /// auto-embedded values for the same field. Failures fail the staged
+    /// write so deployments pay the embedding availability cost directly.
+    #[serde(default)]
+    pub auto_embed_text: bool,
 }
 
 fn default_true() -> bool {
@@ -401,7 +417,7 @@ fn default_true() -> bool {
 impl Default for VectorConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             engine: VectorEngineKind::Local,
             local: LocalVectorConfig::default(),
             #[cfg(feature = "vector-qdrant")]
@@ -409,6 +425,7 @@ impl Default for VectorConfig {
             mvcc: VectorMvccConfig::default(),
             collection: VectorCollectionConfig::default(),
             retention: OutboxRetentionConfig::default(),
+            auto_embed_text: false,
         }
     }
 }

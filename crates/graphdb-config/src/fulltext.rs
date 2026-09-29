@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Local fulltext engine selector.
+///
+/// Only the local Tantivy BM25 engine is supported. The enum is kept so
+/// stored configuration stays explicit about which engine produced an index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum FulltextEngineType {
     #[default]
@@ -120,6 +124,8 @@ fn default_batch_size() -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FulltextConfig {
     pub enabled: bool,
+    /// Engine that produced the indexes. Only the local BM25 engine exists;
+    /// the field documents index provenance and must stay `Bm25`.
     pub default_engine: FulltextEngineType,
     pub index_path: PathBuf,
     pub sync: SyncConfig,

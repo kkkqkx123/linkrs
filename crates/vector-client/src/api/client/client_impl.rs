@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use crate::config::VectorClientConfig;
-use crate::engine::{DisabledEngine, VectorEngine};
-#[allow(unused_imports)]
-use crate::error::{Result, VectorClientError};
+use crate::engine::{DisabledEngine, RemoteVectorEngine};
+use crate::error::Result;
 use crate::types::*;
 
 use super::core::{
@@ -12,7 +11,7 @@ use super::core::{
 
 #[derive(Debug)]
 pub struct VectorClient {
-    engine: Arc<dyn VectorEngine>,
+    engine: Arc<dyn RemoteVectorEngine>,
 }
 
 impl VectorClient {
@@ -27,7 +26,7 @@ impl VectorClient {
         Ok(Self { engine })
     }
 
-    pub fn engine(&self) -> &dyn VectorEngine {
+    pub fn engine(&self) -> &dyn RemoteVectorEngine {
         self.engine.as_ref()
     }
 
@@ -70,6 +69,7 @@ impl VectorClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VectorClientError;
 
     #[tokio::test]
     async fn test_disabled_engine_returns_error() {

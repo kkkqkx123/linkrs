@@ -61,6 +61,8 @@ impl fmt::Debug for VectorBackend {
 /// only batch, concurrency and retry tuning branch here. Created once at
 /// startup via `BackendDeliveryPolicy::from_config` and injected into
 /// `SyncManager`, so `manager.rs` does not scatter `if is_local` checks.
+/// This is the single entry point for delivery tuning; per-target overrides
+/// are not supported.
 #[derive(Debug, Clone)]
 pub struct BackendDeliveryPolicy {
     /// Human readable name (`local` / `qdrant`).
@@ -105,6 +107,9 @@ impl BackendDeliveryPolicy {
     }
 
     /// Build a policy from the global vector configuration.
+    ///
+    /// Single entry point for delivery tuning. Fulltext delivery reuses the
+    /// sync-layer failure policy; vector batch tuning branches here only.
     pub fn from_config(config: &graphdb_config::VectorConfig) -> Self {
         match config.engine {
             graphdb_config::VectorEngineKind::Local => Self::local_default(),

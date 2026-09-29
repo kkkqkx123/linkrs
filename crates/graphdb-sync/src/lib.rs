@@ -12,6 +12,8 @@ mod outbox;
 pub mod outbox_recovery;
 #[cfg(feature = "fulltext")]
 pub mod rebuild;
+#[cfg(any(feature = "fulltext", feature = "vector"))]
+pub mod rebuild_common;
 pub mod receiver;
 pub mod retry;
 pub mod runtime;
@@ -89,6 +91,8 @@ pub use vector_sync::{
 
 #[cfg(feature = "vector")]
 pub use backend::VectorBackend;
+#[cfg(any(feature = "fulltext", feature = "vector"))]
+pub use rebuild_common::RebuildCommonOptions;
 #[cfg(feature = "vector")]
 pub use vector_search::HealthStatus;
 

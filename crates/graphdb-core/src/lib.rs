@@ -1,5 +1,6 @@
 pub mod error;
 pub mod event_dispatch;
+pub mod fusion;
 pub mod metadata;
 pub mod npath;
 pub mod session_stats;

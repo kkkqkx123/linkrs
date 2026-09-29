@@ -840,6 +840,11 @@ impl VectorSyncCoordinator {
 
     // ── Embedding ─────────────────────────────────────────────────────
 
+    /// Resolve query text into a vector for read-time text queries.
+    ///
+    /// The write path persists explicit vector columns only. Text search
+    /// is a read-time convenience; writers that need write-time conversion
+    /// must embed before staging outbox intents (see `embed_texts`).
     #[cfg(feature = "embedding")]
     pub async fn embed_text(&self, text: &str) -> VectorCoordinatorResult<Vec<f32>> {
         if let Some(embedding) = &self.embedding_service {
@@ -848,6 +853,25 @@ impl VectorSyncCoordinator {
                 .await
                 .map_err(|e| VectorCoordinatorError::EmbeddingError(e.to_string()))?;
             Ok(vector)
+        } else {
+            Err(VectorCoordinatorError::EmbeddingError(
+                "Embedding service not available".to_string(),
+            ))
+        }
+    }
+
+    /// Batch variant of `embed_text` for write-time conversion.
+    ///
+    /// Preserves input order; callers map each output vector back to the
+    /// corresponding text field before staging the vector intent.
+    #[cfg(feature = "embedding")]
+    pub async fn embed_texts(&self, texts: &[&str]) -> VectorCoordinatorResult<Vec<Vec<f32>>> {
+        if let Some(embedding) = &self.embedding_service {
+            let vectors = embedding
+                .embed_batch(texts)
+                .await
+                .map_err(|e| VectorCoordinatorError::EmbeddingError(e.to_string()))?;
+            Ok(vectors)
         } else {
             Err(VectorCoordinatorError::EmbeddingError(
                 "Embedding service not available".to_string(),

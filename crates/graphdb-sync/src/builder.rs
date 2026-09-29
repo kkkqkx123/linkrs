@@ -14,6 +14,8 @@ pub struct SyncManagerBuilder {
     vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     dead_letter_queue: Option<Arc<DeadLetterQueue>>,
     outbox_path: Option<std::path::PathBuf>,
+    #[cfg(feature = "vector")]
+    auto_embed_text: bool,
 }
 
 impl Default for SyncManagerBuilder {
@@ -31,6 +33,8 @@ impl SyncManagerBuilder {
             vector_coordinator: None,
             dead_letter_queue: None,
             outbox_path: None,
+            #[cfg(feature = "vector")]
+            auto_embed_text: false,
         }
     }
 
@@ -56,6 +60,12 @@ impl SyncManagerBuilder {
         self
     }
 
+    #[cfg(feature = "vector")]
+    pub fn with_auto_embed_text(mut self, enabled: bool) -> Self {
+        self.auto_embed_text = enabled;
+        self
+    }
+
     pub fn build(self) -> Result<SyncManager, crate::manager::SyncError> {
         let mut manager = SyncManager::new_without_fulltext();
 
@@ -76,6 +86,9 @@ impl SyncManagerBuilder {
         if let Some(path) = self.outbox_path {
             manager.configure_outbox(path)?;
         }
+
+        #[cfg(feature = "vector")]
+        manager.set_auto_embed_text(self.auto_embed_text);
 
         Ok(manager)
     }

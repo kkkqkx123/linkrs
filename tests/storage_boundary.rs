@@ -5,7 +5,6 @@
 //! bound handle exposes the snapshot via `QueryStorage::snapshot_handle()`
 //! without the query competing on the global storage lock per `next()`.
 
-use graphdb_metrics::StatsManager;
 use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb::core::vertex_edge_path::Tag;
 use graphdb::core::{DataType, Value, Vertex};
@@ -16,6 +15,7 @@ use graphdb::storage::{
     StorageWriter,
 };
 use graphdb::test_utils::TestStorage;
+use graphdb_metrics::StatsManager;
 use parking_lot::RwLock;
 use std::sync::Arc;
 

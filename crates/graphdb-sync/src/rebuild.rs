@@ -86,11 +86,22 @@ pub struct FulltextRebuildOptions {
 
 impl Default for FulltextRebuildOptions {
     fn default() -> Self {
+        let common = crate::rebuild_common::RebuildCommonOptions::default();
         Self {
-            catchup_fetch_limit: 1000,
-            max_catchup_rounds: 10,
-            allow_empty_source: false,
+            catchup_fetch_limit: common.catchup_fetch_limit,
+            max_catchup_rounds: common.max_catchup_rounds,
+            allow_empty_source: common.allow_empty_source,
         }
+    }
+}
+
+impl FulltextRebuildOptions {
+    pub fn as_common(&self) -> crate::rebuild_common::RebuildCommonOptions {
+        crate::rebuild_common::RebuildCommonOptions::new(
+            self.catchup_fetch_limit,
+            self.max_catchup_rounds,
+            self.allow_empty_source,
+        )
     }
 }
 
@@ -175,10 +186,19 @@ impl SyncManager {
             None => true,
             Some(docs) => docs.is_empty(),
         };
-        if peeked_empty && !options.allow_empty_source {
-            return Err(SyncError::PersistenceError(format!(
-                "Fulltext rebuild aborted before scratch creation: primary-storage source for {space_id}.{tag_name}.{field_name} yielded no documents (retry with allow_empty_source = true for intentional truncation)"
-            )));
+        if peeked_empty {
+            options
+                .as_common()
+                .ensure_source_non_empty(
+                    0,
+                    &format!("{space_id}.{tag_name}.{field_name}"),
+                )
+                .map_err(|reason| {
+                    SyncError::PersistenceError(format!(
+                        "Fulltext rebuild aborted before scratch creation: {} (retry with allow_empty_source = true for intentional truncation)",
+                        reason
+                    ))
+                })?;
         }
 
         let target = TargetId::new(FULLTEXT_TARGET).map_err(SyncError::PersistenceError)?;

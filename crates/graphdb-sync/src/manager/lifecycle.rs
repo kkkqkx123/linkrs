@@ -20,6 +20,8 @@ impl super::SyncManager {
             sqlite_outbox: None,
             #[cfg(feature = "vector")]
             vector_receiver: None,
+            #[cfg(feature = "vector")]
+            auto_embed_text: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             outbox_consumer: Arc::new(OutboxConsumerConfig::default()),
             #[cfg(feature = "vector")]
             backend_policy: None,
@@ -71,6 +73,18 @@ impl super::SyncManager {
     pub fn with_stats_manager(mut self, stats_manager: Arc<StatsManager>) -> Self {
         self.stats_manager = Some(stats_manager);
         self
+    }
+
+    #[cfg(feature = "vector")]
+    pub fn set_auto_embed_text(&self, enabled: bool) {
+        self.auto_embed_text
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(feature = "vector")]
+    pub fn auto_embed_text(&self) -> bool {
+        self.auto_embed_text
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn set_stats_manager(&mut self, stats_manager: Arc<StatsManager>) {

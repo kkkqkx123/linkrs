@@ -23,7 +23,7 @@ use tonic::transport::Channel;
 use tonic::Request;
 use tracing::{debug, info, warn};
 
-use super::VectorEngine;
+use super::RemoteVectorEngine;
 use crate::config::VectorClientConfig;
 use crate::error::{Result, VectorClientError};
 use crate::types::*;
@@ -216,7 +216,7 @@ impl QdrantGrpcEngine {
 }
 
 #[async_trait]
-impl VectorEngine for QdrantGrpcEngine {
+impl RemoteVectorEngine for QdrantGrpcEngine {
     fn name(&self) -> &str {
         "qdrant-grpc"
     }

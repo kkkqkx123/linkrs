@@ -21,7 +21,6 @@ use std::time::Duration;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use parking_lot::RwLock;
 
-use graphdb_metrics::StatsManager;
 use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb::core::vertex_edge_path::Tag;
 use graphdb::core::{DataType, Edge, Value, Vertex};
@@ -31,6 +30,7 @@ use graphdb::query::QueryRequestContext;
 use graphdb::storage::{
     GraphStorage, StorageReader, StorageSchemaContextOps, StorageSchemaOps, StorageWriter,
 };
+use graphdb_metrics::StatsManager;
 
 const SPACE: &str = "olap_e2e";
 const TAG: &str = "Person";

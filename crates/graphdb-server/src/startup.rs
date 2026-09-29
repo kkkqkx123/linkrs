@@ -204,7 +204,14 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
                 // Attach vector coordinator if a backend is available
                 #[cfg(feature = "vector")]
                 let sync_manager = if let Some(backend) = &vector_backend {
-                    attach_vector_coordinator(sync_manager, backend.clone(), &config)
+                    attach_vector_coordinator(sync_manager, backend.clone(), &config).map_err(
+                        |error| {
+                            graphdb_core::DBError::storage(format!(
+                                "Invalid vector embedding configuration: {}",
+                                error
+                            ))
+                        },
+                    )?
                 } else {
                     sync_manager
                 };
@@ -218,7 +225,14 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
                 // Attach vector coordinator if a backend is available
                 #[cfg(feature = "vector")]
                 let sync_manager = if let Some(backend) = &vector_backend {
-                    attach_vector_coordinator(sync_manager, backend.clone(), &config)
+                    attach_vector_coordinator(sync_manager, backend.clone(), &config).map_err(
+                        |error| {
+                            graphdb_core::DBError::storage(format!(
+                                "Invalid vector embedding configuration: {}",
+                                error
+                            ))
+                        },
+                    )?
                 } else {
                     sync_manager
                 };
@@ -231,7 +245,14 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
             // Attach vector coordinator if a backend is available
             #[cfg(feature = "vector")]
             let sync_manager = if let Some(backend) = &vector_backend {
-                attach_vector_coordinator(sync_manager, backend.clone(), &config)
+                attach_vector_coordinator(sync_manager, backend.clone(), &config).map_err(
+                    |error| {
+                        graphdb_core::DBError::storage(format!(
+                            "Invalid vector embedding configuration: {}",
+                            error
+                        ))
+                    },
+                )?
             } else {
                 sync_manager
             };
@@ -459,8 +480,9 @@ fn attach_vector_coordinator(
     sync_manager: graphdb_sync::SyncManager,
     backend: VectorBackend,
     _config: &Config,
-) -> graphdb_sync::SyncManager {
+) -> Result<graphdb_sync::SyncManager, String> {
     let handle = tokio::runtime::Handle::current();
+    let auto_embed = _config.vector_config().auto_embed_text;
     #[cfg(feature = "vector-qdrant")]
     let config = _config;
     #[cfg(feature = "vector-qdrant")]
@@ -478,11 +500,21 @@ fn attach_vector_coordinator(
         match es {
             Ok(es) => es.map(Arc::new),
             Err(e) => {
+                if auto_embed {
+                    return Err(e);
+                }
                 warn!("Failed to create embedding service: {}", e);
                 None
             }
         }
     };
+    #[cfg(feature = "vector-qdrant")]
+    if auto_embed && embedding_service.is_none() {
+        return Err(
+            "vector.auto_embed_text requires [vector.qdrant.embedding] with explicit dimension"
+                .to_string(),
+        );
+    }
     #[cfg(feature = "vector-qdrant")]
     let vector_coordinator = Arc::new(graphdb_sync::vector_sync::VectorSyncCoordinator::new(
         backend.clone(),
@@ -496,6 +528,13 @@ fn attach_vector_coordinator(
             handle,
         ),
     );
+    #[cfg(not(feature = "vector-qdrant"))]
+    if auto_embed {
+        return Err(
+            "vector.auto_embed_text requires the embedding/qdrant build with a configured service"
+                .to_string(),
+        );
+    }
     {
         use graphdb_config::VectorCollectionGranularity;
         let granularity = match _config.vector_config().collection.granularity {
@@ -511,6 +550,10 @@ fn attach_vector_coordinator(
     }
     info!("Vector index sync enabled");
     let mut manager = sync_manager.with_vector_coordinator(vector_coordinator);
+    manager.set_auto_embed_text(auto_embed);
+    if auto_embed {
+        info!("Vector write-time auto-embedding enabled");
+    }
     // Backend-aware delivery policy: batch / lease / retries / concurrency
     // derived from `VectorConfig` so `manager.rs` does not branch on `is_local`.
     let policy = graphdb_sync::backend::BackendDeliveryPolicy::from_config(_config.vector_config());
@@ -523,7 +566,7 @@ fn attach_vector_coordinator(
         policy.max_concurrency
     );
     manager.configure_backend_policy(policy);
-    manager
+    Ok(manager)
 }
 
 fn property_graph_config_from_config(

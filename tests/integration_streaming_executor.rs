@@ -721,7 +721,6 @@ fn test_distinct_all_same() {
 
 #[cfg(test)]
 mod storage_backed {
-    use graphdb_metrics::StatsManager;
     use graphdb::core::types::VertexId;
     use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo};
     use graphdb::core::vertex_edge_path::{Tag, Vertex};
@@ -735,6 +734,7 @@ mod storage_backed {
         StorageReader, StorageSchemaContextOps, StorageSchemaOps, StorageWriter,
     };
     use graphdb::test_utils::TestStorage;
+    use graphdb_metrics::StatsManager;
     use parking_lot::RwLock;
     use std::collections::HashMap;
     use std::sync::Arc;

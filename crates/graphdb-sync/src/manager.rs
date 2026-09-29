@@ -55,6 +55,8 @@ pub struct SyncManager {
     sqlite_outbox: Option<Arc<SqliteOutbox>>,
     #[cfg(feature = "vector")]
     vector_receiver: Option<Arc<crate::VectorReceiver>>,
+    #[cfg(feature = "vector")]
+    auto_embed_text: Arc<std::sync::atomic::AtomicBool>,
     outbox_consumer: Arc<OutboxConsumerConfig>,
     #[cfg(feature = "vector")]
     backend_policy: Option<Arc<crate::backend::BackendDeliveryPolicy>>,
@@ -84,6 +86,8 @@ impl Clone for SyncManager {
             sqlite_outbox: self.sqlite_outbox.clone(),
             #[cfg(feature = "vector")]
             vector_receiver: self.vector_receiver.clone(),
+            #[cfg(feature = "vector")]
+            auto_embed_text: self.auto_embed_text.clone(),
             outbox_consumer: self.outbox_consumer.clone(),
             #[cfg(feature = "vector")]
             backend_policy: self.backend_policy.clone(),

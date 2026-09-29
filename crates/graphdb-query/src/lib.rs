@@ -60,6 +60,13 @@ pub use session_events::{SessionEvent, SessionEventCallback};
 // Re-export OptimizerEngine
 pub use optimizer::OptimizerEngine;
 
+// Application-layer hybrid retrieval helpers. Both search paths emit
+// identifier plus score rows independently; callers normalize vector point
+// IDs before fusion because vector and fulltext ID spaces differ.
+pub use graphdb_core::fusion::{
+    normalize_vector_hits, normalize_vector_point_id, rrf_fuse, weighted_fuse, FusedHit, ScoredHit,
+};
+
 pub mod storage {
     pub use graphdb_storage::*;
 

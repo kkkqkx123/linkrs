@@ -462,7 +462,11 @@ fn edge_table_stats_snapshot_tracks_live_and_holes() {
     let vids: Vec<VertexId> = (1..=2i64)
         .map(|i| VertexId::try_from_int64(i).expect("test vertex id"))
         .collect();
-    for (src, dst, rank) in [(&vids[0], &vids[1], 0), (&vids[1], &vids[0], 0), (&vids[0], &vids[1], 1)] {
+    for (src, dst, rank) in [
+        (&vids[0], &vids[1], 0),
+        (&vids[1], &vids[0], 0),
+        (&vids[0], &vids[1], 1),
+    ] {
         storage
             .insert_edge(
                 "test_space",
