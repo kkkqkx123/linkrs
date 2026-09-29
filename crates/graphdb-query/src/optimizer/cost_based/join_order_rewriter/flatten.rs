@@ -15,7 +15,7 @@ use crate::optimizer::cost::config::{
     DEDUP_SELECTIVITY, DEFAULT_FANOUT, GET_EDGES_DEFAULT_ROWS, GET_VERTICES_DEFAULT_ROWS,
     UNKNOWN_SCAN_ROWS,
 };
-use crate::optimizer::cost_based::ndv::estimate_group_count;
+use crate::optimizer::cost_based::ndv::{estimate_group_count, DEFAULT_JOIN_SELECTIVITY};
 use crate::optimizer::stats::StatsView;
 
 pub(super) fn classify_join(node: &PlanNodeEnum) -> JoinNodeType {
@@ -227,7 +227,7 @@ fn flatten_recursive(
                     right_key: probe_keys,
                     left_table: String::new(),
                     right_table: String::new(),
-                    selectivity: 0.3,
+                    selectivity: DEFAULT_JOIN_SELECTIVITY,
                 });
             }
 
@@ -583,7 +583,7 @@ fn flatten_recursive_logical(
                     right_key: probe_keys,
                     left_table: String::new(),
                     right_table: String::new(),
-                    selectivity: 0.3,
+                    selectivity: DEFAULT_JOIN_SELECTIVITY,
                 });
             }
 

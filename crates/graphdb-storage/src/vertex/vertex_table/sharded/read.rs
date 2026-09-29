@@ -512,7 +512,6 @@ impl ShardedVertexTable {
         let mut max: Option<graphdb_core::Value> = None;
         let mut null_count: Option<u64> = None;
         let mut merged_hll: Option<crate::stats::HyperLogLog> = None;
-        let mut hll_complete = true;
         let mut any_info = false;
 
         for shard in &self.shards {
@@ -525,16 +524,11 @@ impl ShardedVertexTable {
             if let Some(stats) = table.columns.get_column(column).and_then(|c| c.stats()) {
                 any_info = true;
                 *null_count.get_or_insert(0) += stats.null_count;
-                match &stats.hll {
-                    Some(h) => {
-                        if let Some(ref mut acc) = merged_hll {
-                            acc.merge(h);
-                        } else {
-                            merged_hll = Some(h.clone());
-                        }
-                    }
-                    None => {
-                        hll_complete = false;
+                if let Some(h) = &stats.hll {
+                    if let Some(ref mut acc) = merged_hll {
+                        acc.merge(h);
+                    } else {
+                        merged_hll = Some(h.clone());
                     }
                 }
             }
@@ -543,12 +537,12 @@ impl ShardedVertexTable {
         if !any_info {
             return None;
         }
-        let (hll, distinct_count) = match (merged_hll, hll_complete) {
-            (Some(h), true) => {
+        let (hll, distinct_count) = match merged_hll {
+            Some(h) => {
                 let est = h.estimate();
                 (Some(h), Some(est))
             }
-            _ => (None, None),
+            None => (None, None),
         };
         Some(ColumnStatsSnapshot {
             row_count: self.approximate_id_hole_stats(ts).0 as u64,

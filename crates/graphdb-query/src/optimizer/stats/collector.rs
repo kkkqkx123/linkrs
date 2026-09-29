@@ -75,7 +75,6 @@ struct EdgeDegreeSample {
     max_out: u64,
     max_in: u64,
     distinct_out: u64,
-    distinct_in: u64,
     out_std: f64,
     in_std: f64,
     gini: f64,
@@ -426,7 +425,6 @@ impl StatisticsCollector {
                 max_out: 0,
                 max_in: 0,
                 distinct_out: 0,
-                distinct_in: 0,
                 out_std: 0.0,
                 in_std: 0.0,
                 gini: 0.0,
@@ -483,7 +481,6 @@ impl StatisticsCollector {
             max_out,
             max_in,
             distinct_out: out_freq.len() as u64,
-            distinct_in: in_freq.len() as u64,
             out_std,
             in_std,
             gini,
@@ -602,10 +599,9 @@ impl StatisticsCollector {
                 let tag_props = &vertex.tag.properties;
                 let mut joint_parts: Vec<String> = Vec::with_capacity(prop_names.len());
                 for prop_name in &prop_names {
-                    if let Some(v) = tag_props.get(prop_name.as_str()) {
-                        joint_parts.push(ndv_key(v));
-                    } else {
-                        joint_parts.push("-".to_string());
+                    match tag_props.get(prop_name.as_str()) {
+                        Some(v) if !v.is_null() => joint_parts.push(ndv_key(v)),
+                        _ => joint_parts.push("-".to_string()),
                     }
                 }
                 if !prop_names.is_empty() {
@@ -722,10 +718,9 @@ impl StatisticsCollector {
             for edge in &edges {
                 let mut joint_parts: Vec<String> = Vec::with_capacity(prop_names.len());
                 for prop_name in &prop_names {
-                    if let Some(v) = edge.get_property(prop_name.as_str()) {
-                        joint_parts.push(ndv_key(v));
-                    } else {
-                        joint_parts.push("-".to_string());
+                    match edge.get_property(prop_name.as_str()) {
+                        Some(v) if !v.is_null() => joint_parts.push(ndv_key(v)),
+                        _ => joint_parts.push("-".to_string()),
                     }
                 }
                 if !prop_names.is_empty() {

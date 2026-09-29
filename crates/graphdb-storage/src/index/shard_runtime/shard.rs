@@ -605,10 +605,10 @@ fn delta_size(map: &BTreeMap<SecondaryIndexKey, IndexRecord>) -> u64 {
         .map(|(key, record)| {
             let included = record.included_columns.as_ref().map_or(0, |cols| {
                 cols.iter()
-                    .map(|(name, value)| name.capacity() as u64 + value.estimated_size() as u64)
+                    .map(|(name, value)| name.len() as u64 + value.estimated_size() as u64)
                     .sum::<u64>()
             });
-            std::mem::size_of::<IndexRecord>() as u64 + key.capacity() as u64 + included
+            std::mem::size_of::<IndexRecord>() as u64 + key.len() as u64 + included
         })
         .sum()
 }

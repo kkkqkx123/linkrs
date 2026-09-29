@@ -62,6 +62,7 @@ impl TransactionMonitor {
         metrics.hook_panic_total = self.stats.hook_panic_total.load(Ordering::Relaxed);
         metrics.hook_slow_total = self.stats.hook_slow_total.load(Ordering::Relaxed);
         metrics.active_statements = self.stats.active_statements.load(Ordering::Relaxed);
+        metrics.conflict_breakdown = self.stats.conflict_breakdown();
 
         if !durations.is_empty() {
             let mut sorted_durations = durations.clone();

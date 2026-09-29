@@ -114,23 +114,76 @@ impl PropertyStatistics {
 
     /// Record one observed value into the min/max envelope.
     ///
-    /// Only values with a total order across the column (numeric and string
-    /// families) participate; mixed-type columns never compare across
-    /// families, so the envelope keeps the first-seen family.
+    /// Numeric values compare across int and float kinds with the same
+    /// numeric-aware rule as snapshot merging; string values compare
+    /// lexicographically. Mixed numeric versus string columns keep the
+    /// first-seen family. Numeric strings stay lexicographic.
     pub fn observe_value(&mut self, value: &Value) {
-        let Some(key) = order_key(value) else {
+        if order_key(value).is_none() {
             return;
-        };
-        match self.min_value.as_ref().and_then(order_key) {
+        }
+        match &self.min_value {
             None => self.min_value = Some(value.clone()),
-            Some(cur) if cur.0 == key.0 && key.1 < cur.1 => self.min_value = Some(value.clone()),
-            _ => {}
+            Some(cur) => {
+                if let Some(ord) = envelope_compare(value, cur) {
+                    if ord == std::cmp::Ordering::Less {
+                        self.min_value = Some(value.clone());
+                    }
+                }
+            }
         }
-        match self.max_value.as_ref().and_then(order_key) {
+        match &self.max_value {
             None => self.max_value = Some(value.clone()),
-            Some(cur) if cur.0 == key.0 && key.1 > cur.1 => self.max_value = Some(value.clone()),
-            _ => {}
+            Some(cur) => {
+                if let Some(ord) = envelope_compare(value, cur) {
+                    if ord == std::cmp::Ordering::Greater {
+                        self.max_value = Some(value.clone());
+                    }
+                }
+            }
         }
+    }
+}
+
+/// Compare envelope values with snapshot-compatible numeric semantics:
+/// exact `i64` when both sides are integers, `f64` when a float is involved,
+/// lexicographic within the string family. Returns `None` across families
+/// so mixed columns keep the first-seen family.
+fn envelope_compare(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+    fn as_i64(value: &Value) -> Option<i64> {
+        match value {
+            Value::SmallInt(v) => Some(*v as i64),
+            Value::Int(v) => Some(*v as i64),
+            Value::BigInt(v) => Some(*v),
+            _ => None,
+        }
+    }
+    fn as_f64(value: &Value) -> Option<f64> {
+        match value {
+            Value::SmallInt(v) => Some(*v as f64),
+            Value::Int(v) => Some(*v as f64),
+            Value::BigInt(v) => Some(*v as f64),
+            Value::Float(v) => Some(*v as f64),
+            Value::Double(v) => Some(*v),
+            _ => None,
+        }
+    }
+    match (as_i64(a), as_i64(b)) {
+        (Some(x), Some(y)) => return Some(x.cmp(&y)),
+        _ => {}
+    }
+    match (as_f64(a), as_f64(b)) {
+        (Some(x), Some(y)) => {
+            return Some(x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        _ => {}
+    }
+    match (a, b) {
+        (Value::String(x), Value::String(y)) => Some(x.cmp(y)),
+        (Value::FixedString(x), Value::FixedString(y)) => Some(x.cmp(y)),
+        (Value::String(x), Value::FixedString(y)) => Some(x.as_str().cmp(y.as_str())),
+        (Value::FixedString(x), Value::String(y)) => Some(x.as_str().cmp(y.as_str())),
+        _ => None,
     }
 }
 

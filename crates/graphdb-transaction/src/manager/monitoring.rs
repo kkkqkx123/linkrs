@@ -99,7 +99,6 @@ impl TransactionManager {
             undo_bytes,
             checkpoint_drain_time: Duration::ZERO,
         };
-        self.stats.record_resource_metrics(metrics);
         metrics
     }
 }

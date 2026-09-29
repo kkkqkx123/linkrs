@@ -28,6 +28,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::optimizer::cost::CostCalculator;
+use crate::optimizer::cost_based::ndv::DEFAULT_JOIN_SELECTIVITY;
 use crate::optimizer::decision::{JoinAlgorithm, JoinOrderDecision};
 use graphdb_core::types::ContextualExpression;
 
@@ -96,7 +97,7 @@ impl JoinCondition {
         Self {
             left_table,
             right_table,
-            selectivity: 0.3, // Default selection ratio: 30%
+            selectivity: DEFAULT_JOIN_SELECTIVITY,
             expression: None,
         }
     }
@@ -522,7 +523,7 @@ impl JoinOrderOptimizer {
     ///
     /// Used by the greedy path. The selectivity is the most selective
     /// condition that touches `right_table` (conservative lower bound on the
-    /// join output); `0.3` when no condition references it.
+    /// join output); fallback is the shared join selectivity.
     fn calculate_join_cost(
         &self,
         left_rows: u64,
@@ -539,7 +540,7 @@ impl JoinOrderOptimizer {
         let selectivity = if selectivity.is_finite() {
             selectivity
         } else {
-            0.3
+            DEFAULT_JOIN_SELECTIVITY
         };
 
         let output_rows = ((left_rows as f64 * right_rows as f64 * selectivity) as u64).max(1);

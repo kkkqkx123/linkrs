@@ -321,11 +321,17 @@ impl GraphStorageContext {
 
         // Collect dirty pages for incremental meta
         let (all_dirty_pages, total_pages) = {
+            use std::collections::HashSet;
+            let mut seen = HashSet::new();
             let mut pages = Vec::new();
             let mut total = 0usize;
             for (_, table) in &vertex_tables {
                 total += table.total_pages();
-                pages.extend(table.collect_dirty_pages());
+                for id in table.collect_dirty_pages() {
+                    if seen.insert(id) {
+                        pages.push(id);
+                    }
+                }
             }
             (pages, total)
         };

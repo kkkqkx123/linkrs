@@ -415,7 +415,7 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 |------|------|--------|------|
 | enabled | bool | true | 是否启用监控 |
 | memory_cache_size | usize | 1000 | 内存缓存大小（保留最近N条查询，>0） |
-| slow_query_threshold_ms | u64 | 1000 | 慢查询阈值（毫秒） |
+| slow_query_threshold_ms | u64 | 1000 | 内存执行画像慢查询阈值（毫秒）：控制内存查询画像保留与聚合统计的过滤口径，不控制文件落盘 |
 | progress_report_rows_interval | u64 | 0 | 查询进度通知的行间隔（0 禁用进度上报） |
 
 ### 12.2 慢查询日志 [monitoring.slow_query_log]
@@ -423,7 +423,7 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | enabled | bool | true | 是否启用慢查询日志 |
-| threshold_ms | u64 | 1000 | 慢查询阈值（毫秒，>0） |
+| threshold_ms | u64 | 1000 | 文件慢查询阈值（毫秒，>0）：控制落盘到 `log_file_path` 的口径，与顶层内存阈值独立配置 |
 | log_file_path | String | `"logs/slow_query.log"` | 慢查询日志文件路径 |
 | max_file_size_mb | u64 | 100 | 单文件轮转大小（MB） |
 | max_files | u32 | 5 | 保留的日志文件数 |
@@ -432,6 +432,18 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | json_format | bool | false | 是否使用 JSON 格式 |
 
 > **注意：** 旧版文档中的 `slow_query_log_dir`、`slow_query_log_retention_days` 已被 `[monitoring.slow_query_log]` 子节取代。
+>
+> **慢查询三阈值适用范围：** 顶层 `slow_query_threshold_ms` 用于内存执行画像与聚合统计过滤；
+> `[monitoring.slow_query_log].threshold_ms` 用于文件落盘过滤；`QueryManager` 会话事件阈值用于
+> `SlowQueryDetected` 事件触发。三者独立配置，暂不合并。
+>
+> **分位引擎适用范围：** 精确直方图面向近期延迟分布（近万样本内 `avg/p50/p95/p99`）；
+> 分位摘要面向按模式聚合的常内存估计（`AggregatedQueryStats p95/p99` 与 TopN 慢模式）。两者暂不合并。
+>
+> **数字字符串已知限制：** 范围谓词与快照包络对数字字符串按字典序比较，可能与数值顺序不一致；
+> 为控制剪枝风险暂不改变该语义。
+>
+> **去重口径：** 采样去重与快照去重均不含空值；空值单独由空值数统计。
 
 ---
 

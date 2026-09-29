@@ -1097,21 +1097,7 @@ impl StatsManager {
         self.add_space_metric_with_amount(&space_key, MetricType::SearchResultCount, count);
     }
 
-    /// Record cache hit or miss for a known space.
-    pub fn record_cache_hit(&self, space_id: u64, hit: bool) {
-        let space_key = Self::space_key(space_id);
-        if hit {
-            self.add_value(MetricType::SearchCacheHitCount);
-            self.add_space_metric(&space_key, MetricType::SearchCacheHitCount);
-        } else {
-            self.add_value(MetricType::SearchCacheMissCount);
-            self.add_space_metric(&space_key, MetricType::SearchCacheMissCount);
-        }
-    }
-
-    /// Record cache hit or miss without a known space (global only).
-    /// Replaces the legacy `record_cache_hit(0, …)` unknown-space bucket
-    /// that polluted `space_0`.
+    /// Record cache hit or miss (global only).
     pub fn record_cache_hit_global(&self, hit: bool) {
         if hit {
             self.add_value(MetricType::SearchCacheHitCount);

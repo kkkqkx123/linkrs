@@ -215,26 +215,204 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         self.timed_read(|| self.inner.count_edges_by_type(space, edge_type))
     }
 
+    fn scan_vertices_by_tag_paginated(
+        &self,
+        space: &str,
+        tag: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<Vertex>, StorageError> {
+        self.timed_read(|| {
+            self.inner
+                .scan_vertices_by_tag_paginated(space, tag, offset, limit)
+        })
+    }
+
+    fn scan_vertices_by_prop(
+        &self,
+        space: &str,
+        tag: &str,
+        prop: &str,
+        value: &Value,
+    ) -> Result<Vec<Vertex>, StorageError> {
+        self.timed_read(|| self.inner.scan_vertices_by_prop(space, tag, prop, value))
+    }
+
+    fn get_edge_projected(
+        &self,
+        space: &str,
+        src: &VertexId,
+        dst: &VertexId,
+        edge_type: &str,
+        rank: i64,
+        projection: &[String],
+    ) -> Result<Option<Edge>, StorageError> {
+        self.timed_read(|| {
+            self.inner
+                .get_edge_projected(space, src, dst, edge_type, rank, projection)
+        })
+    }
+
+    fn get_node_edges_projected(
+        &self,
+        space: &str,
+        node_id: &VertexId,
+        direction: EdgeDirection,
+        edge_types: &[String],
+        projection: Option<&[String]>,
+        limit: Option<usize>,
+    ) -> Result<Vec<Edge>, StorageError> {
+        self.timed_read(|| {
+            self.inner.get_node_edges_projected(
+                space, node_id, direction, edge_types, projection, limit,
+            )
+        })
+    }
+
+    fn get_vertices_batch(
+        &self,
+        space: &str,
+        tag: &str,
+        ids: &[VertexId],
+    ) -> Result<Vec<Option<Vertex>>, StorageError> {
+        self.timed_read(|| self.inner.get_vertices_batch(space, tag, ids))
+    }
+
+    fn neighbor_dst_ids_batch(
+        &self,
+        space: &str,
+        src_ids: &[VertexId],
+        direction: EdgeDirection,
+        edge_types: &[String],
+    ) -> Result<Vec<Vec<VertexId>>, StorageError> {
+        self.timed_read(|| {
+            self.inner
+                .neighbor_dst_ids_batch(space, src_ids, direction, edge_types)
+        })
+    }
+
+    fn out_degree_batch(
+        &self,
+        space: &str,
+        src_ids: &[VertexId],
+        direction: EdgeDirection,
+        edge_types: &[String],
+    ) -> Result<Vec<usize>, StorageError> {
+        self.timed_read(|| {
+            self.inner
+                .out_degree_batch(space, src_ids, direction, edge_types)
+        })
+    }
+
+    fn scan_edges_by_type_paginated(
+        &self,
+        space: &str,
+        edge_type: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<Edge>, StorageError> {
+        self.timed_read(|| {
+            self.inner
+                .scan_edges_by_type_paginated(space, edge_type, offset, limit)
+        })
+    }
+
+    fn lookup_edges_by_property_range(
+        &self,
+        space: &str,
+        edge_type: &str,
+        prop_name: &str,
+        lower: Option<&Value>,
+        upper: Option<&Value>,
+        include_lower: bool,
+        include_upper: bool,
+    ) -> Result<Vec<Edge>, StorageError> {
+        self.timed_read(|| {
+            self.inner.lookup_edges_by_property_range(
+                space,
+                edge_type,
+                prop_name,
+                lower,
+                upper,
+                include_lower,
+                include_upper,
+            )
+        })
+    }
+
+    fn lookup_index(
+        &self,
+        space: &str,
+        index: &str,
+        value: &Value,
+    ) -> Result<Vec<Value>, StorageError> {
+        self.timed_read(|| self.inner.lookup_index(space, index, value))
+    }
+
+    fn get_vertex_with_schema(
+        &self,
+        space: &str,
+        tag: &str,
+        id: &Value,
+    ) -> Result<Option<(TagInfo, Vec<u8>)>, StorageError> {
+        self.timed_read(|| self.inner.get_vertex_with_schema(space, tag, id))
+    }
+
+    fn get_edge_with_schema(
+        &self,
+        space: &str,
+        edge_type: &str,
+        src: &Value,
+        dst: &Value,
+    ) -> Result<Option<(EdgeTypeInfo, Vec<u8>)>, StorageError> {
+        self.timed_read(|| self.inner.get_edge_with_schema(space, edge_type, src, dst))
+    }
+
+    fn scan_vertices_with_schema(
+        &self,
+        space: &str,
+        tag: &str,
+    ) -> Result<Vec<(TagInfo, Vec<u8>)>, StorageError> {
+        self.timed_read(|| self.inner.scan_vertices_with_schema(space, tag))
+    }
+
+    fn scan_edges_with_schema(
+        &self,
+        space: &str,
+        edge_type: &str,
+    ) -> Result<Vec<(EdgeTypeInfo, Vec<u8>)>, StorageError> {
+        self.timed_read(|| self.inner.scan_edges_with_schema(space, edge_type))
+    }
+
+    fn create_vertex_cursor(
+        &self,
+        space: &str,
+        options: &ScanOptions,
+    ) -> Result<Box<dyn VertexCursor>, StorageError> {
+        self.timed_read(|| self.inner.create_vertex_cursor(space, options))
+    }
+
+    fn create_edge_cursor(
+        &self,
+        space: &str,
+        options: &ScanOptions,
+    ) -> Result<Box<dyn EdgeCursor>, StorageError> {
+        self.timed_read(|| self.inner.create_edge_cursor(space, options))
+    }
+
+    fn create_index_cursor(
+        &self,
+        plan: &IndexScanPlan,
+    ) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError> {
+        self.timed_read(|| self.inner.create_index_cursor(plan))
+    }
+
     forward_methods!(inner;
         fn layout_version(&self) -> u64;
         fn vertex_id_domain(&self, space: &str) -> Option<std::ops::Range<i64>>;
-        fn scan_vertices_by_tag_paginated(&self, space: &str, tag: &str, offset: usize, limit: usize) -> Result<Vec<Vertex>, StorageError>;
-        fn scan_vertices_by_prop(&self, space: &str, tag: &str, prop: &str, value: &Value) -> Result<Vec<Vertex>, StorageError>;
-        fn get_edge_projected(&self, space: &str, src: &VertexId, dst: &VertexId, edge_type: &str, rank: i64, projection: &[String]) -> Result<Option<Edge>, StorageError>;
-        fn get_node_edges_projected(&self, space: &str, node_id: &VertexId, direction: EdgeDirection, edge_types: &[String], projection: Option<&[String]>, limit: Option<usize>) -> Result<Vec<Edge>, StorageError>;
-        fn get_vertices_batch(&self, space: &str, tag: &str, ids: &[VertexId]) -> Result<Vec<Option<Vertex>>, StorageError>;
-        fn neighbor_dst_ids_batch(&self, space: &str, src_ids: &[VertexId], direction: EdgeDirection, edge_types: &[String]) -> Result<Vec<Vec<VertexId>>, StorageError>;
-        fn out_degree_batch(&self, space: &str, src_ids: &[VertexId], direction: EdgeDirection, edge_types: &[String]) -> Result<Vec<usize>, StorageError>;
-        fn scan_edges_by_type_paginated(&self, space: &str, edge_type: &str, offset: usize, limit: usize) -> Result<Vec<Edge>, StorageError>;
         fn enable_edge_property_index(&self, space: &str, edge_type: &str, pool_capacity: u64) -> Result<bool, StorageError>;
         fn has_edge_property_index(&self, space: &str, edge_type: &str) -> Result<bool, StorageError>;
         fn disable_edge_property_index(&self, space: &str, edge_type: &str) -> Result<(), StorageError>;
-        fn lookup_edges_by_property_range(&self, space: &str, edge_type: &str, prop_name: &str, lower: Option<&Value>, upper: Option<&Value>, include_lower: bool, include_upper: bool) -> Result<Vec<Edge>, StorageError>;
-        fn lookup_index(&self, space: &str, index: &str, value: &Value) -> Result<Vec<Value>, StorageError>;
-        fn get_vertex_with_schema(&self, space: &str, tag: &str, id: &Value) -> Result<Option<(TagInfo, Vec<u8>)>, StorageError>;
-        fn get_edge_with_schema(&self, space: &str, edge_type: &str, src: &Value, dst: &Value) -> Result<Option<(EdgeTypeInfo, Vec<u8>)>, StorageError>;
-        fn scan_vertices_with_schema(&self, space: &str, tag: &str) -> Result<Vec<(TagInfo, Vec<u8>)>, StorageError>;
-        fn scan_edges_with_schema(&self, space: &str, edge_type: &str) -> Result<Vec<(EdgeTypeInfo, Vec<u8>)>, StorageError>;
         fn get_space(&self, space: &str) -> Result<Option<SpaceInfo>, StorageError>;
         fn get_space_by_id(&self, space_id: u64) -> Result<Option<SpaceInfo>, StorageError>;
         fn list_spaces(&self) -> Result<Vec<SpaceInfo>, StorageError>;
@@ -255,20 +433,6 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         fn get_edge_schema_changes(&self, space: &str, edge_type: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::PropertyChange>, StorageError>;
         fn detect_vertex_breaking_changes(&self, space: &str, tag: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::PropertyChange>, StorageError>;
         fn detect_edge_breaking_changes(&self, space: &str, edge_type: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::PropertyChange>, StorageError>;
-        fn create_vertex_cursor(
-            &self,
-            space: &str,
-            options: &ScanOptions,
-        ) -> Result<Box<dyn VertexCursor>, StorageError>;
-        fn create_edge_cursor(
-            &self,
-            space: &str,
-            options: &ScanOptions,
-        ) -> Result<Box<dyn EdgeCursor>, StorageError>;
-        fn create_index_cursor(
-            &self,
-            plan: &IndexScanPlan,
-        ) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError>;
         fn list_migration_history(&self, space: &str, label: &str, is_edge: bool) -> Result<Vec<crate::MigrationHistoryRecord>, StorageError>;
         fn get_applied_versions(&self, space: &str, label: &str, is_edge: bool) -> Result<Vec<u64>, StorageError>;
         fn record_migration_history(&self, record: crate::MigrationHistoryRecord) -> Result<(), StorageError>;
@@ -301,20 +465,199 @@ impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
         result
     }
 
-    forward_methods!(inner;
-        fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError>;
-        fn delete_vertex_with_edges(&mut self, space: &str, tag: &str, id: &VertexId) -> Result<(), StorageError>;
-        fn batch_delete_vertices_with_edges(&mut self, space: &str, tag: &str, ids: &[VertexId]) -> Result<usize, StorageError>;
-        fn batch_insert_vertices(&mut self, space: &str, vertices: Vec<Vertex>) -> Result<Vec<VertexId>, StorageError>;
-        fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
-        fn batch_insert_edges(&mut self, space: &str, edges: Vec<Edge>) -> Result<(), StorageError>;
-        fn batch_delete_edges(&mut self, space: &str, deletes: &[EdgeDeleteKey]) -> Result<usize, StorageError>;
-        fn insert_vertex_data(&mut self, space: &str, info: &InsertVertexInfo) -> Result<bool, StorageError>;
-        fn insert_edge_data(&mut self, space: &str, info: &InsertEdgeInfo) -> Result<bool, StorageError>;
-        fn delete_vertex_data(&mut self, space: &str, tag: &str, vertex_id: &str) -> Result<bool, StorageError>;
-        fn delete_edge_data(&mut self, space: &str, src: &str, dst: &str, rank: i64) -> Result<bool, StorageError>;
-        fn update_data(&mut self, space: &str, space_id: u64, info: &UpdateInfo) -> Result<bool, StorageError>;
-    );
+    fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError> {
+        let start = std::time::Instant::now();
+        let result = StorageWriter::update_vertex(&mut self.inner, space, vertex);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
+
+    fn delete_vertex_with_edges(
+        &mut self,
+        space: &str,
+        tag: &str,
+        id: &VertexId,
+    ) -> Result<(), StorageError> {
+        let start = std::time::Instant::now();
+        let result =
+            StorageWriter::delete_vertex_with_edges(&mut self.inner, space, tag, id);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
+
+    fn batch_delete_vertices_with_edges(
+        &mut self,
+        space: &str,
+        tag: &str,
+        ids: &[VertexId],
+    ) -> Result<usize, StorageError> {
+        let start = std::time::Instant::now();
+        let result =
+            StorageWriter::batch_delete_vertices_with_edges(&mut self.inner, space, tag, ids);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
+
+    fn batch_insert_vertices(
+        &mut self,
+        space: &str,
+        vertices: Vec<Vertex>,
+    ) -> Result<Vec<VertexId>, StorageError> {
+        let start = std::time::Instant::now();
+        let result = StorageWriter::batch_insert_vertices(&mut self.inner, space, vertices);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
+
+    fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
+        let start = std::time::Instant::now();
+        let result = StorageWriter::update_edge(&mut self.inner, space, edge);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
+
+    fn batch_insert_edges(
+        &mut self,
+        space: &str,
+        edges: Vec<Edge>,
+    ) -> Result<(), StorageError> {
+        let start = std::time::Instant::now();
+        let result = StorageWriter::batch_insert_edges(&mut self.inner, space, edges);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
+
+    fn batch_delete_edges(
+        &mut self,
+        space: &str,
+        deletes: &[EdgeDeleteKey],
+    ) -> Result<usize, StorageError> {
+        let start = std::time::Instant::now();
+        let result = StorageWriter::batch_delete_edges(&mut self.inner, space, deletes);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
+
+    fn insert_vertex_data(
+        &mut self,
+        space: &str,
+        info: &InsertVertexInfo,
+    ) -> Result<bool, StorageError> {
+        let start = std::time::Instant::now();
+        let result = StorageWriter::insert_vertex_data(&mut self.inner, space, info);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
+
+    fn insert_edge_data(
+        &mut self,
+        space: &str,
+        info: &InsertEdgeInfo,
+    ) -> Result<bool, StorageError> {
+        let start = std::time::Instant::now();
+        let result = StorageWriter::insert_edge_data(&mut self.inner, space, info);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
+
+    fn delete_vertex_data(
+        &mut self,
+        space: &str,
+        tag: &str,
+        vertex_id: &str,
+    ) -> Result<bool, StorageError> {
+        let start = std::time::Instant::now();
+        let result =
+            StorageWriter::delete_vertex_data(&mut self.inner, space, tag, vertex_id);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
+
+    fn delete_edge_data(
+        &mut self,
+        space: &str,
+        src: &str,
+        dst: &str,
+        rank: i64,
+    ) -> Result<bool, StorageError> {
+        let start = std::time::Instant::now();
+        let result =
+            StorageWriter::delete_edge_data(&mut self.inner, space, src, dst, rank);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
+
+    fn update_data(
+        &mut self,
+        space: &str,
+        space_id: u64,
+        info: &UpdateInfo,
+    ) -> Result<bool, StorageError> {
+        let start = std::time::Instant::now();
+        let result = StorageWriter::update_data(&mut self.inner, space, space_id, info);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
 
     fn delete_vertex(&mut self, space: &str, tag: &str, id: &VertexId) -> Result<(), StorageError> {
         let start = std::time::Instant::now();

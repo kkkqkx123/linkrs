@@ -21,8 +21,8 @@ pub struct ColumnStatsSnapshot {
     pub row_count: u64,
     /// Number of null values, when tracked by the storage layer.
     pub null_count: Option<u64>,
-    /// Distinct value count as an HLL union estimate across merged shards,
-    /// only when every contributing table tracks it.
+    /// Distinct value count excluding nulls, as an HLL union estimate over
+    /// available registers. Retained when any contributing table tracks it.
     pub distinct_count: Option<u64>,
     /// HLL registers backing the distinct estimate when available.
     pub hll: Option<crate::stats::HyperLogLog>,

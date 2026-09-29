@@ -6,7 +6,9 @@
 use std::sync::Arc;
 
 use crate::optimizer::cost::CostCalculator;
-use crate::optimizer::cost::config::DEFAULT_DEGREE_FALLBACK;
+use crate::optimizer::cost::config::{
+    DEFAULT_DEGREE_FALLBACK, SKEW_MODERATE_GINI, SKEW_SEVERE_GINI,
+};
 use crate::optimizer::stats::{EdgeTypeStatistics, StatisticsManager};
 use graphdb_core::types::EdgeDirection;
 
@@ -344,9 +346,9 @@ impl BidirectionalTraversalOptimizer {
 
         // The higher the slope, the greater the tendency for an even distribution (to avoid being concentrated in “hot spots”).
         // Return range: -0.1 to 0.1
-        if avg_skewness > 0.7 {
+        if avg_skewness > SKEW_SEVERE_GINI {
             -0.1 // Severe inclination; adjustment towards equal distribution.
-        } else if avg_skewness > 0.5 {
+        } else if avg_skewness > SKEW_MODERATE_GINI {
             -0.05 // Moderate inclination
         } else {
             0.0 // Slight tilt; no adjustment required.

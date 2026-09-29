@@ -409,8 +409,7 @@ impl ColumnStorage for VariableWidthColumn {
         if new_count < old_count {
             self.compact();
         }
-        let tail = u32::try_from(self.data.len()).unwrap_or(u32::MAX);
-        self.offsets.resize(new_count, tail);
+        self.offsets.resize(new_count, u32::MAX);
         if let Some(ref mut bitmap) = self.null_bitmap {
             bitmap.resize(new_count, false);
             for i in old_count..new_count {

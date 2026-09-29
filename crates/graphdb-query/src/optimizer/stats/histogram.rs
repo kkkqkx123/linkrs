@@ -254,10 +254,39 @@ impl Histogram {
     }
 }
 
-/// Compare two values
+/// Compare two values with snapshot-compatible numeric semantics:
+/// exact `i64` for integer kinds, `f64` when a float is involved,
+/// lexicographic for strings, otherwise `Value` ordering.
+/// Numeric strings stay lexicographic.
 fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
     use std::cmp::Ordering;
 
+    fn as_i64(value: &Value) -> Option<i64> {
+        match value {
+            Value::SmallInt(v) => Some(*v as i64),
+            Value::Int(v) => Some(*v as i64),
+            Value::BigInt(v) => Some(*v),
+            _ => None,
+        }
+    }
+    fn as_f64(value: &Value) -> Option<f64> {
+        match value {
+            Value::SmallInt(v) => Some(*v as f64),
+            Value::Int(v) => Some(*v as f64),
+            Value::BigInt(v) => Some(*v as f64),
+            Value::Float(v) => Some(*v as f64),
+            Value::Double(v) => Some(*v),
+            _ => None,
+        }
+    }
+    match (as_i64(a), as_i64(b)) {
+        (Some(x), Some(y)) => return x.cmp(&y),
+        _ => {}
+    }
+    match (as_f64(a), as_f64(b)) {
+        (Some(x), Some(y)) => return x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+        _ => {}
+    }
     match (a, b) {
         (Value::SmallInt(a), Value::SmallInt(b)) => a.cmp(b),
         (Value::Int(a), Value::Int(b)) => a.cmp(b),
@@ -266,15 +295,7 @@ fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
         (Value::Double(a), Value::Double(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
         (Value::String(a), Value::String(b)) => a.cmp(b),
         (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
-        // Different types are sorted by their type (using the type ID as the sorting criterion).
-        _ => {
-            let type_a = std::mem::discriminant(a);
-            let type_b = std::mem::discriminant(b);
-            // Using address comparison as a stable basis for sorting.
-            let ptr_a = &type_a as *const _ as usize;
-            let ptr_b = &type_b as *const _ as usize;
-            ptr_a.cmp(&ptr_b)
-        }
+        _ => Value::cmp(a, b),
     }
 }
 

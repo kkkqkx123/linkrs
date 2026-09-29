@@ -101,12 +101,12 @@ impl VectorValue {
     pub fn estimated_size(&self) -> usize {
         match self {
             VectorValue::Dense(data) => {
-                std::mem::size_of::<Self>() + data.capacity() * std::mem::size_of::<f32>()
+                std::mem::size_of::<Self>() + data.len() * std::mem::size_of::<f32>()
             }
             VectorValue::Sparse { indices, values } => {
                 std::mem::size_of::<Self>()
-                    + indices.capacity() * std::mem::size_of::<u32>()
-                    + values.capacity() * std::mem::size_of::<f32>()
+                    + indices.len() * std::mem::size_of::<u32>()
+                    + values.len() * std::mem::size_of::<f32>()
             }
         }
     }

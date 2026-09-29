@@ -21,11 +21,11 @@ impl MemoryEstimatable for Value {
             | Value::Double(_) => base_size,
 
             // Variable-length string types
-            Value::String(s) => base_size + s.capacity(),
-            Value::FixedString(data) => base_size + data.capacity(),
+            Value::String(s) => base_size + s.len(),
+            Value::FixedString(data) => base_size + data.len(),
 
             // Binary data
-            Value::Blob(b) => base_size + b.capacity(),
+            Value::Blob(b) => base_size + b.len(),
 
             // Complex types with nested memory
             Value::Decimal128(d) => base_size + std::mem::size_of_val(d),
@@ -44,7 +44,7 @@ impl MemoryEstimatable for Value {
             }
             Value::Map(map) => {
                 base_size
-                    + map.capacity() * (8 + std::mem::size_of::<Value>() * 2)
+                    + map.capacity() * 8
                     + map
                         .iter()
                         .map(|(k, v)| k.estimate_memory() + v.estimate_memory())
@@ -52,7 +52,7 @@ impl MemoryEstimatable for Value {
             }
             Value::Set(set) => {
                 base_size
-                    + set.capacity() * (8 + std::mem::size_of::<Value>())
+                    + set.capacity() * 8
                     + set.iter().map(|v| v.estimate_memory()).sum::<usize>()
             }
 
@@ -83,7 +83,7 @@ impl MemoryEstimatable for Value {
                 base_size
                     + s.fields
                         .iter()
-                        .map(|(k, v)| k.capacity() + v.estimate_memory())
+                        .map(|(k, v)| k.len() + v.estimate_memory())
                         .sum::<usize>()
             }
             Value::Array(a) => {
@@ -110,9 +110,9 @@ mod tests {
 
     #[test]
     fn test_string_value() {
-        let s = compact_str::CompactString::with_capacity(100);
+        let s = compact_str::CompactString::new("hello");
         let v = Value::String(s);
-        assert_eq!(v.estimate_memory(), std::mem::size_of::<Value>() + 100);
+        assert_eq!(v.estimate_memory(), std::mem::size_of::<Value>() + 5);
     }
 
     #[test]
@@ -121,12 +121,12 @@ mod tests {
         let list = vec![
             Value::Int(1),
             Value::Int(2),
-            Value::String(compact_str::CompactString::with_capacity(10)),
+            Value::String(compact_str::CompactString::new("hello")),
         ];
         let v = Value::List(Box::new(List::from(list)));
         let expected = std::mem::size_of::<Value>()
             + std::mem::size_of::<Value>() * 2
-            + (std::mem::size_of::<Value>() + 10);
+            + (std::mem::size_of::<Value>() + 5);
         assert!(v.estimate_memory() >= expected);
     }
 }

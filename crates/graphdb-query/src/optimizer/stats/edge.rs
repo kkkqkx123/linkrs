@@ -7,7 +7,7 @@
 pub struct HotVertexInfo {
     /// Vertex ID
     pub vertex_id: i64,
-    /// “Shudde” is likely a misspelling of “Should” or “Shud”. If you mean “Should”, the translation would be:  “You should do that.”
+    /// Out-degree
     pub out_degree: u64,
     /// In-degree
     pub in_degree: u64,
@@ -91,8 +91,8 @@ impl EdgeTypeStatistics {
 
     /// Determine whether there is a significant inclination.
     pub fn is_heavily_skewed(&self) -> bool {
-        use crate::optimizer::cost::config::{SKEW_HEAVY_GINI, SKEW_MAX_DEGREE_RATIO};
-        self.degree_gini_coefficient > SKEW_HEAVY_GINI
+        use crate::optimizer::cost::config::{SKEW_MAX_DEGREE_RATIO, SKEW_SEVERE_GINI};
+        self.degree_gini_coefficient > SKEW_SEVERE_GINI
             || self.max_out_degree as f64 > self.avg_out_degree * SKEW_MAX_DEGREE_RATIO
     }
 

@@ -71,7 +71,10 @@ impl CachedVertex {
         let mut size = std::mem::size_of::<Self>();
 
         size += self.external_id.len();
-        size += self.column_starts.len() * std::mem::size_of::<Timestamp>();
+        size += self
+            .column_starts
+            .capacity()
+            .saturating_mul(std::mem::size_of::<Timestamp>());
         size += self
             .properties
             .capacity()

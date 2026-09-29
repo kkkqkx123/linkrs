@@ -1350,9 +1350,15 @@ impl ShardedVertexTable {
     }
 
     pub fn collect_dirty_pages(&self) -> Vec<crate::persistence::dirty_page::PageId> {
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
         let mut out = Vec::new();
         for shard in &self.shards {
-            out.extend(shard.read().dirty_pages());
+            for id in shard.read().dirty_pages() {
+                if seen.insert(id) {
+                    out.push(id);
+                }
+            }
         }
         out
     }

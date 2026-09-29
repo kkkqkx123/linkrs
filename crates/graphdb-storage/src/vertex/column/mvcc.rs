@@ -139,6 +139,13 @@ impl Column {
             }
         }
         let use_chunk_layer = self.chunk_layer_routes(&self.chunks.read());
+        let pre_covered = {
+            let chunks = self.chunks.read();
+            let capacity = self.chunk_capacity().max(1);
+            chunks.get(row_idx / capacity).is_some_and(|chunk| {
+                row_idx >= chunk.row_offset && row_idx < chunk.row_offset + chunk.row_count
+            })
+        };
         let absorbed = self.with_resident_chunk(row_idx, |chunk, state| {
             let local = row_idx - chunk.row_offset;
             state.visibility.ensure_len(chunk.row_count);
@@ -165,7 +172,7 @@ impl Column {
                     }
                 }
             }
-            if local < chunk.row_count && live_create < ts {
+            if pre_covered && local < chunk.row_count && live_create < ts {
                 let local_u32 = local as u32;
                 let current: Option<Value> =
                     if super::overflow::OverflowStore::routes_for(&self.data_type) {

@@ -144,9 +144,6 @@ impl SyncCoordinator {
         if let Some(ref sm) = self.stats_manager {
             let latency_ms = start.elapsed().as_millis() as u64;
             sm.record_sync_operation(latency_ms, result.is_ok());
-            if result.is_err() {
-                sm.record_sync_error();
-            }
         }
 
         result

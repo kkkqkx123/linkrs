@@ -691,14 +691,19 @@ impl ColumnStore {
 
     /// Collect all dirty pages across columns.
     pub fn collect_dirty_pages(&self) -> Vec<crate::persistence::dirty_page::PageId> {
+        use std::collections::HashSet;
         let columns = self.columns.read();
+        let mut seen = HashSet::new();
         let mut pages = Vec::new();
         for col in columns.iter() {
             for pid in col.dirty_pages() {
-                pages.push(crate::persistence::dirty_page::PageId::new(
+                let id = crate::persistence::dirty_page::PageId::new(
                     crate::persistence::dirty_page::ComponentType::VertexColumns,
                     pid as u64,
-                ));
+                );
+                if seen.insert(id) {
+                    pages.push(id);
+                }
             }
         }
         pages
