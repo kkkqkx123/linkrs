@@ -12,6 +12,7 @@
   import CypherEditor from '$components/common/CypherEditor.svelte';
   import { exportToCSV, exportToJSON } from '$utils/export';
   import { queryService } from '$services/query';
+  import { splitQueries } from '$utils/gql';
   import type { QueryResult, QueryError } from '$types/query';
 
   let editorContent = $state('');
@@ -92,15 +93,24 @@
     consoleStore.executeQuery();
   }
 
-  /** Parse-and-bind the current selection or buffer without executing it. */
+  /** Parse-and-bind each statement without executing it, reporting the first problem. */
   async function handleValidate() {
-    const target = editorContent.trim();
-    if (!target) return;
+    const statements = splitQueries(editorContent);
+    if (statements.length === 0) return;
     isValidating = true;
     validateMessage = '';
-    const outcome = await queryService.validate(target);
-    validateMessage = outcome.message;
-    isValidating = false;
+    try {
+      for (const statement of statements) {
+        const outcome = await queryService.validate(statement);
+        if (!outcome.valid) {
+          validateMessage = outcome.message;
+          break;
+        }
+        validateMessage = outcome.message;
+      }
+    } finally {
+      isValidating = false;
+    }
   }
 
   function handleSaveFavorite() {
@@ -204,11 +214,11 @@
         <p class="text-red-700 dark:text-red-400 font-medium text-sm">{error.code}</p>
         <p class="text-red-600 dark:text-red-300 text-sm mt-1">{error.message}</p>
       </div>
-    {:else if isMultiResult}
+    {:else if isMultiResult || (results.length === 1 && !currentResult)}
       <div class="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
         <span>⏱ {$t('console.time')}: {formatExecutionTime(executionTime)}</span>
         <span>|</span>
-        <span>{results.length} statements</span>
+        <span>{results.length} {results.length === 1 ? 'statement' : 'statements'}</span>
       </div>
       <div class="flex-1 overflow-auto p-4 flex flex-col gap-3">
         {#each results as entry, index}

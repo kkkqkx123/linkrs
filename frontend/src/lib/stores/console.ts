@@ -1,6 +1,5 @@
 import { writable } from 'svelte/store';
 import type { QueryResult, QueryError } from '$types/query';
-import { splitQueries } from '$utils/gql';
 import { queryService, type BatchStatementResult } from '$services/query';
 
 export interface QueryHistoryItem {
@@ -89,16 +88,12 @@ function createConsoleStore() {
   /**
    * Run every statement contained in the editor. State is cleared up front so
    * stale results never mix with a new run, then each statement is recorded
-   * into both the result list and the query history.
+   * into both the result list and the query history. The editor draft is left
+   * untouched so running a selection never destroys the full script.
    */
-  async function runStatements(rawScript: string, echoIntoEditor: boolean) {
+  async function runStatements(rawScript: string) {
     if (!rawScript.trim()) {
       update(s => ({ ...s, error: { code: 'EMPTY_QUERY', message: 'Query is empty' } }));
-      return;
-    }
-    const statements = splitQueries(rawScript);
-    if (statements.length === 0) {
-      update(s => ({ ...s, error: { code: 'EMPTY_QUERY', message: 'No valid queries found' } }));
       return;
     }
     update(s => ({
@@ -107,10 +102,17 @@ function createConsoleStore() {
       error: null,
       currentResult: null,
       results: [],
-      ...(echoIntoEditor ? { editorContent: rawScript } : {}),
     }));
     try {
       const response = await queryService.executeBatch(rawScript);
+      if (response.results.length === 0) {
+        update(s => ({
+          ...s,
+          isExecuting: false,
+          error: { code: 'EMPTY_QUERY', message: 'No valid queries found' },
+        }));
+        return;
+      }
       const entries = response.results.map(toEntry);
       const primary = entries.find(e => e.success) ?? entries[0] ?? null;
       update(s => ({
@@ -149,10 +151,10 @@ function createConsoleStore() {
     executeQuery: async () => {
       let state: ConsoleState = null!;
       update(s => { state = s; return s; });
-      await runStatements(state.editorContent, false);
+      await runStatements(state.editorContent);
     },
     executeQueryByText: async (query: string) => {
-      await runStatements(query, true);
+      await runStatements(query);
     },
     clearResult: () => update(s => ({ ...s, currentResult: null, results: [], executionTime: 0, error: null })),
     setActiveView: (view: 'table' | 'json' | 'graph') => update(s => ({ ...s, activeView: view })),

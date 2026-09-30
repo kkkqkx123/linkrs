@@ -33,6 +33,9 @@
   let monacoRef: typeof Monaco | null = null;
   let completionsDisposable: Monaco.IDisposable | null = null;
   let applyingExternalValue = false;
+  let currentHeight = $state(height);
+  let dragStartY = 0;
+  let dragStartHeight = 0;
 
   /**
    * Resolve what to execute for the current editor state: an explicit
@@ -93,6 +96,28 @@
     instance.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => {
       onExecute?.(resolveExecutionText(instance));
     });
+  }
+
+  function parseHeightPx(raw: string): number {
+    if (raw.endsWith('px')) return Number.parseFloat(raw) || 160;
+    if (raw.endsWith('rem')) return (Number.parseFloat(raw) || 10) * 16;
+    return 160;
+  }
+
+  function onResizeMove(event: MouseEvent) {
+    const next = Math.min(600, Math.max(80, dragStartHeight + event.clientY - dragStartY));
+    currentHeight = `${next}px`;
+  }
+
+  function onResizeEnd() {
+    window.removeEventListener('mousemove', onResizeMove);
+  }
+
+  function onResizeStart(event: MouseEvent) {
+    dragStartY = event.clientY;
+    dragStartHeight = parseHeightPx(currentHeight);
+    window.addEventListener('mousemove', onResizeMove);
+    window.addEventListener('mouseup', onResizeEnd, { once: true });
   }
 
   /**
@@ -156,10 +181,20 @@
   });
 
   onDestroy(() => {
+    window.removeEventListener('mousemove', onResizeMove);
     completionsDisposable?.dispose();
     editor?.dispose();
     editor = null;
   });
 </script>
 
-<div class="w-full border border-gray-300 dark:border-gray-600 rounded overflow-hidden" style="height: {height};" bind:this={containerEl}></div>
+<div class="w-full border border-gray-300 dark:border-gray-600 rounded overflow-hidden">
+  <div class="w-full overflow-hidden" style="height: {currentHeight};" bind:this={containerEl}></div>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="h-2 cursor-row-resize bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 flex items-center justify-center"
+    onmousedown={onResizeStart}
+  >
+    <div class="w-8 h-0.5 bg-gray-400 dark:bg-gray-500 rounded"></div>
+  </div>
+</div>

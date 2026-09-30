@@ -80,13 +80,18 @@ function toStatementResult(query: string, response: QueryEnvelope, fallbackMs: n
 
 export const queryService = {
   execute: async (params: ExecuteQueryParams): Promise<ExecuteQueryResponse> => {
+    const resolved = resolveSessionId(params.sessionId);
+    if (resolved === undefined) {
+      return {
+        success: false,
+        error: { code: 'NO_SESSION', message: 'Missing session id for query execution' },
+      };
+    }
     try {
       const startTime = Date.now();
-      // The HTTP layer attaches `X-Session-ID` from storage; the body only
-      // carries the statement text and, for stateless calls, an explicit
-      // session override.
-      const body: Record<string, unknown> = { query: params.query };
-      if (params.sessionId !== undefined) body.session_id = params.sessionId;
+      // The HTTP layer attaches `X-Session-ID` from storage for auth; the body
+      // carries the statement text plus the session id required by the wire contract.
+      const body: Record<string, unknown> = { query: params.query, session_id: resolved };
       const response = await post<QueryEnvelope>('/v1/query', body);
       const result = toStatementResult(params.query, response, Date.now() - startTime);
       return {
@@ -174,9 +179,16 @@ export const queryService = {
    * Parse and bind a statement without executing it, so the console can flag
    * syntax/semantic problems before the user commits to a run.
    */
-  validate: async (query: string): Promise<{ valid: boolean; message: string }> => {
+  validate: async (query: string, sessionId?: number): Promise<{ valid: boolean; message: string }> => {
+    const resolved = resolveSessionId(sessionId);
+    if (resolved === undefined) {
+      return { valid: false, message: 'Missing session id for validation' };
+    }
     try {
-      const response = await post<{ valid: boolean; message: string }>('/v1/query/validate', { query });
+      const response = await post<{ valid: boolean; message: string }>('/v1/query/validate', {
+        query,
+        session_id: resolved,
+      });
       return { valid: response.valid, message: response.message };
     } catch (error) {
       return {

@@ -32,7 +32,7 @@ const SORT_GROUP = {
 } as const;
 
 let languageRegistered = false;
-let baseTokenizer: Monaco.languages.IMonarchLanguage | null = null;
+let tokensDisposable: Monaco.IDisposable | null = null;
 
 /** Snapshot accessor shared by the completion engine and highlight refresh. */
 export type SchemaSnapshotProvider = () => { tags: Tag[]; edgeTypes: EdgeType[] };
@@ -131,8 +131,11 @@ export function registerCypherLanguage(monaco: typeof Monaco): void {
 
   monaco.languages.register({ id: CYPHER_LANGUAGE_ID, extensions: ['.cypher', '.cql'] });
 
-  baseTokenizer = createTokenizer({ tags: [], edgeTypes: [] });
-  monaco.languages.setMonarchTokensProvider(CYPHER_LANGUAGE_ID, baseTokenizer);
+  tokensDisposable?.dispose();
+  tokensDisposable = monaco.languages.setMonarchTokensProvider(
+    CYPHER_LANGUAGE_ID,
+    createTokenizer({ tags: [], edgeTypes: [] }),
+  );
 
   monaco.languages.setLanguageConfiguration(CYPHER_LANGUAGE_ID, {
     comments: { lineComment: '--', blockComment: ['/*', '*/'] },
@@ -158,8 +161,8 @@ export function registerCypherLanguage(monaco: typeof Monaco): void {
 export function updateSchemaHighlighting(monaco: typeof Monaco, schema: SchemaSnapshot): void {
   if (!languageRegistered) return;
   const next = createTokenizer(schema);
-  baseTokenizer = next;
-  monaco.languages.setMonarchTokensProvider(CYPHER_LANGUAGE_ID, next);
+  tokensDisposable?.dispose();
+  tokensDisposable = monaco.languages.setMonarchTokensProvider(CYPHER_LANGUAGE_ID, next);
 }
 
 /** Range of the word being typed, used as the replacement span for a suggestion. */
@@ -220,6 +223,36 @@ function buildEntityItems(monaco: typeof Monaco, schema: SchemaSnapshot, range: 
 }
 
 /**
+ * Map query variable aliases to the tag or edge type they bind.
+ * Only the common inline forms are recognized; anything else falls back
+ * to literal entity name matching in the property provider.
+ */
+function buildVariableEntityMap(text: string): Map<string, string> {
+  const mapping = new Map<string, string>();
+  const nodePattern = /\(\s*([A-Za-z_]\w*)\s*:\s*([A-Za-z_]\w*)/g;
+  let match: RegExpExecArray | null;
+  while ((match = nodePattern.exec(text)) !== null) {
+    mapping.set(match[1].toLowerCase(), match[2].toLowerCase());
+  }
+  const edgePattern = /\[\s*([A-Za-z_]\w*)\s*:\s*([A-Za-z_]\w*)/g;
+  while ((match = edgePattern.exec(text)) !== null) {
+    mapping.set(match[1].toLowerCase(), match[2].toLowerCase());
+  }
+  return mapping;
+}
+
+/** Collect distinct parameter names for one prefix from the current text. */
+function collectParamNames(text: string, prefix: string): string[] {
+  const pattern = prefix === '$' ? /\$([A-Za-z_]\w*)/g : /@([A-Za-z_]\w*)/g;
+  const names: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    if (!names.includes(match[1])) names.push(match[1]);
+  }
+  return names;
+}
+
+/**
  * Register completion providers for the Cypher console.
  *
  * Several narrow providers are used instead of one flat list so each can
@@ -265,6 +298,8 @@ export function registerCypherCompletions(
       });
       const match = before.match(/([A-Za-z_]\w*)\.\s*\w*$/);
       const owner = match?.[1]?.toLowerCase();
+      const aliasTarget = owner ? buildVariableEntityMap(model.getValue()).get(owner) : undefined;
+      const effectiveOwner = aliasTarget ?? owner;
       const suggestions: Monaco.languages.CompletionItem[] = [];
       const pushProps = (parent: string, props: { name: string; data_type?: string }[]) => {
         for (const prop of props) {
@@ -279,12 +314,40 @@ export function registerCypherCompletions(
         }
       };
       for (const tag of schema.tags) {
-        if (!owner || tag.name.toLowerCase() === owner) pushProps(tag.name, tag.properties ?? []);
+        if (!owner || tag.name.toLowerCase() === effectiveOwner) pushProps(tag.name, tag.properties ?? []);
       }
       for (const edge of schema.edgeTypes) {
-        if (!owner || edge.name.toLowerCase() === owner) pushProps(edge.name, edge.properties ?? []);
+        if (!owner || edge.name.toLowerCase() === effectiveOwner) pushProps(edge.name, edge.properties ?? []);
       }
       return { suggestions };
+    },
+  }));
+
+  // Parameters: triggered by '$' and '@', sourced from names already present.
+  disposables.push(monaco.languages.registerCompletionItemProvider(CYPHER_LANGUAGE_ID, {
+    triggerCharacters: ['$', '@'],
+    provideCompletionItems: (model, position) => {
+      const before = model.getValueInRange({
+        startLineNumber: position.lineNumber,
+        startColumn: 1,
+        endLineNumber: position.lineNumber,
+        endColumn: position.column,
+      });
+      const trigger = before.match(/([@$])([A-Za-z_]\w*)?$/);
+      if (!trigger) return { suggestions: [] };
+      const prefix = trigger[1];
+      const range = wordRange(model, position);
+      const names = collectParamNames(model.getValue(), prefix);
+      return {
+        suggestions: names.map((name) => ({
+          label: `${prefix}${name}`,
+          kind: monaco.languages.CompletionItemKind.Variable,
+          detail: prefix === '$' ? 'session variable' : 'parameter',
+          insertText: name,
+          sortText: SORT_GROUP.keyword,
+          range,
+        })),
+      };
     },
   }));
 

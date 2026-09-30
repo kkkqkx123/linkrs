@@ -1,142 +1,163 @@
-/**
- * Strip line comments (`--`, `//`, `#`) that appear outside string literals.
- * Cypher block comments (`/* ... *&#47;`) are preserved so they can still be
- * removed together with the statement they annotate.
- */
-const stripLineComments = (content: string): string => {
-  let out = '';
-  let inString = false;
+interface ScannedStatement {
+  query: string;
+  start: number;
+  end: number;
+}
+
+function isWhitespace(char: string): boolean {
+  return char === ' ' || char === '\t' || char === '\n' || char === '\r' || char === '\f';
+}
+
+function scanStatements(content: string): ScannedStatement[] {
+  const out: ScannedStatement[] = [];
+  let current = '';
+  let stmtStart: number | null = null;
+  let stmtEnd = 0;
   let stringChar = '';
   let escaped = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  const appendContent = (text: string, origIndex: number, contentChar: boolean) => {
+    if (stmtStart === null && contentChar) stmtStart = origIndex;
+    if (contentChar) stmtEnd = origIndex + text.length;
+    current += text;
+  };
+
   let i = 0;
   while (i < content.length) {
     const char = content[i];
-    const next = content[i + 1];
-    if (escaped) { out += char; escaped = false; i += 1; continue; }
-    if (char === '\\') { out += char; escaped = true; i += 1; continue; }
-    if (!inString && (char === '"' || char === "'" || char === '`')) {
-      inString = true; stringChar = char; out += char; i += 1; continue;
-    }
-    if (inString && char === stringChar) { inString = false; stringChar = ''; out += char; i += 1; continue; }
-    if (!inString && ((char === '-' && next === '-') || (char === '/' && next === '/') || char === '#')) {
-      while (i < content.length && content[i] !== '\n') i += 1;
+    const next = content[i + 1] ?? '';
+    const next2 = content[i + 2] ?? '';
+
+    if (inBlockComment) {
+      if (char === '*' && next === '/') {
+        inBlockComment = false;
+        i += 2;
+        if (current && !isWhitespace(current[current.length - 1])) current += ' ';
+        continue;
+      }
+      i += 1;
       continue;
     }
-    out += char;
+
+    if (inLineComment) {
+      if (char === '\n') {
+        inLineComment = false;
+        current += char;
+        i += 1;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (stringChar) {
+      if (escaped) {
+        appendContent(char, i, true);
+        escaped = false;
+        i += 1;
+        continue;
+      }
+      if (char === '\\') {
+        appendContent(char, i, true);
+        escaped = true;
+        i += 1;
+        continue;
+      }
+      appendContent(char, i, true);
+      if (char === stringChar) stringChar = '';
+      i += 1;
+      continue;
+    }
+
+    if (escaped) {
+      appendContent(char, i, true);
+      escaped = false;
+      i += 1;
+      continue;
+    }
+
+    if (char === '\\') {
+      if (next === '\n') {
+        i += 2;
+        continue;
+      }
+      if (next === '\r' && next2 === '\n') {
+        i += 3;
+        continue;
+      }
+      appendContent(char, i, true);
+      escaped = true;
+      i += 1;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === '`') {
+      stringChar = char;
+      appendContent(char, i, true);
+      i += 1;
+      continue;
+    }
+
+    if (char === '/' && next === '*') {
+      inBlockComment = true;
+      i += 2;
+      if (current && !isWhitespace(current[current.length - 1])) current += ' ';
+      continue;
+    }
+
+    if ((char === '-' && next === '-') || (char === '/' && next === '/') || char === '#') {
+      inLineComment = true;
+      i += char === '#' ? 1 : 2;
+      continue;
+    }
+
+    if (char === ';') {
+      const trimmed = current.trim();
+      if (trimmed && stmtStart !== null) {
+        out.push({ query: trimmed, start: stmtStart, end: stmtEnd });
+      }
+      current = '';
+      stmtStart = null;
+      stmtEnd = 0;
+      i += 1;
+      continue;
+    }
+
+    if (isWhitespace(char)) {
+      current += char;
+      i += 1;
+      continue;
+    }
+
+    appendContent(char, i, true);
     i += 1;
   }
+
+  const trimmed = current.trim();
+  if (trimmed && stmtStart !== null) {
+    out.push({ query: trimmed, start: stmtStart, end: stmtEnd });
+  }
   return out;
-};
+}
 
 export const splitQueries = (content: string): string[] => {
   if (!content || !content.trim()) return [];
-  const source = stripLineComments(content);
-  const queries: string[] = [];
-  let currentQuery = '';
-  let inString = false;
-  let stringChar = '';
-  let escaped = false;
-
-  for (let i = 0; i < source.length; i++) {
-    const char = source[i];
-    if (escaped) { currentQuery += char; escaped = false; continue; }
-    if (char === '\\') { currentQuery += char; escaped = true; continue; }
-    if (!inString && (char === '"' || char === "'" || char === '`')) {
-      inString = true; stringChar = char; currentQuery += char; continue;
-    }
-    if (inString && char === stringChar) {
-      inString = false; stringChar = ''; currentQuery += char; continue;
-    }
-    if (!inString && char === ';') {
-      const trimmed = currentQuery.trim();
-      if (trimmed) queries.push(trimmed);
-      currentQuery = '';
-      continue;
-    }
-    currentQuery += char;
-  }
-  const trimmed = currentQuery.trim();
-  if (trimmed) queries.push(trimmed);
-  return queries;
+  return scanStatements(content).map((stmt) => stmt.query);
 };
 
 export const getQueryAtCursor = (content: string, cursorPosition: number): { query: string; start: number; end: number } => {
   if (!content) return { query: '', start: 0, end: 0 };
-  const queries = splitQueries(content);
-  let currentPos = 0;
-  for (const query of queries) {
-    const queryStart = content.indexOf(query, currentPos);
-    const queryEnd = queryStart + query.length;
-    if (cursorPosition >= queryStart && cursorPosition <= queryEnd)
-      return { query, start: queryStart, end: queryEnd };
-    currentPos = queryEnd + 1;
+  const statements = scanStatements(content);
+  if (statements.length === 0) return { query: '', start: 0, end: 0 };
+  const cursor = Math.max(0, Math.min(cursorPosition, content.length));
+  for (const stmt of statements) {
+    if (cursor >= stmt.start && cursor <= stmt.end) return { ...stmt };
   }
-  if (queries.length > 0) {
-    const lastQuery = queries[queries.length - 1];
-    const lastQueryStart = content.lastIndexOf(lastQuery);
-    return { query: lastQuery, start: lastQueryStart, end: lastQueryStart + lastQuery.length };
+  for (const stmt of statements) {
+    if (stmt.start > cursor) return { ...stmt };
   }
-  return { query: '', start: 0, end: 0 };
-};
-
-export const formatQuery = (query: string): string => {
-  if (!query) return '';
-  const lines = query.split('\n');
-  const formattedLines: string[] = [];
-  let indentLevel = 0;
-  const indentSize = 2;
-  const keywords = ['MATCH', 'WHERE', 'RETURN', 'CREATE', 'DELETE', 'SET', 'REMOVE', 'WITH', 'UNWIND', 'CALL', 'YIELD', 'ORDER BY', 'LIMIT', 'SKIP', 'UNION'];
-  for (const line of lines) {
-    const trimmedLine = line.trim();
-    if (!trimmedLine) { formattedLines.push(''); continue; }
-    if (trimmedLine.startsWith('}')) indentLevel = Math.max(0, indentLevel - 1);
-    const startsWithKeyword = keywords.some(kw => trimmedLine.toUpperCase().startsWith(kw) || trimmedLine.toUpperCase().startsWith(kw + ' '));
-    let indent = ' '.repeat(indentLevel * indentSize);
-    if (startsWithKeyword && indentLevel > 0) indent = ' '.repeat(Math.max(0, (indentLevel - 1) * indentSize));
-    formattedLines.push(indent + trimmedLine);
-    if (trimmedLine.endsWith('{')) indentLevel++;
-  }
-  return formattedLines.join('\n');
-};
-
-export const toggleComment = (line: string): string => {
-  const trimmed = line.trim();
-  if (trimmed.startsWith('//')) return line.replace(/\/\/\s?/, '');
-  const leadingWhitespace = line.match(/^\s*/)?.[0] || '';
-  return leadingWhitespace + '// ' + trimmed;
-};
-
-export const validateQuery = (query: string): { valid: boolean; error?: string } => {
-  if (!query || !query.trim()) return { valid: false, error: 'Query is empty' };
-  const trimmed = query.trim();
-  const validStartKeywords = ['MATCH', 'CREATE', 'MERGE', 'DELETE', 'REMOVE', 'SET', 'RETURN', 'WITH', 'UNWIND', 'CALL', 'LOAD', 'FOREACH', 'START', 'PROFILE', 'EXPLAIN'];
-  const firstWord = trimmed.split(/\s+/)[0].toUpperCase();
-  if (!validStartKeywords.includes(firstWord)) return { valid: false, error: 'Query must start with a valid Cypher keyword' };
-  let parenCount = 0, braceCount = 0, bracketCount = 0;
-  let inString = false, stringChar = '';
-  for (const char of trimmed) {
-    if (!inString && (char === '"' || char === "'")) { inString = true; stringChar = char; continue; }
-    if (inString && char === stringChar) { inString = false; continue; }
-    if (inString) continue;
-    if (char === '(') parenCount++; if (char === ')') parenCount--;
-    if (char === '{') braceCount++; if (char === '}') braceCount--;
-    if (char === '[') bracketCount++; if (char === ']') bracketCount--;
-  }
-  if (parenCount !== 0) return { valid: false, error: 'Unbalanced parentheses' };
-  if (braceCount !== 0) return { valid: false, error: 'Unbalanced braces' };
-  if (bracketCount !== 0) return { valid: false, error: 'Unbalanced brackets' };
-  return { valid: true };
-};
-
-export const extractQueryInfo = (query: string): { type: string; entities: string[] } => {
-  const upperQuery = query.toUpperCase();
-  const entities: string[] = [];
-  let type = 'UNKNOWN';
-  if (upperQuery.includes('MATCH')) type = 'READ';
-  if (upperQuery.includes('CREATE') || upperQuery.includes('MERGE')) type = 'WRITE';
-  if (upperQuery.includes('DELETE') || upperQuery.includes('REMOVE')) type = 'DELETE';
-  if (upperQuery.includes('SET')) type = 'UPDATE';
-  const labelMatches = query.match(/:\s*([A-Za-z][A-Za-z0-9_]*)/g);
-  if (labelMatches) labelMatches.forEach(m => { const l = m.replace(/^:\s*/, ''); if (!entities.includes(l)) entities.push(l); });
-  return { type, entities };
+  const last = statements[statements.length - 1];
+  return { ...last };
 };
