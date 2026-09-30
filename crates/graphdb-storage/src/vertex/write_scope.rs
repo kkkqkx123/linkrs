@@ -34,6 +34,7 @@ use std::collections::{HashMap, HashSet};
 
 use graphdb_core::types::{LabelId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
+use graphdb_core::error::storage::StorageErrorKind;
 
 use super::id_indexer::IdKey;
 
@@ -123,7 +124,14 @@ impl WriteScope {
 
     fn ensure_capacity(&self) -> StorageResult<()> {
         if self.len() >= MAX_WRITE_SCOPE_KEYS {
-            return Err(StorageError::capacity_exceeded());
+            return Err(StorageError::new(
+                StorageErrorKind::CapacityExceeded,
+                format!(
+                    "write scope holds {} rows at the single-request limit {}: split the batch by label into smaller chunks instead of growing one request",
+                    self.len(),
+                    MAX_WRITE_SCOPE_KEYS,
+                ),
+            ));
         }
         Ok(())
     }
@@ -339,6 +347,29 @@ mod tests {
                 Vec::new()
             )
             .is_err());
+    }
+
+    #[test]
+    fn scope_capacity_error_guides_split_batching() {
+        use graphdb_core::error::storage::StorageErrorKind;
+        let mut scope = WriteScope::new(10);
+        for index in 0..MAX_WRITE_SCOPE_KEYS {
+            scope
+                .stage_insert(1, IdKey::Int(index as i64), index as u32, Vec::new())
+                .expect("within capacity");
+        }
+        let err = scope
+            .stage_insert(
+                1,
+                IdKey::Int(MAX_WRITE_SCOPE_KEYS as i64),
+                MAX_WRITE_SCOPE_KEYS as u32,
+                Vec::new(),
+            )
+            .unwrap_err();
+        assert_eq!(err.kind(), StorageErrorKind::CapacityExceeded);
+        let message = err.message().to_string();
+        assert!(message.contains(&MAX_WRITE_SCOPE_KEYS.to_string()));
+        assert!(message.contains("split"));
     }
 
     #[test]

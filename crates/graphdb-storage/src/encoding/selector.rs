@@ -78,6 +78,8 @@ struct FeedbackObservation {
 impl EncodingFeedback {
     const MAX_OBSERVATIONS: usize = 100;
     const REEVALUATE_AFTER: usize = 20;
+    const EARLY_OBSERVATIONS: usize = 3;
+    const EARLY_RATIO_MARGIN: f64 = 0.2;
 
     fn record(
         &mut self,
@@ -124,6 +126,24 @@ impl EncodingFeedback {
             .count();
         count >= Self::REEVALUATE_AFTER
     }
+
+    fn latest_ratio(
+        &self,
+        encoding_type: EncodingType,
+        family: Option<DataTypeFamily>,
+    ) -> Option<(usize, f64)> {
+        let mut count = 0usize;
+        let mut latest: Option<f64> = None;
+        for observation in self.observations.iter() {
+            if observation.encoding_type == encoding_type
+                && family.is_none_or(|f| observation.family == f)
+            {
+                count += 1;
+                latest = Some(observation.compression_ratio);
+            }
+        }
+        latest.map(|ratio| (count, ratio))
+    }
 }
 
 /// Analyzes data characteristics and selects the optimal encoding.
@@ -156,14 +176,25 @@ impl EncodingSelector {
     }
 
     pub fn should_reencode_for(&self, encoding_type: EncodingType, family: DataTypeFamily) -> bool {
-        if !self.feedback.should_reevaluate(encoding_type, Some(family)) {
-            return false;
-        }
         if let Some(avg_ratio) = self.feedback.average_ratio(encoding_type, Some(family)) {
-            avg_ratio > self.thresholds.reencode_threshold
-        } else {
-            false
+            if self.feedback.should_reevaluate(encoding_type, Some(family))
+                && avg_ratio > self.thresholds.reencode_threshold
+            {
+                return true;
+            }
         }
+        if let Some((count, latest)) =
+            self.feedback.latest_ratio(encoding_type, Some(family))
+        {
+            if count >= EncodingFeedback::EARLY_OBSERVATIONS
+                && (latest > 1.0
+                    || latest > self.thresholds.reencode_threshold
+                        + EncodingFeedback::EARLY_RATIO_MARGIN)
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// Select encoding for integer columns.
@@ -496,6 +527,32 @@ mod tests {
                 EncodingType::Dictionary,
                 DataTypeFamily::String,
                 0.95,
+            );
+        }
+        assert!(!selector.should_reencode_for(EncodingType::Dictionary, DataTypeFamily::String));
+    }
+
+    #[test]
+    fn test_early_reencode_on_expansion() {
+        let mut selector = EncodingSelector::default();
+        for _ in 0..5 {
+            selector.record_compression_result_for(
+                EncodingType::Dictionary,
+                DataTypeFamily::String,
+                1.2,
+            );
+        }
+        assert!(selector.should_reencode_for(EncodingType::Dictionary, DataTypeFamily::String));
+    }
+
+    #[test]
+    fn test_no_early_reencode_without_degradation() {
+        let mut selector = EncodingSelector::default();
+        for _ in 0..5 {
+            selector.record_compression_result_for(
+                EncodingType::Dictionary,
+                DataTypeFamily::String,
+                0.5,
             );
         }
         assert!(!selector.should_reencode_for(EncodingType::Dictionary, DataTypeFamily::String));

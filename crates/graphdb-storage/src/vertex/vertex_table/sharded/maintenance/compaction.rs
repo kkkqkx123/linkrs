@@ -56,8 +56,22 @@ impl ShardedVertexTable {
                     if frag < STABLE_ROW_ID_HOLE_WATERMARK {
                         // Shard is sufficiently dense; lazy recycling will
                         // reclaim holes without compaction.
+                        log::debug!(
+                            "compaction skips dense shard {}: live={} allocated={} hole_rate={:.3}",
+                            idx,
+                            live,
+                            allocated,
+                            frag,
+                        );
                         continue;
                     }
+                    log::debug!(
+                        "compaction remaps shard {}: live={} allocated={} hole_rate={:.3}",
+                        idx,
+                        live,
+                        allocated,
+                        frag,
+                    );
                 }
             }
             let mut table = shard.write();

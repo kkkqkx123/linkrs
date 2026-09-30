@@ -26,7 +26,10 @@ use bitvec::vec::BitVec;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::encoding::{ChunkEncodingMeta, ColumnEncoding, EncodingType};
-use crate::vertex::column::chunk_encoding::{overlay_capacity_for, UpdateOverlay};
+use crate::vertex::column::chunk_encoding::{
+    OVERLAY_RECODE_MEMORY_FLOOR, OVERLAY_RECODE_MEMORY_RATIO_DEN,
+    OVERLAY_RECODE_MEMORY_RATIO_NUM, overlay_capacity_for, UpdateOverlay,
+};
 use crate::vertex::column::chunk_residency::{next_tick, ChunkResidency};
 use crate::vertex::column::column::ColumnInner;
 use crate::vertex::column::mvcc::{RowVisibility, VersionEntry};
@@ -258,11 +261,31 @@ impl ColumnChunk {
     ///
     /// Both signals read the chunk's own overlay budget: distinct rows
     /// waiting in the overlay, or the total number of absorbed writes since
-    /// the last encode. One budget therefore scales hotness with chunk size
-    /// instead of leaving it a column-independent constant.
+    /// the last encode. A full overlay always triggers so the buffer stays
+    /// bounded; the write-count signal additionally requires the buffered
+    /// payload to carry enough bytes relative to the encoded base, so
+    /// repeated small overwrites of few rows no longer force a re-encode
+    /// while large-value pressure still does. One budget therefore scales
+    /// hotness with chunk size instead of leaving it a column-independent
+    /// constant.
     pub fn needs_recode(&self) -> bool {
         let state = self.read_state();
-        state.overlay.is_full() || state.updates_since_encode >= state.overlay.capacity() as u64
+        if state.overlay.is_full() {
+            return true;
+        }
+        if state.updates_since_encode < state.overlay.capacity() as u64 {
+            return false;
+        }
+        if !state.encoding.is_encoded() {
+            return true;
+        }
+        let overlay_bytes = state.overlay.memory_usage();
+        if overlay_bytes < OVERLAY_RECODE_MEMORY_FLOOR {
+            return false;
+        }
+        let encoded_bytes = state.encoding.memory_usage().max(1);
+        overlay_bytes.saturating_mul(OVERLAY_RECODE_MEMORY_RATIO_DEN)
+            >= encoded_bytes.saturating_mul(OVERLAY_RECODE_MEMORY_RATIO_NUM)
     }
 
     /// Refresh the cached compression metadata after re-encoding.
@@ -368,5 +391,49 @@ mod tests {
         assert_eq!(chunk.row_offset, 0);
         assert_eq!(chunk.row_count, 50);
         assert_eq!(chunk.read_state().raw.as_storage().len(), 0);
+    }
+
+    #[test]
+    fn test_recode_combines_count_with_memory() {
+        use crate::encoding::RleBoolColumn;
+        use crate::encoding::ColumnEncoding;
+        let chunk = ColumnChunk::new(0, 4096, &DataType::Bool, true);
+        let capacity = chunk.read_state().overlay.capacity();
+        assert!(capacity >= 2);
+        let mut runs = RleBoolColumn::new();
+        for i in 0..4096 {
+            runs.append(Some(&Value::Bool(i % 2 == 0))).unwrap();
+        }
+        {
+            let mut state = chunk.write_state();
+            state.encoding = ColumnEncoding::RleBool(runs);
+            state.overlay.put(7, Some(Value::Bool(true)));
+            state.updates_since_encode = capacity as u64;
+        }
+        assert!(
+            !chunk.needs_recode(),
+            "repeated tiny overwrites must stay buffered while the payload is small"
+        );
+        {
+            let mut state = chunk.write_state();
+            for row in 0..capacity as u32 {
+                state.overlay.put(100 + row, Some(Value::Bool(false)));
+            }
+        }
+        assert!(
+            chunk.needs_recode(),
+            "a full overlay must still trigger regardless of payload size"
+        );
+    }
+
+    #[test]
+    fn test_recode_raw_keeps_count_signal() {
+        let chunk = ColumnChunk::new(0, 4096, &DataType::Int, true);
+        let capacity = chunk.read_state().overlay.capacity();
+        {
+            let mut state = chunk.write_state();
+            state.updates_since_encode = capacity as u64;
+        }
+        assert!(chunk.needs_recode());
     }
 }

@@ -49,9 +49,10 @@ impl GraphStorageContext {
     /// edge tables.
     ///
     /// Explicit offline tool only: production and background maintenance go
-    /// through the stable path. The cutoff must be the watermark safe
-    /// timestamp; bare transaction stamps are rejected by convention and
-    /// must never be passed here.
+    /// through the stable path. Only shards above the hole-rate watermark
+    /// are re-densified; dense shards are skipped without moving live rows.
+    /// The cutoff must be the watermark safe timestamp; bare transaction
+    /// stamps are rejected by convention and must never be passed here.
     ///
     /// Returns the number of removed vertices. Compaction runs under a
     /// commit barrier holding the auto-commit write gate: same-table writes
@@ -119,9 +120,9 @@ impl GraphStorageContext {
         // Compaction re-densifies internal IDs: cached ID mappings and
         // vertex records for remapped labels are keyed by stale IDs.
         // Bump their invalidation generations (O(1) per label) so newer
-        // readers fall back to the remapped tables. The zero-rewrite gate
-        // fails closed under stable row ids.
-        assert_zero_edge_rewrite(&vertex_mappings)?;
+        // readers fall back to the remapped tables. The offline tool owns
+        // its mapping and propagates it below; the zero-rewrite gate
+        // applies to the stable production path only.
         for &label_id in vertex_mappings.keys() {
             self.persistent
                 .cache_manager

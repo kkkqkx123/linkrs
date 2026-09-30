@@ -1091,4 +1091,71 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_remap_only_rebuilds_over_watermark_shards() {
+        use super::routing::fxhash;
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let ts_insert = 100;
+        let ts_delete = 200;
+        let mut shard_names: Vec<Vec<String>> = vec![Vec::new(), Vec::new()];
+        let mut seq = 0usize;
+        while shard_names[0].len() < 10 || shard_names[1].len() < 5 {
+            let name = format!("sel_{}", seq);
+            seq += 1;
+            let shard = (fxhash(&name) as usize) & 1;
+            let want = if shard == 0 { 10 } else { 5 };
+            if shard_names[shard].len() < want {
+                shard_names[shard].push(name);
+            }
+        }
+        for names in &shard_names {
+            for name in names {
+                insert_with_name(&table, name, ts_insert);
+            }
+        }
+        let mut before = std::collections::HashMap::new();
+        for names in &shard_names {
+            for name in names {
+                before.insert(
+                    name.clone(),
+                    table.get_internal_id(name, ts_delete).unwrap(),
+                );
+            }
+        }
+        for name in shard_names[0][3..7].iter() {
+            let gid = table.get_internal_id(name, ts_delete).unwrap();
+            table.delete_by_internal_id(gid, ts_delete).unwrap();
+        }
+        let victim = shard_names[1][2].clone();
+        let gid = table.get_internal_id(&victim, ts_delete).unwrap();
+        table.delete_by_internal_id(gid, ts_delete).unwrap();
+        let (removed, mapping, _) = table
+            .compact_with_cutoff_collect_mapping(ts_delete)
+            .unwrap();
+        assert_eq!(
+            removed.len(),
+            4,
+            "only the over-watermark shard is reclaimed; the dense shard keeps its tombstone for lazy reuse"
+        );
+        assert!(!mapping.is_empty());
+        assert_eq!(table.get_internal_id(&victim, ts_delete), None);
+        for name in [
+            &shard_names[1][0],
+            &shard_names[1][1],
+            &shard_names[1][3],
+            &shard_names[1][4],
+        ] {
+            assert_eq!(
+                table.get_internal_id(name, ts_delete),
+                before.get(name).copied(),
+                "dense shard survivors must not move"
+            );
+        }
+        for (old, _) in &mapping {
+            let (shard, _) = table.decode_id(*old);
+            assert_eq!(shard, 0, "mapping must only contain over-watermark shard ids");
+        }
+        table.verify_invariants().unwrap();
+    }
 }

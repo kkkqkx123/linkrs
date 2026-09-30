@@ -23,6 +23,21 @@ pub fn overlay_capacity_for(chunk_rows: usize) -> usize {
     (chunk_rows / OVERLAY_CAPACITY_DIVISOR).max(1)
 }
 
+/// Minimum buffered payload for the write-count recode signal.
+///
+/// Repeated tiny overwrites of few rows accumulate counts without carrying
+/// bytes; requiring this floor keeps them in the overlay instead of forcing
+/// a re-encode per budget cycle.
+pub const OVERLAY_RECODE_MEMORY_FLOOR: usize = 512;
+
+/// Buffered-to-encoded byte ratio for the write-count recode signal.
+///
+/// The buffered payload must reach one part in twenty of the encoded base
+/// before the count signal fires, so large-value pressure still recodes
+/// promptly while small-value churn stays buffered.
+pub const OVERLAY_RECODE_MEMORY_RATIO_NUM: usize = 1;
+pub const OVERLAY_RECODE_MEMORY_RATIO_DEN: usize = 20;
+
 /// Default dictionary entry cap per chunk.
 pub const DEFAULT_DICT_MAX_ENTRIES_PER_CHUNK: usize = 65536;
 /// Default ALP exception-rate ceiling above which a chunk falls back to raw.

@@ -26,6 +26,7 @@ use parking_lot::Mutex;
 
 use graphdb_core::types::{LabelId, Timestamp, TransactionId};
 use graphdb_core::{StorageError, StorageResult, Value};
+use graphdb_core::error::storage::StorageErrorKind;
 
 use crate::vertex::{IdKey, ShardedVertexTable, WriteScope};
 
@@ -194,7 +195,14 @@ impl TxnStaging {
 
     fn ensure_capacity(&self) -> StorageResult<()> {
         if self.len() >= MAX_TXN_STAGING_KEYS {
-            return Err(StorageError::capacity_exceeded());
+            return Err(StorageError::new(
+                StorageErrorKind::CapacityExceeded,
+                format!(
+                    "transaction staging holds {} rows at the limit {}: commit or split the batch by label into smaller statements instead of growing one transaction",
+                    self.len(),
+                    MAX_TXN_STAGING_KEYS,
+                ),
+            ));
         }
         Ok(())
     }

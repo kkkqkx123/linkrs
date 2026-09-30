@@ -7,6 +7,7 @@ use graphdb_core::wal::redo::{
 };
 use graphdb_core::wal::types::WalOpType;
 use graphdb_core::{DataType, StorageError, StorageResult, Value, Vertex};
+use graphdb_core::error::storage::StorageErrorKind;
 use graphdb_transaction::wal::TransactionWalEntry;
 use graphdb_transaction::{MutationEntityKey, MutationResult};
 
@@ -1088,6 +1089,46 @@ pub(crate) fn batch_insert_vertices(
     space: &str,
     vertices: Vec<Vertex>,
 ) -> StorageResult<Vec<VertexId>> {
+    batch_insert_vertices_with_split(ctx, space, vertices, true)
+}
+
+/// Batch insert with an explicit split switch.
+///
+/// When `auto_split` is enabled, over-limit inputs loop by label in
+/// single-request chunks instead of failing: online writes share one
+/// timestamp across chunks while offline writes commit one timestamp per
+/// chunk. When disabled, over-limit inputs fail with a capacity error that
+/// names the limit and points at this split entry.
+pub(crate) fn batch_insert_vertices_with_split(
+    ctx: &GraphStorageContext,
+    space: &str,
+    vertices: Vec<Vertex>,
+    auto_split: bool,
+) -> StorageResult<Vec<VertexId>> {
+    if vertices.len() > crate::vertex::MAX_WRITE_SCOPE_KEYS && !auto_split {
+        return Err(over_limit_split_error(vertices.len()));
+    }
+    // The shared body below re-checks the limit after tag resolution so
+    // the chunked entries stay on the same path.
+    batch_insert_vertices_body(ctx, space, vertices)
+}
+
+fn over_limit_split_error(total: usize) -> StorageError {
+    StorageError::new(
+        StorageErrorKind::CapacityExceeded,
+        format!(
+            "batch holds {} rows above the single-request limit {}: enable split batching by label into smaller chunks instead of growing one request",
+            total,
+            crate::vertex::MAX_WRITE_SCOPE_KEYS,
+        ),
+    )
+}
+
+fn batch_insert_vertices_body(
+    ctx: &GraphStorageContext,
+    space: &str,
+    vertices: Vec<Vertex>,
+) -> StorageResult<Vec<VertexId>> {
     let space_info = ctx
         .schema_manager()
         .get_space(space)?
@@ -1109,10 +1150,11 @@ pub(crate) fn batch_insert_vertices(
         }
     }
 
-    // Over-limit batches auto-split instead of rejecting: the single-batch
-    // limit stays as backpressure, but the entry chunks the input. Online
-    // writes share one timestamp across chunks (transaction atomicity);
-    // offline writes commit one timestamp per chunk (prefix commits).
+    // Over-limit batches auto-split when enabled instead of rejecting:
+    // the single-batch limit stays as backpressure, but the entry chunks
+    // the input by label. Online writes share one timestamp across chunks
+    // (transaction atomicity); offline writes commit one timestamp per
+    // chunk (prefix commits).
     if vertices.len() > crate::vertex::MAX_WRITE_SCOPE_KEYS {
         if ctx.is_online_write() {
             return batch_insert_vertices_online_chunked(ctx, space, vertices);
@@ -1189,7 +1231,7 @@ pub(crate) fn batch_insert_vertices(
     // row ever escapes scope ownership.
     if staged.len() > crate::vertex::MAX_WRITE_SCOPE_KEYS {
         ctx.abort_write_timestamp(ts);
-        return Err(StorageError::capacity_exceeded());
+        return Err(over_limit_split_error(staged.len()));
     }
 
     // Phase B (stage): group staged rows by label and buffer each table's
@@ -1508,6 +1550,24 @@ mod batch_prefix_tests {
         // The per-request bound is unchanged; over-limit entries auto-split
         // instead of rejecting, so the constant must stay finite and small.
         assert_eq!(crate::vertex::MAX_WRITE_SCOPE_KEYS, 4096);
+    }
+
+    #[test]
+    fn over_limit_error_guides_split_batching() {
+        let err = over_limit_split_error(crate::vertex::MAX_WRITE_SCOPE_KEYS + 1);
+        assert_eq!(
+            err.kind(),
+            graphdb_core::error::storage::StorageErrorKind::CapacityExceeded
+        );
+        let message = err.message().to_string();
+        assert!(
+            message.contains(&crate::vertex::MAX_WRITE_SCOPE_KEYS.to_string()),
+            "capacity error must name the limit: {message}"
+        );
+        assert!(
+            message.contains("split"),
+            "capacity error must guide split batching: {message}"
+        );
     }
 }
 
