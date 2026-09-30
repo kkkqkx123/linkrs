@@ -15,6 +15,7 @@ use super::manager::{IdManager, ID_STRIPE_COUNT};
 pub struct IdIndexMemoryBreakdown {
     pub slot_count: usize,
     pub live_count: usize,
+    pub hole_count: usize,
     pub free_depth: usize,
     pub delta_entries: usize,
     pub delta_heap_bytes: usize,
@@ -56,9 +57,12 @@ pub(super) fn memory_breakdown(manager: &IdManager) -> IdIndexMemoryBreakdown {
     let set_bytes = core.live_ids.len() * (std::mem::size_of::<u32>() + 32);
     let free_bytes = core.free_ids.capacity() * std::mem::size_of::<u32>()
         + core.free_set.capacity() * (std::mem::size_of::<u32>() + 8);
+    let slot_count = core.keys.len();
+    let hole_count = slot_count.saturating_sub(live);
     IdIndexMemoryBreakdown {
-        slot_count: core.keys.len(),
+        slot_count,
         live_count: live,
+        hole_count,
         free_depth: core.free_set.len(),
         delta_entries: core.delta_log.len(),
         delta_heap_bytes,

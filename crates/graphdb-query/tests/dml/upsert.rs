@@ -279,10 +279,7 @@ fn test_merge_on_match_updates_existing_vertex() {
     scenario.assert_vertex_props(
         1,
         "Person",
-        HashMap::from([
-            ("name", Value::string("Alice")),
-            ("age", Value::Int(30)),
-        ]),
+        HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(30))]),
     );
 }
 
@@ -315,9 +312,7 @@ fn test_merge_both_branches_match_wins() {
         .exec_ddl("CREATE TAG Person(id BIGINT, name STRING, age INT)")
         .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 25)")
         .assert_success()
-        .exec_dml(
-            "MERGE (v:Person {name: 'Alice'}) ON CREATE SET v.age = 1 ON MATCH SET v.age = 2",
-        )
+        .exec_dml("MERGE (v:Person {name: 'Alice'}) ON CREATE SET v.age = 1 ON MATCH SET v.age = 2")
         .assert_success();
     assert_last_merged(&scenario, 1);
     let scenario = scenario
@@ -334,9 +329,7 @@ fn test_merge_both_branches_create_applies_on_create() {
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl("CREATE TAG Person(id BIGINT, name STRING, age INT)")
-        .exec_dml(
-            "MERGE (v:Person {name: 'Zed'}) ON CREATE SET v.age = 1 ON MATCH SET v.age = 2",
-        )
+        .exec_dml("MERGE (v:Person {name: 'Zed'}) ON CREATE SET v.age = 1 ON MATCH SET v.age = 2")
         .assert_success();
     assert_last_merged(&scenario, 1);
     let scenario = scenario
@@ -414,10 +407,7 @@ fn test_merge_on_match_set_expression_sees_existing_properties() {
     scenario.assert_vertex_props(
         1,
         "Person",
-        HashMap::from([
-            ("name", Value::string("Alicia")),
-            ("age", Value::Int(30)),
-        ]),
+        HashMap::from([("name", Value::string("Alicia")), ("age", Value::Int(30))]),
     );
 }
 

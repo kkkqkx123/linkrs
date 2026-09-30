@@ -481,11 +481,34 @@ impl VertexTable {
             .collect()
     }
 
+    /// Checkpoint-epoch floor below which attribute history is not retained.
+    pub fn history_floor(&self) -> Timestamp {
+        self.history_floor
+    }
+
+    fn check_history_floor(&self, internal_id: u32, ts: Timestamp) -> StorageResult<()> {
+        let floor = self.history_floor;
+        if ts < floor {
+            let created = self
+                .timestamps
+                .read()
+                .get_start_ts(internal_id)
+                .unwrap_or(0);
+            if created <= ts {
+                return Err(StorageError::deserialize_error(format!(
+                    "vertex row {} history at {} before epoch floor {} is not retained; version chains do not survive checkpoints",
+                    internal_id, ts, floor
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Strict fenced batch read with explicit decode errors.
     ///
     /// Corrupt payloads fail instead of reading as missing. Attribute time travel ends at
     /// the last load: version chains do not survive checkpoints, so a
-    /// query below [`Self::history_floor`] for a row created at or below
+    /// query below the history floor for a row created at or below
     /// the query timestamp may need dropped before-images and fails
     /// instead of returning the current value. Rows created after the
     /// query timestamp still read as missing.
@@ -498,24 +521,14 @@ impl VertexTable {
         if !self.is_open.load(Ordering::Acquire) {
             return Ok(internal_ids.iter().map(|_| None).collect());
         }
-        let floor = self.history_floor;
         let mut positions: Vec<(usize, u32)> = Vec::with_capacity(internal_ids.len());
         for (pos, &id) in internal_ids.iter().enumerate() {
             if self.is_row_live_at(id, ts) {
                 positions.push((pos, id));
             }
         }
-        if ts < floor {
-            let stamps = self.timestamps.read();
-            for &(_, id) in &positions {
-                let created = stamps.get_start_ts(id).unwrap_or(0);
-                if created <= ts {
-                    return Err(StorageError::deserialize_error(format!(
-                        "vertex row {} history before epoch floor {} is not retained",
-                        id, floor
-                    )));
-                }
-            }
+        for &(_, id) in &positions {
+            self.check_history_floor(id, ts)?;
         }
 
         let mut out: Vec<Option<VertexRecord>> = internal_ids.iter().map(|_| None).collect();
@@ -622,6 +635,73 @@ impl VertexTable {
             internal_id,
             properties,
         })
+    }
+
+    /// Strict single-row projection with explicit history and decode errors.
+    ///
+    /// Non-strict reads return missing below the history floor; this entry
+    /// fails instead so callers can distinguish dropped history from a row
+    /// created after the query timestamp. Row liveness stays with the caller
+    /// through the single gate; never-written windows yield `Ok(None)` and
+    /// corrupt payloads yield `Err` with the column and row.
+    pub fn try_get_projected_by_internal_id(
+        &self,
+        internal_id: u32,
+        ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> StorageResult<Option<VertexRecord>> {
+        if !self.is_open.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        if !self.is_row_live_at(internal_id, ts) {
+            return Ok(None);
+        }
+        self.check_history_floor(internal_id, ts)?;
+        let names: Vec<String> = match projection {
+            Some(names) => names.to_vec(),
+            None => self
+                .schema
+                .properties
+                .iter()
+                .map(|prop| prop.name.clone())
+                .collect(),
+        };
+        let row_idx = internal_id as usize;
+        let props = self
+            .columns
+            .try_get_projected_batch_at_ts(&[row_idx], &names, ts)
+            .map_err(|e| {
+                StorageError::deserialize_error(format!(
+                    "vertex row {} decode failed: {}",
+                    internal_id, e
+                ))
+            })?;
+        let Some(prop_row) = props.into_iter().next() else {
+            return Ok(None);
+        };
+        let key = match self.id_indexer.get_key(internal_id) {
+            Some(key) => key,
+            None => return Ok(None),
+        };
+        let vid = match key {
+            IdKey::Int(i) => match VertexId::try_from_int64(i).ok() {
+                Some(vid) => vid,
+                None => return Ok(None),
+            },
+            IdKey::Text(s) => match VertexId::try_from_string(&s).ok() {
+                Some(vid) => vid,
+                None => return Ok(None),
+            },
+        };
+        let properties: Vec<(String, Value)> = prop_row
+            .into_iter()
+            .filter_map(|(name, opt_val)| opt_val.map(|v| (name, v)))
+            .collect();
+        Ok(Some(VertexRecord {
+            vid,
+            internal_id,
+            properties,
+        }))
     }
 
     /// Fenced point read merging the projected decode with the per-column

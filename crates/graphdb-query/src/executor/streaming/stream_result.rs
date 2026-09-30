@@ -184,11 +184,9 @@ impl StreamingQueryResult {
                 }
             }
             ExecutionResult::ShowConfigs { module } => {
-                let row = vec![
-                    module
-                        .map(graphdb_core::Value::string)
-                        .unwrap_or(graphdb_core::Value::Null(graphdb_core::NullType::Null)),
-                ];
+                let row = vec![module
+                    .map(graphdb_core::Value::string)
+                    .unwrap_or(graphdb_core::Value::Null(graphdb_core::NullType::Null))];
                 let col_names = vec!["module".to_string()];
                 let runtime = Arc::new(ExecutionRuntime::default_budget());
                 Self {

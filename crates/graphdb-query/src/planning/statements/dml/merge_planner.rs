@@ -497,11 +497,8 @@ impl Planner for MergePlanner {
                 if !has_on_match && !has_on_create {
                     let arg_node = ArgumentNode::new(next_node_id(), "merge_args");
                     let arg_node_enum = PlanNodeEnum::Argument(arg_node);
-                    let (logical_root, _) = self.build_node_insert_parts(
-                        vertex,
-                        space_name.clone(),
-                        &expr_ctx,
-                    )?;
+                    let (logical_root, _) =
+                        self.build_node_insert_parts(vertex, space_name.clone(), &expr_ctx)?;
                     let mut sub_plan = SubPlan::from_logical_root(logical_root);
                     sub_plan.set_tail(arg_node_enum);
                     return Ok(sub_plan);
@@ -536,11 +533,8 @@ impl Planner for MergePlanner {
                 }
 
                 let mut current_node = {
-                    let (insert, _) = self.build_node_insert_parts(
-                        vertex,
-                        space_name.clone(),
-                        &expr_ctx,
-                    )?;
+                    let (insert, _) =
+                        self.build_node_insert_parts(vertex, space_name.clone(), &expr_ctx)?;
                     insert
                 };
                 if has_on_create {

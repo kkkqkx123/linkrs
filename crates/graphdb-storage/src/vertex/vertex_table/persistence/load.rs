@@ -91,9 +91,22 @@ impl VertexTable {
         self.load_columns(&columns_path)?;
         // Restore persisted eviction state from mmap sidecars. Derived
         // cache only: failures keep chunks resident without failing load.
-        // Discard counts are observable via the warn above; the manifest
+        // Corrupt and mismatched sidecars count separately; the manifest
         // pin (sharded layer) already pruned tampered sidecars.
-        let _ = self.columns.load_evict_snapshots(path);
+        let snapshots = self.columns.load_evict_snapshots(path);
+        if snapshots.corrupt > 0 || snapshots.mismatched > 0 {
+            log::warn!(
+                "vertex shard eviction snapshots partial: restored={} corrupt={} mismatched={}",
+                snapshots.restored,
+                snapshots.corrupt,
+                snapshots.mismatched
+            );
+        } else if snapshots.restored > 0 {
+            log::debug!(
+                "vertex shard eviction snapshots restored={}",
+                snapshots.restored
+            );
+        }
 
         let timestamps_path = path.join("timestamps.bin");
         self.load_timestamps(&timestamps_path)?;

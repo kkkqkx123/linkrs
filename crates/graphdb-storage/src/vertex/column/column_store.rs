@@ -13,6 +13,15 @@ type ProjectedRow = Vec<(String, Option<Value>)>;
 /// Projected rows in request order: one entry per requested row.
 type ProjectedRowBatch = Vec<ProjectedRow>;
 
+/// Eviction sidecar load result with corrupt and mismatch counted separately.
+/// Missing files are normal and absent from all counters.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SnapshotLoadOutcome {
+    pub restored: usize,
+    pub corrupt: usize,
+    pub mismatched: usize,
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers (used by ColumnStore and Column)
 // ---------------------------------------------------------------------------
@@ -573,6 +582,16 @@ impl ColumnStore {
         }
     }
 
+    /// Buffered overwrite entries across all columns awaiting re-encode.
+    pub fn overlay_entry_count(&self) -> usize {
+        let columns = self.columns.read();
+        let mut total = 0usize;
+        for col in columns.iter() {
+            total += col.overlay_entry_count();
+        }
+        total
+    }
+
     /// Garbage-collect version chains across all columns, returning the total
     /// number of before-images removed.
     pub fn gc_versions(&self, min_active_snapshot_ts: Timestamp) -> usize {
@@ -867,17 +886,38 @@ impl ColumnStore {
         Ok(())
     }
 
+    /// Derived sidecar health without mapping payloads: file count and bytes
+    /// for checkpoint directories. Missing files count as zero; corrupt files
+    /// still count here and are distinguished at load time.
+    pub fn snapshot_sidecar_stats(dir: &std::path::Path) -> (usize, u64) {
+        let mut files = 0usize;
+        let mut bytes = 0u64;
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return (0, 0);
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".snapshot") {
+                continue;
+            }
+            files += 1;
+            if let Ok(meta) = entry.metadata() {
+                bytes += meta.len();
+            }
+        }
+        (files, bytes)
+    }
+
     /// Re-evict chunks persisted by [`Self::flush_evict_snapshots`] from
-    /// memory-mapped sidecars. A missing or corrupt sidecar only warns and
-    /// keeps the affected chunks resident; the open never fails over a
-    /// derived cache. Returns `(restored_chunks, discarded_sidecars)` so the
-    /// table load can surface discardable-cache drops as observable state.
-    pub fn load_evict_snapshots(&self, dir: &std::path::Path) -> (usize, usize) {
+    /// memory-mapped sidecars. A missing sidecar is normal and stays silent;
+    /// a corrupt sidecar and a window mismatch keep chunks resident but count
+    /// separately so operators can tell cache loss from checkpoint drift.
+    /// The open never fails over a derived cache.
+    pub fn load_evict_snapshots(&self, dir: &std::path::Path) -> SnapshotLoadOutcome {
         use super::chunk_residency::open_snapshot_sidecar;
 
         let columns = self.columns.read();
-        let mut restored = 0usize;
-        let mut discarded = 0usize;
+        let mut outcome = SnapshotLoadOutcome::default();
         for col in columns.iter() {
             let path = dir.join(format!("{}.snapshot", col.name));
             if !path.exists() {
@@ -892,13 +932,13 @@ impl ColumnStore {
                         path.display(),
                         e
                     );
-                    discarded += 1;
+                    outcome.corrupt += 1;
                     continue;
                 }
             };
             for record in mapped.chunks {
                 if col.restore_mapped_chunk(record, &mapped.map) {
-                    restored += 1;
+                    outcome.restored += 1;
                 } else {
                     // Window mismatch against the checkpoint pages: the
                     // sidecar names rows the column no longer holds. Keep
@@ -908,19 +948,20 @@ impl ColumnStore {
                         col.name,
                         path.display(),
                     );
-                    discarded += 1;
+                    outcome.mismatched += 1;
                 }
             }
         }
-        if discarded > 0 {
+        if outcome.corrupt > 0 || outcome.mismatched > 0 {
             log::warn!(
-                "snapshot sidecar discards: restored={} discarded={} dir={}",
-                restored,
-                discarded,
+                "snapshot sidecar discards: restored={} corrupt={} mismatched={} dir={}",
+                outcome.restored,
+                outcome.corrupt,
+                outcome.mismatched,
                 dir.display(),
             );
         }
-        (restored, discarded)
+        outcome
     }
 
     /// Quota-segmented eviction across columns for background tasks.

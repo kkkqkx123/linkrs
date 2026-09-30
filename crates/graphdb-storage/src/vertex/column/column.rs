@@ -2219,6 +2219,16 @@ impl Column {
         }
     }
 
+    /// Buffered overwrite entries in every chunk of this column.
+    pub fn overlay_entry_count(&self) -> usize {
+        let chunks = self.chunks.read();
+        let mut total = 0usize;
+        for chunk in chunks.iter() {
+            total += chunk.read_state().overlay.len();
+        }
+        total
+    }
+
     /// Chunk indexes whose overlay load makes them recode candidates.
     pub fn pending_recode_chunks(&self) -> Vec<usize> {
         let chunks = self.chunks.read();

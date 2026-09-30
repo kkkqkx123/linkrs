@@ -172,8 +172,8 @@ impl CsrWithProperties {
                 .unwrap_or(0);
             if created <= query_ts {
                 return Err(StorageError::deserialize_error(format!(
-                    "edge {:?} history before epoch floor {} is not retained",
-                    edge_id, self.history_floor
+                    "edge {:?} history at {} before epoch floor {} is not retained; version chains do not survive checkpoints",
+                    edge_id, query_ts, self.history_floor
                 )));
             }
         }

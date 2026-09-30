@@ -197,12 +197,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                         &branch_ctx,
                     )
                     .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
-                    self.execute_merge_branch(
-                        root,
-                        &query_context,
-                        &space_name,
-                        scope,
-                    )?;
+                    self.execute_merge_branch(root, &query_context, &space_name, scope)?;
                     1
                 }
             }
@@ -211,12 +206,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 let (insert_root, vid_expr) = planner
                     .build_node_insert_parts(&vertex, space_name.clone(), &branch_ctx)
                     .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
-                self.execute_merge_branch(
-                    insert_root,
-                    &query_context,
-                    &space_name,
-                    scope.clone(),
-                )?;
+                self.execute_merge_branch(insert_root, &query_context, &space_name, scope.clone())?;
                 if !merge.on_create.is_empty() {
                     let vid = eval_merge_vid(&vid_expr, &parameters, &session_variables)?;
                     let update_ctx = Arc::new(ExpressionAnalysisContext::new());
@@ -273,9 +263,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             scope,
         )?;
         match result {
-            ExecutionResult::DataSet { .. }
-            | ExecutionResult::Empty
-            | ExecutionResult::Success => Ok(()),
+            ExecutionResult::DataSet { .. } | ExecutionResult::Empty | ExecutionResult::Success => {
+                Ok(())
+            }
             ExecutionResult::Error(message) => Err(DBError::from(QueryError::execution(message))),
             ExecutionResult::SpaceSwitched(_)
             | ExecutionResult::ConfigUpdate { .. }

@@ -1129,6 +1129,59 @@ fn test_partial_compact_preserves_unmoved_rows() {
 }
 
 #[test]
+fn test_history_floor_error_carries_floor_and_query_ts() {
+    use tempfile::TempDir;
+    let schema = create_test_schema();
+    let mut table = new_table(0, "person", schema.clone());
+    table
+        .insert("v0", &[("name".to_string(), Value::string("Alice"))], 50)
+        .unwrap();
+    table
+        .insert("v1", &[("name".to_string(), Value::string("Bob"))], 100)
+        .unwrap();
+    table
+        .update_property(0, "name", &Value::string("Alice2"), 200)
+        .unwrap();
+    let tmp = TempDir::new().unwrap();
+    let shard = tmp.path().join("shard");
+    table
+        .flush(
+            &shard,
+            crate::compression::CompressionType::Zstd { level: 3 },
+        )
+        .unwrap();
+    let mut reloaded = new_table(0, "person", schema);
+    reloaded.load(&shard).unwrap();
+    let floor = reloaded.history_floor();
+    assert_eq!(floor, 100);
+    // Row v0 was born at 50, so its state at 75 predates the surviving
+    // checkpoint epoch and must fail instead of returning the new value.
+    let err = reloaded
+        .try_get_projected_batch(&[0], 75, None)
+        .expect_err("pre-floor history must fail");
+    let message = err.to_string();
+    assert!(message.contains(&floor.to_string()));
+    assert!(message.contains("75"));
+    let single_err = reloaded
+        .try_get_projected_by_internal_id(0, 75, None)
+        .expect_err("single strict read must fail the same way");
+    assert!(single_err.to_string().contains(&floor.to_string()));
+    let current = reloaded
+        .try_get_projected_by_internal_id(0, 250, None)
+        .expect("post-floor read serves");
+    assert!(current.is_some());
+}
+
+#[test]
+fn test_overlay_and_snapshot_counters_stay_consistent() {
+    let schema = create_test_schema();
+    let table = new_table(0, "person", schema);
+    assert_eq!(table.columns.overlay_entry_count(), 0);
+    let stats = table.columns.version_chain_stats();
+    assert_eq!(stats.total_entries, 0);
+}
+
+#[test]
 fn test_compact_preserves_moved_row_history() {
     // A row that moves during compaction must keep its before-image chain:
     // historical snapshot reads have to see pre-update values afterwards.

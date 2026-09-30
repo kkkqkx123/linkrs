@@ -995,8 +995,7 @@ fn test_update_configs_with_module_and_expression() {
         Arc::new(OptimizerEngine::default()),
     );
 
-    let result =
-        pipeline_manager.execute_query("UPDATE CONFIGS database max_connections = 50 * 2");
+    let result = pipeline_manager.execute_query("UPDATE CONFIGS database max_connections = 50 * 2");
     match result {
         Ok(graphdb_query::executor::base::ExecutionResult::ConfigUpdate {
             module,

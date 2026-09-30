@@ -680,6 +680,54 @@ impl ShardedVertexTable {
         }
         keys
     }
+
+    /// One-pass storage health combining index holes, overwrite buffers,
+    /// version chains and residency so live, allocated, holes, overlay and
+    /// version counts can be compared in a single snapshot.
+    ///
+    /// Shards are read without a global lock, so the fields may come from
+    /// different instants under concurrent writes. Use the result for sizing
+    /// and maintenance signals, never as a strongly consistent census.
+    pub fn storage_snapshot(&self, ts: Timestamp) -> VertexStorageSnapshot {
+        let mut snapshot = VertexStorageSnapshot::default();
+        for shard in &self.shards {
+            let table = shard.read();
+            let (live, allocated) = table.id_hole_stats(ts);
+            snapshot.live += live;
+            snapshot.allocated += allocated;
+            snapshot.pk_reuses = snapshot
+                .pk_reuses
+                .saturating_add(table.id_indexer.reuse_count());
+            snapshot.pk_free_depth += table.id_indexer.free_depth();
+            snapshot.pk_memory_bytes += table.id_indexer.memory_breakdown().total_bytes;
+            let versions = table.columns.version_chain_stats();
+            snapshot.version_entries += versions.total_entries;
+            snapshot.version_memory_bytes += versions.memory_bytes;
+            snapshot.overlay_entries += table.columns.overlay_entry_count();
+            let ledger = table.columns.buffer_ledger();
+            snapshot.resident_chunks += ledger.resident_chunks;
+            snapshot.evicted_chunks += ledger.evicted_chunks;
+        }
+        snapshot.holes = snapshot.allocated.saturating_sub(snapshot.live);
+        snapshot
+    }
+}
+
+/// Combined index, overwrite-buffer, version-chain and residency counters
+/// for one vertex label. All counters are approximate cross-shard sums.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VertexStorageSnapshot {
+    pub live: usize,
+    pub allocated: usize,
+    pub holes: usize,
+    pub pk_reuses: u64,
+    pub pk_free_depth: usize,
+    pub pk_memory_bytes: usize,
+    pub version_entries: usize,
+    pub version_memory_bytes: usize,
+    pub overlay_entries: usize,
+    pub resident_chunks: usize,
+    pub evicted_chunks: usize,
 }
 
 /// Pre-sized all-null column of the declared type for sharded merges, so

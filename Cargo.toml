@@ -72,7 +72,7 @@ rand = "0.8.5"
 
 # compression & encoding
 crc32fast = "1.5"
-zstd = "0.13"
+zstd = "0.14"
 postcard = { version = "1.1", features = ["use-std"] }
 criterion = { version = "0.5", features = ["async_tokio"] }
 bitvec = "1.0"

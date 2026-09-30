@@ -10,6 +10,7 @@ pub(crate) mod routing;
 mod schema;
 pub(crate) mod write;
 
+pub use read::VertexStorageSnapshot;
 pub(crate) use write::CommitApplied;
 
 pub struct ShardedVertexTable {
@@ -1006,6 +1007,21 @@ mod tests {
             assert_eq!(old_record.properties, new_record.properties);
         }
         assert!(table.reshard_to(2).is_err());
+    }
+
+    #[test]
+    fn test_storage_snapshot_combines_holes_and_buffers() {
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        for i in 0..6 {
+            insert_with_name(&table, &format!("snap_{}", i), 100);
+        }
+        let gid = table.get_internal_id("snap_0", 200).unwrap();
+        table.delete_by_internal_id(gid, 200).unwrap();
+        let snapshot = table.storage_snapshot(250);
+        assert_eq!(snapshot.live, 5);
+        assert_eq!(snapshot.allocated, 6);
+        assert_eq!(snapshot.holes, 1);
+        assert_eq!(snapshot.pk_free_depth, 0);
     }
 
     #[test]

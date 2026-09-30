@@ -599,6 +599,45 @@ fn test_anchor_threshold_scales_with_live_size() {
 }
 
 #[test]
+fn test_stripe_index_uses_unified_hash() {
+    use super::manager::{stripe_index, ID_STRIPE_COUNT};
+    use std::collections::HashSet;
+    for i in 0..32 {
+        let stripe = stripe_index(&IdKey::Int(i));
+        assert!(stripe < ID_STRIPE_COUNT);
+        assert_eq!(stripe, stripe_index(&IdKey::Int(i)));
+    }
+    for key in ["v0", "v1", "vertex-prefix-a", "vertex-prefix-b"] {
+        let stripe = stripe_index(&IdKey::Text(key.to_string()));
+        assert!(stripe < ID_STRIPE_COUNT);
+    }
+    let mut seen = HashSet::new();
+    for i in 0..64 {
+        seen.insert(stripe_index(&IdKey::Int(i)));
+    }
+    assert!(seen.len() > 1);
+    let mut text_seen = HashSet::new();
+    for i in 0..64 {
+        text_seen.insert(stripe_index(&IdKey::Text(format!("vertex-{i:04}"))));
+    }
+    assert!(text_seen.len() > 1);
+}
+
+#[test]
+fn test_memory_breakdown_reports_hole_count() {
+    let indexer = IdIndexer::new();
+    for i in 0..4 {
+        indexer.insert(IdKey::Int(i)).unwrap();
+    }
+    indexer.remove(&IdKey::Int(1));
+    let breakdown = indexer.memory_breakdown();
+    assert_eq!(breakdown.slot_count, 4);
+    assert_eq!(breakdown.live_count, 3);
+    assert_eq!(breakdown.hole_count, 1);
+    assert_eq!(breakdown.free_depth, 1);
+}
+
+#[test]
 fn test_try_reclaim_cancels_a_release() {
     let indexer = IdIndexer::new();
     let reserved = indexer.reserve_next().unwrap();

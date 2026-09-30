@@ -19,11 +19,36 @@ use super::lookup::PkLookup;
 /// increasing index order, then the shared core, never the reverse.
 pub const ID_STRIPE_COUNT: usize = 16;
 
+fn finalize_stripe_hash(mut hash: u64) -> u64 {
+    hash = hash.wrapping_add(0x9e3779b97f4a7c15);
+    hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d049bb133111eb);
+    hash ^ (hash >> 31)
+}
+
+fn hash_text_for_stripe(text: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in text.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    finalize_stripe_hash(hash)
+}
+
+fn hash_int_for_stripe(value: i64) -> u64 {
+    finalize_stripe_hash(value as u64)
+}
+
+/// Stripe for one primary-key probe using the same fold plus avalanche
+/// finalizer as external-key shard routing, so both layers spread
+/// prefix-similar strings and sequential integers the same way.
+/// Stripes are memory-only shards and never persist, so no migration applies.
 pub fn stripe_index(key: &IdKey) -> usize {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    key.hash(&mut hasher);
-    (hasher.finish() as usize) % ID_STRIPE_COUNT
+    let hash = match key {
+        IdKey::Int(value) => hash_int_for_stripe(*value),
+        IdKey::Text(text) => hash_text_for_stripe(text),
+    };
+    (hash as usize) % ID_STRIPE_COUNT
 }
 
 /// One committed index mutation since the last baseline flush.

@@ -89,11 +89,9 @@ pub async fn execute<
                 config_path.as_deref(),
             ) {
                 Ok(resolved) => Ok::<_, HttpError>(query_result_to_response(resolved)),
-                Err(e) => Ok::<_, HttpError>(QueryResponse::error(
-                    "CONFIG_ERROR".to_string(),
-                    e,
-                    None,
-                )),
+                Err(e) => {
+                    Ok::<_, HttpError>(QueryResponse::error("CONFIG_ERROR".to_string(), e, None))
+                }
             }
         }
         Err(e) => Ok::<_, HttpError>(QueryResponse::error(

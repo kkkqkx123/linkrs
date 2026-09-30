@@ -711,9 +711,8 @@ pub(crate) fn resolve_show_configs(
     };
     let mut rows = Vec::new();
     for section in sections {
-        let keys = section_keys(section).ok_or_else(|| {
-            format!("unknown configuration module '{section}'")
-        })?;
+        let keys = section_keys(section)
+            .ok_or_else(|| format!("unknown configuration module '{section}'"))?;
         for key in keys {
             rows.push(vec![
                 graphdb_core::Value::string(section),
@@ -787,13 +786,7 @@ pub(crate) fn resolve_query_config_intent(
             name,
             value,
         } => graphdb_query::executor::base::ExecutionResult::DataSet {
-            data: apply_config_update_intent(
-                store,
-                config_path,
-                module.as_deref(),
-                &name,
-                &value,
-            )?,
+            data: apply_config_update_intent(store, config_path, module.as_deref(), &name, &value)?,
         },
         graphdb_query::executor::base::ExecutionResult::ShowConfigs { module } => {
             let config = store.read();
@@ -850,7 +843,8 @@ mod tests {
             ]
         );
         assert_eq!(
-            store.read().common.database.max_connections, 512,
+            store.read().common.database.max_connections,
+            512,
             "live config should reflect the applied intent"
         );
         // Unqualified keys resolve when exactly one section owns them.
@@ -908,7 +902,8 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("invalid value"), "unexpected error: {error}");
         assert_eq!(
-            store.read().common.database.max_connections, before,
+            store.read().common.database.max_connections,
+            before,
             "failed update must not mutate live config"
         );
     }
@@ -931,9 +926,12 @@ mod tests {
             .rows
             .iter()
             .find(|row| {
-                row.first().map(|v| v == &graphdb_core::Value::string("database"))
+                row.first()
+                    .map(|v| v == &graphdb_core::Value::string("database"))
                     .unwrap_or(false)
-                    && row.get(1).map(|v| v == &graphdb_core::Value::string("max_connections"))
+                    && row
+                        .get(1)
+                        .map(|v| v == &graphdb_core::Value::string("max_connections"))
                         .unwrap_or(false)
             })
             .expect("database.max_connections row should be listed");

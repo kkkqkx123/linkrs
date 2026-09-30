@@ -611,9 +611,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 let result = self.execute_conditional_merge(request)?;
                 return Ok(match sink {
                     ResultSink::Materialize => PreparedOutcome::Materialized(result),
-                    ResultSink::Stream => PreparedOutcome::Stream(
-                        StreamingQueryResult::from_execution_result(result),
-                    ),
+                    ResultSink::Stream => {
+                        PreparedOutcome::Stream(StreamingQueryResult::from_execution_result(result))
+                    }
                     ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
                 });
             }
@@ -626,9 +626,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             let result = Self::prepare_config_update_intent(request, update)?;
             return Ok(match sink {
                 ResultSink::Materialize => PreparedOutcome::Materialized(result),
-                ResultSink::Stream => PreparedOutcome::Stream(
-                    StreamingQueryResult::from_execution_result(result),
-                ),
+                ResultSink::Stream => {
+                    PreparedOutcome::Stream(StreamingQueryResult::from_execution_result(result))
+                }
                 ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
             });
         }
@@ -638,9 +638,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             };
             return Ok(match sink {
                 ResultSink::Materialize => PreparedOutcome::Materialized(result),
-                ResultSink::Stream => PreparedOutcome::Stream(
-                    StreamingQueryResult::from_execution_result(result),
-                ),
+                ResultSink::Stream => {
+                    PreparedOutcome::Stream(StreamingQueryResult::from_execution_result(result))
+                }
                 ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
             });
         }

@@ -1443,7 +1443,12 @@ mod tests {
         let col = store.get_column("v").expect("column exists");
         col.ensure_all_resident().unwrap();
         assert!(col.chunks.read()[0].read_state().residency.is_resident());
-        store.load_evict_snapshots(&dir);
+        let outcome = store.load_evict_snapshots(&dir);
+        assert_eq!(outcome.restored, 1);
+        assert_eq!(outcome.corrupt, 0);
+        let (files, bytes) = ColumnStore::snapshot_sidecar_stats(&dir);
+        assert_eq!(files, 1);
+        assert!(bytes > 0);
         let col = store.get_column("v").expect("column exists");
         assert!(col.chunks.read()[0].read_state().residency.is_evicted());
         assert_eq!(col.get(0), Some(Value::Int(0)));
@@ -1473,7 +1478,9 @@ mod tests {
 
         let col = store.get_column("v").expect("column exists");
         col.ensure_all_resident().unwrap();
-        store.load_evict_snapshots(&dir);
+        let outcome = store.load_evict_snapshots(&dir);
+        assert_eq!(outcome.corrupt, 1);
+        assert_eq!(outcome.restored, 0);
         let col = store.get_column("v").expect("column exists");
         assert!(col.chunks.read()[0].read_state().residency.is_resident());
         assert_eq!(col.get(0), Some(Value::Int(0)));
