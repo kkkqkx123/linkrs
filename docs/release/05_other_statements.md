@@ -248,6 +248,12 @@ UPDATE CONFIGS STORAGE cache_size = 1024
 UPDATE CONFIGS wal_ttl = 86400
 ```
 
+#### 与参考写法的对应关系
+- 参考项目的查询内逐项配置调用对应本项目的 `UPDATE CONFIGS`，
+  不再单独提供查询内配置形态。
+- 参考项目的表函数调用对应本项目的 `CALL <func>(...) [YIELD ...]`，
+  与配置设置职责分离。
+
 ---
 
 ## 8. 变量赋值语句

@@ -908,6 +908,92 @@ impl Planner for MaintainPlanner {
 
             Stmt::LoadFrom(load_stmt) => {
                 use crate::parser::ast::stmt::ScanSource;
+                if let ScanSource::Query(inner) = &load_stmt.source {
+                    if !load_stmt.options.is_empty() {
+                        return Err(PlannerError::UnsupportedOperation(
+                            "LOAD FROM (query) does not accept file-only OPTIONS".to_string(),
+                        ));
+                    }
+                    if let Some(return_clause) = &load_stmt.return_clause {
+                        let star_only = return_clause.items.len() == 1
+                            && matches!(
+                                &return_clause.items[0],
+                                crate::parser::ast::stmt::ReturnItem::Expression {
+                                    expression,
+                                    alias: None,
+                                } if expression.to_expression_string() == "*"
+                            );
+                        if !star_only {
+                            return Err(PlannerError::UnsupportedOperation(
+                                "LOAD FROM (query) projects inside the inner query; outer RETURN must be absent or RETURN *".to_string(),
+                            ));
+                        }
+                    }
+                    let inner_planner =
+                        crate::planning::planner::PlannerEnum::from_stmt_ref(inner.as_ref());
+                    let Some(mut planner) = inner_planner else {
+                        return Err(PlannerError::UnsupportedOperation(
+                            "LOAD FROM (query) inner statement is not plannable".to_string(),
+                        ));
+                    };
+                    let inner_ast = std::sync::Arc::new(crate::parser::ast::stmt::Ast::new(
+                        inner.as_ref().clone(),
+                        validated.ast.expr_context().clone(),
+                    ));
+                    let inner_validated = crate::binder::validation::ValidatedStatement::new(
+                        inner_ast,
+                        validated.validation_info.clone(),
+                    );
+                    let mut sub_plan = planner.transform(&inner_validated, qctx)?;
+                    if !load_stmt.headers.is_empty() {
+                        let declared: Vec<String> =
+                            load_stmt.headers.iter().map(|h| h.name.clone()).collect();
+                        let current: Vec<String> = sub_plan
+                            .root()
+                            .as_ref()
+                            .map(|root| root.col_names().to_vec())
+                            .unwrap_or_default();
+                        if !current.is_empty() && current.len() != declared.len() {
+                            return Err(PlannerError::PlanGenerationFailed(format!(
+                                "LOAD WITH HEADERS declares {} columns but query yields {}",
+                                declared.len(),
+                                current.len()
+                            )));
+                        }
+                        if current.is_empty() {
+                            return Err(PlannerError::UnsupportedOperation(
+                                "LOAD WITH HEADERS over a query with unknown output columns is not supported; use AS aliases inside the inner query".to_string(),
+                            ));
+                        }
+                        let expr_ctx = validated.ast.expr_context().clone();
+                        let mut columns = Vec::with_capacity(current.len());
+                        for (old, new) in current.iter().zip(declared.iter()) {
+                            let meta = graphdb_core::types::expr::ExpressionMeta::new(
+                                graphdb_core::Expression::Variable(old.clone()),
+                            );
+                            let id = expr_ctx.register_expression(meta);
+                            let expr = graphdb_core::types::ContextualExpression::new(
+                                id,
+                                expr_ctx.clone(),
+                            );
+                            columns.push(graphdb_core::YieldColumn::new(expr, new.clone()));
+                        }
+                        let inner_root = sub_plan.root().clone().ok_or_else(|| {
+                            PlannerError::PlanGenerationFailed(
+                                "LOAD FROM (query) inner plan has no root".to_string(),
+                            )
+                        })?;
+                        let project = crate::planning::plan::core::nodes::ProjectNode::new(
+                            inner_root, columns,
+                        )?;
+                        let tail = sub_plan.tail().clone();
+                        sub_plan = crate::planning::plan::SubPlan::new(
+                            Some(crate::planning::plan::PlanNodeEnum::Project(project)),
+                            tail,
+                        );
+                    }
+                    return Ok(sub_plan);
+                }
                 let (source_kind, source_value, func_name, func_args_json) = match &load_stmt.source
                 {
                     ScanSource::File(path) => ("file".to_string(), path.clone(), None, None),
@@ -926,6 +1012,11 @@ impl Planner for MaintainPlanner {
                             Some(name.clone()),
                             Some(args_json),
                         )
+                    }
+                    ScanSource::Query(_) => {
+                        return Err(PlannerError::UnsupportedOperation(
+                            "LOAD FROM (query) inner statement is not plannable".to_string(),
+                        ));
                     }
                 };
                 let options: Vec<(String, String)> = load_stmt
@@ -958,6 +1049,7 @@ impl Planner for MaintainPlanner {
                     func_args_json,
                     options,
                     col_names,
+                    load_stmt.headers.iter().map(|h| h.name.clone()).collect(),
                 );
                 PlanNodeEnum::LoadFrom(node)
             }

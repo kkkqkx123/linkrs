@@ -161,6 +161,7 @@ define_plan_node! {
         func_name: Option<String>,
         func_args_json: Option<String>,
         options: Vec<(String, String)>,
+        headers: Vec<String>,
     }
     enum: LoadFrom
     input: ZeroInputNode
@@ -175,6 +176,7 @@ impl LoadFromNode {
         func_args_json: Option<String>,
         options: Vec<(String, String)>,
         col_names: Vec<String>,
+        headers: Vec<String>,
     ) -> Self {
         Self {
             id,
@@ -183,6 +185,7 @@ impl LoadFromNode {
             func_name,
             func_args_json,
             options,
+            headers,
             output_var: None,
             col_names,
             column_types: vec![],
@@ -207,6 +210,10 @@ impl LoadFromNode {
 
     pub fn options(&self) -> &[(String, String)] {
         &self.options
+    }
+
+    pub fn headers(&self) -> &[String] {
+        &self.headers
     }
 }
 

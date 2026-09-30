@@ -34,6 +34,7 @@ pub enum SinkSpec {
         updates: Vec<(String, Expression)>,
         condition: Option<Expression>,
         is_upsert: bool,
+        replace_properties: bool,
     },
     UpdateEdges {
         space_name: String,
@@ -43,6 +44,7 @@ pub enum SinkSpec {
         updates: Vec<(String, Expression)>,
         condition: Option<Expression>,
         is_upsert: bool,
+        replace_properties: bool,
     },
     DeleteVertices {
         space_name: String,

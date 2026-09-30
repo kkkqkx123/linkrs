@@ -299,7 +299,7 @@ impl ClauseParser {
         ctx.expect_token(TokenKind::Assign)?;
         let value = self.parse_expression(ctx)?;
 
-        let (property, target) = match property_expr.expression() {
+        let (property, target, is_bare_variable) = match property_expr.expression() {
             Some(expr) => match expr.inner() {
                 CoreExpression::Property { object, property } => {
                     // Check if object is a literal (e.g., 1.age) or a variable (e.g., p.age)
@@ -308,9 +308,9 @@ impl ClauseParser {
                         CoreExpression::Variable(_) => None, // Variable-based property access
                         _ => Some(property_expr.clone()),
                     };
-                    (property.clone(), target)
+                    (property.clone(), target, false)
                 }
-                CoreExpression::Variable(name) => (name.clone(), None),
+                CoreExpression::Variable(name) => (name.clone(), None, true),
                 _ => {
                     return Err(ParseError::new(
                         ParseErrorKind::SyntaxError,
@@ -328,11 +328,20 @@ impl ClauseParser {
             }
         };
 
+        let is_map_overwrite = if !is_bare_variable {
+            false
+        } else if let Some(value_meta) = value.expression() {
+            matches!(value_meta.inner(), CoreExpression::Map(_))
+        } else {
+            false
+        };
+
         Ok(Assignment {
             property,
             value,
             target,
             object: None,
+            is_map_overwrite,
         })
     }
 

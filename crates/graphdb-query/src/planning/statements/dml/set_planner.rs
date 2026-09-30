@@ -141,6 +141,7 @@ impl Planner for SetPlanner {
                             properties,
                             condition: None,
                             is_upsert: false,
+                            replace_properties: assignment.is_map_overwrite,
                         };
                         vertex_updates.push(vertex_update);
                     }
@@ -268,6 +269,7 @@ impl Planner for SetPlanner {
                         properties,
                         condition: None,
                         is_upsert: false,
+                        replace_properties: assignment.is_map_overwrite,
                     };
                     vertex_updates.push(vertex_update);
                 } else {

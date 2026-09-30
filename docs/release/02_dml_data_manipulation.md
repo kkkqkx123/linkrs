@@ -207,6 +207,8 @@ UPDATE EDGE <src_vid> -> <dst_vid> [@<rank>] OF <edge_type> SET <prop> = <value>
 - 支持多属性更新
 - 支持节点和边更新
 - 支持表达式计算
+- 支持整映射覆盖（`SET` 右侧为映射字面量且左侧为裸变量时，
+  替换整组属性；空映射清空属性），不可与逐属性赋值混写
 - 边更新支持两种语法：`OF <edge_type> FROM <src> TO <dst>` 与短形式 `<src> -> <dst> OF <edge_type>`
 - **支持YIELD子句** - 返回更新后的属性值
 
@@ -395,13 +397,17 @@ ON CREATE SET r.created = timestamp()
 ### 语法结构
 ```cypher
 SET <variable>.<prop> = <value> [, <variable>.<prop> = <value> ...]
+SET <variable> = {<prop>: <value> [, ...]}  -- 整映射覆盖
 ```
 
 ### 关键特性
 - 支持动态属性设置
 - 支持表达式计算
 - 支持批量设置
-- 赋值左侧必须是属性路径（如 `p.age`）
+- 逐属性赋值左侧必须是属性路径（如 `p.age`）
+- 整映射覆盖（`SET n = {age: 20}`）一次性替换该实体的全部属性，
+  而非逐项合并；空映射（`SET n = {}`）清空全部属性
+- 整映射覆盖不可与逐属性赋值混写在同一子句中
 - 支持属性增减操作
 
 ### 示例

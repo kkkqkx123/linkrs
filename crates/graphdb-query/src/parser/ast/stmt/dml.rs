@@ -90,6 +90,7 @@ pub struct Assignment {
     pub value: ContextualExpression,
     pub target: Option<ContextualExpression>,
     pub object: Option<ContextualExpression>,
+    pub is_map_overwrite: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

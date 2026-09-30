@@ -240,6 +240,7 @@ impl MergePlanner {
             properties,
             condition: None,
             is_upsert: false,
+            replace_properties: set_clause.assignments.iter().any(|a| a.is_map_overwrite),
         })
     }
 
@@ -396,6 +397,7 @@ impl MergePlanner {
             properties,
             condition: None,
             is_upsert: false,
+            replace_properties: assignments.iter().any(|a| a.is_map_overwrite),
         })
     }
 }

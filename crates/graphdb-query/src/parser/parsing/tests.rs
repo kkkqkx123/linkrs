@@ -213,6 +213,58 @@ mod tests {
     }
 
     #[test]
+    fn test_set_map_overwrite() {
+        let query = "SET n = {age: 20}";
+        let result = parse_statement(query);
+        assert!(
+            result.is_ok(),
+            "SET map overwrite parsing should succeed: {:?}",
+            result.err()
+        );
+
+        if let crate::parser::ast::Stmt::Set(set) = result.expect("SET parsing should succeed") {
+            assert_eq!(set.assignments.len(), 1);
+            assert!(set.assignments[0].is_map_overwrite);
+        } else {
+            panic!("Expected SET statement");
+        }
+    }
+
+    #[test]
+    fn test_set_map_on_property_path_is_not_overwrite() {
+        let query = "SET n.props = {age: 20}";
+        let result = parse_statement(query);
+        assert!(
+            result.is_ok(),
+            "SET property path with map value should succeed: {:?}",
+            result.err()
+        );
+
+        if let crate::parser::ast::Stmt::Set(set) = result.expect("SET parsing should succeed") {
+            assert!(!set.assignments[0].is_map_overwrite);
+        } else {
+            panic!("Expected SET statement");
+        }
+    }
+
+    #[test]
+    fn test_set_variable_scalar_is_not_overwrite() {
+        let query = "SET n = 20";
+        let result = parse_statement(query);
+        assert!(
+            result.is_ok(),
+            "SET variable scalar parsing should succeed: {:?}",
+            result.err()
+        );
+
+        if let crate::parser::ast::Stmt::Set(set) = result.expect("SET parsing should succeed") {
+            assert!(!set.assignments[0].is_map_overwrite);
+        } else {
+            panic!("Expected SET statement");
+        }
+    }
+
+    #[test]
     fn test_update_vertex_basic() {
         let query = "UPDATE 1 SET age = 26";
         let result = parse_statement(query);

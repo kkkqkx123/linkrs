@@ -70,6 +70,7 @@ pub enum SinkOperatorKind {
         updates: Vec<(String, Expression)>,
         condition: Option<Expression>,
         is_upsert: bool,
+        replace_properties: bool,
         rows_updated: u64,
         summary_returned: bool,
     },
@@ -82,6 +83,7 @@ pub enum SinkOperatorKind {
         updates: Vec<(String, Expression)>,
         condition: Option<Expression>,
         is_upsert: bool,
+        replace_properties: bool,
         rows_updated: u64,
         summary_returned: bool,
     },
@@ -142,6 +144,50 @@ fn make_modify_result(output_layout: Arc<SlotLayout>, op: &str, count: u64) -> D
 
 fn eval_expr(expr: &Expression, context: &mut ValueRowContext) -> Result<Value, QueryError> {
     ExpressionEvaluator::evaluate(expr, context).map_err(|e| QueryError::execution(e.to_string()))
+}
+
+fn eval_update_props(
+    updates: &[(String, Expression)],
+    replace_properties: bool,
+    context: &mut ValueRowContext,
+) -> Result<HashMap<String, Value>, QueryError> {
+    if !replace_properties {
+        let mut props = HashMap::new();
+        for (prop_name, expr) in updates.iter() {
+            let val = eval_expr(expr, context)?;
+            props.insert(prop_name.clone(), val);
+        }
+        return Ok(props);
+    }
+    if updates.len() != 1 {
+        return Err(QueryError::execution(
+            "Whole-map overwrite cannot be mixed with per-property assignments".to_string(),
+        ));
+    }
+    match eval_expr(&updates[0].1, context)? {
+        Value::Map(entries) => {
+            let mut props = HashMap::with_capacity(entries.len());
+            for (key, val) in entries.iter() {
+                match key {
+                    Value::String(name) => {
+                        props.insert(name.to_string(), val.clone());
+                    }
+                    Value::FixedString(name) => {
+                        props.insert(name.clone(), val.clone());
+                    }
+                    _ => {
+                        return Err(QueryError::execution(
+                            "Map overwrite keys must be strings".to_string(),
+                        ));
+                    }
+                }
+            }
+            Ok(props)
+        }
+        _ => Err(QueryError::execution(
+            "Map overwrite value must be a map".to_string(),
+        )),
+    }
 }
 
 /// Build a row context that resolves `$name` parameter references.
@@ -290,6 +336,7 @@ impl SinkOperator {
                 updates,
                 condition,
                 is_upsert,
+                replace_properties,
             } => SinkOperatorKind::UpdateVertices {
                 storage,
                 space_name: space_name.clone(),
@@ -297,6 +344,7 @@ impl SinkOperator {
                 updates: updates.clone(),
                 condition: condition.clone(),
                 is_upsert: *is_upsert,
+                replace_properties: *replace_properties,
                 rows_updated: 0,
                 summary_returned: false,
             },
@@ -308,6 +356,7 @@ impl SinkOperator {
                 updates,
                 condition,
                 is_upsert,
+                replace_properties,
             } => SinkOperatorKind::UpdateEdges {
                 storage,
                 space_name: space_name.clone(),
@@ -317,6 +366,7 @@ impl SinkOperator {
                 updates: updates.clone(),
                 condition: condition.clone(),
                 is_upsert: *is_upsert,
+                replace_properties: *replace_properties,
                 rows_updated: 0,
                 summary_returned: false,
             },
@@ -625,6 +675,7 @@ impl SinkOperator {
                 updates,
                 condition,
                 is_upsert,
+                replace_properties,
                 rows_updated,
                 summary_returned,
                 ..
@@ -668,11 +719,11 @@ impl SinkOperator {
                                 Some(ev) => ev,
                                 None => {
                                     if *is_upsert {
-                                        let mut props = HashMap::new();
-                                        for (prop_name, expr) in updates.iter() {
-                                            let val = eval_expr(expr, &mut context)?;
-                                            props.insert(prop_name.clone(), val);
-                                        }
+                                        let props = eval_update_props(
+                                            updates,
+                                            *replace_properties,
+                                            &mut context,
+                                        )?;
                                         let vertex =
                                             Vertex::new(vid, Tag::new(tag_name.clone(), props));
                                         StorageWriter::insert_vertex(
@@ -703,12 +754,11 @@ impl SinkOperator {
                                     continue;
                                 }
                             }
-                            let mut props = HashMap::new();
-                            for (prop_name, expr) in updates.iter() {
-                                let val = eval_expr(expr, &mut context)?;
-                                props.insert(prop_name.clone(), val);
-                            }
-                            let tag = if *tag_name == existing.tag.name {
+                            let props =
+                                eval_update_props(updates, *replace_properties, &mut context)?;
+                            let tag = if *replace_properties {
+                                Tag::new(existing.tag.name.clone(), props)
+                            } else if *tag_name == existing.tag.name {
                                 let mut merged = existing.tag.properties.clone();
                                 for (k, v) in &props {
                                     merged.insert(k.clone(), v.clone());
@@ -744,6 +794,7 @@ impl SinkOperator {
                 updates,
                 condition,
                 is_upsert,
+                replace_properties,
                 rows_updated,
                 summary_returned,
                 ..
@@ -793,11 +844,11 @@ impl SinkOperator {
                                     Some(edge) => edge,
                                     None => {
                                         if *is_upsert {
-                                            let mut props = HashMap::new();
-                                            for (prop_name, expr) in updates.iter() {
-                                                let val = eval_expr(expr, &mut context)?;
-                                                props.insert(prop_name.clone(), val);
-                                            }
+                                            let props = eval_update_props(
+                                                updates,
+                                                *replace_properties,
+                                                &mut context,
+                                            )?;
                                             let edge =
                                                 Edge::new(src, dst, edge_type.clone(), 0, props);
                                             StorageWriter::insert_edge(
@@ -825,11 +876,8 @@ impl SinkOperator {
                                         continue;
                                     }
                                 }
-                                let mut props = HashMap::new();
-                                for (prop_name, expr) in updates.iter() {
-                                    let val = eval_expr(expr, &mut context)?;
-                                    props.insert(prop_name.clone(), val);
-                                }
+                                let props =
+                                    eval_update_props(updates, *replace_properties, &mut context)?;
                                 let mut edge = Edge::new_empty(src, dst, edge_type.clone(), 0);
                                 edge.props = props;
                                 StorageWriter::update_edge(&mut *writer, space_name, edge)

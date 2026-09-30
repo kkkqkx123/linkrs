@@ -69,6 +69,11 @@ impl UpdatePlanner {
             properties,
             condition: update_stmt.where_clause.clone(),
             is_upsert: update_stmt.is_upsert,
+            replace_properties: update_stmt
+                .set_clause
+                .assignments
+                .iter()
+                .any(|a| a.is_map_overwrite),
         })
     }
 }
@@ -157,6 +162,7 @@ impl Planner for UpdatePlanner {
                     properties,
                     condition,
                     is_upsert: update.is_upsert,
+                    replace_properties: update.assignments.iter().any(|a| a.is_map_overwrite),
                 };
                 UpdateTargetType::Edge(edge_info)
             }
@@ -183,6 +189,7 @@ impl Planner for UpdatePlanner {
                     properties,
                     condition: None,
                     is_upsert: update.is_upsert,
+                    replace_properties: update.assignments.iter().any(|a| a.is_map_overwrite),
                 };
 
                 let logical_scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
@@ -239,6 +246,7 @@ impl Planner for UpdatePlanner {
                     properties,
                     condition,
                     is_upsert: update.is_upsert,
+                    replace_properties: update.assignments.iter().any(|a| a.is_map_overwrite),
                 };
                 UpdateTargetType::Vertex(vertex_info)
             }
@@ -344,6 +352,11 @@ impl Planner for UpdatePlanner {
                     properties,
                     condition: update_stmt.where_clause.clone(),
                     is_upsert: update_stmt.is_upsert,
+                    replace_properties: update_stmt
+                        .set_clause
+                        .assignments
+                        .iter()
+                        .any(|a| a.is_map_overwrite),
                 };
 
                 let logical_scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
@@ -383,6 +396,11 @@ impl Planner for UpdatePlanner {
                     properties,
                     condition: update_stmt.where_clause.clone(),
                     is_upsert: update_stmt.is_upsert,
+                    replace_properties: update_stmt
+                        .set_clause
+                        .assignments
+                        .iter()
+                        .any(|a| a.is_map_overwrite),
                 };
                 UpdateTargetType::Vertex(vertex_info)
             }

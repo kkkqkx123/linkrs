@@ -351,6 +351,7 @@ pub(super) fn execute_load_from(
         func_args_json,
         options,
         col_names,
+        headers,
         emitted,
         ..
     } = &mut op.kind
@@ -361,6 +362,12 @@ pub(super) fn execute_load_from(
         return Ok(None);
     }
     *emitted = true;
+
+    if source_kind == "query" {
+        return Err(QueryError::execution(
+            "LOAD FROM (query) must be expanded at plan time".to_string(),
+        ));
+    }
 
     if source_kind == "table_func" {
         let name = func_name.clone().unwrap_or_default();
@@ -391,9 +398,24 @@ pub(super) fn execute_load_from(
         }
 
         let num_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
-        let schema_cols: Vec<ColumnInfo> = (0..num_cols)
-            .map(|i| ColumnInfo {
-                name: format!("col{}", i),
+        if !headers.is_empty() && headers.len() != num_cols {
+            return Err(QueryError::execution(format!(
+                "LOAD WITH HEADERS declares {} columns but table function yields {}",
+                headers.len(),
+                num_cols
+            )));
+        }
+        let schema_names: Vec<String> = if !headers.is_empty() {
+            headers.clone()
+        } else if col_names.len() == num_cols {
+            col_names.clone()
+        } else {
+            (0..num_cols).map(|i| format!("col{i}")).collect()
+        };
+        let schema_cols: Vec<ColumnInfo> = schema_names
+            .iter()
+            .map(|name| ColumnInfo {
+                name: name.clone(),
                 data_type: "string".to_string(),
             })
             .collect();
@@ -446,7 +468,9 @@ pub(super) fn execute_load_from(
                 .from_reader(std::io::BufReader::new(file));
 
             if schema.is_none() {
-                let headers: Vec<String> = if header {
+                let schema_names: Vec<String> = if !headers.is_empty() {
+                    headers.clone()
+                } else if header {
                     reader
                         .headers()
                         .map_err(|e| {
@@ -461,7 +485,7 @@ pub(super) fn execute_load_from(
                     Vec::new()
                 };
 
-                let schema_cols: Vec<ColumnInfo> = if headers.is_empty() {
+                let schema_cols: Vec<ColumnInfo> = if schema_names.is_empty() {
                     col_names
                         .iter()
                         .map(|n| ColumnInfo {
@@ -470,7 +494,7 @@ pub(super) fn execute_load_from(
                         })
                         .collect()
                 } else {
-                    headers
+                    schema_names
                         .iter()
                         .map(|n| ColumnInfo {
                             name: n.clone(),
@@ -484,6 +508,14 @@ pub(super) fn execute_load_from(
             for result in reader.records() {
                 let record = result
                     .map_err(|e| QueryError::execution(format!("LOAD FROM glob row error: {e}")))?;
+                if !headers.is_empty() && record.len() != headers.len() {
+                    return Err(QueryError::execution(format!(
+                        "LOAD WITH HEADERS declares {} columns but '{}' yields {}",
+                        headers.len(),
+                        file_path.display(),
+                        record.len()
+                    )));
+                }
                 let row: Vec<Value> = record.iter().map(|s| Value::String(s.into())).collect();
                 all_rows.push(row);
             }
@@ -521,7 +553,9 @@ pub(super) fn execute_load_from(
         .flexible(true)
         .from_reader(std::io::BufReader::new(file));
 
-    let headers: Vec<String> = if header {
+    let schema_names: Vec<String> = if !headers.is_empty() {
+        headers.clone()
+    } else if header {
         reader
             .headers()
             .map_err(|e| QueryError::execution(format!("LOAD FROM header error: {e}")))?
@@ -534,7 +568,7 @@ pub(super) fn execute_load_from(
         Vec::new()
     };
 
-    let schema_cols: Vec<ColumnInfo> = if headers.is_empty() {
+    let schema_cols: Vec<ColumnInfo> = if schema_names.is_empty() {
         col_names
             .iter()
             .map(|n| ColumnInfo {
@@ -543,7 +577,7 @@ pub(super) fn execute_load_from(
             })
             .collect()
     } else {
-        headers
+        schema_names
             .iter()
             .map(|n| ColumnInfo {
                 name: n.clone(),
@@ -557,6 +591,13 @@ pub(super) fn execute_load_from(
     for result in reader.records() {
         let record =
             result.map_err(|e| QueryError::execution(format!("LOAD FROM row error: {e}")))?;
+        if !headers.is_empty() && record.len() != headers.len() {
+            return Err(QueryError::execution(format!(
+                "LOAD WITH HEADERS declares {} columns but '{file_path}' yields {}",
+                headers.len(),
+                record.len()
+            )));
+        }
         let row: Vec<Value> = record.iter().map(|s| Value::String(s.into())).collect();
         rows.push(row);
     }

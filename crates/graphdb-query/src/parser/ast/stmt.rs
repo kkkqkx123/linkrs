@@ -1049,6 +1049,7 @@ mod tests {
             (
                 Stmt::LoadFrom(LoadFromStmt {
                     span,
+                    headers: vec![],
                     source: ScanSource::File("data.csv".to_string()),
                     options: vec![],
                     return_clause: None,

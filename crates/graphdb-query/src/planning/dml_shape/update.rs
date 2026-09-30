@@ -96,6 +96,11 @@ pub(crate) fn render_set_assignments(
         if assignment.target.is_some() || assignment.object.is_some() {
             return None;
         }
+        // Whole-map overwrite carries replace semantics that the
+        // per-property template cannot express; skip shape caching.
+        if assignment.is_map_overwrite {
+            return None;
+        }
         out.push_str(&assignment.property);
         out.push_str(" = ");
         render_contextual(out, values, &assignment.value)?;

@@ -327,6 +327,7 @@ pub enum DdlSpec {
         func_args_json: Option<String>,
         options: Vec<(String, String)>,
         col_names: Vec<String>,
+        headers: Vec<String>,
     },
     InQueryCall {
         space_name: String,

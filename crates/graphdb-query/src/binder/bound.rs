@@ -577,6 +577,7 @@ pub struct BoundAssignment {
     pub value: BoundExpression,
     pub target: Option<BoundExpression>,
     pub object: Option<BoundExpression>,
+    pub is_map_overwrite: bool,
 }
 
 #[derive(Debug, Clone)]

@@ -207,6 +207,7 @@ pub enum DdlOperatorKind {
         func_args_json: Option<String>,
         options: Vec<(String, String)>,
         col_names: Vec<String>,
+        headers: Vec<String>,
         emitted: bool,
     },
     InQueryCall {
@@ -391,6 +392,7 @@ impl DdlOperator {
                 func_args_json,
                 options,
                 col_names,
+                headers,
             } => DdlOperatorKind::LoadFrom {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -400,6 +402,7 @@ impl DdlOperator {
                 func_args_json: func_args_json.clone(),
                 options: options.clone(),
                 col_names: col_names.clone(),
+                headers: headers.clone(),
                 emitted: false,
             },
             super::spec::DdlSpec::InQueryCall {

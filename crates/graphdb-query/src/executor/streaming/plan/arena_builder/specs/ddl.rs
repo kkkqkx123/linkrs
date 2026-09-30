@@ -163,6 +163,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_update_spec(
                 .map(contextual_to_expression)
                 .transpose()?,
             is_upsert: info.is_upsert,
+            replace_properties: info.replace_properties,
         }),
         UpdateTargetType::Edge(info) => Ok(SinkSpec::UpdateEdges {
             space_name: exec_ctx.space_name.clone().unwrap_or_default(),
@@ -180,6 +181,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_update_spec(
                 .map(contextual_to_expression)
                 .transpose()?,
             is_upsert: info.is_upsert,
+            replace_properties: info.replace_properties,
         }),
     }
 }
@@ -213,6 +215,11 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_update_vertices
             .first()
             .map(|update| update.is_upsert)
             .unwrap_or(false),
+        replace_properties: node
+            .updates()
+            .first()
+            .map(|update| update.replace_properties)
+            .unwrap_or(false),
     })
 }
 
@@ -245,6 +252,11 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_update_edges_sp
             .updates()
             .first()
             .map(|update| update.is_upsert)
+            .unwrap_or(false),
+        replace_properties: node
+            .updates()
+            .first()
+            .map(|update| update.replace_properties)
             .unwrap_or(false),
     })
 }

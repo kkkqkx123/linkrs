@@ -3,6 +3,7 @@
 
 use crate::parser::ast::stmt::*;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
+use crate::parser::core::token::TokenKindExt;
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
 use graphdb_core::types::expr::contextual::ContextualExpression;
@@ -119,10 +120,57 @@ pub(super) fn parse_checkpoint_statement(ctx: &mut ParseContext) -> Result<Stmt,
     Ok(Stmt::Checkpoint(CheckpointStmt { span }))
 }
 
-/// Parse `LOAD FROM '<path>' [OPTIONS (key=value, ...)] [RETURN ...]`.
+/// Parse `LOAD [WITH HEADERS (...)] FROM <source> [OPTIONS (...)] [RETURN ...]`.
+///
+/// Sources are tried in order: GLOB keyword form, parenthesized query,
+/// identifier-plus-paren table function, string literal file path.
 pub(super) fn parse_load_from_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
     let start_span = ctx.current_span();
     ctx.consume_keyword("LOAD")?;
+
+    let headers = if ctx.check_keyword("WITH") {
+        ctx.consume_keyword("WITH")?;
+        ctx.consume_keyword("HEADERS")?;
+        ctx.expect_token(TokenKind::LParen)?;
+        let mut cols = Vec::new();
+        loop {
+            let name = ctx.expect_identifier()?;
+            let (is_end, is_ident, lexeme) = {
+                let token = ctx.current_token();
+                (
+                    matches!(token.kind, TokenKind::Comma | TokenKind::RParen),
+                    matches!(token.kind, TokenKind::Identifier(_)),
+                    token.lexeme.clone(),
+                )
+            };
+            let data_type = if is_end {
+                None
+            } else if is_ident {
+                Some(ctx.expect_identifier()?)
+            } else if lexeme.is_empty() {
+                None
+            } else {
+                ctx.next_token();
+                Some(lexeme)
+            };
+            cols.push(LoadHeaderColumn { name, data_type });
+            if !ctx.match_token(TokenKind::Comma) {
+                break;
+            }
+        }
+        if cols.is_empty() {
+            return Err(ParseError::new(
+                ParseErrorKind::SyntaxError,
+                "LOAD WITH HEADERS requires at least one column".to_string(),
+                ctx.current_position(),
+            ));
+        }
+        ctx.expect_token(TokenKind::RParen)?;
+        cols
+    } else {
+        Vec::new()
+    };
+
     ctx.consume_keyword("FROM")?;
 
     let source = if ctx.check_keyword("GLOB") {
@@ -131,6 +179,35 @@ pub(super) fn parse_load_from_statement(ctx: &mut ParseContext) -> Result<Stmt, 
         let pattern = ctx.expect_string_literal()?;
         ctx.expect_token(TokenKind::RParen)?;
         ScanSource::Glob(pattern)
+    } else if ctx.check_token(TokenKind::LParen) {
+        ctx.expect_token(TokenKind::LParen)?;
+        let inner = super::StmtParser::parse_statement(ctx)?;
+        ctx.expect_token(TokenKind::RParen)?;
+        ScanSource::Query(Box::new(inner))
+    } else if ctx.current_token().kind.is_identifier() {
+        let name = ctx.expect_identifier()?;
+        if ctx.check_token(TokenKind::LParen) {
+            ctx.expect_token(TokenKind::LParen)?;
+            let mut args = Vec::new();
+            if !ctx.check_token(TokenKind::RParen) {
+                loop {
+                    let arg = super::misc::parse_expression(ctx)?;
+                    args.push(arg);
+                    if !ctx.match_token(TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            ctx.expect_token(TokenKind::RParen)?;
+            ScanSource::TableFunc { name, args }
+        } else {
+            return Err(ParseError::new(
+                ParseErrorKind::SyntaxError,
+                "LOAD FROM expects a file path, GLOB(...), table function call, or (query)"
+                    .to_string(),
+                ctx.current_position(),
+            ));
+        }
     } else {
         let path = ctx.expect_string_literal()?;
         ScanSource::File(path)
@@ -199,6 +276,7 @@ pub(super) fn parse_load_from_statement(ctx: &mut ParseContext) -> Result<Stmt, 
     let span = ctx.merge_span(start_span.start, end_span.end);
     Ok(Stmt::LoadFrom(LoadFromStmt {
         span,
+        headers,
         source,
         options,
         return_clause,

@@ -343,6 +343,7 @@ impl Binder {
                 value,
                 target,
                 object,
+                is_map_overwrite: a.is_map_overwrite,
             });
         }
         Ok(out)

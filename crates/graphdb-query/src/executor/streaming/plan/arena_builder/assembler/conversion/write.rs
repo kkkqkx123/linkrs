@@ -379,6 +379,7 @@ impl ArenaPlanAssembler {
                     func_args_json: lf.func_args_json().map(|s| s.to_string()),
                     options: lf.options().to_vec(),
                     col_names: lf.col_names().to_vec(),
+                    headers: lf.headers().to_vec(),
                 },
             ),
             PlanNodeEnum::InQueryCall(iqc) => Self::push_ddl_op(

@@ -993,6 +993,75 @@ fn test_parse_load_from_glob() {
 }
 
 #[test]
+fn test_parse_load_from_table_func() {
+    let mut ctx = create_parser_context("LOAD FROM read_csv('data.csv') RETURN *");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "LOAD FROM table function parse failure: {:?}",
+        result.err()
+    );
+    if let Ok(Stmt::LoadFrom(stmt)) = result {
+        assert!(matches!(
+            stmt.source,
+            crate::parser::ast::stmt::ScanSource::TableFunc { .. }
+        ));
+    } else {
+        panic!("Expected LoadFrom statement");
+    }
+}
+
+#[test]
+fn test_parse_load_from_query_source() {
+    let mut ctx = create_parser_context("LOAD FROM (MATCH (n) RETURN n) RETURN *");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "LOAD FROM query source parse failure: {:?}",
+        result.err()
+    );
+    if let Ok(Stmt::LoadFrom(stmt)) = result {
+        assert!(matches!(
+            stmt.source,
+            crate::parser::ast::stmt::ScanSource::Query(_)
+        ));
+    } else {
+        panic!("Expected LoadFrom statement");
+    }
+}
+
+#[test]
+fn test_parse_load_with_headers() {
+    let mut ctx =
+        create_parser_context("LOAD WITH HEADERS (id INT64, name STRING) FROM 'data.csv'");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "LOAD WITH HEADERS parse failure: {:?}",
+        result.err()
+    );
+    if let Ok(Stmt::LoadFrom(stmt)) = result {
+        assert_eq!(stmt.headers.len(), 2);
+        assert_eq!(stmt.headers[0].name, "id");
+    } else {
+        panic!("Expected LoadFrom statement");
+    }
+}
+
+#[test]
+fn test_parse_load_with_headers_query_source() {
+    let mut ctx = create_parser_context(
+        "LOAD WITH HEADERS (id, name) FROM (MATCH (n) RETURN n.id AS id, n.name AS name)",
+    );
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "LOAD WITH HEADERS query source parse failure: {:?}",
+        result.err()
+    );
+}
+
+#[test]
 fn test_parse_call_no_args() {
     let mut ctx = create_parser_context("CALL db_version()");
     let result = StmtParser::parse_statement(&mut ctx);

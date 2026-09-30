@@ -241,12 +241,19 @@ pub struct YieldStmt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadFromStmt {
     pub span: Span,
+    pub headers: Vec<LoadHeaderColumn>,
     pub source: ScanSource,
     pub options: Vec<LoadOption>,
     pub return_clause: Option<ReturnClause>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct LoadHeaderColumn {
+    pub name: String,
+    pub data_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub enum ScanSource {
     File(String),
     Glob(String),
@@ -254,6 +261,22 @@ pub enum ScanSource {
         name: String,
         args: Vec<ContextualExpression>,
     },
+    Query(Box<Stmt>),
+}
+
+impl PartialEq for ScanSource {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ScanSource::File(a), ScanSource::File(b)) => a == b,
+            (ScanSource::Glob(a), ScanSource::Glob(b)) => a == b,
+            (
+                ScanSource::TableFunc { name: a, args: aa },
+                ScanSource::TableFunc { name: b, args: ab },
+            ) => a == b && aa == ab,
+            (ScanSource::Query(a), ScanSource::Query(b)) => format!("{a:?}") == format!("{b:?}"),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

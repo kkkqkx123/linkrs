@@ -53,6 +53,7 @@ pub struct VertexUpdateInfo {
     pub properties: HashMap<String, ContextualExpression>,
     pub condition: Option<ContextualExpression>,
     pub is_upsert: bool,
+    pub replace_properties: bool,
 }
 
 /// Edge update information
@@ -66,6 +67,7 @@ pub struct EdgeUpdateInfo {
     pub properties: HashMap<String, ContextualExpression>,
     pub condition: Option<ContextualExpression>,
     pub is_upsert: bool,
+    pub replace_properties: bool,
 }
 
 /// Update target type enum
