@@ -35,6 +35,13 @@ pub struct QueryRequest {
 pub struct BatchQueryRequest {
     pub session_id: i64,
     pub statements: Vec<String>,
+    /// Query parameters bound to `@name` references in every statement.
+    #[serde(default)]
+    pub parameters: HashMap<String, serde_json::Value>,
+    /// Session variables bound to `$name` references in every statement.
+    /// When omitted, the session-managed snapshot is used.
+    #[serde(default)]
+    pub session_variables: HashMap<String, serde_json::Value>,
 }
 
 /// Batch query response: one [`QueryResponse`] per input statement, in order.

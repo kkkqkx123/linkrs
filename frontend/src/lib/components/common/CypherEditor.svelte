@@ -7,6 +7,7 @@
     CYPHER_LANGUAGE_ID,
     registerCypherLanguage,
     registerCypherCompletions,
+    registerHistoryCompletion,
     updateSchemaHighlighting,
   } from '$utils/monacoCypher';
   import { getQueryAtCursor } from '$utils/gql';
@@ -18,6 +19,7 @@
     placeholder = '',
     height = '10rem',
     onExecute,
+    historyProvider,
   }: {
     value?: string;
     isDark?: boolean;
@@ -26,12 +28,15 @@
     height?: string;
     /** Receives the text to run: the selection, the statement under the cursor, or the whole buffer. */
     onExecute?: (text: string) => void;
+    /** Supplies past statements for slash-triggered history completion. */
+    historyProvider?: () => string[];
   } = $props();
 
   let containerEl = $state<HTMLDivElement>();
   let editor: Monaco.editor.IStandaloneCodeEditor | null = null;
   let monacoRef: typeof Monaco | null = null;
   let completionsDisposable: Monaco.IDisposable | null = null;
+  let historyDisposable: Monaco.IDisposable | null = null;
   let applyingExternalValue = false;
   let currentHeight = $state(height);
   let dragStartY = 0;
@@ -65,6 +70,9 @@
     monacoRef = monaco;
     registerCypherLanguage(monaco);
     completionsDisposable = registerCypherCompletions(monaco, () => get(schemaStore));
+    if (historyProvider) {
+      historyDisposable = registerHistoryCompletion(monaco, historyProvider);
+    }
     defineTheme(monaco);
 
     const instance = monaco.editor.create(containerEl, {
@@ -95,6 +103,15 @@
     });
     instance.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => {
       onExecute?.(resolveExecutionText(instance));
+    });
+    instance.addAction({
+      id: 'graphdb-run-selection',
+      label: 'Run Selection or Statement at Cursor',
+      contextMenuGroupId: 'navigation',
+      contextMenuOrder: 1.5,
+      run: () => {
+        onExecute?.(resolveExecutionText(instance));
+      },
     });
   }
 
@@ -183,6 +200,7 @@
   onDestroy(() => {
     window.removeEventListener('mousemove', onResizeMove);
     completionsDisposable?.dispose();
+    historyDisposable?.dispose();
     editor?.dispose();
     editor = null;
   });

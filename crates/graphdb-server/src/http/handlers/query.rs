@@ -130,8 +130,16 @@ pub async fn execute_batch<
 ) -> Result<JsonResponse<BatchQueryResponse>, HttpError> {
     let graph_service = state.server.get_graph_service();
 
+    let parameters = json_params_to_core(&request.parameters);
+    let session_variables = json_params_to_core(&request.session_variables);
+
     let outcomes = graph_service
-        .execute_batch(request.session_id, &request.statements)
+        .execute_batch(
+            request.session_id,
+            &request.statements,
+            parameters,
+            session_variables,
+        )
         .await;
 
     let store = state.server.config_store();

@@ -1,3 +1,5 @@
+import { CYPHER_KEYWORDS } from '$utils/monacoCypher';
+
 interface ScannedStatement {
   query: string;
   start: number;
@@ -145,6 +147,164 @@ function scanStatements(content: string): ScannedStatement[] {
 export const splitQueries = (content: string): string[] => {
   if (!content || !content.trim()) return [];
   return scanStatements(content).map((stmt) => stmt.query);
+};
+
+/** Clause keywords that start a new line in formatted output. */
+const FORMAT_BREAK_BEFORE = new Set([
+  'MATCH', 'OPTIONAL', 'WHERE', 'WITH', 'RETURN', 'ORDER', 'SKIP', 'LIMIT',
+  'CREATE', 'DELETE', 'DETACH', 'SET', 'REMOVE', 'MERGE', 'UNWIND', 'CALL',
+  'YIELD', 'GO', 'FETCH', 'LOOKUP', 'USE', 'SHOW', 'DESCRIBE', 'DROP',
+  'ALTER', 'ADD', 'REBUILD',
+]);
+
+function isWordChar(char: string): boolean {
+  return /[A-Za-z0-9_]/.test(char);
+}
+
+/**
+ * Format query text with uppercased keywords and one major clause per line.
+ * Strings, quoted identifiers, and comments pass through byte-for-byte so
+ * formatting never changes query semantics.
+ */
+export const formatQuery = (content: string): string => {
+  if (!content || !content.trim()) return content;
+  let out = '';
+  let word = '';
+  let stringChar = '';
+  let escaped = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let atLineStart = true;
+
+  const keywordSet = new Set(CYPHER_KEYWORDS);
+
+  const flushWord = () => {
+    if (!word) return;
+    const upper = word.toUpperCase();
+    if (keywordSet.has(upper)) {
+      if (FORMAT_BREAK_BEFORE.has(upper) && !atLineStart && out.trim()) {
+        out += '\n';
+        atLineStart = true;
+      }
+      out += upper;
+    } else {
+      out += word;
+    }
+    word = '';
+    atLineStart = false;
+  };
+
+  let i = 0;
+  while (i < content.length) {
+    const char = content[i];
+    const next = content[i + 1] ?? '';
+
+    if (inBlockComment) {
+      out += char;
+      if (char === '*' && next === '/') {
+        out += next;
+        i += 2;
+        inBlockComment = false;
+        continue;
+      }
+      if (char === '\n') atLineStart = true;
+      else if (!isWhitespace(char)) atLineStart = false;
+      i += 1;
+      continue;
+    }
+
+    if (inLineComment) {
+      out += char;
+      i += 1;
+      if (char === '\n') {
+        inLineComment = false;
+        atLineStart = true;
+      }
+      continue;
+    }
+
+    if (stringChar) {
+      out += char;
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === stringChar) stringChar = '';
+      i += 1;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === '`') {
+      flushWord();
+      stringChar = char;
+      out += char;
+      atLineStart = false;
+      i += 1;
+      continue;
+    }
+
+    if (char === '/' && next === '*') {
+      flushWord();
+      inBlockComment = true;
+      out += '/*';
+      i += 2;
+      continue;
+    }
+
+    if ((char === '-' && next === '-') || (char === '/' && next === '/') || char === '#') {
+      flushWord();
+      inLineComment = true;
+      if (char === '#') {
+        out += char;
+        i += 1;
+      } else {
+        out += char + next;
+        i += 2;
+      }
+      continue;
+    }
+
+    if (isWordChar(char)) {
+      word += char;
+      i += 1;
+      continue;
+    }
+
+    flushWord();
+
+    if (char === ';') {
+      out += ';';
+      atLineStart = false;
+      i += 1;
+      let j = i;
+      while (j < content.length && (content[j] === ' ' || content[j] === '\t')) j += 1;
+      if (j < content.length && content[j] !== '\n') {
+        out += '\n';
+        atLineStart = true;
+      }
+      i = j;
+      continue;
+    }
+
+    if (isWhitespace(char)) {
+      if (char === '\n') {
+        if (!out.endsWith('\n')) out += '\n';
+        atLineStart = true;
+      } else if (!out.endsWith('\n') && !out.endsWith(' ') && out.length > 0) {
+        out += ' ';
+      }
+      i += 1;
+      continue;
+    }
+
+    out += char;
+    atLineStart = false;
+    i += 1;
+  }
+  flushWord();
+  return out
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .join('\n')
+    .trim();
 };
 
 export const getQueryAtCursor = (content: string, cursorPosition: number): { query: string; start: number; end: number } => {

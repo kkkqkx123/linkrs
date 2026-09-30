@@ -38,6 +38,8 @@ interface ConsoleState {
   activeView: 'table' | 'json' | 'graph';
   history: QueryHistoryItem[];
   favorites: QueryFavoriteItem[];
+  parameters: Record<string, unknown>;
+  sessionVariables: Record<string, unknown>;
 }
 
 const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -72,6 +74,18 @@ function toEntry(item: BatchStatementResult): StatementResultEntry {
   };
 }
 
+function loadBindings(key: string): Record<string, unknown> {
+  try {
+    const saved = localStorage.getItem(key);
+    if (!saved) return {};
+    const parsed: unknown = JSON.parse(saved);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch { /* ignore */ }
+  return {};
+}
+
 function createConsoleStore() {
   const { subscribe, set, update } = writable<ConsoleState>({
     editorContent: localStorage.getItem('graphdb_editor_draft') || '',
@@ -83,6 +97,8 @@ function createConsoleStore() {
     activeView: (persisted.activeView as 'table' | 'json' | 'graph') || 'table',
     history: persisted.history || [],
     favorites: persisted.favorites || [],
+    parameters: loadBindings('graphdb_console_parameters'),
+    sessionVariables: loadBindings('graphdb_console_session_variables'),
   });
 
   /**
@@ -96,15 +112,13 @@ function createConsoleStore() {
       update(s => ({ ...s, error: { code: 'EMPTY_QUERY', message: 'Query is empty' } }));
       return;
     }
-    update(s => ({
-      ...s,
-      isExecuting: true,
-      error: null,
-      currentResult: null,
-      results: [],
-    }));
+    let bindings: { parameters: Record<string, unknown>; sessionVariables: Record<string, unknown> } = { parameters: {}, sessionVariables: {} };
+    update(s => {
+      bindings = { parameters: s.parameters, sessionVariables: s.sessionVariables };
+      return { ...s, isExecuting: true, error: null, currentResult: null, results: [] };
+    });
     try {
-      const response = await queryService.executeBatch(rawScript);
+      const response = await queryService.executeBatch(rawScript, bindings);
       if (response.results.length === 0) {
         update(s => ({
           ...s,
@@ -147,6 +161,14 @@ function createConsoleStore() {
     setEditorContent: (content: string) => {
       update(s => ({ ...s, editorContent: content }));
       localStorage.setItem('graphdb_editor_draft', content);
+    },
+    setParameters: (parameters: Record<string, unknown>) => {
+      update(s => ({ ...s, parameters }));
+      try { localStorage.setItem('graphdb_console_parameters', JSON.stringify(parameters)); } catch { /* ignore */ }
+    },
+    setSessionVariables: (sessionVariables: Record<string, unknown>) => {
+      update(s => ({ ...s, sessionVariables }));
+      try { localStorage.setItem('graphdb_console_session_variables', JSON.stringify(sessionVariables)); } catch { /* ignore */ }
     },
     executeQuery: async () => {
       let state: ConsoleState = null!;

@@ -5,6 +5,14 @@ import { splitQueries } from '$utils/gql';
 export interface ExecuteQueryParams {
   query: string;
   sessionId?: number;
+  parameters?: Record<string, unknown>;
+  sessionVariables?: Record<string, unknown>;
+}
+
+export interface BatchExecuteOptions {
+  sessionId?: number;
+  parameters?: Record<string, unknown>;
+  sessionVariables?: Record<string, unknown>;
 }
 
 export interface ExecuteQueryResponse {
@@ -92,6 +100,8 @@ export const queryService = {
       // The HTTP layer attaches `X-Session-ID` from storage for auth; the body
       // carries the statement text plus the session id required by the wire contract.
       const body: Record<string, unknown> = { query: params.query, session_id: resolved };
+      if (params.parameters !== undefined) body.parameters = params.parameters;
+      if (params.sessionVariables !== undefined) body.session_variables = params.sessionVariables;
       const response = await post<QueryEnvelope>('/v1/query', body);
       const result = toStatementResult(params.query, response, Date.now() - startTime);
       return {
@@ -117,13 +127,13 @@ export const queryService = {
    * script is split client-side so blank lines and comments are dropped before
    * the statements leave the browser.
    */
-  executeBatch: async (script: string, sessionId?: number): Promise<BatchExecuteResponse> => {
+  executeBatch: async (script: string, options?: BatchExecuteOptions): Promise<BatchExecuteResponse> => {
     const startTime = Date.now();
     const statements = splitQueries(script);
     if (statements.length === 0) {
       return { results: [], totalExecutionTime: 0, success: false };
     }
-    const resolved = resolveSessionId(sessionId);
+    const resolved = resolveSessionId(options?.sessionId);
     if (resolved === undefined) {
       return {
         results: statements.map((query) => ({
@@ -137,10 +147,13 @@ export const queryService = {
       };
     }
     try {
-      const response = await post<BatchEnvelope>('/v1/query/batch', {
+      const batchBody: Record<string, unknown> = {
         session_id: resolved,
         statements,
-      });
+      };
+      if (options?.parameters !== undefined) batchBody.parameters = options.parameters;
+      if (options?.sessionVariables !== undefined) batchBody.session_variables = options.sessionVariables;
+      const response = await post<BatchEnvelope>('/v1/query/batch', batchBody);
       const envelopes = response.results ?? [];
       const fallbackMs = Math.round((Date.now() - startTime) / statements.length);
       const results = statements.map((query, index) => {

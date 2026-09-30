@@ -168,6 +168,8 @@ impl HttpClient {
         let request = BatchQueryRequest {
             session_id,
             statements: statements.to_vec(),
+            parameters: std::collections::HashMap::new(),
+            session_variables: std::collections::HashMap::new(),
         };
 
         let response = self.inner.post(&url).json(&request).send().await?;

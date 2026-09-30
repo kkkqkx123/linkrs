@@ -75,10 +75,34 @@ function buildSchemaRules(names: string[], token: string): Monaco.languages.IMon
   return [[new RegExp(`\\b(?:${pattern})\\b`), token]];
 }
 
+/** Collect property names that are safe to highlight as fields. */
+function collectFieldNames(schema: SchemaSnapshot): string[] {
+  const blocked = new Set([
+    ...CYPHER_KEYWORDS.map((keyword) => keyword.toLowerCase()),
+    ...CYPHER_FUNCTIONS.map((fn) => fn.toLowerCase()),
+  ]);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const consider = (name: string) => {
+    const key = name.toLowerCase();
+    if (!name || blocked.has(key) || seen.has(key)) return;
+    seen.add(key);
+    out.push(name);
+  };
+  for (const tag of schema.tags) {
+    for (const prop of tag.properties ?? []) consider(prop.name);
+  }
+  for (const edge of schema.edgeTypes) {
+    for (const prop of edge.properties ?? []) consider(prop.name);
+  }
+  return out;
+}
+
 /** The shared tokenizer body: schema rules are injected at the front by the refresh step. */
 function createTokenizer(schema: SchemaSnapshot): Monaco.languages.IMonarchLanguage {
   const tags = schema.tags.map((t) => t.name);
   const edges = schema.edgeTypes.map((e) => e.name);
+  const fields = collectFieldNames(schema);
   return {
     defaultToken: '',
     ignoreCase: true,
@@ -89,6 +113,7 @@ function createTokenizer(schema: SchemaSnapshot): Monaco.languages.IMonarchLangu
       root: [
         ...buildSchemaRules(tags, 'tag'),
         ...buildSchemaRules(edges, 'edge'),
+        ...buildSchemaRules(fields, 'field'),
         [/--.*$/, 'comment'],
         [/\/\/.*$/, 'comment'],
         [/#.*$/, 'comment'],
@@ -343,6 +368,7 @@ export function registerCypherCompletions(
           label: `${prefix}${name}`,
           kind: monaco.languages.CompletionItemKind.Variable,
           detail: prefix === '$' ? 'session variable' : 'parameter',
+          filterText: name,
           insertText: name,
           sortText: SORT_GROUP.keyword,
           range,
@@ -356,4 +382,55 @@ export function registerCypherCompletions(
       for (const disposable of disposables) disposable.dispose();
     },
   };
+}
+
+/**
+ * Register slash-triggered history completion for the Cypher console.
+ * Typing `/` followed by a prefix offers past statements whose text contains
+ * the prefix; accepting replaces the slash filter with the full statement.
+ */
+export function registerHistoryCompletion(
+  monaco: typeof Monaco,
+  getHistory: () => string[],
+): Monaco.IDisposable {
+  return monaco.languages.registerCompletionItemProvider(CYPHER_LANGUAGE_ID, {
+    triggerCharacters: ['/'],
+    provideCompletionItems: (model, position) => {
+      const before = model.getValueInRange({
+        startLineNumber: position.lineNumber,
+        startColumn: 1,
+        endLineNumber: position.lineNumber,
+        endColumn: position.column,
+      });
+      const trigger = before.match(/\/([A-Za-z0-9_]*)$/);
+      if (!trigger) return { suggestions: [] };
+      const prefix = trigger[1].toLowerCase();
+      const range = {
+        startLineNumber: position.lineNumber,
+        startColumn: position.column - trigger[0].length,
+        endLineNumber: position.lineNumber,
+        endColumn: position.column,
+      };
+      const seen = new Set<string>();
+      const suggestions: Monaco.languages.CompletionItem[] = [];
+      for (const entry of getHistory()) {
+        const statement = entry.trim();
+        if (!statement || seen.has(statement)) continue;
+        seen.add(statement);
+        if (prefix && !statement.toLowerCase().includes(prefix)) continue;
+        const headline = statement.length > 80 ? `${statement.slice(0, 80)}...` : statement;
+        suggestions.push({
+          label: headline,
+          kind: monaco.languages.CompletionItemKind.Text,
+          detail: 'history',
+          filterText: statement,
+          insertText: statement,
+          sortText: SORT_GROUP.keyword,
+          range,
+        });
+        if (suggestions.length >= 20) break;
+      }
+      return { suggestions };
+    },
+  });
 }

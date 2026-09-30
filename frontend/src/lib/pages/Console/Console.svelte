@@ -12,7 +12,7 @@
   import CypherEditor from '$components/common/CypherEditor.svelte';
   import { exportToCSV, exportToJSON } from '$utils/export';
   import { queryService } from '$services/query';
-  import { splitQueries } from '$utils/gql';
+  import { formatQuery, splitQueries } from '$utils/gql';
   import type { QueryResult, QueryError } from '$types/query';
 
   let editorContent = $state('');
@@ -32,6 +32,42 @@
   let saveModalError = $state('');
   let validateMessage = $state('');
   let isValidating = $state(false);
+
+  interface ParamRow { id: string; name: string; text: string; }
+
+  let rowSeq = 0;
+  const nextRowId = () => `param-${Date.now()}-${rowSeq++}`;
+
+  function parseParamValue(text: string): unknown {
+    const trimmed = text.trim();
+    if (!trimmed) return '';
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return text;
+    }
+  }
+
+  function rowsFromRecord(record: Record<string, unknown>): ParamRow[] {
+    return Object.entries(record).map(([name, value]) => ({
+      id: nextRowId(),
+      name,
+      text: typeof value === 'string' ? value : JSON.stringify(value),
+    }));
+  }
+
+  function rowsToRecord(rows: ParamRow[]): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const row of rows) {
+      if (!row.name.trim()) continue;
+      out[row.name.trim()] = parseParamValue(row.text);
+    }
+    return out;
+  }
+
+  let parameters = $state<ParamRow[]>([]);
+  let sessionVariables = $state<ParamRow[]>([]);
+  let paramsOpen = $state(false);
 
   /** True when a run produced more than one statement outcome. */
   let isMultiResult = $derived(results.length > 1);
@@ -54,6 +90,9 @@
   }
 
   onMount(() => {
+    const snapshot = get(consoleStore);
+    parameters = rowsFromRecord(snapshot.parameters);
+    sessionVariables = rowsFromRecord(snapshot.sessionVariables);
     const unsub = consoleStore.subscribe(s => {
       editorContent = s.editorContent;
       isExecuting = s.isExecuting;
@@ -66,7 +105,12 @@
       favorites = s.favorites;
     });
     const unsubTheme = theme.subscribe(v => { isDark = v === 'dark'; });
-    return () => { unsub(); unsubTheme(); };
+    return () => {
+      unsub();
+      unsubTheme();
+      if (saveTimer) clearTimeout(saveTimer);
+      if (validateTimer) clearTimeout(validateTimer);
+    };
   });
 
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -77,6 +121,29 @@
     const content = editorContent;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => consoleStore.setEditorContent(content), 300);
+  });
+
+  // Re-check the buffer in the background after the user pauses typing, so
+  // mistakes surface without an explicit validate click. Manual validation
+  // stays available for an immediate answer.
+  $effect(() => {
+    const content = editorContent;
+    if (validateTimer) clearTimeout(validateTimer);
+    if (!content.trim()) {
+      validateMessage = '';
+      return;
+    }
+    validateTimer = setTimeout(() => void autoValidate(content), 800);
+  });
+
+  // Push binding rows into the store whenever the panel edits them, so the
+  // next execution carries the latest values without an explicit save step.
+  $effect(() => {
+    consoleStore.setParameters(rowsToRecord(parameters));
+  });
+
+  $effect(() => {
+    consoleStore.setSessionVariables(rowsToRecord(sessionVariables));
   });
 
   /**
@@ -111,6 +178,34 @@
     } finally {
       isValidating = false;
     }
+  }
+
+  function handleFormat() {
+    const formatted = formatQuery(editorContent);
+    if (formatted && formatted !== editorContent) {
+      editorContent = formatted;
+      consoleStore.setEditorContent(formatted);
+    }
+  }
+
+  let validateTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Quietly re-check the first problem after the user pauses typing. */
+  async function autoValidate(content: string) {
+    if (isValidating) return;
+    const statements = splitQueries(content);
+    if (statements.length === 0) return;
+    try {
+      for (const statement of statements) {
+        const outcome = await queryService.validate(statement);
+        if (content !== editorContent) return;
+        if (!outcome.valid) {
+          validateMessage = outcome.message;
+          return;
+        }
+        validateMessage = outcome.message;
+      }
+    } catch { /* ignore background check failures */ }
   }
 
   function handleSaveFavorite() {
@@ -152,6 +247,7 @@
         {isDark}
         placeholder="{$t('console.queryPlaceholder')} {$t('console.executeHint')}"
         onExecute={handleExecute}
+        historyProvider={() => history.map(item => item.query)}
       />
     </div>
     <div class="px-4 pb-3 flex items-center gap-2 flex-wrap">
@@ -168,6 +264,13 @@
         disabled={isValidating || !editorContent.trim()}
       >
         {isValidating ? $t('console.validating') : $t('console.validate')}
+      </button>
+      <button
+        class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded transition-colors cursor-pointer disabled:opacity-50"
+        onclick={handleFormat}
+        disabled={!editorContent.trim()}
+      >
+        {$t('console.format')}
       </button>
       <button class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded transition-colors cursor-pointer" onclick={() => { consoleStore.setEditorContent(''); consoleStore.clearResult(); }}>
         {$t('console.clear')}
@@ -192,6 +295,78 @@
       >
         💾 {$t('common.save')}
       </button>
+    </div>
+    <div class="px-4 pb-3">
+      <button
+        class="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 cursor-pointer"
+        onclick={() => paramsOpen = !paramsOpen}
+      >
+        {paramsOpen ? '▾' : '▸'} {$t('console.parameters')} ({parameters.length + sessionVariables.length})
+      </button>
+      {#if paramsOpen}
+        <div class="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div class="border border-gray-200 dark:border-gray-700 rounded p-2">
+            <p class="text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">@ {$t('console.parameters')}</p>
+            {#each parameters as row (row.id)}
+              <div class="flex gap-1 mb-1">
+                <input
+                  type="text"
+                  bind:value={row.name}
+                  placeholder={$t('console.bindingName')}
+                  class="w-1/3 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+                />
+                <input
+                  type="text"
+                  bind:value={row.text}
+                  placeholder={$t('console.bindingValue')}
+                  class="flex-1 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+                />
+                <button
+                  class="px-1.5 text-xs text-red-400 hover:text-red-600 cursor-pointer"
+                  onclick={() => { parameters = parameters.filter(r => r.id !== row.id); }}
+                  aria-label={$t('common.delete')}
+                >✕</button>
+              </div>
+            {/each}
+            <button
+              class="text-xs text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 cursor-pointer"
+              onclick={() => { parameters = [...parameters, { id: nextRowId(), name: '', text: '' }]; }}
+            >
+              {$t('console.addBinding')}
+            </button>
+          </div>
+          <div class="border border-gray-200 dark:border-gray-700 rounded p-2">
+            <p class="text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">$ {$t('console.sessionVariables')}</p>
+            {#each sessionVariables as row (row.id)}
+              <div class="flex gap-1 mb-1">
+                <input
+                  type="text"
+                  bind:value={row.name}
+                  placeholder={$t('console.bindingName')}
+                  class="w-1/3 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+                />
+                <input
+                  type="text"
+                  bind:value={row.text}
+                  placeholder={$t('console.bindingValue')}
+                  class="flex-1 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+                />
+                <button
+                  class="px-1.5 text-xs text-red-400 hover:text-red-600 cursor-pointer"
+                  onclick={() => { sessionVariables = sessionVariables.filter(r => r.id !== row.id); }}
+                  aria-label={$t('common.delete')}
+                >✕</button>
+              </div>
+            {/each}
+            <button
+              class="text-xs text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 cursor-pointer"
+              onclick={() => { sessionVariables = [...sessionVariables, { id: nextRowId(), name: '', text: '' }]; }}
+            >
+              {$t('console.addBinding')}
+            </button>
+          </div>
+        </div>
+      {/if}
     </div>
     {#if validateMessage}
       <div class="mx-4 mb-3 p-2 text-xs rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 text-gray-600 dark:text-gray-300">

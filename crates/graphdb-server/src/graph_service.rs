@@ -1859,6 +1859,8 @@ where
         &self,
         session_id: i64,
         statements: &[String],
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
     ) -> Vec<Result<QueryResult, String>> {
         let Some(session) = self.session_manager.find_session(session_id) else {
             return statements
@@ -1871,8 +1873,8 @@ where
         let username = session.user();
 
         // Classification pass: transaction commands get an explicit error,
-        // LET statements run per-statement through `execute`, everything
-        // else joins the batch window.
+        // LET statements run per-statement, everything else joins the
+        // batch window.
         let mut results: Vec<Option<Result<QueryResult, String>>> = vec![None; statements.len()];
         let mut batch_indices: Vec<usize> = Vec::new();
         let mut batch_statements: Vec<String> = Vec::new();
@@ -1881,7 +1883,15 @@ where
                 Err(parse_error) => results[index] = Some(Err(parse_error)),
                 Ok(Some(parsed)) => match parsed.ast.stmt() {
                     Stmt::AssignVariable(_) => {
-                        results[index] = Some(self.execute(session_id, stmt).await);
+                        results[index] = Some(
+                            self.execute_with_params(
+                                session_id,
+                                stmt,
+                                parameters.clone(),
+                                session_variables.clone(),
+                            )
+                            .await,
+                        );
                     }
                     _ => {
                         results[index] = Some(Err(
@@ -1901,7 +1911,15 @@ where
         // per-statement execution so transaction semantics are preserved.
         if session.current_transaction().is_some() || !session.is_auto_commit() {
             for (index, stmt) in batch_statements.iter().enumerate() {
-                results[batch_indices[index]] = Some(self.execute(session_id, stmt).await);
+                results[batch_indices[index]] = Some(
+                    self.execute_with_params(
+                        session_id,
+                        stmt,
+                        parameters.clone(),
+                        session_variables.clone(),
+                    )
+                    .await,
+                );
             }
             return finalize_batch_outcomes(results);
         }
@@ -1929,8 +1947,8 @@ where
             space_name: session.space().map(|s| s.name),
             auto_commit: true,
             transaction_id: None,
-            parameters: None,
-            session_variables: None,
+            parameters,
+            session_variables,
             query_id: None,
             parsed_statement: None,
             consistency: Default::default(),
