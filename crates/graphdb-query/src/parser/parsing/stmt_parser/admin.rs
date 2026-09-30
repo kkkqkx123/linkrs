@@ -214,6 +214,9 @@ pub(super) fn parse_load_from_statement(ctx: &mut ParseContext) -> Result<Stmt, 
     };
 
     let options = if ctx.check_keyword("OPTIONS") || ctx.check_token(TokenKind::LParen) {
+        if ctx.check_keyword("OPTIONS") {
+            ctx.consume_keyword("OPTIONS")?;
+        }
         ctx.expect_token(TokenKind::LParen)?;
         let mut opts = Vec::new();
         loop {

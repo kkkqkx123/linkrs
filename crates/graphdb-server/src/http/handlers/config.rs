@@ -582,3 +582,380 @@ pub(crate) fn apply_config_update(
     }
     Ok((requires_restart, true))
 }
+
+/// Known configuration sections: the module vocabulary for the
+/// `SHOW CONFIGS` / `UPDATE CONFIGS` query statements.
+pub(crate) const CONFIG_SECTIONS: &[&str] = &[
+    "database",
+    "transaction",
+    "log",
+    "auth",
+    "bootstrap",
+    "optimizer",
+    "monitoring",
+];
+
+/// Settable keys per section, mirroring the read/write tables above.
+pub(crate) fn section_keys(section: &str) -> Option<&'static [&'static str]> {
+    match section {
+        "database" => Some(&["host", "port", "storage_path", "max_connections"]),
+        "transaction" => Some(&[
+            "default_timeout",
+            "max_concurrent_transactions",
+            "auto_commit",
+        ]),
+        "log" => Some(&["level", "dir", "file", "max_file_size", "max_files"]),
+        "auth" => Some(&[
+            "enable_authorize",
+            "failed_login_attempts",
+            "session_idle_timeout_secs",
+            "force_change_default_password",
+            "default_username",
+            "bcrypt_cost",
+        ]),
+        "bootstrap" => Some(&[
+            "auto_create_default_space",
+            "default_space_name",
+            "single_user_mode",
+        ]),
+        "optimizer" => Some(&[
+            "max_iteration_rounds",
+            "max_exploration_rounds",
+            "enable_cost_model",
+            "enable_multi_plan",
+            "enable_property_pruning",
+            "enable_adaptive_iteration",
+            "stable_threshold",
+            "min_iteration_rounds",
+            "statistics_sample_limit",
+            "statistics_min_epoch_delta",
+            "storage_cost_profile",
+            "space_cost_profiles",
+        ]),
+        "monitoring" => Some(&["enabled", "memory_cache_size", "slow_query_threshold_ms"]),
+        _ => None,
+    }
+}
+
+/// Normalize a statement module to a configuration section.
+///
+/// `None` means all sections. Unknown modules fail loudly with the valid
+/// vocabulary instead of silently matching nothing.
+pub(crate) fn resolve_config_section(module: Option<&str>) -> Result<Option<String>, String> {
+    match module {
+        None => Ok(None),
+        Some(raw) => {
+            let normalized = raw.trim().to_lowercase();
+            if CONFIG_SECTIONS.contains(&normalized.as_str()) {
+                Ok(Some(normalized))
+            } else {
+                Err(format!(
+                    "unknown configuration module '{raw}': expected one of {}",
+                    CONFIG_SECTIONS.join(", ")
+                ))
+            }
+        }
+    }
+}
+
+/// Resolve the target section/key of an `UPDATE CONFIGS` intent.
+///
+/// An explicit module must name a known section. Without a module the key
+/// is looked up across sections: exactly one owner is required, so unknown
+/// keys and ambiguous keys both fail with an actionable message.
+fn resolve_config_key(module: Option<&str>, name: &str) -> Result<(String, String), String> {
+    if let Some(section) = resolve_config_section(module)? {
+        return Ok((section, name.to_string()));
+    }
+    let mut owners = Vec::new();
+    for section in CONFIG_SECTIONS {
+        if section_keys(section).is_some_and(|keys| keys.contains(&name)) {
+            owners.push(*section);
+        }
+    }
+    match owners.as_slice() {
+        [] => Err(format!(
+            "unknown configuration key '{name}': qualify it with a module (one of {})",
+            CONFIG_SECTIONS.join(", ")
+        )),
+        [section] => Ok((section.to_string(), name.to_string())),
+        _ => Err(format!(
+            "ambiguous configuration key '{name}': present in {} — qualify it with a module",
+            owners.join(", ")
+        )),
+    }
+}
+
+/// Render a configuration value for display rows: plain strings stay bare,
+/// anything else renders as compact JSON.
+fn display_config_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Null => String::new(),
+        _ => value.to_string(),
+    }
+}
+
+/// Resolve a `SHOW CONFIGS` intent against live configuration.
+///
+/// Returns `section / key / value / requires_restart` rows, restricted to
+/// one section when the statement names a module.
+pub(crate) fn resolve_show_configs(
+    config: &crate::config::Config,
+    module: Option<&str>,
+) -> Result<graphdb_core::DataSet, String> {
+    let section = resolve_config_section(module)?;
+    let sections: Vec<&str> = match section.as_deref() {
+        Some(name) => vec![name],
+        None => CONFIG_SECTIONS.to_vec(),
+    };
+    let mut rows = Vec::new();
+    for section in sections {
+        let keys = section_keys(section).ok_or_else(|| {
+            format!("unknown configuration module '{section}'")
+        })?;
+        for key in keys {
+            rows.push(vec![
+                graphdb_core::Value::string(section),
+                graphdb_core::Value::string(*key),
+                graphdb_core::Value::string(display_config_value(&get_config_value(
+                    config, section, key,
+                ))),
+                graphdb_core::Value::Bool(is_restart_required(section, key)),
+            ]);
+        }
+    }
+    Ok(graphdb_core::DataSet::from_rows(
+        rows,
+        vec![
+            "section".to_string(),
+            "key".to_string(),
+            "value".to_string(),
+            "requires_restart".to_string(),
+        ],
+    ))
+}
+
+/// Apply an `UPDATE CONFIGS` intent to live configuration.
+///
+/// Reuses the typed validation, restart detection, persistence, and
+/// rollback of the management endpoints instead of a second write path.
+/// Returns a one-row receipt (`updated / requires_restart / persisted`).
+pub(crate) fn apply_config_update_intent(
+    store: &parking_lot::RwLock<crate::config::Config>,
+    config_path: Option<&std::path::Path>,
+    module: Option<&str>,
+    name: &str,
+    value: &graphdb_core::Value,
+) -> Result<graphdb_core::DataSet, String> {
+    let (section, key) = resolve_config_key(module, name)?;
+    let json = crate::value::to_json(value.clone());
+    let (requires_restart, persisted) =
+        apply_config_update(store, config_path, &section, &key, &json)?;
+    Ok(graphdb_core::DataSet::from_rows(
+        vec![vec![
+            graphdb_core::Value::string(format!("{section}.{key}")),
+            graphdb_core::Value::Bool(requires_restart),
+            graphdb_core::Value::Bool(persisted),
+        ]],
+        vec![
+            "updated".to_string(),
+            "requires_restart".to_string(),
+            "persisted".to_string(),
+        ],
+    ))
+}
+
+/// Resolve configuration intents carried by a query result.
+///
+/// `ConfigUpdate` intents are applied to the live store and replaced by
+/// their receipt; `ShowConfigs` intents are replaced by live rows. Any
+/// other result passes through untouched, preserving metadata.
+pub(crate) fn resolve_query_config_intent(
+    result: graphdb_api::api_core::QueryResult,
+    store: &parking_lot::RwLock<crate::config::Config>,
+    config_path: Option<&std::path::Path>,
+) -> Result<graphdb_api::api_core::QueryResult, String> {
+    use graphdb_api::api_core::QueryResult;
+    let graphdb_api::api_core::QueryResult {
+        execution,
+        metadata,
+    } = result;
+    let execution = match execution {
+        graphdb_query::executor::base::ExecutionResult::ConfigUpdate {
+            module,
+            name,
+            value,
+        } => graphdb_query::executor::base::ExecutionResult::DataSet {
+            data: apply_config_update_intent(
+                store,
+                config_path,
+                module.as_deref(),
+                &name,
+                &value,
+            )?,
+        },
+        graphdb_query::executor::base::ExecutionResult::ShowConfigs { module } => {
+            let config = store.read();
+            graphdb_query::executor::base::ExecutionResult::DataSet {
+                data: resolve_show_configs(&config, module.as_deref())?,
+            }
+        }
+        other => other,
+    };
+    Ok(QueryResult::new(execution, metadata))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parking_lot::RwLock;
+    use std::sync::Arc;
+
+    fn test_store() -> Arc<RwLock<crate::config::Config>> {
+        Arc::new(RwLock::new(crate::config::Config::default()))
+    }
+
+    #[test]
+    fn test_resolve_config_section_vocabulary() {
+        assert_eq!(resolve_config_section(None).unwrap(), None);
+        assert_eq!(
+            resolve_config_section(Some("DATABASE")).unwrap(),
+            Some("database".to_string())
+        );
+        let error = resolve_config_section(Some("storage")).unwrap_err();
+        assert!(
+            error.contains("unknown configuration module"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_apply_intent_updates_live_config() {
+        let store = test_store();
+        let receipt = apply_config_update_intent(
+            &store,
+            None,
+            Some("database"),
+            "max_connections",
+            &graphdb_core::Value::Int(512),
+        )
+        .expect("valid update should apply");
+        assert_eq!(
+            receipt.col_names,
+            vec![
+                "updated".to_string(),
+                "requires_restart".to_string(),
+                "persisted".to_string()
+            ]
+        );
+        assert_eq!(
+            store.read().common.database.max_connections, 512,
+            "live config should reflect the applied intent"
+        );
+        // Unqualified keys resolve when exactly one section owns them.
+        apply_config_update_intent(
+            &store,
+            None,
+            None,
+            "max_connections",
+            &graphdb_core::Value::Int(256),
+        )
+        .expect("unqualified unique key should resolve");
+        assert_eq!(store.read().common.database.max_connections, 256);
+    }
+
+    #[test]
+    fn test_apply_intent_rejects_unknown_key() {
+        let store = test_store();
+        let error = apply_config_update_intent(
+            &store,
+            None,
+            Some("database"),
+            "no_such_key",
+            &graphdb_core::Value::Int(1),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("unknown configuration key"),
+            "unexpected error: {error}"
+        );
+        let error = apply_config_update_intent(
+            &store,
+            None,
+            Some("no_such_module"),
+            "max_connections",
+            &graphdb_core::Value::Int(1),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("unknown configuration module"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_apply_intent_rejects_type_mismatch() {
+        let store = test_store();
+        let before = store.read().common.database.max_connections;
+        let error = apply_config_update_intent(
+            &store,
+            None,
+            Some("database"),
+            "max_connections",
+            &graphdb_core::Value::string("not-a-number"),
+        )
+        .unwrap_err();
+        assert!(error.contains("invalid value"), "unexpected error: {error}");
+        assert_eq!(
+            store.read().common.database.max_connections, before,
+            "failed update must not mutate live config"
+        );
+    }
+
+    #[test]
+    fn test_resolve_show_configs_lists_live_values() {
+        let store = test_store();
+        store.write().common.database.max_connections = 777;
+        let rows = resolve_show_configs(&store.read(), None).expect("listing should succeed");
+        assert_eq!(
+            rows.col_names,
+            vec![
+                "section".to_string(),
+                "key".to_string(),
+                "value".to_string(),
+                "requires_restart".to_string()
+            ]
+        );
+        let entry = rows
+            .rows
+            .iter()
+            .find(|row| {
+                row.first().map(|v| v == &graphdb_core::Value::string("database"))
+                    .unwrap_or(false)
+                    && row.get(1).map(|v| v == &graphdb_core::Value::string("max_connections"))
+                        .unwrap_or(false)
+            })
+            .expect("database.max_connections row should be listed");
+        assert_eq!(
+            entry.get(2),
+            Some(&graphdb_core::Value::string("777")),
+            "listing should reflect live configuration"
+        );
+
+        let scoped = resolve_show_configs(&store.read(), Some("database"))
+            .expect("scoped listing should succeed");
+        assert!(
+            scoped
+                .rows
+                .iter()
+                .all(|row| row.first() == Some(&graphdb_core::Value::string("database"))),
+            "scoped listing should only contain the requested section"
+        );
+        let error = resolve_show_configs(&store.read(), Some("storage")).unwrap_err();
+        assert!(
+            error.contains("unknown configuration module"),
+            "unexpected error: {error}"
+        );
+    }
+}

@@ -4,7 +4,7 @@
 
 use graphdb_core::error::DBError;
 use graphdb_core::types::{SpaceStatus, SpaceSummary};
-use graphdb_core::DataSet;
+use graphdb_core::{DataSet, Value};
 
 /// Type of execution result
 ///
@@ -21,6 +21,22 @@ pub enum ExecutionResult {
     SpaceSwitched(SpaceSummary),
     /// implementation error
     Error(String),
+    /// Configuration update intent produced by `UPDATE CONFIGS`.
+    ///
+    /// The query engine parses the statement and evaluates the assigned
+    /// value but never touches global configuration storage: the host
+    /// (network service or embedding) applies the intent with its own
+    /// validation, persistence, and restart semantics.
+    ConfigUpdate {
+        module: Option<String>,
+        name: String,
+        value: Value,
+    },
+    /// Configuration listing intent produced by `SHOW CONFIGS`.
+    ///
+    /// The engine carries no configuration store, so the host resolves the
+    /// intent against the live configuration and returns the rows.
+    ShowConfigs { module: Option<String> },
 }
 
 impl ExecutionResult {
@@ -32,6 +48,8 @@ impl ExecutionResult {
             ExecutionResult::Empty => 0,
             ExecutionResult::SpaceSwitched(_) => 0,
             ExecutionResult::Error(_) => 0,
+            ExecutionResult::ConfigUpdate { .. } => 0,
+            ExecutionResult::ShowConfigs { .. } => 0,
         }
     }
 

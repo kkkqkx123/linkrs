@@ -1686,7 +1686,12 @@ impl<
     fn extract_permission_from_statement(&self, stmt: &str) -> Permission {
         let stmt_upper = stmt.trim().to_uppercase();
 
-        if stmt_upper.starts_with("SELECT") || stmt_upper.starts_with("MATCH") {
+        // Configuration writes mutate global server state outside any space:
+        // only administrators may issue them. Reads of configuration stay on
+        // the default read path.
+        if stmt_upper.starts_with("UPDATE CONFIGS") {
+            Permission::Admin
+        } else if stmt_upper.starts_with("SELECT") || stmt_upper.starts_with("MATCH") {
             Permission::Read
         } else if stmt_upper.starts_with("INSERT") || stmt_upper.starts_with("CREATE") {
             Permission::Write

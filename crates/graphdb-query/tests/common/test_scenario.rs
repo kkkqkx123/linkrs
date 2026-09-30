@@ -128,6 +128,11 @@ impl TestScenario {
         self.last_error.as_deref()
     }
 
+    /// The last execution result, if the statement ran without transport error.
+    pub fn last_result(&self) -> Option<&ExecutionResult> {
+        self.last_result.as_ref()
+    }
+
     /// Execute `ANALYZE` for the current space.
     pub fn analyze(mut self) -> Self {
         let space_name = self.current_space.as_ref().map(|s| s.space_name.clone());

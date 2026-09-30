@@ -26,7 +26,7 @@ use crate::planning::plan::core::nodes::{
 };
 use crate::planning::plan::core::{
     node_id_generator::next_node_id, AlterSpaceNode, ClearSpaceNode, PlanNodeEnum, ShowSpacesNode,
-    ShowStatsNode, ShowStatsType, ShowUsersNode,
+    ShowStatsNode, ShowStatsType,
 };
 use crate::planning::plan::SubPlan;
 use crate::planning::plan::{
@@ -72,29 +72,10 @@ impl MaintainPlanner {
                 let show_spaces_node = ShowSpacesNode::new(next_node_id());
                 PlanNodeEnum::SpaceManage(SpaceManageNode::Show(show_spaces_node))
             }
-            ShowTarget::Users => {
-                let show_users_node = ShowUsersNode::new(next_node_id());
-                PlanNodeEnum::UserManage(crate::planning::plan::core::nodes::management::manage_node_enums::UserManageNode::ShowUsers(show_users_node))
-            }
-            ShowTarget::Roles => {
-                let show_roles_node = crate::planning::plan::core::nodes::ShowRolesNode::new(
-                    next_node_id(),
-                    current_space.to_string(),
-                );
-                PlanNodeEnum::UserManage(crate::planning::plan::core::nodes::management::manage_node_enums::UserManageNode::ShowRoles(show_roles_node))
-            }
             ShowTarget::Indexes => {
                 let show_indexes_node =
                     ShowIndexesNode::new(next_node_id(), current_space.to_string());
                 PlanNodeEnum::IndexManage(IndexManageNode::ShowIndexes(show_indexes_node))
-            }
-            ShowTarget::Tag(_) => {
-                let show_tags_node = ShowTagsNode::new(next_node_id(), current_space.to_string());
-                PlanNodeEnum::TagManage(TagManageNode::Show(show_tags_node))
-            }
-            ShowTarget::Edge(_) => {
-                let show_edges_node = ShowEdgesNode::new(next_node_id(), current_space.to_string());
-                PlanNodeEnum::EdgeManage(EdgeManageNode::Show(show_edges_node))
             }
             ShowTarget::Index(_) => {
                 let show_indexes_node =

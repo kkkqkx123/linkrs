@@ -78,8 +78,23 @@ pub async fn execute<
         .await
     {
         Ok(exec_result) => {
-            // Converting QueryResult to QueryResponse
-            Ok::<_, HttpError>(query_result_to_response(exec_result))
+            // Configuration intents (`UPDATE CONFIGS` / `SHOW CONFIGS`)
+            // resolve against the live store here; anything else passes
+            // through to the standard response mapping.
+            let store = state.server.config_store();
+            let config_path = state.server.get_config_path();
+            match crate::http::handlers::config::resolve_query_config_intent(
+                exec_result,
+                &store,
+                config_path.as_deref(),
+            ) {
+                Ok(resolved) => Ok::<_, HttpError>(query_result_to_response(resolved)),
+                Err(e) => Ok::<_, HttpError>(QueryResponse::error(
+                    "CONFIG_ERROR".to_string(),
+                    e,
+                    None,
+                )),
+            }
         }
         Err(e) => Ok::<_, HttpError>(QueryResponse::error(
             "QUERY_ERROR".to_string(),
@@ -121,10 +136,21 @@ pub async fn execute_batch<
         .execute_batch(request.session_id, &request.statements)
         .await;
 
+    let store = state.server.config_store();
+    let config_path = state.server.get_config_path();
     let results = outcomes
         .into_iter()
         .map(|outcome| match outcome {
-            Ok(exec_result) => query_result_to_response(exec_result),
+            Ok(exec_result) => {
+                match crate::http::handlers::config::resolve_query_config_intent(
+                    exec_result,
+                    &store,
+                    config_path.as_deref(),
+                ) {
+                    Ok(resolved) => query_result_to_response(resolved),
+                    Err(e) => QueryResponse::error("CONFIG_ERROR".to_string(), e, None),
+                }
+            }
             Err(e) => QueryResponse::error("QUERY_ERROR".to_string(), e, None),
         })
         .collect();

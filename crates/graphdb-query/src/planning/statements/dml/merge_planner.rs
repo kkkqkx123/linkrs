@@ -400,6 +400,71 @@ impl MergePlanner {
             replace_properties: assignments.iter().any(|a| a.is_map_overwrite),
         })
     }
+
+    /// Build the standalone insert root for a node-pattern merge together
+    /// with the vertex-id expression the insert will use.
+    ///
+    /// Shared by the bare-merge plan path and the conditional-merge
+    /// orchestration so both compute the same insert values and vid.
+    pub(crate) fn build_node_insert_parts(
+        &self,
+        vertex: &BoundPatternVertex,
+        space_name: String,
+        expr_ctx: &Arc<ExpressionAnalysisContext>,
+    ) -> Result<(LogicalNodeEnum, ContextualExpression), PlannerError> {
+        let vertex_info = self.bound_vertex_to_info(vertex, space_name, expr_ctx)?;
+        let vid_expr = vertex_info
+            .values
+            .first()
+            .map(|(vid, _)| vid.clone())
+            .ok_or_else(|| {
+                PlannerError::PlanGenerationFailed(
+                    "MERGE node pattern produced no vertex id".to_string(),
+                )
+            })?;
+        let insert = LogicalNodeEnum::InsertVertices(LogicalInsertVerticesNode {
+            id: next_node_id(),
+            info: vertex_info,
+            output_var: None,
+            col_names: vec!["inserted".to_string()],
+            column_types: vec![],
+        });
+        Ok((insert, vid_expr))
+    }
+
+    /// Build the update root targeting one concrete vertex for a merge
+    /// branch (`ON MATCH` on the probed vertex, `ON CREATE` on the vertex
+    /// the create branch just inserted).
+    ///
+    /// Unlike the display-only `Select` branches, the vid and tag are fully
+    /// resolved here so the update sink can locate its target row.
+    pub(crate) fn build_node_update_root(
+        assignments: &[BoundAssignment],
+        space_name: String,
+        tag_name: String,
+        vid: Value,
+        expr_ctx: &Arc<ExpressionAnalysisContext>,
+    ) -> Result<LogicalNodeEnum, PlannerError> {
+        let properties = Self::bound_assignments_to_properties(assignments, expr_ctx)?;
+        let vid_meta = ExpressionMeta::new(Expression::Literal(vid));
+        let vid_id = expr_ctx.register_expression(vid_meta);
+        let info = VertexUpdateInfo {
+            space_name,
+            vertex_id: ContextualExpression::new(vid_id, expr_ctx.clone()),
+            tag_name: Some(tag_name),
+            properties,
+            condition: None,
+            is_upsert: false,
+            replace_properties: assignments.iter().any(|a| a.is_map_overwrite),
+        };
+        Ok(LogicalNodeEnum::Update(LogicalUpdateNode {
+            id: next_node_id(),
+            info: UpdateTargetType::Vertex(info),
+            output_var: None,
+            col_names: vec!["updated".to_string()],
+            column_types: vec![],
+        }))
+    }
 }
 
 impl Planner for MergePlanner {
@@ -426,22 +491,17 @@ impl Planner for MergePlanner {
 
         match &merge.pattern {
             BoundMergePattern::Node(vertex) => {
-                let vertex_info =
-                    self.bound_vertex_to_info(vertex, space_name.clone(), &expr_ctx)?;
-
                 let has_on_match = !merge.on_match.is_empty();
                 let has_on_create = !merge.on_create.is_empty();
 
                 if !has_on_match && !has_on_create {
                     let arg_node = ArgumentNode::new(next_node_id(), "merge_args");
                     let arg_node_enum = PlanNodeEnum::Argument(arg_node);
-                    let logical_root = LogicalNodeEnum::InsertVertices(LogicalInsertVerticesNode {
-                        id: next_node_id(),
-                        info: vertex_info,
-                        output_var: None,
-                        col_names: vec!["inserted".to_string()],
-                        column_types: vec![],
-                    });
+                    let (logical_root, _) = self.build_node_insert_parts(
+                        vertex,
+                        space_name.clone(),
+                        &expr_ctx,
+                    )?;
                     let mut sub_plan = SubPlan::from_logical_root(logical_root);
                     sub_plan.set_tail(arg_node_enum);
                     return Ok(sub_plan);
@@ -475,13 +535,14 @@ impl Planner for MergePlanner {
                     }));
                 }
 
-                let mut current_node = LogicalNodeEnum::InsertVertices(LogicalInsertVerticesNode {
-                    id: next_node_id(),
-                    info: vertex_info,
-                    output_var: None,
-                    col_names: vec!["inserted".to_string()],
-                    column_types: vec![],
-                });
+                let mut current_node = {
+                    let (insert, _) = self.build_node_insert_parts(
+                        vertex,
+                        space_name.clone(),
+                        &expr_ctx,
+                    )?;
+                    insert
+                };
                 if has_on_create {
                     let update_info = Self::build_update_info_from_bound(
                         &merge.on_create,
@@ -578,6 +639,11 @@ impl Planner for MergePlanner {
         let is_edge = self.is_edge_pattern(&merge_stmt.pattern);
 
         if is_edge {
+            if merge_stmt.on_match.is_some() || merge_stmt.on_create.is_some() {
+                return Err(PlannerError::UnsupportedOperation(
+                    "MERGE edge pattern with ON MATCH / ON CREATE is not supported".to_string(),
+                ));
+            }
             let edge_info = self.pattern_to_edge_info(
                 &merge_stmt.pattern,
                 space_name.clone(),

@@ -254,13 +254,31 @@ impl<
             .await
         {
             Ok(result) => {
-                let (query_result, metadata) = query_result_to_proto(&result);
-                Ok(Response::new(ExecuteQueryResponse {
-                    success: true,
-                    result: query_result,
-                    error: String::new(),
-                    metadata,
-                }))
+                // Configuration intents resolve against the live store like
+                // the HTTP surface; resolution failures are query errors.
+                let store = self.app_state.server.config_store();
+                let config_path = self.app_state.server.get_config_path();
+                match crate::http::handlers::config::resolve_query_config_intent(
+                    result,
+                    &store,
+                    config_path.as_deref(),
+                ) {
+                    Ok(resolved) => {
+                        let (query_result, metadata) = query_result_to_proto(&resolved);
+                        Ok(Response::new(ExecuteQueryResponse {
+                            success: true,
+                            result: query_result,
+                            error: String::new(),
+                            metadata,
+                        }))
+                    }
+                    Err(e) => Ok(Response::new(ExecuteQueryResponse {
+                        success: false,
+                        result: None,
+                        error: e,
+                        metadata: None,
+                    })),
+                }
             }
             Err(e) if e.contains("Invalid session ID") => Err(Status::unauthenticated(e)),
             Err(e) => Ok(Response::new(ExecuteQueryResponse {

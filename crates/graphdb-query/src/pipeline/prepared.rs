@@ -602,6 +602,48 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
             });
         }
+        // Conditional MERGE (`ON MATCH` / `ON CREATE` on a node pattern)
+        // plans to a scalar conditional the streaming assembler cannot
+        // execute, so it takes the probe-then-branch orchestration path:
+        // no cached plan is served or stored for it.
+        if let Some(bound) = request.bound_statement.as_ref() {
+            if super::merge_conditional::is_conditional_node_merge(bound) {
+                let result = self.execute_conditional_merge(request)?;
+                return Ok(match sink {
+                    ResultSink::Materialize => PreparedOutcome::Materialized(result),
+                    ResultSink::Stream => PreparedOutcome::Stream(
+                        StreamingQueryResult::from_execution_result(result),
+                    ),
+                    ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
+                });
+            }
+        }
+        // Configuration statements bypass planning: the engine carries no
+        // global configuration store. `UPDATE CONFIGS` evaluates its value
+        // and returns an application intent; `SHOW CONFIGS` returns a
+        // listing intent. The host resolves both against live configuration.
+        if let Stmt::UpdateConfigs(update) = &request.stmt {
+            let result = Self::prepare_config_update_intent(request, update)?;
+            return Ok(match sink {
+                ResultSink::Materialize => PreparedOutcome::Materialized(result),
+                ResultSink::Stream => PreparedOutcome::Stream(
+                    StreamingQueryResult::from_execution_result(result),
+                ),
+                ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
+            });
+        }
+        if let Stmt::ShowConfigs(show) = &request.stmt {
+            let result = ExecutionResult::ShowConfigs {
+                module: show.module.clone(),
+            };
+            return Ok(match sink {
+                ResultSink::Materialize => PreparedOutcome::Materialized(result),
+                ResultSink::Stream => PreparedOutcome::Stream(
+                    StreamingQueryResult::from_execution_result(result),
+                ),
+                ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
+            });
+        }
         // DDL has no streaming semantics: materialize and wrap.
         let stream_ddl =
             sink == ResultSink::Stream && request.statement_class == StatementClass::Ddl;
@@ -713,6 +755,39 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .map_err(|error| DBError::from(QueryError::execution(error)))?;
         log::info!("ANALYZE completed for space '{}'", space_name);
         Ok(ExecutionResult::Success)
+    }
+
+    /// Evaluate an `UPDATE CONFIGS` assignment into an application intent.
+    ///
+    /// Bypass path: no plan is generated. The value expression is evaluated
+    /// as a constant (literals, parameters, session variables, deterministic
+    /// scalar expressions); anything needing row input fails loudly instead
+    /// of producing a silently wrong configuration value.
+    fn prepare_config_update_intent(
+        request: &PreparedRequest,
+        update: &crate::parser::ast::UpdateConfigsStmt,
+    ) -> DBResult<ExecutionResult> {
+        let expression = update.config_value.get_expression().ok_or_else(|| {
+            DBError::from(QueryError::execution(
+                "UPDATE CONFIGS value has no evaluable expression".to_string(),
+            ))
+        })?;
+        let request_context = request.query_context.request_context();
+        let value = super::merge_conditional::eval_const_expression(
+            &expression,
+            &request_context.parameters,
+            &request_context.session_variables,
+        )
+        .map_err(|error| {
+            DBError::from(QueryError::execution(format!(
+                "UPDATE CONFIGS value must be a constant expression: {error}"
+            )))
+        })?;
+        Ok(ExecutionResult::ConfigUpdate {
+            module: update.module.clone(),
+            name: update.config_name.clone(),
+            value,
+        })
     }
 
     // ── Request context construction ──────────────────────────────────────

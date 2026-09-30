@@ -4,6 +4,7 @@
 
 use crate::parser::ast::stmt::*;
 use crate::parser::core::error::ParseError;
+use crate::parser::core::error::ParseErrorKind;
 use crate::parser::core::token::TokenKindExt;
 use crate::parser::parsing::clause_parser::ClauseParser;
 use crate::parser::parsing::expr_parser::parse_expression_with_context;
@@ -808,6 +809,8 @@ impl DmlParser {
         let pattern = TraversalParser::new().parse_pattern(ctx)?;
 
         // Consume the shared `ON` token once, then branch on CREATE vs MATCH.
+        // Both clauses may appear (each at most once, in any order), mirroring
+        // Cypher: `MERGE ... ON CREATE SET ... ON MATCH SET ...`.
         let (mut on_create, mut on_match) = if ctx.match_token(TokenKind::On) {
             if ctx.match_token(TokenKind::Create) {
                 (Some(Self::parse_merge_set_clause(ctx)?), None)
@@ -819,6 +822,33 @@ impl DmlParser {
         } else {
             (None, None)
         };
+        if ctx.match_token(TokenKind::On) {
+            if ctx.match_token(TokenKind::Create) {
+                if on_create.is_some() {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "Duplicate ON CREATE clause in MERGE statement".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+                on_create = Some(Self::parse_merge_set_clause(ctx)?);
+            } else if ctx.match_token(TokenKind::Match) {
+                if on_match.is_some() {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "Duplicate ON MATCH clause in MERGE statement".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+                on_match = Some(Self::parse_merge_set_clause(ctx)?);
+            } else {
+                return Err(ParseError::new(
+                    ParseErrorKind::SyntaxError,
+                    "Expected CREATE or MATCH after ON in MERGE statement".to_string(),
+                    ctx.current_position(),
+                ));
+            }
+        }
 
         // A bare `SET ...` clause following the pattern (e.g.
         // `MERGE (v:Tag {..}) SET v.prop = ..`) applies to both the matched

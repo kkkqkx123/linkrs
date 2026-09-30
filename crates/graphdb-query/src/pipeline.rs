@@ -2,6 +2,7 @@ mod compiler;
 mod diagnostics;
 mod execution;
 mod frontend;
+mod merge_conditional;
 mod prepared;
 
 use crate::cache::{ParameterizedQueryHandler, PlanCacheConfig, QueryPlanCache};

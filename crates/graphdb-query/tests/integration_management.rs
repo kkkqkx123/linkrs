@@ -952,8 +952,10 @@ fn test_update_configs_parser_multiple() {
 
 #[test]
 fn test_update_configs_execution() {
-    // UPDATE CONFIGS is a server-layer operation: it parses in the embedded
-    // pipeline but planning reports unsupported. Pin that contract.
+    // UPDATE CONFIGS parses in the embedded pipeline, evaluates its value,
+    // and returns an application intent: the engine carries no global
+    // configuration store, so the host applies the intent with its own
+    // validation, persistence, and restart semantics.
     let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
@@ -966,12 +968,97 @@ fn test_update_configs_execution() {
 
     let result = pipeline_manager.execute_query("UPDATE CONFIGS max_connections = 100");
     match result {
-        Ok(_) => panic!("UPDATE CONFIGS should not execute in the embedded pipeline"),
-        Err(e) => assert!(
-            format!("{e:?}").contains("not supported"),
-            "UPDATE CONFIGS should report unsupported, got: {e:?}"
-        ),
-    };
+        Ok(graphdb_query::executor::base::ExecutionResult::ConfigUpdate {
+            module,
+            name,
+            value,
+        }) => {
+            assert_eq!(module, None);
+            assert_eq!(name, "max_connections");
+            assert_eq!(value, graphdb_core::Value::Int(100));
+        }
+        other => panic!("UPDATE CONFIGS should return an application intent, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_update_configs_with_module_and_expression() {
+    // Module passthrough plus constant-expression evaluation (parameters
+    // and arithmetic resolve before the intent is built).
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
+    let storage = test_storage.storage();
+    let stats_manager = Arc::new(StatsManager::new());
+
+    let mut pipeline_manager = QueryPipelineManager::with_optimizer(
+        storage,
+        stats_manager,
+        Arc::new(OptimizerEngine::default()),
+    );
+
+    let result =
+        pipeline_manager.execute_query("UPDATE CONFIGS database max_connections = 50 * 2");
+    match result {
+        Ok(graphdb_query::executor::base::ExecutionResult::ConfigUpdate {
+            module,
+            name,
+            value,
+        }) => {
+            assert_eq!(module, Some("database".to_string()));
+            assert_eq!(name, "max_connections");
+            assert_eq!(value, graphdb_core::Value::Int(100));
+        }
+        other => panic!("UPDATE CONFIGS should return an application intent, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_update_configs_non_constant_value_reports_error() {
+    // Values needing row input cannot become configuration: fail loudly
+    // instead of substituting a wrong value.
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
+    let storage = test_storage.storage();
+    let stats_manager = Arc::new(StatsManager::new());
+
+    let mut pipeline_manager = QueryPipelineManager::with_optimizer(
+        storage,
+        stats_manager,
+        Arc::new(OptimizerEngine::default()),
+    );
+
+    let result = pipeline_manager.execute_query("UPDATE CONFIGS max_connections = missing_var");
+    assert!(
+        result.is_err(),
+        "non-constant UPDATE CONFIGS value should fail, got: {result:?}"
+    );
+}
+
+#[test]
+fn test_show_configs_returns_listing_intent() {
+    // SHOW CONFIGS carries no store in the engine: it returns a listing
+    // intent (with the requested module, if any) for the host to resolve
+    // against live configuration.
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
+    let storage = test_storage.storage();
+    let stats_manager = Arc::new(StatsManager::new());
+
+    let mut pipeline_manager = QueryPipelineManager::with_optimizer(
+        storage,
+        stats_manager,
+        Arc::new(OptimizerEngine::default()),
+    );
+
+    match pipeline_manager.execute_query("SHOW CONFIGS") {
+        Ok(graphdb_query::executor::base::ExecutionResult::ShowConfigs { module }) => {
+            assert_eq!(module, None);
+        }
+        other => panic!("SHOW CONFIGS should return a listing intent, got: {other:?}"),
+    }
+    match pipeline_manager.execute_query("SHOW CONFIGS storage") {
+        Ok(graphdb_query::executor::base::ExecutionResult::ShowConfigs { module }) => {
+            assert_eq!(module, Some("storage".to_string()));
+        }
+        other => panic!("SHOW CONFIGS should return a listing intent, got: {other:?}"),
+    }
 }
 
 // ==================== SHOW SESSIONS/QUERIES/CONFIGS Tests ====================
@@ -1355,17 +1442,18 @@ fn test_management_update_configs_operations() {
         "UPDATE CONFIGS storage cache_size = 1024",
     ];
 
-    // UPDATE CONFIGS is a server-layer operation; the embedded pipeline
-    // reports unsupported. Pin that contract per statement.
+    // UPDATE CONFIGS returns an application intent per statement for the
+    // host to apply; the embedded pipeline evaluates the value but never
+    // touches global configuration storage.
     for query in &update_configs_queries {
         let result = pipeline_manager.execute_query(query);
-        match result {
-            Ok(_) => panic!("{query} should not execute in the embedded pipeline"),
-            Err(e) => assert!(
-                format!("{e:?}").contains("not supported"),
-                "{query} should report unsupported, got: {e:?}"
+        assert!(
+            matches!(
+                result,
+                Ok(graphdb_query::executor::base::ExecutionResult::ConfigUpdate { .. })
             ),
-        };
+            "{query} should return an application intent, got: {result:?}"
+        );
     }
 }
 

@@ -153,6 +153,56 @@ impl StreamingQueryResult {
                     dropped: Arc::new(AtomicBool::new(false)),
                 }
             }
+            ExecutionResult::ConfigUpdate {
+                module,
+                name,
+                value,
+            } => {
+                let row = vec![
+                    module
+                        .map(graphdb_core::Value::string)
+                        .unwrap_or(graphdb_core::Value::Null(graphdb_core::NullType::Null)),
+                    graphdb_core::Value::string(name),
+                    value,
+                ];
+                let col_names = vec![
+                    "module".to_string(),
+                    "config_name".to_string(),
+                    "config_value".to_string(),
+                ];
+                let runtime = Arc::new(ExecutionRuntime::default_budget());
+                Self {
+                    inner: Arc::new(Mutex::new(StreamState::Materialized {
+                        rows: vec![row],
+                        col_names,
+                        exhausted: false,
+                    })),
+                    runtime,
+                    on_drop: Arc::new(Mutex::new(None)),
+                    transaction_finalizer: Arc::new(Mutex::new(None)),
+                    dropped: Arc::new(AtomicBool::new(false)),
+                }
+            }
+            ExecutionResult::ShowConfigs { module } => {
+                let row = vec![
+                    module
+                        .map(graphdb_core::Value::string)
+                        .unwrap_or(graphdb_core::Value::Null(graphdb_core::NullType::Null)),
+                ];
+                let col_names = vec!["module".to_string()];
+                let runtime = Arc::new(ExecutionRuntime::default_budget());
+                Self {
+                    inner: Arc::new(Mutex::new(StreamState::Materialized {
+                        rows: vec![row],
+                        col_names,
+                        exhausted: false,
+                    })),
+                    runtime,
+                    on_drop: Arc::new(Mutex::new(None)),
+                    transaction_finalizer: Arc::new(Mutex::new(None)),
+                    dropped: Arc::new(AtomicBool::new(false)),
+                }
+            }
         }
     }
 

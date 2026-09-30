@@ -223,10 +223,7 @@ fn test_merge_parser_edge() {
 
 #[test]
 fn test_merge_execution_vertex_create() {
-    // Bare MERGE without SET exercises the degenerate insert path. A bare
-    // SET clause is preserved into both merge branches at parse/bind time
-    // and requires conditional (Select) executor support, which is
-    // tracked as follow-up work rather than asserted here.
+    // Bare MERGE without SET takes the degenerate insert path.
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
@@ -237,7 +234,6 @@ fn test_merge_execution_vertex_create() {
 
 #[test]
 fn test_merge_execution_vertex_match() {
-    // See test_merge_execution_vertex_create for why no bare SET is used.
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
@@ -246,6 +242,207 @@ fn test_merge_execution_vertex_match() {
         .assert_success()
         .exec_dml("MERGE (v:Person {name: 'Alice'})")
         .assert_success();
+}
+
+// ==================== MERGE ON MATCH / ON CREATE Execution Tests ====================
+
+fn assert_last_merged(scenario: &TestScenario, expected: i64) {
+    match scenario.last_result() {
+        Some(graphdb_query::executor::base::ExecutionResult::DataSet { data }) => {
+            assert_eq!(
+                data.col_names,
+                vec!["merged".to_string()],
+                "MERGE unified output columns mismatch: {:?}",
+                data.col_names
+            );
+            assert_eq!(
+                data.rows,
+                vec![vec![Value::BigInt(expected)]],
+                "MERGE merged count mismatch"
+            );
+        }
+        other => panic!("MERGE should return the unified merged dataset, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_merge_on_match_updates_existing_vertex() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id BIGINT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 25)")
+        .assert_success()
+        .exec_dml("MERGE (v:Person {name: 'Alice'}) ON MATCH SET v.age = 30")
+        .assert_success();
+    assert_last_merged(&scenario, 1);
+    scenario.assert_vertex_props(
+        1,
+        "Person",
+        HashMap::from([
+            ("name", Value::string("Alice")),
+            ("age", Value::Int(30)),
+        ]),
+    );
+}
+
+#[test]
+fn test_merge_on_create_inserts_new_vertex() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id BIGINT, name STRING, age INT)")
+        .exec_dml("MERGE (v:Person {name: 'Bob'}) ON CREATE SET v.age = 40")
+        .assert_success();
+    assert_last_merged(&scenario, 1);
+    let scenario = scenario
+        .query("MATCH (n:Person {name: 'Bob'}) RETURN n.age")
+        .assert_success()
+        .assert_result_count(1);
+    match scenario.last_result() {
+        Some(graphdb_query::executor::base::ExecutionResult::DataSet { data }) => {
+            assert_eq!(data.rows, vec![vec![Value::Int(40)]]);
+        }
+        other => panic!("expected created vertex age row, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_merge_both_branches_match_wins() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id BIGINT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 25)")
+        .assert_success()
+        .exec_dml(
+            "MERGE (v:Person {name: 'Alice'}) ON CREATE SET v.age = 1 ON MATCH SET v.age = 2",
+        )
+        .assert_success();
+    assert_last_merged(&scenario, 1);
+    let scenario = scenario
+        .assert_vertex_props(1, "Person", HashMap::from([("age", Value::Int(2))]))
+        .query("MATCH (n:Person) RETURN n")
+        .assert_success()
+        .assert_result_count(1);
+    let _ = scenario;
+}
+
+#[test]
+fn test_merge_both_branches_create_applies_on_create() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id BIGINT, name STRING, age INT)")
+        .exec_dml(
+            "MERGE (v:Person {name: 'Zed'}) ON CREATE SET v.age = 1 ON MATCH SET v.age = 2",
+        )
+        .assert_success();
+    assert_last_merged(&scenario, 1);
+    let scenario = scenario
+        .query("MATCH (n:Person {name: 'Zed'}) RETURN n.age")
+        .assert_success()
+        .assert_result_count(1);
+    match scenario.last_result() {
+        Some(graphdb_query::executor::base::ExecutionResult::DataSet { data }) => {
+            assert_eq!(data.rows, vec![vec![Value::Int(1)]]);
+        }
+        other => panic!("expected created vertex age row, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_merge_create_only_is_idempotent() {
+    // The second MERGE probes the vertex created by the first one, takes
+    // the (empty) match branch, and reports zero merged vertices.
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id BIGINT, name STRING, age INT)")
+        .exec_dml("MERGE (v:Person {name: 'Idem'}) ON CREATE SET v.age = 7")
+        .assert_success()
+        .exec_dml("MERGE (v:Person {name: 'Idem'}) ON CREATE SET v.age = 7")
+        .assert_success();
+    assert_last_merged(&scenario, 0);
+    let scenario = scenario
+        .query("MATCH (n:Person) RETURN n")
+        .assert_success()
+        .assert_result_count(1)
+        .query("MATCH (n:Person {name: 'Idem'}) RETURN n.age")
+        .assert_success();
+    match scenario.last_result() {
+        Some(graphdb_query::executor::base::ExecutionResult::DataSet { data }) => {
+            assert_eq!(data.rows, vec![vec![Value::Int(7)]]);
+        }
+        other => panic!("expected idempotent vertex age row, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_merge_bare_set_applies_to_both_branches() {
+    // A trailing bare SET is folded into both branches at parse time: the
+    // first MERGE creates with the value, the second updates it.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id BIGINT, name STRING, age INT)")
+        .exec_dml("MERGE (v:Person {name: 'Cid'}) SET v.age = 5")
+        .assert_success()
+        .query("MATCH (n:Person {name: 'Cid'}) RETURN n.age")
+        .assert_success()
+        .assert_result_count(1)
+        .exec_dml("MERGE (v:Person {name: 'Cid'}) SET v.age = 6")
+        .assert_success()
+        .query("MATCH (n:Person {name: 'Cid'}) RETURN n.age")
+        .assert_success()
+        .assert_result_count(1);
+}
+
+#[test]
+fn test_merge_on_match_set_expression_sees_existing_properties() {
+    // SET expressions resolve existing properties (`age + 1`): the update
+    // branch loads the probed vertex into the evaluation context.
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id BIGINT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 25)")
+        .assert_success()
+        .exec_dml("MERGE (v:Person {name: 'Alice'}) ON MATCH SET age = age + 5, v.name = 'Alicia'")
+        .assert_success();
+    assert_last_merged(&scenario, 1);
+    scenario.assert_vertex_props(
+        1,
+        "Person",
+        HashMap::from([
+            ("name", Value::string("Alicia")),
+            ("age", Value::Int(30)),
+        ]),
+    );
+}
+
+#[test]
+fn test_merge_unknown_label_reports_error() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_dml("MERGE (v:NoSuchTag {x: 1}) ON MATCH SET v.y = 2")
+        .assert_error();
+}
+
+#[test]
+fn test_merge_edge_with_actions_stays_rejected() {
+    // Scalar probe-then-branch orchestration covers node patterns only:
+    // edge endpoints need dataflow the probe cannot see, so edge patterns
+    // with actions fail loudly instead of dropping the actions silently.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since DATE, weight DOUBLE)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("MERGE (a)-[r:KNOWS]->(b) ON MATCH SET r.weight = 1.0")
+        .assert_error();
 }
 
 // ==================== UPSERT with WHEN Condition Execution Tests ====================
