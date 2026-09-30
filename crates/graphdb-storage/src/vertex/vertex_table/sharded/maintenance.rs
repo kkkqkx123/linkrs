@@ -18,7 +18,3 @@ mod memory;
 mod pk_stats;
 mod thresholds;
 
-#[allow(unused_imports)]
-pub(crate) use thresholds::SHARD_FRAGMENTATION_THRESHOLD;
-#[allow(unused_imports)]
-pub use thresholds::{hole_rate, STABLE_ROW_ID_HOLE_WATERMARK};
