@@ -60,6 +60,18 @@ impl StorageWriter for GraphStorage {
         Ok(result)
     }
 
+    fn batch_insert_vertices_with_split(
+        &mut self,
+        space: &str,
+        vertices: Vec<Vertex>,
+        auto_split: bool,
+    ) -> Result<Vec<VertexId>, StorageError> {
+        self.ctx.check_write_admission()?;
+        let result = writer::batch_insert_vertices_with_split(&self.ctx, space, vertices, auto_split)?;
+        self.commit_auto_if_needed()?;
+        Ok(result)
+    }
+
     fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
         self.ctx.check_write_admission()?;
         writer::insert_edge(&self.ctx, space, edge)?;

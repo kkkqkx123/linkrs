@@ -19,6 +19,22 @@ impl GraphStorageContext {
         super::super::schema_engine::create_vertex_type(self, name, properties, primary_key)
     }
 
+    pub fn create_vertex_type_with_estimate(
+        &self,
+        name: &str,
+        properties: Vec<StoragePropertyDef>,
+        primary_key: &str,
+        estimated_rows: Option<u64>,
+    ) -> StorageResult<LabelId> {
+        super::super::schema_engine::create_vertex_type_with_estimate(
+            self,
+            name,
+            properties,
+            primary_key,
+            estimated_rows,
+        )
+    }
+
     pub fn create_vertex_type_with_id(
         &self,
         storage_name: &str,
@@ -34,6 +50,26 @@ impl GraphStorageContext {
             label_id,
             properties,
             primary_key,
+        )
+    }
+
+    pub fn create_vertex_type_with_id_with_estimate(
+        &self,
+        storage_name: &str,
+        user_name: &str,
+        label_id: LabelId,
+        properties: Vec<StoragePropertyDef>,
+        primary_key: &str,
+        estimated_rows: Option<u64>,
+    ) -> StorageResult<LabelId> {
+        super::super::schema_engine::create_vertex_type_with_id_with_estimate(
+            self,
+            storage_name,
+            user_name,
+            label_id,
+            properties,
+            primary_key,
+            estimated_rows,
         )
     }
 

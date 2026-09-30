@@ -221,6 +221,7 @@ fn general_column_at_ts(column: &Column, rows: &[usize], query_ts: Timestamp) ->
 pub struct ColumnStore {
     columns: parking_lot::RwLock<Vec<Column>>,
     name_to_index: parking_lot::RwLock<std::collections::HashMap<String, usize>>,
+    unavailable: parking_lot::RwLock<std::collections::HashMap<String, String>>,
 }
 
 impl Clone for ColumnStore {
@@ -228,6 +229,7 @@ impl Clone for ColumnStore {
         Self {
             columns: parking_lot::RwLock::new(self.columns.read().clone()),
             name_to_index: parking_lot::RwLock::new(self.name_to_index.read().clone()),
+            unavailable: parking_lot::RwLock::new(self.unavailable.read().clone()),
         }
     }
 }
@@ -237,6 +239,7 @@ impl ColumnStore {
         Self {
             columns: parking_lot::RwLock::new(Vec::new()),
             name_to_index: parking_lot::RwLock::new(std::collections::HashMap::new()),
+            unavailable: parking_lot::RwLock::new(std::collections::HashMap::new()),
         }
     }
 
@@ -246,7 +249,52 @@ impl ColumnStore {
             name_to_index: parking_lot::RwLock::new(std::collections::HashMap::with_capacity(
                 capacity,
             )),
+            unavailable: parking_lot::RwLock::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// Mark one column unavailable with a human-readable reason. Later strict
+    /// reads and writes that touch the column fail with the column name;
+    /// projections over healthy columns keep serving.
+    pub fn mark_column_unavailable(&self, name: &str, reason: String) {
+        self.unavailable.write().insert(name.to_string(), reason);
+    }
+
+    /// Unavailable columns with their reasons, sorted by name for stable output.
+    pub fn unavailable_columns(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = self
+            .unavailable
+            .read()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    pub fn is_column_unavailable(&self, name: &str) -> bool {
+        self.unavailable.read().contains_key(name)
+    }
+
+    /// Fail when the named column is marked unavailable. Descriptive lookups
+    /// (names, declared types, zone bounds of healthy columns) bypass this;
+    /// every data path that would decode or write the column calls it first
+    /// so the error names the column instead of refusing the whole table.
+    pub fn check_column_available(&self, name: &str) -> StorageResult<()> {
+        if let Some(reason) = self.unavailable.read().get(name) {
+            return Err(StorageError::deserialize_error(format!(
+                "column {} unavailable: {}",
+                name, reason
+            )));
+        }
+        Ok(())
+    }
+
+    /// Drop all unavailable marks. Full baseline loads call this first so a
+    /// retry after repairing the files starts from a clean slate; delta
+    /// applies preserve existing marks and only add new ones.
+    pub fn clear_unavailable_columns(&self) {
+        self.unavailable.write().clear();
     }
 
     /// Per-zone min/max bounds of one column, for zone-map pruning.
@@ -373,6 +421,7 @@ impl ColumnStore {
 
     pub fn set(&self, row_idx: usize, values: &[(String, Value)]) -> StorageResult<()> {
         for (name, value) in values {
+            self.check_column_available(name)?;
             if let Some(col) = self.get_column(name) {
                 col.set(row_idx, Some(value))?;
             }
@@ -396,6 +445,7 @@ impl ColumnStore {
         ts: Timestamp,
     ) -> StorageResult<()> {
         for (name, value) in values {
+            self.check_column_available(name)?;
             if let Some(col) = self.get_column(name) {
                 col.set_versioned(row_idx, Some(value), ts)?;
             }
@@ -413,6 +463,7 @@ impl ColumnStore {
         ts: Timestamp,
         row_alive: F,
     ) -> StorageResult<()> {
+        self.check_column_available(col_name)?;
         let col = self
             .get_column(col_name)
             .ok_or_else(|| StorageError::column_not_found(col_name.to_string()))?;
@@ -486,6 +537,13 @@ impl ColumnStore {
         rows: &[usize],
         query_ts: Timestamp,
     ) -> StorageResult<ProjectedRowBatch> {
+        let degraded: Vec<(String, String)> = self.unavailable_columns();
+        if let Some((name, reason)) = degraded.into_iter().next() {
+            return Err(StorageError::deserialize_error(format!(
+                "column {} unavailable: {}",
+                name, reason
+            )));
+        }
         let columns = self.columns.read();
         let mut out = vec![Vec::with_capacity(columns.len()); rows.len()];
         for col in columns.iter() {
@@ -512,6 +570,7 @@ impl ColumnStore {
     ) -> StorageResult<ProjectedRowBatch> {
         let mut out = vec![Vec::with_capacity(projection.len()); rows.len()];
         for name in projection {
+            self.check_column_available(name)?;
             let column = self
                 .get_column(name)
                 .ok_or_else(|| StorageError::column_not_found(name.clone()))?;
@@ -537,6 +596,12 @@ impl ColumnStore {
     ) -> Vec<(String, ColumnValues)> {
         if names.is_empty() {
             self.for_each_column(|column| {
+                if self.is_column_unavailable(&column.name) {
+                    return (
+                        column.name.clone(),
+                        ColumnValues::General(vec![None; rows.len()]),
+                    );
+                }
                 let values = decode_column_values_at_ts(column, rows, query_ts);
                 (column.name.clone(), values)
             })
@@ -544,6 +609,9 @@ impl ColumnStore {
             names
                 .iter()
                 .map(|name| {
+                    if self.is_column_unavailable(name) {
+                        return (name.clone(), ColumnValues::General(vec![None; rows.len()]));
+                    }
                     let values = match self.get_column(name) {
                         Some(column) => decode_column_values_at_ts(&column, rows, query_ts),
                         None => ColumnValues::General(vec![None; rows.len()]),
@@ -647,6 +715,7 @@ impl ColumnStore {
             column.col_id = idx as i32;
             name_to_index.insert(column.name.clone(), idx);
         }
+        self.unavailable.write().remove(name);
 
         Ok(())
     }
@@ -665,12 +734,15 @@ impl ColumnStore {
             .ok_or_else(|| StorageError::column_not_found(old_name.to_string()))?;
 
         if let Some(column) = columns.get_mut(index) {
-            column.name = new_name;
+            column.name = new_name.clone();
         }
 
         name_to_index.clear();
         for (idx, column) in columns.iter().enumerate() {
             name_to_index.insert(column.name.clone(), idx);
+        }
+        if let Some(reason) = self.unavailable.write().remove(old_name) {
+            self.unavailable.write().insert(new_name, reason);
         }
 
         Ok(())
@@ -886,9 +958,11 @@ impl ColumnStore {
         Ok(())
     }
 
-    /// Derived sidecar health without mapping payloads: file count and bytes
-    /// for checkpoint directories. Missing files count as zero; corrupt files
-    /// still count here and are distinguished at load time.
+    /// Derived sidecar inventory without mapping payloads: file count and
+    /// bytes for one checkpoint directory. Missing files count as zero;
+    /// corrupt files still count here and are distinguished at load time.
+    /// Per-directory inventory for tooling; manifest-pinned verification
+    /// lives in the commit health inspection.
     pub fn snapshot_sidecar_stats(dir: &std::path::Path) -> (usize, u64) {
         let mut files = 0usize;
         let mut bytes = 0u64;

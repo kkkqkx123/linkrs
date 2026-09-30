@@ -543,6 +543,29 @@ pub trait StorageWriter: Send + Sync + std::fmt::Debug {
         space: &str,
         vertices: Vec<Vertex>,
     ) -> Result<Vec<VertexId>, StorageError>;
+    /// Minimal default: delegates when splitting is on and enforces the
+    /// single-request limit when off. The engine override chunks by label.
+    fn batch_insert_vertices_with_split(
+        &mut self,
+        space: &str,
+        vertices: Vec<Vertex>,
+        auto_split: bool,
+    ) -> Result<Vec<VertexId>, StorageError> {
+        if auto_split {
+            return self.batch_insert_vertices(space, vertices);
+        }
+        if vertices.len() > crate::vertex::MAX_WRITE_SCOPE_KEYS {
+            return Err(StorageError::new(
+                graphdb_core::error::storage::StorageErrorKind::CapacityExceeded,
+                format!(
+                    "batch holds {} rows above the single-request limit {}: enable split batching by label into smaller chunks instead of growing one request",
+                    vertices.len(),
+                    crate::vertex::MAX_WRITE_SCOPE_KEYS,
+                ),
+            ));
+        }
+        self.batch_insert_vertices(space, vertices)
+    }
     fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
     fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
     fn delete_edge(
@@ -600,6 +623,15 @@ pub trait StorageSchemaOps: Send + Sync + std::fmt::Debug {
         -> Result<bool, StorageError>;
 
     fn create_tag(&mut self, space: &str, tag: &TagInfo) -> Result<u32, StorageError>;
+    fn create_tag_with_estimate(
+        &mut self,
+        space: &str,
+        tag: &TagInfo,
+        estimated_rows: Option<u64>,
+    ) -> Result<u32, StorageError> {
+        let _ = estimated_rows;
+        self.create_tag(space, tag)
+    }
     fn alter_tag(
         &mut self,
         space: &str,

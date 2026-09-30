@@ -59,6 +59,7 @@ impl ShardedVertexTable {
             total.slot_count += breakdown.slot_count;
             total.live_count += breakdown.live_count;
             total.hole_count += breakdown.hole_count;
+            total.hole_bytes += breakdown.hole_bytes;
             total.free_depth += breakdown.free_depth;
             total.delta_entries += breakdown.delta_entries;
             total.delta_heap_bytes += breakdown.delta_heap_bytes;

@@ -3,10 +3,21 @@
 use std::path::Path;
 
 use super::super::ShardedVertexTable;
-use super::commit_manifest::{CommitManifest, CorruptionClass, COMMIT_MANIFEST_FILE_NAME};
+use super::commit_manifest::{
+    column_for_isolatable_file, CommitManifest, CorruptionClass, COMMIT_MANIFEST_FILE_NAME,
+};
 use super::common::now_ms;
 use super::sidecar::prune_tampered_sidecars;
 use graphdb_core::StorageResult;
+
+/// Shard index plus owning column for a manifest-listed per-column file.
+/// Returns `None` for table-critical files or malformed shard prefixes.
+fn parse_shard_column(rel: &str) -> Option<(usize, String)> {
+    let (shard_part, _) = rel.split_once('/')?;
+    let idx: usize = shard_part.strip_prefix("shard_")?.parse().ok()?;
+    let col = column_for_isolatable_file(rel)?;
+    Some((idx, col))
+}
 
 impl ShardedVertexTable {
     /// Open a table from whatever layout and generation its manifest pins.
@@ -75,9 +86,9 @@ impl ShardedVertexTable {
         // Refuse to mis-decode: persisted global IDs embed the shard count.
         self.check_table_manifest(path)?;
         // Adopt the persisted baseline timestamp so the age signal survives
-        // restarts. Missing timestamps only warn and keep the in-process
-        // estimate; a persisted future value (clock skew) adopts the larger
-        // of the two with a warning, never moves the signal backward.
+        // restarts. A missing timestamp refuses the open; a persisted future
+        // value (clock skew) adopts the larger of the two with a warning,
+        // never moves the signal backward.
         match Self::read_table_manifest(path)?.and_then(|m| m.last_full_flush_ms) {
             Some(persisted) => {
                 use std::sync::atomic::Ordering;
@@ -96,12 +107,14 @@ impl ShardedVertexTable {
                     self.last_full_flush_ms.store(adopted, Ordering::Release);
                 }
             }
-            None => log::warn!(
-                "vertex table '{}' manifest at {} has no baseline timestamp; \
-                 falling back to the in-process age estimate",
-                self.label_name,
-                path.display(),
-            ),
+            None => {
+                return Err(graphdb_core::StorageError::deserialize_error(format!(
+                    "vertex table '{}' manifest at {} has no baseline timestamp: \
+                     rebuild the table with the offline redistribution tool instead of opening it in place",
+                    self.label_name,
+                    path.display(),
+                )));
+            }
         }
         match Self::read_commit_manifest(path)? {
             Some(manifest) => {
@@ -126,7 +139,7 @@ impl ShardedVertexTable {
                     if !shard_dir.exists() {
                         return Err(graphdb_core::StorageError::deserialize_error(format!(
                             "class={} checkpoint epoch {} incomplete: shard directory missing: file={}",
-                            CorruptionClass::Isolatable.as_str(),
+                            CorruptionClass::Fatal.as_str(),
                             manifest.epoch,
                             shard_dir.display(),
                         )));
@@ -135,7 +148,7 @@ impl ShardedVertexTable {
                     table.load(&shard_dir).map_err(|e| {
                         graphdb_core::StorageError::deserialize_error(format!(
                             "class={} checkpoint epoch {} shard {} corrupt at file={}: {}",
-                            CorruptionClass::Isolatable.as_str(),
+                            CorruptionClass::Fatal.as_str(),
                             manifest.epoch,
                             i,
                             shard_dir.display(),
@@ -205,6 +218,31 @@ impl ShardedVertexTable {
                 })?;
             }
             Self::load_pk_overlay_strict(&mut table, &shard_dir, manifest, i)?;
+        }
+        // Manifest-listed column pages missing from disk never reached the
+        // per-page loop above; mark their columns unavailable so later reads
+        // fail with the column name instead of serving stale pages silently.
+        // Table-critical missing files already refused in verification.
+        for rel in &manifest.files {
+            if path.join(rel).exists() {
+                continue;
+            }
+            let Some((shard_idx, col)) = parse_shard_column(rel) else {
+                continue;
+            };
+            if shard_idx >= self.shards.len() {
+                continue;
+            }
+            let reason = format!("checkpoint file missing: {}", rel);
+            log::warn!(
+                "column {} in shard {} unavailable: {}",
+                col,
+                shard_idx,
+                reason
+            );
+            self.shards[shard_idx]
+                .read()
+                .mark_column_unavailable(&col, reason);
         }
         Ok(())
     }

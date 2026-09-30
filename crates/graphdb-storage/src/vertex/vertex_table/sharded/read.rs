@@ -699,7 +699,9 @@ impl ShardedVertexTable {
                 .pk_reuses
                 .saturating_add(table.id_indexer.reuse_count());
             snapshot.pk_free_depth += table.id_indexer.free_depth();
-            snapshot.pk_memory_bytes += table.id_indexer.memory_breakdown().total_bytes;
+            let breakdown = table.id_indexer.memory_breakdown();
+            snapshot.pk_memory_bytes += breakdown.total_bytes;
+            snapshot.pk_hole_bytes += breakdown.hole_bytes;
             let versions = table.columns.version_chain_stats();
             snapshot.version_entries += versions.total_entries;
             snapshot.version_memory_bytes += versions.memory_bytes;
@@ -715,6 +717,8 @@ impl ShardedVertexTable {
 
 /// Combined index, overwrite-buffer, version-chain and residency counters
 /// for one vertex label. All counters are approximate cross-shard sums.
+/// Column deleted-row bytes stay resident until reclamation and remain part
+/// of the version and buffer totals rather than a separate hole-bytes field.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct VertexStorageSnapshot {
     pub live: usize,
@@ -723,6 +727,7 @@ pub struct VertexStorageSnapshot {
     pub pk_reuses: u64,
     pub pk_free_depth: usize,
     pub pk_memory_bytes: usize,
+    pub pk_hole_bytes: usize,
     pub version_entries: usize,
     pub version_memory_bytes: usize,
     pub overlay_entries: usize,

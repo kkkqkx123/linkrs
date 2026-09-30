@@ -171,10 +171,11 @@ impl CsrWithProperties {
                 .map(|vis| vis.create_ts)
                 .unwrap_or(0);
             if created <= query_ts {
-                return Err(StorageError::deserialize_error(format!(
-                    "edge {:?} history at {} before epoch floor {} is not retained; version chains do not survive checkpoints",
-                    edge_id, query_ts, self.history_floor
-                )));
+                return Err(StorageError::history_before_floor_edge(
+                    format!("{:?}", edge_id),
+                    query_ts,
+                    self.history_floor,
+                ));
             }
         }
         Ok(())

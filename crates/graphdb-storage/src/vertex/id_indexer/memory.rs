@@ -16,6 +16,7 @@ pub struct IdIndexMemoryBreakdown {
     pub slot_count: usize,
     pub live_count: usize,
     pub hole_count: usize,
+    pub hole_bytes: usize,
     pub free_depth: usize,
     pub delta_entries: usize,
     pub delta_heap_bytes: usize,
@@ -59,10 +60,12 @@ pub(super) fn memory_breakdown(manager: &IdManager) -> IdIndexMemoryBreakdown {
         + core.free_set.capacity() * (std::mem::size_of::<u32>() + 8);
     let slot_count = core.keys.len();
     let hole_count = slot_count.saturating_sub(live);
+    let hole_bytes = hole_count.saturating_mul(std::mem::size_of::<Option<IdKey>>());
     IdIndexMemoryBreakdown {
         slot_count,
         live_count: live,
         hole_count,
+        hole_bytes,
         free_depth: core.free_set.len(),
         delta_entries: core.delta_log.len(),
         delta_heap_bytes,

@@ -51,6 +51,7 @@ pub enum StorageErrorKind {
     CompressError,
     DecompressError,
     DataCorruption,
+    HistoryBeforeFloor,
 }
 
 impl StorageErrorKind {
@@ -89,6 +90,7 @@ impl StorageErrorKind {
             StorageErrorKind::CompressError => "compress_error",
             StorageErrorKind::DecompressError => "decompress_error",
             StorageErrorKind::DataCorruption => "data_corruption",
+            StorageErrorKind::HistoryBeforeFloor => "history_before_floor",
         }
     }
 }
@@ -302,6 +304,28 @@ impl StorageError {
     pub fn data_corruption(message: impl Into<String>) -> Self {
         Self::new(StorageErrorKind::DataCorruption, message)
     }
+
+    pub fn history_before_floor(row: u32, ts: u64, floor: u64) -> Self {
+        Self::new(
+            StorageErrorKind::HistoryBeforeFloor,
+            format!(
+                "vertex row {} history at {} before epoch floor {} is not retained; version chains do not survive checkpoints",
+                row, ts, floor
+            ),
+        )
+    }
+
+    pub fn history_before_floor_edge(edge: impl Into<String>, ts: u64, floor: u64) -> Self {
+        Self::new(
+            StorageErrorKind::HistoryBeforeFloor,
+            format!(
+                "edge {} history at {} before epoch floor {} is not retained; version chains do not survive checkpoints",
+                edge.into(),
+                ts,
+                floor
+            ),
+        )
+    }
 }
 
 impl std::fmt::Display for StorageError {
@@ -379,7 +403,7 @@ impl ToPublicError for StorageError {
             | StorageErrorKind::EdgeNotFound
             | StorageErrorKind::NotFound => ErrorCode::ResourceNotFound,
             StorageErrorKind::AlreadyExists => ErrorCode::ResourceAlreadyExists,
-            StorageErrorKind::InvalidInput | StorageErrorKind::InvalidOperation => {
+            StorageErrorKind::InvalidInput | StorageErrorKind::InvalidOperation | StorageErrorKind::HistoryBeforeFloor => {
                 ErrorCode::InvalidInput
             }
             StorageErrorKind::LockTimeout => ErrorCode::Timeout,

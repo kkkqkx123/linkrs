@@ -9,11 +9,13 @@
 //! 2. Checkpoint: full or incremental flush writes shard files first and
 //!    `commit_manifest.json` last. The manifest lists every file the open
 //!    path may trust; files outside it are never read.
-//! 3. Open: a manifest-listed file that is missing or corrupt refuses the
-//!    whole table open instead of running sick. There is deliberately no
-//!    degraded single-shard open: serving a subset of shards would hand
-//!    out global IDs whose siblings silently vanished, which readers
-//!    cannot distinguish from genuine absence.
+//! 3. Open: a manifest-listed table-critical file that is missing or corrupt
+//!    refuses the whole table open instead of running sick. Per-column files
+//!    (overflow sidecars and incremental column pages) degrade to
+//!    column-unavailable instead. There is deliberately no degraded
+//!    single-shard open: serving a subset of shards would hand out global
+//!    IDs whose siblings silently vanished, which readers cannot distinguish
+//!    from genuine absence.
 //!
 //! Fault-injection coverage for this contract lives in
 //! `crates/graphdb-storage/tests/persistence_recovery.rs`: flush plus
@@ -50,6 +52,6 @@ pub(crate) use common::{now_ms, MANIFEST_FORMAT_VERSION};
 pub use health::{CommitHealthReport, GlobalCommitHealth};
 pub(crate) use sidecar::SnapshotSidecarRecord;
 pub(crate) use table_manifest::{
-    legacy_table_manifest_checksum, table_manifest_checksum, verify_table_manifest,
-    ManifestLineage, TableManifest, TableManifestInput, TABLE_MANIFEST_FILE_NAME,
+    table_manifest_checksum, verify_table_manifest, ManifestLineage, TableManifest,
+    TableManifestInput, TABLE_MANIFEST_FILE_NAME,
 };

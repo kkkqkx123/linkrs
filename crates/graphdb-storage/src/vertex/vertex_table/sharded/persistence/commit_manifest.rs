@@ -40,9 +40,9 @@ pub(crate) struct CommitManifest {
     /// mixed in from another generation would mis-decode global IDs.
     pub(crate) generation: u64,
     pub(crate) files: Vec<String>,
-    /// Derived eviction sidecars pinned for verification only. Absent in
-    /// old manifests (decoded as empty); never part of the strict file
-    /// set, so a missing or corrupt sidecar never refuses the open.
+    /// Derived eviction sidecars pinned for verification only. Absent decodes
+    /// as empty; never part of the strict file set, so a missing or corrupt
+    /// sidecar never refuses the open.
     #[serde(default)]
     pub(crate) sidecars: Vec<SnapshotSidecarRecord>,
     pub(crate) written_at_ms: u64,
@@ -114,9 +114,9 @@ pub(crate) fn verify_commit_manifest_content(
     Ok(())
 }
 
-/// Damage classification for the graded open path. Fatal defects refuse
-/// every open mode (table manifest, commit manifest, lineage); isolatable
-/// defects refuse the strict open but load healthy shards in repair mode.
+/// Damage classification for the graded open path. Fatal defects refuse the
+/// open. Isolatable defects mark one column unavailable and keep the table
+/// open for the healthy columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CorruptionClass {
@@ -135,6 +135,34 @@ impl CorruptionClass {
 
 pub(crate) fn commit_manifest_path(dir: &Path) -> PathBuf {
     dir.join(COMMIT_MANIFEST_FILE_NAME)
+}
+
+/// Column owning a manifest-listed file, when the file is per-column state
+/// that can degrade to column-unavailable instead of refusing the whole
+/// table. Overflow sidecars (`shard_N/<col>.overflow`) and incremental column
+/// pages (`shard_N/columns_pages/<col>_<page>.page`) are isolatable; every
+/// other checkpoint file stays table-critical.
+pub(crate) fn column_for_isolatable_file(rel: &str) -> Option<String> {
+    let (_, rest) = rel.split_once('/')?;
+    if let Some(stem) = rest.strip_suffix(".overflow") {
+        if stem.is_empty() || stem.contains('/') {
+            return None;
+        }
+        return Some(stem.to_string());
+    }
+    let pages_prefix = "columns_pages/";
+    if let Some(file) = rest.strip_prefix(pages_prefix) {
+        let stem = file.strip_suffix(".page")?;
+        if stem.contains('/') {
+            return None;
+        }
+        let (col, page) = stem.rsplit_once('_')?;
+        if col.is_empty() || page.parse::<usize>().is_err() {
+            return None;
+        }
+        return Some(col.to_string());
+    }
+    None
 }
 
 fn collect_committed_files(dir: &Path) -> StorageResult<Vec<String>> {
@@ -263,6 +291,17 @@ impl ShardedVertexTable {
         for rel in &manifest.files {
             let full = path.join(rel);
             if !full.exists() {
+                if let Some(col) = column_for_isolatable_file(rel) {
+                    log::warn!(
+                        "checkpoint epoch {} kind={} column file missing (isolatable): file={} column={}: \
+                         opening with that column unavailable instead of refusing the table",
+                        manifest.epoch,
+                        manifest.kind.as_str(),
+                        full.display(),
+                        col,
+                    );
+                    continue;
+                }
                 return Err(graphdb_core::StorageError::deserialize_error(format!(
                     "class={} checkpoint epoch {} kind={} incomplete: manifest-listed file missing: file={}",
                     CorruptionClass::Fatal.as_str(),

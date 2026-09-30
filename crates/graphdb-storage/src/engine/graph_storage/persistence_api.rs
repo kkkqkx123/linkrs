@@ -9,6 +9,18 @@ use crate::StoragePersistenceOps;
 use super::persistence;
 use super::GraphStorage;
 
+/// Read-only redistribution preview: live rows, their distribution under the
+/// target shard count, and edge partitions that would need draining (edge-free
+/// entry) or translation (edge-aware entry). No rows are copied and the
+/// catalog is untouched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VertexReshardDryRun {
+    pub live_rows: usize,
+    pub new_num_shards: usize,
+    pub per_shard_rows: Vec<usize>,
+    pub edge_blockers: Vec<String>,
+}
+
 impl GraphStorage {
     /// Offline inspection of the vertex store under `vertices_dir`.
     ///
@@ -30,6 +42,52 @@ impl GraphStorage {
         );
         log::info!("{}", summary);
         Ok(summary)
+    }
+
+    /// Read-only redistribution preview for one vertex label.
+    ///
+    /// Runs the vertex dry-run precheck (target layout, pending schema fence,
+    /// key shapes, target capacity, live distribution) plus an edge-reference
+    /// census, without copying any row or switching the catalog. Edge
+    /// partitions holding live edges that reference the label are reported,
+    /// not refused, so the caller can choose the edge-free entry (drain
+    /// first) or the edge-aware entry (translate through the produced map).
+    pub fn dry_run_reshard_vertex_table(
+        &self,
+        label: LabelId,
+        new_num_shards: usize,
+    ) -> StorageResult<VertexReshardDryRun> {
+        let preview = self.ctx.data_store().with_vertex_tables(|tables| {
+            let table = tables.get(&label).ok_or_else(|| {
+                StorageError::label_not_found(format!("vertex label {} not found", label))
+            })?;
+            table.dry_run_reshard_to(new_num_shards)
+        })?;
+        let blockers: Vec<String> = self.ctx.data_store().with_edge_tables(|tables| {
+            let mut blockers = Vec::new();
+            for (key, table) in tables.iter() {
+                if key.src_label != label
+                    && key.dst_label != label
+                    && key.src_label != 0
+                    && key.dst_label != 0
+                {
+                    continue;
+                }
+                if table.read().edge_count() > 0 {
+                    blockers.push(format!(
+                        "edge partition ({},{},{}) holds live edges",
+                        key.src_label, key.dst_label, key.edge_label
+                    ));
+                }
+            }
+            blockers
+        });
+        Ok(VertexReshardDryRun {
+            live_rows: preview.live_rows,
+            new_num_shards: preview.new_num_shards,
+            per_shard_rows: preview.per_shard_rows,
+            edge_blockers: blockers,
+        })
     }
 
     /// Pre-switch baseline probe for an offline reshard: flushes the rebuilt

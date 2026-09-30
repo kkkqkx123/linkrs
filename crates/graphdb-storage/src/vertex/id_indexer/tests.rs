@@ -634,6 +634,10 @@ fn test_memory_breakdown_reports_hole_count() {
     assert_eq!(breakdown.slot_count, 4);
     assert_eq!(breakdown.live_count, 3);
     assert_eq!(breakdown.hole_count, 1);
+    assert_eq!(
+        breakdown.hole_bytes,
+        breakdown.hole_count * std::mem::size_of::<Option<IdKey>>()
+    );
     assert_eq!(breakdown.free_depth, 1);
 }
 

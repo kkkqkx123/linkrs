@@ -31,10 +31,8 @@ pub(crate) struct TableManifest {
     pub(crate) generation: u64,
     /// Wall-clock milliseconds of the last full baseline flush, written on
     /// every full flush and preserved across incremental flushes. Drives
-    /// the baseline-age signal across restarts; missing (old manifests)
-    /// never refuses the open, only warns and falls back to the in-process
-    /// estimate.
-    #[serde(default)]
+    /// the baseline-age signal across restarts; a missing timestamp refuses
+    /// the open and requires a rebuild.
     pub(crate) last_full_flush_ms: Option<u64>,
     pub(crate) checksum: u32,
 }
@@ -61,27 +59,18 @@ pub(crate) fn table_manifest_checksum(input: TableManifestInput<'_>) -> u32 {
     hasher.update(&input.total_segments.to_le_bytes());
     hasher.update(&[input.router_version]);
     hasher.update(&input.generation.to_le_bytes());
-    // Absent timestamps hash as zero so a fresh table and an old manifest
-    // share one checksum shape; old manifests without the field fall back
-    // to the legacy checksum in verification instead of refusing the open.
     hasher.update(&input.last_full_flush_ms.unwrap_or(0).to_le_bytes());
     hasher.finalize()
 }
 
-pub(crate) fn legacy_table_manifest_checksum(input: TableManifestInput<'_>) -> u32 {
-    let mut hasher = crc32fast::Hasher::new();
-    hasher.update(&[input.format_version]);
-    hasher.update(&input.label.to_le_bytes());
-    hasher.update(input.label_name.as_bytes());
-    hasher.update(&(input.num_shards as u64).to_le_bytes());
-    hasher.update(&input.segment_slots_bits.to_le_bytes());
-    hasher.update(&input.total_segments.to_le_bytes());
-    hasher.update(&[input.router_version]);
-    hasher.update(&input.generation.to_le_bytes());
-    hasher.finalize()
-}
-
 pub(crate) fn verify_table_manifest(manifest: &TableManifest, path: &Path) -> StorageResult<()> {
+    if manifest.last_full_flush_ms.is_none() {
+        return Err(graphdb_core::StorageError::deserialize_error(format!(
+            "table manifest at {} has no baseline timestamp: rebuild the table with the \
+             offline redistribution tool instead of opening it in place",
+            path.display(),
+        )));
+    }
     if manifest.format_version != MANIFEST_FORMAT_VERSION {
         return Err(graphdb_core::StorageError::deserialize_error(format!(
             "unsupported table manifest version {} at {}, expected {}: \
@@ -104,29 +93,12 @@ pub(crate) fn verify_table_manifest(manifest: &TableManifest, path: &Path) -> St
         last_full_flush_ms: manifest.last_full_flush_ms,
     });
     if expected != manifest.checksum {
-        // Old manifests predate the baseline-timestamp field and decode it
-        // as missing: accept them through the legacy checksum instead of
-        // refusing the open. The load path warns and falls back to the
-        // in-process age estimate.
-        let legacy = legacy_table_manifest_checksum(TableManifestInput {
-            format_version: manifest.format_version,
-            label: manifest.label,
-            label_name: &manifest.label_name,
-            num_shards: manifest.num_shards,
-            segment_slots_bits: manifest.segment_slots_bits,
-            total_segments: manifest.total_segments,
-            router_version: manifest.router_version,
-            generation: manifest.generation,
-            last_full_flush_ms: None,
-        });
-        if manifest.last_full_flush_ms.is_some() || legacy != manifest.checksum {
-            return Err(graphdb_core::StorageError::deserialize_error(format!(
-                "table manifest checksum mismatch at {}: expected {:#010x}, got {:#010x}",
-                path.display(),
-                expected,
-                manifest.checksum,
-            )));
-        }
+        return Err(graphdb_core::StorageError::deserialize_error(format!(
+            "table manifest checksum mismatch at {}: expected {:#010x}, got {:#010x}",
+            path.display(),
+            expected,
+            manifest.checksum,
+        )));
     }
     let layout = super::super::routing::ShardLayout {
         num_shards: manifest.num_shards,

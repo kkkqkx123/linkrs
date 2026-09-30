@@ -47,6 +47,10 @@ pub struct CommitHealthReport {
     /// frames). Never block `is_healthy`: reload drops the sidecar and
     /// keeps the chunks resident.
     pub sidecar_issues: Vec<String>,
+    /// Total bytes of pinned sidecars present on disk. Missing sidecars
+    /// count as zero; corrupt files still count here and are distinguished
+    /// through `sidecar_issues`.
+    pub sidecar_bytes: u64,
 }
 
 impl CommitHealthReport {
@@ -204,6 +208,7 @@ impl ShardedVertexTable {
         let mut sidecars: Vec<String> = pinned_sidecars.iter().map(|r| r.file.clone()).collect();
         sidecars.sort();
         let mut sidecar_issues = Vec::new();
+        let mut sidecar_bytes = 0u64;
         for record in &pinned_sidecars {
             let full = dir.join(&record.file);
             let bytes = std::fs::read(&full);
@@ -212,6 +217,7 @@ impl ShardedVertexTable {
                     sidecar_issues.push(format!("sidecar missing (discardable): {}", record.file))
                 }
                 Ok(payload) => {
+                    sidecar_bytes += payload.len() as u64;
                     let mut hasher = crc32fast::Hasher::new();
                     hasher.update(&payload);
                     if payload.len() as u64 != record.bytes || hasher.finalize() != record.checksum
@@ -269,6 +275,7 @@ impl ShardedVertexTable {
             pk_issues,
             sidecars,
             sidecar_issues,
+            sidecar_bytes,
         })
     }
 

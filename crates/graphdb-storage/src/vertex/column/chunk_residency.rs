@@ -24,10 +24,10 @@
 //! Checkpoint sidecars persist evicted snapshots across restarts: full flush
 //! writes one `{column}.snapshot` file per column holding the already
 //! compressed pages of every evicted chunk, and reload re-evicts matching
-//! chunks from a mapping of the sidecar. Sidecars are derived caches
-//! excluded from the commit manifest: a missing or corrupt sidecar only
-//! keeps chunks resident and never fails the open. A missing sidecar never
-//! changes what a read observes — the checkpoint pages stay authoritative.
+//! chunks from a mapping of the sidecar. Sidecars are derived caches pinned
+//! for verification only: a missing or corrupt sidecar only keeps chunks
+//! resident and never fails the open. A missing sidecar never changes what
+//! a read observes — the checkpoint pages stay authoritative.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;

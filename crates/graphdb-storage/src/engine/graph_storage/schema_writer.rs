@@ -299,6 +299,15 @@ pub(crate) fn create_tag(
     space: &str,
     tag: &TagInfo,
 ) -> StorageResult<u32> {
+    create_tag_with_estimate(ctx, space, tag, None)
+}
+
+pub(crate) fn create_tag_with_estimate(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag: &TagInfo,
+    estimated_rows: Option<u64>,
+) -> StorageResult<u32> {
     let space_id = ctx.schema_manager().get_space_id(space)?;
     if ctx
         .schema_manager()
@@ -356,12 +365,13 @@ pub(crate) fn create_tag(
 
     let tag_id_returned = ctx.schema_manager().create_tag(space, tag)?;
 
-    ctx.create_vertex_type_with_id(
+    ctx.create_vertex_type_with_id_with_estimate(
         &vertex_type_storage_name(space_id, &tag.tag_name),
         &tag.tag_name,
         tag_id_returned,
         properties,
         primary_key,
+        estimated_rows,
     )?;
 
     // Only append WAL after successful execution

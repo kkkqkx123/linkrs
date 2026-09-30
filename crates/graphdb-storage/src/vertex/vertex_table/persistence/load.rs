@@ -34,6 +34,7 @@ impl VertexTable {
 
     fn load_internal<P: AsRef<Path>>(&mut self, path: P) -> StorageResult<()> {
         let path = path.as_ref();
+        self.columns.clear_unavailable_columns();
 
         let meta_path = path.join("meta.bin");
         let (meta_data, _meta_rows) = Self::read_pages_from_file(&meta_path)?;
@@ -342,8 +343,18 @@ impl VertexTable {
             if let Some(col) = self.columns.get_column(&name) {
                 col.rebuild_chunk_profiles();
             }
+            // Overflow sidecars are per-column files: a missing or corrupt
+            // sidecar marks only that column unavailable instead of refusing
+            // the whole shard. The main column payload stays table-critical
+            // and still fails the load above.
             if overflow_present {
-                Self::load_overflow_sidecar(&mut self.columns, dir.as_deref(), &name)?;
+                if let Err(e) =
+                    Self::load_overflow_sidecar(&mut self.columns, dir.as_deref(), &name)
+                {
+                    let reason = format!("overflow sidecar failed: {}", e);
+                    log::warn!("column {} unavailable: {}", name, reason);
+                    self.columns.mark_column_unavailable(&name, reason);
+                }
             }
         }
 

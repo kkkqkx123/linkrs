@@ -8,11 +8,10 @@
 //!
 //! Values are stored one `Vec<Value>` per column. This keeps a projected or
 //! filtered subset of columns cache-friendly and removes the row<->column
-//! transposes that the row-oriented buffers forced at every blocking boundary
-//! (see design §2.3). The module lives in `graphdb-core` (the bottom of the
-//! DAG) so that both `graphdb-query` and a future `graphdb-storage` columnar
-//! rebuild can depend on it without violating the `…→storage→query→…`
-//! dependency rule (design §4.2).
+//! transposes that the row-oriented buffers forced at every blocking boundary.
+//! The module lives in `graphdb-core` (the bottom of the DAG) so that both
+//! `graphdb-query` and a future `graphdb-storage` columnar rebuild can depend
+//! on it without violating the storage to query dependency direction.
 
 use crate::value::Value;
 use std::collections::hash_map::DefaultHasher;
@@ -160,8 +159,8 @@ pub struct MaterializedBatch {
     num_rows: usize,
     /// Optional selection vector; `None` == identity over `0..num_rows`.
     selection: Option<SelectionVector>,
-    /// Schema fingerprint for spill-compatibility checks (design §3.4).
-    /// Until R3 lands, this is the hashed column count; the column-name
+    /// Schema fingerprint for spill-compatibility checks.
+    /// Until run files land, this is the hashed column count; the column-name
     /// fingerprint from `spill.rs` will be threaded through when columnar
     /// run files are added.
     schema_fingerprint: u64,

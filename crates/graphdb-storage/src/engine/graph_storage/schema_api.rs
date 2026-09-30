@@ -36,6 +36,16 @@ impl StorageSchemaOps for GraphStorage {
         schema_writer::create_tag(&self.ctx, space, tag)
     }
 
+    fn create_tag_with_estimate(
+        &mut self,
+        space: &str,
+        tag: &TagInfo,
+        estimated_rows: Option<u64>,
+    ) -> Result<u32, StorageError> {
+        self.ctx.check_write_admission()?;
+        schema_writer::create_tag_with_estimate(&self.ctx, space, tag, estimated_rows)
+    }
+
     fn alter_tag(
         &mut self,
         space: &str,

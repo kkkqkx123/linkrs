@@ -13,6 +13,17 @@ pub(crate) mod write;
 pub use read::VertexStorageSnapshot;
 pub(crate) use write::CommitApplied;
 
+/// Read-only redistribution preview: live rows plus their distribution under
+/// the target shard count. Produced without copying any row; the rebuild
+/// entry reuses it as its pre-copy gate and checks the produced mapping
+/// against it afterwards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReshardDryRun {
+    pub live_rows: usize,
+    pub new_num_shards: usize,
+    pub per_shard_rows: Vec<usize>,
+}
+
 pub struct ShardedVertexTable {
     shards: Vec<RwLock<VertexTable>>,
     layout: ShardLayout,
@@ -34,9 +45,31 @@ impl ShardedVertexTable {
         label_name: String,
         schema: crate::vertex::VertexSchema,
     ) -> Self {
-        Self::with_config(label, label_name, schema, routing::default_num_shards())
+        Self::with_estimate(label, label_name, schema, 1, None)
     }
 
+    /// Build a new table from an estimated row count plus a parallelism cap.
+    /// Small estimates stay on one shard; large estimates keep the
+    /// parallelism-shaped layout. Opened tables ignore this and adopt the
+    /// layout pinned in their manifest.
+    pub fn with_estimate(
+        label: graphdb_core::types::LabelId,
+        label_name: String,
+        schema: crate::vertex::VertexSchema,
+        parallelism_shards: usize,
+        estimated_rows: Option<u64>,
+    ) -> Self {
+        Self::with_layout(
+            label,
+            label_name,
+            schema,
+            ShardLayout::for_new_table_with_estimate(parallelism_shards, estimated_rows),
+            0,
+        )
+    }
+
+    /// Build a table with an explicit shard count. Test and offline
+    /// redistribution only; production creation goes through `with_estimate`.
     pub fn with_config(
         label: graphdb_core::types::LabelId,
         label_name: String,
@@ -52,9 +85,22 @@ impl ShardedVertexTable {
         )
     }
 
+    /// Unavailable columns across all shards as `(shard, column, reason)`,
+    /// sorted for stable output. Empty when every column is healthy.
+    pub fn unavailable_columns(&self) -> Vec<(usize, String, String)> {
+        let mut out = Vec::new();
+        for (idx, shard) in self.shards.iter().enumerate() {
+            for (col, reason) in shard.read().unavailable_columns() {
+                out.push((idx, col, reason));
+            }
+        }
+        out.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+        out
+    }
+
     /// Build a table under an explicit versioned layout. New tables use
-    /// [`ShardLayout::for_new_table`] with generation zero; opened tables
-    /// use the layout and generation pinned in their manifest.
+    /// [`ShardLayout::for_new_table_with_estimate`] with generation zero;
+    /// opened tables use the layout and generation pinned in their manifest.
     pub(crate) fn with_layout(
         label: graphdb_core::types::LabelId,
         label_name: String,
@@ -149,12 +195,25 @@ impl ShardedVertexTable {
     /// The rebuilt table carries the next redistribution generation, so a
     /// checkpoint flushed from it can never be mistaken for one from the
     /// source lineage at open.
-    pub fn reshard_to(
+    ///
+    /// The read-only precheck runs first: illegal layouts, pending schema
+    /// changes, malformed keys, index entries without a retrievable record,
+    /// and target capacity overflows fail before any row is copied. After
+    /// the copy the produced mapping must cover every live row, otherwise
+    /// the rebuild fails instead of handing out a partial edge-translation
+    /// map.
+    pub fn dry_run_reshard_to(
         &self,
         new_num_shards: usize,
-    ) -> graphdb_core::StorageResult<(Self, std::collections::HashMap<u32, u32>)> {
+    ) -> graphdb_core::StorageResult<ReshardDryRun> {
         use graphdb_core::types::MAX_TIMESTAMP;
         let target = ShardLayout::for_new_table(new_num_shards);
+        if !target.is_consistent() {
+            return Err(graphdb_core::StorageError::invalid_operation(format!(
+                "reshard refused: target layout for {} shards is inconsistent",
+                new_num_shards
+            )));
+        }
         if target == self.layout {
             return Err(graphdb_core::StorageError::invalid_operation(format!(
                 "reshard is a no-op: table already uses {} shards",
@@ -170,6 +229,79 @@ impl ShardedVertexTable {
                 )));
             }
         }
+        let ts = MAX_TIMESTAMP - 1;
+        let mut per_shard_rows = vec![0usize; target.num_shards];
+        let mut live_rows = 0usize;
+        let mask = target.num_shards - 1;
+        for key in self.external_id_keys() {
+            match &key {
+                crate::vertex::IdKey::Text(name) => {
+                    if name.len() > graphdb_core::types::VERTEX_ID_MAX_SIZE {
+                        return Err(graphdb_core::StorageError::invalid_input(format!(
+                            "reshard refused: text key of {} bytes exceeds the limit",
+                            name.len()
+                        )));
+                    }
+                    let Some(old_global) = self.get_internal_id(name, ts) else {
+                        continue;
+                    };
+                    let Some(_) = self.get_by_internal_id_offline(old_global, ts) else {
+                        return Err(graphdb_core::StorageError::invalid_operation(format!(
+                            "reshard refused: indexed text key maps to a missing record; \
+                             refusing a partial edge-translation map",
+                        )));
+                    };
+                    let shard = (routing::fxhash(name) as usize) & mask;
+                    per_shard_rows[shard] += 1;
+                    live_rows += 1;
+                }
+                crate::vertex::IdKey::Int(n) => {
+                    if *n < 0 {
+                        return Err(graphdb_core::StorageError::invalid_input(format!(
+                            "reshard refused: negative integer key {}",
+                            n
+                        )));
+                    }
+                    let Some(old_global) = self.get_internal_id_by_i64(*n, ts) else {
+                        continue;
+                    };
+                    let Some(_) = self.get_by_internal_id_offline(old_global, ts) else {
+                        return Err(graphdb_core::StorageError::invalid_operation(format!(
+                            "reshard refused: indexed integer key {} maps to a missing record; \
+                             refusing a partial edge-translation map",
+                            n
+                        )));
+                    };
+                    let shard = (routing::fxhash_i64(*n) as usize) & mask;
+                    per_shard_rows[shard] += 1;
+                    live_rows += 1;
+                }
+            }
+        }
+        let per_shard_capacity = (target.total_segments / target.num_shards as u32) as u64
+            * target.segment_slots() as u64;
+        for (shard, rows) in per_shard_rows.iter().enumerate() {
+            if *rows as u64 > per_shard_capacity {
+                return Err(graphdb_core::StorageError::invalid_operation(format!(
+                    "reshard refused: target shard {} would hold {} rows beyond the address space {}",
+                    shard, rows, per_shard_capacity
+                )));
+            }
+        }
+        Ok(ReshardDryRun {
+            live_rows,
+            new_num_shards: target.num_shards,
+            per_shard_rows,
+        })
+    }
+
+    pub fn reshard_to(
+        &self,
+        new_num_shards: usize,
+    ) -> graphdb_core::StorageResult<(Self, std::collections::HashMap<u32, u32>)> {
+        use graphdb_core::types::MAX_TIMESTAMP;
+        let preview = self.dry_run_reshard_to(new_num_shards)?;
+        let target = ShardLayout::for_new_table(preview.new_num_shards);
         let schema = self.schema();
         let rebuilt = Self::with_layout(
             self.label,
@@ -222,6 +354,17 @@ impl ShardedVertexTable {
                     .backdate_row_for_reshard(new_local, orig_create);
             }
             id_mapping.insert(old_global, new_global);
+        }
+        if id_mapping.len() != preview.live_rows
+            || rebuilt.approximate_total_count() != preview.live_rows
+        {
+            return Err(graphdb_core::StorageError::invalid_operation(format!(
+                "reshard incomplete: preview counted {} live rows but the rebuild mapped {} into {} rows; \
+                 refusing a partial edge-translation map",
+                preview.live_rows,
+                id_mapping.len(),
+                rebuilt.approximate_total_count(),
+            )));
         }
         Ok((rebuilt, id_mapping))
     }
@@ -1154,8 +1297,100 @@ mod tests {
         }
         for (old, _) in &mapping {
             let (shard, _) = table.decode_id(*old);
-            assert_eq!(shard, 0, "mapping must only contain over-watermark shard ids");
+            assert_eq!(
+                shard, 0,
+                "mapping must only contain over-watermark shard ids"
+            );
         }
         table.verify_invariants().unwrap();
+    }
+
+    #[test]
+    fn test_estimate_driven_shard_counts() {
+        use super::routing::{shards_for_estimate, SINGLE_SHARD_MAX_ESTIMATE};
+        assert_eq!(shards_for_estimate(None, 8), 1);
+        assert_eq!(shards_for_estimate(Some(0), 8), 1);
+        assert_eq!(shards_for_estimate(Some(SINGLE_SHARD_MAX_ESTIMATE), 8), 1);
+        assert_eq!(
+            shards_for_estimate(Some(SINGLE_SHARD_MAX_ESTIMATE + 1), 8),
+            8
+        );
+        assert_eq!(shards_for_estimate(Some(1_000_000), 12), 16);
+        assert_eq!(shards_for_estimate(Some(1_000_000), 300), 256);
+    }
+
+    #[test]
+    fn test_new_table_defaults_to_single_shard() {
+        let table = ShardedVertexTable::new(1, "t".to_string(), test_schema());
+        assert_eq!(table.num_shards(), 1);
+        let small =
+            ShardedVertexTable::with_estimate(1, "t".to_string(), test_schema(), 8, Some(10));
+        assert_eq!(small.num_shards(), 1);
+        let large =
+            ShardedVertexTable::with_estimate(1, "t".to_string(), test_schema(), 8, Some(500_000));
+        assert_eq!(large.num_shards(), 8);
+    }
+
+    #[test]
+    fn test_single_shard_id_tail_bound() {
+        let table = ShardedVertexTable::with_estimate(1, "t".to_string(), test_schema(), 8, None);
+        assert_eq!(table.num_shards(), 1);
+        let ts = TEST_TS;
+        let n = 200usize;
+        let mut max_id = 0u32;
+        for i in 0..n {
+            let id = insert_with_name(&table, &format!("tail_{}", i), ts);
+            max_id = max_id.max(id);
+        }
+        assert!(
+            (max_id as usize) < n + table.layout().segment_slots() as usize,
+            "single-shard tail must not inflate by the shard count: max {max_id} for {n} rows",
+        );
+    }
+
+    #[test]
+    fn test_dry_run_reports_distribution_and_refuses_noop() {
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        let ts = TEST_TS;
+        for i in 0..20 {
+            insert_with_name(&table, &format!("d_{}", i), ts);
+        }
+        let preview = table.dry_run_reshard_to(4).expect("dry run succeeds");
+        assert_eq!(preview.new_num_shards, 4);
+        assert_eq!(preview.live_rows, 20);
+        assert_eq!(preview.per_shard_rows.len(), 4);
+        assert_eq!(preview.per_shard_rows.iter().sum::<usize>(), 20);
+        let err = table.dry_run_reshard_to(2).unwrap_err().to_string();
+        assert!(
+            err.contains("no-op"),
+            "same-count dry run must refuse: {err}"
+        );
+        let (rebuilt, mapping) = table.reshard_to(4).expect("rebuild succeeds");
+        assert_eq!(mapping.len(), preview.live_rows);
+        assert_eq!(rebuilt.approximate_total_count(), preview.live_rows);
+    }
+
+    #[test]
+    fn test_dry_run_refuses_pending_schema_change() {
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+        insert_with_name(&table, "d_0", TEST_TS);
+        table
+            .prepare_add_property_staged(StoragePropertyDef {
+                name: "nick".to_string(),
+                data_type: DataType::String,
+                nullable: true,
+                default_value: None,
+            })
+            .unwrap();
+        let err = table.dry_run_reshard_to(4).unwrap_err().to_string();
+        assert!(
+            err.contains("pending schema change"),
+            "dry run must fence pending schema: {err}"
+        );
+        table.abort_pending_schema_change();
+        let preview = table
+            .dry_run_reshard_to(4)
+            .expect("dry run succeeds after abort");
+        assert_eq!(preview.live_rows, 1);
     }
 }

@@ -495,10 +495,7 @@ impl VertexTable {
                 .get_start_ts(internal_id)
                 .unwrap_or(0);
             if created <= ts {
-                return Err(StorageError::deserialize_error(format!(
-                    "vertex row {} history at {} before epoch floor {} is not retained; version chains do not survive checkpoints",
-                    internal_id, ts, floor
-                )));
+                return Err(StorageError::history_before_floor(internal_id, ts, floor));
             }
         }
         Ok(())
@@ -764,6 +761,7 @@ impl VertexTable {
     /// Staging paths call this before buffering so an invalid column fails
     /// with no global write.
     pub fn prepare_update(&self, col_name: &str, value: &Value) -> StorageResult<Value> {
+        self.columns.check_column_available(col_name)?;
         if self
             .schema
             .properties
@@ -952,6 +950,22 @@ impl VertexTable {
     /// Declared data type of the column `name`, if it exists in the schema.
     pub fn data_type_of(&self, name: &str) -> Option<graphdb_core::types::DataType> {
         self.columns.data_type_of(name)
+    }
+
+    /// Mark one column unavailable with a reason. Later strict reads and
+    /// writes touching the column fail with the column name; healthy columns
+    /// keep serving.
+    pub fn mark_column_unavailable(&self, name: &str, reason: String) {
+        self.columns.mark_column_unavailable(name, reason);
+    }
+
+    /// Unavailable columns with their reasons, sorted by name.
+    pub fn unavailable_columns(&self) -> Vec<(String, String)> {
+        self.columns.unavailable_columns()
+    }
+
+    pub fn is_column_unavailable(&self, name: &str) -> bool {
+        self.columns.is_column_unavailable(name)
     }
 
     pub fn total_count(&self) -> usize {

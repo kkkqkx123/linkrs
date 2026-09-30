@@ -3,7 +3,7 @@ mod constraints;
 mod data;
 mod edge;
 pub(crate) mod index_maintenance;
-mod vertex;
+pub(crate) mod vertex;
 
 pub(crate) use batch::{
     batch_delete_edges, batch_insert_edges, chunk_edges_for_commit, RECOMMENDED_BATCH_CHUNK_EDGES,
@@ -13,6 +13,7 @@ pub(crate) use data::{
 };
 pub(crate) use edge::{delete_edge, insert_edge, update_edge};
 pub(crate) use vertex::{
-    batch_delete_vertices_with_edges, batch_insert_vertices, delete_vertex,
-    delete_vertex_with_edges, insert_vertex, update_vertex,
+    batch_delete_vertices_with_edges, batch_insert_vertices,
+    batch_insert_vertices_with_split, delete_vertex, delete_vertex_with_edges, insert_vertex,
+    update_vertex,
 };

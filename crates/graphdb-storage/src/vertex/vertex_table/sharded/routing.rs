@@ -42,6 +42,18 @@ impl ShardLayout {
         }
     }
 
+    /// Layout for a new table from an estimated row count plus a parallelism
+    /// cap. Small estimates stay on one shard so tiny tables pay no
+    /// cross-shard merge or ID tail cost; large estimates keep the
+    /// parallelism-shaped multi-shard layout. Opened tables ignore this and
+    /// adopt the layout pinned in their manifest.
+    pub fn for_new_table_with_estimate(
+        parallelism_shards: usize,
+        estimated_rows: Option<u64>,
+    ) -> Self {
+        Self::for_new_table(shards_for_estimate(estimated_rows, parallelism_shards))
+    }
+
     /// Slots per ID segment under this layout.
     pub fn segment_slots(&self) -> u32 {
         1 << self.segment_slots_bits
@@ -64,15 +76,21 @@ impl ShardLayout {
     }
 }
 
-/// Adapt the default shard count to the available CPU parallelism, clamped to
-/// `MAX_SHARDS` and rounded down to a power of two (required by the shard-ID
-/// bit encoding). Fallback to 1 if the platform cannot report parallelism.
-pub(super) fn default_num_shards() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .clamp(1, MAX_SHARDS)
-        .next_power_of_two()
+/// Estimated rows at or below this stay on one shard. Keeps tiny tables dense
+/// (no ID tail, no cross-shard merge) while large estimates keep the
+/// parallelism-shaped layout. Advisory only; persisted layouts pin the real
+/// count and redistribution moves data explicitly.
+pub const SINGLE_SHARD_MAX_ESTIMATE: u64 = 100_000;
+
+/// Shard count for a new table from an estimated row count plus a parallelism
+/// cap. Unknown or small estimates yield one shard; large estimates yield the
+/// parallelism cap rounded to a power of two within the supported range.
+pub fn shards_for_estimate(estimated_rows: Option<u64>, parallelism_shards: usize) -> usize {
+    match estimated_rows {
+        None => 1,
+        Some(n) if n <= SINGLE_SHARD_MAX_ESTIMATE => 1,
+        Some(_) => parallelism_shards.clamp(1, MAX_SHARDS).next_power_of_two(),
+    }
 }
 // Internal ID layout: `internal_id = (segment << K) | slot`.
 // A shard's i-th segment is `shard + i * num_shards`, so segments are
@@ -147,7 +165,7 @@ pub(super) const ROUTER_VERSION: u8 = 1;
 /// Splitmix64 avalanche finalizer: diffuses input entropy across all output
 /// bits so prefix-similar keys and sequential integers spread evenly over
 /// the shard mask instead of clustering.
-fn finalize(mut hash: u64) -> u64 {
+pub(crate) fn finalize(mut hash: u64) -> u64 {
     hash = hash.wrapping_add(0x9e3779b97f4a7c15);
     hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
     hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d049bb133111eb);
@@ -161,7 +179,7 @@ fn finalize(mut hash: u64) -> u64 {
 /// for the same key for the lifetime of the manifest format. The FNV-1a
 /// fold plus finalizer spreads prefix-similar string keys that the bare
 /// multiply-xor fold clustered.
-pub(super) fn fxhash(s: &str) -> u64 {
+pub(crate) fn fxhash(s: &str) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325;
     for byte in s.bytes() {
         hash ^= byte as u64;
@@ -170,7 +188,7 @@ pub(super) fn fxhash(s: &str) -> u64 {
     finalize(hash)
 }
 
-pub(super) fn fxhash_i64(n: i64) -> u64 {
+pub(crate) fn fxhash_i64(n: i64) -> u64 {
     finalize(n as u64)
 }
 

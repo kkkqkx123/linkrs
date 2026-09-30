@@ -763,7 +763,7 @@ fn baseline_timestamp_survives_restart_and_drives_age() {
 }
 
 #[test]
-fn manifest_without_timestamp_still_opens() {
+fn manifest_without_timestamp_refuses_open() {
     let dir = unique_dir("baseline-ts-missing");
     let _ = std::fs::remove_dir_all(&dir);
     let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
@@ -779,8 +779,8 @@ fn manifest_without_timestamp_still_opens() {
             None,
         )
         .unwrap();
-    // Strip the timestamp and re-sign with the legacy checksum: an old
-    // manifest must still open with a fallback estimate, not refuse.
+    // Stripping the timestamp breaks the checksum: manifests without the
+    // field refuse the open and require a rebuild.
     let manifest_path = dir.join(TABLE_MANIFEST_FILE_NAME);
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
@@ -788,18 +788,6 @@ fn manifest_without_timestamp_still_opens() {
         .as_object_mut()
         .unwrap()
         .remove("last_full_flush_ms");
-    manifest["checksum"] =
-        serde_json::Value::from(legacy_table_manifest_checksum(TableManifestInput {
-            format_version: manifest["format_version"].as_u64().unwrap() as u8,
-            label: manifest["label"].as_u64().unwrap() as graphdb_core::types::LabelId,
-            label_name: manifest["label_name"].as_str().unwrap(),
-            num_shards: manifest["num_shards"].as_u64().unwrap() as usize,
-            segment_slots_bits: manifest["segment_slots_bits"].as_u64().unwrap() as u32,
-            total_segments: manifest["total_segments"].as_u64().unwrap() as u32,
-            router_version: manifest["router_version"].as_u64().unwrap() as u8,
-            generation: manifest["generation"].as_u64().unwrap(),
-            last_full_flush_ms: None,
-        }));
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let reopened = ShardedVertexTable::with_layout(
         1,
@@ -808,9 +796,7 @@ fn manifest_without_timestamp_still_opens() {
         super::super::routing::ShardLayout::for_new_table(2),
         0,
     );
-    reopened
-        .load(&dir)
-        .expect("old manifest opens with fallback");
+    reopened.load(&dir).expect_err("manifest without timestamp refuses");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1174,4 +1160,138 @@ fn strict_open_reports_shard_damage_class() {
         "strict shard failure must carry machine-readable class and shard: {err}"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn two_column_schema() -> crate::vertex::VertexSchema {
+    crate::vertex::VertexSchema {
+        label_id: 1,
+        label_name: "person".to_string(),
+        properties: vec![
+            StoragePropertyDef::new("name".to_string(), DataType::String),
+            StoragePropertyDef {
+                name: "bio".to_string(),
+                data_type: DataType::String,
+                nullable: true,
+                default_value: None,
+            },
+        ],
+        primary_key_index: 0,
+        schema_version: 1,
+    }
+}
+
+#[test]
+fn column_overflow_missing_degrades_single_column() {
+    let dir = unique_dir("col-isolate");
+    let _ = std::fs::remove_dir_all(&dir);
+    let table = ShardedVertexTable::with_config(1, "t".to_string(), two_column_schema(), 1);
+    let ts: Timestamp = 10;
+    let big_bio = "x".repeat(2000);
+    table
+        .insert(
+            "v1",
+            &[
+                ("name".to_string(), Value::from("v1")),
+                ("bio".to_string(), Value::from(big_bio.clone())),
+            ],
+            ts,
+        )
+        .unwrap();
+    table
+        .flush_with_epoch(
+            &dir,
+            CompressionType::Zstd { level: 0 },
+            51,
+            CommitKind::Full,
+            None,
+        )
+        .unwrap();
+    let overflow = dir.join("shard_0").join("bio.overflow");
+    assert!(
+        overflow.exists(),
+        "large string must spill to a per-column overflow sidecar"
+    );
+    std::fs::remove_file(&overflow).unwrap();
+    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), two_column_schema(), 1);
+    reloaded
+        .load(&dir)
+        .expect("single-column loss must not refuse the table");
+    let unavailable = reloaded.unavailable_columns();
+    assert!(
+        unavailable.iter().any(|(_, col, _)| col == "bio"),
+        "degraded column must be reported with its name: {unavailable:?}"
+    );
+    assert!(
+        reloaded.get_internal_id("v1", ts).is_some(),
+        "identity must stay usable after column isolation"
+    );
+    let gid = reloaded.get_internal_id("v1", ts).unwrap();
+    let manager = graphdb_transaction::VersionManager::new();
+    let guard = crate::mvcc_visibility::VisibilityGuard::new(
+        ts,
+        crate::mvcc_visibility::PendingGate::new(&manager, None),
+    );
+    let healthy = reloaded
+        .resolve_projected_batch(&[gid], &guard, Some(&["name".to_string()]))
+        .expect("healthy projection must still decode");
+    assert!(healthy[0].is_some(), "healthy column must stay readable");
+    let manager2 = graphdb_transaction::VersionManager::new();
+    let guard2 = crate::mvcc_visibility::VisibilityGuard::new(
+        ts,
+        crate::mvcc_visibility::PendingGate::new(&manager2, None),
+    );
+    let err = reloaded
+        .resolve_projected_batch(&[gid], &guard2, Some(&["bio".to_string()]))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("bio"),
+        "strict read of the degraded column must name it: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn table_critical_columns_bin_missing_still_refuses() {
+    let dir = unique_dir("table-critical");
+    let _ = std::fs::remove_dir_all(&dir);
+    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let ts: Timestamp = 10;
+    table
+        .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+        .unwrap();
+    table
+        .flush_with_epoch(
+            &dir,
+            CompressionType::Zstd { level: 0 },
+            52,
+            CommitKind::Full,
+            None,
+        )
+        .unwrap();
+    std::fs::remove_file(dir.join("shard_0").join("columns.bin")).unwrap();
+    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let err = reloaded.load(&dir).unwrap_err().to_string();
+    assert!(
+        err.contains("columns.bin") || err.contains("missing"),
+        "table-critical loss must still refuse the open: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn isolatable_file_classification_names_columns() {
+    use super::commit_manifest::column_for_isolatable_file;
+    assert_eq!(
+        column_for_isolatable_file("shard_0/bio.overflow").as_deref(),
+        Some("bio")
+    );
+    assert_eq!(
+        column_for_isolatable_file("shard_3/columns_pages/bio_12.page").as_deref(),
+        Some("bio")
+    );
+    assert!(column_for_isolatable_file("shard_0/columns.bin").is_none());
+    assert!(column_for_isolatable_file("shard_0/meta.bin").is_none());
+    assert!(column_for_isolatable_file("shard_0/id_indexer.bin").is_none());
+    assert!(column_for_isolatable_file("table_manifest.json").is_none());
 }

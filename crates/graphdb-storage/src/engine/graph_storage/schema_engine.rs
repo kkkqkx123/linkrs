@@ -15,6 +15,16 @@ pub fn create_vertex_type(
     properties: Vec<StoragePropertyDef>,
     primary_key: &str,
 ) -> StorageResult<LabelId> {
+    create_vertex_type_with_estimate(ctx, name, properties, primary_key, None)
+}
+
+pub fn create_vertex_type_with_estimate(
+    ctx: &GraphStorageContext,
+    name: &str,
+    properties: Vec<StoragePropertyDef>,
+    primary_key: &str,
+    estimated_rows: Option<u64>,
+) -> StorageResult<LabelId> {
     if !ctx.is_open_flag().load(Ordering::Acquire) {
         return Err(StorageError::storage_not_open());
     }
@@ -36,11 +46,12 @@ pub fn create_vertex_type(
             schema
                 .validate_on_creation()
                 .map_err(StorageError::invalid_operation)?;
-            Ok(ShardedVertexTable::with_config(
+            Ok(ShardedVertexTable::with_estimate(
                 label_id,
                 name.to_string(),
                 schema,
                 ctx.vertex_table_shards(),
+                estimated_rows,
             ))
         })
 }
@@ -52,6 +63,26 @@ pub fn create_vertex_type_with_id(
     label_id: LabelId,
     properties: Vec<StoragePropertyDef>,
     primary_key: &str,
+) -> StorageResult<LabelId> {
+    create_vertex_type_with_id_with_estimate(
+        ctx,
+        storage_name,
+        user_name,
+        label_id,
+        properties,
+        primary_key,
+        None,
+    )
+}
+
+pub fn create_vertex_type_with_id_with_estimate(
+    ctx: &GraphStorageContext,
+    storage_name: &str,
+    user_name: &str,
+    label_id: LabelId,
+    properties: Vec<StoragePropertyDef>,
+    primary_key: &str,
+    estimated_rows: Option<u64>,
 ) -> StorageResult<LabelId> {
     if !ctx.is_open_flag().load(Ordering::Acquire) {
         return Err(StorageError::storage_not_open());
@@ -74,11 +105,12 @@ pub fn create_vertex_type_with_id(
             schema
                 .validate_on_creation()
                 .map_err(StorageError::invalid_operation)?;
-            Ok(ShardedVertexTable::with_config(
+            Ok(ShardedVertexTable::with_estimate(
                 label_id,
                 user_name.to_string(),
                 schema,
                 ctx.vertex_table_shards(),
+                estimated_rows,
             ))
         })
 }
@@ -1063,6 +1095,37 @@ mod tests {
                 actual_version, expected_version,
                 "Edge version should increment sequentially"
             );
+        }
+    }
+
+    #[test]
+    fn test_estimate_driven_vertex_shards() {
+        let ctx = GraphStorageContext::new();
+        let small = ctx
+            .create_vertex_type("SmallTag", name_prop(), "name")
+            .expect("small table creation succeeds");
+        let small_shards = ctx
+            .data_store()
+            .test_read_vertex_tables()
+            .get(&small)
+            .unwrap()
+            .num_shards();
+        assert_eq!(small_shards, 1);
+        let large = ctx
+            .create_vertex_type_with_estimate("LargeTag", name_prop(), "name", Some(500_000))
+            .expect("large table creation succeeds");
+        let large_shards = ctx
+            .data_store()
+            .test_read_vertex_tables()
+            .get(&large)
+            .unwrap()
+            .num_shards();
+        assert!(
+            large_shards >= 1 && large_shards.is_power_of_two(),
+            "large estimate must keep a valid multi-shard layout, got {large_shards}"
+        );
+        if ctx.vertex_table_shards() > 1 {
+            assert_eq!(large_shards, ctx.vertex_table_shards());
         }
     }
 }
