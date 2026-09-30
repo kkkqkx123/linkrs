@@ -5,8 +5,10 @@
 
 use std::sync::Arc;
 
+use crate::parser::ast::pattern::Pattern;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
+use crate::parser::parsing::traversal_parser::TraversalParser;
 use crate::parser::TokenKind;
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_core::types::expr::{ContextualExpression, Expression, ExpressionMeta, SubqueryBody};
@@ -548,6 +550,14 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
 
     match token.kind {
         TokenKind::LParen => {
+            // Inline pattern predicate (`WHERE (a)-[:KNOWS]->(b)`): a chained
+            // graph pattern in operand position reads as an existence check
+            // and rewrites to the equivalent EXISTS subquery. Only chained
+            // patterns qualify; a lone `(a)` keeps its parenthesized
+            // expression meaning.
+            if let Some(inline) = try_parse_inline_pattern_predicate(ctx, start_pos)? {
+                return Ok(inline);
+            }
             ctx.next_token();
 
             // Check if this is a lambda expression: (x, y) -> expr
@@ -1138,4 +1148,104 @@ pub(crate) fn parse_sql_subquery_body(
 
 pub(crate) fn parse_subquery_body(ctx: &mut ParseContext<'_>) -> Result<SubqueryBody, ParseError> {
     subquery::parse_subquery_body(ctx)
+}
+
+/// Attempt an inline pattern predicate rewrite at the current position.
+///
+/// When the tokens form a chained graph pattern (`(a)-[:T]->(b)`) followed
+/// by a boolean-level continuation, the pattern is rendered back to source
+/// text and wrapped into an EXISTS subquery body, reusing the established
+/// EXISTS binding and planning path. Returns `Ok(None)` without consuming
+/// input when the position does not hold such a pattern, so ordinary
+/// parenthesized expressions parse exactly as before.
+fn try_parse_inline_pattern_predicate(
+    ctx: &mut ParseContext<'_>,
+    start_pos: Position,
+) -> Result<Option<ParseResult>, ParseError> {
+    let ckpt = ctx.checkpoint();
+    let pattern = match TraversalParser::new().parse_pattern(ctx) {
+        Ok(Pattern::Path(path)) => Pattern::Path(path),
+        _ => {
+            ctx.take_recursive_comprehension();
+            ctx.restore(ckpt);
+            return Ok(None);
+        }
+    };
+    if !is_pattern_predicate_follower(ctx) {
+        ctx.restore(ckpt);
+        return Ok(None);
+    }
+    let Some(pattern_str) = pattern.to_pattern_string() else {
+        ctx.restore(ckpt);
+        return Ok(None);
+    };
+    let span = ctx.merge_span(start_pos, ctx.current_position());
+    let body = SubqueryBody {
+        id: 0,
+        patterns: vec![pattern_str],
+        where_clause: None,
+        return_expr: None,
+    };
+    Ok(Some(ParseResult {
+        expr: Expression::exists(body),
+        span,
+    }))
+}
+
+/// Whether the current token can legally follow an inline pattern predicate.
+///
+/// Operators that continue an expression (comparisons, arithmetic, postfix
+/// access, predicates like IN / BETWEEN / IS) disqualify the rewrite so
+/// expressions such as `(a) - (b)` keep their arithmetic meaning. Boolean
+/// combinators, closers, and clause keywords accept it.
+fn is_pattern_predicate_follower(ctx: &ParseContext<'_>) -> bool {
+    !matches!(
+        ctx.current_token().kind,
+        TokenKind::Eq
+            | TokenKind::Assign
+            | TokenKind::Ne
+            | TokenKind::Lt
+            | TokenKind::Le
+            | TokenKind::Gt
+            | TokenKind::Ge
+            | TokenKind::Regex
+            | TokenKind::Plus
+            | TokenKind::Minus
+            | TokenKind::Star
+            | TokenKind::Div
+            | TokenKind::Mod
+            | TokenKind::Exp
+            | TokenKind::Ampersand
+            | TokenKind::ShiftLeft
+            | TokenKind::ShiftRight
+            | TokenKind::NotOp
+            | TokenKind::Dot
+            | TokenKind::DoubleColon
+            | TokenKind::Colon
+            | TokenKind::DotDot
+            | TokenKind::LBracket
+            | TokenKind::LParen
+            | TokenKind::Arrow
+            | TokenKind::BackArrow
+            | TokenKind::RightArrow
+            | TokenKind::LeftArrow
+            | TokenKind::ArrowRight
+            | TokenKind::HashArrow
+            | TokenKind::HashArrowRight
+            | TokenKind::At
+            | TokenKind::QMark
+            | TokenKind::Question
+            | TokenKind::In
+            | TokenKind::NotIn
+            | TokenKind::Is
+            | TokenKind::IsNull
+            | TokenKind::IsNotNull
+            | TokenKind::IsEmpty
+            | TokenKind::IsNotEmpty
+            | TokenKind::Between
+            | TokenKind::Contains
+            | TokenKind::StartsWith
+            | TokenKind::EndsWith
+            | TokenKind::Not
+    )
 }

@@ -1,7 +1,7 @@
 import { writable } from 'svelte/store';
 import type { QueryResult, QueryError } from '$types/query';
 import { splitQueries } from '$utils/gql';
-import { queryService } from '$services/query';
+import { queryService, type BatchStatementResult } from '$services/query';
 
 export interface QueryHistoryItem {
   id: string;
@@ -19,10 +19,21 @@ export interface QueryFavoriteItem {
   createdAt: number;
 }
 
+/** One statement's outcome as rendered in the console result list. */
+export interface StatementResultEntry {
+  id: string;
+  query: string;
+  success: boolean;
+  result: QueryResult | null;
+  error: QueryError | null;
+  executionTime: number;
+}
+
 interface ConsoleState {
   editorContent: string;
   isExecuting: boolean;
   currentResult: QueryResult | null;
+  results: StatementResultEntry[];
   executionTime: number;
   error: QueryError | null;
   activeView: 'table' | 'json' | 'graph';
@@ -50,17 +61,84 @@ function persist(state: ConsoleState) {
 
 const persisted = loadPersisted();
 
+/** Map one batch statement outcome into a renderable result entry. */
+function toEntry(item: BatchStatementResult): StatementResultEntry {
+  return {
+    id: generateId(),
+    query: item.query,
+    success: item.success,
+    result: item.data ?? null,
+    error: item.error ?? null,
+    executionTime: item.executionTime ?? 0,
+  };
+}
+
 function createConsoleStore() {
   const { subscribe, set, update } = writable<ConsoleState>({
     editorContent: localStorage.getItem('graphdb_editor_draft') || '',
     isExecuting: false,
     currentResult: null,
+    results: [],
     executionTime: 0,
     error: null,
     activeView: (persisted.activeView as 'table' | 'json' | 'graph') || 'table',
     history: persisted.history || [],
     favorites: persisted.favorites || [],
   });
+
+  /**
+   * Run every statement contained in the editor. State is cleared up front so
+   * stale results never mix with a new run, then each statement is recorded
+   * into both the result list and the query history.
+   */
+  async function runStatements(rawScript: string, echoIntoEditor: boolean) {
+    if (!rawScript.trim()) {
+      update(s => ({ ...s, error: { code: 'EMPTY_QUERY', message: 'Query is empty' } }));
+      return;
+    }
+    const statements = splitQueries(rawScript);
+    if (statements.length === 0) {
+      update(s => ({ ...s, error: { code: 'EMPTY_QUERY', message: 'No valid queries found' } }));
+      return;
+    }
+    update(s => ({
+      ...s,
+      isExecuting: true,
+      error: null,
+      currentResult: null,
+      results: [],
+      ...(echoIntoEditor ? { editorContent: rawScript } : {}),
+    }));
+    try {
+      const response = await queryService.executeBatch(rawScript);
+      const entries = response.results.map(toEntry);
+      const primary = entries.find(e => e.success) ?? entries[0] ?? null;
+      update(s => ({
+        ...s,
+        isExecuting: false,
+        results: entries,
+        currentResult: primary?.result ?? null,
+        executionTime: response.totalExecutionTime,
+        error: entries.length > 0 && entries.every(e => !e.success)
+          ? (entries[0].error ?? { code: 'EXECUTION_ERROR', message: 'Query failed' })
+          : null,
+      }));
+      for (const entry of entries) {
+        addToHistory({
+          query: entry.query,
+          executionTime: entry.executionTime,
+          rowCount: entry.result?.rowCount ?? 0,
+          success: entry.success,
+        });
+      }
+    } catch (error) {
+      update(s => ({
+        ...s,
+        isExecuting: false,
+        error: { code: 'EXECUTION_ERROR', message: error instanceof Error ? error.message : 'Failed to execute query' },
+      }));
+    }
+  }
 
   return {
     subscribe,
@@ -71,54 +149,12 @@ function createConsoleStore() {
     executeQuery: async () => {
       let state: ConsoleState = null!;
       update(s => { state = s; return s; });
-      if (!state.editorContent.trim()) {
-        update(s => ({ ...s, error: { code: 'EMPTY_QUERY', message: 'Query is empty' } }));
-        return;
-      }
-      update(s => ({ ...s, isExecuting: true, error: null, currentResult: null }));
-      try {
-        const queries = splitQueries(state.editorContent);
-        if (queries.length === 0) {
-          update(s => ({ ...s, isExecuting: false, error: { code: 'EMPTY_QUERY', message: 'No valid queries found' } }));
-          return;
-        }
-        const query = queries[0];
-        const response = await queryService.execute({ query });
-        if (response.success && response.data) {
-          const data = response.data;
-          const executionTime = response.executionTime || 0;
-          update(s => ({ ...s, currentResult: data, executionTime, isExecuting: false }));
-          addToHistory({ query, executionTime, rowCount: data.rowCount || 0, success: true });
-        } else {
-          update(s => ({ ...s, error: response.error || { code: 'UNKNOWN_ERROR', message: 'Unknown error' }, executionTime: response.executionTime || 0, isExecuting: false }));
-          addToHistory({ query, executionTime: response.executionTime || 0, rowCount: 0, success: false });
-        }
-      } catch (error) {
-        update(s => ({ ...s, error: { code: 'EXECUTION_ERROR', message: error instanceof Error ? error.message : 'Failed to execute query' }, isExecuting: false }));
-      }
+      await runStatements(state.editorContent, false);
     },
     executeQueryByText: async (query: string) => {
-      if (!query.trim()) {
-        update(s => ({ ...s, error: { code: 'EMPTY_QUERY', message: 'Query is empty' } }));
-        return;
-      }
-      update(s => ({ ...s, isExecuting: true, error: null, currentResult: null, editorContent: query }));
-      try {
-        const response = await queryService.execute({ query });
-        if (response.success && response.data) {
-          const data = response.data;
-          const executionTime = response.executionTime || 0;
-          update(s => ({ ...s, currentResult: data, executionTime, isExecuting: false }));
-          addToHistory({ query, executionTime, rowCount: data.rowCount || 0, success: true });
-        } else {
-          update(s => ({ ...s, error: response.error || { code: 'UNKNOWN_ERROR', message: 'Unknown error' }, executionTime: response.executionTime || 0, isExecuting: false }));
-          addToHistory({ query, executionTime: response.executionTime || 0, rowCount: 0, success: false });
-        }
-      } catch (error) {
-        update(s => ({ ...s, error: { code: 'EXECUTION_ERROR', message: error instanceof Error ? error.message : 'Failed to execute query' }, isExecuting: false }));
-      }
+      await runStatements(query, true);
     },
-    clearResult: () => update(s => ({ ...s, currentResult: null, executionTime: 0, error: null })),
+    clearResult: () => update(s => ({ ...s, currentResult: null, results: [], executionTime: 0, error: null })),
     setActiveView: (view: 'table' | 'json' | 'graph') => update(s => ({ ...s, activeView: view })),
     addToHistory: (item: Omit<QueryHistoryItem, 'id' | 'timestamp'>) => addToHistory(item),
     clearHistory: () => update(s => ({ ...s, history: [] })),

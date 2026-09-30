@@ -632,6 +632,70 @@ impl TraversalParser {
     pub fn parse_pattern(&mut self, ctx: &mut ParseContext) -> Result<Pattern, ParseError> {
         let start_span = ctx.current_span();
 
+        // Named path binding (`p = (a)-[]->(b)`): an identifier directly
+        // followed by `=` introduces a path name. Anything else falls
+        // through to the plain pattern forms. `==` is not assignment, so
+        // only a single `=` triggers this branch.
+        if let TokenKind::Identifier(_) = ctx.current_token().kind {
+            let ckpt = ctx.checkpoint();
+            if let Ok(candidate) = ctx.expect_identifier() {
+                if ctx.match_token(TokenKind::Assign) {
+                    return self.parse_named_path(ctx, candidate, start_span);
+                }
+            }
+            ctx.restore(ckpt);
+        }
+
+        self.parse_unnamed_pattern(ctx, start_span)
+    }
+
+    /// Parse the remainder of a named path binding after `name =`.
+    ///
+    /// Only node and path patterns qualify; a bare variable reference is
+    /// rejected because it carries no traversable structure. A lone node
+    /// is lifted into a single-element path so downstream stages observe a
+    /// uniform named-path shape.
+    fn parse_named_path(
+        &mut self,
+        ctx: &mut ParseContext,
+        name: String,
+        start_span: crate::parser::ast::types::Span,
+    ) -> Result<Pattern, ParseError> {
+        match self.parse_unnamed_pattern(ctx, ctx.current_span())? {
+            Pattern::Path(mut path) => {
+                if path.name.is_some() {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "Duplicate path name in named path binding".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+                path.name = Some(name);
+                Ok(Pattern::Path(path))
+            }
+            Pattern::Node(node) => {
+                let end_span = ctx.current_span();
+                let span = ctx.merge_span(start_span.start, end_span.end);
+                Ok(Pattern::Path(PathPattern::with_name(
+                    vec![PathElement::Node(node)],
+                    span,
+                    name,
+                )))
+            }
+            _ => Err(ParseError::new(
+                ParseErrorKind::SyntaxError,
+                "Expected a node or path pattern after '=' in named path binding".to_string(),
+                ctx.current_position(),
+            )),
+        }
+    }
+
+    /// Parse a plain pattern without a leading path-name binding.
+    fn parse_unnamed_pattern(
+        &mut self,
+        ctx: &mut ParseContext,
+        start_span: crate::parser::ast::types::Span,
+    ) -> Result<Pattern, ParseError> {
         // Check whether it is in node mode (starting with ()).
         if ctx.match_token(TokenKind::LParen) {
             let node = self.parse_node_pattern(ctx, start_span)?;
@@ -760,7 +824,11 @@ impl TraversalParser {
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);
 
-        Ok(Pattern::Path(PathPattern { span, elements }))
+        Ok(Pattern::Path(PathPattern {
+            span,
+            elements,
+            name: None,
+        }))
     }
 
     /// Analyzing the border mode

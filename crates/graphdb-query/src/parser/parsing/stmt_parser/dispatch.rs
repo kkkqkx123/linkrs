@@ -68,6 +68,13 @@ pub(super) fn parse_token_statement(ctx: &mut ParseContext) -> Result<Stmt, Pars
             if ctx.check_keyword_sequence(&["MATCH", "VECTOR"]) {
                 return crate::parser::parsing::vector_parser::parse_vector(ctx);
             }
+            // Full-text MATCH variant carries a string pattern, which never
+            // starts a plain graph pattern.
+            if ctx.current_token().kind == TokenKind::Match
+                && matches!(ctx.peek_token().kind, TokenKind::StringLiteral(_))
+            {
+                return misc::parse_fulltext_statement(ctx);
+            }
             TraversalParser::new().parse_match_statement(ctx)
         }
         TokenKind::Go => TraversalParser::new().parse_go_statement(ctx),
@@ -85,7 +92,13 @@ pub(super) fn parse_token_statement(ctx: &mut ParseContext) -> Result<Stmt, Pars
         // DDL statements or Cypher CREATE data statements
         TokenKind::Create => misc::parse_create_statement_extended(ctx),
         TokenKind::Drop => DdlParser::new().parse_drop_statement(ctx),
-        TokenKind::Desc => DdlParser::new().parse_desc_statement(ctx),
+        TokenKind::Desc => {
+            // DESCRIBE/DESC FULLTEXT INDEX is served by the full-text parser.
+            if ctx.check_keyword_sequence(&["DESCRIBE", "FULLTEXT"]) {
+                return misc::parse_fulltext_statement(ctx);
+            }
+            DdlParser::new().parse_desc_statement(ctx)
+        }
         TokenKind::Alter => DdlParser::new().parse_alter_statement(ctx),
 
         // User management statements
@@ -99,7 +112,13 @@ pub(super) fn parse_token_statement(ctx: &mut ParseContext) -> Result<Stmt, Pars
 
         // Tool statements
         TokenKind::Use => UtilStmtParser::new().parse_use_statement(ctx),
-        TokenKind::Show => ShowParser::new().parse_show_statement_extended(ctx),
+        TokenKind::Show => {
+            // SHOW FULLTEXT INDEX is served by the full-text parser.
+            if ctx.check_keyword_sequence(&["SHOW", "FULLTEXT"]) {
+                return misc::parse_fulltext_statement(ctx);
+            }
+            ShowParser::new().parse_show_statement_extended(ctx)
+        }
         TokenKind::Explain => ExplainParser::new().parse_explain_statement(ctx),
         TokenKind::Profile => ExplainParser::new().parse_profile_statement(ctx),
         TokenKind::Analyze => ExplainParser::new().parse_analyze_statement(ctx),
@@ -109,6 +128,11 @@ pub(super) fn parse_token_statement(ctx: &mut ParseContext) -> Result<Stmt, Pars
         TokenKind::Lookup => {
             if ctx.check_keyword_sequence(&["LOOKUP", "VECTOR"]) {
                 return crate::parser::parsing::vector_parser::parse_vector(ctx);
+            }
+            // LOOKUP ON <schema> INDEX <index> ... is the full-text variant;
+            // plain LOOKUP never carries INDEX in that position.
+            if is_lookup_fulltext(ctx) {
+                return misc::parse_fulltext_statement(ctx);
             }
             UtilStmtParser::new().parse_lookup_statement(ctx)
         }
@@ -146,4 +170,28 @@ pub(super) fn parse_token_statement(ctx: &mut ParseContext) -> Result<Stmt, Pars
             ctx.current_position(),
         )),
     }
+}
+
+/// Non-consuming lookahead for the full-text LOOKUP form.
+///
+/// Matches `LOOKUP ON <identifier> INDEX` without advancing the context.
+/// Plain LOOKUP targets (TAG / EDGE / name with WHERE / YIELD) never place
+/// INDEX directly after the schema name, so a match unambiguously selects
+/// the full-text parser.
+fn is_lookup_fulltext(ctx: &mut ParseContext) -> bool {
+    let ckpt = ctx.checkpoint();
+    ctx.next_token(); // consume LOOKUP
+    let matched = if ctx.check_token(TokenKind::On) {
+        ctx.next_token(); // consume ON
+        if matches!(ctx.current_token().kind, TokenKind::Identifier(_)) {
+            ctx.next_token(); // consume schema name
+            ctx.check_keyword("INDEX")
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    ctx.restore(ckpt);
+    matched
 }

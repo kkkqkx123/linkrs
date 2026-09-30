@@ -8,6 +8,11 @@ use crate::encoding::EncodingType;
 
 use graphdb_core::types::Timestamp;
 
+/// One projected row: ordered `(column name, value-or-null)` pairs.
+type ProjectedRow = Vec<(String, Option<Value>)>;
+/// Projected rows in request order: one entry per requested row.
+type ProjectedRowBatch = Vec<ProjectedRow>;
+
 // ---------------------------------------------------------------------------
 // Internal helpers (used by ColumnStore and Column)
 // ---------------------------------------------------------------------------
@@ -366,7 +371,7 @@ impl ColumnStore {
         Ok(())
     }
 
-    pub fn get(&self, row_idx: usize) -> Vec<(String, Option<Value>)> {
+    pub fn get(&self, row_idx: usize) -> ProjectedRow {
         self.for_each_column(|col| (col.name.clone(), col.get(row_idx)))
     }
 
@@ -406,7 +411,7 @@ impl ColumnStore {
     }
 
     /// Read all columns for one row as visible at `query_ts`.
-    pub fn get_at_ts(&self, row_idx: usize, query_ts: Timestamp) -> Vec<(String, Option<Value>)> {
+    pub fn get_at_ts(&self, row_idx: usize, query_ts: Timestamp) -> ProjectedRow {
         self.for_each_column(|col| (col.name.clone(), col.get_at_ts(row_idx, query_ts)))
     }
 
@@ -427,7 +432,7 @@ impl ColumnStore {
         row_idx: usize,
         projection: &[String],
         query_ts: Timestamp,
-    ) -> (Vec<(String, Option<Value>)>, Vec<Timestamp>) {
+    ) -> (ProjectedRow, Vec<Timestamp>) {
         let mut values = Vec::with_capacity(projection.len());
         let mut stamps = Vec::with_capacity(projection.len());
         for name in projection {
@@ -452,7 +457,7 @@ impl ColumnStore {
         row_idx: usize,
         projection: &[String],
         query_ts: Timestamp,
-    ) -> Vec<(String, Option<Value>)> {
+    ) -> ProjectedRow {
         projection
             .iter()
             .filter_map(|name| {
@@ -471,7 +476,7 @@ impl ColumnStore {
         &self,
         rows: &[usize],
         query_ts: Timestamp,
-    ) -> StorageResult<Vec<Vec<(String, Option<Value>)>>> {
+    ) -> StorageResult<ProjectedRowBatch> {
         let columns = self.columns.read();
         let mut out = vec![Vec::with_capacity(columns.len()); rows.len()];
         for col in columns.iter() {
@@ -495,7 +500,7 @@ impl ColumnStore {
         rows: &[usize],
         projection: &[String],
         query_ts: Timestamp,
-    ) -> StorageResult<Vec<Vec<(String, Option<Value>)>>> {
+    ) -> StorageResult<ProjectedRowBatch> {
         let mut out = vec![Vec::with_capacity(projection.len()); rows.len()];
         for name in projection {
             let column = self

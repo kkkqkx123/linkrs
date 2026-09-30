@@ -463,7 +463,7 @@ impl EdgeStore {
         let mut scanned = 0usize;
         for edge in iter {
             scanned += 1;
-            if scanned % 4096 == 0 {
+            if scanned.is_multiple_of(4096) {
                 std::thread::yield_now();
             }
             let src_u32 = edge.src_vid.as_internal_u32().unwrap_or(u32::MAX);

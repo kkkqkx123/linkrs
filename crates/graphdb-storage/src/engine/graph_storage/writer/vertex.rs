@@ -561,14 +561,26 @@ pub(crate) fn delete_vertex(
     let ts = ctx.get_write_timestamp()?;
     delete_vertex_with_timestamp(
         ctx,
-        space_info.space_id,
-        tag_name,
-        label_id,
-        &vid,
-        &routed,
+        VertexDeleteTarget {
+            space_id: space_info.space_id,
+            tag_name,
+            label_id,
+            vid: &vid,
+            routed: &routed,
+        },
         ts,
         true,
     )
+}
+
+/// Everything identifying one vertex deletion: its space/tag label plus the
+/// identity in both logical and routed form.
+struct VertexDeleteTarget<'a> {
+    space_id: u64,
+    tag_name: &'a str,
+    label_id: LabelId,
+    vid: &'a VertexId,
+    routed: &'a RoutedVertexId,
 }
 
 /// Delete one vertex row with a caller-provided write timestamp.
@@ -581,14 +593,17 @@ pub(crate) fn delete_vertex(
 /// batch caller performs once after its loop.
 fn delete_vertex_with_timestamp(
     ctx: &GraphStorageContext,
-    space_id: u64,
-    tag_name: &str,
-    label_id: LabelId,
-    vid: &VertexId,
-    routed: &RoutedVertexId,
+    target: VertexDeleteTarget<'_>,
     ts: Timestamp,
     settle: bool,
 ) -> StorageResult<()> {
+    let VertexDeleteTarget {
+        space_id,
+        tag_name,
+        label_id,
+        vid,
+        routed,
+    } = target;
     let redo = DeleteVertexRedo {
         label: label_id,
         vid: *vid,
@@ -695,7 +710,18 @@ pub(crate) fn delete_vertex_with_edges(
             return Err(error);
         }
     }
-    delete_vertex_with_timestamp(ctx, space_id, tag_name, label_id, &id, &routed, ts, true)
+    delete_vertex_with_timestamp(
+        ctx,
+        VertexDeleteTarget {
+            space_id,
+            tag_name,
+            label_id,
+            vid: &id,
+            routed: &routed,
+        },
+        ts,
+        true,
+    )
 }
 
 /// Batch-delete multiple vertices together with all their incident edges.
@@ -748,7 +774,18 @@ pub(crate) fn batch_delete_vertices_with_edges(
     // The online path defers settling to the transaction commit.
     let mut deleted = 0usize;
     for (id, route) in ids.iter().zip(routed.iter()) {
-        delete_vertex_with_timestamp(ctx, space_id, tag_name, label_id, id, route, ts, false)?;
+        delete_vertex_with_timestamp(
+            ctx,
+            VertexDeleteTarget {
+                space_id,
+                tag_name,
+                label_id,
+                vid: id,
+                routed: route,
+            },
+            ts,
+            false,
+        )?;
         deleted += 1;
     }
     if !ctx.is_online_write() {

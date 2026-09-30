@@ -199,9 +199,10 @@ impl ColumnStorage for FixedWidthColumn {
                     }
                 }
                 _ => {
-                    if !was_null && row_idx < old_count {
-                        self.null_count += 1;
-                    } else if row_idx >= old_count {
+                    // A null write either extends the row count (this row was
+                    // not counted before) or replaces a previously non-null
+                    // slot; a row already null stays counted once.
+                    if row_idx >= old_count || !was_null {
                         self.null_count += 1;
                     }
                 }

@@ -737,7 +737,7 @@ impl Column {
             let state = chunk.read_state();
             if let Some(chains) = state.version_chains.as_ref() {
                 total_rows += chains.len();
-                for (_, chain) in chains.iter() {
+                for chain in chains.values() {
                     total_entries += chain.len();
                     max_len = max_len.max(chain.len());
                     memory_bytes += chain.len() * std::mem::size_of::<VersionEntry>();

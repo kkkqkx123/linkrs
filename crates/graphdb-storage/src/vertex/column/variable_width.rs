@@ -144,7 +144,7 @@ impl ColumnStorage for VariableWidthColumn {
                         row_idx, e
                     ))
                 })?;
-            return Ok(Some(Value::Geography(geo)));
+            Ok(Some(Value::Geography(geo)))
         } else if matches!(
             self.data_type,
             DataType::Vector | DataType::VectorDense(_) | DataType::VectorSparse(_)
@@ -175,7 +175,7 @@ impl ColumnStorage for VariableWidthColumn {
                 })?;
                 data.push(f32::from_le_bytes(chunk));
             }
-            return Ok(Some(Value::Vector(VectorValue::dense(data))));
+            Ok(Some(Value::Vector(VectorValue::dense(data))))
         } else if matches!(self.data_type, DataType::Json) {
             let s = String::from_utf8(bytes.to_vec()).map_err(|e| {
                 StorageError::deserialize_error(format!(
@@ -189,7 +189,7 @@ impl ColumnStorage for VariableWidthColumn {
                     row_idx, e
                 ))
             })?;
-            return Ok(Some(Value::Json(Box::new(j))));
+            Ok(Some(Value::Json(Box::new(j))))
         } else if matches!(self.data_type, DataType::JsonB) {
             let s = String::from_utf8(bytes.to_vec()).map_err(|e| {
                 StorageError::deserialize_error(format!(
@@ -203,7 +203,7 @@ impl ColumnStorage for VariableWidthColumn {
                     row_idx, e
                 ))
             })?;
-            return Ok(Some(Value::JsonB(Box::new(jb))));
+            Ok(Some(Value::JsonB(Box::new(jb))))
         } else if matches!(self.data_type, DataType::FixedString(_)) {
             let s = String::from_utf8(bytes.to_vec()).map_err(|e| {
                 StorageError::deserialize_error(format!(
@@ -211,7 +211,7 @@ impl ColumnStorage for VariableWidthColumn {
                     row_idx, e
                 ))
             })?;
-            return Ok(Some(Value::FixedString(s)));
+            Ok(Some(Value::FixedString(s)))
         } else if matches!(
             self.data_type,
             DataType::Struct(_)
@@ -234,9 +234,9 @@ impl ColumnStorage for VariableWidthColumn {
                     row_idx, e
                 ))
             })?;
-            return Ok(Some(v));
+            Ok(Some(v))
         } else if matches!(self.data_type, DataType::Blob) {
-            return Ok(Some(Value::Blob(bytes.to_vec())));
+            Ok(Some(Value::Blob(bytes.to_vec())))
         } else {
             let s = String::from_utf8(bytes.to_vec()).map_err(|e| {
                 StorageError::deserialize_error(format!(
@@ -244,7 +244,7 @@ impl ColumnStorage for VariableWidthColumn {
                     row_idx, e
                 ))
             })?;
-            return Ok(Some(Value::string(s)));
+            Ok(Some(Value::string(s)))
         }
     }
 

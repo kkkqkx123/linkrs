@@ -377,10 +377,7 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
             data.tag_names
                 .iter()
                 .cloned()
-                .map(|tag| Mutation::DeleteVertex {
-                    tag,
-                    id: id.clone(),
-                })
+                .map(|tag| Mutation::DeleteVertex { tag, id })
                 .collect(),
         )
     }

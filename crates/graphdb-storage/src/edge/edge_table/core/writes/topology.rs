@@ -546,9 +546,7 @@ impl EdgeStore {
         // same conflicts in O(1) without another row scan, and the failure
         // path underneath cleans up the record staged above.
 
-        if let Err(e) = self.mvcc.record_creation(edge_id, ts) {
-            return Err(e);
-        }
+        self.mvcc.record_creation(edge_id, ts)?;
 
         if let Err(e) = self
             .properties

@@ -281,3 +281,98 @@ fn test_parse_scalar_subquery_requires_return() {
         "SUBQUERY without RETURN must be rejected at parse time"
     );
 }
+
+#[test]
+fn test_parse_inline_pattern_predicate_rewrites_to_exists() {
+    let input = "(a)-[:knows]->(b)";
+    let ctx = &mut ParseContext::new(input);
+    let parse_result = parse_expression(ctx).expect("inline pattern must parse");
+    match parse_result.expr {
+        Expression::Exists { body } => {
+            assert_eq!(body.patterns.len(), 1);
+            assert_eq!(body.patterns[0], "(a)-[:knows]->(b)");
+            // The rendered pattern must survive the bind-time re-parse.
+            let reparsed = crate::parser::parsing::traversal_parser::TraversalParser::new()
+                .parse_pattern(&mut ParseContext::new(&body.patterns[0]));
+            assert!(
+                reparsed.is_ok(),
+                "rendered pattern must be re-parseable: {:?}",
+                reparsed.err()
+            );
+        }
+        other => panic!("expected EXISTS rewrite, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_inline_pattern_predicate_combines_with_boolean_ops() {
+    for input in [
+        "(a)-[:knows]->(b) AND a.age > 20",
+        "NOT (a)-[:knows]->(b)",
+        "((a)-[:knows]->(b))",
+    ] {
+        let ctx = &mut ParseContext::new(input);
+        let result = parse_expression(ctx);
+        assert!(
+            result.is_ok(),
+            "parse failed for {input}: {:?}",
+            result.err()
+        );
+    }
+}
+
+#[test]
+fn test_parse_parenthesized_expressions_keep_meaning() {
+    // A lone parenthesized variable is not a pattern predicate.
+    let ctx = &mut ParseContext::new("(a)");
+    let parse_result = parse_expression(ctx).expect("parens must parse");
+    assert!(
+        matches!(parse_result.expr, Expression::Variable(_)),
+        "expected variable, got {:?}",
+        parse_result.expr
+    );
+
+    // Subtraction between parenthesized operands is not a pattern.
+    let ctx = &mut ParseContext::new("(a)-(b)");
+    let parse_result = parse_expression(ctx).expect("subtraction must parse");
+    assert!(
+        matches!(parse_result.expr, Expression::Binary { .. }),
+        "expected binary subtraction, got {:?}",
+        parse_result.expr
+    );
+}
+
+#[test]
+fn test_parse_window_function_with_partition_and_order() {
+    let input = "row_number() OVER (PARTITION BY a ORDER BY b DESC)";
+    let ctx = &mut ParseContext::new(input);
+    let parse_result = parse_expression(ctx).expect("window function must parse");
+    match parse_result.expr {
+        Expression::WindowFunction {
+            over_partition_by,
+            over_order_by,
+            over_order_desc,
+            ..
+        } => {
+            assert_eq!(over_partition_by.len(), 1);
+            assert_eq!(over_order_by.len(), 1);
+            assert_eq!(over_order_desc, vec![true]);
+        }
+        other => panic!("expected WindowFunction, got {:?}", other),
+    }
+
+    let input = "row_number() OVER (PARTITION BY a, b)";
+    let ctx = &mut ParseContext::new(input);
+    let parse_result = parse_expression(ctx).expect("window function must parse");
+    match parse_result.expr {
+        Expression::WindowFunction {
+            over_partition_by,
+            over_order_by,
+            ..
+        } => {
+            assert_eq!(over_partition_by.len(), 2);
+            assert!(over_order_by.is_empty());
+        }
+        other => panic!("expected WindowFunction, got {:?}", other),
+    }
+}

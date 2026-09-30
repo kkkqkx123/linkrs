@@ -109,7 +109,7 @@ impl super::SyncManager {
                 ));
             }
             let mut staged = properties.to_vec();
-            for (field, vector) in pending_fields.into_iter().zip(vectors.into_iter()) {
+            for (field, vector) in pending_fields.into_iter().zip(vectors) {
                 if let Some(info) = coordinator.index_info(space_id, tag_name, &field) {
                     let expected = info.config.vector_size;
                     if expected != 0 && vector.len() != expected {

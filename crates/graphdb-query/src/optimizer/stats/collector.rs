@@ -478,7 +478,7 @@ impl StatisticsCollector {
                 hot.push((*vid, 0, *c));
             }
         }
-        hot.sort_by(|a, b| (b.1 + b.2).cmp(&(a.1 + a.2)));
+        hot.sort_by_key(|entry| std::cmp::Reverse(entry.1 + entry.2));
         hot.truncate(3);
         let hot_vertices = hot
             .into_iter()

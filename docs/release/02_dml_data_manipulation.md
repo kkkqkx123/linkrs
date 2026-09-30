@@ -287,12 +287,13 @@ UPSERT EDGE "101" -> "102" @1 OF follow SET degree = 0.9 YIELD $^.follow.degree
 ### 语法结构
 ```cypher
 DELETE VERTEX <vertex_id> [, <vertex_id> ...] [WITH EDGE]
-DELETE TAG <tag_name> [, <tag_name> ...] FROM <vid> [, <vid> ...]
-DELETE TAG * FROM <vid> [, <vid> ...]
 DELETE EDGE <edge_type> <src_vid> -> <dst_vid> [@<rank>] [, ...]
 DELETE EDGE <src_vid> -> <dst_vid> [@<rank>] OF <edge_type> [, ...]
 DETACH DELETE <vertex_expr> [, <vertex_expr> ...]
 ```
+
+> 说明：按标签剥离顶点的 `DELETE TAG ... FROM ...` 形态当前尚未实现，
+> 解析器会直接拒绝该写法；如需删除整个顶点请使用 `DELETE VERTEX`。
 
 ### 关键特性
 - 支持批量删除节点
@@ -300,8 +301,6 @@ DETACH DELETE <vertex_expr> [, <vertex_expr> ...]
 - 支持指定边rank
 - 支持级联删除关联边（WITH EDGE）
 - 支持 Cypher 风格的 `DETACH DELETE`（等价于 WITH EDGE）
-- **支持删除指定标签** - 从顶点移除特定标签而不删除顶点
-- **支持通配符删除所有标签** - DELETE TAG *
 - 支持在 MATCH 语句后直接接 DELETE 子句（见下文）
 - 不指定WITH EDGE时保留边（产生悬挂边）
 
@@ -315,15 +314,6 @@ DELETE VERTEX "101" WITH EDGE
 
 -- Cypher风格级联删除
 DETACH DELETE "101"
-
--- 删除指定标签（保留顶点和其他标签）
-DELETE TAG employee FROM "101"
-
--- 删除多个标签
-DELETE TAG employee, manager FROM "101", "102"
-
--- 删除所有标签（保留空顶点）
-DELETE TAG * FROM "101"
 
 -- 删除边
 DELETE EDGE follow "101" -> "102" @0
@@ -362,7 +352,7 @@ MATCH (a)-[e:KNOWS]->(b) DELETE e
 
 ### 语法结构
 ```cypher
-MERGE (<variable>:<Label> {<prop>: <value>}) [ON CREATE SET <prop> = <value>] [ON MATCH SET <prop> = <value>]
+MERGE (<variable>:<Label> {<prop>: <value>}) [ON CREATE SET <prop> = <value>] [ON MATCH SET <prop> = <value>] [SET <prop> = <value>]
 MERGE EDGE|VERTEX ON <tag_or_edge_type> [SET <prop> = <value>] WHERE id(vid|src) == <value> [AND id(dst) == <value>]
 ```
 
@@ -374,7 +364,8 @@ MERGE EDGE|VERTEX ON <tag_or_edge_type> [SET <prop> = <value>] WHERE id(vid|src)
 - 基于模式匹配，比UPSERT更灵活
 - 支持 UPSERT 风格的 `MERGE VERTEX/EDGE ON ...` 语法
 - MATCH 语句支持跟随 MERGE 子句（解析校验，不改变匹配结果）
-- 模式后允许裸 `SET` 子句（解析校验）
+- 模式后的裸 `SET` 子句同时作用于创建与匹配两条分支，
+  其赋值会合并进已有的 `ON CREATE` / `ON MATCH` 子句
 
 ### 示例
 ```cypher
@@ -430,19 +421,20 @@ SET p.temp_field = NULL
 ## 8. REMOVE - 移除属性
 
 ### 功能
-移除节点或边的属性或标签（独立语句）。
+移除节点或边的属性（独立语句）。
 
 ### 语法结构
 ```cypher
 REMOVE <variable>.<prop> [, <variable>.<prop> ...]
-REMOVE <variable>:<Label> [, <variable>:<Label> ...]
 ```
+
+> 说明：`REMOVE <variable>:<Label>` 标签移除形态当前尚未实现，
+> 解析器会直接拒绝该写法。
 
 ### 关键特性
 - 支持移除属性
-- 支持移除标签（与DELETE TAG类似）
 - 支持批量操作
-- 返回移除的属性/标签数量
+- 返回移除的属性数量
 
 ### 示例
 ```cypher
@@ -451,12 +443,6 @@ REMOVE p.temp_field
 
 -- 移除多个属性
 REMOVE p.temp1, p.temp2, p.deprecated_field
-
--- 移除标签
-REMOVE p:OldLabel
-
--- 同时移除属性和标签
-REMOVE p.temp_field, p:OldLabel
 ```
 
 ---
@@ -510,17 +496,16 @@ COPY VERTEX person TO '/tmp/person_out.csv'
 | **INSERT** | 插入新数据 | 可选(IF NOT EXISTS) | 无 | 插入数量 | 批量导入、初始化数据 |
 | **UPDATE** | 更新已有数据 | 否 | WHERE | YIELD支持 | 属性修改、增量更新 |
 | **UPSERT** | 插入或更新 | 是 | WHERE | YIELD支持 | 幂等写入、同步场景 |
-| **DELETE** | 删除数据 | 否 | MATCH模式 | 删除数量 | 数据清理、标签移除 |
+| **DELETE** | 删除数据 | 否 | MATCH模式 | 删除数量 | 数据清理 |
 | **MERGE** | 匹配则更新，否则创建 | 是 | 模式匹配 | 无 | 复杂条件的数据合并 |
 | **SET** | 属性设置 | 否 | 无 | 无 | 属性动态更新 |
-| **REMOVE** | 移除属性/标签 | 否 | 无 | 移除数量 | 清理临时数据 |
+| **REMOVE** | 移除属性 | 否 | 无 | 移除数量 | 清理临时数据 |
 | **COPY** | 批量导入/导出 | 否 | 无 | 导入/导出统计 | CSV数据搬迁 |
 
 ### 选择建议
 
 - **需要幂等性**: 使用 `INSERT IF NOT EXISTS` 或 `UPSERT`
 - **需要返回更新后数据**: 使用 `UPDATE ... YIELD` 或 `UPSERT ... YIELD`
-- **需要删除标签但保留顶点**: 使用 `DELETE TAG` 或 `REMOVE :Label`
 - **复杂条件的数据合并**: 使用 `MERGE` (基于模式匹配)
 - **简单的属性更新**: 使用 `UPDATE` 或 `SET`
 - **CSV 批量搬迁**: 使用 `COPY`

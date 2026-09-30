@@ -351,6 +351,26 @@ impl Binder {
                 for element in &pp.elements {
                     last_var = self.process_path_element(element, graph, last_var)?;
                 }
+                if let Some(path_name) = &pp.name {
+                    if graph.find_node(path_name).is_some()
+                        || graph.find_edge(path_name).is_some()
+                        || self.scope.contains(path_name)
+                    {
+                        return Err(DBError::from(
+                            graphdb_core::error::QueryError::invalid_query(format!(
+                                "Duplicate variable: {}",
+                                path_name
+                            )),
+                        ));
+                    }
+                    self.scope.define_variable(BinderVariable {
+                        name: path_name.clone(),
+                        alias_type: AliasType::Path,
+                        tags: Vec::new(),
+                        properties: std::collections::HashMap::new(),
+                        is_defined: true,
+                    });
+                }
                 Ok(last_var)
             }
             Pattern::Variable(vp) => {

@@ -234,9 +234,7 @@ impl JoinOrderOptimizer {
         let mut accumulated_rows = 0u64;
         let mut total_cost = 0.0;
         for (position, id) in order.iter().enumerate() {
-            let Some(table) = id_to_table.get(id.as_str()) else {
-                return None;
-            };
+            let table = id_to_table.get(id.as_str())?;
             if position == 0 {
                 accumulated_mask |= 1 << table.bit_id;
                 accumulated_rows = table.estimated_rows;

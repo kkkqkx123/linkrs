@@ -543,10 +543,11 @@ impl Column {
         let first_row = page_id * crate::persistence::dirty_page::ROWS_PER_PAGE;
         let direct = first_row / self.chunk_capacity().max(1);
         if let Some(chunk) = chunks.get(direct) {
-            if first_row >= chunk.row_offset && first_row < chunk.row_offset + chunk.row_count {
-                if chunk.write_state().dirty_pages.remove(&mark) {
-                    return;
-                }
+            if first_row >= chunk.row_offset
+                && first_row < chunk.row_offset + chunk.row_count
+                && chunk.write_state().dirty_pages.remove(&mark)
+            {
+                return;
             }
         }
         for chunk in chunks.iter() {
@@ -865,7 +866,7 @@ impl Column {
                 postcard::from_bytes::<graphdb_core::value::Geography>(bytes).map_err(|e| {
                     StorageError::deserialize_error(format!("compact geography: {}", e))
                 })?;
-            return Ok(Value::Geography(geo));
+            Ok(Value::Geography(geo))
         } else if matches!(
             self.data_type,
             DataType::Vector | DataType::VectorDense(_) | DataType::VectorSparse(_)
@@ -893,26 +894,26 @@ impl Column {
                 })?;
                 out.push(f32::from_le_bytes(chunk));
             }
-            return Ok(Value::Vector(VectorValue::dense(out)));
+            Ok(Value::Vector(VectorValue::dense(out)))
         } else if matches!(self.data_type, DataType::Json) {
             let s = String::from_utf8(bytes.to_vec()).map_err(|e| {
                 StorageError::deserialize_error(format!("compact JSON UTF-8: {}", e))
             })?;
             let j = graphdb_core::value::Json::parse(&s)
                 .map_err(|e| StorageError::deserialize_error(format!("compact JSON: {}", e)))?;
-            return Ok(Value::Json(Box::new(j)));
+            Ok(Value::Json(Box::new(j)))
         } else if matches!(self.data_type, DataType::JsonB) {
             let s = String::from_utf8(bytes.to_vec()).map_err(|e| {
                 StorageError::deserialize_error(format!("compact JSONB UTF-8: {}", e))
             })?;
             let jb = graphdb_core::value::JsonB::parse(&s)
                 .map_err(|e| StorageError::deserialize_error(format!("compact JSONB: {}", e)))?;
-            return Ok(Value::JsonB(Box::new(jb)));
+            Ok(Value::JsonB(Box::new(jb)))
         } else if matches!(self.data_type, DataType::FixedString(_)) {
             let s = String::from_utf8(bytes.to_vec()).map_err(|e| {
                 StorageError::deserialize_error(format!("compact fixed string UTF-8: {}", e))
             })?;
-            return Ok(Value::FixedString(s));
+            Ok(Value::FixedString(s))
         } else if matches!(
             self.data_type,
             DataType::Struct(_)
@@ -931,14 +932,14 @@ impl Column {
         ) {
             let v = postcard::from_bytes::<Value>(bytes)
                 .map_err(|e| StorageError::deserialize_error(format!("compact opaque: {}", e)))?;
-            return Ok(v);
+            Ok(v)
         } else if matches!(self.data_type, DataType::Blob) {
-            return Ok(Value::Blob(bytes.to_vec()));
+            Ok(Value::Blob(bytes.to_vec()))
         } else {
             let s = String::from_utf8(bytes.to_vec()).map_err(|e| {
                 StorageError::deserialize_error(format!("compact string UTF-8: {}", e))
             })?;
-            return Ok(Value::string(s));
+            Ok(Value::string(s))
         }
     }
 
@@ -1340,10 +1341,10 @@ impl Column {
             return true;
         }
         let local = (row_idx - chunk.row_offset) as u32;
-        if super::overflow::OverflowStore::routes_for(&column.data_type) {
-            if chunk.read_state().overflow_rows.contains_key(&local) {
-                return false;
-            }
+        if super::overflow::OverflowStore::routes_for(&column.data_type)
+            && chunk.read_state().overflow_rows.contains_key(&local)
+        {
+            return false;
         }
         let state = chunk.read_state();
         if let Some(hit) = state.overlay.get(local) {
@@ -1418,7 +1419,7 @@ impl Column {
         for chunk in chunks.iter() {
             let state = chunk.read_state();
             if let Some(chains) = state.version_chains.as_ref() {
-                for (_, chain) in chains.iter() {
+                for chain in chains.values() {
                     version_bytes += chain.len() * std::mem::size_of::<super::mvcc::VersionEntry>();
                     for entry in chain.iter() {
                         version_bytes += entry
@@ -2774,12 +2775,10 @@ impl Column {
                     (hot, idx)
                 })
                 .collect();
-            scored.sort_by(|a, b| b.0.cmp(&a.0));
+            scored.sort_by_key(|entry| std::cmp::Reverse(entry.0));
             scored.into_iter().map(|(_, idx)| idx).collect()
         };
-        let len = order.len();
-        for pos in 0..len {
-            let idx = order[pos];
+        for &idx in &order {
             let (start, end) = {
                 let chunks = self.chunks.read();
                 let Some(chunk) = chunks.get(idx) else {

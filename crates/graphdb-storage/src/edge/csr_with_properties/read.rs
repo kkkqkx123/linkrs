@@ -194,7 +194,7 @@ impl CsrWithProperties {
         edge_id: EdgeId,
         query_ts: Timestamp,
         projection: Option<&[String]>,
-    ) -> StorageResult<Option<Vec<(String, Option<Value>)>>> {
+    ) -> StorageResult<Option<ProjectedProps>> {
         if self.inline {
             return Ok(None);
         }

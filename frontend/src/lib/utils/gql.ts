@@ -1,13 +1,44 @@
+/**
+ * Strip line comments (`--`, `//`, `#`) that appear outside string literals.
+ * Cypher block comments (`/* ... *&#47;`) are preserved so they can still be
+ * removed together with the statement they annotate.
+ */
+const stripLineComments = (content: string): string => {
+  let out = '';
+  let inString = false;
+  let stringChar = '';
+  let escaped = false;
+  let i = 0;
+  while (i < content.length) {
+    const char = content[i];
+    const next = content[i + 1];
+    if (escaped) { out += char; escaped = false; i += 1; continue; }
+    if (char === '\\') { out += char; escaped = true; i += 1; continue; }
+    if (!inString && (char === '"' || char === "'" || char === '`')) {
+      inString = true; stringChar = char; out += char; i += 1; continue;
+    }
+    if (inString && char === stringChar) { inString = false; stringChar = ''; out += char; i += 1; continue; }
+    if (!inString && ((char === '-' && next === '-') || (char === '/' && next === '/') || char === '#')) {
+      while (i < content.length && content[i] !== '\n') i += 1;
+      continue;
+    }
+    out += char;
+    i += 1;
+  }
+  return out;
+};
+
 export const splitQueries = (content: string): string[] => {
   if (!content || !content.trim()) return [];
+  const source = stripLineComments(content);
   const queries: string[] = [];
   let currentQuery = '';
   let inString = false;
   let stringChar = '';
   let escaped = false;
 
-  for (let i = 0; i < content.length; i++) {
-    const char = content[i];
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i];
     if (escaped) { currentQuery += char; escaped = false; continue; }
     if (char === '\\') { currentQuery += char; escaped = true; continue; }
     if (!inString && (char === '"' || char === "'" || char === '`')) {

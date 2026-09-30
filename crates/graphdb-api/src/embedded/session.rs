@@ -855,7 +855,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         // Detect USE <space> results and persist space context
         self.update_space_from_result(&result);
 
-        self.notify_dml(query, result.metadata.rows_returned as u64);
+        self.notify_dml(query, result.metadata.rows_returned);
 
         Ok(QueryResult::from_core(result))
     }
@@ -1117,7 +1117,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         txn_manager
             .finish_statement(&ctx, statement_start)
             .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
-        self.notify_dml(query, result.metadata.rows_returned as u64);
+        self.notify_dml(query, result.metadata.rows_returned);
         Ok(QueryResult::from_core(result))
     }
 
@@ -1302,7 +1302,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         // Detect USE <space> results and persist space context
         self.update_space_from_result(&result);
 
-        self.notify_dml(query, result.metadata.rows_returned as u64);
+        self.notify_dml(query, result.metadata.rows_returned);
 
         Ok(QueryResult::from_core(result))
     }
@@ -1383,7 +1383,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         // Detect USE <space> results and persist space context
         self.update_space_from_result(&result);
 
-        self.notify_dml(query, result.metadata.rows_returned as u64);
+        self.notify_dml(query, result.metadata.rows_returned);
 
         Ok(QueryResult::from_core(result))
     }

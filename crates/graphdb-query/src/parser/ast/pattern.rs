@@ -25,6 +25,31 @@ impl Pattern {
             Pattern::Variable(p) => p.span,
         }
     }
+
+    /// Render a node or path pattern back to canonical source text.
+    ///
+    /// The output re-parses through the traversal parser, which lets callers
+    /// embed a parsed pattern into string-based subquery bodies (e.g. the
+    /// inline pattern predicate rewrite). Returns `None` for shapes without
+    /// a faithful textual form (bare variables, top-level edges,
+    /// alternatives, repetitions, recursive comprehensions).
+    pub fn to_pattern_string(&self) -> Option<String> {
+        match self {
+            Pattern::Node(node) => render_node(node),
+            Pattern::Path(path) => {
+                let mut out = String::new();
+                for element in &path.elements {
+                    match element {
+                        PathElement::Node(node) => out.push_str(&render_node(node)?),
+                        PathElement::Edge(edge) => out.push_str(&render_edge(edge)?),
+                        _ => return None,
+                    }
+                }
+                Some(out)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Node mode
@@ -158,11 +183,27 @@ impl EdgeRange {
 pub struct PathPattern {
     pub span: Span,
     pub elements: Vec<PathElement>,
+    /// Optional path name from `p = <pattern>` binding. Plain patterns
+    /// carry `None`; the planner ignores the name for scan planning and
+    /// the binder exposes it as a path alias in scope.
+    pub name: Option<String>,
 }
 
 impl PathPattern {
     pub fn new(elements: Vec<PathElement>, span: Span) -> Self {
-        Self { span, elements }
+        Self {
+            span,
+            elements,
+            name: None,
+        }
+    }
+
+    pub fn with_name(elements: Vec<PathElement>, span: Span, name: String) -> Self {
+        Self {
+            span,
+            elements,
+            name: Some(name),
+        }
     }
 }
 
@@ -216,9 +257,128 @@ impl VariablePattern {
     }
 }
 
+/// Render `(var:Label {k: v, ...})`. Property values reuse the core
+/// expression display so literals keep their quoting.
+fn render_node(node: &NodePattern) -> Option<String> {
+    let mut out = String::from("(");
+    if let Some(ref var) = node.variable {
+        out.push_str(var);
+    }
+    for label in &node.labels {
+        out.push(':');
+        out.push_str(label);
+    }
+    if let Some(ref props) = node.properties {
+        out.push_str(&render_properties(props)?);
+    }
+    out.push(')');
+    Some(out)
+}
+
+/// Render the edge segment including its direction arrows, e.g.
+/// `-[e:KNOWS {since: 2020}]->`. A present path semantic overrides the
+/// numeric range exactly like the parser does; an absent range renders no
+/// suffix. Recursive comprehensions have no textual round-trip.
+fn render_edge(edge: &EdgePattern) -> Option<String> {
+    if edge.recursive_comprehension.is_some() {
+        return None;
+    }
+    let mut out = String::new();
+    match edge.direction {
+        EdgeDirection::In => out.push_str("<-"),
+        EdgeDirection::Out | EdgeDirection::Both => out.push('-'),
+    }
+    out.push('[');
+    if let Some(ref var) = edge.variable {
+        out.push_str(var);
+    }
+    for (i, edge_type) in edge.edge_types.iter().enumerate() {
+        if i == 0 {
+            out.push(':');
+        } else {
+            out.push_str("|:");
+        }
+        out.push_str(edge_type);
+    }
+    if let Some(ref props) = edge.properties {
+        out.push_str(&render_properties(props)?);
+    }
+    if let Some(ref semantic) = edge.path_semantic {
+        match semantic {
+            PathSemantic::Walk => {
+                if edge.range.is_some() {
+                    out.push_str(&render_range(edge.range.as_ref())?);
+                }
+            }
+            PathSemantic::Trail => out.push_str("*TRAIL"),
+            PathSemantic::Acyclic => out.push_str("*ACYCLIC"),
+            PathSemantic::Shortest => out.push_str("*SHORTEST"),
+            PathSemantic::AllShortest => out.push_str("*ALL SHORTEST"),
+            PathSemantic::WeightedShortest(weight) => {
+                out.push_str("*WEIGHTED(");
+                out.push_str(weight);
+                out.push(')');
+            }
+        }
+    } else if let Some(ref range) = edge.range {
+        out.push_str(&render_range(Some(range))?);
+    }
+    out.push(']');
+    match edge.direction {
+        EdgeDirection::Out => out.push_str("->"),
+        EdgeDirection::In | EdgeDirection::Both => out.push('-'),
+    }
+    Some(out)
+}
+
+/// Render `*`, `*n`, `*a..b`, `*a..`. An open-ended upper bound without a
+/// lower bound has no parser round-trip, so it renders as `*0..b`.
+fn render_range(range: Option<&EdgeRange>) -> Option<String> {
+    let range = range?;
+    let mut out = String::from("*");
+    match (range.min, range.max) {
+        (None, None) => {}
+        (Some(min), Some(max)) if min == max => out.push_str(&min.to_string()),
+        (Some(min), Some(max)) => {
+            out.push_str(&min.to_string());
+            out.push_str("..");
+            out.push_str(&max.to_string());
+        }
+        (Some(min), None) => {
+            out.push_str(&min.to_string());
+            out.push_str("..");
+        }
+        (None, Some(max)) => {
+            out.push_str("0..");
+            out.push_str(&max.to_string());
+        }
+    }
+    Some(out)
+}
+
+/// Render ` {k1: v1, k2: v2}` from a map property expression.
+fn render_properties(props: &ContextualExpression) -> Option<String> {
+    let expr = props.get_expression()?;
+    match expr {
+        graphdb_core::types::expr::Expression::Map(entries) => {
+            let mut out = String::from(" {");
+            for (i, (key, value)) in entries.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(key);
+                out.push_str(": ");
+                out.push_str(&value.to_expression_string());
+            }
+            out.push('}');
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
 // Pattern Tool Functions
 pub struct PatternUtils;
-
 impl PatternUtils {
     /// All variables used in the search pattern
     pub fn find_variables(pattern: &Pattern) -> Vec<String> {
@@ -252,6 +412,9 @@ impl PatternUtils {
                 }
             }
             Pattern::Path(p) => {
+                if let Some(ref path_name) = p.name {
+                    variables.push(path_name.clone());
+                }
                 for element in &p.elements {
                     Self::find_variables_in_element(element, variables);
                 }

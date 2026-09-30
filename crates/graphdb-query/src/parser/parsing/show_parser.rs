@@ -92,6 +92,31 @@ impl ShowParser {
                 span,
                 target: ShowTarget::Spaces,
             }))
+        } else if ctx.check_token(TokenKind::Indexes) {
+            ctx.expect_token(TokenKind::Indexes)?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            Ok(Stmt::Show(ShowStmt {
+                span,
+                target: ShowTarget::Indexes,
+            }))
+        } else if ctx.check_token(TokenKind::Index) {
+            ctx.expect_token(TokenKind::Index)?;
+            let index_name = ctx.expect_identifier()?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            Ok(Stmt::Show(ShowStmt {
+                span,
+                target: ShowTarget::Index(index_name),
+            }))
+        } else if ctx.check_token(TokenKind::Stats) {
+            ctx.expect_token(TokenKind::Stats)?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            Ok(Stmt::Show(ShowStmt {
+                span,
+                target: ShowTarget::Stats,
+            }))
         } else if ctx.check_token(TokenKind::Users) {
             ctx.expect_token(TokenKind::Users)?;
             let end_span = ctx.current_span();

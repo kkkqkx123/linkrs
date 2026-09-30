@@ -181,15 +181,11 @@ fn envelope_compare(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
             _ => None,
         }
     }
-    match (as_i64(a), as_i64(b)) {
-        (Some(x), Some(y)) => return Some(x.cmp(&y)),
-        _ => {}
+    if let (Some(x), Some(y)) = (as_i64(a), as_i64(b)) {
+        return Some(x.cmp(&y));
     }
-    match (as_f64(a), as_f64(b)) {
-        (Some(x), Some(y)) => {
-            return Some(x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal));
-        }
-        _ => {}
+    if let (Some(x), Some(y)) = (as_f64(a), as_f64(b)) {
+        return Some(x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal));
     }
     match (a, b) {
         (Value::String(x), Value::String(y)) => Some(x.cmp(y)),

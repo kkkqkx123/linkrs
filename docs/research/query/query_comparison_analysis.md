@@ -27,7 +27,7 @@
 | `UNWIND` | ✅ | ✅ | ✅ |
 | 查询内 `CALL ... [WHERE] [YIELD]` | ✅（`db_version()` 等少量函数 + 标量回退） | ✅（20+ 表函数） | ✅（表函数白名单） |
 | `LOAD FROM` 扫描读入 | ✅（File/Glob 源） | ✅（文件/列表/GLOB/查询/参数/附库/表函数） | ✅（文件/列表/GLOB/查询/变量/表函数） |
-| `WHERE` 中内联模式谓词 | ❌（`NodePattern.predicates` 解析器从不填充） | ✅ | ✅（改写为 EXISTS） |
+| `WHERE` 中内联模式谓词 | ✅（改写为等价 EXISTS） | ✅ | ✅（改写为 EXISTS） |
 | `EXISTS { }` / `COUNT { }` 子查询 | ✅ `EXISTS { MATCH }`；另有 `SUBQUERY {}`、`IN { query }` | ✅ 两者 | ✅ 两者 |
 | Nebula `GO` / `LOOKUP` / `FETCH` / `GET SUBGRAPH` | ✅（独有） | ❌ | ❌ |
 | `FIND SHORTEST/ALL PATH` | ✅（独有，双向 BFS/Dijkstra） | ❌（用变长模式 `* SHORTEST` 表达） | ❌（同左） |
@@ -66,7 +66,7 @@
 |------|---------|---------|------|
 | Cypher `CREATE (pattern)` | ✅ | ✅ | ✅ |
 | Nebula `INSERT VERTEX/EDGE [IF NOT EXISTS]` | ✅（独有） | ❌ | ❌ |
-| `MERGE (pattern) [ON MATCH/CREATE SET]` | ✅（裸 `SET` 子句仅校验后丢弃——**文档/实现偏差**） | ✅ | ✅ |
+| `MERGE (pattern) [ON MATCH/CREATE SET]` | ✅（裸 `SET` 同时作用于两条分支） | ✅ | ✅ |
 | `MERGE VERTEX/EDGE ON ...`（upsert 形态） | ✅（独有） | ❌ | ❌ |
 | `SET prop = expr` 独立语句 | ✅ | ✅（仅随查询内） | ✅（仅随查询内） |
 | `REMOVE prop / REMOVE n:Label` | ✅（独有，点/标签删除） | ❌（无 REMOVE） | ❌（无 REMOVE） |
@@ -85,7 +85,7 @@
 | 能力 | 当前项目 | ladybug | neug |
 |------|---------|---------|------|
 | 基础模式（多标签/多边类型/无向/路径变量） | ✅ | ✅ | ✅ |
-| **命名路径绑定 `p = (a)-[]->(b)`** | ❌ | ✅ | ✅ |
+| **命名路径绑定 `p = (a)-[]->(b)`** | ✅（解析+绑定，别名注册与重名拒绝） | ✅ | ✅ |
 | 变长 `*n` / `*a..b` / `*..b` | ✅ | ✅ | ✅ |
 | `TRAIL` / `ACYCLIC` 语义 | ✅ | ✅ | ✅ |
 | `SHORTEST` / `ALL SHORTEST` | ✅（含 `ALLSHORTESTPATHS` 别名） | ✅ | ✅ |
@@ -148,9 +148,9 @@
 
 | 优先级 | 能力 | 来源 | 说明 |
 |--------|------|------|------|
-| 高 | **命名路径绑定 `p = (a)-[]->(b)`** | 两者 | 变长/最短查询取整条路径的惯用写法；当前 `PathPattern` 已有 AST 但解析器无 `=` 绑定 |
-| 高 | `WHERE` 内联模式谓词 `WHERE (a)-[:k]->(b)` | 两者 | 等价 EXISTS 的便捷写法；`NodePattern.predicates` 字段已预留但从未填充 |
-| 高 | `LOAD WITH HEADERS (列定义)` + 查询作为扫描源 | 两者 | 当前 `LOAD FROM` 仅 File/Glob；补 `(查询)` 源与列定义可打通导入管道 |
+| 高 | **命名路径绑定 `p = (a)-[]->(b)`** | 两者 | 已实现：`PathPattern` 增路径名字段，解析器识别等号绑定，绑定器注册路径别名并拒绝重名；路径值的执行期物化仍为后续工作 |
+| 高 | `WHERE` 内联模式谓词 `WHERE (a)-[:k]->(b)` | 两者 | 已实现：表达式主括号分支试探链式模式，命中改写为等价 EXISTS 子查询，复用已有绑定与规划链路； lone `(a)` 保留括号表达式语义 |
+| 高 | `LOAD WITH HEADERS (列定义)` + 查询作为扫描源 | 两者 | 未实现（第三阶段） |
 | 中 | `CALL option = value` 会话/扩展配置设置 | 两者 | 与当前 `UPDATE CONFIGS` 部分重叠，可评估是否合并 |
 | 中 | `SET a = {map}` 整属性 map 覆盖 | 两者 | 当前 SET 仅逐属性赋值 |
 | 中 | `CREATE MACRO` 默认参数 | 两者 | 当前宏已支持默认参数形态（`sep = '-'`），此项实际已对齐 |
@@ -163,16 +163,25 @@
 - 链式比较与 `!=` 拒绝：当前项目支持 `!=`/`==`，与 Nebula 习惯一致，保留即可。
 - ladybug 的 `CREATE INDEX` 不存在（其文档声称有属文档陈旧）；当前项目普通属性索引 DDL 更完整。
 
-### 当前项目的实现/文档偏差（对比中暴露）
+### 当前项目的实现/文档偏差（对比中暴露，已按阶段方案处理）
 
-1. `DELETE TAG ...` 文档有、解析器无；`SHOW INDEXES`/`SHOW STATS` 枚举有、解析分支无。
-2. `LOOKUP FULLTEXT`/`MATCH FULLTEXT`/`SHOW|DESCRIBE FULLTEXT INDEX` AST+planner 存在但顶层分发不可达。
-3. `MERGE (pattern)` 后裸 `SET` 子句仅校验后丢弃。
-4. `SAMPLE <n>` 与窗口函数缺测试覆盖。
+1. `DELETE TAG ...` 文档有、解析器无：执行层无标签剥离能力，
+   已修正文档，明确标记该形态尚未实现（`REMOVE <var>:<Label>` 同理）。
+2. `LOOKUP FULLTEXT`/`MATCH FULLTEXT`/`SHOW|DESCRIBE FULLTEXT INDEX`
+   AST 与规划器存在但顶层分发不可达：已在分发层按关键字序列
+   优先拦截接通（`MATCH` 后字符串字面量、`LOOKUP ON <name> INDEX`、
+   `SHOW FULLTEXT`、`DESCRIBE/DESC FULLTEXT`）。
+3. `MERGE (pattern)` 后裸 `SET` 子句仅校验后丢弃：
+   已改为存入合并语句结构，同时作用于创建与匹配两条分支。
+4. `SHOW INDEXES`/`SHOW STATS` 枚举有、解析分支无：
+   已补解析分支；`SHOW INDEX <name>` 同步可达。
+5. `SAMPLE <n>` 与窗口函数缺测试覆盖：已补解析单测。
 
 ## 10. 结论
 
 - **语法骨架**：三者同源 openCypher 核心（MATCH/WHERE/RETURN/WITH/UNION/CREATE/MERGE/SET/DELETE + 变长路径语义关键字），当前项目叠加 Nebula 方言形成混合体系，语句覆盖面整体**大于**两个参考项目。
-- **主要差距**集中在 Cypher 惯用便捷形态：命名路径绑定、WHERE 内联模式谓词、`LOAD FROM` 扫描源扩展；这三项均属解析层补强，AST/执行侧多已具备承载结构。
+- **主要差距**原集中在 Cypher 惯用便捷形态：命名路径绑定、WHERE 内联模式谓词、
+  `LOAD FROM` 扫描源扩展；前两项已按阶段方案实现（解析层补强，复用已有
+  EXISTS 绑定与规划链路），剩余 `LOAD FROM` 扫描源扩展为后续阶段工作。
 - **搜索语句化**是当前项目的架构优势：ladybug/neug 将 FTS/VECTOR 放在扩展 `CALL` 内，当前项目提升为一等 DDL/DQL 语句，与 DDL 体系一致性更好。
 - **验证成熟度**：ladybug 有 591 个测试文件（含 TCK）可作回归参照；neug 无测试且存在"语法可解析但函数未注册"的断裂（位运算、量词），引用其特性时应以注册表为准而非语法。

@@ -53,6 +53,8 @@
   "console.title": "查询控制台",
   "console.execute": "执行",
   "console.executing": "执行中...",
+  "console.validate": "校验",
+  "console.validating": "校验中...",
   "console.history": "历史",
   "console.favorites": "收藏",
   "console.saveFavorite": "保存到收藏",

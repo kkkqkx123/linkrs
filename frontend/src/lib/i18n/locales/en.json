@@ -53,6 +53,8 @@
   "console.title": "Query Console",
   "console.execute": "Execute",
   "console.executing": "Executing...",
+  "console.validate": "Validate",
+  "console.validating": "Validating...",
   "console.history": "History",
   "console.favorites": "Favorites",
   "console.saveFavorite": "Save to Favorites",

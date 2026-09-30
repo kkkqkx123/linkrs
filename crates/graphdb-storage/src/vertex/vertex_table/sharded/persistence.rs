@@ -113,33 +113,35 @@ fn legacy_table_manifest_checksum(input: TableManifestInput<'_>) -> u32 {
     hasher.finalize()
 }
 
-fn commit_manifest_checksum(
+struct CommitManifestInput<'a> {
     format_version: u8,
     epoch: u64,
     kind: CommitKind,
     base_epoch: Option<u64>,
     generation: u64,
-    files: &[String],
-    sidecars: &[SnapshotSidecarRecord],
+    files: &'a [String],
+    sidecars: &'a [SnapshotSidecarRecord],
     written_at_ms: u64,
-) -> u32 {
+}
+
+fn commit_manifest_checksum(input: CommitManifestInput<'_>) -> u32 {
     let mut hasher = crc32fast::Hasher::new();
-    hasher.update(&[format_version]);
-    hasher.update(&epoch.to_le_bytes());
-    hasher.update(kind.as_str().as_bytes());
-    hasher.update(&base_epoch.unwrap_or(u64::MAX).to_le_bytes());
-    hasher.update(&generation.to_le_bytes());
-    for file in files {
+    hasher.update(&[input.format_version]);
+    hasher.update(&input.epoch.to_le_bytes());
+    hasher.update(input.kind.as_str().as_bytes());
+    hasher.update(&input.base_epoch.unwrap_or(u64::MAX).to_le_bytes());
+    hasher.update(&input.generation.to_le_bytes());
+    for file in input.files {
         hasher.update(file.as_bytes());
         hasher.update(&[0]);
     }
-    for sidecar in sidecars {
+    for sidecar in input.sidecars {
         hasher.update(sidecar.file.as_bytes());
         hasher.update(&[0]);
         hasher.update(&sidecar.bytes.to_le_bytes());
         hasher.update(&sidecar.checksum.to_le_bytes());
     }
-    hasher.update(&written_at_ms.to_le_bytes());
+    hasher.update(&input.written_at_ms.to_le_bytes());
     hasher.finalize()
 }
 
@@ -229,16 +231,16 @@ fn verify_commit_manifest_content(manifest: &CommitManifest, path: &Path) -> Sto
             MANIFEST_FORMAT_VERSION,
         )));
     }
-    let expected = commit_manifest_checksum(
-        manifest.format_version,
-        manifest.epoch,
-        manifest.kind,
-        manifest.base_epoch,
-        manifest.generation,
-        &manifest.files,
-        &manifest.sidecars,
-        manifest.written_at_ms,
-    );
+    let expected = commit_manifest_checksum(CommitManifestInput {
+        format_version: manifest.format_version,
+        epoch: manifest.epoch,
+        kind: manifest.kind,
+        base_epoch: manifest.base_epoch,
+        generation: manifest.generation,
+        files: &manifest.files,
+        sidecars: &manifest.sidecars,
+        written_at_ms: manifest.written_at_ms,
+    });
     if expected != manifest.checksum {
         return Err(graphdb_core::StorageError::deserialize_error(format!(
             "commit manifest checksum mismatch at {}: expected {:#010x}, got {:#010x}",
@@ -757,16 +759,16 @@ impl ShardedVertexTable {
         let sidecars = collect_sidecar_records(path.as_ref());
         let format_version = MANIFEST_FORMAT_VERSION;
         let written_at_ms = now_ms();
-        let checksum = commit_manifest_checksum(
+        let checksum = commit_manifest_checksum(CommitManifestInput {
             format_version,
             epoch,
             kind,
             base_epoch,
-            self.generation,
-            &files,
-            &sidecars,
+            generation: self.generation,
+            files: &files,
+            sidecars: &sidecars,
             written_at_ms,
-        );
+        });
         let manifest = CommitManifest {
             format_version,
             epoch,
@@ -1974,16 +1976,17 @@ mod commit_tests {
         let sidecars: Vec<SnapshotSidecarRecord> =
             serde_json::from_value(manifest.get("sidecars").cloned().unwrap_or_default())
                 .unwrap_or_default();
-        manifest["checksum"] = serde_json::Value::from(commit_manifest_checksum(
-            manifest["format_version"].as_u64().unwrap() as u8,
-            manifest["epoch"].as_u64().unwrap(),
-            kind,
-            manifest["base_epoch"].as_u64(),
-            7,
-            &files,
-            &sidecars,
-            manifest["written_at_ms"].as_u64().unwrap(),
-        ));
+        manifest["checksum"] =
+            serde_json::Value::from(commit_manifest_checksum(CommitManifestInput {
+                format_version: manifest["format_version"].as_u64().unwrap() as u8,
+                epoch: manifest["epoch"].as_u64().unwrap(),
+                kind,
+                base_epoch: manifest["base_epoch"].as_u64(),
+                generation: 7,
+                files: &files,
+                sidecars: &sidecars,
+                written_at_ms: manifest["written_at_ms"].as_u64().unwrap(),
+            }));
         std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
         let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
         let err = reloaded.load(&dir).unwrap_err().to_string();
@@ -2233,16 +2236,17 @@ mod commit_tests {
         let sidecars: Vec<SnapshotSidecarRecord> =
             serde_json::from_value(manifest.get("sidecars").cloned().unwrap_or_default())
                 .unwrap_or_default();
-        manifest["checksum"] = serde_json::Value::from(commit_manifest_checksum(
-            manifest["format_version"].as_u64().unwrap() as u8,
-            manifest["epoch"].as_u64().unwrap(),
-            kind,
-            manifest["base_epoch"].as_u64(),
-            7,
-            &files,
-            &sidecars,
-            manifest["written_at_ms"].as_u64().unwrap(),
-        ));
+        manifest["checksum"] =
+            serde_json::Value::from(commit_manifest_checksum(CommitManifestInput {
+                format_version: manifest["format_version"].as_u64().unwrap() as u8,
+                epoch: manifest["epoch"].as_u64().unwrap(),
+                kind,
+                base_epoch: manifest["base_epoch"].as_u64(),
+                generation: 7,
+                files: &files,
+                sidecars: &sidecars,
+                written_at_ms: manifest["written_at_ms"].as_u64().unwrap(),
+            }));
         std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
         let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
         assert!(!report.is_healthy());

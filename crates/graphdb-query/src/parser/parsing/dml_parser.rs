@@ -808,7 +808,7 @@ impl DmlParser {
         let pattern = TraversalParser::new().parse_pattern(ctx)?;
 
         // Consume the shared `ON` token once, then branch on CREATE vs MATCH.
-        let (on_create, on_match) = if ctx.match_token(TokenKind::On) {
+        let (mut on_create, mut on_match) = if ctx.match_token(TokenKind::On) {
             if ctx.match_token(TokenKind::Create) {
                 (Some(Self::parse_merge_set_clause(ctx)?), None)
             } else if ctx.match_token(TokenKind::Match) {
@@ -820,12 +820,25 @@ impl DmlParser {
             (None, None)
         };
 
-        // Accept a bare `SET ...` clause following the pattern (e.g.
-        // `MERGE (v:Tag {..}) SET v.prop = ..`). It is parsed for syntax
-        // validation but not stored: the merge plan inserts the pattern when
-        // absent and matches it when present, with no per-branch action.
+        // A bare `SET ...` clause following the pattern (e.g.
+        // `MERGE (v:Tag {..}) SET v.prop = ..`) applies to both the matched
+        // and the created branch, mirroring the post-merge update semantics.
+        // Its assignments are merged into any ON CREATE / ON MATCH clause
+        // already present so no parsed assignment is silently discarded.
         if ctx.match_token(TokenKind::Set) {
-            ClauseParser::new().parse_set_clause(ctx)?;
+            let bare = ClauseParser::new().parse_set_clause(ctx)?;
+            if !bare.assignments.is_empty() {
+                if let Some(clause) = on_create.as_mut() {
+                    clause.assignments.extend(bare.assignments.iter().cloned());
+                } else {
+                    on_create = Some(bare.clone());
+                }
+                if let Some(clause) = on_match.as_mut() {
+                    clause.assignments.extend(bare.assignments);
+                } else {
+                    on_match = Some(bare);
+                }
+            }
         }
 
         Ok(Stmt::Merge(MergeStmt {
@@ -911,7 +924,11 @@ impl DmlParser {
                 PathElement::Edge(edge),
                 PathElement::Node(end_node),
             ];
-            Ok(Pattern::Path(PathPattern { span, elements }))
+            Ok(Pattern::Path(PathPattern {
+                span,
+                elements,
+                name: None,
+            }))
         } else {
             Ok(Pattern::Node(start_node))
         }

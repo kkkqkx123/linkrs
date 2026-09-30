@@ -1257,3 +1257,277 @@ fn test_parse_alter_edge_add_drop_from() {
         panic!("Expected Alter statement: {:?}", result.err());
     }
 }
+
+#[test]
+fn test_parse_show_indexes_stats_and_index() {
+    let mut ctx = create_parser_context("SHOW INDEXES");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "SHOW INDEXES parse failure: {:?}",
+        result.err()
+    );
+    if let Ok(Stmt::Show(stmt)) = result {
+        assert_eq!(stmt.target, ShowTarget::Indexes);
+    } else {
+        panic!("Expected Show statement");
+    }
+
+    let mut ctx = create_parser_context("SHOW STATS");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "SHOW STATS parse failure: {:?}",
+        result.err()
+    );
+    if let Ok(Stmt::Show(stmt)) = result {
+        assert_eq!(stmt.target, ShowTarget::Stats);
+    } else {
+        panic!("Expected Show statement");
+    }
+
+    let mut ctx = create_parser_context("SHOW INDEX person_name_index");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "SHOW INDEX parse failure: {:?}",
+        result.err()
+    );
+    if let Ok(Stmt::Show(stmt)) = result {
+        assert_eq!(
+            stmt.target,
+            ShowTarget::Index("person_name_index".to_string())
+        );
+    } else {
+        panic!("Expected Show statement");
+    }
+}
+
+#[test]
+fn test_parse_fulltext_match_lookup_show_describe_dispatch() {
+    let mut ctx = create_parser_context("MATCH 'docs' WHERE FULLTEXT_MATCH(content, 'database')");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "MATCH FULLTEXT parse failure: {:?}",
+        result.err()
+    );
+    assert!(
+        matches!(result.unwrap(), crate::parser::ast::Stmt::MatchFulltext(_)),
+        "expected MatchFulltext statement"
+    );
+
+    let mut ctx = create_parser_context("LOOKUP ON article INDEX idx_article WHERE 'database'");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "LOOKUP FULLTEXT parse failure: {:?}",
+        result.err()
+    );
+    assert!(
+        matches!(result.unwrap(), crate::parser::ast::Stmt::LookupFulltext(_)),
+        "expected LookupFulltext statement"
+    );
+
+    let mut ctx = create_parser_context("SHOW FULLTEXT INDEX");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "SHOW FULLTEXT INDEX parse failure: {:?}",
+        result.err()
+    );
+    assert!(
+        matches!(
+            result.unwrap(),
+            crate::parser::ast::Stmt::ShowFulltextIndex(_)
+        ),
+        "expected ShowFulltextIndex statement"
+    );
+
+    let mut ctx = create_parser_context("DESCRIBE FULLTEXT INDEX idx_article");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "DESCRIBE FULLTEXT INDEX parse failure: {:?}",
+        result.err()
+    );
+    assert!(
+        matches!(
+            result.unwrap(),
+            crate::parser::ast::Stmt::DescribeFulltextIndex(_)
+        ),
+        "expected DescribeFulltextIndex statement"
+    );
+}
+
+#[test]
+fn test_parse_plain_lookup_still_parses_after_fulltext_routing() {
+    let mut ctx = create_parser_context("LOOKUP ON person WHERE person.age > 20 YIELD person.name");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "plain LOOKUP parse failure: {:?}",
+        result.err()
+    );
+    assert!(
+        matches!(result.unwrap(), Stmt::Lookup(_)),
+        "expected Lookup statement"
+    );
+}
+
+#[test]
+fn test_parse_merge_bare_set_applies_to_both_branches() {
+    let mut ctx = create_parser_context("MERGE (n:person {name: 'a'}) SET n.age = 30");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "MERGE bare SET parse failure: {:?}",
+        result.err()
+    );
+    if let Ok(Stmt::Merge(merge)) = result {
+        let on_create = merge.on_create.expect("bare SET must populate ON CREATE");
+        let on_match = merge.on_match.expect("bare SET must populate ON MATCH");
+        assert_eq!(on_create.assignments.len(), 1);
+        assert_eq!(on_match.assignments.len(), 1);
+        assert_eq!(on_create.assignments[0].property, "age");
+        assert_eq!(on_match.assignments[0].property, "age");
+    } else {
+        panic!("Expected Merge statement");
+    }
+}
+
+#[test]
+fn test_parse_merge_bare_set_merges_with_on_match_clause() {
+    let mut ctx = create_parser_context("MERGE (n:person) ON MATCH SET n.a = 1 SET n.b = 2");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "MERGE SET merge failure: {:?}",
+        result.err()
+    );
+    if let Ok(Stmt::Merge(merge)) = result {
+        let on_match = merge.on_match.expect("ON MATCH must be present");
+        let on_create = merge.on_create.expect("bare SET must populate ON CREATE");
+        assert_eq!(on_match.assignments.len(), 2);
+        assert_eq!(on_create.assignments.len(), 1);
+        assert_eq!(on_create.assignments[0].property, "b");
+    } else {
+        panic!("Expected Merge statement");
+    }
+}
+
+#[test]
+fn test_parse_named_path_binding() {
+    let mut ctx = create_parser_context("MATCH p = (a:person)-[e:knows]->(b:person) RETURN a");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "named path parse failure: {:?}",
+        result.err()
+    );
+    if let Ok(crate::parser::ast::Stmt::Match(m)) = result {
+        assert_eq!(m.patterns.len(), 1);
+        if let crate::parser::ast::pattern::Pattern::Path(path) = &m.patterns[0] {
+            assert_eq!(path.name.as_deref(), Some("p"));
+            assert_eq!(path.elements.len(), 3);
+        } else {
+            panic!("expected path pattern");
+        }
+    } else {
+        panic!("Expected Match statement");
+    }
+
+    let mut ctx = create_parser_context("MATCH p = (a) RETURN a");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "single-node named path parse failure: {:?}",
+        result.err()
+    );
+    if let Ok(crate::parser::ast::Stmt::Match(m)) = result {
+        if let crate::parser::ast::pattern::Pattern::Path(path) = &m.patterns[0] {
+            assert_eq!(path.name.as_deref(), Some("p"));
+            assert_eq!(path.elements.len(), 1);
+        } else {
+            panic!("expected path pattern");
+        }
+    } else {
+        panic!("Expected Match statement");
+    }
+}
+
+#[test]
+fn test_parse_named_path_binding_rejects_bare_variable() {
+    let mut ctx = create_parser_context("MATCH p = q RETURN p");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_err() || ctx.has_errors(),
+        "binding a bare variable as a path must fail"
+    );
+}
+
+#[test]
+fn test_parse_match_where_inline_pattern_predicate() {
+    let mut ctx = create_parser_context("MATCH (a:person) WHERE (a)-[:knows]->(b:person) RETURN a");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "inline pattern predicate parse failure: {:?}",
+        result.err()
+    );
+    if let Ok(crate::parser::ast::Stmt::Match(m)) = result {
+        let where_clause = m.where_clause.expect("WHERE must be present");
+        let expr = where_clause
+            .expression()
+            .expect("WHERE must be registered")
+            .inner()
+            .clone();
+        match expr {
+            graphdb_core::Expression::Exists { body } => {
+                assert_eq!(body.patterns.len(), 1);
+                assert!(
+                    body.patterns[0].contains("knows"),
+                    "unexpected pattern text: {}",
+                    body.patterns[0]
+                );
+            }
+            other => panic!("expected EXISTS rewrite, got {:?}", other),
+        }
+    } else {
+        panic!("Expected Match statement");
+    }
+
+    // Combined with an ordinary conjunct the rewrite still applies.
+    let mut ctx = create_parser_context(
+        "MATCH (a:person) WHERE a.age > 20 AND (a)-[:knows]->(b:person) RETURN a",
+    );
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "conjunctive inline pattern parse failure: {:?}",
+        result.err()
+    );
+
+    // A lone parenthesized variable keeps its expression meaning.
+    let mut ctx = create_parser_context("MATCH (a) WHERE (a) RETURN a");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "parenthesized variable must still parse: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_parse_return_sample_clause() {
+    let mut ctx = create_parser_context("MATCH (n) RETURN n SAMPLE 3");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(result.is_ok(), "SAMPLE parse failure: {:?}", result.err());
+    if let Ok(crate::parser::ast::Stmt::Match(m)) = result {
+        let return_clause = m.return_clause.expect("RETURN must be present");
+        let sample = return_clause.sample.expect("SAMPLE must be parsed");
+        assert_eq!(sample.count, 3);
+    } else {
+        panic!("Expected Match statement");
+    }
+}

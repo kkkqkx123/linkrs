@@ -17,9 +17,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|p| p.join("proto"))
             .ok_or("graphdb-server is expected under <workspace>/crates")?;
 
-        for file in ["graphdb.proto"] {
-            println!("cargo:rerun-if-changed={}", proto_dir.join(file).display());
-        }
+        println!(
+            "cargo:rerun-if-changed={}",
+            proto_dir.join("graphdb.proto").display()
+        );
 
         tonic_build::configure()
             .build_server(true)

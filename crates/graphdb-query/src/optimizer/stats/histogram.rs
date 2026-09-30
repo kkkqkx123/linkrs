@@ -283,13 +283,11 @@ fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
             _ => None,
         }
     }
-    match (as_i64(a), as_i64(b)) {
-        (Some(x), Some(y)) => return x.cmp(&y),
-        _ => {}
+    if let (Some(x), Some(y)) = (as_i64(a), as_i64(b)) {
+        return x.cmp(&y);
     }
-    match (as_f64(a), as_f64(b)) {
-        (Some(x), Some(y)) => return x.partial_cmp(&y).unwrap_or(Ordering::Equal),
-        _ => {}
+    if let (Some(x), Some(y)) = (as_f64(a), as_f64(b)) {
+        return x.partial_cmp(&y).unwrap_or(Ordering::Equal);
     }
     match (a, b) {
         (Value::SmallInt(a), Value::SmallInt(b)) => a.cmp(b),

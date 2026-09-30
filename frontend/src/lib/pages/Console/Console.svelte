@@ -3,7 +3,7 @@
   import { t } from 'svelte-i18n';
   import { get } from 'svelte/store';
   import { navigate } from 'svelte-routing';
-  import { consoleStore, type QueryHistoryItem, type QueryFavoriteItem } from '$stores/console';
+  import { consoleStore, type QueryHistoryItem, type QueryFavoriteItem, type StatementResultEntry } from '$stores/console';
   import { graphStore } from '$stores/graph';
   import { theme } from '$stores/theme';
   import { formatExecutionTime, formatRowCount, formatCellValue } from '$utils/parseData';
@@ -11,11 +11,13 @@
   import CytoscapeCanvas from '$components/common/CytoscapeCanvas.svelte';
   import CypherEditor from '$components/common/CypherEditor.svelte';
   import { exportToCSV, exportToJSON } from '$utils/export';
+  import { queryService } from '$services/query';
   import type { QueryResult, QueryError } from '$types/query';
 
   let editorContent = $state('');
   let isExecuting = $state(false);
   let currentResult = $state<QueryResult | null>(null);
+  let results = $state<StatementResultEntry[]>([]);
   let executionTime = $state(0);
   let error = $state<QueryError | null>(null);
   let activeView = $state<'table' | 'json' | 'graph'>('table');
@@ -27,6 +29,11 @@
   let saveModalOpen = $state(false);
   let favoriteName = $state('');
   let saveModalError = $state('');
+  let validateMessage = $state('');
+  let isValidating = $state(false);
+
+  /** True when a run produced more than one statement outcome. */
+  let isMultiResult = $derived(results.length > 1);
 
   let graphSummary = $derived.by(() => {
     if (!currentResult) return null;
@@ -50,6 +57,7 @@
       editorContent = s.editorContent;
       isExecuting = s.isExecuting;
       currentResult = s.currentResult;
+      results = s.results;
       executionTime = s.executionTime;
       error = s.error;
       activeView = s.activeView;
@@ -70,10 +78,29 @@
     saveTimer = setTimeout(() => consoleStore.setEditorContent(content), 300);
   });
 
-  function handleExecute() {
+  /**
+   * Execute the text handed over by the editor, which is either the current
+   * selection, the statement under the caret, or the whole buffer.
+   */
+  function handleExecute(text?: string) {
     if (saveTimer) clearTimeout(saveTimer);
+    if (typeof text === 'string' && text.trim()) {
+      consoleStore.executeQueryByText(text);
+      return;
+    }
     consoleStore.setEditorContent(editorContent);
     consoleStore.executeQuery();
+  }
+
+  /** Parse-and-bind the current selection or buffer without executing it. */
+  async function handleValidate() {
+    const target = editorContent.trim();
+    if (!target) return;
+    isValidating = true;
+    validateMessage = '';
+    const outcome = await queryService.validate(target);
+    validateMessage = outcome.message;
+    isValidating = false;
   }
 
   function handleSaveFavorite() {
@@ -117,13 +144,20 @@
         onExecute={handleExecute}
       />
     </div>
-    <div class="px-4 pb-3 flex items-center gap-2">
+    <div class="px-4 pb-3 flex items-center gap-2 flex-wrap">
       <button
         class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded transition-colors disabled:opacity-50 cursor-pointer"
-        onclick={handleExecute}
+        onclick={() => handleExecute()}
         disabled={isExecuting || !editorContent.trim()}
       >
         {isExecuting ? $t('console.executing') : $t('console.execute')}
+      </button>
+      <button
+        class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded transition-colors cursor-pointer disabled:opacity-50"
+        onclick={handleValidate}
+        disabled={isValidating || !editorContent.trim()}
+      >
+        {isValidating ? $t('console.validating') : $t('console.validate')}
       </button>
       <button class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded transition-colors cursor-pointer" onclick={() => { consoleStore.setEditorContent(''); consoleStore.clearResult(); }}>
         {$t('console.clear')}
@@ -149,6 +183,11 @@
         💾 {$t('common.save')}
       </button>
     </div>
+    {#if validateMessage}
+      <div class="mx-4 mb-3 p-2 text-xs rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 text-gray-600 dark:text-gray-300">
+        {validateMessage}
+      </div>
+    {/if}
   </div>
 
   <!-- Result Section -->
@@ -160,10 +199,63 @@
           <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{$t('common.loading')}</p>
         </div>
       </div>
-    {:else if error}
+    {:else if error && results.length === 0}
       <div class="m-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
         <p class="text-red-700 dark:text-red-400 font-medium text-sm">{error.code}</p>
         <p class="text-red-600 dark:text-red-300 text-sm mt-1">{error.message}</p>
+      </div>
+    {:else if isMultiResult}
+      <div class="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+        <span>⏱ {$t('console.time')}: {formatExecutionTime(executionTime)}</span>
+        <span>|</span>
+        <span>{results.length} statements</span>
+      </div>
+      <div class="flex-1 overflow-auto p-4 flex flex-col gap-3">
+        {#each results as entry, index}
+          <div class="border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
+            <div class="px-3 py-2 bg-gray-50 dark:bg-gray-800/50 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+              <span class={entry.success ? 'text-green-500' : 'text-red-500'}>{entry.success ? '✓' : '✗'}</span>
+              <span class="text-gray-400">#{index + 1}</span>
+              <span class="font-mono truncate flex-1 text-gray-700 dark:text-gray-300">{entry.query}</span>
+              <span>{formatExecutionTime(entry.executionTime)}</span>
+              {#if entry.result}
+                <span>{formatRowCount(entry.result.rowCount)}</span>
+              {/if}
+            </div>
+            <div class="p-3">
+              {#if !entry.success && entry.error}
+                <div class="text-red-600 dark:text-red-400 text-xs">
+                  <span class="font-medium">{entry.error.code}</span>: {entry.error.message}
+                </div>
+              {:else if entry.result}
+                {#if entry.result.columns.length > 0}
+                  <div class="overflow-x-auto">
+                    <table class="w-full text-sm border-collapse">
+                      <thead>
+                        <tr class="bg-gray-50 dark:bg-gray-800/50">
+                          {#each entry.result.columns as col}
+                            <th class="px-3 py-1.5 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700 whitespace-nowrap">{col}</th>
+                          {/each}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {#each entry.result.rows as row}
+                          <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30 even:bg-gray-50/50 dark:even:bg-gray-800/20">
+                            {#each entry.result.columns as col}
+                              <td class="px-3 py-1 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300 max-w-xs truncate">{formatCellValue(row[col])}</td>
+                            {/each}
+                          </tr>
+                        {/each}
+                      </tbody>
+                    </table>
+                  </div>
+                {:else}
+                  <div class="text-xs text-green-600 dark:text-green-400">OK</div>
+                {/if}
+              {/if}
+            </div>
+          </div>
+        {/each}
       </div>
     {:else if currentResult}
       <div class="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">

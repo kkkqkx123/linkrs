@@ -238,6 +238,49 @@ mod tests {
     }
 
     #[test]
+    fn test_bind_named_path_registers_path_variables() {
+        let bound = bind_query("MATCH p = (a:person)-[e:knows]->(b:person) RETURN a")
+            .expect("named path query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        assert_eq!(stmt.query_graph.nodes.len(), 2);
+        assert_eq!(stmt.query_graph.edges.len(), 1);
+    }
+
+    #[test]
+    fn test_bind_named_path_rejects_duplicate_variable() {
+        let err = bind_query("MATCH p = (p:person)-[e:knows]->(b:person) RETURN p")
+            .expect_err("path name colliding with a node variable must fail");
+        assert!(
+            err.to_string().contains("Duplicate variable"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_bind_inline_pattern_predicate_matches_exists() {
+        // The inline form must bind exactly like the explicit EXISTS form:
+        // a correlated existence check over the same pattern.
+        let bound = bind_query("MATCH (t:person) WHERE (t)-[:knows]->(p:person) RETURN t.name")
+            .expect("inline pattern predicate should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::Exists { query, .. } => {
+                let sub = query.as_match().expect("subquery should be a Match");
+                assert_eq!(sub.query_graph.nodes.len(), 2);
+                assert_eq!(sub.query_graph.edges.len(), 1);
+            }
+            other => panic!("expected BoundExpression::Exists, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_bind_using_join_binary_hint() {
         let bound = bind_query(
             "MATCH (a)-[e1:knows]->(b), (a)-[e2:knows]->(c) USING JOIN BINARY(e1, e2) RETURN a",

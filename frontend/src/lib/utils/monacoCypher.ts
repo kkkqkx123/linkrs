@@ -19,20 +19,67 @@ export const CYPHER_FUNCTIONS = [
   'replace', 'size', 'head', 'last', 'range', 'coalesce',
 ];
 
+/**
+ * Completion ordering. Monaco sorts suggestions by `sortText`, so a lower
+ * group number pushes the whole category to the top of the list.
+ */
+const SORT_GROUP = {
+  keyword: '1',
+  tag: '2',
+  edge: '3',
+  field: '4',
+  function: '5',
+} as const;
+
 let languageRegistered = false;
+let baseTokenizer: Monaco.languages.IMonarchLanguage | null = null;
 
-// Register the Cypher language and its Monarch tokenizer exactly once. Monarch
-// handles highlighting purely in the UI thread, so no language web worker is
-// required.
-export function registerCypherLanguage(monaco: typeof Monaco): void {
-  if (languageRegistered || monaco.languages.getLanguages().some((lang) => lang.id === CYPHER_LANGUAGE_ID)) {
-    languageRegistered = true;
-    return;
+/** Snapshot accessor shared by the completion engine and highlight refresh. */
+export type SchemaSnapshotProvider = () => { tags: Tag[]; edgeTypes: EdgeType[] };
+
+interface SchemaSnapshot {
+  tags: Tag[];
+  edgeTypes: EdgeType[];
+}
+
+function readSchema(getSchema: SchemaSnapshotProvider): SchemaSnapshot {
+  try {
+    const snapshot = getSchema();
+    return { tags: snapshot.tags ?? [], edgeTypes: snapshot.edgeTypes ?? [] };
+  } catch {
+    // Schema may be unavailable; keyword and function completion still works.
+    return { tags: [], edgeTypes: [] };
   }
+}
 
-  monaco.languages.register({ id: CYPHER_LANGUAGE_ID, extensions: ['.cypher', '.cql'] });
+/** Escape a schema name so it is safe to embed inside a RegExp alternation. */
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
-  monaco.languages.setMonarchTokensProvider(CYPHER_LANGUAGE_ID, {
+/** Wrap a schema name in backticks when it is not a plain identifier. */
+function quoteIfNeeded(value: string): string {
+  return /^[A-Za-z_]\w*$/.test(value) && !CYPHER_KEYWORDS.includes(value.toUpperCase())
+    ? value
+    : '`' + value.replace(/`/g, '') + '`';
+}
+
+/**
+ * Build Monarch highlight rules that colour tag and edge names distinctly.
+ * Names are matched only at word boundaries so substrings of larger
+ * identifiers are left untouched.
+ */
+function buildSchemaRules(names: string[], token: string): Monaco.languages.IMonarchLanguageRule[] {
+  if (names.length === 0) return [];
+  const pattern = names.map(escapeRegex).join('|');
+  return [[new RegExp(`\\b(?:${pattern})\\b`), token]];
+}
+
+/** The shared tokenizer body: schema rules are injected at the front by the refresh step. */
+function createTokenizer(schema: SchemaSnapshot): Monaco.languages.IMonarchLanguage {
+  const tags = schema.tags.map((t) => t.name);
+  const edges = schema.edgeTypes.map((e) => e.name);
+  return {
     defaultToken: '',
     ignoreCase: true,
     keywords: CYPHER_KEYWORDS,
@@ -40,8 +87,11 @@ export function registerCypherLanguage(monaco: typeof Monaco): void {
     operators: ['==', '!=', '<>', '<=', '>=', '=', '<', '>', '+', '-', '*', '/', '%'],
     tokenizer: {
       root: [
+        ...buildSchemaRules(tags, 'tag'),
+        ...buildSchemaRules(edges, 'edge'),
         [/--.*$/, 'comment'],
         [/\/\/.*$/, 'comment'],
+        [/#.*$/, 'comment'],
         [/\/\*/, 'comment', '@comment'],
         [/'([^'\\]|\\.)*'/, 'string'],
         [/"([^"\\]|\\.)*"/, 'string'],
@@ -66,7 +116,23 @@ export function registerCypherLanguage(monaco: typeof Monaco): void {
         [/[/*]/, 'comment'],
       ],
     },
-  });
+  };
+}
+
+/**
+ * Register the Cypher language and install its tokenizer. Monarch
+ * highlights in the UI thread only, so no language web worker is required.
+ */
+export function registerCypherLanguage(monaco: typeof Monaco): void {
+  if (languageRegistered || monaco.languages.getLanguages().some((lang) => lang.id === CYPHER_LANGUAGE_ID)) {
+    languageRegistered = true;
+    return;
+  }
+
+  monaco.languages.register({ id: CYPHER_LANGUAGE_ID, extensions: ['.cypher', '.cql'] });
+
+  baseTokenizer = createTokenizer({ tags: [], edgeTypes: [] });
+  monaco.languages.setMonarchTokensProvider(CYPHER_LANGUAGE_ID, baseTokenizer);
 
   monaco.languages.setLanguageConfiguration(CYPHER_LANGUAGE_ID, {
     comments: { lineComment: '--', blockComment: ['/*', '*/'] },
@@ -77,78 +143,154 @@ export function registerCypherLanguage(monaco: typeof Monaco): void {
       { open: '{', close: '}' },
       { open: "'", close: "'" },
       { open: '"', close: '"' },
+      { open: '`', close: '`' },
     ],
   });
 
   languageRegistered = true;
 }
 
-// Provider used by the completion engine to surface schema-aware suggestions.
-export type SchemaSnapshotProvider = () => { tags: Tag[]; edgeTypes: EdgeType[] };
+/**
+ * Refresh schema-driven highlighting by re-installing the tokenizer with
+ * tag/edge names as first-class tokens. Called whenever the schema changes so
+ * renamed or newly created entities pick up their colour immediately.
+ */
+export function updateSchemaHighlighting(monaco: typeof Monaco, schema: SchemaSnapshot): void {
+  if (!languageRegistered) return;
+  const next = createTokenizer(schema);
+  baseTokenizer = next;
+  monaco.languages.setMonarchTokensProvider(CYPHER_LANGUAGE_ID, next);
+}
 
-// Register completion items: keywords, functions, and the tags, edge types and
-// properties currently known to the schema store.
-export function registerCypherCompletions(monaco: typeof Monaco, getSchema: SchemaSnapshotProvider): Monaco.IDisposable {
-  return monaco.languages.registerCompletionItemProvider(CYPHER_LANGUAGE_ID, {
+/** Range of the word being typed, used as the replacement span for a suggestion. */
+function wordRange(model: Monaco.editor.ITextModel, position: Monaco.Position): Monaco.IRange {
+  const word = model.getWordUntilPosition(position);
+  return {
+    startLineNumber: position.lineNumber,
+    endLineNumber: position.lineNumber,
+    startColumn: word.startColumn,
+    endColumn: word.endColumn,
+  };
+}
+
+function buildKeywordItems(monaco: typeof Monaco, range: Monaco.IRange): Monaco.languages.CompletionItem[] {
+  return CYPHER_KEYWORDS.map((keyword) => ({
+    label: keyword,
+    kind: monaco.languages.CompletionItemKind.Keyword,
+    insertText: keyword,
+    sortText: SORT_GROUP.keyword,
+    range,
+  }));
+}
+
+function buildFunctionItems(monaco: typeof Monaco, range: Monaco.IRange): Monaco.languages.CompletionItem[] {
+  return CYPHER_FUNCTIONS.map((fn) => ({
+    label: fn,
+    kind: monaco.languages.CompletionItemKind.Function,
+    insertText: `${fn}($0)`,
+    insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+    sortText: SORT_GROUP.function,
+    range,
+  }));
+}
+
+function buildEntityItems(monaco: typeof Monaco, schema: SchemaSnapshot, range: Monaco.IRange): Monaco.languages.CompletionItem[] {
+  const items: Monaco.languages.CompletionItem[] = [];
+  for (const tag of schema.tags) {
+    items.push({
+      label: tag.name,
+      kind: monaco.languages.CompletionItemKind.Class,
+      detail: 'tag',
+      insertText: quoteIfNeeded(tag.name),
+      sortText: SORT_GROUP.tag,
+      range,
+    });
+  }
+  for (const edge of schema.edgeTypes) {
+    items.push({
+      label: edge.name,
+      kind: monaco.languages.CompletionItemKind.Interface,
+      detail: 'edge type',
+      insertText: quoteIfNeeded(edge.name),
+      sortText: SORT_GROUP.edge,
+      range,
+    });
+  }
+  return items;
+}
+
+/**
+ * Register completion providers for the Cypher console.
+ *
+ * Several narrow providers are used instead of one flat list so each can
+ * declare its own trigger characters and ordering. The field provider inspects
+ * the identifier before the caret to suggest only the properties of the tag or
+ * edge named there.
+ */
+export function registerCypherCompletions(
+  monaco: typeof Monaco,
+  getSchema: SchemaSnapshotProvider,
+): Monaco.IDisposable {
+  const disposables: Monaco.IDisposable[] = [];
+
+  // Keywords and functions: always available, no trigger characters.
+  disposables.push(monaco.languages.registerCompletionItemProvider(CYPHER_LANGUAGE_ID, {
     provideCompletionItems: (model, position) => {
-      const word = model.getWordUntilPosition(position);
-      const range: Monaco.IRange = {
-        startLineNumber: position.lineNumber,
-        endLineNumber: position.lineNumber,
-        startColumn: word.startColumn,
-        endColumn: word.endColumn,
-      };
-
-      const keywordItems: Monaco.languages.CompletionItem[] = CYPHER_KEYWORDS.map((keyword) => ({
-        label: keyword,
-        kind: monaco.languages.CompletionItemKind.Keyword,
-        insertText: keyword,
-        range,
-      }));
-
-      const functionItems: Monaco.languages.CompletionItem[] = CYPHER_FUNCTIONS.map((fn) => ({
-        label: fn,
-        kind: monaco.languages.CompletionItemKind.Function,
-        insertText: `${fn}($0)`,
-        insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-        range,
-      }));
-
-      const schemaItems: Monaco.languages.CompletionItem[] = [];
-      try {
-        const schema = getSchema();
-        for (const tag of schema.tags ?? []) {
-          schemaItems.push({
-            label: tag.name,
-            kind: monaco.languages.CompletionItemKind.Class,
-            detail: 'tag',
-            insertText: tag.name,
-            range,
-          });
-          for (const prop of tag.properties ?? []) {
-            schemaItems.push({
-              label: prop.name,
-              kind: monaco.languages.CompletionItemKind.Field,
-              detail: `tag ${tag.name} property`,
-              insertText: prop.name,
-              range,
-            });
-          }
-        }
-        for (const edge of schema.edgeTypes ?? []) {
-          schemaItems.push({
-            label: edge.name,
-            kind: monaco.languages.CompletionItemKind.Interface,
-            detail: 'edge type',
-            insertText: edge.name,
-            range,
-          });
-        }
-      } catch {
-        // Schema may be unavailable; keyword and function completion still work.
-      }
-
-      return { suggestions: [...keywordItems, ...functionItems, ...schemaItems] };
+      const range = wordRange(model, position);
+      return { suggestions: [...buildKeywordItems(monaco, range), ...buildFunctionItems(monaco, range)] };
     },
-  });
+  }));
+
+  // Tags and edge types: available everywhere, and again right after ':'.
+  disposables.push(monaco.languages.registerCompletionItemProvider(CYPHER_LANGUAGE_ID, {
+    triggerCharacters: [':'],
+    provideCompletionItems: (model, position) => {
+      const range = wordRange(model, position);
+      return { suggestions: buildEntityItems(monaco, readSchema(getSchema), range) };
+    },
+  }));
+
+  // Properties: triggered by '.', filtered by the entity name before the dot.
+  disposables.push(monaco.languages.registerCompletionItemProvider(CYPHER_LANGUAGE_ID, {
+    triggerCharacters: ['.'],
+    provideCompletionItems: (model, position) => {
+      const range = wordRange(model, position);
+      const schema = readSchema(getSchema);
+      // Inspect the identifier immediately preceding the dot to scope fields.
+      const before = model.getValueInRange({
+        startLineNumber: position.lineNumber,
+        startColumn: 1,
+        endLineNumber: position.lineNumber,
+        endColumn: position.column,
+      });
+      const match = before.match(/([A-Za-z_]\w*)\.\s*\w*$/);
+      const owner = match?.[1]?.toLowerCase();
+      const suggestions: Monaco.languages.CompletionItem[] = [];
+      const pushProps = (parent: string, props: { name: string; data_type?: string }[]) => {
+        for (const prop of props) {
+          suggestions.push({
+            label: prop.name,
+            kind: monaco.languages.CompletionItemKind.Field,
+            detail: `${parent}.${prop.name}${prop.data_type ? ` (${prop.data_type})` : ''}`,
+            insertText: prop.name,
+            sortText: SORT_GROUP.field,
+            range,
+          });
+        }
+      };
+      for (const tag of schema.tags) {
+        if (!owner || tag.name.toLowerCase() === owner) pushProps(tag.name, tag.properties ?? []);
+      }
+      for (const edge of schema.edgeTypes) {
+        if (!owner || edge.name.toLowerCase() === owner) pushProps(edge.name, edge.properties ?? []);
+      }
+      return { suggestions };
+    },
+  }));
+
+  return {
+    dispose: () => {
+      for (const disposable of disposables) disposable.dispose();
+    },
+  };
 }
