@@ -28,6 +28,8 @@ export interface QueryHistoryItem {
   streamStatus?: 'completed' | 'failed' | 'cancelled';
   /** Failure code for failed runs, when known. */
   errorCode?: string;
+  /** Backend trace id linking the run to its query portrait. */
+  traceId?: string;
 }
 
 export interface QueryFavoriteItem {
@@ -48,6 +50,11 @@ export interface StatementResultEntry {
   error: QueryError | null;
   executionTime: number;
   truncated: boolean;
+  /** Backend trace id for portrait lookup. */
+  traceId?: string;
+  /** Per-stage timings for the hover breakdown. */
+  stages?: Record<string, number> | null;
+  planNodeCount?: number | null;
 }
 
 export type StreamStatus = 'idle' | 'connecting' | 'receiving' | 'completed' | 'failed' | 'cancelled';
@@ -172,6 +179,9 @@ function toEntry(item: BatchStatementResult): StatementResultEntry {
     error: item.error ?? null,
     executionTime: item.executionTime ?? 0,
     truncated: item.truncated === true,
+    traceId: item.traceId,
+    stages: (item.stages ?? null) as Record<string, number> | null,
+    planNodeCount: item.planNodeCount ?? null,
   };
 }
 
@@ -335,6 +345,7 @@ function createConsoleStore() {
           errorCode: entry.success
             ? (entry.truncated ? 'ROW_LIMIT_EXCEEDED' : undefined)
             : entry.error?.code,
+          traceId: entry.traceId,
         });
       }
     } catch (error) {

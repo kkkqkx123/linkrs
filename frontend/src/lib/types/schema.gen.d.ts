@@ -1152,6 +1152,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/statistics/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Aggregated overview across system, query, storage, transaction and sync. */
+        get: operations["get_v1_statistics_overview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/statistics/queries": {
         parameters: {
             query?: never;
@@ -1161,6 +1178,23 @@ export interface paths {
         };
         /** Obtain query statistics */
         get: operations["queries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/statistics/queries/{trace_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Single query portrait by trace id. */
+        get: operations["get_v1_statistics_query_profile"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2016,6 +2050,31 @@ export interface components {
             /** Format: int64 */
             timeout_seconds?: number | null;
         };
+        CacheSection: {
+            /** Format: int64 */
+            hit_count: number;
+            /** Format: double */
+            hit_rate: number;
+            /** Format: int64 */
+            miss_count: number;
+        };
+        /** @description Checkpoint summary embedded in database storage sections. */
+        CheckpointSummary: {
+            /** Format: double */
+            avg_duration_us?: number;
+            /** Format: int64 */
+            failure_count?: number;
+            /** Format: int64 */
+            success_count?: number;
+            /** Format: int64 */
+            trigger_count?: number;
+            /** Format: int64 */
+            triggered_by_interval?: number;
+            /** Format: int64 */
+            triggered_by_wal_size?: number;
+            /** Format: int64 */
+            triggered_explicit?: number;
+        };
         ClearDegradedRequest: {
             /** Format: int64 */
             end_lsn: number;
@@ -2137,6 +2196,12 @@ export interface components {
                 value: string;
             };
         };
+        /** @description Connection counters shared by system responses. */
+        ConnectionStats: {
+            active: number;
+            max: number;
+            total: number;
+        };
         /** @description Create batch task request */
         CreateBatchRequest: {
             /** @description Batch size */
@@ -2223,6 +2288,74 @@ export interface components {
             tag_name: string;
             vector_size: number;
         };
+        /** @description Database overview response mirroring the handler JSON keys. */
+        DatabaseOverviewResponse: {
+            performance: components["schemas"]["DatabasePerformance"];
+            search: components["schemas"]["DatabaseSearchSummary"];
+            spaces: components["schemas"]["DatabaseSpaces"];
+            storage: components["schemas"]["DatabaseStorage"];
+        };
+        DatabasePerformance: {
+            /** Format: int64 */
+            active_queries: number;
+            /** Format: double */
+            avg_latency_ms: number;
+            /** Format: double */
+            cache_hit_rate: number;
+            cache_hit_rate_source?: string;
+            /** Format: int64 */
+            error_total?: number;
+            latency_percentiles_us?: null | components["schemas"]["LatencyPercentilesUs"];
+            /** Format: double */
+            queries_per_second: number;
+            query_cache_size: number;
+            /** Format: int64 */
+            total_queries: number;
+        };
+        DatabaseSearchSummary: {
+            /** Format: double */
+            avg_latency_ms: number;
+            /** Format: int64 */
+            cache_hit_count: number;
+            /** Format: double */
+            cache_hit_rate: number;
+            /** Format: int64 */
+            cache_miss_count: number;
+            /** Format: int64 */
+            total_delete_operations: number;
+            /** Format: int64 */
+            total_errors: number;
+            /** Format: int64 */
+            total_index_operations: number;
+            /** Format: int64 */
+            total_queries: number;
+        };
+        DatabaseSpaces: {
+            count: number;
+            total_edges: number;
+            total_vertices: number;
+        };
+        DatabaseStorage: {
+            checkpoint?: components["schemas"]["CheckpointSummary"];
+            /** Format: int64 */
+            data_size_bytes: number;
+            /** Format: int64 */
+            dirty_pages?: number;
+            /** Format: int64 */
+            dirty_pages_total?: number;
+            /** Format: int64 */
+            fragmentation_permille?: number;
+            /** Format: int64 */
+            index_size_bytes: number;
+            /** Format: int64 */
+            tombstone_count?: number;
+            /** Format: int64 */
+            tombstone_memory_bytes?: number;
+            /** Format: int64 */
+            total_size_bytes: number;
+            /** Format: int64 */
+            wasted_bytes?: number;
+        };
         /** @description Edge delete data */
         DeleteEdgeData: {
             /** @description Target vertex ID */
@@ -2245,6 +2378,16 @@ export interface components {
             /** Format: int64 */
             space_id: number;
             tag_name: string;
+        };
+        DeleteSection: {
+            /** Format: double */
+            avg_latency_ms: number;
+            /** Format: int64 */
+            total_errors: number;
+            /** Format: int64 */
+            total_latency_ms: number;
+            /** Format: int64 */
+            total_operations: number;
         };
         /** @description Vertex delete data */
         DeleteVertexData: {
@@ -2289,6 +2432,18 @@ export interface components {
             /** @description Task status */
             status: components["schemas"]["BatchStatus"];
         };
+        /** @description Executor rollup entry. */
+        ExecutorSummaryEntry: {
+            /** Format: double */
+            avg_time_ms: number;
+            /** Format: int64 */
+            count: number;
+            executor_type: string;
+            /** Format: int64 */
+            total_rows: number;
+            /** Format: int64 */
+            total_time_ms: number;
+        };
         /** @description Query favorite item */
         FavoriteItem: {
             created_at: string;
@@ -2318,6 +2473,8 @@ export interface components {
             rows?: {
                 [key: string]: unknown;
             }[];
+            stages?: null | components["schemas"]["QueryStageTimings"];
+            trace_id?: string | null;
         };
         /** @description A single filter condition: field plus its predicate. */
         FilterCondition: {
@@ -2422,6 +2579,27 @@ export interface components {
             progress?: number | null;
             status: string;
         };
+        IndexSection: {
+            /** Format: double */
+            avg_latency_ms: number;
+            /** Format: int64 */
+            total_errors: number;
+            /** Format: int64 */
+            total_latency_ms: number;
+            /** Format: int64 */
+            total_operations: number;
+        };
+        /** @description Latency percentiles in microseconds. */
+        LatencyPercentilesUs: {
+            /** Format: int64 */
+            avg: number;
+            /** Format: int64 */
+            p50: number;
+            /** Format: int64 */
+            p95: number;
+            /** Format: int64 */
+            p99: number;
+        };
         /** @description List of vector indexes response */
         ListVectorIndexesResponse: {
             count: number;
@@ -2445,6 +2623,13 @@ export interface components {
             /** Format: int64 */
             session_id: number;
         };
+        /** @description Memory usage block shared by system responses. */
+        MemoryUsage: {
+            /** Format: int64 */
+            total_bytes: number;
+            /** Format: int64 */
+            used_bytes: number;
+        };
         MigrationExecuteRequest: {
             plan_json: string;
         };
@@ -2467,6 +2652,63 @@ export interface components {
             columns?: string[];
             /** Format: int64 */
             cursor_id: number;
+        };
+        OverviewErrors: {
+            /** Format: int64 */
+            total: number;
+        };
+        /** @description Cross-subsystem overview for the monitoring first screen. */
+        OverviewResponse: {
+            database: components["schemas"]["DatabaseOverviewResponse"];
+            errors: components["schemas"]["OverviewErrors"];
+            query_latency_us: components["schemas"]["LatencyPercentilesUs"];
+            storage: components["schemas"]["OverviewStorage"];
+            sync: components["schemas"]["OverviewSync"];
+            system: components["schemas"]["SystemResourceResponse"];
+            timeseries: components["schemas"]["OverviewTimeseriesPoint"][];
+            transaction: components["schemas"]["OverviewTransaction"];
+        };
+        OverviewStorage: {
+            /** Format: int64 */
+            checkpoint_failure: number;
+            /** Format: int64 */
+            checkpoint_success: number;
+            /** Format: int64 */
+            fragmentation_permille: number;
+            /** Format: int64 */
+            read_ops: number;
+            /** Format: int64 */
+            tombstone_count: number;
+            /** Format: int64 */
+            write_ops: number;
+        };
+        /** @description Sync summary embedded in the overview; mirrors the sync status shape. */
+        OverviewSync: {
+            is_running: boolean;
+            outbox_dead_lettered: number;
+            outbox_pending: number;
+            /** Format: int64 */
+            outbox_retries: number;
+        };
+        OverviewTimeseriesPoint: {
+            /** Format: double */
+            avg_latency_ms: number;
+            /** Format: int64 */
+            errors: number;
+            /** Format: int64 */
+            queries: number;
+            /** Format: int64 */
+            second: number;
+        };
+        OverviewTransaction: {
+            /** Format: int64 */
+            active: number;
+            /** Format: int64 */
+            begun: number;
+            /** Format: int64 */
+            committed: number;
+            /** Format: int64 */
+            rolled_back: number;
         };
         /** @description Property definition */
         PropertyDef: {
@@ -2493,16 +2735,60 @@ export interface components {
         QueryMetadata: {
             /** Format: int64 */
             execution_time_ms?: number;
+            plan_node_count?: number | null;
+            result_row_count?: number | null;
             rows_returned?: number;
             /** Format: int64 */
             rows_scanned?: number;
             /** Format: int64 */
             space_id?: number | null;
+            stages?: null | components["schemas"]["QueryStageTimings"];
+            trace_id?: string | null;
             /**
              * @description The result was cut at the configured row ceiling; `rows_returned`
              *     holds the rows actually delivered.
              */
             truncated?: boolean;
+        };
+        /** @description Aggregated query pattern entry. */
+        QueryPatternEntry: {
+            /** Format: double */
+            avg_duration_ms: number;
+            /** Format: int64 */
+            error_count?: number;
+            /** Format: double */
+            error_rate: number;
+            /** Format: int64 */
+            execution_count: number;
+            labels?: string[];
+            normalized_query: string;
+            /** Format: double */
+            p95_duration_ms: number;
+            /** Format: double */
+            p99_duration_ms: number;
+            query_type: string;
+        };
+        /** @description Single query portrait detail for console jumps. */
+        QueryProfileDetailResponse: {
+            /** Format: double */
+            duration_ms: number;
+            error?: string | null;
+            executors?: components["schemas"]["QueryProfileExecutor"][];
+            plan_node_count?: number | null;
+            query: string;
+            result_count?: number | null;
+            /** Format: int64 */
+            session_id: number;
+            stages?: null | components["schemas"]["QueryStageTimings"];
+            status: string;
+            trace_id: string;
+        };
+        QueryProfileExecutor: {
+            /** Format: double */
+            duration_ms: number;
+            executor_type: string;
+            memory_bytes: number;
+            rows: number;
         };
         /** @description Query request */
         QueryRequest: {
@@ -2534,6 +2820,60 @@ export interface components {
             error?: null | components["schemas"]["QueryError"];
             metadata?: components["schemas"]["QueryMetadata"];
             success: boolean;
+        };
+        /** @description Per-stage timings in milliseconds for query portraits. */
+        QueryStageTimings: {
+            /** Format: double */
+            execute_ms?: number;
+            /** Format: double */
+            optimize_ms?: number;
+            /** Format: double */
+            parse_ms?: number;
+            /** Format: double */
+            plan_ms?: number;
+            /** Format: double */
+            validate_ms?: number;
+        };
+        /** @description Query statistics response with time-window filtering and error breakdowns. */
+        QueryStatsResponse: {
+            /** Format: int64 */
+            error_total?: number;
+            errors_by_phase?: {
+                [key: string]: number;
+            };
+            errors_by_type?: {
+                [key: string]: number;
+            };
+            executor_summary?: components["schemas"]["ExecutorSummaryEntry"][];
+            from?: string | null;
+            latency_percentiles_us?: null | components["schemas"]["LatencyPercentilesUs"];
+            query_types: components["schemas"]["QueryTypeStatistics"];
+            slow_queries: components["schemas"]["SlowQueryInfo"][];
+            to?: string | null;
+            top_patterns?: components["schemas"]["QueryPatternEntry"][];
+            /** Format: int64 */
+            total_queries: number;
+        };
+        /** @description Query type statistics */
+        QueryTypeStatistics: {
+            /** Format: int64 */
+            create_queries: number;
+            /** Format: int64 */
+            delete_queries: number;
+            /** Format: int64 */
+            fetch_queries: number;
+            /** Format: int64 */
+            go_queries: number;
+            /** Format: int64 */
+            insert_queries: number;
+            /** Format: int64 */
+            lookup_queries: number;
+            /** Format: int64 */
+            match_queries: number;
+            /** Format: int64 */
+            show_queries: number;
+            /** Format: int64 */
+            update_queries: number;
         };
         /** @description Numeric range bounds; absent bounds are open. */
         RangeCondition: {
@@ -2665,6 +3005,45 @@ export interface components {
             next_offset?: string | null;
             points: components["schemas"]["VectorSearchResult"][];
         };
+        /** @description Per-index search breakdown entry. */
+        SearchIndexEntry: {
+            /** Format: double */
+            avg_search_latency_ms: number;
+            index: string;
+            /** Format: int64 */
+            index_errors: number;
+            /** Format: int64 */
+            index_latency_ms: number;
+            /** Format: int64 */
+            index_operations: number;
+            /** Format: int64 */
+            search_errors: number;
+            /** Format: int64 */
+            search_latency_ms: number;
+            /** Format: int64 */
+            search_queries: number;
+        };
+        SearchSection: {
+            /** Format: double */
+            avg_latency_ms: number;
+            latency_percentiles_us: components["schemas"]["LatencyPercentilesUs"];
+            /** Format: int64 */
+            total_errors: number;
+            /** Format: int64 */
+            total_latency_ms: number;
+            /** Format: int64 */
+            total_queries: number;
+            /** Format: int64 */
+            total_results: number;
+        };
+        /** @description Search statistics response with per-index detail. */
+        SearchStatsResponse: {
+            by_index?: components["schemas"]["SearchIndexEntry"][];
+            cache: components["schemas"]["CacheSection"];
+            delete: components["schemas"]["DeleteSection"];
+            index: components["schemas"]["IndexSection"];
+            search: components["schemas"]["SearchSection"];
+        };
         /** @description Session response */
         SessionResponse: {
             /** Format: int64 */
@@ -2683,6 +3062,20 @@ export interface components {
             /** Format: int64 */
             space_id: number;
             tag_name: string;
+        };
+        /** @description Information about a slow query */
+        SlowQueryInfo: {
+            /** Format: double */
+            duration_ms: number;
+            plan_node_count?: number | null;
+            query: string;
+            /** Format: int64 */
+            session_id: number;
+            stages?: null | components["schemas"]["QueryStageTimings"];
+            /** Format: int64 */
+            started_at_secs?: number | null;
+            status: string;
+            trace_id: string;
         };
         /** @description Space detail response */
         SpaceDetail: {
@@ -2769,6 +3162,23 @@ export interface components {
             /** Format: int64 */
             outbox_write_amplification_bytes: number;
             unrecovered_dlq_size: number;
+        };
+        /** @description System resource response with stable keys plus process and disk detail. */
+        SystemResourceResponse: {
+            connections: components["schemas"]["ConnectionStats"];
+            /** Format: double */
+            cpu_usage_percent: number;
+            /** Format: int64 */
+            data_dir_size_bytes?: number | null;
+            /** Format: int64 */
+            max_file_descriptors?: number | null;
+            memory_usage: components["schemas"]["MemoryUsage"];
+            /** Format: int64 */
+            process_memory_bytes?: number | null;
+            /** Format: int64 */
+            uptime_secs?: number | null;
+            /** Format: int64 */
+            wal_dir_size_bytes?: number | null;
         };
         /** @description Tag detail */
         TagDetail: {
@@ -5947,7 +6357,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DatabaseOverviewResponse"];
                 };
             };
             /** @description Internal error */
@@ -6040,6 +6450,33 @@ export interface operations {
             };
         };
     };
+    get_v1_statistics_overview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Aggregated monitoring overview */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OverviewResponse"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     queries: {
         parameters: {
             query?: {
@@ -6060,8 +6497,45 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["QueryStatsResponse"];
                 };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_v1_statistics_query_profile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Query trace id */
+                trace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Query portrait detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueryProfileDetailResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Internal error */
             500: {
@@ -6087,7 +6561,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SearchStatsResponse"];
                 };
             };
             /** @description Internal error */
@@ -6151,7 +6625,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SystemResourceResponse"];
                 };
             };
             /** @description Internal error */

@@ -163,6 +163,12 @@ pub struct SlowQueryInfo {
     pub query: String,
     pub duration_ms: f64,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stages: Option<crate::query::QueryStageTimings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_node_count: Option<usize>,
 }
 
 /// Database statistics
@@ -175,6 +181,320 @@ pub struct DatabaseStatistics {
     pub active_queries: u64,
     pub queries_per_second: f64,
     pub avg_latency_ms: f64,
+}
+
+/// Memory usage block shared by system responses.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct MemoryUsage {
+    pub used_bytes: u64,
+    pub total_bytes: u64,
+}
+
+/// Connection counters shared by system responses.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ConnectionStats {
+    pub active: usize,
+    pub total: usize,
+    pub max: usize,
+}
+
+/// Latency percentiles in microseconds.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct LatencyPercentilesUs {
+    pub avg: u64,
+    pub p50: u64,
+    pub p95: u64,
+    pub p99: u64,
+}
+
+/// System resource response with stable keys plus process and disk detail.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SystemResourceResponse {
+    pub cpu_usage_percent: f64,
+    pub memory_usage: MemoryUsage,
+    pub connections: ConnectionStats,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_memory_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uptime_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_dir_size_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wal_dir_size_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_file_descriptors: Option<u64>,
+}
+
+/// Checkpoint summary embedded in database storage sections.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
+pub struct CheckpointSummary {
+    #[serde(default)]
+    pub success_count: u64,
+    #[serde(default)]
+    pub failure_count: u64,
+    #[serde(default)]
+    pub trigger_count: u64,
+    #[serde(default)]
+    pub avg_duration_us: f64,
+    #[serde(default)]
+    pub triggered_by_wal_size: u64,
+    #[serde(default)]
+    pub triggered_by_interval: u64,
+    #[serde(default)]
+    pub triggered_explicit: u64,
+}
+
+/// Database overview response mirroring the handler JSON keys.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DatabaseOverviewResponse {
+    pub spaces: DatabaseSpaces,
+    pub storage: DatabaseStorage,
+    pub performance: DatabasePerformance,
+    pub search: DatabaseSearchSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DatabaseSpaces {
+    pub count: usize,
+    pub total_vertices: usize,
+    pub total_edges: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DatabaseStorage {
+    pub total_size_bytes: u64,
+    pub index_size_bytes: u64,
+    pub data_size_bytes: u64,
+    #[serde(default)]
+    pub fragmentation_permille: u64,
+    #[serde(default)]
+    pub wasted_bytes: u64,
+    #[serde(default)]
+    pub tombstone_count: u64,
+    #[serde(default)]
+    pub tombstone_memory_bytes: u64,
+    #[serde(default)]
+    pub dirty_pages: u64,
+    #[serde(default)]
+    pub dirty_pages_total: u64,
+    #[serde(default)]
+    pub checkpoint: CheckpointSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DatabasePerformance {
+    pub total_queries: u64,
+    pub active_queries: u64,
+    pub query_cache_size: usize,
+    pub queries_per_second: f64,
+    pub avg_latency_ms: f64,
+    pub cache_hit_rate: f64,
+    #[serde(default)]
+    pub cache_hit_rate_source: String,
+    #[serde(default)]
+    pub error_total: u64,
+    #[serde(default)]
+    pub latency_percentiles_us: Option<LatencyPercentilesUs>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DatabaseSearchSummary {
+    pub total_queries: u64,
+    pub total_errors: u64,
+    pub avg_latency_ms: f64,
+    pub total_index_operations: u64,
+    pub total_delete_operations: u64,
+    pub cache_hit_count: u64,
+    pub cache_miss_count: u64,
+    pub cache_hit_rate: f64,
+}
+
+/// Aggregated query pattern entry.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct QueryPatternEntry {
+    pub normalized_query: String,
+    pub query_type: String,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    pub execution_count: u64,
+    pub avg_duration_ms: f64,
+    pub p95_duration_ms: f64,
+    pub p99_duration_ms: f64,
+    pub error_rate: f64,
+    #[serde(default)]
+    pub error_count: u64,
+}
+
+/// Executor rollup entry.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ExecutorSummaryEntry {
+    pub executor_type: String,
+    pub count: u64,
+    pub total_time_ms: u64,
+    pub total_rows: u64,
+    pub avg_time_ms: f64,
+}
+
+/// Query statistics response with time-window filtering and error breakdowns.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct QueryStatsResponse {
+    pub total_queries: u64,
+    pub slow_queries: Vec<SlowQueryInfo>,
+    pub query_types: QueryTypeStatistics,
+    #[serde(default)]
+    pub errors_by_type: std::collections::HashMap<String, u64>,
+    #[serde(default)]
+    pub errors_by_phase: std::collections::HashMap<String, u64>,
+    #[serde(default)]
+    pub error_total: u64,
+    #[serde(default)]
+    pub top_patterns: Vec<QueryPatternEntry>,
+    #[serde(default)]
+    pub executor_summary: Vec<ExecutorSummaryEntry>,
+    #[serde(default)]
+    pub latency_percentiles_us: Option<LatencyPercentilesUs>,
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
+}
+
+/// Per-index search breakdown entry.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SearchIndexEntry {
+    pub index: String,
+    pub search_queries: u64,
+    pub search_errors: u64,
+    pub search_latency_ms: u64,
+    pub avg_search_latency_ms: f64,
+    pub index_operations: u64,
+    pub index_errors: u64,
+    pub index_latency_ms: u64,
+}
+
+/// Search statistics response with per-index detail.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SearchStatsResponse {
+    pub search: SearchSection,
+    pub index: IndexSection,
+    pub delete: DeleteSection,
+    pub cache: CacheSection,
+    #[serde(default)]
+    pub by_index: Vec<SearchIndexEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SearchSection {
+    pub total_queries: u64,
+    pub total_errors: u64,
+    pub total_latency_ms: u64,
+    pub avg_latency_ms: f64,
+    pub total_results: u64,
+    pub latency_percentiles_us: LatencyPercentilesUs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct IndexSection {
+    pub total_operations: u64,
+    pub total_errors: u64,
+    pub total_latency_ms: u64,
+    pub avg_latency_ms: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DeleteSection {
+    pub total_operations: u64,
+    pub total_errors: u64,
+    pub total_latency_ms: u64,
+    pub avg_latency_ms: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CacheSection {
+    pub hit_count: u64,
+    pub miss_count: u64,
+    pub hit_rate: f64,
+}
+
+/// Cross-subsystem overview for the monitoring first screen.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OverviewResponse {
+    pub system: SystemResourceResponse,
+    pub database: DatabaseOverviewResponse,
+    pub query_latency_us: LatencyPercentilesUs,
+    pub errors: OverviewErrors,
+    pub storage: OverviewStorage,
+    pub transaction: OverviewTransaction,
+    pub sync: OverviewSync,
+    pub timeseries: Vec<OverviewTimeseriesPoint>,
+}
+
+/// Sync summary embedded in the overview; mirrors the sync status shape.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OverviewSync {
+    pub is_running: bool,
+    pub outbox_pending: usize,
+    pub outbox_retries: u64,
+    pub outbox_dead_lettered: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OverviewErrors {
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OverviewStorage {
+    pub read_ops: u64,
+    pub write_ops: u64,
+    pub fragmentation_permille: u64,
+    pub tombstone_count: u64,
+    pub checkpoint_success: u64,
+    pub checkpoint_failure: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OverviewTransaction {
+    pub begun: u64,
+    pub committed: u64,
+    pub rolled_back: u64,
+    pub active: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OverviewTimeseriesPoint {
+    pub second: u64,
+    pub queries: u64,
+    pub avg_latency_ms: f64,
+    pub errors: u64,
+}
+
+/// Single query portrait detail for console jumps.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct QueryProfileDetailResponse {
+    pub trace_id: String,
+    pub session_id: i64,
+    pub query: String,
+    pub duration_ms: f64,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stages: Option<crate::query::QueryStageTimings>,
+    #[serde(default)]
+    pub executors: Vec<QueryProfileExecutor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_node_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct QueryProfileExecutor {
+    pub executor_type: String,
+    pub duration_ms: f64,
+    pub rows: usize,
+    pub memory_bytes: usize,
 }
 
 #[cfg(test)]

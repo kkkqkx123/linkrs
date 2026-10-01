@@ -37,6 +37,12 @@
       label: 'sidebar.dataBrowser',
       route: '/data-browser',
     },
+    {
+      key: '/monitoring',
+      icon: '📈',
+      label: 'sidebar.monitoring',
+      route: '/monitoring',
+    },
   ];
 
   function isActive(item: { key: string; route?: string; children?: Array<{ key: string }> }): boolean {

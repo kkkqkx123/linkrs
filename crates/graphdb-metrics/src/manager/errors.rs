@@ -1,10 +1,29 @@
 //! Error delegation to the dedicated error statistics manager.
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::error_stats::{ErrorInfo, ErrorType, QueryPhase};
 use crate::profile::QueryProfile;
 
 use super::core::StatsManager;
+
+/// Serializable error snapshot for handlers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorSnapshot {
+    pub total_errors: u64,
+    pub errors_by_type: HashMap<String, u64>,
+    pub errors_by_phase: HashMap<String, u64>,
+}
+
+/// Serializable recent error entry for handlers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecentErrorView {
+    pub timestamp_secs: u64,
+    pub error_type: String,
+    pub error_phase: String,
+    pub message: String,
+    pub query_text: Option<String>,
+}
 
 impl StatsManager {
     pub fn record_error(&self, error_type: ErrorType, phase: QueryPhase) {
@@ -44,5 +63,36 @@ impl StatsManager {
 
     pub fn get_recent_errors(&self, limit: usize) -> Vec<crate::error_stats::RecentError> {
         self.error_stats.get_recent_errors(limit)
+    }
+
+    pub fn error_snapshot(&self) -> ErrorSnapshot {
+        let summary = self.error_stats.get_error_summary();
+        ErrorSnapshot {
+            total_errors: summary.total_errors,
+            errors_by_type: summary
+                .errors_by_type
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+            errors_by_phase: summary
+                .errors_by_phase
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+        }
+    }
+
+    pub fn recent_errors_snapshot(&self, limit: usize) -> Vec<RecentErrorView> {
+        self.error_stats
+            .get_recent_errors(limit)
+            .into_iter()
+            .map(|e| RecentErrorView {
+                timestamp_secs: e.timestamp,
+                error_type: e.error_type.to_string(),
+                error_phase: e.error_phase.to_string(),
+                message: e.message,
+                query_text: e.query_text,
+            })
+            .collect()
     }
 }

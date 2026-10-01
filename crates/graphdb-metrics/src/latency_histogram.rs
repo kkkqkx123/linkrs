@@ -92,6 +92,14 @@ impl LatencyHistogram {
         self.latencies.len()
     }
 
+    pub fn set_max_samples(&mut self, max_samples: usize) {
+        let max_samples = max_samples.max(1);
+        self.max_samples = max_samples;
+        while self.latencies.len() > max_samples {
+            self.latencies.pop_front();
+        }
+    }
+
     /// Clear all samples
     pub fn clear(&mut self) {
         self.latencies.clear();

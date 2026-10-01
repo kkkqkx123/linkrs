@@ -22,7 +22,10 @@ pub use error_stats::{
 };
 pub use latency_histogram::LatencyHistogram;
 pub use manager::{
-    CheckpointTriggerReason, MetricType, MetricValue, OutboxState, StatsManager, TxnResourceMetrics,
+    CheckpointSnapshot, CheckpointTriggerReason, ErrorSnapshot, ExecutorSummary, MetricType,
+    MetricValue, OutboxState, QueryLatencySnapshot, QueryPatternSnapshot, RecentErrorView,
+    ResourceSample, SearchIndexBreakdown, StatsManager, StorageSnapshot, TimeseriesBucket,
+    TransactionSnapshot, TxnResourceMetrics,
 };
 pub use metrics::QueryMetrics;
 pub use profile::{ExecutorStat, QueryProfile, QueryStatus, StageMetrics};

@@ -3,10 +3,13 @@ use axum::{
     extract::{Json, State},
     response::Json as JsonResponse,
 };
+use graphdb_metrics::{ErrorInfo, ErrorType, QueryMetrics, QueryPhase, QueryProfile, StatsManager};
 use graphdb_wire::query::{
     BatchQueryRequest, BatchQueryResponse, QueryData, QueryMetadata, QueryRequest, QueryResponse,
-    ValidateRequest, ValidateResponse,
+    QueryStageTimings, ValidateRequest, ValidateResponse,
 };
+use std::sync::Arc;
+use std::time::Instant;
 
 use crate::http::{error::HttpError, state::AppState};
 use crate::storage::{
@@ -69,6 +72,9 @@ pub async fn execute<
 
     // Executing Queries with GraphService
     let row_limit = result_size_limit(&state);
+    let stats = state.server.get_stats_manager().clone();
+    let trace_id = new_trace_id();
+    let start = Instant::now();
     let result = match graph_service
         .execute_with_consistency(
             request.session_id,
@@ -90,17 +96,56 @@ pub async fn execute<
                 &store,
                 config_path.as_deref(),
             ) {
-                Ok(resolved) => Ok::<_, HttpError>(query_result_to_response(resolved, row_limit)),
+                Ok(resolved) => {
+                    let elapsed_us = start.elapsed().as_micros() as u64;
+                    let response =
+                        query_result_to_response(resolved, row_limit, &trace_id, elapsed_us);
+                    record_success_profile(
+                        &stats,
+                        request.session_id,
+                        &request.query,
+                        trace_id.clone(),
+                        elapsed_us,
+                        response.metadata.rows_returned,
+                    );
+                    Ok::<_, HttpError>(response)
+                }
                 Err(e) => {
-                    Ok::<_, HttpError>(QueryResponse::error("CONFIG_ERROR".to_string(), e, None))
+                    let elapsed_us = start.elapsed().as_micros() as u64;
+                    record_failure_profile(
+                        &stats,
+                        request.session_id,
+                        &request.query,
+                        trace_id.clone(),
+                        elapsed_us,
+                        &e,
+                    );
+                    Ok::<_, HttpError>(error_with_trace(
+                        "CONFIG_ERROR".to_string(),
+                        e,
+                        trace_id,
+                        elapsed_us,
+                    ))
                 }
             }
         }
-        Err(e) => Ok::<_, HttpError>(QueryResponse::error(
-            "QUERY_ERROR".to_string(),
-            e.to_string(),
-            None,
-        )),
+        Err(e) => {
+            let elapsed_us = start.elapsed().as_micros() as u64;
+            record_failure_profile(
+                &stats,
+                request.session_id,
+                &request.query,
+                trace_id.clone(),
+                elapsed_us,
+                &e.to_string(),
+            );
+            Ok::<_, HttpError>(error_with_trace(
+                "QUERY_ERROR".to_string(),
+                e.to_string(),
+                trace_id,
+                elapsed_us,
+            ))
+        }
     };
 
     Ok(JsonResponse(result?))
@@ -147,20 +192,61 @@ pub async fn execute_batch<
     let store = state.server.config_store();
     let config_path = state.server.get_config_path();
     let row_limit = result_size_limit(&state);
+    let stats = state.server.get_stats_manager().clone();
+    let batch_start = Instant::now();
     let results = outcomes
         .into_iter()
-        .map(|outcome| match outcome {
-            Ok(exec_result) => {
-                match crate::http::handlers::config::resolve_query_config_intent(
-                    exec_result,
-                    &store,
-                    config_path.as_deref(),
-                ) {
-                    Ok(resolved) => query_result_to_response(resolved, row_limit),
-                    Err(e) => QueryResponse::error("CONFIG_ERROR".to_string(), e, None),
+        .enumerate()
+        .map(|(index, outcome)| {
+            let trace_id = new_trace_id();
+            let elapsed_us = batch_start.elapsed().as_micros() as u64;
+            let query_text = request.statements.get(index).cloned().unwrap_or_default();
+            match outcome {
+                Ok(exec_result) => {
+                    match crate::http::handlers::config::resolve_query_config_intent(
+                        exec_result,
+                        &store,
+                        config_path.as_deref(),
+                    ) {
+                        Ok(resolved) => {
+                            let response = query_result_to_response(
+                                resolved, row_limit, &trace_id, elapsed_us,
+                            );
+                            record_success_profile(
+                                &stats,
+                                request.session_id,
+                                &query_text,
+                                trace_id,
+                                elapsed_us,
+                                response.metadata.rows_returned,
+                            );
+                            response
+                        }
+                        Err(e) => {
+                            record_failure_profile(
+                                &stats,
+                                request.session_id,
+                                &query_text,
+                                trace_id.clone(),
+                                elapsed_us,
+                                &e,
+                            );
+                            error_with_trace("CONFIG_ERROR".to_string(), e, trace_id, elapsed_us)
+                        }
+                    }
+                }
+                Err(e) => {
+                    record_failure_profile(
+                        &stats,
+                        request.session_id,
+                        &query_text,
+                        trace_id.clone(),
+                        elapsed_us,
+                        &e.to_string(),
+                    );
+                    error_with_trace("QUERY_ERROR".to_string(), e, trace_id, elapsed_us)
                 }
             }
-            Err(e) => QueryResponse::error("QUERY_ERROR".to_string(), e, None),
         })
         .collect();
 
@@ -266,6 +352,78 @@ pub(crate) fn extract_parameter_names(query: &str) -> Vec<String> {
     names
 }
 
+fn new_trace_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn stages_for_elapsed_us(elapsed_us: u64) -> QueryStageTimings {
+    QueryStageTimings {
+        parse_ms: 0.0,
+        validate_ms: 0.0,
+        plan_ms: 0.0,
+        optimize_ms: 0.0,
+        execute_ms: elapsed_us as f64 / 1000.0,
+    }
+}
+
+fn error_with_trace(
+    code: String,
+    message: String,
+    trace_id: String,
+    elapsed_us: u64,
+) -> QueryResponse {
+    let mut response = QueryResponse::error(code, message, None);
+    response.metadata.trace_id = Some(trace_id);
+    response.metadata.stages = Some(stages_for_elapsed_us(elapsed_us));
+    response.metadata.execution_time_ms = (elapsed_us / 1000) as u64;
+    response
+}
+
+fn record_success_profile(
+    stats: &Arc<StatsManager>,
+    session_id: i64,
+    query_text: &str,
+    trace_id: String,
+    elapsed_us: u64,
+    rows_returned: usize,
+) {
+    let mut profile = QueryProfile::new(session_id, query_text.to_string());
+    profile.trace_id = trace_id;
+    profile.total_duration_us = elapsed_us;
+    profile.stages.execute_us = elapsed_us;
+    profile.result_count = rows_returned;
+    let mut metrics = QueryMetrics::new();
+    metrics.execute_time_us = elapsed_us;
+    metrics.total_time_us = elapsed_us;
+    metrics.result_row_count = rows_returned;
+    stats.record_query_metrics(&metrics);
+    stats.record_query_profile(profile);
+}
+
+fn record_failure_profile(
+    stats: &Arc<StatsManager>,
+    session_id: i64,
+    query_text: &str,
+    trace_id: String,
+    elapsed_us: u64,
+    message: &str,
+) {
+    let mut profile = QueryProfile::new(session_id, query_text.to_string());
+    profile.trace_id = trace_id;
+    profile.total_duration_us = elapsed_us;
+    profile.stages.execute_us = elapsed_us;
+    let mut metrics = QueryMetrics::new();
+    metrics.execute_time_us = elapsed_us;
+    metrics.total_time_us = elapsed_us;
+    stats.record_query_metrics(&metrics);
+    let error_info = ErrorInfo::new(
+        ErrorType::ExecutionError,
+        QueryPhase::Execute,
+        message.to_string(),
+    );
+    stats.record_failed_query(profile, error_info);
+}
+
 /// Convert a core-layer [`QueryResult`] into the wire `QueryResponse`.
 /// The core result carries the engine `ExecutionResult` unchanged; each
 /// variant is rendered here into the JSON wire shape (rows stay in column
@@ -274,6 +432,8 @@ pub(crate) fn extract_parameter_names(query: &str) -> Vec<String> {
 fn query_result_to_response(
     result: graphdb_api::api_core::QueryResult,
     row_limit: Option<usize>,
+    trace_id: &str,
+    elapsed_us: u64,
 ) -> QueryResponse {
     // `metadata.space_id` surfaces the switched-to space. The engine executes
     // USE as a DataSet with a `space_id` column (the `SpaceSwitched` variant
@@ -331,15 +491,24 @@ fn query_result_to_response(
         _ => false,
     };
     let row_count = rows.len();
+    let execution_time_ms = if result.metadata.execution_time_ms == 0 {
+        (elapsed_us / 1000) as u64
+    } else {
+        result.metadata.execution_time_ms
+    };
 
     QueryResponse::success(
         QueryData::new(columns, rows),
         QueryMetadata {
-            execution_time_ms: result.metadata.execution_time_ms,
+            execution_time_ms,
             rows_scanned: result.metadata.rows_scanned,
             rows_returned: row_count,
             space_id,
             truncated,
+            trace_id: Some(trace_id.to_string()),
+            stages: Some(stages_for_elapsed_us(elapsed_us)),
+            plan_node_count: None,
+            result_row_count: Some(row_count),
         },
     )
 }

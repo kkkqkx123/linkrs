@@ -10,6 +10,7 @@
   import Schema from '$pages/Schema/Schema.svelte';
   import Graph from '$pages/Graph/Graph.svelte';
   import DataBrowser from '$pages/DataBrowser/DataBrowser.svelte';
+  import Monitoring from '$pages/Monitoring/Monitoring.svelte';
   import Toast from '$components/common/Toast.svelte';
   import type { Component } from 'svelte';
   import type { SvelteComponent } from 'svelte';
@@ -42,6 +43,7 @@
           </Route>
           <Route path="graph" component={asLegacy(Graph)} />
           <Route path="data-browser" component={asLegacy(DataBrowser)} />
+          <Route path="monitoring" component={asLegacy(Monitoring)} />
         </MainLayout>
       </ProtectedRoute>
     </Route>

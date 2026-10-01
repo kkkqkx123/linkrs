@@ -34,6 +34,10 @@ struct StreamMetadata {
     pub execution_time_ms: u64,
     pub columns: Vec<String>,
     pub stmt: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stages: Option<graphdb_wire::query::QueryStageTimings>,
 }
 
 /// Batch-streaming boundary: a statement starts executing.
@@ -54,6 +58,8 @@ struct StatementEnd {
     pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
 }
 
 /// Failure detail carried by a statement outcome.
@@ -70,6 +76,7 @@ struct StatementOutcome {
     /// The client disconnected mid-statement; the caller stops the loop.
     disconnected: bool,
     failure: Option<StreamFailure>,
+    trace_id: String,
 }
 
 type EventSender = Sender<Result<Event, HttpError>>;
@@ -115,12 +122,14 @@ pub async fn execute_stream<
 
     tokio::spawn(async move {
         let graph_service = server.get_graph_service();
+        let stats_manager = server.get_stats_manager().clone();
         if batch_mode {
             let parameters = json_params_to_core(&request.parameters);
             let session_variables = json_params_to_core(&request.session_variables);
             run_batch_stream(
                 &tx,
                 &graph_service,
+                &stats_manager,
                 request.session_id,
                 &request.statements,
                 parameters,
@@ -130,14 +139,17 @@ pub async fn execute_stream<
             )
             .await;
         } else {
+            let trace_id = uuid::Uuid::new_v4().to_string();
             let outcome = stream_statement_body(
                 &tx,
                 &graph_service,
+                &stats_manager,
                 request.session_id,
                 &request.query,
                 None,
                 row_limit,
                 0,
+                trace_id,
             )
             .await;
             if !outcome.disconnected {
@@ -169,6 +181,7 @@ async fn run_batch_stream<
 >(
     tx: &EventSender,
     graph_service: &Arc<GraphService<S>>,
+    stats_manager: &Arc<graphdb_metrics::StatsManager>,
     session_id: i64,
     statements: &[String],
     parameters: Option<HashMap<String, graphdb_core::Value>>,
@@ -185,14 +198,17 @@ async fn run_batch_stream<
             return;
         }
         let bindings = Some((parameters.clone(), session_variables.clone()));
+        let trace_id = uuid::Uuid::new_v4().to_string();
         let outcome = stream_statement_body(
             tx,
             graph_service,
+            stats_manager,
             session_id,
             statement,
             bindings,
             row_limit,
             index,
+            trace_id,
         )
         .await;
         if outcome.disconnected {
@@ -205,6 +221,7 @@ async fn run_batch_stream<
             execution_time_ms: outcome.execution_time_ms,
             code: outcome.failure.as_ref().map(|f| f.code.clone()),
             message: outcome.failure.as_ref().map(|f| f.message.clone()),
+            trace_id: Some(outcome.trace_id.clone()),
         };
         if !send_json(tx, "statement_end", &end).await {
             return;
@@ -231,6 +248,7 @@ async fn stream_statement_body<
 >(
     tx: &EventSender,
     graph_service: &Arc<GraphService<S>>,
+    stats_manager: &Arc<graphdb_metrics::StatsManager>,
     session_id: i64,
     stmt: &str,
     bindings: Option<(
@@ -239,8 +257,10 @@ async fn stream_statement_body<
     )>,
     row_limit: Option<usize>,
     stmt_index: usize,
+    trace_id: String,
 ) -> StatementOutcome {
     let start_time = std::time::Instant::now();
+    let stmt_text = stmt.to_string();
     let failed = |code: &str, message: String| StatementOutcome {
         rows_returned: 0,
         execution_time_ms: start_time.elapsed().as_millis() as u64,
@@ -249,6 +269,7 @@ async fn stream_statement_body<
             code: code.to_string(),
             message,
         }),
+        trace_id: trace_id.clone(),
     };
 
     // Get a streaming result handle (chunk-at-a-time).
@@ -270,7 +291,17 @@ async fn stream_statement_body<
                 "stmt": stmt_index
             });
             send_event(tx, "error", &error_msg.to_string()).await;
-            return failed("QUERY_ERROR", e);
+            let outcome = failed("QUERY_ERROR", e.clone());
+            record_stream_profile(
+                stats_manager,
+                session_id,
+                &stmt_text,
+                &trace_id,
+                start_time.elapsed().as_micros() as u64,
+                0,
+                Some(e),
+            );
+            return outcome;
         }
     };
 
@@ -375,23 +406,42 @@ async fn stream_statement_body<
     // Wait for the pull task to finish.
     match pull_handle.await {
         Ok(PullOutcome::Completed(total_rows)) => {
+            let elapsed_us = start_time.elapsed().as_micros() as u64;
             // Send metadata summary AFTER all rows.
             let metadata = StreamMetadata {
                 rows_returned: total_rows,
-                execution_time_ms: start_time.elapsed().as_millis() as u64,
+                execution_time_ms: (elapsed_us / 1000) as u64,
                 columns: Vec::new(), // schema was sent upfront
                 stmt: stmt_index,
+                trace_id: Some(trace_id.clone()),
+                stages: Some(graphdb_wire::query::QueryStageTimings {
+                    parse_ms: 0.0,
+                    validate_ms: 0.0,
+                    plan_ms: 0.0,
+                    optimize_ms: 0.0,
+                    execute_ms: elapsed_us as f64 / 1000.0,
+                }),
             };
 
             if let Ok(meta_str) = serde_json::to_string(&metadata) {
                 send_event(tx, "metadata", &meta_str).await;
             }
 
+            record_stream_profile(
+                stats_manager,
+                session_id,
+                &stmt_text,
+                &trace_id,
+                elapsed_us,
+                total_rows,
+                None,
+            );
             StatementOutcome {
                 rows_returned: total_rows,
-                execution_time_ms: start_time.elapsed().as_millis() as u64,
+                execution_time_ms: (elapsed_us / 1000) as u64,
                 disconnected: false,
                 failure: None,
+                trace_id: trace_id.clone(),
             }
         }
         Ok(PullOutcome::Failed(total_rows, failure)) => {
@@ -403,11 +453,23 @@ async fn stream_statement_body<
                 "stmt": stmt_index,
             });
             send_event(tx, "error", &error_msg.to_string()).await;
+            let elapsed_us = start_time.elapsed().as_micros() as u64;
+            let message = failure.message.clone();
+            record_stream_profile(
+                stats_manager,
+                session_id,
+                &stmt_text,
+                &trace_id,
+                elapsed_us,
+                total_rows,
+                Some(message),
+            );
             StatementOutcome {
                 rows_returned: total_rows,
                 execution_time_ms: start_time.elapsed().as_millis() as u64,
                 disconnected: false,
                 failure: Some(failure),
+                trace_id: trace_id.clone(),
             }
         }
         Ok(PullOutcome::LimitReached(total_rows, limit)) => {
@@ -426,11 +488,23 @@ async fn stream_statement_body<
                 "stmt": stmt_index,
             });
             send_event(tx, "error", &error_msg.to_string()).await;
+            let elapsed_us = start_time.elapsed().as_micros() as u64;
+            let message = failure.message.clone();
+            record_stream_profile(
+                stats_manager,
+                session_id,
+                &stmt_text,
+                &trace_id,
+                elapsed_us,
+                total_rows,
+                Some(message),
+            );
             StatementOutcome {
                 rows_returned: total_rows,
                 execution_time_ms: start_time.elapsed().as_millis() as u64,
                 disconnected: false,
                 failure: Some(failure),
+                trace_id: trace_id.clone(),
             }
         }
         Ok(PullOutcome::Disconnected(total_rows)) => StatementOutcome {
@@ -438,6 +512,7 @@ async fn stream_statement_body<
             execution_time_ms: start_time.elapsed().as_millis() as u64,
             disconnected: true,
             failure: None,
+            trace_id: trace_id.clone(),
         },
         Err(_) => {
             // Task panicked or cancelled — channel will be dropped.
@@ -446,6 +521,7 @@ async fn stream_statement_body<
                 execution_time_ms: start_time.elapsed().as_millis() as u64,
                 disconnected: true,
                 failure: None,
+                trace_id: trace_id.clone(),
             }
         }
     }
@@ -471,5 +547,46 @@ async fn send_json<T: Serialize>(tx: &EventSender, event: &str, payload: &T) -> 
     match serde_json::to_string(payload) {
         Ok(data) => send_event(tx, event, &data).await,
         Err(_) => false,
+    }
+}
+
+fn record_stream_profile(
+    stats_manager: &Arc<graphdb_metrics::StatsManager>,
+    session_id: i64,
+    query_text: &str,
+    trace_id: &str,
+    elapsed_us: u64,
+    rows: usize,
+    error: Option<String>,
+) {
+    if let Some(message) = error {
+        let mut profile = graphdb_metrics::QueryProfile::new(session_id, query_text.to_string());
+        profile.trace_id = trace_id.to_string();
+        profile.total_duration_us = elapsed_us;
+        profile.stages.execute_us = elapsed_us;
+        profile.result_count = rows;
+        let mut metrics = graphdb_metrics::QueryMetrics::new();
+        metrics.execute_time_us = elapsed_us;
+        metrics.total_time_us = elapsed_us;
+        metrics.result_row_count = rows;
+        stats_manager.record_query_metrics(&metrics);
+        let error_info = graphdb_metrics::ErrorInfo::new(
+            graphdb_metrics::ErrorType::ExecutionError,
+            graphdb_metrics::QueryPhase::Execute,
+            message,
+        );
+        stats_manager.record_failed_query(profile, error_info);
+    } else {
+        let mut profile = graphdb_metrics::QueryProfile::new(session_id, query_text.to_string());
+        profile.trace_id = trace_id.to_string();
+        profile.total_duration_us = elapsed_us;
+        profile.stages.execute_us = elapsed_us;
+        profile.result_count = rows;
+        let mut metrics = graphdb_metrics::QueryMetrics::new();
+        metrics.execute_time_us = elapsed_us;
+        metrics.total_time_us = elapsed_us;
+        metrics.result_row_count = rows;
+        stats_manager.record_query_metrics(&metrics);
+        stats_manager.record_query_profile(profile);
     }
 }

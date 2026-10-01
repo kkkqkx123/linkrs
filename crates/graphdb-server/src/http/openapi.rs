@@ -57,6 +57,8 @@ use utoipa::OpenApi;
         crate::http::handlers::export::export_data,
         crate::http::handlers::statistics::session,
         crate::http::handlers::statistics::queries,
+        crate::http::handlers::statistics::query_profile_detail,
+        crate::http::handlers::statistics::overview,
         crate::http::handlers::statistics::database,
         crate::http::handlers::statistics::system,
         crate::http::handlers::statistics::search,

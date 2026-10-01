@@ -73,6 +73,21 @@ pub struct QueryData {
     pub row_count: usize,
 }
 
+/// Per-stage timings in milliseconds for query portraits.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
+pub struct QueryStageTimings {
+    #[serde(default)]
+    pub parse_ms: f64,
+    #[serde(default)]
+    pub validate_ms: f64,
+    #[serde(default)]
+    pub plan_ms: f64,
+    #[serde(default)]
+    pub optimize_ms: f64,
+    #[serde(default)]
+    pub execute_ms: f64,
+}
+
 /// Query metadata
 #[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct QueryMetadata {
@@ -88,6 +103,14 @@ pub struct QueryMetadata {
     /// holds the rows actually delivered.
     #[serde(default)]
     pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stages: Option<QueryStageTimings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_node_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_row_count: Option<usize>,
 }
 
 /// Query error.
@@ -189,6 +212,10 @@ pub struct FetchCursorResponse {
     pub rows: Vec<HashMap<String, serde_json::Value>>,
     pub has_more: bool,
     pub returned: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stages: Option<QueryStageTimings>,
 }
 
 /// Release a cursor.
@@ -399,6 +426,38 @@ mod tests {
         )
         .expect("validate request with estimate should parse");
         assert!(with_estimate.need_estimate);
+    }
+
+    #[test]
+    fn metadata_extension_defaults() {
+        let meta: QueryMetadata = serde_json::from_str(
+            r#"{"execution_time_ms": 5, "rows_scanned": 1, "rows_returned": 1}"#,
+        )
+        .expect("old metadata must parse");
+        assert!(meta.trace_id.is_none());
+        assert!(meta.stages.is_none());
+        assert!(meta.plan_node_count.is_none());
+        let full = QueryMetadata {
+            execution_time_ms: 5,
+            rows_scanned: 1,
+            rows_returned: 1,
+            space_id: None,
+            truncated: false,
+            trace_id: Some("trace-1".to_string()),
+            stages: Some(QueryStageTimings {
+                parse_ms: 0.1,
+                validate_ms: 0.1,
+                plan_ms: 0.2,
+                optimize_ms: 0.1,
+                execute_ms: 4.5,
+            }),
+            plan_node_count: Some(3),
+            result_row_count: Some(1),
+        };
+        let json = serde_json::to_string(&full).unwrap();
+        let back: QueryMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.trace_id.as_deref(), Some("trace-1"));
+        assert_eq!(back.plan_node_count, Some(3));
     }
 
     #[test]

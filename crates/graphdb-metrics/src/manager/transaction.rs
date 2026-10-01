@@ -1,6 +1,29 @@
 //! Transaction lifecycle and resource gauges.
+use serde::{Deserialize, Serialize};
+
 use super::core::StatsManager;
 use super::metric_type::MetricType;
+
+/// Transaction snapshot for handlers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionSnapshot {
+    pub begun: u64,
+    pub committed: u64,
+    pub rolled_back: u64,
+    pub active: u64,
+    pub conflicts: u64,
+    pub timeouts: u64,
+    pub disconnects: u64,
+    pub recovery_aborts: u64,
+    pub cleanup_failures: u64,
+    pub active_statements: u64,
+    pub active_snapshots: u64,
+    pub pending_writes: u64,
+    pub frontier_lag: u64,
+    pub staged_wal_bytes: u64,
+    pub undo_bytes: u64,
+    pub checkpoint_drain_time_ms: u64,
+}
 
 /// Transaction resource metrics
 #[derive(Debug, Clone, Copy)]
@@ -56,6 +79,28 @@ impl StatsManager {
     /// Record transaction cleanup failure.
     pub fn record_txn_cleanup_failure(&self) {
         self.add_value(MetricType::TxnCleanupFailureCount);
+    }
+
+    pub fn transaction_snapshot(&self) -> TransactionSnapshot {
+        let v = |m: MetricType| self.get_value(m).unwrap_or(0);
+        TransactionSnapshot {
+            begun: v(MetricType::TxnBeginCount),
+            committed: v(MetricType::TxnCommitCount),
+            rolled_back: v(MetricType::TxnRollbackCount),
+            active: v(MetricType::TxnActiveCount),
+            conflicts: v(MetricType::TxnConflictCount),
+            timeouts: v(MetricType::TxnTimeoutCount),
+            disconnects: v(MetricType::TxnDisconnectCount),
+            recovery_aborts: v(MetricType::TxnRecoveryAbortCount),
+            cleanup_failures: v(MetricType::TxnCleanupFailureCount),
+            active_statements: v(MetricType::TxnActiveStatements),
+            active_snapshots: v(MetricType::TxnActiveSnapshots),
+            pending_writes: v(MetricType::TxnPendingWrites),
+            frontier_lag: v(MetricType::TxnFrontierLag),
+            staged_wal_bytes: v(MetricType::TxnStagedWalBytes),
+            undo_bytes: v(MetricType::TxnUndoBytes),
+            checkpoint_drain_time_ms: v(MetricType::TxnCheckpointDrainTimeMs),
+        }
     }
 
     /// Transaction resource metrics

@@ -1,9 +1,26 @@
 //! Checkpoint and dirty-page observability.
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
 use super::core::StatsManager;
 use super::metric_type::MetricType;
+
+/// Checkpoint summary for handlers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointSnapshot {
+    pub trigger_count: u64,
+    pub success_count: u64,
+    pub failure_count: u64,
+    pub avg_duration_us: f64,
+    pub data_flushed_bytes: u64,
+    pub wal_files_truncated: u64,
+    pub triggered_by_wal_size: u64,
+    pub triggered_by_interval: u64,
+    pub triggered_explicit: u64,
+    pub deduplicated: u64,
+    pub blocked: u64,
+}
 
 /// Reason a checkpoint was triggered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +77,28 @@ impl StatsManager {
     /// Record a checkpoint request that found another checkpoint in progress.
     pub fn record_checkpoint_blocked(&self) {
         self.add_value(MetricType::CheckpointRequestsBlocked);
+    }
+
+    pub fn checkpoint_snapshot(&self) -> CheckpointSnapshot {
+        let v = |m: MetricType| self.get_value(m).unwrap_or(0);
+        let success = v(MetricType::CheckpointSuccessCount);
+        CheckpointSnapshot {
+            trigger_count: v(MetricType::CheckpointTriggerCount),
+            success_count: success,
+            failure_count: v(MetricType::CheckpointFailureCount),
+            avg_duration_us: if success == 0 {
+                0.0
+            } else {
+                v(MetricType::CheckpointDurationUs) as f64 / success as f64
+            },
+            data_flushed_bytes: v(MetricType::CheckpointDataFlushedBytes),
+            wal_files_truncated: v(MetricType::CheckpointWalFilesTruncated),
+            triggered_by_wal_size: v(MetricType::CheckpointTriggeredByWalSize),
+            triggered_by_interval: v(MetricType::CheckpointTriggeredByInterval),
+            triggered_explicit: v(MetricType::CheckpointTriggeredExplicit),
+            deduplicated: v(MetricType::CheckpointRequestsDeduplicated),
+            blocked: v(MetricType::CheckpointRequestsBlocked),
+        }
     }
 
     /// Get all checkpoint-related metrics.

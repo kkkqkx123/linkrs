@@ -19,6 +19,28 @@ pub struct MonitoringConfig {
     /// runtime reports processed-row watermarks to attached progress observers.
     #[serde(default)]
     pub progress_report_rows_interval: u64,
+    /// Portrait cache size is `memory_cache_size`; this keeps the name for
+    /// handler-facing snapshot limits.
+    #[serde(default = "default_histogram_max_samples")]
+    pub histogram_max_samples: usize,
+    /// Timeseries ring retention in seconds.
+    #[serde(default = "default_timeseries_retention_secs")]
+    pub timeseries_retention_secs: usize,
+    /// Resource sampling interval in seconds.
+    #[serde(default = "default_resource_sample_interval_secs")]
+    pub resource_sample_interval_secs: u64,
+}
+
+fn default_histogram_max_samples() -> usize {
+    10000
+}
+
+fn default_timeseries_retention_secs() -> usize {
+    3600
+}
+
+fn default_resource_sample_interval_secs() -> u64 {
+    60
 }
 
 impl Default for MonitoringConfig {
@@ -29,6 +51,9 @@ impl Default for MonitoringConfig {
             slow_query_threshold_ms: 1000,
             slow_query_log: SlowQueryLogConfig::default(),
             progress_report_rows_interval: 0,
+            histogram_max_samples: default_histogram_max_samples(),
+            timeseries_retention_secs: default_timeseries_retention_secs(),
+            resource_sample_interval_secs: default_resource_sample_interval_secs(),
         }
     }
 }
@@ -38,6 +63,15 @@ impl MonitoringConfig {
     pub fn validate(&self) -> Result<(), String> {
         if self.memory_cache_size == 0 {
             return Err("Memory cache size must be greater than 0".to_string());
+        }
+        if self.histogram_max_samples < 100 || self.histogram_max_samples > 100_000 {
+            return Err("Histogram max samples must be within 100..=100000".to_string());
+        }
+        if self.timeseries_retention_secs < 60 || self.timeseries_retention_secs > 86400 {
+            return Err("Timeseries retention must be within 60..=86400 seconds".to_string());
+        }
+        if self.resource_sample_interval_secs == 0 || self.resource_sample_interval_secs > 3600 {
+            return Err("Resource sample interval must be within 1..=3600 seconds".to_string());
         }
 
         Ok(())
@@ -153,6 +187,18 @@ mod tests {
             ..Default::default()
         };
         assert!(invalid_config.validate().is_err());
+
+        let invalid_histogram = MonitoringConfig {
+            histogram_max_samples: 10,
+            ..Default::default()
+        };
+        assert!(invalid_histogram.validate().is_err());
+
+        let invalid_retention = MonitoringConfig {
+            timeseries_retention_secs: 10,
+            ..Default::default()
+        };
+        assert!(invalid_retention.validate().is_err());
     }
 
     #[test]

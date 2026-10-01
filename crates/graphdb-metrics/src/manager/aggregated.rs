@@ -1,7 +1,23 @@
 //! Aggregated pattern delegation to the dedicated pattern manager.
+use serde::{Deserialize, Serialize};
+
 use crate::profile::QueryProfile;
 
 use super::core::StatsManager;
+
+/// Serializable pattern entry for handlers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryPatternSnapshot {
+    pub normalized_query: String,
+    pub query_type: String,
+    pub labels: Vec<String>,
+    pub execution_count: u64,
+    pub avg_duration_ms: f64,
+    pub p95_duration_ms: f64,
+    pub p99_duration_ms: f64,
+    pub error_rate: f64,
+    pub error_count: u64,
+}
 
 impl StatsManager {
     /// Record aggregated query statistics
@@ -15,6 +31,33 @@ impl StatsManager {
         limit: usize,
     ) -> Vec<crate::aggregated_stats::AggregatedQueryStats> {
         self.aggregated_stats.get_top_n_slow_queries(limit)
+    }
+
+    pub fn pattern_snapshot(&self, limit: usize) -> Vec<QueryPatternSnapshot> {
+        self.aggregated_stats
+            .get_top_n_slow_queries(limit)
+            .into_iter()
+            .map(|s| {
+                let avg_duration_ms = s.avg_duration_ms();
+                let p95_duration_ms = s.p95_duration_ms();
+                let p99_duration_ms = s.p99_duration_ms();
+                let error_rate = s.error_rate();
+                let execution_count = s.execution_count;
+                let error_count = s.error_count;
+                let pattern = s.pattern;
+                QueryPatternSnapshot {
+                    normalized_query: pattern.normalized_query,
+                    query_type: pattern.query_type,
+                    labels: pattern.labels,
+                    execution_count,
+                    avg_duration_ms,
+                    p95_duration_ms,
+                    p99_duration_ms,
+                    error_rate,
+                    error_count,
+                }
+            })
+            .collect()
     }
 
     /// Get top N slow query patterns by total duration

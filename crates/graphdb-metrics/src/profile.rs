@@ -105,13 +105,22 @@ pub struct QueryProfile {
     pub session_id: i64,
     pub query_text: String,
     pub start_time: Instant,
+    pub started_at_secs: u64,
     pub total_duration_us: u64,
     pub stages: StageMetrics,
     pub executor_stats: Vec<ExecutorStat>,
     pub result_count: usize,
+    pub plan_node_count: usize,
     pub status: QueryStatus,
     pub error_message: Option<String>,
     pub error_info: Option<ErrorInfo>,
+}
+
+fn wall_secs_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 impl QueryProfile {
@@ -121,10 +130,12 @@ impl QueryProfile {
             session_id,
             query_text,
             start_time: Instant::now(),
+            started_at_secs: wall_secs_now(),
             total_duration_us: 0,
             stages: StageMetrics::default(),
             executor_stats: Vec::new(),
             result_count: 0,
+            plan_node_count: 0,
             status: QueryStatus::Success,
             error_message: None,
             error_info: None,

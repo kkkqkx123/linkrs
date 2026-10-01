@@ -4,11 +4,14 @@
   import { connectionStore } from '$stores/connection';
   import { connectionService } from '$services/connection';
   import type { HealthResponse } from '$services/connection';
+  import { statisticsService, type SystemResourceResponse } from '$services/statistics';
+  import { formatBytes } from '$utils/metricsFormat';
 
   let isConnected = $state(false);
   let isChecking = $state(false);
   let panelOpen = $state(false);
   let healthData = $state<HealthResponse | null>(null);
+  let systemData = $state<SystemResourceResponse | null>(null);
   let lastCheckTime = $state<string | null>(null);
   let latency = $state<number | null>(null);
   let checkError = $state<string | null>(null);
@@ -52,6 +55,12 @@
       latency = Math.round(performance.now() - start);
       checkError = err instanceof Error ? err.message : 'Health check failed';
       healthData = null;
+    }
+    // System detail is best-effort: keep the existing rows on failure.
+    try {
+      systemData = await statisticsService.system();
+    } catch {
+      /* keep previous system snapshot */
     } finally {
       isChecking = false;
     }
@@ -126,6 +135,27 @@
               <span class="text-gray-500 dark:text-gray-400">{$t('common.latency')}</span>
               <span class="text-gray-800 dark:text-gray-200 font-mono {latency > 1000 ? 'text-yellow-600 dark:text-yellow-400' : latency > 500 ? 'text-orange-600 dark:text-orange-400' : ''}">
                 {latency}ms
+              </span>
+            </div>
+          {/if}
+
+          {#if systemData}
+            <div class="flex justify-between">
+              <span class="text-gray-500 dark:text-gray-400">{$t('common.processMemory')}</span>
+              <span class="text-gray-800 dark:text-gray-200 font-mono">
+                {systemData.process_memory_bytes != null ? formatBytes(systemData.process_memory_bytes) : '—'}
+              </span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-500 dark:text-gray-400">{$t('common.diskUsage')}</span>
+              <span class="text-gray-800 dark:text-gray-200 font-mono">
+                {systemData.data_dir_size_bytes != null ? formatBytes(systemData.data_dir_size_bytes) : '—'}
+              </span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-500 dark:text-gray-400">{$t('common.activeConnections')}</span>
+              <span class="text-gray-800 dark:text-gray-200 font-mono">
+                {systemData.connections?.active ?? '—'}
               </span>
             </div>
           {/if}

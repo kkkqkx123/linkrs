@@ -27,6 +27,9 @@ export interface ExecuteQueryResponse {
 	data?: QueryResult;
 	error?: QueryError;
 	executionTime?: number;
+	traceId?: string;
+	stages?: components['schemas']['QueryStageTimings'];
+	planNodeCount?: number;
 }
 
 /** Per-statement result inside a batch response. */
@@ -37,6 +40,9 @@ export interface BatchStatementResult {
 	error?: QueryError;
 	executionTime?: number;
 	truncated?: boolean;
+	traceId?: string;
+	stages?: components['schemas']['QueryStageTimings'];
+	planNodeCount?: number;
 }
 
 /** Aggregated outcome of running a multi-statement script. */
@@ -53,6 +59,9 @@ function toStatementResult(
 	fallbackMs: number
 ): BatchStatementResult {
 	const executionTime = response.metadata?.execution_time_ms ?? fallbackMs;
+	const traceId = response.metadata?.trace_id ?? undefined;
+	const stages = response.metadata?.stages ?? undefined;
+	const planNodeCount = response.metadata?.plan_node_count ?? undefined;
 	if (!response.success) {
 		return {
 			query,
@@ -61,7 +70,10 @@ function toStatementResult(
 				code: response.error?.code || 'EXECUTION_ERROR',
 				message: response.error?.message || 'Failed to execute query'
 			},
-			executionTime
+			executionTime,
+			traceId,
+			stages,
+			planNodeCount
 		};
 	}
 	const columns = response.data?.columns ?? [];
@@ -73,7 +85,10 @@ function toStatementResult(
 		success: true,
 		data: { columns, rows, rowCount, truncated },
 		executionTime,
-		truncated
+		truncated,
+		traceId,
+		stages,
+		planNodeCount
 	};
 }
 
@@ -99,7 +114,10 @@ export const queryService = {
 				success: result.success,
 				data: result.data,
 				error: result.error,
-				executionTime: result.executionTime
+				executionTime: result.executionTime,
+				traceId: result.traceId,
+				stages: result.stages,
+				planNodeCount: result.planNodeCount
 			};
 		} catch (error) {
 			return {

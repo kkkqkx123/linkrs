@@ -36,8 +36,8 @@ use super::{
         health, query, schema,
         session::{create as create_session, delete_session, get_session},
         statistics::{
-            database, freeze_stats, queries, search as search_stats, session, system,
-            trigger_freeze,
+            database, freeze_stats, overview, queries, query_profile_detail,
+            search as search_stats, session, system, trigger_freeze,
         },
         stream::execute_stream,
         sync, transaction,
@@ -126,6 +126,8 @@ pub fn create_router<
         // Statistical information routing
         .route("/statistics/sessions/{id}", get(session))
         .route("/statistics/queries", get(queries))
+        .route("/statistics/queries/{trace_id}", get(query_profile_detail))
+        .route("/statistics/overview", get(overview))
         .route("/statistics/database", get(database))
         .route("/statistics/system", get(system))
         .route("/statistics/search", get(search_stats))

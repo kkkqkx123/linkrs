@@ -81,6 +81,20 @@
   /** True when a run produced more than one statement outcome. */
   let isMultiResult = $derived(results.length > 1);
 
+  /** Primary entry backing the single-result header (first success wins). */
+  let primaryEntry = $derived(results.find((e) => e.success) ?? results[0] ?? null);
+
+  /** Human-readable stage breakdown for the header hover detail. */
+  function stageDetail(entry: StatementResultEntry | null): string {
+    if (!entry?.stages) return '';
+    const parts = Object.entries(entry.stages).map(([k, v]) => {
+      const num = typeof v === 'number' ? v : Number(v);
+      return `${k}: ${Number.isFinite(num) ? num.toFixed(2) : '?'}ms`;
+    });
+    const trace = entry.traceId ? ` | trace: ${entry.traceId}` : '';
+    return parts.join(' | ') + trace;
+  }
+
   /** Streaming transport is holding an open or finished stream. */
   let streamingActive = $derived(
     stream !== null && stream.status !== 'idle' && resultMode === 'stream',
@@ -591,19 +605,22 @@
       </div>
       <div class="flex-1 overflow-auto p-4 flex flex-col gap-3">
         {#each results as entry, index (index)}
-          <div class="border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
-            <div class="px-3 py-2 bg-gray-50 dark:bg-gray-800/50 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+          <details class="border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
+            <summary class="px-3 py-2 bg-gray-50 dark:bg-gray-800/50 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
               <span class={entry.success ? 'text-green-500' : 'text-red-500'}>{entry.success ? '✓' : '✗'}</span>
               <span class="text-gray-400">#{index + 1}</span>
               <span class="font-mono truncate flex-1 text-gray-700 dark:text-gray-300">{entry.query}</span>
-              <span>{formatExecutionTime(entry.executionTime)}</span>
+              <span title={entry.stages ? stageDetail(entry) : undefined}>{formatExecutionTime(entry.executionTime)}</span>
+              {#if entry.traceId}
+                <span class="font-mono text-gray-400" title={entry.traceId}>⛁ {entry.traceId.slice(0, 8)}</span>
+              {/if}
               {#if entry.result}
                 <span>{formatRowCount(entry.result.rowCount)}</span>
                 {#if entry.truncated}
                   <span class="text-amber-600 dark:text-amber-400" title={$t('console.rowLimitHint')}>⚠ {$t('console.resultTruncated')}</span>
                 {/if}
               {/if}
-            </div>
+            </summary>
             <div class="p-3">
               {#if !entry.success && entry.error}
                 <div class="text-red-600 dark:text-red-400 text-xs">
@@ -636,12 +653,15 @@
                 {/if}
               {/if}
             </div>
-          </div>
+          </details>
         {/each}
       </div>
     {:else if currentResult}
       <div class="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-        <span>⏱ {$t('console.time')}: {formatExecutionTime(executionTime)}</span>
+        <span title={primaryEntry?.stages ? `${$t('console.stages')}: ${stageDetail(primaryEntry)}` : undefined}>⏱ {$t('console.time')}: {formatExecutionTime(executionTime)}</span>
+        {#if primaryEntry?.traceId}
+          <span class="font-mono text-xs text-gray-400" title={primaryEntry.traceId}>⛁ {primaryEntry.traceId.slice(0, 8)}</span>
+        {/if}
         <span>|</span>
         <span>{formatRowCount(currentResult.rowCount)}</span>
         {#if currentResult.truncated}
@@ -761,6 +781,9 @@
                 {/if}
                 {#if item.errorCode}
                   <span class="text-red-400">· {item.errorCode}</span>
+                {/if}
+                {#if item.traceId}
+                  <span class="font-mono" title={item.traceId}>· ⛁ {item.traceId.slice(0, 8)}</span>
                 {/if}
               </div>
               <button

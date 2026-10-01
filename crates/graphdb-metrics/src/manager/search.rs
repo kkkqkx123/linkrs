@@ -1,6 +1,21 @@
 //! Search, index and vector observability.
+use serde::{Deserialize, Serialize};
+
 use super::core::StatsManager;
 use super::metric_type::MetricType;
+
+/// Per-index breakdown for handlers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchIndexBreakdown {
+    pub index: String,
+    pub search_queries: u64,
+    pub search_errors: u64,
+    pub search_latency_ms: u64,
+    pub avg_search_latency_ms: f64,
+    pub index_operations: u64,
+    pub index_errors: u64,
+    pub index_latency_ms: u64,
+}
 
 impl StatsManager {
     /// Record a search query operation.
@@ -117,5 +132,37 @@ impl StatsManager {
 
     pub fn record_vector_disabled_skips(&self, count: u64) {
         self.set_value(MetricType::VectorDisabledSkips, count);
+    }
+
+    pub fn search_index_breakdown(&self) -> Vec<SearchIndexBreakdown> {
+        let mut out = Vec::new();
+        for entry in self.index_metrics.iter() {
+            let name = entry.key().clone();
+            let map = entry.value();
+            let get = |m: MetricType| map.get(&m).map(|v| v.get()).unwrap_or(0);
+            let search_queries = get(MetricType::NumSearchQueries);
+            let index_operations = get(MetricType::NumIndexOperations);
+            if search_queries == 0 && index_operations == 0 {
+                continue;
+            }
+            let search_latency_ms = get(MetricType::SearchLatencyMs);
+            out.push(SearchIndexBreakdown {
+                index: name,
+                search_queries,
+                search_errors: get(MetricType::NumSearchErrors),
+                search_latency_ms,
+                avg_search_latency_ms: if search_queries == 0 {
+                    0.0
+                } else {
+                    search_latency_ms as f64 / search_queries as f64
+                },
+                index_operations,
+                index_errors: get(MetricType::NumIndexErrors),
+                index_latency_ms: get(MetricType::IndexLatencyMs),
+            });
+        }
+        out.sort_by(|a, b| b.search_queries.cmp(&a.search_queries));
+        out.truncate(50);
+        out
     }
 }

@@ -88,12 +88,35 @@ pub async fn fetch_cursor<
     State(state): State<AppState<S>>,
     Json(request): Json<FetchCursorRequest>,
 ) -> Result<JsonResponse<FetchCursorResponse>, HttpError> {
+    let trace_id = uuid::Uuid::new_v4().to_string();
+    let start = std::time::Instant::now();
+    let stats_manager = state.server.get_stats_manager().clone();
     let page = state
         .server
         .get_graph_service()
         .fetch_cursor(request.session_id, request.cursor_id, request.page_size)
         .await
-        .map_err(cursor_error)?;
+        .map_err(|message| {
+            let elapsed_us = start.elapsed().as_micros() as u64;
+            let mut profile = graphdb_metrics::QueryProfile::new(
+                request.session_id,
+                "(cursor fetch)".to_string(),
+            );
+            profile.trace_id = trace_id.clone();
+            profile.total_duration_us = elapsed_us;
+            profile.stages.execute_us = elapsed_us;
+            let mut metrics = graphdb_metrics::QueryMetrics::new();
+            metrics.execute_time_us = elapsed_us;
+            metrics.total_time_us = elapsed_us;
+            stats_manager.record_query_metrics(&metrics);
+            let error_info = graphdb_metrics::ErrorInfo::new(
+                graphdb_metrics::ErrorType::ExecutionError,
+                graphdb_metrics::QueryPhase::Execute,
+                message.clone(),
+            );
+            stats_manager.record_failed_query(profile, error_info);
+            cursor_error(message)
+        })?;
     let rows = page
         .rows
         .into_iter()
@@ -106,11 +129,32 @@ pub async fn fetch_cursor<
         })
         .collect::<Vec<_>>();
     let returned = rows.len();
+    let elapsed_us = start.elapsed().as_micros() as u64;
+    let mut profile =
+        graphdb_metrics::QueryProfile::new(request.session_id, "(cursor fetch)".to_string());
+    profile.trace_id = trace_id.clone();
+    profile.total_duration_us = elapsed_us;
+    profile.stages.execute_us = elapsed_us;
+    profile.result_count = returned;
+    let mut metrics = graphdb_metrics::QueryMetrics::new();
+    metrics.execute_time_us = elapsed_us;
+    metrics.total_time_us = elapsed_us;
+    metrics.result_row_count = returned;
+    stats_manager.record_query_metrics(&metrics);
+    stats_manager.record_query_profile(profile);
     Ok(JsonResponse(FetchCursorResponse {
         columns: page.columns,
         rows,
         has_more: page.has_more,
         returned,
+        trace_id: Some(trace_id),
+        stages: Some(graphdb_wire::query::QueryStageTimings {
+            parse_ms: 0.0,
+            validate_ms: 0.0,
+            plan_ms: 0.0,
+            optimize_ms: 0.0,
+            execute_ms: elapsed_us as f64 / 1000.0,
+        }),
     }))
 }
 
@@ -179,6 +223,8 @@ mod tests {
             )])],
             has_more: true,
             returned: 1,
+            trace_id: None,
+            stages: None,
         };
         let json = serde_json::to_string(&page).expect("fetch response serializes");
         let back: FetchCursorResponse = serde_json::from_str(&json).expect("fetch response parses");

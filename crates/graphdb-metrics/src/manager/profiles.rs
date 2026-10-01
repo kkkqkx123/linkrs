@@ -16,15 +16,30 @@ pub struct SlowQueryStats {
     pub avg_duration_secs: f64,
 }
 
+/// Executor rollup for handler responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutorSummary {
+    pub executor_type: String,
+    pub count: u64,
+    pub total_time_ms: u64,
+    pub total_rows: u64,
+    pub avg_time_ms: f64,
+}
+
 impl StatsManager {
     pub fn record_query_profile(&self, profile: QueryProfile) {
         if !self.monitoring_enabled {
             return;
         }
 
-        if profile.total_duration_us >= self.slow_query_threshold_us {
+        let is_failed = matches!(profile.status, crate::profile::QueryStatus::Failed);
+        let is_slow = profile.total_duration_us >= self.slow_query_threshold_us;
+        if is_slow {
             self.write_slow_query_log(&profile);
+        } else {
+            self.aggregated_stats.record_query(&profile, false);
         }
+        self.record_timeseries_query(profile.total_duration_us, is_failed);
 
         let mut profiles = self.query_profiles.write();
         if profiles.len() >= self.profile_cache_size {
@@ -178,6 +193,57 @@ Executor details: {}{}",
         }
 
         stats
+    }
+
+    pub fn executor_summary_snapshot(&self) -> Vec<ExecutorSummary> {
+        let mut out: Vec<ExecutorSummary> = self
+            .get_executor_stats_summary()
+            .into_iter()
+            .map(|(executor_type, (total_time_ms, total_rows, count))| {
+                let avg_time_ms = if count == 0 {
+                    0.0
+                } else {
+                    total_time_ms as f64 / count as f64
+                };
+                ExecutorSummary {
+                    executor_type,
+                    count: count as u64,
+                    total_time_ms,
+                    total_rows,
+                    avg_time_ms,
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| b.total_time_ms.cmp(&a.total_time_ms));
+        out
+    }
+
+    pub fn profiles_in_window(
+        &self,
+        from_secs: Option<u64>,
+        to_secs: Option<u64>,
+        limit: usize,
+    ) -> Vec<QueryProfile> {
+        let profiles = self.query_profiles.read();
+        profiles
+            .iter()
+            .rev()
+            .filter(|p| {
+                if let Some(from) = from_secs {
+                    if p.started_at_secs < from {
+                        return false;
+                    }
+                }
+                if let Some(to) = to_secs {
+                    if p.started_at_secs > to {
+                        return false;
+                    }
+                }
+                true
+            })
+            .take(limit)
+            .cloned()
+            .collect()
     }
 
     pub fn clear_query_cache(&self) {

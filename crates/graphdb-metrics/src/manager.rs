@@ -26,13 +26,18 @@ mod storage;
 mod sync;
 mod transaction;
 
-pub use checkpoint::CheckpointTriggerReason;
-pub use core::StatsManager;
+pub use aggregated::QueryPatternSnapshot;
+pub use checkpoint::{CheckpointSnapshot, CheckpointTriggerReason};
+pub use core::{ResourceSample, StatsManager, TimeseriesBucket};
+pub use errors::{ErrorSnapshot, RecentErrorView};
 pub use metric_type::MetricType;
 pub use metric_value::MetricValue;
-pub use profiles::SlowQueryStats;
+pub use profiles::{ExecutorSummary, SlowQueryStats};
+pub use query_metrics::QueryLatencySnapshot;
+pub use search::SearchIndexBreakdown;
+pub use storage::StorageSnapshot;
 pub use sync::OutboxState;
-pub use transaction::TxnResourceMetrics;
+pub use transaction::{TransactionSnapshot, TxnResourceMetrics};
 
 #[cfg(test)]
 mod tests {
@@ -342,5 +347,89 @@ mod tests {
             stats.get_value(MetricType::CheckpointRequestsBlocked),
             Some(1)
         );
+    }
+
+    #[test]
+    fn test_snapshots_empty_zero() {
+        let stats = StatsManager::new();
+        let latency = stats.query_latency_snapshot();
+        assert_eq!(latency.count, 0);
+        assert_eq!(latency.avg_us, 0);
+        let errors = stats.error_snapshot();
+        assert_eq!(errors.total_errors, 0);
+        assert!(errors.errors_by_type.is_empty());
+        let storage = stats.storage_snapshot();
+        assert_eq!(storage.read_ops, 0);
+        assert_eq!(storage.bloom_hit_rate, 0.0);
+        let txn = stats.transaction_snapshot();
+        assert_eq!(txn.begun, 0);
+        let checkpoint = stats.checkpoint_snapshot();
+        assert_eq!(checkpoint.success_count, 0);
+        assert_eq!(checkpoint.avg_duration_us, 0.0);
+        assert!(stats.query_timeseries(60).is_empty());
+        assert!(stats.pattern_snapshot(5).is_empty());
+    }
+
+    #[test]
+    fn test_timeseries_eviction() {
+        let stats = StatsManager::new();
+        stats.set_timeseries_capacity(60);
+        for _ in 0..5 {
+            stats.record_timeseries_query(1000, false);
+        }
+        let series = stats.query_timeseries(3600);
+        assert!(!series.is_empty());
+        let total: u64 = series.iter().map(|b| b.queries).sum();
+        assert_eq!(total, 5);
+        stats.set_timeseries_capacity(60);
+        assert!(stats.query_timeseries(3600).len() <= 60);
+    }
+
+    #[test]
+    fn test_latency_percentile_monotonic() {
+        let stats = StatsManager::new();
+        for i in 1..=50 {
+            let mut profile = QueryProfile::new(1, format!("MATCH (n) RETURN {i}"));
+            profile.total_duration_us = i * 1000;
+            let mut metrics = crate::metrics::QueryMetrics::new();
+            metrics.total_time_us = i * 1000;
+            metrics.execute_time_us = i * 1000;
+            stats.record_query_metrics(&metrics);
+            stats.record_query_profile(profile);
+        }
+        let snapshot = stats.query_latency_snapshot();
+        assert!(snapshot.count > 0);
+        assert!(snapshot.p50_us <= snapshot.p95_us);
+        assert!(snapshot.p95_us <= snapshot.p99_us);
+    }
+
+    #[test]
+    fn test_error_snapshot_sums() {
+        let stats = StatsManager::new();
+        stats.record_error(
+            crate::error_stats::ErrorType::ParseError,
+            crate::error_stats::QueryPhase::Parse,
+        );
+        stats.record_error(
+            crate::error_stats::ErrorType::ExecutionError,
+            crate::error_stats::QueryPhase::Execute,
+        );
+        let snapshot = stats.error_snapshot();
+        assert_eq!(snapshot.total_errors, 2);
+        let by_type: u64 = snapshot.errors_by_type.values().sum();
+        let by_phase: u64 = snapshot.errors_by_phase.values().sum();
+        assert_eq!(by_type, 2);
+        assert_eq!(by_phase, 2);
+    }
+
+    #[test]
+    fn test_window_filter() {
+        let stats = StatsManager::with_config(true, 10, 1_000_000);
+        let profile = QueryProfile::new(7, "MATCH (n) RETURN n".to_string());
+        stats.record_query_profile(profile);
+        let all = stats.profiles_in_window(None, None, 10);
+        assert_eq!(all.len(), 1);
+        let future = stats.profiles_in_window(Some(u64::MAX - 1), None, 10);
+        assert!(future.is_empty());
     }
 }

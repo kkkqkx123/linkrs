@@ -77,6 +77,8 @@ pub async fn start_service_with_config_path(
         )
         .expect("Failed to create StatsManager with slow query logger"),
     );
+    stats_manager.set_timeseries_capacity(m.timeseries_retention_secs);
+    stats_manager.set_histogram_max_samples(m.histogram_max_samples);
 
     let storage_path = PathBuf::from(config.storage_path());
     let mut persistence_config = PersistenceConfig::for_work_dir(&storage_path)

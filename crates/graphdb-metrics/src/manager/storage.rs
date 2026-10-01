@@ -1,6 +1,42 @@
 //! Storage engine observability: I/O, bloom filters and space health.
+use serde::{Deserialize, Serialize};
+
 use super::core::StatsManager;
 use super::metric_type::MetricType;
+
+/// Storage subsystem snapshot for handlers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageSnapshot {
+    pub read_ops: u64,
+    pub write_ops: u64,
+    pub avg_read_latency_us: f64,
+    pub avg_write_latency_us: f64,
+    pub storage_errors: u64,
+    pub index_memory_bytes: u64,
+    pub tombstone_count: u64,
+    pub tombstone_memory_bytes: u64,
+    pub fragmentation_permille: u64,
+    pub wasted_bytes: u64,
+    pub bloom_queries: u64,
+    pub bloom_hits: u64,
+    pub bloom_hit_rate: f64,
+    pub dirty_pages: u64,
+    pub dirty_pages_total: u64,
+    pub dirty_page_ratio_permille: u64,
+    pub checkpoint_strategy_incremental: u64,
+    pub checkpoint_strategy_hybrid: u64,
+    pub checkpoint_strategy_full: u64,
+    pub checkpoint_incremental_duration_us: u64,
+    pub checkpoint_incremental_bytes_flushed: u64,
+}
+
+fn avg(total: u64, count: u64) -> f64 {
+    if count == 0 {
+        0.0
+    } else {
+        total as f64 / count as f64
+    }
+}
 
 impl StatsManager {
     pub fn record_storage_read(&self, latency_us: u64) {
@@ -60,6 +96,41 @@ impl StatsManager {
 
     pub fn set_index_memory_usage(&self, bytes: u64) {
         self.set_value(MetricType::IndexMemoryUsage, bytes);
+    }
+
+    pub fn storage_snapshot(&self) -> StorageSnapshot {
+        let v = |m: MetricType| self.get_value(m).unwrap_or(0);
+        let read_ops = v(MetricType::StorageReadOps);
+        let write_ops = v(MetricType::StorageWriteOps);
+        let bloom_queries = v(MetricType::BloomQueries);
+        let bloom_hits = v(MetricType::BloomHits);
+        StorageSnapshot {
+            read_ops,
+            write_ops,
+            avg_read_latency_us: avg(v(MetricType::StorageReadLatencyUs), read_ops),
+            avg_write_latency_us: avg(v(MetricType::StorageWriteLatencyUs), write_ops),
+            storage_errors: v(MetricType::StorageErrors),
+            index_memory_bytes: v(MetricType::IndexMemoryUsage),
+            tombstone_count: v(MetricType::TombstoneCount),
+            tombstone_memory_bytes: v(MetricType::TombstoneMemoryBytes),
+            fragmentation_permille: v(MetricType::FragmentationRatioPermille),
+            wasted_bytes: v(MetricType::TopologyWastedBytes),
+            bloom_queries,
+            bloom_hits,
+            bloom_hit_rate: if bloom_queries == 0 {
+                0.0
+            } else {
+                bloom_hits as f64 / bloom_queries as f64
+            },
+            dirty_pages: v(MetricType::DirtyPagesCount),
+            dirty_pages_total: v(MetricType::DirtyPagesTotal),
+            dirty_page_ratio_permille: v(MetricType::DirtyPageRatioPermille),
+            checkpoint_strategy_incremental: v(MetricType::CheckpointStrategyIncremental),
+            checkpoint_strategy_hybrid: v(MetricType::CheckpointStrategyHybrid),
+            checkpoint_strategy_full: v(MetricType::CheckpointStrategyFull),
+            checkpoint_incremental_duration_us: v(MetricType::CheckpointIncrementalDurationUs),
+            checkpoint_incremental_bytes_flushed: v(MetricType::CheckpointIncrementalBytesFlushed),
+        }
     }
 
     /// Record tombstone statistics for MVCC observability

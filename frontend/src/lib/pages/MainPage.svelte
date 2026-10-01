@@ -1,5 +1,6 @@
 <script lang="ts">
   import { t } from 'svelte-i18n';
+  import { navigate } from 'svelte-routing';
 </script>
 
 <div class="max-w-4xl mx-auto space-y-6 animate-fade-in">
@@ -33,6 +34,16 @@
         <div class="text-xs text-gray-400 dark:text-gray-500">{$t('mainPage.dataBrowserDesc')}</div>
       </div>
     </div>
+    <button
+      class="text-left bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm hover:shadow transition-all duration-300 hover:scale-[1.02] cursor-pointer"
+      onclick={() => navigate('/monitoring')}
+    >
+      <div class="space-y-2">
+        <p class="text-sm font-medium text-gray-500 dark:text-gray-400">{$t('sidebar.monitoring')}</p>
+        <p class="text-2xl font-bold text-gray-900 dark:text-white">📈</p>
+        <div class="text-xs text-gray-400 dark:text-gray-500">{$t('mainPage.monitoringDesc')}</div>
+      </div>
+    </button>
   </div>
 
   <!-- Welcome Card -->
@@ -45,6 +56,7 @@
       <li class="flex items-center gap-2"><span class="text-blue-500">🗄</span> <strong>{$t('sidebar.schema')}:</strong> {$t('mainPage.schemaDesc')}</li>
       <li class="flex items-center gap-2"><span class="text-blue-500">🔗</span> <strong>{$t('sidebar.graph')}:</strong> {$t('mainPage.graphDesc')}</li>
       <li class="flex items-center gap-2"><span class="text-blue-500">📋</span> <strong>{$t('sidebar.dataBrowser')}:</strong> {$t('mainPage.dataBrowserDesc')}</li>
+      <li class="flex items-center gap-2"><span class="text-blue-500">📈</span> <strong>{$t('sidebar.monitoring')}:</strong> {$t('mainPage.monitoringDesc')}</li>
     </ul>
   </div>
 </div>

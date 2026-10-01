@@ -1,4 +1,5 @@
 //! Lightweight numeric query metrics and latency histograms.
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::metrics::QueryMetrics;
@@ -6,6 +7,16 @@ use crate::metrics::QueryMetrics;
 use super::core::StatsManager;
 use super::metric_type::MetricType;
 use super::metric_value::MetricValue;
+
+/// Graph query latency snapshot derived from the shared histogram.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct QueryLatencySnapshot {
+    pub count: usize,
+    pub avg_us: u64,
+    pub p50_us: u64,
+    pub p95_us: u64,
+    pub p99_us: u64,
+}
 
 impl StatsManager {
     pub fn record_query_metrics(&self, metrics: &QueryMetrics) {
@@ -67,6 +78,17 @@ impl StatsManager {
             histogram.p95(),
             histogram.p99(),
         )
+    }
+
+    pub fn query_latency_snapshot(&self) -> QueryLatencySnapshot {
+        let histogram = self.query_latency_histogram.read();
+        QueryLatencySnapshot {
+            count: histogram.count(),
+            avg_us: histogram.avg(),
+            p50_us: histogram.p50(),
+            p95_us: histogram.p95(),
+            p99_us: histogram.p99(),
+        }
     }
 
     /// Get search latency percentiles (avg, p50, p95, p99) in microseconds

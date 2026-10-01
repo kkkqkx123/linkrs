@@ -161,6 +161,7 @@ mod tests {
                 rows_scanned: 5,
                 rows_returned: 1,
                 space_id: None,
+                ..Default::default()
             },
         );
         let result = QueryResult::from(response);

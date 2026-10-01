@@ -3481,7 +3481,9 @@
             "description": "Database statistics",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseOverviewResponse"
+                }
               }
             }
           },
@@ -3555,6 +3557,30 @@
         }
       }
     },
+    "/v1/statistics/overview": {
+      "get": {
+        "tags": [
+          "Statistics"
+        ],
+        "summary": "Aggregated overview across system, query, storage, transaction and sync.",
+        "operationId": "get_v1_statistics_overview",
+        "responses": {
+          "200": {
+            "description": "Aggregated monitoring overview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
     "/v1/statistics/queries": {
       "get": {
         "tags": [
@@ -3587,9 +3613,49 @@
             "description": "Query statistics",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/QueryStatsResponse"
+                }
               }
             }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/statistics/queries/{trace_id}": {
+      "get": {
+        "tags": [
+          "Statistics"
+        ],
+        "summary": "Single query portrait by trace id.",
+        "operationId": "get_v1_statistics_query_profile",
+        "parameters": [
+          {
+            "name": "trace_id",
+            "in": "path",
+            "description": "Query trace id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Query portrait detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryProfileDetailResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
           },
           "500": {
             "description": "Internal error"
@@ -3609,7 +3675,9 @@
             "description": "Search statistics",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SearchStatsResponse"
+                }
               }
             }
           },
@@ -3668,7 +3736,9 @@
             "description": "System resource usage",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SystemResourceResponse"
+                }
               }
             }
           },
@@ -5904,6 +5974,70 @@
           }
         }
       },
+      "CacheSection": {
+        "type": "object",
+        "required": [
+          "hit_count",
+          "miss_count",
+          "hit_rate"
+        ],
+        "properties": {
+          "hit_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "hit_rate": {
+            "type": "number",
+            "format": "double"
+          },
+          "miss_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "CheckpointSummary": {
+        "type": "object",
+        "description": "Checkpoint summary embedded in database storage sections.",
+        "properties": {
+          "avg_duration_us": {
+            "type": "number",
+            "format": "double"
+          },
+          "failure_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "success_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "trigger_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "triggered_by_interval": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "triggered_by_wal_size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "triggered_explicit": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "ClearDegradedRequest": {
         "type": "object",
         "required": [
@@ -6256,6 +6390,29 @@
         ],
         "description": "Predicate of a [`FilterCondition`]."
       },
+      "ConnectionStats": {
+        "type": "object",
+        "description": "Connection counters shared by system responses.",
+        "required": [
+          "active",
+          "total",
+          "max"
+        ],
+        "properties": {
+          "active": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "CreateBatchRequest": {
         "type": "object",
         "description": "Create batch task request",
@@ -6504,6 +6661,220 @@
           }
         }
       },
+      "DatabaseOverviewResponse": {
+        "type": "object",
+        "description": "Database overview response mirroring the handler JSON keys.",
+        "required": [
+          "spaces",
+          "storage",
+          "performance",
+          "search"
+        ],
+        "properties": {
+          "performance": {
+            "$ref": "#/components/schemas/DatabasePerformance"
+          },
+          "search": {
+            "$ref": "#/components/schemas/DatabaseSearchSummary"
+          },
+          "spaces": {
+            "$ref": "#/components/schemas/DatabaseSpaces"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/DatabaseStorage"
+          }
+        }
+      },
+      "DatabasePerformance": {
+        "type": "object",
+        "required": [
+          "total_queries",
+          "active_queries",
+          "query_cache_size",
+          "queries_per_second",
+          "avg_latency_ms",
+          "cache_hit_rate"
+        ],
+        "properties": {
+          "active_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "avg_latency_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "cache_hit_rate": {
+            "type": "number",
+            "format": "double"
+          },
+          "cache_hit_rate_source": {
+            "type": "string"
+          },
+          "error_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "latency_percentiles_us": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LatencyPercentilesUs"
+              }
+            ]
+          },
+          "queries_per_second": {
+            "type": "number",
+            "format": "double"
+          },
+          "query_cache_size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "DatabaseSearchSummary": {
+        "type": "object",
+        "required": [
+          "total_queries",
+          "total_errors",
+          "avg_latency_ms",
+          "total_index_operations",
+          "total_delete_operations",
+          "cache_hit_count",
+          "cache_miss_count",
+          "cache_hit_rate"
+        ],
+        "properties": {
+          "avg_latency_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "cache_hit_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "cache_hit_rate": {
+            "type": "number",
+            "format": "double"
+          },
+          "cache_miss_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_delete_operations": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_index_operations": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "DatabaseSpaces": {
+        "type": "object",
+        "required": [
+          "count",
+          "total_vertices",
+          "total_edges"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_edges": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_vertices": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "DatabaseStorage": {
+        "type": "object",
+        "required": [
+          "total_size_bytes",
+          "index_size_bytes",
+          "data_size_bytes"
+        ],
+        "properties": {
+          "checkpoint": {
+            "$ref": "#/components/schemas/CheckpointSummary"
+          },
+          "data_size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "dirty_pages": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "dirty_pages_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "fragmentation_permille": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "index_size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "tombstone_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "tombstone_memory_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "wasted_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "DeleteEdgeData": {
         "type": "object",
         "description": "Edge delete data",
@@ -6563,6 +6934,36 @@
           },
           "tag_name": {
             "type": "string"
+          }
+        }
+      },
+      "DeleteSection": {
+        "type": "object",
+        "required": [
+          "total_operations",
+          "total_errors",
+          "total_latency_ms",
+          "avg_latency_ms"
+        ],
+        "properties": {
+          "avg_latency_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "total_errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_latency_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_operations": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -6689,6 +7090,41 @@
           }
         }
       },
+      "ExecutorSummaryEntry": {
+        "type": "object",
+        "description": "Executor rollup entry.",
+        "required": [
+          "executor_type",
+          "count",
+          "total_time_ms",
+          "total_rows",
+          "avg_time_ms"
+        ],
+        "properties": {
+          "avg_time_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "executor_type": {
+            "type": "string"
+          },
+          "total_rows": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_time_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "FavoriteItem": {
         "type": "object",
         "description": "Query favorite item",
@@ -6791,6 +7227,22 @@
                 "type": "string"
               }
             }
+          },
+          "stages": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/QueryStageTimings"
+              }
+            ]
+          },
+          "trace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -7091,6 +7543,68 @@
           }
         }
       },
+      "IndexSection": {
+        "type": "object",
+        "required": [
+          "total_operations",
+          "total_errors",
+          "total_latency_ms",
+          "avg_latency_ms"
+        ],
+        "properties": {
+          "avg_latency_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "total_errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_latency_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_operations": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "LatencyPercentilesUs": {
+        "type": "object",
+        "description": "Latency percentiles in microseconds.",
+        "required": [
+          "avg",
+          "p50",
+          "p95",
+          "p99"
+        ],
+        "properties": {
+          "avg": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "p50": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "p95": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "p99": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "ListVectorIndexesResponse": {
         "type": "object",
         "description": "List of vector indexes response",
@@ -7162,6 +7676,26 @@
           "session_id": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "MemoryUsage": {
+        "type": "object",
+        "description": "Memory usage block shared by system responses.",
+        "required": [
+          "used_bytes",
+          "total_bytes"
+        ],
+        "properties": {
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "used_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -7238,6 +7772,194 @@
             }
           },
           "cursor_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "OverviewErrors": {
+        "type": "object",
+        "required": [
+          "total"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "OverviewResponse": {
+        "type": "object",
+        "description": "Cross-subsystem overview for the monitoring first screen.",
+        "required": [
+          "system",
+          "database",
+          "query_latency_us",
+          "errors",
+          "storage",
+          "transaction",
+          "sync",
+          "timeseries"
+        ],
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/DatabaseOverviewResponse"
+          },
+          "errors": {
+            "$ref": "#/components/schemas/OverviewErrors"
+          },
+          "query_latency_us": {
+            "$ref": "#/components/schemas/LatencyPercentilesUs"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/OverviewStorage"
+          },
+          "sync": {
+            "$ref": "#/components/schemas/OverviewSync"
+          },
+          "system": {
+            "$ref": "#/components/schemas/SystemResourceResponse"
+          },
+          "timeseries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OverviewTimeseriesPoint"
+            }
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/OverviewTransaction"
+          }
+        }
+      },
+      "OverviewStorage": {
+        "type": "object",
+        "required": [
+          "read_ops",
+          "write_ops",
+          "fragmentation_permille",
+          "tombstone_count",
+          "checkpoint_success",
+          "checkpoint_failure"
+        ],
+        "properties": {
+          "checkpoint_failure": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "checkpoint_success": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "fragmentation_permille": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "read_ops": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "tombstone_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "write_ops": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "OverviewSync": {
+        "type": "object",
+        "description": "Sync summary embedded in the overview; mirrors the sync status shape.",
+        "required": [
+          "is_running",
+          "outbox_pending",
+          "outbox_retries",
+          "outbox_dead_lettered"
+        ],
+        "properties": {
+          "is_running": {
+            "type": "boolean"
+          },
+          "outbox_dead_lettered": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "outbox_pending": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "outbox_retries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "OverviewTimeseriesPoint": {
+        "type": "object",
+        "required": [
+          "second",
+          "queries",
+          "avg_latency_ms",
+          "errors"
+        ],
+        "properties": {
+          "avg_latency_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "second": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "OverviewTransaction": {
+        "type": "object",
+        "required": [
+          "begun",
+          "committed",
+          "rolled_back",
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "begun": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "committed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "rolled_back": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -7327,6 +8049,20 @@
             "format": "int64",
             "minimum": 0
           },
+          "plan_node_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "result_row_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
           "rows_returned": {
             "type": "integer",
             "minimum": 0
@@ -7344,9 +8080,170 @@
             "format": "int64",
             "minimum": 0
           },
+          "stages": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/QueryStageTimings"
+              }
+            ]
+          },
+          "trace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "truncated": {
             "type": "boolean",
             "description": "The result was cut at the configured row ceiling; `rows_returned`\nholds the rows actually delivered."
+          }
+        }
+      },
+      "QueryPatternEntry": {
+        "type": "object",
+        "description": "Aggregated query pattern entry.",
+        "required": [
+          "normalized_query",
+          "query_type",
+          "execution_count",
+          "avg_duration_ms",
+          "p95_duration_ms",
+          "p99_duration_ms",
+          "error_rate"
+        ],
+        "properties": {
+          "avg_duration_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "error_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "error_rate": {
+            "type": "number",
+            "format": "double"
+          },
+          "execution_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "normalized_query": {
+            "type": "string"
+          },
+          "p95_duration_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "p99_duration_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "query_type": {
+            "type": "string"
+          }
+        }
+      },
+      "QueryProfileDetailResponse": {
+        "type": "object",
+        "description": "Single query portrait detail for console jumps.",
+        "required": [
+          "trace_id",
+          "session_id",
+          "query",
+          "duration_ms",
+          "status"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "executors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueryProfileExecutor"
+            }
+          },
+          "plan_node_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "query": {
+            "type": "string"
+          },
+          "result_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "session_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "stages": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/QueryStageTimings"
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "trace_id": {
+            "type": "string"
+          }
+        }
+      },
+      "QueryProfileExecutor": {
+        "type": "object",
+        "required": [
+          "executor_type",
+          "duration_ms",
+          "rows",
+          "memory_bytes"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "executor_type": {
+            "type": "string"
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rows": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -7438,6 +8335,180 @@
           },
           "success": {
             "type": "boolean"
+          }
+        }
+      },
+      "QueryStageTimings": {
+        "type": "object",
+        "description": "Per-stage timings in milliseconds for query portraits.",
+        "properties": {
+          "execute_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "optimize_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "parse_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "plan_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "validate_ms": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "QueryStatsResponse": {
+        "type": "object",
+        "description": "Query statistics response with time-window filtering and error breakdowns.",
+        "required": [
+          "total_queries",
+          "slow_queries",
+          "query_types"
+        ],
+        "properties": {
+          "error_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "errors_by_phase": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "errors_by_type": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "executor_summary": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExecutorSummaryEntry"
+            }
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latency_percentiles_us": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LatencyPercentilesUs"
+              }
+            ]
+          },
+          "query_types": {
+            "$ref": "#/components/schemas/QueryTypeStatistics"
+          },
+          "slow_queries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SlowQueryInfo"
+            }
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "top_patterns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueryPatternEntry"
+            }
+          },
+          "total_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "QueryTypeStatistics": {
+        "type": "object",
+        "description": "Query type statistics",
+        "required": [
+          "match_queries",
+          "create_queries",
+          "update_queries",
+          "delete_queries",
+          "insert_queries",
+          "go_queries",
+          "fetch_queries",
+          "lookup_queries",
+          "show_queries"
+        ],
+        "properties": {
+          "create_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "delete_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "fetch_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "go_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "insert_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "lookup_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "match_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "show_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "update_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -7781,6 +8852,129 @@
           }
         }
       },
+      "SearchIndexEntry": {
+        "type": "object",
+        "description": "Per-index search breakdown entry.",
+        "required": [
+          "index",
+          "search_queries",
+          "search_errors",
+          "search_latency_ms",
+          "avg_search_latency_ms",
+          "index_operations",
+          "index_errors",
+          "index_latency_ms"
+        ],
+        "properties": {
+          "avg_search_latency_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "index": {
+            "type": "string"
+          },
+          "index_errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "index_latency_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "index_operations": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "search_errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "search_latency_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "search_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "SearchSection": {
+        "type": "object",
+        "required": [
+          "total_queries",
+          "total_errors",
+          "total_latency_ms",
+          "avg_latency_ms",
+          "total_results",
+          "latency_percentiles_us"
+        ],
+        "properties": {
+          "avg_latency_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "latency_percentiles_us": {
+            "$ref": "#/components/schemas/LatencyPercentilesUs"
+          },
+          "total_errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_latency_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_results": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "SearchStatsResponse": {
+        "type": "object",
+        "description": "Search statistics response with per-index detail.",
+        "required": [
+          "search",
+          "index",
+          "delete",
+          "cache"
+        ],
+        "properties": {
+          "by_index": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchIndexEntry"
+            }
+          },
+          "cache": {
+            "$ref": "#/components/schemas/CacheSection"
+          },
+          "delete": {
+            "$ref": "#/components/schemas/DeleteSection"
+          },
+          "index": {
+            "$ref": "#/components/schemas/IndexSection"
+          },
+          "search": {
+            "$ref": "#/components/schemas/SearchSection"
+          }
+        }
+      },
       "SessionResponse": {
         "type": "object",
         "description": "Session response",
@@ -7836,6 +9030,61 @@
             "minimum": 0
           },
           "tag_name": {
+            "type": "string"
+          }
+        }
+      },
+      "SlowQueryInfo": {
+        "type": "object",
+        "description": "Information about a slow query",
+        "required": [
+          "trace_id",
+          "session_id",
+          "query",
+          "duration_ms",
+          "status"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "plan_node_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "query": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "stages": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/QueryStageTimings"
+              }
+            ]
+          },
+          "started_at_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string"
+          },
+          "trace_id": {
             "type": "string"
           }
         }
@@ -8034,6 +9283,67 @@
           },
           "unrecovered_dlq_size": {
             "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "SystemResourceResponse": {
+        "type": "object",
+        "description": "System resource response with stable keys plus process and disk detail.",
+        "required": [
+          "cpu_usage_percent",
+          "memory_usage",
+          "connections"
+        ],
+        "properties": {
+          "connections": {
+            "$ref": "#/components/schemas/ConnectionStats"
+          },
+          "cpu_usage_percent": {
+            "type": "number",
+            "format": "double"
+          },
+          "data_dir_size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_file_descriptors": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "memory_usage": {
+            "$ref": "#/components/schemas/MemoryUsage"
+          },
+          "process_memory_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "uptime_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "wal_dir_size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
             "minimum": 0
           }
         }
