@@ -198,6 +198,11 @@ impl ClientSession {
         self.cursor_context.close(cursor_id)
     }
 
+    /// Release every cursor held by this session.
+    pub fn close_all_cursors(&self) {
+        self.cursor_context.close_all();
+    }
+
     /// Number of currently open cursors.
     pub fn cursor_count(&self) -> usize {
         self.cursor_context.active_count()

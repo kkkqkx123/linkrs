@@ -920,6 +920,12 @@ impl<
                     .to_string(),
             );
         }
+        if Self::has_multiple_statements(stmt) {
+            return Err(
+                "Cursors support single data statements only; run multi-statement scripts on the materialized path"
+                    .to_string(),
+            );
+        }
         let result = self.execute_stream(session_id, stmt).await?;
         let columns = result.column_names().unwrap_or_default();
         let cursor_id = session.open_cursor(stmt.to_string(), result, columns.clone())?;
@@ -957,8 +963,7 @@ impl<
     /// Whether the statement text begins with a transaction / session
     /// command keyword (used to surface the first specific parse error for
     /// malformed commands instead of the generic recovery abort).
-    pub(crate) fn is_command_like(stmt: &str) -> bool {
-        let upper = stmt.trim().to_uppercase();
+    pub(crate) fn is_command_like(stmt: &str) -> bool {        let upper = stmt.trim().to_uppercase();
         upper == "BEGIN"
             || upper.starts_with("BEGIN ")
             || upper.starts_with("START TRANSACTION")
@@ -968,6 +973,21 @@ impl<
             || upper.starts_with("RELEASE SAVEPOINT")
             || upper == "LET"
             || upper.starts_with("LET ")
+    }
+
+    /// Whether the text holds more than one statement, reusing the parser's
+    /// statement-boundary rule: one optional trailing semicolon is allowed,
+    /// anything after that is a second statement.
+    fn has_multiple_statements(text: &str) -> bool {
+        if text.trim().is_empty() {
+            return false;
+        }
+        let mut parser = Parser::new(text);
+        let _ = parser.parse();
+        parser
+            .errors()
+            .iter()
+            .any(|error| error.message.contains("after end of statement"))
     }
 
     /// Unified classification entry: parse the statement and return it when

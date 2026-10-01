@@ -25,7 +25,7 @@ export interface QueryHistoryItem {
   /** Total rows reported by the server (stream runs). */
   reportedTotal?: number | null;
   /** Terminal stream state for stream runs. */
-  streamStatus?: 'completed' | 'failed';
+  streamStatus?: 'completed' | 'failed' | 'cancelled';
   /** Failure code for failed runs, when known. */
   errorCode?: string;
 }
@@ -50,9 +50,9 @@ export interface StatementResultEntry {
   truncated: boolean;
 }
 
-export type StreamStatus = 'idle' | 'connecting' | 'receiving' | 'completed' | 'failed';
+export type StreamStatus = 'idle' | 'connecting' | 'receiving' | 'completed' | 'failed' | 'cancelled';
 
-export type StreamCardStatus = 'pending' | 'receiving' | 'completed' | 'failed';
+export type StreamCardStatus = 'pending' | 'receiving' | 'completed' | 'failed' | 'cancelled';
 
 /** One statement's progressive buffer inside a stream run. */
 export interface StreamCardState {
@@ -390,9 +390,6 @@ function createConsoleStore() {
       };
     });
     const isCurrent = () => generation === streamGeneration;
-    // Batch boundary events carry no statement index on data events, so the
-    // most recent statement_begin owns schema/row/metadata until the next one.
-    let currentCard = 0;
     const cardQuery = batch
       ? { query: '', statements: cardQueries, parameters: bindings.parameters, sessionVariables: bindings.sessionVariables, failFast: true }
       : { query: cardQueries[0] };
@@ -402,7 +399,6 @@ function createConsoleStore() {
         {
           onStatementBegin: ({ index }) => {
             if (!isCurrent()) return;
-            currentCard = index;
             update(s => {
               const cards = s.stream.cards.map(card =>
                 card.index === index && card.status === 'pending'
@@ -431,9 +427,9 @@ function createConsoleStore() {
               return { ...s, stream: { ...s.stream, cards } };
             });
           },
-          onSchema: (columns) => {
+          onSchema: (columns, stmt) => {
             if (!isCurrent()) return;
-            const target = currentCard;
+            const target = stmt;
             update(s => ({
               ...s,
               stream: {
@@ -444,9 +440,9 @@ function createConsoleStore() {
               },
             }));
           },
-          onRow: (row, index) => {
+          onRow: (row, index, stmt) => {
             if (!isCurrent()) return;
-            const target = currentCard;
+            const target = stmt;
             update(s => {
               const cards = s.stream.cards.map(card => {
                 if (card.index !== target) return card;
@@ -471,7 +467,7 @@ function createConsoleStore() {
           },
           onMetadata: (info) => {
             if (!isCurrent()) return;
-            const target = currentCard;
+            const target = info.stmt;
             update(s => ({
               ...s,
               stream: {
@@ -486,7 +482,7 @@ function createConsoleStore() {
           },
           onStreamError: (streamError) => {
             if (!isCurrent()) return;
-            const target = currentCard;
+            const target = streamError.stmt;
             update(s => ({
               ...s,
               stream: {
@@ -504,12 +500,12 @@ function createConsoleStore() {
       if (!isCurrent()) return;
       if (streamController === controller) streamController = null;
       if (outcome.cancelled || controller.signal.aborted) {
-        failOverall('STREAM_CANCELLED', 'Stream cancelled by user', startedAt);
+        failOverall('STREAM_CANCELLED', 'Stream cancelled by user', startedAt, true);
         recordCardsHistory(false);
         return;
       }
       if (!outcome.doneReceived) {
-        failOverall('STREAM_INTERRUPTED', 'Stream ended without a completion marker, please retry', startedAt);
+        failOverall('STREAM_INTERRUPTED', 'Stream ended without a completion marker, please retry', startedAt, true);
         recordCardsHistory(false);
         return;
       }
@@ -540,7 +536,7 @@ function createConsoleStore() {
       if (!isCurrent()) return;
       if (streamController === controller) streamController = null;
       if (controller.signal.aborted) {
-        failOverall('STREAM_CANCELLED', 'Stream cancelled by user', startedAt);
+        failOverall('STREAM_CANCELLED', 'Stream cancelled by user', startedAt, true);
         recordCardsHistory(false);
         return;
       }
@@ -553,18 +549,19 @@ function createConsoleStore() {
     }
   }
 
-  /** Mark the run failed overall and fail every card still in flight. */
-  function failOverall(code: string, message: string, startedAt: number) {
+  /** Mark the run ended overall and settle every card still in flight. */
+  function failOverall(code: string, message: string, startedAt: number, cancelled = false) {
+    const status = cancelled ? 'cancelled' : 'failed';
     update(s => ({
       ...s,
       stream: {
         ...s.stream,
-        status: 'failed',
+        status,
         executionTime: s.stream.executionTime || Date.now() - startedAt,
         error: s.stream.error ?? { code, message },
         cards: s.stream.cards.map(card =>
           card.status === 'receiving' || (card.status === 'pending' && !s.stream.batch)
-            ? { ...card, status: 'failed' as StreamCardStatus, error: card.error ?? { code, message } }
+            ? { ...card, status: status as StreamCardStatus, error: card.error ?? { code, message } }
             : card,
         ),
       },
@@ -575,10 +572,13 @@ function createConsoleStore() {
   function recordCardsHistory(doneOk: boolean) {
     const snapshot = get({ subscribe }).stream;
     if (!snapshot || snapshot.cards.length === 0) return;
+    const overallCode = snapshot.error?.code ?? '';
+    const cancelled = overallCode === 'STREAM_CANCELLED' || overallCode === 'STREAM_INTERRUPTED';
     const ordered = [...snapshot.cards].sort((a, b) => a.index - b.index);
     for (const card of ordered) {
       if (card.status === 'pending') continue;
       const success = doneOk && card.status === 'completed';
+      const streamStatus = card.status === 'completed' ? 'completed' : cancelled ? 'cancelled' : 'failed';
       addToHistory({
         query: card.query,
         executionTime: card.executionTime || snapshot.executionTime,
@@ -587,7 +587,7 @@ function createConsoleStore() {
         path: 'stream',
         receivedCount: card.receivedCount,
         reportedTotal: card.reportedTotal,
-        streamStatus: card.status === 'completed' ? 'completed' : 'failed',
+        streamStatus,
         errorCode: success ? undefined : (card.error?.code ?? snapshot.error?.code),
       });
     }
@@ -622,7 +622,15 @@ function createConsoleStore() {
       await runStream(rawText);
       return;
     }
-    const outcome = await queryService.validate(eligibility.statement);
+    const outcome = await queryService.validate(eligibility.statement, undefined, true);
+    if (!outcome.valid) {
+      update(s => ({
+        ...s,
+        autoDecision: { path: 'materialized', estimatedRows: null, threshold },
+      }));
+      await runStatements(rawText);
+      return;
+    }
     const path = resolveAutoPath(
       { mode: 'single', estimatedRows: outcome.estimatedRows },
       threshold,

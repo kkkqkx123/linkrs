@@ -5,7 +5,7 @@ use axum::{
 };
 use graphdb_wire::query::{
     BatchQueryRequest, BatchQueryResponse, QueryData, QueryMetadata, QueryRequest, QueryResponse,
-    ValidateResponse,
+    ValidateRequest, ValidateResponse,
 };
 
 use crate::http::{error::HttpError, state::AppState};
@@ -170,7 +170,7 @@ pub async fn execute_batch<
     post,
     path = "/v1/query/validate",
     tag = "Query",
-    request_body = QueryRequest,
+    request_body = ValidateRequest,
     responses(
         (status = 200, body = ValidateResponse, description = "Query validation result"),
         (status = 500, description = "Internal error")
@@ -187,23 +187,24 @@ pub async fn validate<
         + 'static,
 >(
     State(state): State<AppState<S>>,
-    Json(request): Json<QueryRequest>,
+    Json(request): Json<ValidateRequest>,
 ) -> Result<JsonResponse<ValidateResponse>, HttpError> {
     // Real validation: parse plus binder name resolution, without executing.
     match validate_gql(&request.query) {
         Ok(_) => {
             // Advisory row estimate for automatic routing. Command-like
             // statements never stream, so they carry no estimate.
-            let estimated_rows =
-                if crate::graph_service::GraphService::<S>::is_command_like(&request.query) {
-                    None
-                } else {
-                    state
-                        .server
-                        .get_graph_service()
-                        .estimate_rows(request.session_id, &request.query)
-                        .await
-                };
+            let estimated_rows = if !request.need_estimate {
+                None
+            } else if crate::graph_service::GraphService::<S>::is_command_like(&request.query) {
+                None
+            } else {
+                state
+                    .server
+                    .get_graph_service()
+                    .estimate_rows(request.session_id, &request.query)
+                    .await
+            };
             Ok(JsonResponse(ValidateResponse {
                 valid: true,
                 message: "Query is valid".to_string(),

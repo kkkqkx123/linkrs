@@ -19,7 +19,11 @@ describe('resolveAutoPath', () => {
     assert.equal(resolveAutoPath({ mode: 'single', estimatedRows: null }, 1000), 'stream');
     assert.equal(resolveAutoPath({ mode: 'single', estimatedRows: undefined }, 1000), 'stream');
     assert.equal(resolveAutoPath({ mode: 'batch', estimatedRows: 3 }, 1_000_000), 'stream');
-    assert.equal(resolveAutoPath({ mode: null, estimatedRows: 1 }, 1000), 'stream');
+  });
+
+  it('materializes empty or command-shaped input', () => {
+    assert.equal(resolveAutoPath({ mode: null, estimatedRows: 1 }, 1000), 'materialized');
+    assert.equal(resolveAutoPath({ mode: null, estimatedRows: null }, 1000), 'materialized');
   });
 });
 

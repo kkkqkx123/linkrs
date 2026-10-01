@@ -3,9 +3,10 @@
 //! A cursor holds one [`StreamingQueryResult`] execution handle plus a small
 //! row buffer. Fetching pulls chunks until the requested page is full (or
 //! the execution is exhausted); the frontend never buffers the full result.
-//! Cursors are reclaimed three ways: explicit close, idle-timeout sweep on
-//! the next cursor operation, and session drop (dropping the result handle
-//! runs its deregistration callback, mirroring streaming queries).
+//! Explicit close drops the handle promptly. Query deregistration runs
+//! through the handle's drop callback, the single path shared with streaming
+//! queries, which also covers idle-timeout sweeps, fetch-failure removals,
+//! and session drops.
 
 use parking_lot::RwLock;
 use std::collections::{HashMap, VecDeque};
@@ -100,6 +101,7 @@ impl CursorContext {
     /// Pull chunks until `page_size` rows are ready or the execution ends.
     /// Blocking: callers run this off the async runtime.
     pub fn fetch(&self, cursor_id: u64, page_size: usize) -> Result<CursorPage, String> {
+        self.sweep_expired();
         let page_size = page_size.clamp(MIN_CURSOR_PAGE_SIZE, MAX_CURSOR_PAGE_SIZE);
         // Snapshot the handle without holding the lock across blocking pulls.
         let (result, must_pull) = {
@@ -169,9 +171,15 @@ impl CursorContext {
         })
     }
 
-    /// Release a cursor; dropping the handle deregisters the query.
+    /// Release a cursor; dropping the handle runs query deregistration.
     pub fn close(&self, cursor_id: u64) -> bool {
+        self.sweep_expired();
         self.cursors.write().remove(&cursor_id).is_some()
+    }
+
+    /// Release every cursor; dropping each handle runs query deregistration.
+    pub fn close_all(&self) {
+        self.cursors.write().clear();
     }
 
     /// Number of currently open cursors.

@@ -752,7 +752,10 @@
                   <span>· {$t(item.path === 'stream' ? 'console.historyViaStream' : 'console.historyViaMaterialized')}</span>
                 {/if}
                 {#if item.streamStatus}
-                  <span>· {$t(item.streamStatus === 'completed' ? 'console.streamStatusCompleted' : 'console.streamStatusFailed')}</span>
+                  <span>· {$t(item.streamStatus === 'completed' ? 'console.streamStatusCompleted' : item.streamStatus === 'cancelled' ? 'console.streamStatusCancelled' : 'console.streamStatusFailed')}</span>
+                {/if}
+                {#if item.path === 'stream' && item.reportedTotal !== undefined && item.reportedTotal !== null}
+                  <span>· {$t('console.historyReceivedTotal', { values: { received: item.receivedCount ?? item.rowCount, total: item.reportedTotal } })}</span>
                 {/if}
                 {#if item.errorCode}
                   <span class="text-red-400">· {item.errorCode}</span>

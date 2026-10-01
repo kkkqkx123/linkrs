@@ -191,6 +191,7 @@ export const queryService = {
   validate: async (
     query: string,
     sessionId?: number,
+    needEstimate?: boolean,
   ): Promise<{ valid: boolean; message: string; estimatedRows: number | null }> => {
     const resolved = resolveSessionId(sessionId);
     if (resolved === undefined) {
@@ -202,6 +203,7 @@ export const queryService = {
         {
           query,
           session_id: resolved,
+          need_estimate: needEstimate === true,
         },
       );
       const estimated = response.estimated_rows;

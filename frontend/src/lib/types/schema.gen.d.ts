@@ -327,7 +327,16 @@ export interface UpdateFavoriteRequest {
 export interface UpdateTagRequest {
 }
 
+export interface ValidateRequest {
+  query: string;
+  session_id: number;
+  need_estimate?: boolean;
+}
+
 export interface ValidateResponse {
+  valid: boolean;
+  message: string;
+  estimated_rows?: number | null;
 }
 
 export interface VectorFilter {

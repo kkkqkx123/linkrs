@@ -24,6 +24,7 @@ use crate::storage::{
 struct StreamDataItem {
     pub row: serde_json::Value,
     pub index: usize,
+    pub stmt: usize,
 }
 
 /// Streaming results metadata
@@ -32,6 +33,7 @@ struct StreamMetadata {
     pub rows_returned: usize,
     pub execution_time_ms: u64,
     pub columns: Vec<String>,
+    pub stmt: usize,
 }
 
 /// Batch-streaming boundary: a statement starts executing.
@@ -135,6 +137,7 @@ pub async fn execute_stream<
                 &request.query,
                 None,
                 row_limit,
+                0,
             )
             .await;
             if !outcome.disconnected {
@@ -189,6 +192,7 @@ async fn run_batch_stream<
             statement,
             bindings,
             row_limit,
+            index,
         )
         .await;
         if outcome.disconnected {
@@ -234,6 +238,7 @@ async fn stream_statement_body<
         Option<HashMap<String, graphdb_core::Value>>,
     )>,
     row_limit: Option<usize>,
+    stmt_index: usize,
 ) -> StatementOutcome {
     let start_time = std::time::Instant::now();
     let failed = |code: &str, message: String| StatementOutcome {
@@ -261,7 +266,8 @@ async fn stream_statement_body<
             let error_msg = json!({
                 "error": true,
                 "message": e,
-                "code": "QUERY_ERROR"
+                "code": "QUERY_ERROR",
+                "stmt": stmt_index
             });
             send_event(tx, "error", &error_msg.to_string()).await;
             return failed("QUERY_ERROR", e);
@@ -277,6 +283,7 @@ async fn stream_statement_body<
         let schema = json!({
             "columns": columns,
             "column_count": columns.len(),
+            "stmt": stmt_index,
         });
         if let Ok(schema_str) = serde_json::to_string(&schema) {
             send_event(tx, "schema", &schema_str).await;
@@ -288,6 +295,7 @@ async fn stream_statement_body<
     let tx_pull = tx.clone();
     let stream_result_pull = stream_result.clone();
     let schema_sent_pull = schema_sent.clone();
+    let pull_stmt = stmt_index;
     let pull_handle = tokio::task::spawn_blocking(move || {
         let mut row_index: usize = 0;
         loop {
@@ -301,6 +309,7 @@ async fn stream_statement_body<
                         let schema = json!({
                             "columns": columns,
                             "column_count": columns.len(),
+                            "stmt": pull_stmt,
                         });
                         if let Ok(schema_str) = serde_json::to_string(&schema) {
                             if tx_pull
@@ -333,6 +342,7 @@ async fn stream_statement_body<
                         let item = StreamDataItem {
                             row: serde_json::Value::Object(obj),
                             index: row_index,
+                            stmt: pull_stmt,
                         };
                         row_index += 1;
 
@@ -370,6 +380,7 @@ async fn stream_statement_body<
                 rows_returned: total_rows,
                 execution_time_ms: start_time.elapsed().as_millis() as u64,
                 columns: Vec::new(), // schema was sent upfront
+                stmt: stmt_index,
             };
 
             if let Ok(meta_str) = serde_json::to_string(&metadata) {
@@ -389,6 +400,7 @@ async fn stream_statement_body<
                 "error": true,
                 "message": failure.message,
                 "code": failure.code,
+                "stmt": stmt_index,
             });
             send_event(tx, "error", &error_msg.to_string()).await;
             StatementOutcome {
@@ -411,6 +423,7 @@ async fn stream_statement_body<
                 "error": true,
                 "message": failure.message,
                 "code": failure.code,
+                "stmt": stmt_index,
             });
             send_event(tx, "error", &error_msg.to_string()).await;
             StatementOutcome {

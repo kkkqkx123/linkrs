@@ -298,6 +298,10 @@ impl GraphSessionManager {
     pub async fn remove_session(&self, session_id: i64) {
         info!("Removing session ID: {}", session_id);
 
+        if let Some(entry) = self.sessions.get(&session_id) {
+            entry.value().mark_all_queries_killed();
+            entry.value().close_all_cursors();
+        }
         // DashMap does not require explicit locking.
         let existed = self.sessions.remove(&session_id).is_some();
         self.active_sessions.remove(&session_id);
@@ -397,10 +401,8 @@ impl GraphSessionManager {
             target_session.active_queries_count()
         );
 
-        // Terminate all queries in the session.
-        target_session.mark_all_queries_killed();
-
-        // Remove the session from the manager.
+        // Remove the session from the manager, which terminates all
+        // queries and closes all cursors before dropping the entry.
         self.remove_session(session_id).await;
 
         info!(

@@ -82,13 +82,16 @@
         ? 'console.streamStatusReceiving'
         : stream.status === 'completed'
           ? 'console.streamStatusCompleted'
-          : 'console.streamStatusFailed',
+          : stream.status === 'cancelled'
+            ? 'console.streamStatusCancelled'
+            : 'console.streamStatusFailed',
   );
 
   function cardStatusKey(status: StreamCardState['status']): string {
     if (status === 'pending') return 'console.streamCardPending';
     if (status === 'receiving') return 'console.streamStatusReceiving';
     if (status === 'completed') return 'console.streamStatusCompleted';
+    if (status === 'cancelled') return 'console.streamStatusCancelled';
     return 'console.streamStatusFailed';
   }
 </script>
@@ -160,7 +163,7 @@
 {/snippet}
 
 <div class="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-  <span class="inline-block w-2 h-2 rounded-full {stream.status === 'failed' ? 'bg-red-500' : stream.status === 'completed' ? 'bg-green-500' : 'bg-blue-500 animate-pulse'}"></span>
+  <span class="inline-block w-2 h-2 rounded-full {stream.status === 'failed' ? 'bg-red-500' : stream.status === 'cancelled' ? 'bg-amber-500' : stream.status === 'completed' ? 'bg-green-500' : 'bg-blue-500 animate-pulse'}"></span>
   <span>{$t(statusKey)}</span>
   <span>|</span>
   {#if stream.executionTime > 0}
@@ -226,7 +229,7 @@
         {@const synthetic = syntheticOf(card, cardModel(card).dense)}
         <div class="border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
           <div class="px-3 py-2 bg-gray-50 dark:bg-gray-800/50 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-            <span class={card.status === 'failed' ? 'text-red-500' : card.status === 'completed' ? 'text-green-500' : 'text-blue-500'}>{card.status === 'failed' ? '✗' : card.status === 'completed' ? '✓' : '…'}</span>
+            <span class={card.status === 'failed' ? 'text-red-500' : card.status === 'cancelled' ? 'text-amber-500' : card.status === 'completed' ? 'text-green-500' : 'text-blue-500'}>{card.status === 'failed' ? '✗' : card.status === 'completed' ? '✓' : card.status === 'cancelled' ? '⊘' : '…'}</span>
             <span class="text-gray-400">#{card.index + 1}</span>
             <span class="font-mono truncate flex-1 text-gray-700 dark:text-gray-300">{card.query}</span>
             <span>{$t(cardStatusKey(card.status))}</span>

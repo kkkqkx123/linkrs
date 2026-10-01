@@ -2,10 +2,10 @@ import { SseParser } from '$utils/sseParser';
 import { getApiBaseUrl, getSessionHeaders, resolveSessionId } from '$utils/http';
 
 export interface StreamRowHandler {
-  onSchema?: (columns: string[]) => void;
-  onRow?: (row: Record<string, unknown>, index: number) => void;
-  onMetadata?: (info: { rowsReturned: number; executionTimeMs: number }) => void;
-  onStreamError?: (error: { code: string; message: string }) => void;
+  onSchema?: (columns: string[], stmt: number) => void;
+  onRow?: (row: Record<string, unknown>, index: number, stmt: number) => void;
+  onMetadata?: (info: { rowsReturned: number; executionTimeMs: number; stmt: number }) => void;
+  onStreamError?: (error: { code: string; message: string; stmt: number }) => void;
   onStatementBegin?: (info: { index: number; query: string }) => void;
   onStatementEnd?: (info: {
     index: number;
@@ -95,15 +95,15 @@ export async function streamQuery(
       if (done) break;
       const events = parser.feed(decoder.decode(value, { stream: true }));
       for (const event of events) {
-        if (event.kind === 'schema') handlers.onSchema?.(event.columns);
-        else if (event.kind === 'row') handlers.onRow?.(event.row, event.index);
+        if (event.kind === 'schema') handlers.onSchema?.(event.columns, event.stmt);
+        else if (event.kind === 'row') handlers.onRow?.(event.row, event.index, event.stmt);
         else if (event.kind === 'metadata') {
           outcome.rowsReturned = event.rowsReturned;
           outcome.executionTimeMs = event.executionTimeMs;
-          handlers.onMetadata?.({ rowsReturned: event.rowsReturned, executionTimeMs: event.executionTimeMs });
+          handlers.onMetadata?.({ rowsReturned: event.rowsReturned, executionTimeMs: event.executionTimeMs, stmt: event.stmt });
         } else if (event.kind === 'error') {
           outcome.streamError = { code: event.code, message: event.message };
-          handlers.onStreamError?.(outcome.streamError);
+          handlers.onStreamError?.({ code: event.code, message: event.message, stmt: event.stmt });
         } else if (event.kind === 'statement_begin') {
           handlers.onStatementBegin?.({ index: event.index, query: event.query });
         } else if (event.kind === 'statement_end') {

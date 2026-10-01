@@ -190,12 +190,16 @@ message ExecuteQueryResponse {
 
 message ValidateQueryRequest {
   string query = 1;
+  string session_id = 2;
+  bool need_estimate = 3;
 }
 
 message ValidateQueryResponse {
   bool valid = 1;
   string error = 2;
   repeated string parameter_names = 3;
+  uint64 estimated_rows = 4;
+  bool has_estimate = 5;
 }
 
 message QueryResult {

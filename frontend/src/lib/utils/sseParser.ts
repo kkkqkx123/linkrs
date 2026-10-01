@@ -5,24 +5,28 @@ const JSONBig = JSONBigint({ storeAsString: true });
 export interface SchemaEvent {
   kind: 'schema';
   columns: string[];
+  stmt: number;
 }
 
 export interface RowEvent {
   kind: 'row';
   row: Record<string, unknown>;
   index: number;
+  stmt: number;
 }
 
 export interface MetadataEvent {
   kind: 'metadata';
   rowsReturned: number;
   executionTimeMs: number;
+  stmt: number;
 }
 
 export interface StreamErrorEvent {
   kind: 'error';
   code: string;
   message: string;
+  stmt: number;
 }
 
 export interface DoneEvent {
@@ -133,6 +137,19 @@ function toPlainValue(value: unknown): unknown {
   return value;
 }
 
+function readStmt(record: Record<string, unknown>): number {
+  const stmt = record['stmt'];
+  if (typeof stmt === 'number' && Number.isInteger(stmt) && stmt >= 0) return stmt;
+  return 0;
+}
+
+function recordFor(payload: unknown): Record<string, unknown> {
+  if (payload !== null && typeof payload === 'object' && !Array.isArray(payload)) {
+    return payload as Record<string, unknown>;
+  }
+  return {};
+}
+
 function frameToEvent(frame: RawFrame): StreamEvent | null {
   const name = frame.event || 'message';
   if (name === 'done') return { kind: 'done' };
@@ -167,20 +184,20 @@ function frameToEvent(frame: RawFrame): StreamEvent | null {
   }
   if (name === 'schema') {
     const columns = asStringArray((payload as Record<string, unknown> | null)?.['columns']);
-    return { kind: 'schema', columns };
+    return { kind: 'schema', columns, stmt: readStmt(recordFor(payload)) };
   }
   if (name === 'metadata') {
     const record = (payload ?? {}) as Record<string, unknown>;
     const rowsReturned = typeof record['rows_returned'] === 'number' ? record['rows_returned'] : 0;
     const executionTimeMs =
       typeof record['execution_time_ms'] === 'number' ? record['execution_time_ms'] : 0;
-    return { kind: 'metadata', rowsReturned, executionTimeMs };
+    return { kind: 'metadata', rowsReturned, executionTimeMs, stmt: readStmt(record) };
   }
   if (name === 'error') {
     const record = (payload ?? {}) as Record<string, unknown>;
     const message = typeof record['message'] === 'string' ? record['message'] : 'Query failed';
     const code = typeof record['code'] === 'string' ? record['code'] : 'QUERY_ERROR';
-    return { kind: 'error', code, message };
+    return { kind: 'error', code, message, stmt: readStmt(record) };
   }
   const record = (payload ?? {}) as Record<string, unknown>;
   const row =
@@ -189,7 +206,7 @@ function frameToEvent(frame: RawFrame): StreamEvent | null {
       : {};
   const index = typeof record['index'] === 'number' ? record['index'] : -1;
   if (index < 0) return null;
-  return { kind: 'row', row, index };
+  return { kind: 'row', row, index, stmt: readStmt(record) };
 }
 
 export class SseParser {

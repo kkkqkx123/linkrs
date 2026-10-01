@@ -101,6 +101,15 @@ pub struct QueryError {
 
 /// Verify the response.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ValidateRequest {
+    pub query: String,
+    pub session_id: i64,
+    #[serde(default)]
+    pub need_estimate: bool,
+}
+
+/// Verify the response.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ValidateResponse {
     pub valid: bool,
     pub message: String,
@@ -376,6 +385,20 @@ mod tests {
         assert_eq!(batch.statements.len(), 2);
         assert_eq!(batch.parameters.get("p"), Some(&serde_json::Value::from(1)));
         assert!(!batch.fail_fast);
+    }
+
+    #[test]
+    fn validate_request_estimate_defaults_off() {
+        let request: ValidateRequest =
+            serde_json::from_str(r#"{"query": "RETURN 1", "session_id": 3}"#)
+                .expect("validate request should parse");
+        assert!(!request.need_estimate);
+
+        let with_estimate: ValidateRequest = serde_json::from_str(
+            r#"{"query": "RETURN 1", "session_id": 3, "need_estimate": true}"#,
+        )
+        .expect("validate request with estimate should parse");
+        assert!(with_estimate.need_estimate);
     }
 
     #[test]

@@ -294,17 +294,40 @@ impl<
         &self,
         request: Request<ValidateQueryRequest>,
     ) -> Result<Response<ValidateQueryResponse>, Status> {
-        let query = request.into_inner().query;
-        match crate::http::handlers::query::validate_gql(&query) {
-            Ok(parameter_names) => Ok(Response::new(ValidateQueryResponse {
-                valid: true,
-                error: String::new(),
-                parameter_names,
-            })),
+        let inner = request.into_inner();
+        let session_id = inner.session_id.parse::<i64>().unwrap_or(0);
+        match crate::http::handlers::query::validate_gql(&inner.query) {
+            Ok(parameter_names) => {
+                let (estimated_rows, has_estimate) = if !inner.need_estimate {
+                    (0, false)
+                } else if crate::graph_service::GraphService::<S>::is_command_like(&inner.query) {
+                    (0, false)
+                } else {
+                    match self
+                        .app_state
+                        .server
+                        .get_graph_service()
+                        .estimate_rows(session_id, &inner.query)
+                        .await
+                    {
+                        Some(rows) => (rows, true),
+                        None => (0, false),
+                    }
+                };
+                Ok(Response::new(ValidateQueryResponse {
+                    valid: true,
+                    error: String::new(),
+                    parameter_names,
+                    estimated_rows,
+                    has_estimate,
+                }))
+            }
             Err(e) => Ok(Response::new(ValidateQueryResponse {
                 valid: false,
                 error: e,
                 parameter_names: vec![],
+                estimated_rows: 0,
+                has_estimate: false,
             })),
         }
     }

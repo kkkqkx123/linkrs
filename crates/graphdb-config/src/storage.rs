@@ -469,6 +469,8 @@ mod tests {
         assert_eq!(config.max_edge_scan, 10_000_000);
         assert!(!config.has_memory_limit());
         assert!(!config.has_timeout());
+        assert_eq!(config.max_result_size, 0);
+        assert!(!config.has_result_size_limit());
     }
 
     #[test]
@@ -481,6 +483,25 @@ mod tests {
             ..Default::default()
         };
         assert!(invalid_config.validate().is_err());
+    }
+
+    #[test]
+    fn test_result_size_limit_bounds() {
+        let unlimited = QueryResourceConfig::default();
+        assert!(!unlimited.has_result_size_limit());
+
+        let single = QueryResourceConfig {
+            max_result_size: 1,
+            ..Default::default()
+        };
+        assert!(single.has_result_size_limit());
+
+        let bounded = QueryResourceConfig {
+            max_result_size: 1000,
+            ..Default::default()
+        };
+        assert!(bounded.has_result_size_limit());
+        assert_eq!(bounded.max_result_size, 1000);
     }
 
     #[test]

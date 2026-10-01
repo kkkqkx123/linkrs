@@ -50,6 +50,12 @@ pub struct ExportQuery {
 /// have changed between display and export. Only `csv` and `jsonl` are
 /// supported; `jsonl` carries one object per line because a JSON array
 /// cannot be appended to without backtracking.
+///
+/// Transport note: this route sits behind the session-header auth
+/// middleware, so browsers fetch it with script (which can attach the
+/// session header) and buffer the body before saving. A native anchor
+/// download is not used because it cannot send the header, and passing the
+/// session through the URL would leak it via history and logs.
 pub async fn export_data<
     S: StorageClient
         + StorageSchemaContextOps
@@ -123,15 +129,7 @@ pub async fn export_data<
                         columns = Some(names.clone());
                     }
                     if as_csv && !header_sent {
-                        let header = columns
-                            .as_ref()
-                            .map(|cols| {
-                                cols.iter()
-                                    .map(|c| csv_escape(c))
-                                    .collect::<Vec<_>>()
-                                    .join(",")
-                            })
-                            .unwrap_or_default();
+                        let header = csv_header_line(columns.as_ref());
                         if tx
                             .blocking_send(Ok(Bytes::from(format!("{header}\n"))))
                             .is_err()
@@ -168,15 +166,7 @@ pub async fn export_data<
                 Ok(None) => {
                     // Empty result still yields a header-only CSV.
                     if as_csv && !header_sent {
-                        let header = columns
-                            .as_ref()
-                            .map(|cols| {
-                                cols.iter()
-                                    .map(|c| csv_escape(c))
-                                    .collect::<Vec<_>>()
-                                    .join(",")
-                            })
-                            .unwrap_or_default();
+                        let header = csv_header_line(columns.as_ref());
                         let _ = tx.blocking_send(Ok(Bytes::from(format!("{header}\n"))));
                     }
                     return;
@@ -200,6 +190,18 @@ pub async fn export_data<
         .map_err(|e| HttpError::InternalError(format!("Failed to build response: {}", e)))?;
 
     Ok(response)
+}
+
+/// Render the CSV header from the column list.
+fn csv_header_line(columns: Option<&Vec<String>>) -> String {
+    columns
+        .map(|cols| {
+            cols.iter()
+                .map(|c| csv_escape(c))
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default()
 }
 
 /// Render one CSV line: cells in column order, objects as compact JSON.
@@ -259,7 +261,17 @@ mod tests {
         assert_eq!(csv_escape("a,b"), "\"a,b\"");
         assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
         assert_eq!(csv_escape("line1\nline2"), "\"line1\nline2\"");
+        assert_eq!(csv_escape("line1\r\nline2"), "\"line1\r\nline2\"");
         assert_eq!(csv_escape(""), "");
+    }
+
+    #[test]
+    fn csv_header_renders_once_for_empty_results() {
+        assert_eq!(
+            csv_header_line(Some(&vec!["a".to_string(), "b,c".to_string()])),
+            "a,\"b,c\""
+        );
+        assert_eq!(csv_header_line(None), "");
     }
 
     #[test]

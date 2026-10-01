@@ -27,11 +27,13 @@ export interface AutoRouteInput {
  * Pick an execution path. Batch scripts always stream (the safe direction
  * for an unknown total), a missing estimate streams for the same reason,
  * and an estimate at or under the threshold stays materialized so small
- * queries render in one step.
+ * queries render in one step. Empty or command-shaped input stays
+ * materialized, matching the caller fallback.
  */
 export function resolveAutoPath(input: AutoRouteInput, threshold: number): AutoPath {
   if (input.mode === 'batch') return 'stream';
+  if (input.mode !== 'single') return 'materialized';
   const estimated = input.estimatedRows;
-  if (input.mode !== 'single' || estimated === null || estimated === undefined) return 'stream';
+  if (estimated === null || estimated === undefined) return 'stream';
   return estimated > threshold ? 'stream' : 'materialized';
 }

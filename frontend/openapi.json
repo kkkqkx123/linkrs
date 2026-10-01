@@ -2767,7 +2767,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/QueryRequest"
+                "$ref": "#/components/schemas/ValidateRequest"
               }
             }
           },
@@ -7443,6 +7443,27 @@
           }
         }
       },
+      "ValidateRequest": {
+        "type": "object",
+        "description": "Verify the response.",
+        "required": [
+          "query",
+          "session_id"
+        ],
+        "properties": {
+          "need_estimate": {
+            "type": "boolean",
+            "default": false
+          },
+          "query": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "ValidateResponse": {
         "type": "object",
         "description": "Verify the response.",
@@ -7451,6 +7472,14 @@
           "message"
         ],
         "properties": {
+          "estimated_rows": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
           "message": {
             "type": "string"
           },
