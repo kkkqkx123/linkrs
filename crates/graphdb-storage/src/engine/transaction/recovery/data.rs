@@ -4,7 +4,9 @@ use crate::engine::transaction::{AddEdgeParams, TransactionOps};
 use graphdb_core::metadata::IndexMetadataManager;
 use graphdb_core::types::{LabelId, Timestamp, UndoLogError, VertexId};
 use graphdb_core::{StorageError, StorageResult, Value};
-use graphdb_transaction::wal::{DeleteEdgeRedo, InsertEdgeRedo, UpdateEdgePropRedo};
+use graphdb_transaction::wal::{
+    DeleteEdgeRedo, DeleteVertexPropsRedo, InsertEdgeRedo, UpdateEdgePropRedo,
+};
 
 /// Whether an edge-insert replay failure is a benign duplicate.
 ///
@@ -200,6 +202,34 @@ pub(crate) fn replay_delete_vertex(
 
     ctx.replay_vertex_index_delete(label, vid, ts)?;
 
+    Ok(())
+}
+
+pub(crate) fn replay_delete_vertex_props(
+    ctx: &GraphStorageContext,
+    redo: &DeleteVertexPropsRedo,
+    ts: Timestamp,
+) -> StorageResult<()> {
+    let replayed = ctx
+        .data_store()
+        .with_vertex_tables_mut_result(|vertex_tables| {
+            TransactionOps::delete_vertex_props_by_vid(
+                vertex_tables,
+                redo.label,
+                redo.vid,
+                &redo.prop_names,
+                ts,
+            )
+        });
+    if let Err(e) = replayed {
+        if !is_benign_replay_missing(&e) {
+            return Err(StorageError::db_error(format!(
+                "Failed to replay delete vertex props: {}",
+                e
+            )));
+        }
+    }
+    ctx.mark_vertex_modified(redo.label);
     Ok(())
 }
 

@@ -68,6 +68,19 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
         Ok(())
     }
 
+    fn update_vertex_replace(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError> {
+        let old_vertex = self
+            .inner
+            .get_vertex(space, &vertex.tag.name, &vertex.vid)?
+            .ok_or_else(|| StorageError::node_not_found(vertex.vid))?;
+        self.inner.update_vertex_replace(space, vertex.clone())?;
+        if let Err(error) = self.sync_replace_vertex(space, &old_vertex, &vertex) {
+            return Err(self.reject_staged_write(error));
+        }
+        self.commit_auto_transaction()?;
+        Ok(())
+    }
+
     fn delete_vertex(&mut self, space: &str, tag: &str, id: &VertexId) -> Result<(), StorageError> {
         let vertex = self
             .inner
@@ -151,6 +164,23 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
 
     fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
         let result = self.inner.update_edge(space, edge.clone());
+        if result.is_ok() {
+            if let Err(error) =
+                self.sync_delete_edge(space, &edge.src, &edge.dst, &edge.edge_type, edge.ranking)
+            {
+                return Err(self.reject_staged_write(error));
+            }
+            if let Err(error) = self.sync_insert_edge(space, &edge) {
+                return Err(self.reject_staged_write(error));
+            }
+        }
+        result?;
+        self.commit_auto_transaction()?;
+        Ok(())
+    }
+
+    fn update_edge_replace(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
+        let result = self.inner.update_edge_replace(space, edge.clone());
         if result.is_ok() {
             if let Err(error) =
                 self.sync_delete_edge(space, &edge.src, &edge.dst, &edge.edge_type, edge.ranking)

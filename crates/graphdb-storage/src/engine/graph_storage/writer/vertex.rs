@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
+use graphdb_core::error::storage::StorageErrorKind;
 use graphdb_core::metadata::IndexMetadataManager;
 use graphdb_core::types::{EdgeIdentifier, LabelId, TagInfo, Timestamp, VertexId};
 use graphdb_core::wal::redo::{
-    DeleteEdgeRedo, DeleteVertexRedo, InsertVertexRedo, UpdateVertexPropRedo,
+    DeleteEdgeRedo, DeleteVertexPropsRedo, DeleteVertexRedo, InsertVertexRedo, UpdateVertexPropRedo,
 };
 use graphdb_core::wal::types::WalOpType;
 use graphdb_core::{DataType, StorageError, StorageResult, Value, Vertex};
-use graphdb_core::error::storage::StorageErrorKind;
 use graphdb_transaction::wal::TransactionWalEntry;
 use graphdb_transaction::{MutationEntityKey, MutationResult};
 
@@ -483,6 +483,194 @@ pub(crate) fn update_vertex(
 
     ctx.commit_write_timestamp_ordered(ts)?;
 
+    Ok(())
+}
+
+pub(crate) fn update_vertex_replace(
+    ctx: &GraphStorageContext,
+    space: &str,
+    vertex: Vertex,
+) -> StorageResult<()> {
+    let space_info = ctx
+        .schema_manager()
+        .get_space(space)?
+        .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
+    let tag = &vertex.tag;
+    let vid = VertexId::normalize_for_vid_type(&space_info.vid_type, vertex.vid)?;
+    let ts = ctx.get_write_timestamp()?;
+    let label_id = tag_label_id(ctx, space, &tag.name)?
+        .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag.name)))?;
+    let online = ctx.is_online_write();
+    let staging = if online {
+        match ctx.txn_staging_mark(ts) {
+            Ok(mark) => Some(mark),
+            Err(error) => {
+                ctx.abort_write_timestamp(ts);
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+    let unwind = |ctx: &GraphStorageContext, error: StorageError| -> StorageError {
+        if let Some((buffer, mark)) = &staging {
+            ctx.rollback_staging_to(buffer, *mark);
+        }
+        ctx.abort_write_timestamp(ts);
+        error
+    };
+    let pk_mirror: Option<(String, DataType, Value)> =
+        ctx.data_store().with_vertex_tables(|tables| {
+            tables.get(&label_id).and_then(|table| {
+                let schema = table.schema();
+                let pk = schema.properties.get(schema.primary_key_index)?;
+                let key = match route_vertex_id(&vid).ok()? {
+                    RoutedVertexId::Int(id) => IdKey::Int(id),
+                    RoutedVertexId::Text(id) => IdKey::Text(id),
+                };
+                primary_key_mirror_value(&pk.data_type, &key)
+                    .ok()
+                    .map(|mirror| (pk.name.clone(), pk.data_type.clone(), mirror))
+            })
+        });
+    let pk_name = pk_mirror.as_ref().map(|(name, _, _)| name.clone());
+    let current_record = match route_vertex_id(&vid)? {
+        RoutedVertexId::Int(id_int) => ctx.get_vertex_by_i64(label_id, id_int, ts),
+        RoutedVertexId::Text(id_str) => ctx.get_vertex(label_id, &id_str, ts),
+    };
+    let current_props: HashMap<String, Value> = current_record
+        .as_ref()
+        .map(|record| record.properties.iter().cloned().collect())
+        .unwrap_or_default();
+    if current_record.is_none() {
+        return Err(unwind(
+            ctx,
+            StorageError::not_found(format!("Vertex not found: {}", vid)),
+        ));
+    }
+    let mut new_props: HashMap<String, Value> = HashMap::new();
+    for (prop_name, value) in &tag.properties {
+        if Some(prop_name) == pk_name.as_ref() {
+            continue;
+        }
+        new_props.insert(prop_name.clone(), value.clone());
+    }
+    let mut deleted: Vec<String> = current_props
+        .keys()
+        .filter(|name| !new_props.contains_key(*name))
+        .filter(|name| Some(*name) != pk_name.as_ref())
+        .cloned()
+        .collect();
+    deleted.sort();
+    for (prop_name, value) in &tag.properties {
+        let restates_mirror = match pk_mirror.as_ref() {
+            Some((pk_name, pk_type, mirror)) if prop_name == pk_name => {
+                value == mirror || value.try_cast_to(pk_type).is_ok_and(|cast| &cast == mirror)
+            }
+            _ => false,
+        };
+        if restates_mirror {
+            continue;
+        }
+        if Some(prop_name) == pk_name.as_ref() {
+            return Err(unwind(
+                ctx,
+                StorageError::invalid_operation(format!(
+                    "Primary key column '{}' must mirror the vertex id",
+                    prop_name
+                )),
+            ));
+        }
+        let redo = UpdateVertexPropRedo {
+            label: label_id,
+            vid,
+            prop_name: prop_name.clone(),
+            value: value.clone(),
+        };
+        let redo_entry = match ctx.append_wal_redo(WalOpType::UpdateVertexProp, ts, &redo) {
+            Ok(entry) => entry,
+            Err(error) => return Err(unwind(ctx, error)),
+        };
+        let update_result = match route_vertex_id(&vid)? {
+            RoutedVertexId::Int(id_int) => {
+                ctx.update_vertex_property_by_i64(label_id, id_int, prop_name, value, ts)
+            }
+            RoutedVertexId::Text(id_str) => {
+                ctx.update_vertex_property(label_id, &id_str, prop_name, value, ts)
+            }
+        };
+        if let Err(error) = update_result {
+            return Err(unwind(ctx, error));
+        }
+        if let Err(error) = record_vertex_property_update(ctx, vid, Some(redo_entry)) {
+            return Err(unwind(ctx, error));
+        }
+    }
+    if !deleted.is_empty() {
+        let redo = DeleteVertexPropsRedo {
+            label: label_id,
+            vid,
+            prop_names: deleted.clone(),
+        };
+        let redo_entry = match ctx.append_wal_redo(WalOpType::DeleteVertexProps, ts, &redo) {
+            Ok(entry) => entry,
+            Err(error) => return Err(unwind(ctx, error)),
+        };
+        for prop_name in &deleted {
+            let delete_result = match route_vertex_id(&vid)? {
+                RoutedVertexId::Int(id_int) => {
+                    ctx.delete_vertex_row_property_by_i64(label_id, id_int, prop_name, ts)
+                }
+                RoutedVertexId::Text(id_str) => {
+                    ctx.delete_vertex_row_property(label_id, &id_str, prop_name, ts)
+                }
+            };
+            if let Err(error) = delete_result {
+                return Err(unwind(ctx, error));
+            }
+        }
+        if let Err(error) = record_vertex_property_update(ctx, vid, Some(redo_entry)) {
+            return Err(unwind(ctx, error));
+        }
+    }
+    let props: Vec<(String, Value)> = new_props.into_iter().collect();
+    let vid_value = Value::from(vid);
+    if online {
+        if let Err(error) = super::index_maintenance::check_vertex_unique_indexes(
+            ctx,
+            ctx.index_metadata_manager(),
+            space_info.space_id,
+            &vid_value,
+            &tag.name,
+            &props,
+        ) {
+            return Err(unwind(ctx, error));
+        }
+        if let Err(error) = ctx.stage_vertex_index_op(
+            ts,
+            StagedIndexOp::Update {
+                space_id: space_info.space_id,
+                vid: vid_value,
+                tag: tag.name.clone(),
+                properties: props,
+            },
+        ) {
+            return Err(unwind(ctx, error));
+        }
+        return Ok(());
+    }
+    if let Err(error) = super::index_maintenance::refresh_vertex_indexes(
+        ctx,
+        ctx.index_metadata_manager(),
+        space_info.space_id,
+        &vid_value,
+        &tag.name,
+        &props,
+        ts,
+    ) {
+        return Err(unwind(ctx, error));
+    }
+    ctx.commit_write_timestamp_ordered(ts)?;
     Ok(())
 }
 

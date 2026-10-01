@@ -6,13 +6,14 @@ use graphdb_core::{StorageError, StorageResult, Value};
 type ShardStagedInsert = (IdKey, u32, Vec<(String, Value)>);
 
 /// Every mutation a tracked commit installed, addressed by global id so a
-/// later durability failure can compensate the whole triple.
+/// later durability failure can compensate the whole set.
 #[derive(Debug, Default)]
 pub struct CommitApplied {
     pub mapping: Vec<(IdKey, u32)>,
     pub inserts: Vec<u32>,
     pub updates: Vec<(u32, String)>,
     pub deletes: Vec<u32>,
+    pub property_deletes: Vec<(u32, String)>,
 }
 
 impl CommitApplied {
@@ -21,6 +22,7 @@ impl CommitApplied {
         mapping: Vec<(IdKey, u32)>,
         applied_updates: Vec<(usize, u32, String)>,
         applied_deletes: Vec<(usize, u32)>,
+        applied_property_deletes: Vec<(usize, u32, String)>,
     ) -> Self {
         Self {
             inserts: mapping.iter().map(|(_, id)| *id).collect(),
@@ -32,6 +34,10 @@ impl CommitApplied {
             deletes: applied_deletes
                 .into_iter()
                 .map(|(shard_idx, local_id)| table.encode_id(shard_idx, local_id))
+                .collect(),
+            property_deletes: applied_property_deletes
+                .into_iter()
+                .map(|(shard_idx, local_id, col)| (table.encode_id(shard_idx, local_id), col))
                 .collect(),
         }
     }
@@ -77,6 +83,17 @@ impl ShardedVertexTable {
         let (idx, local_id) = self.decode_id(global_id);
         let table = self.shards[idx].read();
         table.update_property(local_id, col_name, value, ts)
+    }
+
+    pub fn delete_property_by_global_id(
+        &self,
+        global_id: u32,
+        col_name: &str,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let (idx, local_id) = self.decode_id(global_id);
+        let table = self.shards[idx].read();
+        table.delete_property(local_id, col_name, ts)
     }
 
     pub fn delete_by_internal_id(&self, global_id: u32, ts: Timestamp) -> StorageResult<()> {
@@ -474,6 +491,33 @@ impl ShardedVertexTable {
         Ok(())
     }
 
+    /// Scoped column-deletion staging against a resolved global id.
+    ///
+    /// Only row liveness is prechecked here; column values are never
+    /// checked. The tombstone lands at commit time.
+    pub fn delete_property_with_scope(
+        &self,
+        global_id: u32,
+        col_name: &str,
+        ts: Timestamp,
+        scope: &mut WriteScope,
+    ) -> StorageResult<()> {
+        scope.ensure_same_write_ts(ts)?;
+        let (idx, local_id) = self.decode_id(global_id);
+        let table = self.shards[idx].read();
+        table
+            .get_external_id(local_id, ts)
+            .ok_or(StorageError::vertex_not_found())?;
+        if table.is_pk_column(col_name) {
+            return Err(StorageError::invalid_operation(format!(
+                "Primary key column '{}' cannot be deleted by row replacement",
+                col_name
+            )));
+        }
+        scope.stage_property_deletes(self.label, global_id, vec![col_name.to_string()])?;
+        Ok(())
+    }
+
     /// Scoped delete staging by external id. Existence is resolved read-only;
     /// the tombstone is applied by the commit hook.
     pub fn delete_with_scope(
@@ -569,7 +613,7 @@ impl ShardedVertexTable {
 
     /// Tracked commit hook reporting every applied mutation for later
     /// compensation: a durability failure after this apply (WAL append,
-    /// index replay) undoes the whole triple through
+    /// index replay) undoes the whole set through
     /// [`Self::undo_applied_commit`] instead of inserts only.
     pub fn commit_write_scope_tracked(
         &self,
@@ -583,6 +627,7 @@ impl ShardedVertexTable {
         }
         let mut applied: Vec<(usize, u32)> = Vec::new();
         let mut applied_updates: Vec<(usize, u32, String)> = Vec::new();
+        let mut applied_property_deletes: Vec<(usize, u32, String)> = Vec::new();
         let mut applied_deletes: Vec<(usize, u32)> = Vec::new();
         let mut mapping: Vec<(IdKey, u32)> = Vec::new();
         let result = self.apply_staged_inserts(scope, ts, &mut applied, &mut mapping);
@@ -597,8 +642,18 @@ impl ShardedVertexTable {
             self.rollback_write_scope(scope, ts);
             return Err(error);
         }
+        if let Err(error) =
+            self.apply_staged_property_deletes(scope, ts, &mut applied_property_deletes)
+        {
+            self.undo_applied_updates(&applied_property_deletes, ts);
+            self.undo_applied_updates(&applied_updates, ts);
+            self.undo_applied_inserts(&applied);
+            self.rollback_write_scope(scope, ts);
+            return Err(error);
+        }
         if let Err(error) = self.apply_staged_deletes(scope, ts, &mut applied_deletes) {
             self.undo_applied_deletes(&applied_deletes);
+            self.undo_applied_updates(&applied_property_deletes, ts);
             self.undo_applied_updates(&applied_updates, ts);
             self.undo_applied_inserts(&applied);
             self.rollback_write_scope(scope, ts);
@@ -610,15 +665,21 @@ impl ShardedVertexTable {
             mapping,
             applied_updates,
             applied_deletes,
+            applied_property_deletes,
         ))
     }
 
     /// Compensate a previous tracked apply in reverse order: deletes are
-    /// revived, updates pop their version entry, inserts drop their keys.
+    /// revived, updates and column tombstones pop their version entry,
+    /// inserts drop their keys.
     pub fn undo_applied_commit(&self, applied: &CommitApplied, ts: Timestamp) {
         for global_id in applied.deletes.iter().rev() {
             let (idx, local_id) = self.decode_id(*global_id);
             self.shards[idx].read().revert_delete(local_id);
+        }
+        for (global_id, col_name) in applied.property_deletes.iter().rev() {
+            let (idx, local_id) = self.decode_id(*global_id);
+            let _ = self.shards[idx].read().undo_update(local_id, col_name, ts);
         }
         for (global_id, col_name) in applied.updates.iter().rev() {
             let (idx, local_id) = self.decode_id(*global_id);
@@ -669,6 +730,45 @@ impl ShardedVertexTable {
             let _ = scope.stage_update(self.label, global_id, props);
         }
         if let Some(error) = first_error {
+            return Err(error);
+        }
+        let staged_property_deletes = scope.take_property_deletes_for_label(self.label);
+        let mut property_delete_error: Option<StorageError> = None;
+        for (global_id, cols) in &staged_property_deletes {
+            if property_delete_error.is_some() {
+                break;
+            }
+            if created.contains(global_id) {
+                property_delete_error = Some(StorageError::invalid_operation(format!(
+                    "row {} created by this commit cannot lose columns to row replacement",
+                    global_id
+                )));
+                break;
+            }
+            let (idx, local_id) = self.decode_id(*global_id);
+            let table = self.shards[idx].read();
+            if !table.is_row_live_at(local_id, ts) {
+                property_delete_error = Some(StorageError::vertex_not_found());
+                break;
+            }
+            for col_name in cols {
+                if table.is_pk_column(col_name) {
+                    property_delete_error = Some(StorageError::invalid_operation(format!(
+                        "Primary key column '{}' cannot be deleted by row replacement",
+                        col_name
+                    )));
+                    break;
+                }
+                if let Err(error) = table.columns.check_column_available(col_name) {
+                    property_delete_error = Some(error);
+                    break;
+                }
+            }
+        }
+        for (global_id, cols) in staged_property_deletes {
+            let _ = scope.stage_property_deletes(self.label, global_id, cols);
+        }
+        if let Some(error) = property_delete_error {
             return Err(error);
         }
         let staged_deletes = scope.take_deletes_for_label(self.label);
@@ -774,7 +874,26 @@ impl ShardedVertexTable {
         Ok(())
     }
 
-    /// Apply the label's staged deletes after inserts and updates.
+    /// Apply the label's staged column deletions after the updates.
+    fn apply_staged_property_deletes(
+        &self,
+        scope: &mut WriteScope,
+        ts: Timestamp,
+        applied: &mut Vec<(usize, u32, String)>,
+    ) -> StorageResult<()> {
+        let staged = scope.take_property_deletes_for_label(self.label);
+        for (global_id, cols) in staged {
+            let (idx, local_id) = self.decode_id(global_id);
+            let table = self.shards[idx].read();
+            for col_name in &cols {
+                table.delete_property(local_id, col_name, ts)?;
+                applied.push((idx, local_id, col_name.clone()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply the label's staged deletes after inserts, updates and column deletions.
     fn apply_staged_deletes(
         &self,
         scope: &mut WriteScope,

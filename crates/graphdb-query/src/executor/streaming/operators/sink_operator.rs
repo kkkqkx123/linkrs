@@ -159,35 +159,40 @@ fn eval_update_props(
         }
         return Ok(props);
     }
-    if updates.len() != 1 {
-        return Err(QueryError::execution(
-            "Whole-map overwrite cannot be mixed with per-property assignments".to_string(),
-        ));
-    }
-    match eval_expr(&updates[0].1, context)? {
-        Value::Map(entries) => {
-            let mut props = HashMap::with_capacity(entries.len());
-            for (key, val) in entries.iter() {
-                match key {
-                    Value::String(name) => {
-                        props.insert(name.to_string(), val.clone());
-                    }
-                    Value::FixedString(name) => {
-                        props.insert(name.clone(), val.clone());
-                    }
-                    _ => {
-                        return Err(QueryError::execution(
-                            "Map overwrite keys must be strings".to_string(),
-                        ));
+    let mut props = HashMap::new();
+    let mut saw_map = false;
+    for (prop_name, expr) in updates.iter() {
+        let val = eval_expr(expr, context)?;
+        match val {
+            Value::Map(entries) => {
+                saw_map = true;
+                for (key, item) in entries.iter() {
+                    match key {
+                        Value::String(name) => {
+                            props.insert(name.to_string(), item.clone());
+                        }
+                        Value::FixedString(name) => {
+                            props.insert(name.clone(), item.clone());
+                        }
+                        _ => {
+                            return Err(QueryError::execution(
+                                "Map overwrite keys must be strings".to_string(),
+                            ));
+                        }
                     }
                 }
             }
-            Ok(props)
+            other => {
+                props.insert(prop_name.clone(), other);
+            }
         }
-        _ => Err(QueryError::execution(
-            "Map overwrite value must be a map".to_string(),
-        )),
     }
+    if !saw_map {
+        return Err(QueryError::execution(
+            "Map overwrite value must be a map".to_string(),
+        ));
+    }
+    Ok(props)
 }
 
 /// Build a row context that resolves `$name` parameter references.
@@ -768,8 +773,17 @@ impl SinkOperator {
                                 Tag::new(tag_name.clone(), props)
                             };
                             let vertex = Vertex::new(vid, tag);
-                            StorageWriter::update_vertex(&mut *writer, space_name, vertex)
+                            if *replace_properties {
+                                StorageWriter::update_vertex_replace(
+                                    &mut *writer,
+                                    space_name,
+                                    vertex,
+                                )
                                 .map_err(|e| QueryError::execution(e.to_string()))?;
+                            } else {
+                                StorageWriter::update_vertex(&mut *writer, space_name, vertex)
+                                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                            }
                             *rows_updated += 1;
                         }
                     } else {
@@ -880,8 +894,17 @@ impl SinkOperator {
                                     eval_update_props(updates, *replace_properties, &mut context)?;
                                 let mut edge = Edge::new_empty(src, dst, edge_type.clone(), 0);
                                 edge.props = props;
-                                StorageWriter::update_edge(&mut *writer, space_name, edge)
+                                if *replace_properties {
+                                    StorageWriter::update_edge_replace(
+                                        &mut *writer,
+                                        space_name,
+                                        edge,
+                                    )
                                     .map_err(|e| QueryError::execution(e.to_string()))?;
+                                } else {
+                                    StorageWriter::update_edge(&mut *writer, space_name, edge)
+                                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                                }
                                 *rows_updated += 1;
                             }
                         }

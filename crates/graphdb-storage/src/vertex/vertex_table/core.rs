@@ -860,6 +860,39 @@ impl VertexTable {
         Ok(())
     }
 
+    /// Delete one column of one row by writing a null tombstone version.
+    ///
+    /// Primary-key mirror columns never participate in row replacement and
+    /// are rejected here as misuse.
+    pub fn delete_property(
+        &self,
+        internal_id: u32,
+        col_name: &str,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        if !self.is_open.load(Ordering::Acquire) {
+            return Err(StorageError::storage_not_open());
+        }
+        if self.is_pk_column(col_name) {
+            return Err(StorageError::invalid_operation(format!(
+                "Primary key column '{}' cannot be deleted by row replacement",
+                col_name
+            )));
+        }
+        let stamps = self.timestamps.read();
+        if !stamps.is_valid(internal_id, ts) {
+            return Err(StorageError::vertex_not_found());
+        }
+        self.columns.set_property_versioned_checked(
+            internal_id as usize,
+            col_name,
+            None,
+            ts,
+            || stamps.is_valid(internal_id, ts),
+        )?;
+        Ok(())
+    }
+
     /// Apply one delete by internal id: timestamp tombstone under the
     /// identity latch, then the row dirty mark on the column segments.
     pub fn apply_delete(&self, internal_id: u32, ts: Timestamp) -> StorageResult<()> {

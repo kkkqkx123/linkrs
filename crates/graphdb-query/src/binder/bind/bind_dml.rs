@@ -174,7 +174,6 @@ impl Binder {
         &mut self,
         stmt: &crate::parser::ast::UpdateStmt,
     ) -> DBResult<BoundStatement> {
-        reject_map_overwrite(&stmt.set_clause.assignments)?;
         let target_alias = update_target_alias(&stmt.target);
         let target = match &stmt.target {
             UpdateTarget::Vertex(expr) => {
@@ -274,12 +273,6 @@ impl Binder {
         &mut self,
         stmt: &crate::parser::ast::MergeStmt,
     ) -> DBResult<BoundStatement> {
-        if let Some(clause) = &stmt.on_create {
-            reject_map_overwrite(&clause.assignments)?;
-        }
-        if let Some(clause) = &stmt.on_match {
-            reject_map_overwrite(&clause.assignments)?;
-        }
         let target_alias = match &stmt.pattern {
             Pattern::Node(node) => node.variable.clone(),
             _ => None,
@@ -467,23 +460,6 @@ impl Binder {
         binder.space_name = self.space_name.clone();
         binder.bind_expr(&contextual)
     }
-}
-
-/// Reject whole-map overwrite assignments (`SET v = {...}`).
-///
-/// The storage layer only merges per-property writes, so accepting the
-/// map form would silently keep stale properties. Fail explicitly at bind
-/// time instead of mis-executing.
-fn reject_map_overwrite(assignments: &[Assignment]) -> DBResult<()> {
-    if assignments.iter().any(|a| a.is_map_overwrite) {
-        return Err(graphdb_core::error::DBError::from(
-            graphdb_core::error::QueryError::invalid_query(
-                "Whole-map overwrite (SET v = {...}) is not supported: assign properties individually"
-                    .to_string(),
-            ),
-        ));
-    }
-    Ok(())
 }
 
 /// The variable alias naming an update target, when the target carries one.

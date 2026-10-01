@@ -403,9 +403,9 @@ impl ToPublicError for StorageError {
             | StorageErrorKind::EdgeNotFound
             | StorageErrorKind::NotFound => ErrorCode::ResourceNotFound,
             StorageErrorKind::AlreadyExists => ErrorCode::ResourceAlreadyExists,
-            StorageErrorKind::InvalidInput | StorageErrorKind::InvalidOperation | StorageErrorKind::HistoryBeforeFloor => {
-                ErrorCode::InvalidInput
-            }
+            StorageErrorKind::InvalidInput
+            | StorageErrorKind::InvalidOperation
+            | StorageErrorKind::HistoryBeforeFloor => ErrorCode::InvalidInput,
             StorageErrorKind::LockTimeout => ErrorCode::Timeout,
             StorageErrorKind::Deadlock => ErrorCode::Deadlock,
             StorageErrorKind::Conflict => ErrorCode::Conflict,

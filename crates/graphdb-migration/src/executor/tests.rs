@@ -346,6 +346,9 @@ impl StorageWriter for TestStorage {
         }
         Ok(())
     }
+    fn update_vertex_replace(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError> {
+        self.update_vertex(space, vertex)
+    }
     fn delete_vertex(
         &mut self,
         _space: &str,
@@ -395,6 +398,9 @@ impl StorageWriter for TestStorage {
             map.insert(key, vec![edge]);
         }
         Ok(())
+    }
+    fn update_edge_replace(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
+        self.update_edge(space, edge)
     }
     fn delete_edge(
         &mut self,

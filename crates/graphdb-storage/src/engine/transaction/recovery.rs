@@ -11,8 +11,8 @@ use graphdb_transaction::wal::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
     DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
-    DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
-    RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
+    DeleteVertexPropsRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo,
+    InsertEdgeRedo, RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
     UpdateEdgePropRedo, UpdateSequenceRedo,
 };
 
@@ -33,6 +33,14 @@ impl RecoveryApplier for GraphStorageContext {
 
     fn replay_delete_edge(&self, redo: &DeleteEdgeRedo, ts: Timestamp) -> StorageResult<()> {
         data::replay_delete_edge(self, redo, ts)
+    }
+
+    fn replay_delete_vertex_props(
+        &self,
+        redo: &DeleteVertexPropsRedo,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        data::replay_delete_vertex_props(self, redo, ts)
     }
 
     fn replay_update_vertex_prop(

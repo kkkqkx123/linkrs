@@ -27,8 +27,8 @@ use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::encoding::{ChunkEncodingMeta, ColumnEncoding, EncodingType};
 use crate::vertex::column::chunk_encoding::{
-    OVERLAY_RECODE_MEMORY_FLOOR, OVERLAY_RECODE_MEMORY_RATIO_DEN,
-    OVERLAY_RECODE_MEMORY_RATIO_NUM, overlay_capacity_for, UpdateOverlay,
+    overlay_capacity_for, UpdateOverlay, OVERLAY_RECODE_MEMORY_FLOOR,
+    OVERLAY_RECODE_MEMORY_RATIO_DEN, OVERLAY_RECODE_MEMORY_RATIO_NUM,
 };
 use crate::vertex::column::chunk_residency::{next_tick, ChunkResidency};
 use crate::vertex::column::column::ColumnInner;
@@ -395,8 +395,8 @@ mod tests {
 
     #[test]
     fn test_recode_combines_count_with_memory() {
-        use crate::encoding::RleBoolColumn;
         use crate::encoding::ColumnEncoding;
+        use crate::encoding::RleBoolColumn;
         let chunk = ColumnChunk::new(0, 4096, &DataType::Bool, true);
         let capacity = chunk.read_state().overlay.capacity();
         assert!(capacity >= 2);

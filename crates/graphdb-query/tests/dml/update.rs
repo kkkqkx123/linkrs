@@ -120,6 +120,25 @@ fn test_update_execution_edge() {
         .assert_success();
 }
 
+#[test]
+fn test_update_edge_map_overwrite_replaces_row() {
+    let mut expected = HashMap::new();
+    expected.insert("since", Value::string("2024-02-01"));
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since STRING, weight INT)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT EDGE KNOWS(since, weight) VALUES 1 -> 2:('2024-01-01', 5)")
+        .assert_success()
+        .exec_dml("UPDATE EDGE 1 -> 2 OF KNOWS SET e = {since: '2024-02-01'}")
+        .assert_success()
+        .assert_edge_exists(1, 2, "KNOWS")
+        .assert_edge_props(1, 2, "KNOWS", expected)
+        .assert_edge_prop_absent(1, 2, "KNOWS", "weight");
+}
+
 // ==================== UPDATE Vertex with Verification Tests ====================
 
 #[test]
@@ -548,12 +567,10 @@ fn test_update_null_arithmetic() {
         .assert_error();
 }
 
-// ==================== UPDATE Whole-Map Overwrite Rejection Tests ====================
+// ==================== UPDATE Whole-Map Replace Tests ====================
 
 #[test]
-fn test_update_map_overwrite_is_rejected() {
-    // The storage layer only merges per-property writes: accepting the map
-    // form would silently keep stale properties, so it fails explicitly.
+fn test_update_map_overwrite_executes_replace() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
@@ -561,7 +578,54 @@ fn test_update_map_overwrite_is_rejected() {
         .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
         .assert_success()
         .exec_dml("UPDATE 1 ON Person SET v = {age: 20}")
-        .assert_error();
+        .assert_success()
+        .assert_vertex_prop_absent(1, "Person", "name");
+}
+
+#[test]
+fn test_update_map_overwrite_replaces_row() {
+    let mut expected = HashMap::new();
+    expected.insert("age", Value::Int(20));
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .assert_success()
+        .exec_dml("UPDATE 1 ON Person SET v = {age: 20}")
+        .assert_success()
+        .assert_vertex_props(1, "Person", expected)
+        .assert_vertex_prop_absent(1, "Person", "name");
+}
+
+#[test]
+fn test_update_map_overwrite_empty_clears_row() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .assert_success()
+        .exec_dml("UPDATE 1 ON Person SET v = {}")
+        .assert_success()
+        .assert_vertex_prop_absent(1, "Person", "name")
+        .assert_vertex_prop_absent(1, "Person", "age");
+}
+
+#[test]
+fn test_update_mixed_map_and_property_overlays() {
+    let mut expected = HashMap::new();
+    expected.insert("age", Value::Int(20));
+    expected.insert("name", Value::string("Bob"));
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .assert_success()
+        .exec_dml("UPDATE 1 ON Person SET v = {age: 20}, name = 'Bob'")
+        .assert_success()
+        .assert_vertex_props(1, "Person", expected);
 }
 
 #[test]

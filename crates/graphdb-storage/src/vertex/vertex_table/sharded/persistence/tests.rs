@@ -796,7 +796,9 @@ fn manifest_without_timestamp_refuses_open() {
         super::super::routing::ShardLayout::for_new_table(2),
         0,
     );
-    reopened.load(&dir).expect_err("manifest without timestamp refuses");
+    reopened
+        .load(&dir)
+        .expect_err("manifest without timestamp refuses");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

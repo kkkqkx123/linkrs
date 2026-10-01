@@ -6,9 +6,10 @@ use super::redo::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
     CreateEdgeTypeRedo, CreateMacroRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateTypeAliasRedo,
     CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
-    DeleteVertexPropRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropMacroRedo, DropSpaceRedo,
-    DropTagIndexRedo, DropTypeAliasRedo, InsertEdgeRedo, RenameEdgePropRedo, RenameEdgeTypeRedo,
-    RenameTagRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
+    DeleteVertexPropRedo, DeleteVertexPropsRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo,
+    DropMacroRedo, DropSpaceRedo, DropTagIndexRedo, DropTypeAliasRedo, InsertEdgeRedo,
+    RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
+    UpdateSequenceRedo,
 };
 use super::types::{WalOpType, WalResult};
 
@@ -65,6 +66,15 @@ pub trait RecoveryApplier {
     ) -> StorageResult<()>;
 
     fn replay_delete_edge(&self, redo: &DeleteEdgeRedo, ts: Timestamp) -> StorageResult<()>;
+
+    fn replay_delete_vertex_props(
+        &self,
+        redo: &DeleteVertexPropsRedo,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let _ = (redo, ts);
+        Ok(())
+    }
 
     // Schema Operations
     fn replay_create_space(&self, redo: &CreateSpaceRedo, ts: Timestamp) -> StorageResult<()>;

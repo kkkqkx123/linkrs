@@ -975,7 +975,8 @@ impl<
     /// Whether the statement text begins with a transaction / session
     /// command keyword (used to surface the first specific parse error for
     /// malformed commands instead of the generic recovery abort).
-    pub(crate) fn is_command_like(stmt: &str) -> bool {        let upper = stmt.trim().to_uppercase();
+    pub(crate) fn is_command_like(stmt: &str) -> bool {
+        let upper = stmt.trim().to_uppercase();
         upper == "BEGIN"
             || upper.starts_with("BEGIN ")
             || upper.starts_with("START TRANSACTION")

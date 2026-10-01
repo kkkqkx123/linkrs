@@ -521,6 +521,12 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
 pub trait StorageWriter: Send + Sync + std::fmt::Debug {
     fn insert_vertex(&mut self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError>;
     fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError>;
+    fn update_vertex_replace(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError> {
+        let _ = (space, vertex);
+        Err(StorageError::not_supported(
+            "Row replacement is not supported by this storage implementation",
+        ))
+    }
     /// Delete one vertex without touching its incident edges. The orphaned
     /// edge rows stay visible until repaired: prefer
     /// `delete_vertex_with_edges` for cascade deletes, or run
@@ -568,6 +574,12 @@ pub trait StorageWriter: Send + Sync + std::fmt::Debug {
     }
     fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
     fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
+    fn update_edge_replace(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
+        let _ = (space, edge);
+        Err(StorageError::not_supported(
+            "Row replacement is not supported by this storage implementation",
+        ))
+    }
     fn delete_edge(
         &mut self,
         space: &str,

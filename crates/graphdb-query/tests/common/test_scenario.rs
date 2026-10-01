@@ -544,6 +544,30 @@ impl TestScenario {
         self
     }
 
+    /// Assert vertex does not carry a property
+    pub fn assert_vertex_prop_absent(mut self, vid: i64, tag: &str, prop: &str) -> Self {
+        let query = format!("FETCH PROP ON {} {}", tag, vid);
+        match self
+            .pipeline
+            .execute_query_with_space(&query, self.current_space.clone())
+        {
+            Ok(result) => {
+                let props = self.extract_props(&result);
+                assert!(
+                    !props.contains_key(prop),
+                    "Property {} should be absent for vertex {}, got {:?}",
+                    prop,
+                    vid,
+                    props.get(prop)
+                );
+            }
+            Err(e) => {
+                panic!("Failed to get vertex properties: {:?}", e);
+            }
+        }
+        self
+    }
+
     /// Assert edge exists
     pub fn assert_edge_exists(self, src: i64, dst: i64, edge_type: &str) -> Self {
         let space_name = self
@@ -566,6 +590,80 @@ impl TestScenario {
             found,
             "Expected edge {} -> {} with type {} to exist",
             src, dst, edge_type
+        );
+        self
+    }
+
+    /// Assert edge carries specific properties
+    pub fn assert_edge_props(
+        self,
+        src: i64,
+        dst: i64,
+        edge_type: &str,
+        expected: HashMap<&str, Value>,
+    ) -> Self {
+        let space_name = self
+            .current_space
+            .as_ref()
+            .map(|s| s.space_name.clone())
+            .unwrap_or_default();
+        let src_vid = VertexId::try_from_int64(src).expect("test vertex id");
+        let dst_vid = VertexId::try_from_int64(dst).expect("test vertex id");
+        let props = {
+            let storage_guard = self.storage.write();
+            let edges = storage_guard
+                .scan_edges_by_type(&space_name, edge_type)
+                .unwrap_or_default();
+            edges
+                .into_iter()
+                .find(|e| *e.src() == src_vid && *e.dst() == dst_vid && e.edge_type == edge_type)
+                .map(|e| e.props.clone())
+                .unwrap_or_default()
+        };
+        for (key, value) in expected {
+            assert_eq!(
+                props.get(key),
+                Some(&value),
+                "Property {} mismatch for edge {} -> {}:{}. Expected {:?}, got {:?}",
+                key,
+                src,
+                dst,
+                edge_type,
+                value,
+                props.get(key)
+            );
+        }
+        self
+    }
+
+    /// Assert edge does not carry a property
+    pub fn assert_edge_prop_absent(self, src: i64, dst: i64, edge_type: &str, prop: &str) -> Self {
+        let space_name = self
+            .current_space
+            .as_ref()
+            .map(|s| s.space_name.clone())
+            .unwrap_or_default();
+        let src_vid = VertexId::try_from_int64(src).expect("test vertex id");
+        let dst_vid = VertexId::try_from_int64(dst).expect("test vertex id");
+        let props = {
+            let storage_guard = self.storage.write();
+            let edges = storage_guard
+                .scan_edges_by_type(&space_name, edge_type)
+                .unwrap_or_default();
+            edges
+                .into_iter()
+                .find(|e| *e.src() == src_vid && *e.dst() == dst_vid && e.edge_type == edge_type)
+                .map(|e| e.props.clone())
+                .unwrap_or_default()
+        };
+        assert!(
+            !props.contains_key(prop),
+            "Property {} should be absent for edge {} -> {}:{}, got {:?}",
+            prop,
+            src,
+            dst,
+            edge_type,
+            props.get(prop)
         );
         self
     }

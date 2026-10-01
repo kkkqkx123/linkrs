@@ -120,6 +120,71 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
         Ok(())
     }
 
+    pub(super) fn sync_replace_vertex(
+        &mut self,
+        space: &str,
+        old_vertex: &Vertex,
+        new_vertex: &Vertex,
+    ) -> Result<(), StorageError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let Some(sync_manager) = self.get_sync_manager() else {
+            return Ok(());
+        };
+        let space_id = self.inner.get_space_id(space)?;
+        let txn_id = self.get_current_txn_id();
+        let tag = &new_vertex.tag;
+        let changed_props = Self::detect_changed_properties(old_vertex, new_vertex);
+        let mut removed: Vec<(String, Value)> = old_vertex
+            .tag
+            .properties
+            .iter()
+            .filter(|(name, _)| !new_vertex.tag.properties.contains_key(*name))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        removed.sort_by(|a, b| a.0.cmp(&b.0));
+        if changed_props.is_empty() && removed.is_empty() {
+            return Ok(());
+        }
+        let vid_value = Value::from(new_vertex.vid);
+        if let Some(txn_id) = txn_id {
+            if !changed_props.is_empty() {
+                sync_manager
+                    .on_vertex_change_with_txn(
+                        txn_id,
+                        space_id,
+                        &tag.name,
+                        &vid_value,
+                        &changed_props,
+                        ChangeType::Update,
+                    )
+                    .map_err(|e| {
+                        StorageError::db_error(format!("Failed to sync vertex update: {}", e))
+                    })?;
+            }
+            if !removed.is_empty() {
+                sync_manager
+                    .on_vertex_change_with_txn(
+                        txn_id,
+                        space_id,
+                        &tag.name,
+                        &vid_value,
+                        &removed,
+                        ChangeType::Delete,
+                    )
+                    .map_err(|e| {
+                        StorageError::db_error(format!("Failed to sync vertex deletes: {}", e))
+                    })?;
+            }
+        } else {
+            return Err(StorageError::db_error(
+                "Synchronized writes require an operation transaction context".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn sync_delete_vertex(
         &mut self,
         space: &str,

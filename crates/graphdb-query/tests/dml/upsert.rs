@@ -733,12 +733,12 @@ fn test_merge_on_match_unrelated_alias_stays_rejected() {
         .assert_error();
 }
 
-// ==================== MERGE Whole-Map Overwrite Rejection Tests ====================
+// ==================== MERGE Whole-Map Replace Tests ====================
 
 #[test]
-fn test_merge_on_match_map_overwrite_is_rejected() {
-    // Same storage limitation as UPDATE: the map form would silently keep
-    // stale properties, so it fails explicitly instead.
+fn test_merge_on_match_map_overwrite_replaces_row() {
+    let mut expected = HashMap::new();
+    expected.insert("age", Value::Int(1));
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
@@ -746,5 +746,7 @@ fn test_merge_on_match_map_overwrite_is_rejected() {
         .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 25)")
         .assert_success()
         .exec_dml("MERGE (v:Person {name: 'Alice'}) ON MATCH SET v = {age: 1}")
-        .assert_error();
+        .assert_success()
+        .assert_vertex_props(1, "Person", expected)
+        .assert_vertex_prop_absent(1, "Person", "name");
 }

@@ -334,10 +334,12 @@ pub(crate) fn delete_edge(
     result.map(|_| ())
 }
 
-/// Atomically replace an edge's properties: delete the old edge and insert the
-/// new one under a single write timestamp. If the insert fails, the old edge is
-/// restored from a pre-delete read, ensuring no data loss.
-pub(crate) fn update_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) -> StorageResult<()> {
+fn update_edge_inner(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge: Edge,
+    replace: bool,
+) -> StorageResult<()> {
     let space_info = ctx
         .schema_manager()
         .get_space(space)?
@@ -348,13 +350,23 @@ pub(crate) fn update_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
     let dst = VertexId::normalize_for_vid_type(&space_info.vid_type, edge.dst)?;
     let edge_type = edge.edge_type.clone();
     let ranking = edge.ranking;
-    let edge = Edge::new(src, dst, edge_type.clone(), ranking, edge.props.clone());
+    let incoming = edge.props.clone();
 
-    // Read current properties for rollback
+    // Read current properties for rollback and merge.
     let current_props =
         super::super::reader::get_edge(ctx, space, &src, &dst, &edge_type, ranking)?
             .map(|e| e.props)
             .unwrap_or_default();
+    let merged_props = if replace {
+        incoming
+    } else {
+        let mut merged = current_props.clone();
+        for (k, v) in incoming {
+            merged.insert(k, v);
+        }
+        merged
+    };
+    let edge = Edge::new(src, dst, edge_type.clone(), ranking, merged_props);
     let edge_info = resolve_edge_type(ctx, space, &edge_type)?;
     let src_label = endpoint_label_id(ctx, space, &edge_info.src_tag_name)?
         .ok_or_else(|| StorageError::not_found("Source tag not found"))?;
@@ -418,4 +430,21 @@ pub(crate) fn update_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
             Err(e)
         }
     }
+}
+
+/// Atomically merge an edge's properties: delete the old edge and insert the
+/// merged one under a single write timestamp. If the insert fails, the old edge is
+/// restored from a pre-delete read, ensuring no data loss.
+pub(crate) fn update_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) -> StorageResult<()> {
+    update_edge_inner(ctx, space, edge, false)
+}
+
+/// Atomically replace an edge's properties: delete the old edge and insert the
+/// new set under a single write timestamp.
+pub(crate) fn update_edge_replace(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge: Edge,
+) -> StorageResult<()> {
+    update_edge_inner(ctx, space, edge, true)
 }

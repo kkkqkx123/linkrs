@@ -32,9 +32,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+use graphdb_core::error::storage::StorageErrorKind;
 use graphdb_core::types::{LabelId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
-use graphdb_core::error::storage::StorageErrorKind;
 
 use super::id_indexer::IdKey;
 
@@ -61,6 +61,7 @@ pub struct WriteScope {
     inserts: HashMap<ScopeKey, ScopeInsertRow>,
     updates: HashMap<ScopeIdKey, ScopeUpdateRow>,
     deletes: HashSet<ScopeIdKey>,
+    property_deletes: HashMap<ScopeIdKey, Vec<String>>,
 }
 
 impl WriteScope {
@@ -72,6 +73,7 @@ impl WriteScope {
             inserts: HashMap::new(),
             updates: HashMap::new(),
             deletes: HashSet::new(),
+            property_deletes: HashMap::new(),
         }
     }
 
@@ -98,28 +100,33 @@ impl WriteScope {
     /// Rebuild a scope from transaction-level staging rows for the commit
     /// apply. Bypasses the per-scope capacity bound: those rows already
     /// passed the transaction-level bound when they were staged.
-    pub(crate) fn from_staged(
+    pub(crate) fn from_staged_with_property_deletes(
         write_ts: Timestamp,
         inserts: HashMap<ScopeKey, ScopeInsertRow>,
         updates: HashMap<ScopeIdKey, ScopeUpdateRow>,
         deletes: HashSet<ScopeIdKey>,
+        property_deletes: HashMap<ScopeIdKey, Vec<String>>,
     ) -> Self {
         Self {
             write_ts,
             inserts,
             updates,
             deletes,
+            property_deletes,
         }
     }
 
-    /// Number of staged rows (inserts plus updates plus deletes).
+    /// Number of staged rows (inserts plus updates plus deletes plus property deletes).
     pub fn len(&self) -> usize {
-        self.inserts.len() + self.updates.len() + self.deletes.len()
+        self.inserts.len() + self.updates.len() + self.deletes.len() + self.property_deletes.len()
     }
 
     /// Whether nothing is staged.
     pub fn is_empty(&self) -> bool {
-        self.inserts.is_empty() && self.updates.is_empty() && self.deletes.is_empty()
+        self.inserts.is_empty()
+            && self.updates.is_empty()
+            && self.deletes.is_empty()
+            && self.property_deletes.is_empty()
     }
 
     fn ensure_capacity(&self) -> StorageResult<()> {
@@ -174,11 +181,65 @@ impl WriteScope {
         global_id: u32,
         properties: Vec<(String, Value)>,
     ) -> StorageResult<()> {
-        self.ensure_capacity()?;
+        for (name, _) in &properties {
+            if let Some(deleted) = self.property_deletes.get(&(label, global_id)) {
+                if deleted.iter().any(|d| d == name) {
+                    return Err(StorageError::invalid_operation(format!(
+                        "column '{}' staged for both update and delete: sets must stay disjoint",
+                        name
+                    )));
+                }
+            }
+        }
+        self.ensure_capacity_for_update(label, global_id)?;
         self.updates
             .entry((label, global_id))
             .or_default()
             .extend(properties);
+        Ok(())
+    }
+
+    fn ensure_capacity_for_update(&self, label: LabelId, global_id: u32) -> StorageResult<()> {
+        if self.updates.contains_key(&(label, global_id))
+            || self.property_deletes.contains_key(&(label, global_id))
+        {
+            return Ok(());
+        }
+        self.ensure_capacity()
+    }
+
+    /// Stage column deletions against an already resolved global id.
+    ///
+    /// Each name is written as a null tombstone at commit. Names must not
+    /// overlap the staged update set for the same row.
+    pub fn stage_property_deletes(
+        &mut self,
+        label: LabelId,
+        global_id: u32,
+        columns: Vec<String>,
+    ) -> StorageResult<()> {
+        if columns.is_empty() {
+            return Ok(());
+        }
+        if let Some(staged) = self.updates.get(&(label, global_id)) {
+            for name in &columns {
+                if staged.iter().any(|(existing, _)| existing == name) {
+                    return Err(StorageError::invalid_operation(format!(
+                        "column '{}' staged for both update and delete: sets must stay disjoint",
+                        name
+                    )));
+                }
+            }
+        }
+        if !self.property_deletes.contains_key(&(label, global_id)) {
+            self.ensure_capacity()?;
+        }
+        let entry = self.property_deletes.entry((label, global_id)).or_default();
+        for name in columns {
+            if !entry.contains(&name) {
+                entry.push(name);
+            }
+        }
         Ok(())
     }
 
@@ -228,6 +289,23 @@ impl WriteScope {
         out
     }
 
+    /// Take every staged property deletion of one label for the commit apply.
+    pub fn take_property_deletes_for_label(&mut self, label: LabelId) -> Vec<(u32, Vec<String>)> {
+        let keys: Vec<(LabelId, u32)> = self
+            .property_deletes
+            .keys()
+            .filter(|(entry_label, _)| *entry_label == label)
+            .cloned()
+            .collect();
+        let mut out = Vec::with_capacity(keys.len());
+        for map_key in keys {
+            if let Some(cols) = self.property_deletes.remove(&map_key) {
+                out.push((map_key.1, cols));
+            }
+        }
+        out
+    }
+
     /// Take every staged delete of one label for the commit apply.
     pub fn take_deletes_for_label(&mut self, label: LabelId) -> Vec<u32> {
         let keys: Vec<(LabelId, u32)> = self
@@ -257,7 +335,7 @@ impl WriteScope {
             .collect()
     }
 
-    /// Labels with staged rows in any of the three sets, sorted.
+    /// Labels with staged rows in any of the four sets, sorted.
     pub fn labels(&self) -> Vec<LabelId> {
         let mut labels: Vec<LabelId> = self
             .inserts
@@ -265,6 +343,7 @@ impl WriteScope {
             .map(|(label, _)| *label)
             .chain(self.updates.keys().map(|(label, _)| *label))
             .chain(self.deletes.iter().map(|(label, _)| *label))
+            .chain(self.property_deletes.keys().map(|(label, _)| *label))
             .collect();
         labels.sort_unstable();
         labels.dedup();
@@ -280,6 +359,8 @@ impl WriteScope {
             .retain(|(entry_label, _), _| *entry_label != label);
         self.deletes
             .retain(|(entry_label, _)| *entry_label != label);
+        self.property_deletes
+            .retain(|(entry_label, _), _| *entry_label != label);
     }
 
     /// Rollback hook: discard this label's staged rows and return the
@@ -300,6 +381,8 @@ impl WriteScope {
             .retain(|(entry_label, _), _| *entry_label != label);
         self.deletes
             .retain(|(entry_label, _)| *entry_label != label);
+        self.property_deletes
+            .retain(|(entry_label, _), _| *entry_label != label);
         dropped
     }
 
@@ -308,6 +391,7 @@ impl WriteScope {
         self.inserts.clear();
         self.updates.clear();
         self.deletes.clear();
+        self.property_deletes.clear();
     }
 }
 

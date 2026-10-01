@@ -318,7 +318,10 @@ mod tests {
         let doc: serde_json::Value =
             serde_json::from_str(&openapi_json()).expect("document must parse");
         let mut seen = HashSet::new();
-        for (_path, item) in doc["paths"].as_object().expect("document must contain paths") {
+        for (_path, item) in doc["paths"]
+            .as_object()
+            .expect("document must contain paths")
+        {
             if let Some(ops) = item.as_object() {
                 for (_method, op) in ops {
                     if let Some(id) = op.get("operationId").and_then(|id| id.as_str()) {
@@ -457,7 +460,10 @@ mod tests {
         })?;
         let path = buf
             .iter()
-            .find_map(|line| line.find("path = \"").map(|i| &line[i + "path = \"".len()..]))
+            .find_map(|line| {
+                line.find("path = \"")
+                    .map(|i| &line[i + "path = \"".len()..])
+            })
             .and_then(|rest| rest.split('"').next())
             .map(str::to_string)?;
         Some((method, path))
@@ -505,9 +511,7 @@ mod tests {
                     || trimmed.starts_with("pub async fn ")
                     || trimmed.starts_with("pub(crate) async fn ");
                 if is_fn {
-                    fn_active = pending_attr
-                        .take()
-                        .map_or(true, |expr| eval_cfg(&expr));
+                    fn_active = pending_attr.take().map_or(true, |expr| eval_cfg(&expr));
                     entry = None;
                     continue;
                 }
@@ -596,22 +600,13 @@ mod tests {
 
     fn eval_cfg(expr: &str) -> bool {
         let expr = expr.trim();
-        if let Some(inner) = expr
-            .strip_prefix("not(")
-            .and_then(|s| s.strip_suffix(')'))
-        {
+        if let Some(inner) = expr.strip_prefix("not(").and_then(|s| s.strip_suffix(')')) {
             return !eval_cfg(inner);
         }
-        if let Some(inner) = expr
-            .strip_prefix("all(")
-            .and_then(|s| s.strip_suffix(')'))
-        {
+        if let Some(inner) = expr.strip_prefix("all(").and_then(|s| s.strip_suffix(')')) {
             return split_cfg_items(inner).iter().all(|item| eval_cfg(item));
         }
-        if let Some(inner) = expr
-            .strip_prefix("any(")
-            .and_then(|s| s.strip_suffix(')'))
-        {
+        if let Some(inner) = expr.strip_prefix("any(").and_then(|s| s.strip_suffix(')')) {
             return split_cfg_items(inner).iter().any(|item| eval_cfg(item));
         }
         match expr {

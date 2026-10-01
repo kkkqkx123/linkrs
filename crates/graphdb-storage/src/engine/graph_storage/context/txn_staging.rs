@@ -24,9 +24,9 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+use graphdb_core::error::storage::StorageErrorKind;
 use graphdb_core::types::{LabelId, Timestamp, TransactionId};
 use graphdb_core::{StorageError, StorageResult, Value};
-use graphdb_core::error::storage::StorageErrorKind;
 
 use crate::vertex::{IdKey, ShardedVertexTable, WriteScope};
 
@@ -56,6 +56,7 @@ pub(crate) struct TxnStaging {
     inserts: HashMap<StagedKey, StagedInsertRow>,
     updates: HashMap<StagedKey, StagedUpdateRow>,
     deletes: HashSet<StagedKey>,
+    property_deletes: HashMap<StagedKey, Vec<String>>,
     resolved: HashMap<StagedKey, u32>,
     journal: Vec<UndoOp>,
     index_ops: Vec<StagedIndexOp>,
@@ -124,6 +125,10 @@ enum UndoOp {
         pair: (LabelId, IdKey),
         prev_present: bool,
     },
+    PropertyDeletes {
+        pair: (LabelId, IdKey),
+        prev: Option<Vec<String>>,
+    },
 }
 
 /// Outcome of [`TxnStaging::rollback_to`]: `(label, reserved id)` pairs the
@@ -145,6 +150,7 @@ impl TxnStaging {
             inserts: HashMap::new(),
             updates: HashMap::new(),
             deletes: HashSet::new(),
+            property_deletes: HashMap::new(),
             resolved: HashMap::new(),
             journal: Vec::new(),
             index_ops: Vec::new(),
@@ -168,11 +174,14 @@ impl TxnStaging {
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.inserts.len() + self.updates.len() + self.deletes.len()
+        self.inserts.len() + self.updates.len() + self.deletes.len() + self.property_deletes.len()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.inserts.is_empty() && self.updates.is_empty() && self.deletes.is_empty()
+        self.inserts.is_empty()
+            && self.updates.is_empty()
+            && self.deletes.is_empty()
+            && self.property_deletes.is_empty()
     }
 
     // ── key resolution cache ──────────────────────────────────────────────
@@ -191,6 +200,7 @@ impl TxnStaging {
         !self.inserts.contains_key(&(label, key.clone()))
             && !self.updates.contains_key(&(label, key.clone()))
             && !self.deletes.contains(&(label, key.clone()))
+            && !self.property_deletes.contains_key(&(label, key.clone()))
     }
 
     fn ensure_capacity(&self) -> StorageResult<()> {
@@ -224,6 +234,11 @@ impl TxnStaging {
         self.journal.push(UndoOp::Deletes { pair, prev_present });
     }
 
+    fn record_property_deletes(&mut self, pair: (LabelId, IdKey)) {
+        let prev = self.property_deletes.get(&pair).cloned();
+        self.journal.push(UndoOp::PropertyDeletes { pair, prev });
+    }
+
     /// Fold one staged insert row and its reserved global id into the
     /// transaction buffer. Returns a reserved id the buffer does not hold
     /// (a superseded reservation or an unused one on the delete-fold path)
@@ -245,6 +260,10 @@ impl TxnStaging {
             // bound row, so the buffer never holds it.
             self.record_deletes(pair.clone());
             self.deletes.remove(&pair);
+            if self.property_deletes.contains_key(&pair) {
+                self.record_property_deletes(pair.clone());
+                self.property_deletes.remove(&pair);
+            }
             self.record_updates(pair.clone());
             self.updates.insert(pair, properties);
             return Ok(Some(reserved));
@@ -271,11 +290,24 @@ impl TxnStaging {
             // An update of a row this transaction inserted merges into the
             // staged insert row; the main table never sees the update.
             self.record_inserts(pair.clone());
-            let row = &mut self.inserts.get_mut(&pair).expect("checked").1;
-            for (name, value) in columns {
-                match row.iter_mut().find(|(existing, _)| *existing == name) {
-                    Some(slot) => slot.1 = value,
-                    None => row.push((name, value)),
+            let row_names: Vec<String>;
+            {
+                let row = &mut self.inserts.get_mut(&pair).expect("checked").1;
+                for (name, value) in columns {
+                    match row.iter_mut().find(|(existing, _)| *existing == name) {
+                        Some(slot) => slot.1 = value,
+                        None => row.push((name, value)),
+                    }
+                }
+                row_names = row.iter().map(|(name, _)| name.clone()).collect();
+            }
+            if self.property_deletes.contains_key(&pair) {
+                self.record_property_deletes(pair.clone());
+                if let Some(deleted) = self.property_deletes.get_mut(&pair) {
+                    deleted.retain(|d| !row_names.iter().any(|n| n == d));
+                    if deleted.is_empty() {
+                        self.property_deletes.remove(&pair);
+                    }
                 }
             }
             return Ok(());
@@ -283,8 +315,66 @@ impl TxnStaging {
         if self.counts_as_new(label, &key) {
             self.ensure_capacity()?;
         }
+        if self.property_deletes.contains_key(&pair) {
+            self.record_property_deletes(pair.clone());
+            if let Some(deleted) = self.property_deletes.get_mut(&pair) {
+                let incoming: Vec<String> = columns.iter().map(|(name, _)| name.clone()).collect();
+                deleted.retain(|d| !incoming.iter().any(|n| n == d));
+                if deleted.is_empty() {
+                    self.property_deletes.remove(&pair);
+                }
+            }
+        }
         self.record_updates(pair.clone());
         self.updates.entry(pair).or_default().extend(columns);
+        Ok(())
+    }
+
+    /// Fold staged column deletions into the transaction buffer.
+    pub(crate) fn stage_property_delete(
+        &mut self,
+        label: LabelId,
+        key: IdKey,
+        columns: Vec<String>,
+    ) -> StorageResult<()> {
+        if columns.is_empty() {
+            return Ok(());
+        }
+        let pair = (label, key.clone());
+        if self.inserts.contains_key(&pair) {
+            self.record_inserts(pair.clone());
+            let row = &mut self.inserts.get_mut(&pair).expect("checked").1;
+            row.retain(|(name, _)| !columns.iter().any(|d| d == name));
+            if self.property_deletes.contains_key(&pair) {
+                self.record_property_deletes(pair.clone());
+                if let Some(deleted) = self.property_deletes.get_mut(&pair) {
+                    deleted.retain(|d| !columns.iter().any(|c| c == d));
+                    if deleted.is_empty() {
+                        self.property_deletes.remove(&pair);
+                    }
+                }
+            }
+            return Ok(());
+        }
+        if self.counts_as_new(label, &key) {
+            self.ensure_capacity()?;
+        }
+        if self.updates.contains_key(&pair) {
+            self.record_updates(pair.clone());
+            if let Some(staged) = self.updates.get_mut(&pair) {
+                staged.retain(|(name, _)| !columns.iter().any(|d| d == name));
+                if staged.is_empty() {
+                    self.updates.remove(&pair);
+                }
+            }
+        }
+        self.record_property_deletes(pair.clone());
+        let entry = self.property_deletes.entry(pair).or_default();
+        for name in columns {
+            if !entry.contains(&name) {
+                entry.push(name);
+            }
+        }
         Ok(())
     }
 
@@ -307,13 +397,22 @@ impl TxnStaging {
                 self.record_updates(pair.clone());
                 self.updates.remove(&pair);
             }
+            if self.property_deletes.contains_key(&pair) {
+                self.record_property_deletes(pair.clone());
+                self.property_deletes.remove(&pair);
+            }
             return Ok(cancelled);
         }
-        // A delete swallows earlier updates of the same row.
+        // A delete swallows earlier updates and column deletions of the same row.
         if self.updates.contains_key(&pair) {
             self.record_updates(pair.clone());
             self.updates.remove(&pair);
-        } else if !self.deletes.contains(&pair) {
+        }
+        if self.property_deletes.contains_key(&pair) {
+            self.record_property_deletes(pair.clone());
+            self.property_deletes.remove(&pair);
+        }
+        if !self.deletes.contains(&pair) {
             self.ensure_capacity()?;
         }
         self.record_deletes(pair.clone());
@@ -360,6 +459,16 @@ impl TxnStaging {
         self.updates.get(&(label, key.clone())).map(Vec::as_slice)
     }
 
+    pub(crate) fn pending_property_deletes(
+        &self,
+        label: LabelId,
+        key: &IdKey,
+    ) -> Option<&[String]> {
+        self.property_deletes
+            .get(&(label, key.clone()))
+            .map(Vec::as_slice)
+    }
+
     /// Staged insert rows of one label (external key, reserved id,
     /// properties).
     pub(crate) fn insert_rows(
@@ -389,6 +498,17 @@ impl TxnStaging {
             .iter()
             .filter(move |pair| pair.0 == label)
             .map(|(_, key)| key)
+    }
+
+    /// Staged column deletions of one label (external key, columns).
+    pub(crate) fn property_delete_rows(
+        &self,
+        label: LabelId,
+    ) -> impl Iterator<Item = (&IdKey, &[String])> {
+        self.property_deletes
+            .iter()
+            .filter(move |pair| pair.0 .0 == label)
+            .map(|((_, key), cols)| (key, cols.as_slice()))
     }
 
     // ── statement journal ─────────────────────────────────────────────────
@@ -439,6 +559,12 @@ impl TxnStaging {
                         self.deletes.remove(&pair);
                     }
                 }
+                UndoOp::PropertyDeletes { pair, prev } => {
+                    self.property_deletes.remove(&pair);
+                    if let Some(columns) = prev {
+                        self.property_deletes.insert(pair, columns);
+                    }
+                }
             }
         }
         self.index_ops.truncate(mark.index_len);
@@ -465,13 +591,14 @@ impl TxnStaging {
 
     // ── commit apply support ──────────────────────────────────────────────
 
-    /// Labels touched by this staging (any of the three sets).
+    /// Labels touched by this staging (any of the four sets).
     pub(crate) fn labels(&self) -> Vec<LabelId> {
         let mut labels: Vec<LabelId> = self
             .inserts
             .keys()
             .chain(self.updates.keys())
             .chain(self.deletes.iter())
+            .chain(self.property_deletes.keys())
             .map(|(label, _)| *label)
             .collect();
         labels.sort_unstable();
@@ -480,9 +607,9 @@ impl TxnStaging {
     }
 
     /// Drain one label's staged rows into a [`WriteScope`] for the point
-    /// write channel apply. Insert rows carry their reserved ids; updates
-    /// and deletes require their cached internal ids; a missing resolution
-    /// is a staging misuse.
+    /// write channel apply. Insert rows carry their reserved ids; updates,
+    /// column deletions and deletes require their cached internal ids; a
+    /// missing resolution is a staging misuse.
     pub(crate) fn take_label_scope(&mut self, label: LabelId) -> StorageResult<WriteScope> {
         let mut scoped_inserts = HashMap::new();
         for (key, entry) in self.inserts.extract_within(label) {
@@ -493,17 +620,23 @@ impl TxnStaging {
             let id = self.resolved_id(label, &key)?;
             scoped_updates.insert((label, id), columns);
         }
+        let mut scoped_property_deletes = HashMap::new();
+        for (key, columns) in self.property_deletes.extract_within(label) {
+            let id = self.resolved_id(label, &key)?;
+            scoped_property_deletes.insert((label, id), columns);
+        }
         let mut scoped_deletes = HashSet::new();
         for key in self.deletes.extract_within(label) {
             let id = self.resolved_id(label, &key)?;
             scoped_deletes.insert((label, id));
         }
         self.journal.clear();
-        Ok(WriteScope::from_staged(
+        Ok(WriteScope::from_staged_with_property_deletes(
             self.write_ts,
             scoped_inserts,
             scoped_updates,
             scoped_deletes,
+            scoped_property_deletes,
         ))
     }
 
@@ -532,6 +665,7 @@ impl TxnStaging {
         self.inserts.clear();
         self.updates.clear();
         self.deletes.clear();
+        self.property_deletes.clear();
         self.resolved.clear();
         self.journal.clear();
         self.index_ops.clear();
@@ -768,6 +902,35 @@ impl super::GraphStorageContext {
         guard.stage_update(label, key.clone(), columns)
     }
 
+    /// Stage one online vertex column deletion. Only liveness is checked;
+    /// column values are never validated.
+    pub(crate) fn stage_vertex_property_delete(
+        &self,
+        label: LabelId,
+        key: &IdKey,
+        column: &str,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let table = self.staging_vertex_table(label)?;
+        let buffer = self.txn_staging_buffer(ts)?;
+        let mut guard = buffer.lock();
+        if guard.pending_insert_id(label, key).is_some() {
+            return guard.stage_property_delete(label, key.clone(), vec![column.to_string()]);
+        }
+        if guard.has_pending_delete(label, key) {
+            return Err(StorageError::vertex_not_found());
+        }
+        let id = match key {
+            IdKey::Text(name) => table.get_internal_id(name, ts),
+            IdKey::Int(n) => table.get_internal_id_by_i64(*n, ts),
+        };
+        let Some(id) = id else {
+            return Err(StorageError::vertex_not_found());
+        };
+        guard.cache_resolution(label, key.clone(), id);
+        guard.stage_property_delete(label, key.clone(), vec![column.to_string()])
+    }
+
     /// Stage one online vertex delete. Cancelling a staged insert drops that
     /// row and releases its reservation.
     pub(crate) fn stage_vertex_delete(
@@ -867,6 +1030,12 @@ impl super::GraphStorageContext {
                 guard.cache_resolution(label, key.clone(), id);
                 guard.stage_update(label, key, columns)?;
             }
+            for (id, columns) in scope.take_property_deletes_for_label(label) {
+                let key = reverse_key(&table, id)?;
+                let mut guard = buffer.lock();
+                guard.cache_resolution(label, key.clone(), id);
+                guard.stage_property_delete(label, key, columns)?;
+            }
             for id in scope.take_deletes_for_label(label) {
                 let key = reverse_key(&table, id)?;
                 let mut guard = buffer.lock();
@@ -915,6 +1084,11 @@ impl super::GraphStorageContext {
                 let guard = buffer.lock();
                 let mut pairs = Vec::new();
                 for (key, _) in guard.update_rows(label) {
+                    if let Some(id) = guard.resolve(label, key) {
+                        pairs.push((key.clone(), id));
+                    }
+                }
+                for (key, _) in guard.property_delete_rows(label) {
                     if let Some(id) = guard.resolve(label, key) {
                         pairs.push((key.clone(), id));
                     }

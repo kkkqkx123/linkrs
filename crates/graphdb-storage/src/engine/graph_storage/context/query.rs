@@ -8,10 +8,7 @@ impl GraphStorageContext {
     ///
     /// Returns `(shard, column, reason)` triples, empty when every column
     /// is healthy. Read-only observability over the column-isolated open.
-    pub fn vertex_unavailable_columns(
-        &self,
-        label: LabelId,
-    ) -> Vec<(usize, String, String)> {
+    pub fn vertex_unavailable_columns(&self, label: LabelId) -> Vec<(usize, String, String)> {
         self.persistent
             .data_store
             .catalog_read_snapshot()

@@ -11,9 +11,8 @@ pub(crate) use batch::{
 pub(crate) use data::{
     delete_edge_data, delete_vertex_data, insert_edge_data, insert_vertex_data, update_data,
 };
-pub(crate) use edge::{delete_edge, insert_edge, update_edge};
+pub(crate) use edge::{delete_edge, insert_edge, update_edge, update_edge_replace};
 pub(crate) use vertex::{
-    batch_delete_vertices_with_edges, batch_insert_vertices,
-    batch_insert_vertices_with_split, delete_vertex, delete_vertex_with_edges, insert_vertex,
-    update_vertex,
+    batch_delete_vertices_with_edges, batch_insert_vertices, batch_insert_vertices_with_split,
+    delete_vertex, delete_vertex_with_edges, insert_vertex, update_vertex, update_vertex_replace,
 };

@@ -129,6 +129,7 @@ pub enum WalOpType {
     DropMacro = 32,
     CreateTypeAlias = 33,
     DropTypeAlias = 34,
+    DeleteVertexProps = 35,
 }
 
 impl TryFrom<u8> for WalOpType {
@@ -171,6 +172,7 @@ impl TryFrom<u8> for WalOpType {
             32 => Ok(WalOpType::DropMacro),
             33 => Ok(WalOpType::CreateTypeAlias),
             34 => Ok(WalOpType::DropTypeAlias),
+            35 => Ok(WalOpType::DeleteVertexProps),
             _ => Err(WalError::InvalidOpType(value)),
         }
     }
@@ -214,6 +216,7 @@ impl fmt::Display for WalOpType {
             WalOpType::DropMacro => write!(f, "DropMacro"),
             WalOpType::CreateTypeAlias => write!(f, "CreateTypeAlias"),
             WalOpType::DropTypeAlias => write!(f, "DropTypeAlias"),
+            WalOpType::DeleteVertexProps => write!(f, "DeleteVertexProps"),
         }
     }
 }
@@ -429,6 +432,7 @@ impl WalHeader {
                 | WalOpType::DeleteEdgeType
                 | WalOpType::DeleteVertexProp
                 | WalOpType::DeleteEdgeProp
+                | WalOpType::DeleteVertexProps
                 | WalOpType::RenameVertexProp
                 | WalOpType::RenameEdgeProp
                 | WalOpType::Compact

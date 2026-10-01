@@ -207,6 +207,26 @@ impl TransactionOps {
         Ok(())
     }
 
+    pub fn delete_vertex_props_by_vid(
+        vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
+        label: LabelId,
+        vid: VertexId,
+        prop_names: &[String],
+        ts: Timestamp,
+    ) -> UndoLogResult<()> {
+        let table = vertex_tables
+            .get(&label)
+            .ok_or(UndoLogError::LabelNotFound(label))?;
+        let internal_id =
+            Self::resolve_vertex_id(table, vid, ts).ok_or(UndoLogError::LabelNotFound(0))?;
+        for prop_name in prop_names {
+            table
+                .delete_property_by_global_id(internal_id, prop_name, ts)
+                .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     pub fn update_edge_property(
         edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
         vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,

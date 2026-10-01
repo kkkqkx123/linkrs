@@ -489,6 +489,18 @@ impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
         result
     }
 
+    fn update_vertex_replace(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError> {
+        let start = std::time::Instant::now();
+        let result = StorageWriter::update_vertex_replace(&mut self.inner, space, vertex);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
+
     fn delete_vertex_with_edges(
         &mut self,
         space: &str,
@@ -543,6 +555,18 @@ impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
     fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
         let start = std::time::Instant::now();
         let result = StorageWriter::update_edge(&mut self.inner, space, edge);
+        if result.is_err() {
+            if let Some(stats) = &self.stats {
+                stats.record_storage_error();
+            }
+        }
+        self.record_write(start);
+        result
+    }
+
+    fn update_edge_replace(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
+        let start = std::time::Instant::now();
+        let result = StorageWriter::update_edge_replace(&mut self.inner, space, edge);
         if result.is_err() {
             if let Some(stats) = &self.stats {
                 stats.record_storage_error();

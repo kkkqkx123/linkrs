@@ -316,18 +316,6 @@ impl Planner for UpdatePlanner {
     ) -> Result<SubPlan, PlannerError> {
         let update_stmt = self.extract_update_stmt(validated.stmt())?;
 
-        if update_stmt
-            .set_clause
-            .assignments
-            .iter()
-            .any(|a| a.is_map_overwrite)
-        {
-            return Err(PlannerError::PlanGenerationFailed(
-                "Whole-map overwrite (SET v = {...}) is not supported: assign properties individually"
-                    .to_string(),
-            ));
-        }
-
         // Unified entry for expression-level EXISTS / IN: subqueries in
         // UPDATE SET values or the UPDATE WHERE condition are rejected at
         // planning time with a precise error.

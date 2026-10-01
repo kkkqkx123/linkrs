@@ -20,6 +20,12 @@ impl StorageWriter for GraphStorage {
         self.commit_auto_if_needed()
     }
 
+    fn update_vertex_replace(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError> {
+        self.ctx.check_write_admission()?;
+        writer::update_vertex_replace(&self.ctx, space, vertex)?;
+        self.commit_auto_if_needed()
+    }
+
     fn delete_vertex(&mut self, space: &str, tag: &str, id: &VertexId) -> Result<(), StorageError> {
         self.ctx.check_write_admission()?;
         writer::delete_vertex(&self.ctx, space, tag, id)?;
@@ -67,7 +73,8 @@ impl StorageWriter for GraphStorage {
         auto_split: bool,
     ) -> Result<Vec<VertexId>, StorageError> {
         self.ctx.check_write_admission()?;
-        let result = writer::batch_insert_vertices_with_split(&self.ctx, space, vertices, auto_split)?;
+        let result =
+            writer::batch_insert_vertices_with_split(&self.ctx, space, vertices, auto_split)?;
         self.commit_auto_if_needed()?;
         Ok(result)
     }
@@ -81,6 +88,12 @@ impl StorageWriter for GraphStorage {
     fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
         self.ctx.check_write_admission()?;
         writer::update_edge(&self.ctx, space, edge)?;
+        self.commit_auto_if_needed()
+    }
+
+    fn update_edge_replace(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
+        self.ctx.check_write_admission()?;
+        writer::update_edge_replace(&self.ctx, space, edge)?;
         self.commit_auto_if_needed()
     }
 

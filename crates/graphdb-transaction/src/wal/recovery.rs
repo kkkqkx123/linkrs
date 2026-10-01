@@ -7,11 +7,12 @@ use crate::wal::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
     CreateEdgeTypeRedo, CreateMacroRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateTypeAliasRedo,
     CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
-    DeleteVertexPropRedo, DeleteVertexRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropMacroRedo,
-    DropSpaceRedo, DropTagIndexRedo, DropTypeAliasRedo, InsertEdgeRedo, InsertVertexRedo,
-    LocalWalParser, Lsn, ParallelWalParser, ParsedWalEntry, RecoveryResult, RenameEdgePropRedo,
-    RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
-    UpdateSequenceRedo, UpdateVertexPropRedo, WalOpType, WalParser, WalRecoveryMode,
+    DeleteVertexPropRedo, DeleteVertexPropsRedo, DeleteVertexRedo, DeleteVertexTypeRedo,
+    DropEdgeIndexRedo, DropMacroRedo, DropSpaceRedo, DropTagIndexRedo, DropTypeAliasRedo,
+    InsertEdgeRedo, InsertVertexRedo, LocalWalParser, Lsn, ParallelWalParser, ParsedWalEntry,
+    RecoveryResult, RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
+    UpdateEdgePropRedo, UpdateSequenceRedo, UpdateVertexPropRedo, WalOpType, WalParser,
+    WalRecoveryMode,
 };
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult};
@@ -679,6 +680,18 @@ impl RecoveryManager {
                         self.stats,
                         DropTypeAliasRedo,
                         replay_drop_type_alias
+                    )
+                }
+                WalOpType::DeleteVertexProps => {
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        DeleteVertexPropsRedo,
+                        replay_delete_vertex_props
                     )
                 }
                 WalOpType::OutboxIntent

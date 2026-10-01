@@ -156,6 +156,13 @@ pub struct DeleteEdgePropRedo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteVertexPropsRedo {
+    pub label: LabelId,
+    pub vid: VertexId,
+    pub prop_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenameVertexPropRedo {
     pub label: LabelId,
     pub old_name: String,

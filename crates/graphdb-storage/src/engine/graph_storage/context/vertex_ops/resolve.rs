@@ -42,6 +42,17 @@ pub(crate) fn apply_staged_columns(
     }
 }
 
+/// Remove staged column deletions from a property list.
+pub(crate) fn apply_staged_property_deletes(
+    properties: &mut Vec<(String, graphdb_core::Value)>,
+    deleted: &[String],
+) {
+    if deleted.is_empty() {
+        return;
+    }
+    properties.retain(|(name, _)| !deleted.iter().any(|d| d == name));
+}
+
 /// A row surfaced by a transaction's own staging: composed property list
 /// plus the external key and the id to present (the reserved global id
 /// staged at insert time, or the real internal id for composed updates).
@@ -125,9 +136,9 @@ impl GraphStorageContext {
             return merge;
         };
         let buffer = buffer.lock();
-        // Deletes and updates address rows by their cached resolution; a
-        // missing resolution means the key was staged without an existing
-        // row, which a scan cannot contain.
+        // Deletes, updates and column deletions address rows by their cached
+        // resolution; a missing resolution means the key was staged without
+        // an existing row, which a scan cannot contain.
         for (key, columns) in buffer.update_rows(label) {
             let Some(id) = buffer.resolve(label, key) else {
                 continue;
@@ -141,6 +152,31 @@ impl GraphStorageContext {
             };
             let mut properties = base.properties;
             apply_staged_columns(&mut properties, columns);
+            if let Some(deleted) = buffer.pending_property_deletes(label, key) {
+                apply_staged_property_deletes(&mut properties, deleted);
+            }
+            merge.rows.push(StagedRow {
+                vid,
+                id,
+                properties,
+            });
+        }
+        for (key, deleted) in buffer.property_delete_rows(label) {
+            if buffer.pending_update(label, key).is_some() {
+                continue;
+            }
+            let Some(id) = buffer.resolve(label, key) else {
+                continue;
+            };
+            merge.dropped_ids.insert(id);
+            let Some(base) = table.resolve_projected(id, guard, None) else {
+                continue;
+            };
+            let Some(vid) = vid_of_key(key) else {
+                continue;
+            };
+            let mut properties = base.properties;
+            apply_staged_property_deletes(&mut properties, deleted);
             merge.rows.push(StagedRow {
                 vid,
                 id,
@@ -186,10 +222,17 @@ impl GraphStorageContext {
                 Some(None)
             } else if let Some((reserved, props)) = buffer.pending_insert_row(label, key) {
                 Some(Some((reserved, props.to_vec())))
-            } else if let Some(columns) = buffer.pending_update(label, key) {
+            } else if buffer.pending_update(label, key).is_some()
+                || buffer.pending_property_deletes(label, key).is_some()
+            {
                 match properties {
                     Some(mut merged) => {
-                        apply_staged_columns(&mut merged, columns);
+                        if let Some(columns) = buffer.pending_update(label, key) {
+                            apply_staged_columns(&mut merged, columns);
+                        }
+                        if let Some(deleted) = buffer.pending_property_deletes(label, key) {
+                            apply_staged_property_deletes(&mut merged, deleted);
+                        }
                         Some(global_id.map(|internal_id| (internal_id, merged)))
                     }
                     None => Some(None),
@@ -513,17 +556,34 @@ impl GraphStorageContext {
         )?;
         if let (Some(key), Some(buffer)) = (key, self.active_txn_staging()) {
             let buffer = buffer.lock();
-            if let Some(columns) = buffer.pending_update(label, &key) {
+            let has_update = buffer.pending_update(label, &key).is_some();
+            let has_deletes = buffer.pending_property_deletes(label, &key).is_some();
+            if has_update || has_deletes {
                 let mut properties = record.properties;
-                match projection {
-                    None => apply_staged_columns(&mut properties, columns),
-                    Some(names) => {
-                        let scoped: Vec<_> = columns
-                            .iter()
-                            .filter(|(name, _)| names.iter().any(|n| n == name))
-                            .cloned()
-                            .collect();
-                        apply_staged_columns(&mut properties, &scoped);
+                if let Some(columns) = buffer.pending_update(label, &key) {
+                    match projection {
+                        None => apply_staged_columns(&mut properties, columns),
+                        Some(names) => {
+                            let scoped: Vec<_> = columns
+                                .iter()
+                                .filter(|(name, _)| names.iter().any(|n| n == name))
+                                .cloned()
+                                .collect();
+                            apply_staged_columns(&mut properties, &scoped);
+                        }
+                    }
+                }
+                if let Some(deleted) = buffer.pending_property_deletes(label, &key) {
+                    match projection {
+                        None => apply_staged_property_deletes(&mut properties, deleted),
+                        Some(names) => {
+                            let scoped: Vec<String> = deleted
+                                .iter()
+                                .filter(|name| names.iter().any(|n| n == *name))
+                                .cloned()
+                                .collect();
+                            apply_staged_property_deletes(&mut properties, &scoped);
+                        }
                     }
                 }
                 return Some(VertexRecord {

@@ -183,13 +183,11 @@ impl EncodingSelector {
                 return true;
             }
         }
-        if let Some((count, latest)) =
-            self.feedback.latest_ratio(encoding_type, Some(family))
-        {
+        if let Some((count, latest)) = self.feedback.latest_ratio(encoding_type, Some(family)) {
             if count >= EncodingFeedback::EARLY_OBSERVATIONS
                 && (latest > 1.0
-                    || latest > self.thresholds.reencode_threshold
-                        + EncodingFeedback::EARLY_RATIO_MARGIN)
+                    || latest
+                        > self.thresholds.reencode_threshold + EncodingFeedback::EARLY_RATIO_MARGIN)
             {
                 return true;
             }
