@@ -22,6 +22,7 @@ const OPERATOR_TEMPLATES: Record<FilterOperator, (field: string) => string> = {
 // Strip control characters and escape backslashes and single quotes so a string
 // literal cannot terminate early or smuggle in additional tokens.
 export function escapeStringValue(value: string): string {
+  // eslint-disable-next-line no-control-regex -- stripping control characters is the point of this sanitizer
   const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, '');
   const escaped = cleaned.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   return `'${escaped}'`;

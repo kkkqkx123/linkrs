@@ -98,7 +98,7 @@
     <p class="text-xs text-gray-400 dark:text-gray-500">{$t('dataBrowser.filterPanel.empty')}</p>
   {:else}
     <div class="flex flex-col gap-2">
-      {#each conditions as condition, index}
+      {#each conditions as condition, index (index)}
         <div class="flex items-center gap-2">
           <select
             class="flex-1 px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-xs bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
@@ -108,7 +108,7 @@
             {#if availableProperties.length === 0}
               <option value="">{$t('dataBrowser.filterPanel.property')}</option>
             {/if}
-            {#each availableProperties as prop}
+            {#each availableProperties as prop (prop)}
               <option value={prop}>{prop}</option>
             {/each}
           </select>
@@ -117,7 +117,7 @@
             value={condition.operator}
             onchange={(e) => updateCondition(index, { operator: (e.target as HTMLSelectElement).value as FilterOperator })}
           >
-            {#each OPERATORS as op}
+            {#each OPERATORS as op (op)}
               <option value={op}>{$t(`dataBrowser.op.${op}`)}</option>
             {/each}
           </select>

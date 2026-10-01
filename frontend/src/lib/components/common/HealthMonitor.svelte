@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
   import { connectionStore } from '$stores/connection';
   import { connectionService } from '$services/connection';

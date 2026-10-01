@@ -10,6 +10,7 @@ export const handleVidStringName = (name: string, spaceVidType?: string) => {
 export const convertBigNumberToString = (value: unknown) =>
   typeof value === 'bigint' ? value.toString() : value;
 
+// eslint-disable-next-line no-control-regex -- removing trailing NUL padding is intentional
 export const removeNullCharacters = (data: string) => data.replace(/\u0000+$/g, '');
 
 export const safeParse = <T>(data: string, options?: { parser?: (data: string) => T }): T | undefined => {

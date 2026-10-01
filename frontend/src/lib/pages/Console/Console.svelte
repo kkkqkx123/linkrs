@@ -590,7 +590,7 @@
         <span>{results.length} {results.length === 1 ? 'statement' : 'statements'}</span>
       </div>
       <div class="flex-1 overflow-auto p-4 flex flex-col gap-3">
-        {#each results as entry, index}
+        {#each results as entry, index (index)}
           <div class="border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
             <div class="px-3 py-2 bg-gray-50 dark:bg-gray-800/50 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
               <span class={entry.success ? 'text-green-500' : 'text-red-500'}>{entry.success ? '✓' : '✗'}</span>
@@ -615,15 +615,15 @@
                     <table class="w-full text-sm border-collapse">
                       <thead>
                         <tr class="bg-gray-50 dark:bg-gray-800/50">
-                          {#each entry.result.columns as col}
+                          {#each entry.result.columns as col (col)}
                             <th class="px-3 py-1.5 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700 whitespace-nowrap">{col}</th>
                           {/each}
                         </tr>
                       </thead>
                       <tbody>
-                        {#each entry.result.rows as row}
+                        {#each entry.result.rows as row, i (i)}
                           <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30 even:bg-gray-50/50 dark:even:bg-gray-800/20">
-                            {#each entry.result.columns as col}
+                            {#each entry.result.columns as col (col)}
                               <td class="px-3 py-1 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300 max-w-xs truncate">{formatCellValue(row[col])}</td>
                             {/each}
                           </tr>
@@ -649,7 +649,7 @@
         {/if}
         <div class="flex-1"></div>
         <div class="flex gap-1">
-          {#each ['table', 'json', 'graph'] as view}
+          {#each ['table', 'json', 'graph'] as view (view)}
             <button
               class="px-2 py-0.5 text-xs rounded cursor-pointer {activeView === view ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
               onclick={() => { activeView = view as 'table' | 'json' | 'graph'; consoleStore.setActiveView(view as 'table' | 'json' | 'graph'); }}
@@ -668,15 +668,15 @@
             <table class="w-full text-sm border-collapse">
               <thead>
                 <tr class="bg-gray-50 dark:bg-gray-800/50">
-                  {#each currentResult.columns as col}
+                  {#each currentResult.columns as col (col)}
                     <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700 whitespace-nowrap">{col}</th>
                   {/each}
                 </tr>
               </thead>
               <tbody>
-                {#each currentResult.rows as row}
+                {#each currentResult.rows as row, i (i)}
                   <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30 even:bg-gray-50/50 dark:even:bg-gray-800/20">
-                    {#each currentResult.columns as col}
+                    {#each currentResult.columns as col (col)}
                       <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300 max-w-xs truncate">{formatCellValue(row[col])}</td>
                     {/each}
                   </tr>
@@ -736,11 +736,13 @@
         {#if history.length === 0}
           <p class="text-gray-400 dark:text-gray-500 text-sm text-center py-4">{$t('console.noResult')}</p>
         {:else}
-          {#each history as item}
-            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+          {#each history as item (item.id)}
             <div
+              role="button"
+              tabindex="0"
               class="mb-3 p-3 border border-gray-200 dark:border-gray-700 rounded hover:bg-gray-50 dark:hover:bg-gray-700/30 cursor-pointer"
               onclick={() => handleLoadHistory(item)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleLoadHistory(item); }}
               title={$t('console.historyLoadHint')}
             >
               <p class="text-xs font-mono text-gray-700 dark:text-gray-300 truncate mb-1">{item.query}</p>
@@ -794,11 +796,13 @@
         {#if favorites.length === 0}
           <p class="text-gray-400 dark:text-gray-500 text-sm text-center py-4">{$t('console.noResult')}</p>
         {:else}
-          {#each favorites as fav}
-            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+          {#each favorites as fav (fav.id)}
             <div
+              role="button"
+              tabindex="0"
               class="mb-3 p-3 border border-gray-200 dark:border-gray-700 rounded hover:bg-gray-50 dark:hover:bg-gray-700/30 cursor-pointer"
               onclick={() => handleLoadFavorite(fav)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleLoadFavorite(fav); }}
               title={$t('console.historyLoadHint')}
             >
               <p class="text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">{fav.name}</p>

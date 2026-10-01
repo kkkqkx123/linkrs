@@ -40,7 +40,7 @@ function persistCurrentSpace(name: string | null) {
 
 function createSchemaStore() {
   const savedSpace = localStorage.getItem('schema-current-space');
-  const { subscribe, set, update } = writable<SchemaState>({
+  const { subscribe, update } = writable<SchemaState>({
     spaces: [], isLoadingSpaces: false, spacesError: null,
     currentSpace: savedSpace,
     spaceDetails: {}, spaceStatistics: {},

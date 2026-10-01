@@ -38,6 +38,9 @@
   let completionsDisposable: Monaco.IDisposable | null = null;
   let historyDisposable: Monaco.IDisposable | null = null;
   let applyingExternalValue = false;
+  // The height prop is only read as the initial value; afterwards the
+  // user-driven resize handler is the single source of truth for the size.
+  // svelte-ignore state_referenced_locally
   let currentHeight = $state(height);
   let dragStartY = 0;
   let dragStartHeight = 0;
@@ -169,14 +172,12 @@
   }
 
   $effect(() => {
-    containerEl;
     if (containerEl && !editor) {
       void initEditor();
     }
   });
 
   $effect(() => {
-    isDark;
     if (monacoRef && editor) {
       monacoRef.editor.setTheme(isDark ? 'graphdb-dark' : 'graphdb-light');
     }

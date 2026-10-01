@@ -22,12 +22,8 @@
 
   let containerEl = $state<HTMLDivElement | undefined>(undefined);
   let scrollTop = $state(0);
-  let viewportHeight = $state(0);
+  let viewportHeight = $derived(containerEl?.clientHeight ?? height);
   let raf = 0;
-
-  $effect(() => {
-    viewportHeight = containerEl?.clientHeight ?? height;
-  });
 
   let frozenKey = $state('');
   let widths = $state<number[]>([]);
@@ -76,7 +72,7 @@
   <table class="w-full text-sm border-collapse" style="table-layout: fixed;">
     <colgroup>
       <col style="width: 64px;" />
-      {#each widths as width}
+      {#each widths as width, i (i)}
         <col style="width: {width}px;" />
       {/each}
     </colgroup>
@@ -86,7 +82,7 @@
           class="px-3 py-2 text-left font-medium text-gray-400 border-b border-gray-200 dark:border-gray-700 whitespace-nowrap sticky top-0 bg-gray-50 dark:bg-gray-800 z-10"
           >#</th
         >
-        {#each columns as column}
+        {#each columns as column (column)}
           <th
             class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700 whitespace-nowrap overflow-hidden text-ellipsis sticky top-0 bg-gray-50 dark:bg-gray-800 z-10"
             title={column}>{column}</th
@@ -104,7 +100,7 @@
           style="height: {rowHeight}px;"
         >
           <td class="px-3 py-1 border-b border-gray-100 dark:border-gray-700/50 text-gray-400 text-xs whitespace-nowrap overflow-hidden">{entry.index + 1}</td>
-          {#each columns as column}
+          {#each columns as column (column)}
             <td
               class="px-3 py-1 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300 whitespace-nowrap overflow-hidden text-ellipsis"
               title={formatCellValue(entry.row[column])}>{formatCellValue(entry.row[column])}</td

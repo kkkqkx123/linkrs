@@ -123,16 +123,12 @@
   }
 
   $effect(() => {
-    data;
-    containerEl;
     if (containerEl && data && !initialized) {
       void initCytoscape();
     }
   });
 
   $effect(() => {
-    data;
-    relayoutToken;
     if (!cyInstance) return;
     syncElements(false);
     if (relayoutToken !== lastRelayoutToken) {
@@ -142,13 +138,10 @@
   });
 
   $effect(() => {
-    styleConfig;
-    isDark;
     if (cyInstance) refreshStyle();
   });
 
   $effect(() => {
-    layout;
     if (cyInstance) applyLayout(cyInstance, layout, cyInstance.elements().length);
   });
 

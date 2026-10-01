@@ -7,13 +7,10 @@ import type {
 	EdgeType,
 	CreateTagParams,
 	CreateEdgeTypeParams,
-	CreateIndexParams,
-	UpdateTagParams,
-	UpdateEdgeTypeParams
+	CreateIndexParams
 } from '$types/schema';
 
 type Schemas = components['schemas'];
-type SpaceDetail = Schemas['SpaceDetail'];
 type SpaceStatistics = Schemas['SpaceStatistics'];
 type SpaceDetailSchema = Schemas['SpaceDetail'];
 type TagDetailSchema = Schemas['TagDetail'];
@@ -23,8 +20,6 @@ type CreateSpaceRequest = Schemas['CreateSpaceRequest'];
 type CreateTagRequest = Schemas['CreateTagRequest'];
 type CreateEdgeTypeRequest = Schemas['CreateEdgeTypeRequest'];
 type CreateIndexRequest = Schemas['CreateIndexRequest'];
-type UpdateTagRequest = Schemas['UpdateTagRequest'];
-type UpdateEdgeTypeRequest = Schemas['UpdateEdgeTypeRequest'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null;

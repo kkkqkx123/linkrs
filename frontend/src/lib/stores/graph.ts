@@ -56,7 +56,7 @@ function persistStyles(state: GraphState) {
 }
 
 function createGraphStore() {
-  const { subscribe, set, update } = writable<GraphState>({
+  const { subscribe, update } = writable<GraphState>({
     graphData: null,
     layout: (persisted.layout as LayoutType) || 'force',
     zoom: 1,

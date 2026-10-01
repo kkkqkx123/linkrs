@@ -17,7 +17,7 @@
         <Skeleton width="80px" height="2rem" rounded="md" />
       </div>
       <div class="space-y-3 mt-6">
-        {#each [1, 2, 3, 4, 5] as _}
+        {#each { length: 5 }, i (i)}
           <div class="flex gap-4">
             <Skeleton class="flex-1" height="0.75rem" rounded="sm" />
             <Skeleton width="60%" height="0.75rem" rounded="sm" />

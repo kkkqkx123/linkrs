@@ -29,7 +29,7 @@
     onchange={handleChange}
   >
     <option value="">-- {$t('common.select')} --</option>
-    {#each spaces as space}
+    {#each spaces as space (space.name)}
       <option value={space.name}>{space.name}</option>
     {/each}
   </select>

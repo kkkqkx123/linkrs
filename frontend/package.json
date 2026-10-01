@@ -7,19 +7,30 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json"
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "devDependencies": {
     "@dvaji/vite-plugin-monaco-editor": "^2.0.0",
+    "@eslint/js": "^10.0.1",
     "@sveltejs/vite-plugin-svelte": "^7.2.0",
     "@tailwindcss/vite": "^4.3.3",
     "@tsconfig/svelte": "^5.0.8",
     "@types/json-bigint": "^1.0.4",
     "@types/node": "^24.13.3",
+    "eslint": "^10.11.0",
+    "eslint-plugin-svelte": "^3.23.0",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.9",
+    "prettier-plugin-svelte": "^4.1.1",
     "svelte": "^5.56.8",
     "svelte-check": "^4.7.3",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.2",
+    "typescript-eslint": "^8.71.0",
     "vite": "^8.2.0"
   },
   "dependencies": {

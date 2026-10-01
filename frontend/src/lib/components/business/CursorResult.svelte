@@ -109,7 +109,7 @@
   </button>
   <div class="flex-1"></div>
   <div class="flex gap-1">
-    {#each ['table', 'json', 'graph'] as view}
+    {#each ['table', 'json', 'graph'] as view (view)}
       <button
         class="px-2 py-0.5 text-xs rounded cursor-pointer {activeView === view ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
         onclick={() => onViewChange(view as 'table' | 'json' | 'graph')}

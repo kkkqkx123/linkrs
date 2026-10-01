@@ -80,7 +80,7 @@ function splitRawFrames(buffer: string): { frames: string[]; rest: string } {
   while (i < buffer.length) {
     const ch = buffer[i];
     if (ch === '\n' || ch === '\r') {
-      let lineEnd = i;
+      const lineEnd = i;
       let next = i + 1;
       if (ch === '\r' && buffer[next] === '\n') next += 1;
       let after = next;

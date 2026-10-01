@@ -9,10 +9,10 @@
 
   onMount(async () => {
     let auth = false;
-    const unsub = isAuthenticated.subscribe(v => auth = v)();
+    isAuthenticated.subscribe(v => auth = v)();
     if (!auth) {
       let store: { isConnected: boolean; isVerified: boolean } = { isConnected: false, isVerified: false };
-      const unsub2 = connectionStore.subscribe(s => store = s)();
+      connectionStore.subscribe(s => store = s)();
       if (store.isConnected && !store.isVerified) {
         await connectionStore.checkHealth();
       }

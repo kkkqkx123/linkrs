@@ -10,17 +10,18 @@
   import { formatCellValue } from '$utils/parseData';
   import PageSkeleton from '$components/common/PageSkeleton.svelte';
   import FilterPanel from './FilterPanel.svelte';
-  import type { FilterGroup } from '$types/dataBrowser';
+  import type { VertexData, EdgeData, Statistics } from '$types/dataBrowser';
+  import type { Tag, EdgeType } from '$types/schema';
 
   let currentSpace = $state<string | null>(null);
-  let tags = $state<Array<any>>([]);
-  let edgeTypes = $state<Array<any>>([]);
+  let tags = $state<Tag[]>([]);
+  let edgeTypes = $state<EdgeType[]>([]);
 
   let activeTab = $state<'vertices' | 'edges'>('vertices');
   let selectedTag = $state<string | null>(null);
   let selectedEdgeType = $state<string | null>(null);
-  let vertices = $state<Array<any>>([]);
-  let edges = $state<Array<any>>([]);
+  let vertices = $state<VertexData[]>([]);
+  let edges = $state<EdgeData[]>([]);
   let vertexTotal = $state(0);
   let edgeTotal = $state(0);
   let vertexPage = $state(1);
@@ -29,11 +30,10 @@
   let edgePageSize = $state(50);
   let loading = $state(false);
   let error = $state<string | null>(null);
-  let statistics = $state<any>(null);
+  let statistics = $state<Statistics | null>(null);
   let filterPanelVisible = $state(false);
-  let filters = $state<FilterGroup>({ conditions: [], logic: 'AND' });
   let detailModalVisible = $state(false);
-  let detailData = $state<any>(null);
+  let detailData = $state<VertexData | EdgeData | null>(null);
   let detailType = $state<string | null>(null);
 
   let vertexProperties = $state<string[]>([]);
@@ -62,7 +62,6 @@
       error = s.error;
       statistics = s.statistics;
       filterPanelVisible = s.filterPanelVisible;
-      filters = s.filters;
       detailModalVisible = s.detailModalVisible;
       detailData = s.detailData;
       detailType = s.detailType;
@@ -140,25 +139,27 @@
     if (tab === 'edges' && currentSpace) { schemaStore.fetchEdgeTypes(currentSpace); if (selectedEdgeType) loadEdges(); }
   }
 
-  function showDetail(data: any, type: 'vertex' | 'edge') {
+  function showDetail(data: VertexData | EdgeData, type: 'vertex' | 'edge') {
     dataBrowserStore.showDetail(data, type);
   }
 
-  function viewInGraph(data: any, type: 'vertex' | 'edge') {
+  function viewInGraph(data: VertexData | EdgeData, type: 'vertex' | 'edge') {
     if (type === 'vertex') {
+      const v = data as VertexData;
       graphStore.mergeGraphData({
-        nodes: [{ id: String(data.id), tag: data.tag ?? 'unknown', properties: data.properties ?? {} }],
+        nodes: [{ id: String(v.id), tag: v.tag ?? 'unknown', properties: v.properties ?? {} }],
         edges: [],
       });
     } else {
-      const src = String(data.src);
-      const dst = String(data.dst);
+      const e = data as EdgeData;
+      const src = String(e.src);
+      const dst = String(e.dst);
       graphStore.mergeGraphData({
         nodes: [
           { id: src, tag: 'unknown', properties: {} },
           { id: dst, tag: 'unknown', properties: {} },
         ],
-        edges: [{ id: String(data.id), type: data.type ?? 'unknown', source: src, target: dst, rank: data.rank ?? 0, properties: data.properties ?? {} }],
+        edges: [{ id: String(e.id), type: e.type ?? 'unknown', source: src, target: dst, rank: e.rank ?? 0, properties: e.properties ?? {} }],
       });
     }
     navigate('/graph');
@@ -208,7 +209,7 @@
             <div class="mb-4">
               <select class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200" value={selectedTag || ''} onchange={handleTagChange}>
                 <option value="">-- {$t('dataBrowser.selectTag')} --</option>
-                {#each tags as tag}
+                {#each tags as tag (tag.name)}
                   <option value={tag.name}>{tag.name}</option>
                 {/each}
               </select>
@@ -223,18 +224,18 @@
                     <tr class="bg-gray-50 dark:bg-gray-800/50">
                       <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">ID</th>
                       <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">{$t('schema.tags')}</th>
-                      {#each vertexProperties as prop}
+                      {#each vertexProperties as prop (prop)}
                         <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">{prop}</th>
                       {/each}
                       <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">{$t('common.actions')}</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {#each vertices as v}
+                    {#each vertices as v (v.id)}
                       <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30">
                         <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 font-mono text-xs text-gray-800 dark:text-gray-200">{v.id}</td>
                         <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300">{v.tag}</td>
-                        {#each vertexProperties as prop}
+                        {#each vertexProperties as prop (prop)}
                           <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 max-w-40 truncate text-gray-700 dark:text-gray-300">{formatCellValue(v.properties[prop])}</td>
                         {/each}
                         <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50">
@@ -271,7 +272,7 @@
             <div class="mb-4">
               <select class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200" value={selectedEdgeType || ''} onchange={handleEdgeTypeChange}>
                 <option value="">-- {$t('dataBrowser.selectEdgeType')} --</option>
-                {#each edgeTypes as et}
+                {#each edgeTypes as et (et.name)}
                   <option value={et.name}>{et.name}</option>
                 {/each}
               </select>
@@ -289,21 +290,21 @@
                       <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">Source</th>
                       <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">Target</th>
                       <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">Rank</th>
-                      {#each edgeProperties as prop}
+                      {#each edgeProperties as prop (prop)}
                         <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">{prop}</th>
                       {/each}
                       <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">{$t('common.actions')}</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {#each edges as e}
+                    {#each edges as e (e.id)}
                       <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30">
                         <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 font-mono text-xs text-gray-800 dark:text-gray-200">{e.id}</td>
                         <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300">{e.type}</td>
                         <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 font-mono text-xs text-gray-800 dark:text-gray-200">{e.src}</td>
                         <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 font-mono text-xs text-gray-800 dark:text-gray-200">{e.dst}</td>
                         <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300">{e.rank}</td>
-                        {#each edgeProperties as prop}
+                        {#each edgeProperties as prop (prop)}
                           <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 max-w-40 truncate text-gray-700 dark:text-gray-300">{formatCellValue(e.properties[prop])}</td>
                         {/each}
                         <td class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50">
@@ -365,7 +366,6 @@
 <!-- Detail Modal -->
 {#if detailModalVisible && detailData}
   <div class="fixed inset-0 z-50 flex items-center justify-center">
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div role="presentation" class="absolute inset-0 bg-black/20" onclick={() => dataBrowserStore.hideDetail()}></div>
     <div class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto">
       <div class="flex items-center justify-between mb-4">
@@ -373,7 +373,7 @@
         <button class="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer" onclick={() => dataBrowserStore.hideDetail()}>✕</button>
       </div>
       <div class="space-y-2">
-        {#each Object.entries(detailData) as [key, value]}
+        {#each Object.entries(detailData) as [key, value] (key)}
           {#if key !== 'properties'}
             <div class="text-sm"><span class="text-gray-500 dark:text-gray-400">{key}:</span> <span class="ml-1 text-gray-800 dark:text-gray-200">{String(value)}</span></div>
           {/if}
@@ -381,7 +381,7 @@
         {#if detailData.properties}
           <div class="mt-4">
             <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{$t('common.properties')}</h4>
-            {#each Object.entries(detailData.properties) as [k, v]}
+            {#each Object.entries(detailData.properties) as [k, v] (k)}
               <div class="text-sm ml-2"><span class="text-gray-500 dark:text-gray-400">{k}:</span> <span class="ml-1 text-gray-800 dark:text-gray-200">{String(v)}</span></div>
             {/each}
           </div>

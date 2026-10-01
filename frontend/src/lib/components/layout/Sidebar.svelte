@@ -56,7 +56,7 @@
   </div>
   <nav class="flex-1 p-3">
     <ul class="space-y-1">
-      {#each menuItems as item}
+      {#each menuItems as item (item.key)}
         {#if item.children}
           <li>
             <details open={item.children.some(c => path.startsWith(c.key))}>
@@ -65,7 +65,7 @@
                 <span>{$t(item.label)}</span>
               </summary>
               <ul class="ml-4 mt-1 space-y-1">
-                {#each item.children as child}
+                {#each item.children as child (child.key)}
                   <li>
                     <button
                       class="w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-sm cursor-pointer transition-colors {isActive(child) ? 'bg-blue-50 dark:bg-blue-900/30 text-[var(--color-primary)] font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50'}"

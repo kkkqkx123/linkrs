@@ -4,17 +4,23 @@
   import { get } from 'svelte/store';
   import { schemaStore } from '$stores/schema';
   import { theme } from '$stores/theme';
-  import { DATA_TYPE_LABELS, VID_TYPES } from '$config/constants';
-  import { formatDate } from '$utils/function';
+  import { DATA_TYPE_LABELS } from '$config/constants';
   import PageSkeleton from '$components/common/PageSkeleton.svelte';
   import SchemaErGraph from './SchemaErGraph.svelte';
+  import type { Space, Tag, EdgeType } from '$types/schema';
+  import type { components } from '$types/schema.gen';
+
+  type IndexInfo = components['schemas']['IndexInfo'] & {
+    entity_type?: string;
+    entity_name?: string;
+  };
 
   let activeTab = $state<'spaces' | 'tags' | 'edges' | 'indexes' | 'er'>('spaces');
   let pageInitialized = $state(false);
   let isDark = $state(false);
 
   // Spaces
-  let spaces = $state<Array<any>>([]);
+  let spaces = $state<Space[]>([]);
   let isLoadingSpaces = $state(false);
   let currentSpace = $state<string | null>(null);
   let showCreateSpace = $state(false);
@@ -24,21 +30,21 @@
   let newSpaceReplicaFactor = $state(1);
 
   // Tags
-  let tags = $state<Array<any>>([]);
+  let tags = $state<Tag[]>([]);
   let isLoadingTags = $state(false);
   let showCreateTag = $state(false);
   let newTagName = $state('');
   let newTagProps = $state<Array<{ name: string; data_type: string; nullable: boolean }>>([]);
 
   // Edges
-  let edgeTypes = $state<Array<any>>([]);
+  let edgeTypes = $state<EdgeType[]>([]);
   let isLoadingEdgeTypes = $state(false);
   let showCreateEdge = $state(false);
   let newEdgeName = $state('');
   let newEdgeProps = $state<Array<{ name: string; data_type: string; nullable: boolean }>>([]);
 
   // Indexes
-  let indexes = $state<Array<any>>([]);
+  let indexes = $state<IndexInfo[]>([]);
   let isLoadingIndexes = $state(false);
   let showCreateIndex = $state(false);
   let newIndexName = $state('');
@@ -161,11 +167,11 @@
     }
   }
 
-  function addProp(props: Array<any>) {
+  function addProp(props: Array<{ name: string; data_type: string; nullable: boolean }>) {
     props.push({ name: '', data_type: 'STRING', nullable: true });
   }
 
-  function removeProp(props: Array<any>, index: number) {
+  function removeProp(props: Array<{ name: string; data_type: string; nullable: boolean }>, index: number) {
     props.splice(index, 1);
   }
 </script>
@@ -188,7 +194,7 @@
         onchange={(e) => selectSpace((e.target as HTMLSelectElement).value)}
       >
         <option value="">-- {$t('common.select')} --</option>
-        {#each spaces as s}
+        {#each spaces as s (s.name)}
           <option value={s.name}>{s.name}</option>
         {/each}
       </select>
@@ -201,7 +207,7 @@
   <!-- Tabs -->
   <div class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm flex flex-col flex-1 overflow-hidden">
     <div class="flex border-b border-gray-200 dark:border-gray-700">
-      {#each ['spaces', 'tags', 'edges', 'indexes', 'er'] as tab}
+      {#each ['spaces', 'tags', 'edges', 'indexes', 'er'] as tab (tab)}
         <button
           class="px-5 py-3 text-sm font-medium cursor-pointer transition-colors {activeTab === tab ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-500' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
           onclick={() => handleTabChange(tab as 'spaces' | 'tags' | 'edges' | 'indexes' | 'er')}
@@ -229,7 +235,7 @@
                 </tr>
               </thead>
               <tbody>
-                {#each spaces as space}
+                {#each spaces as space (space.name)}
                   <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30 {currentSpace === space.name ? 'bg-blue-50 dark:bg-blue-900/20' : ''}">
                     <td class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 font-medium text-gray-800 dark:text-gray-200">{space.name}</td>
                     <td class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300">{space.vid_type}</td>
@@ -262,12 +268,12 @@
                 </tr>
               </thead>
               <tbody>
-                {#each tags as tag}
+                {#each tags as tag (tag.name)}
                   <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30">
                     <td class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 font-medium text-gray-800 dark:text-gray-200">{tag.name}</td>
                     <td class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50">
                       {#if tag.properties?.length}
-                        <span class="text-xs text-gray-500 dark:text-gray-400">{tag.properties.map((p: any) => p.name).join(', ')}</span>
+                        <span class="text-xs text-gray-500 dark:text-gray-400">{tag.properties.map((p) => p.name).join(', ')}</span>
                       {:else}
                         <span class="text-xs text-gray-400 dark:text-gray-500">{$t('common.noProperties')}</span>
                       {/if}
@@ -301,12 +307,12 @@
                 </tr>
               </thead>
               <tbody>
-                {#each edgeTypes as edge}
+                {#each edgeTypes as edge (edge.name)}
                   <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30">
                     <td class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 font-medium text-gray-800 dark:text-gray-200">{edge.name}</td>
                     <td class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50">
                       {#if edge.properties?.length}
-                        <span class="text-xs text-gray-500 dark:text-gray-400">{edge.properties.map((p: any) => p.name).join(', ')}</span>
+                        <span class="text-xs text-gray-500 dark:text-gray-400">{edge.properties.map((p) => p.name).join(', ')}</span>
                       {:else}
                         <span class="text-xs text-gray-400 dark:text-gray-500">{$t('common.noProperties')}</span>
                       {/if}
@@ -342,7 +348,7 @@
                 </tr>
               </thead>
               <tbody>
-                {#each indexes as idx}
+                {#each indexes as idx (idx.name)}
                   <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30">
                     <td class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 font-medium text-gray-800 dark:text-gray-200">{idx.name}</td>
                     <td class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300">{idx.index_type}</td>
@@ -442,11 +448,11 @@
         <div>
           <!-- svelte-ignore a11y_label_has_associated_control -->
           <label class="block text-sm text-gray-600 dark:text-gray-400 mb-1">{$t('common.properties')}</label>
-          {#each newTagProps as prop, i}
+          {#each newTagProps as prop, i (i)}
             <div class="flex gap-2 mb-2 items-start">
               <input type="text" bind:value={prop.name} class="flex-1 px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200" placeholder="{$t('common.name')}" />
               <select bind:value={prop.data_type} class="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200">
-                {#each dataTypes as dt}
+                {#each dataTypes as dt (dt)}
                   <option value={dt}>{dt}</option>
                 {/each}
               </select>
@@ -492,11 +498,11 @@
         <div>
           <!-- svelte-ignore a11y_label_has_associated_control -->
           <label class="block text-sm text-gray-600 dark:text-gray-400 mb-1">{$t('common.properties')}</label>
-          {#each newEdgeProps as prop, i}
+          {#each newEdgeProps as prop, i (i)}
             <div class="flex gap-2 mb-2">
               <input type="text" bind:value={prop.name} class="flex-1 px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200" placeholder="{$t('common.name')}" />
               <select bind:value={prop.data_type} class="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200">
-                {#each dataTypes as dt}
+                {#each dataTypes as dt (dt)}
                   <option value={dt}>{dt}</option>
                 {/each}
               </select>

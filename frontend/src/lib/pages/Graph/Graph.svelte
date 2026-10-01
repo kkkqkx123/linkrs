@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
   import { get } from 'svelte/store';
   import { t } from 'svelte-i18n';
   import { graphStore, type EdgeDetail, type NodeDetail } from '$stores/graph';
@@ -28,7 +29,7 @@
   let cyInstance = $state<cytoscape.Core | null>(null);
   let relayoutToken = $state(0);
   let isExpanding = $state(false);
-  const expandedNodes = new Set<string>();
+  const expandedNodes = new SvelteSet<string>();
 
   const layoutOptions = getLayoutOptions();
 
@@ -235,7 +236,7 @@
         value={layout}
         onchange={handleLayoutChange}
       >
-        {#each layoutOptions as opt}
+        {#each layoutOptions as opt (opt.value)}
           <option value={opt.value}>{opt.label}</option>
         {/each}
       </select>
@@ -253,7 +254,7 @@
     <div class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm px-5 py-3 grid grid-cols-2 gap-4 max-h-48 overflow-y-auto">
       <div>
         <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Nodes</h4>
-        {#each Object.entries(nodeStyles) as [tag, style]}
+        {#each Object.entries(nodeStyles) as [tag, style] (tag)}
           <div class="flex items-center gap-2 mb-1 text-sm">
             <input type="color" value={style.color} oninput={(e) => graphStore.setNodeStyle(tag, { color: (e.target as HTMLInputElement).value })} class="w-8 h-6 cursor-pointer" />
             <span class="text-gray-700 dark:text-gray-300 font-mono text-xs">{tag}</span>
@@ -263,7 +264,7 @@
               onchange={(e) => graphStore.setNodeStyle(tag, { labelProperty: (e.target as HTMLSelectElement).value })}
             >
               <option value="id">id</option>
-              {#each nodeLabelFields[tag] ?? [] as field}
+              {#each nodeLabelFields[tag] ?? [] as field (field)}
                 <option value={field}>{field}</option>
               {/each}
             </select>
@@ -272,7 +273,7 @@
       </div>
       <div>
         <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Edges</h4>
-        {#each Object.entries(edgeStyles) as [type, style]}
+        {#each Object.entries(edgeStyles) as [type, style] (type)}
           <div class="flex items-center gap-2 mb-1 text-sm">
             <input type="color" value={style.color} oninput={(e) => graphStore.setEdgeStyle(type, { color: (e.target as HTMLInputElement).value })} class="w-8 h-6 cursor-pointer" />
             <span class="text-gray-700 dark:text-gray-300 font-mono text-xs">{type}</span>
@@ -282,7 +283,7 @@
               onchange={(e) => graphStore.setEdgeStyle(type, { labelProperty: (e.target as HTMLSelectElement).value })}
             >
               <option value="type">type</option>
-              {#each edgeLabelFields[type] ?? [] as field}
+              {#each edgeLabelFields[type] ?? [] as field (field)}
                 <option value={field}>{field}</option>
               {/each}
             </select>
@@ -326,7 +327,7 @@
           <button class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer" onclick={() => graphStore.hideDetail()}>✕</button>
         </div>
         <div class="space-y-3">
-          {#each Object.entries(detailData) as [key, value]}
+          {#each Object.entries(detailData) as [key, value] (key)}
             {#if key !== 'properties'}
               <div class="text-sm">
                 <span class="text-gray-500 dark:text-gray-400 block text-xs uppercase tracking-wide">{key}</span>
@@ -337,7 +338,7 @@
           {#if detailData.properties && Object.keys(detailData.properties).length > 0}
             <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
               <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{$t('graph.properties')}</h4>
-              {#each Object.entries(detailData.properties) as [k, v]}
+              {#each Object.entries(detailData.properties) as [k, v] (k)}
                 <div class="text-sm mb-2">
                   <span class="text-gray-500 dark:text-gray-400 block text-xs">{k}</span>
                   <span class="text-gray-800 dark:text-gray-200 font-mono text-xs break-all">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>

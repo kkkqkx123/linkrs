@@ -16,7 +16,9 @@
 
   // svelte-routing's typings expect legacy Svelte 4 component constructors;
   // cast Svelte 5 components to satisfy Route's `component` prop type.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- svelte-routing's Route prop is typed against Svelte 4's any-parameterized components
   type LegacyComponent = typeof SvelteComponent<any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see LegacyComponent above
   const asLegacy = (c: Component<any>) => c as unknown as LegacyComponent;
 
   setUnauthorizedHandler(() => {
@@ -35,7 +37,7 @@
         <MainLayout>
           <Route path="/" component={asLegacy(MainPage)} />
           <Route path="console" component={asLegacy(Console)} />
-          <Route path="schema" let:params>
+          <Route path="schema">
             <Schema />
           </Route>
           <Route path="graph" component={asLegacy(Graph)} />

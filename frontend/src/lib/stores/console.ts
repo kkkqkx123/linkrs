@@ -254,7 +254,7 @@ function abortActiveStream() {
 }
 
 function createConsoleStore() {
-  const { subscribe, set, update } = writable<ConsoleState>({
+  const { subscribe, update } = writable<ConsoleState>({
     editorContent: localStorage.getItem('graphdb_editor_draft') || '',
     isExecuting: false,
     currentResult: null,
