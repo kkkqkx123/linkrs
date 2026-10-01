@@ -697,3 +697,54 @@ fn test_upsert_edge_yield_execution() {
         .exec_dml("UPSERT EDGE ON KNOWS SET since = '2024-01-01' WHERE id(src) == 1 AND id(dst) == 2 YIELD since")
         .assert_success();
 }
+
+// ==================== MERGE Alias Self-Reference Tests ====================
+
+#[test]
+fn test_merge_on_match_alias_self_reference() {
+    // Value expressions may reference the merged node's own alias: the
+    // binder normalizes `v.age` to the row property the sink already
+    // resolves, so this behaves exactly like the bare form.
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id BIGINT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 25)")
+        .assert_success()
+        .exec_dml("MERGE (v:Person {name: 'Alice'}) ON MATCH SET age = v.age + 5")
+        .assert_success();
+    assert_last_merged(&scenario, 1);
+    scenario.assert_vertex_props(
+        1,
+        "Person",
+        HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(30))]),
+    );
+}
+
+#[test]
+fn test_merge_on_match_unrelated_alias_stays_rejected() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id BIGINT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 25)")
+        .assert_success()
+        .exec_dml("MERGE (v:Person {name: 'Alice'}) ON MATCH SET age = w.age + 5")
+        .assert_error();
+}
+
+// ==================== MERGE Whole-Map Overwrite Rejection Tests ====================
+
+#[test]
+fn test_merge_on_match_map_overwrite_is_rejected() {
+    // Same storage limitation as UPDATE: the map form would silently keep
+    // stale properties, so it fails explicitly instead.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id BIGINT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 25)")
+        .assert_success()
+        .exec_dml("MERGE (v:Person {name: 'Alice'}) ON MATCH SET v = {age: 1}")
+        .assert_error();
+}

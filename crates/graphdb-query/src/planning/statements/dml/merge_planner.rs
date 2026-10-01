@@ -222,6 +222,12 @@ impl MergePlanner {
             graphdb_core::types::expr::expression_context::ExpressionAnalysisContext,
         >,
     ) -> Result<VertexUpdateInfo, PlannerError> {
+        if set_clause.assignments.iter().any(|a| a.is_map_overwrite) {
+            return Err(PlannerError::PlanGenerationFailed(
+                "Whole-map overwrite (SET v = {...}) is not supported: assign properties individually"
+                    .to_string(),
+            ));
+        }
         let mut properties = HashMap::new();
 
         for assignment in &set_clause.assignments {

@@ -207,8 +207,12 @@ UPDATE EDGE <src_vid> -> <dst_vid> [@<rank>] OF <edge_type> SET <prop> = <value>
 - 支持多属性更新
 - 支持节点和边更新
 - 支持表达式计算
-- 支持整映射覆盖（`SET` 右侧为映射字面量且左侧为裸变量时，
-  替换整组属性；空映射清空属性），不可与逐属性赋值混写
+- 整映射覆盖（`SET v = {...}`）在 UPDATE 中明确拒绝：
+  存储层仅支持逐属性合并写入，接受该形式会静默保留旧属性，
+  因此直接报错，请逐属性赋值
+- 目标别名的自引用可用：`SET` 右值与条件中的 `<别名>.<属性>`
+  在别名即更新目标且未被外层作用域绑定时，按行属性解析，
+  与裸属性名写法等价；其他限定符保持原报错
 - 边更新支持两种语法：`OF <edge_type> FROM <src> TO <dst>` 与短形式 `<src> -> <dst> OF <edge_type>`
 - **支持YIELD子句** - 返回更新后的属性值
 
@@ -350,13 +354,18 @@ MATCH (a)-[e:KNOWS]->(b) DELETE e
 ## 6. MERGE - 合并数据
 
 ### 功能
-如果存在则更新，不存在则创建（基于模式匹配）。
+如果存在则更新，不存在则创建（基于模式匹配）。点模式的条件执行已实现，
+同一事务快照内先按标签加全属性相等做存在性探查，再执行命中的分支；
+边模式携带动作子句会显式拒绝，不会静默丢弃。
 
 ### 语法结构
 ```cypher
 MERGE (<variable>:<Label> {<prop>: <value>}) [ON CREATE SET <prop> = <value>] [ON MATCH SET <prop> = <value>] [SET <prop> = <value>]
 MERGE EDGE|VERTEX ON <tag_or_edge_type> [SET <prop> = <value>] WHERE id(vid|src) == <value> [AND id(dst) == <value>]
 ```
+
+双动作子句可按任意顺序各出现至多一次，重复出现或 `ON` 后缺 `CREATE`/`MATCH`
+关键字均报语法错误。无动作的合并保持 `IF NOT EXISTS` 插入路径。
 
 ### 关键特性
 - 幂等操作
@@ -368,6 +377,20 @@ MERGE EDGE|VERTEX ON <tag_or_edge_type> [SET <prop> = <value>] WHERE id(vid|src)
 - MATCH 语句支持跟随 MERGE 子句（解析校验，不改变匹配结果）
 - 模式后的裸 `SET` 子句同时作用于创建与匹配两条分支，
   其赋值会合并进已有的 `ON CREATE` / `ON MATCH` 子句
+- 条件分支复用插入与更新写入能力，不新增流式算子；
+  无论走哪条分支，均返回统一的 `merged` 列，不透出内部分支列名差异
+- 探查语义为标签加全属性相等，数值类型宽容比较
+ （SmallInt/Int/BigInt 互比按数值相等）；模式属性必须为常量表达式，
+  行变量、属性引用、子查询均明确拒绝
+- 仅覆盖点模式；边模式携带动作因端点解析需要数据流、标量探查不可见，
+  显式拒绝
+- 探查与分支写入在同一事务作用域内完成；仅含 `ON CREATE` 时，
+  第二次命中因无匹配动作而返回 `0`，不会重复创建
+- 整映射覆盖（`SET v = {...}`）在 MERGE 动作子句中明确拒绝，
+  与 UPDATE 原因相同：存储层仅合并写入，优先使用逐属性赋值
+- `ON MATCH` / `ON CREATE` 的赋值表达式支持目标别名自引用
+  （如 `SET age = v.age + 5`），按命中行属性解析；
+  其他限定符保持原报错
 
 ### 示例
 ```cypher
@@ -380,12 +403,11 @@ ON CREATE SET p.created_at = timestamp()
 MERGE (p:Person {id: '101'})
 ON MATCH SET p.name = 'Alice', p.updated = true
 ON CREATE SET p.name = 'Alice', p.created = timestamp(), p.status = 'active'
-
--- MERGE边关系
-MERGE (a:Person {name: 'Alice'})-[r:FRIEND {since: 2020}]->(b:Person {name: 'Bob'})
-ON MATCH SET r.updated = timestamp()
-ON CREATE SET r.created = timestamp()
 ```
+
+点模式之外的边模式携带动作子句会明确失败，例如
+`MERGE (a)-[r:KNOWS]->(b) ON MATCH SET r.weight = 1.0` 直接返回错误，
+请改用点合并加边写入的组合。
 
 ---
 

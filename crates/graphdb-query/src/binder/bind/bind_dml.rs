@@ -174,6 +174,8 @@ impl Binder {
         &mut self,
         stmt: &crate::parser::ast::UpdateStmt,
     ) -> DBResult<BoundStatement> {
+        reject_map_overwrite(&stmt.set_clause.assignments)?;
+        let target_alias = update_target_alias(&stmt.target);
         let target = match &stmt.target {
             UpdateTarget::Vertex(expr) => {
                 let b = self.bind_expr(expr)?;
@@ -204,12 +206,19 @@ impl Binder {
                 }
             }
         };
-        let assignments = Self::bind_assignments(self, &stmt.set_clause.assignments)?;
+        let assignments =
+            Self::bind_assignments(self, &stmt.set_clause.assignments, target_alias.as_deref())?;
         let where_clause = stmt
             .where_clause
             .as_ref()
             .map(|w| self.bind_expr(w))
-            .transpose()?;
+            .transpose()?
+            .map(|bound| match target_alias.as_deref() {
+                Some(alias) if self.scope.lookup(alias).is_none() => {
+                    normalize_target_alias_refs(bound, alias)
+                }
+                _ => bound,
+            });
         Ok(BoundStatement::Update(BoundUpdate {
             target,
             assignments,
@@ -265,13 +274,23 @@ impl Binder {
         &mut self,
         stmt: &crate::parser::ast::MergeStmt,
     ) -> DBResult<BoundStatement> {
+        if let Some(clause) = &stmt.on_create {
+            reject_map_overwrite(&clause.assignments)?;
+        }
+        if let Some(clause) = &stmt.on_match {
+            reject_map_overwrite(&clause.assignments)?;
+        }
+        let target_alias = match &stmt.pattern {
+            Pattern::Node(node) => node.variable.clone(),
+            _ => None,
+        };
         let on_create = if let Some(clause) = &stmt.on_create {
-            Self::bind_assignments(self, &clause.assignments)?
+            Self::bind_assignments(self, &clause.assignments, target_alias.as_deref())?
         } else {
             Vec::new()
         };
         let on_match = if let Some(clause) = &stmt.on_match {
-            Self::bind_assignments(self, &clause.assignments)?
+            Self::bind_assignments(self, &clause.assignments, target_alias.as_deref())?
         } else {
             Vec::new()
         };
@@ -287,7 +306,7 @@ impl Binder {
         &mut self,
         stmt: &crate::parser::ast::SetStmt,
     ) -> DBResult<BoundStatement> {
-        let assignments = Self::bind_assignments(self, &stmt.assignments)?;
+        let assignments = Self::bind_assignments(self, &stmt.assignments, None)?;
         Ok(BoundStatement::Set(BoundSet { assignments }))
     }
 
@@ -332,10 +351,22 @@ impl Binder {
         }))
     }
 
-    fn bind_assignments(&mut self, assignments: &[Assignment]) -> DBResult<Vec<BoundAssignment>> {
+    fn bind_assignments(
+        &mut self,
+        assignments: &[Assignment],
+        target_alias: Option<&str>,
+    ) -> DBResult<Vec<BoundAssignment>> {
+        let normalize = match target_alias {
+            Some(alias) if self.scope.lookup(alias).is_none() => Some(alias),
+            _ => None,
+        };
         let mut out = Vec::with_capacity(assignments.len());
         for a in assignments {
             let value = self.bind_expr(&a.value)?;
+            let value = match normalize {
+                Some(alias) => normalize_target_alias_refs(value, alias),
+                None => value,
+            };
             let target = a.target.as_ref().map(|t| self.bind_expr(t)).transpose()?;
             let object = a.object.as_ref().map(|o| self.bind_expr(o)).transpose()?;
             out.push(BoundAssignment {
@@ -435,5 +466,264 @@ impl Binder {
         binder.schema_manager = self.schema_manager.clone();
         binder.space_name = self.space_name.clone();
         binder.bind_expr(&contextual)
+    }
+}
+
+/// Reject whole-map overwrite assignments (`SET v = {...}`).
+///
+/// The storage layer only merges per-property writes, so accepting the
+/// map form would silently keep stale properties. Fail explicitly at bind
+/// time instead of mis-executing.
+fn reject_map_overwrite(assignments: &[Assignment]) -> DBResult<()> {
+    if assignments.iter().any(|a| a.is_map_overwrite) {
+        return Err(graphdb_core::error::DBError::from(
+            graphdb_core::error::QueryError::invalid_query(
+                "Whole-map overwrite (SET v = {...}) is not supported: assign properties individually"
+                    .to_string(),
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// The variable alias naming an update target, when the target carries one.
+///
+/// Only single-alias vertex targets qualify: edge targets name endpoints
+/// rather than the updated row, so they are left out deliberately.
+fn update_target_alias(target: &UpdateTarget) -> Option<String> {
+    match target {
+        UpdateTarget::TagOnVertex { vid, .. } => variable_name(vid),
+        UpdateTarget::Vertex(expr) => variable_name(expr),
+        _ => None,
+    }
+}
+
+/// The variable name carried by an expression, if it is a bare variable.
+fn variable_name(
+    expr: &graphdb_core::types::expr::contextual::ContextualExpression,
+) -> Option<String> {
+    match expr.expression().map(|meta| meta.inner().clone()) {
+        Some(Expression::Variable(name)) => Some(name),
+        _ => None,
+    }
+}
+
+/// Rewrite `alias.prop` references to bare property names.
+///
+/// Update sinks resolve bare names against the target row's existing
+/// properties, while the target alias itself is never bound in the row
+/// context. The rewrite is semantics-preserving exactly there, so callers
+/// must only apply it when the alias is otherwise unbound in scope.
+/// References under any other qualifier, and every subquery body, are left
+/// untouched.
+fn normalize_target_alias_refs(expr: BoundExpression, alias: &str) -> BoundExpression {
+    match expr {
+        BoundExpression::Property {
+            object,
+            property,
+            value_type,
+        } => match *object {
+            BoundExpression::Variable(name, _) if name == alias => {
+                BoundExpression::Variable(property, value_type)
+            }
+            other => BoundExpression::Property {
+                object: Box::new(normalize_target_alias_refs(other, alias)),
+                property,
+                value_type,
+            },
+        },
+        BoundExpression::StructField {
+            base,
+            field,
+            return_type,
+        } => BoundExpression::StructField {
+            base: Box::new(normalize_target_alias_refs(*base, alias)),
+            field,
+            return_type,
+        },
+        BoundExpression::BinaryOp {
+            left,
+            op,
+            right,
+            return_type,
+        } => BoundExpression::BinaryOp {
+            left: Box::new(normalize_target_alias_refs(*left, alias)),
+            op,
+            right: Box::new(normalize_target_alias_refs(*right, alias)),
+            return_type,
+        },
+        BoundExpression::UnaryOp {
+            op,
+            operand,
+            return_type,
+        } => BoundExpression::UnaryOp {
+            op,
+            operand: Box::new(normalize_target_alias_refs(*operand, alias)),
+            return_type,
+        },
+        BoundExpression::Function(mut call) => {
+            call.args = call
+                .args
+                .into_iter()
+                .map(|arg| normalize_target_alias_refs(arg, alias))
+                .collect();
+            BoundExpression::Function(call)
+        }
+        BoundExpression::Aggregate(mut call) => {
+            call.arguments = call
+                .arguments
+                .into_iter()
+                .map(|arg| normalize_target_alias_refs(arg, alias))
+                .collect();
+            BoundExpression::Aggregate(call)
+        }
+        BoundExpression::List(items, data_type) => BoundExpression::List(
+            items
+                .into_iter()
+                .map(|item| normalize_target_alias_refs(item, alias))
+                .collect(),
+            data_type,
+        ),
+        BoundExpression::Map(pairs, data_type) => BoundExpression::Map(
+            pairs
+                .into_iter()
+                .map(|(name, value)| (name, normalize_target_alias_refs(value, alias)))
+                .collect(),
+            data_type,
+        ),
+        BoundExpression::Case {
+            expr,
+            when_then,
+            else_expr,
+            return_type,
+        } => BoundExpression::Case {
+            expr: expr.map(|inner| Box::new(normalize_target_alias_refs(*inner, alias))),
+            when_then: when_then
+                .into_iter()
+                .map(|(when, then)| {
+                    (
+                        normalize_target_alias_refs(when, alias),
+                        normalize_target_alias_refs(then, alias),
+                    )
+                })
+                .collect(),
+            else_expr: else_expr.map(|inner| Box::new(normalize_target_alias_refs(*inner, alias))),
+            return_type,
+        },
+        BoundExpression::Cast { expr, target_type } => BoundExpression::Cast {
+            expr: Box::new(normalize_target_alias_refs(*expr, alias)),
+            target_type,
+        },
+        BoundExpression::Predicate {
+            func,
+            args,
+            return_type,
+        } => BoundExpression::Predicate {
+            func,
+            args: args
+                .into_iter()
+                .map(|arg| normalize_target_alias_refs(arg, alias))
+                .collect(),
+            return_type,
+        },
+        BoundExpression::Subscript {
+            collection,
+            index,
+            return_type,
+        } => BoundExpression::Subscript {
+            collection: Box::new(normalize_target_alias_refs(*collection, alias)),
+            index: Box::new(normalize_target_alias_refs(*index, alias)),
+            return_type,
+        },
+        BoundExpression::Path(items, data_type) => BoundExpression::Path(
+            items
+                .into_iter()
+                .map(|item| normalize_target_alias_refs(item, alias))
+                .collect(),
+            data_type,
+        ),
+        BoundExpression::PathBuild(items, data_type) => BoundExpression::PathBuild(
+            items
+                .into_iter()
+                .map(|item| normalize_target_alias_refs(item, alias))
+                .collect(),
+            data_type,
+        ),
+        BoundExpression::ListComprehension {
+            variable,
+            source,
+            filter,
+            map,
+            return_type,
+        } => {
+            if variable == alias {
+                BoundExpression::ListComprehension {
+                    variable,
+                    source,
+                    filter,
+                    map,
+                    return_type,
+                }
+            } else {
+                BoundExpression::ListComprehension {
+                    variable,
+                    source: Box::new(normalize_target_alias_refs(*source, alias)),
+                    filter: filter
+                        .map(|inner| Box::new(normalize_target_alias_refs(*inner, alias))),
+                    map: map.map(|inner| Box::new(normalize_target_alias_refs(*inner, alias))),
+                    return_type,
+                }
+            }
+        }
+        BoundExpression::Reduce {
+            accumulator,
+            initial,
+            variable,
+            source,
+            mapping,
+            return_type,
+        } => {
+            if accumulator == alias || variable == alias {
+                BoundExpression::Reduce {
+                    accumulator,
+                    initial,
+                    variable,
+                    source,
+                    mapping,
+                    return_type,
+                }
+            } else {
+                BoundExpression::Reduce {
+                    accumulator,
+                    initial: Box::new(normalize_target_alias_refs(*initial, alias)),
+                    variable,
+                    source: Box::new(normalize_target_alias_refs(*source, alias)),
+                    mapping: Box::new(normalize_target_alias_refs(*mapping, alias)),
+                    return_type,
+                }
+            }
+        }
+        BoundExpression::Lambda { params, body } => {
+            if params.iter().any(|param| param == alias) {
+                BoundExpression::Lambda { params, body }
+            } else {
+                BoundExpression::Lambda {
+                    params,
+                    body: Box::new(normalize_target_alias_refs(*body, alias)),
+                }
+            }
+        }
+        BoundExpression::In {
+            expr,
+            subquery,
+            negated,
+            original_body,
+        } => BoundExpression::In {
+            expr: Box::new(normalize_target_alias_refs(*expr, alias)),
+            subquery,
+            negated,
+            original_body,
+        },
+        other => other,
     }
 }

@@ -794,7 +794,13 @@ max_files = 10
 1. 配置文件中的显式配置
 2. 配置文件中省略的字段使用默认值
 3. 路径类配置相对于配置文件所在目录解析
-4. 运行时可通过 HTTP 管理接口查看/修改部分配置（`SHOW CONFIGS` / `UPDATE CONFIGS`）
+4. 运行时可通过查询语句查看/修改部分配置（`SHOW CONFIGS` / `UPDATE CONFIGS`，
+   详见其他语句文档的配置管理节）
+
+查询可访问的模块仅限 database、transaction、log、auth、bootstrap、
+optimizer、monitoring 七个节；grpc、parallel、storage、query_resource、
+columnar、monitoring 慢查询子节、vector、fulltext、embedded 等其余节
+仅能通过配置文件与管理接口维护，不在查询配置词汇内。
 
 ---
 

@@ -209,7 +209,8 @@ KILL QUERY 123, 456
 ### 7.1 SHOW CONFIGS - 显示配置
 
 #### 功能
-显示系统配置信息。
+读取真实配置存储并显示系统配置信息。无模块时列出全部模块，
+有模块时仅列出该模块。未知模块明确拒绝。
 
 #### 语法结构
 ```cypher
@@ -217,19 +218,35 @@ SHOW CONFIGS [<module>]
 ```
 
 #### 参数说明
-- `module`: 可选，指定模块名（GRAPH、STORAGE、META）
+- `module`: 可选，模块名，仅支持 database、transaction、log、auth、
+  bootstrap、optimizer、monitoring，不区分大小写
+
+#### 输出列
+- `section`：配置节，与模块名一致
+- `key`：配置项名
+- `value`：当前值，字符串保持原样，其余渲染为紧凑 JSON
+- `requires_restart`：该项是否需要重启生效
+
+#### 权限
+需要管理员权限。
+
+流式查询（`/v1/query/stream`）、gRPC 流式与导出接口不支持
+配置语句，会直接返回错误指引使用一元查询接口；
+单行结果无需流式，且流式物化无法承载服务端应用语义。
 
 #### 示例
 ```cypher
 SHOW CONFIGS
-SHOW CONFIGS GRAPH
-SHOW CONFIGS STORAGE
+SHOW CONFIGS database
+SHOW CONFIGS optimizer
 ```
 
 ### 7.2 UPDATE CONFIGS - 更新配置
 
 #### 功能
-更新系统配置值。
+更新系统配置值。查询引擎仅做语法解析与常量求值并构造意图，
+不直接触碰全局存储；服务层复用管理接口的校验、持久化、重启标记
+与回滚语义后应用意图。不新增查询内逐项调用形态。
 
 #### 语法结构
 ```cypher
@@ -237,15 +254,26 @@ UPDATE CONFIGS [<module>] <config_name> = <value>
 ```
 
 #### 参数说明
-- `module`: 可选，指定模块名（GRAPH、STORAGE、META）
-- `config_name`: 配置项名称
-- `value`: 配置值（支持表达式）
+- `module`: 可选，模块名，仅支持 database、transaction、log、auth、
+  bootstrap、optimizer、monitoring，不区分大小写；省略时配置名必须
+  在全部模块中唯一归属，否则未知键与歧义键均明确拒绝
+- `config_name`: 配置项名称，已知键才可写，未知键明确拒绝
+- `value`: 配置值，支持常量表达式（含参数与会话变量参与的确定性
+  标量计算）；需要行输入的变量、属性引用、子查询明确拒绝
+
+#### 返回列
+- `updated`：实际生效的 `section.key`
+- `requires_restart`：是否需要重启生效
+- `persisted`：是否已持久化到保留的配置文件
+
+#### 权限
+需要管理员权限，走直接写路径，不经只读快照与计划缓存。
 
 #### 示例
 ```cypher
+UPDATE CONFIGS database max_connections = 1000
 UPDATE CONFIGS max_connections = 1000
-UPDATE CONFIGS STORAGE cache_size = 1024
-UPDATE CONFIGS wal_ttl = 86400
+UPDATE CONFIGS database max_connections = 50 * 2
 ```
 
 #### 与参考写法的对应关系

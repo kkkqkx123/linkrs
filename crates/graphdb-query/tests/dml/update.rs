@@ -547,3 +547,73 @@ fn test_update_null_arithmetic() {
         .exec_dml("UPDATE 1 ON Counter SET val = val + 1")
         .assert_error();
 }
+
+// ==================== UPDATE Whole-Map Overwrite Rejection Tests ====================
+
+#[test]
+fn test_update_map_overwrite_is_rejected() {
+    // The storage layer only merges per-property writes: accepting the map
+    // form would silently keep stale properties, so it fails explicitly.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .assert_success()
+        .exec_dml("UPDATE 1 ON Person SET v = {age: 20}")
+        .assert_error();
+}
+
+#[test]
+fn test_update_unrelated_alias_reference_stays_rejected() {
+    // Only the update target's own alias normalizes to the row; any other
+    // qualifier keeps failing as before.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .assert_success()
+        .exec_dml("UPDATE 1 ON Person SET age = w.age + 1")
+        .assert_error();
+}
+
+// ==================== UPDATE Standalone vid Morphology Gate Tests ====================
+
+#[test]
+fn test_update_variable_vid_is_rejected_with_precise_error() {
+    // Standalone UPDATE has no row scope: a bare query variable cannot be
+    // evaluated by the single-row source and must fail at planning time.
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .assert_success()
+        .exec_dml("UPDATE v ON Person SET age = 31");
+
+    let error = scenario.error().expect("Variable vid should be rejected");
+    assert!(
+        error.contains("Standalone UPDATE vid"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn test_update_complex_vid_expression_is_rejected() {
+    // Compound expressions are outside the allowed literal / parameter /
+    // session-variable shapes and must fail with the same gate.
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .assert_success()
+        .exec_dml("UPDATE 1 + 2 ON Person SET age = 31");
+
+    let error = scenario.error().expect("Complex vid should be rejected");
+    assert!(
+        error.contains("Standalone UPDATE vid"),
+        "unexpected error: {error}"
+    );
+}

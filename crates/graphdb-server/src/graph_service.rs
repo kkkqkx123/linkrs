@@ -764,6 +764,18 @@ impl<
         session_variables: Option<HashMap<String, graphdb_core::Value>>,
     ) -> Result<StreamingQueryResult, String> {
         let session_id = session.id();
+        // Configuration statements resolve server-side on the materialized
+        // path only: their results are single-row, and the streaming
+        // materialization would echo unapplied values. Reject them here so
+        // every surface (stream, gRPC stream, export) fails fast with
+        // guidance instead of bypassing permission or reporting success
+        // without applying anything.
+        if Self::is_config_statement(stmt) {
+            return Err(
+                "UPDATE CONFIGS and SHOW CONFIGS are not supported on streaming endpoints; use the unary query endpoint instead"
+                    .to_string(),
+            );
+        }
         // Transaction / session commands are forwarded to the materialized
         // `execute` path: the streaming path does not build a session
         // controller (no CommandScope branch in the stream executor), and
@@ -1849,13 +1861,23 @@ impl<
         result
     }
 
+    /// Whether the statement is a server-resolved configuration statement.
+    ///
+    /// Shared by permission classification and the streaming entry guard so
+    /// both agree on the set: configuration intents resolve on the
+    /// materialized path only.
+    fn is_config_statement(stmt: &str) -> bool {
+        let upper = stmt.trim().to_uppercase();
+        upper.starts_with("UPDATE CONFIGS") || upper.starts_with("SHOW CONFIGS")
+    }
+
     fn extract_permission_from_statement(&self, stmt: &str) -> Permission {
         let stmt_upper = stmt.trim().to_uppercase();
 
-        // Configuration writes mutate global server state outside any space:
-        // only administrators may issue them. Reads of configuration stay on
-        // the default read path.
-        if stmt_upper.starts_with("UPDATE CONFIGS") {
+        // Configuration statements touch global server state outside any
+        // space: only administrators may issue them. This matches the
+        // statement category mapping where both forms require admin rights.
+        if Self::is_config_statement(stmt) {
             Permission::Admin
         } else if stmt_upper.starts_with("SELECT") || stmt_upper.starts_with("MATCH") {
             Permission::Read
@@ -2356,6 +2378,22 @@ mod tests {
             "unexpected error: {}",
             bare_let
         );
+    }
+
+    #[test]
+    fn config_statements_are_classified_for_streaming_guard() {
+        assert!(GraphService::<MockStorage>::is_config_statement(
+            "UPDATE CONFIGS SET a = 1"
+        ));
+        assert!(GraphService::<MockStorage>::is_config_statement(
+            "  show configs database"
+        ));
+        assert!(!GraphService::<MockStorage>::is_config_statement(
+            "MATCH (n) RETURN n"
+        ));
+        assert!(!GraphService::<MockStorage>::is_config_statement(
+            "UPDATE 1 ON Person SET age = 2"
+        ));
     }
 
     #[test]

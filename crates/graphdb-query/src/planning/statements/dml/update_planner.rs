@@ -28,6 +28,48 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct UpdatePlanner;
 
+/// Standalone UPDATE has no row scope, so its vid can only be a literal,
+/// a query parameter or a session variable. Anything else (bare query
+/// variable or compound expression) cannot be evaluated by the single-row
+/// source and must fail here with a precise planning error instead of a
+/// generic execution-time evaluation failure.
+fn validate_bound_standalone_vid(
+    vid: &crate::binder::bound::BoundExpression,
+) -> Result<(), PlannerError> {
+    match vid {
+        crate::binder::bound::BoundExpression::Literal(..)
+        | crate::binder::bound::BoundExpression::ParameterRef(..)
+        | crate::binder::bound::BoundExpression::SessionVariable(..) => Ok(()),
+        crate::binder::bound::BoundExpression::Variable(name, _) => {
+            Err(PlannerError::PlanGenerationFailed(format!(
+                "Standalone UPDATE vid does not support query variable '{name}': use a literal, a parameter (@p) or a session variable ($v)"
+            )))
+        }
+        _ => Err(PlannerError::PlanGenerationFailed(
+            "Standalone UPDATE vid must be a literal, a parameter (@p) or a session variable ($v)".to_string(),
+        )),
+    }
+}
+
+/// Legacy-path counterpart of [`validate_bound_standalone_vid`]: the AST
+/// pipeline carries vid as a `ContextualExpression`, so the morphology
+/// check runs on the inner `Expression`.
+fn validate_ast_standalone_vid(vid: &ContextualExpression) -> Result<(), PlannerError> {
+    match vid.expression().map(|meta| meta.inner().clone()) {
+        Some(graphdb_core::Expression::Literal(_))
+        | Some(graphdb_core::Expression::Parameter(_))
+        | Some(graphdb_core::Expression::SessionVariable(_)) => Ok(()),
+        Some(graphdb_core::Expression::Variable(name)) => {
+            Err(PlannerError::PlanGenerationFailed(format!(
+                "Standalone UPDATE vid does not support query variable '{name}': use a literal, a parameter (@p) or a session variable ($v)"
+            )))
+        }
+        _ => Err(PlannerError::PlanGenerationFailed(
+            "Standalone UPDATE vid must be a literal, a parameter (@p) or a session variable ($v)".to_string(),
+        )),
+    }
+}
+
 impl UpdatePlanner {
     /// Create a new update planner.
     pub fn new() -> Self {
@@ -216,6 +258,7 @@ impl Planner for UpdatePlanner {
                 return Ok(sub_plan);
             }
             crate::binder::bound::BoundUpdateTarget::TagOnVertex { vid, tag_name } => {
+                validate_bound_standalone_vid(vid)?;
                 let vid_ctx =
                     crate::binder::expr_converter::bound_expr_to_contextual(vid, &expr_ctx)
                         .map_err(PlannerError::PlanGenerationFailed)?;
@@ -272,6 +315,18 @@ impl Planner for UpdatePlanner {
         qctx: Arc<QueryContext>,
     ) -> Result<SubPlan, PlannerError> {
         let update_stmt = self.extract_update_stmt(validated.stmt())?;
+
+        if update_stmt
+            .set_clause
+            .assignments
+            .iter()
+            .any(|a| a.is_map_overwrite)
+        {
+            return Err(PlannerError::PlanGenerationFailed(
+                "Whole-map overwrite (SET v = {...}) is not supported: assign properties individually"
+                    .to_string(),
+            ));
+        }
 
         // Unified entry for expression-level EXISTS / IN: subqueries in
         // UPDATE SET values or the UPDATE WHERE condition are rejected at
@@ -384,6 +439,7 @@ impl Planner for UpdatePlanner {
             }
             UpdateTarget::TagOnVertex { vid, tag_name } => {
                 // Update specific tag on a specific vertex
+                validate_ast_standalone_vid(vid)?;
                 let mut properties = HashMap::new();
                 for assignment in &update_stmt.set_clause.assignments {
                     properties.insert(assignment.property.clone(), assignment.value.clone());
