@@ -41,6 +41,7 @@ pub fn create_routes<
 
 /// Get vertex details
 #[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
+#[into_params(parameter_in = Query)]
 pub struct GetVertexParams {
     pub space: String,
 }
@@ -100,6 +101,7 @@ async fn get_vertex<
 
 /// Get edge details
 #[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
+#[into_params(parameter_in = Query)]
 pub struct GetEdgeParams {
     pub space: String,
     pub src: String,
@@ -160,6 +162,7 @@ async fn get_edge<
 
 /// Get neighbors of a vertex
 #[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
+#[into_params(parameter_in = Query)]
 pub struct GetNeighborsParams {
     pub space: String,
     /// Direction: OUT, IN, or BOTH

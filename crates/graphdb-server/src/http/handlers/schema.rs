@@ -147,6 +147,7 @@ pub async fn drop_space<
 
 #[utoipa::path(
     get,
+    operation_id = "get_v1_schema_spaces",
     path = "/v1/schema/spaces",
     tag = "Schema",
     responses(
@@ -198,6 +199,7 @@ pub async fn list_spaces<
 
 #[utoipa::path(
     post,
+    operation_id = "post_v1_schema_spaces_name_tags",
     path = "/v1/schema/spaces/{name}/tags",
     tag = "Schema",
     params(("name" = String, Path, description = "Space name")),
@@ -257,6 +259,7 @@ pub async fn create_tag<
 
 #[utoipa::path(
     get,
+    operation_id = "get_v1_schema_spaces_name_tags",
     path = "/v1/schema/spaces/{name}/tags",
     tag = "Schema",
     params(("name" = String, Path, description = "Space name")),
@@ -315,6 +318,7 @@ pub async fn list_tags<
 
 #[utoipa::path(
     post,
+    operation_id = "post_v1_schema_spaces_name_edge_types",
     path = "/v1/schema/spaces/{name}/edge-types",
     tag = "Schema",
     params(("name" = String, Path, description = "Space name")),
@@ -374,6 +378,7 @@ pub async fn create_edge_type<
 
 #[utoipa::path(
     get,
+    operation_id = "get_v1_schema_spaces_name_edge_types",
     path = "/v1/schema/spaces/{name}/edge-types",
     tag = "Schema",
     params(("name" = String, Path, description = "Space name")),

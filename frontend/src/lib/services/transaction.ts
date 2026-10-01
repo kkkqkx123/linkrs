@@ -1,35 +1,33 @@
-import { post } from '$utils/http';
-import type { BeginTransactionRequest, BatchQueryRequest, BatchQueryResponse } from '$types/schema';
+import { call, client } from '$lib/api/client';
+import type { components } from '$types/schema.gen';
+
+type BeginTransactionRequest = components['schemas']['BeginTransactionRequest'];
+type TransactionResponse = components['schemas']['TransactionResponse'];
 
 export interface BeginTransactionParams {
-  session_id: number;
-  read_only?: boolean;
-  timeout_seconds?: number;
-  query_timeout_seconds?: number;
-  statement_timeout_seconds?: number;
-  idle_timeout_seconds?: number;
-}
-
-export interface BeginTransactionResponse {
-  transaction_id: number;
-  status: string;
-}
-
-export interface CommitTransactionParams {
-  session_id: number;
-}
-
-export interface RollbackTransactionParams {
-  session_id: number;
+	readOnly?: boolean;
+	timeoutSeconds?: number;
+	queryTimeoutSeconds?: number;
+	statementTimeoutSeconds?: number;
+	idleTimeoutSeconds?: number;
 }
 
 export const transactionService = {
-  begin: async (params: BeginTransactionParams): Promise<BeginTransactionResponse> =>
-    await post<BeginTransactionResponse>('/v1/transactions', params as any),
-  commit: async (id: number, params: CommitTransactionParams): Promise<{ message: string; transaction_id: number }> =>
-    await post<{ message: string; transaction_id: number }>(`/v1/transactions/${id}/commit`, params),
-  rollback: async (id: number, params: RollbackTransactionParams): Promise<{ message: string; transaction_id: number }> =>
-    await post<{ message: string; transaction_id: number }>(`/v1/transactions/${id}/rollback`, params),
+	begin: async (params?: BeginTransactionParams): Promise<TransactionResponse> => {
+		const body: BeginTransactionRequest = {};
+		if (params?.readOnly !== undefined) body.read_only = params.readOnly;
+		if (params?.timeoutSeconds !== undefined) body.timeout_seconds = params.timeoutSeconds;
+		if (params?.queryTimeoutSeconds !== undefined)
+			body.query_timeout_seconds = params.queryTimeoutSeconds;
+		if (params?.statementTimeoutSeconds !== undefined)
+			body.statement_timeout_seconds = params.statementTimeoutSeconds;
+		if (params?.idleTimeoutSeconds !== undefined) body.idle_timeout_seconds = params.idleTimeoutSeconds;
+		return call(client.POST('/v1/transactions', { body }));
+	},
+	commit: async (id: number): Promise<unknown> =>
+		call(client.POST('/v1/transactions/{id}/commit', { params: { path: { id } } })),
+	rollback: async (id: number): Promise<unknown> =>
+		call(client.POST('/v1/transactions/{id}/rollback', { params: { path: { id } } }))
 };
 
 export default transactionService;

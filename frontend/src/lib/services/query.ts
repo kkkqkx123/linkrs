@@ -1,225 +1,224 @@
-import { post, resolveSessionId } from '$utils/http';
+import { call, client } from '$lib/api/client';
+import { resolveSessionId } from '$utils/http';
 import type { QueryResult, QueryError } from '$types/query';
+import type { components } from '$types/schema.gen';
 import { splitQueries } from '$utils/gql';
 
+type QueryRequest = components['schemas']['QueryRequest'];
+type QueryResponse = components['schemas']['QueryResponse'];
+type BatchQueryRequest = components['schemas']['BatchQueryRequest'];
+type ValidateRequest = components['schemas']['ValidateRequest'];
+
 export interface ExecuteQueryParams {
-  query: string;
-  sessionId?: number;
-  parameters?: Record<string, unknown>;
-  sessionVariables?: Record<string, unknown>;
+	query: string;
+	sessionId?: number;
+	parameters?: Record<string, unknown>;
+	sessionVariables?: Record<string, unknown>;
 }
 
 export interface BatchExecuteOptions {
-  sessionId?: number;
-  parameters?: Record<string, unknown>;
-  sessionVariables?: Record<string, unknown>;
+	sessionId?: number;
+	parameters?: Record<string, unknown>;
+	sessionVariables?: Record<string, unknown>;
 }
 
 export interface ExecuteQueryResponse {
-  success: boolean;
-  data?: QueryResult;
-  error?: QueryError;
-  executionTime?: number;
+	success: boolean;
+	data?: QueryResult;
+	error?: QueryError;
+	executionTime?: number;
 }
 
 /** Per-statement result inside a batch response. */
 export interface BatchStatementResult {
-  query: string;
-  success: boolean;
-  data?: QueryResult;
-  error?: QueryError;
-  executionTime?: number;
-  truncated?: boolean;
+	query: string;
+	success: boolean;
+	data?: QueryResult;
+	error?: QueryError;
+	executionTime?: number;
+	truncated?: boolean;
 }
 
 /** Aggregated outcome of running a multi-statement script. */
 export interface BatchExecuteResponse {
-  results: BatchStatementResult[];
-  totalExecutionTime: number;
-  success: boolean;
-}
-
-interface QueryEnvelope {
-  success: boolean;
-  data?: {
-    columns?: string[];
-    rows?: Record<string, unknown>[];
-    row_count?: number;
-  };
-  error?: { code?: string; message?: string };
-  metadata?: { execution_time_ms?: number; rows_returned?: number; truncated?: boolean };
-}
-
-interface BatchEnvelope {
-  results?: QueryEnvelope[];
+	results: BatchStatementResult[];
+	totalExecutionTime: number;
+	success: boolean;
 }
 
 /** Convert one utterance of the wire envelope into a typed result. */
-function toStatementResult(query: string, response: QueryEnvelope, fallbackMs: number): BatchStatementResult {
-  const executionTime = response.metadata?.execution_time_ms ?? fallbackMs;
-  if (!response.success) {
-    return {
-      query,
-      success: false,
-      error: {
-        code: response.error?.code || 'EXECUTION_ERROR',
-        message: response.error?.message || 'Failed to execute query',
-      },
-      executionTime,
-    };
-  }
-  const columns = response.data?.columns ?? [];
-  const rows = response.data?.rows ?? [];
-  const rowCount = response.data?.row_count ?? rows.length;
-  const truncated = response.metadata?.truncated === true;
-  return {
-    query,
-    success: true,
-    data: { columns, rows, rowCount, truncated },
-    executionTime,
-    truncated,
-  };
+function toStatementResult(
+	query: string,
+	response: QueryResponse,
+	fallbackMs: number
+): BatchStatementResult {
+	const executionTime = response.metadata?.execution_time_ms ?? fallbackMs;
+	if (!response.success) {
+		return {
+			query,
+			success: false,
+			error: {
+				code: response.error?.code || 'EXECUTION_ERROR',
+				message: response.error?.message || 'Failed to execute query'
+			},
+			executionTime
+		};
+	}
+	const columns = response.data?.columns ?? [];
+	const rows = (response.data?.rows ?? []) as Record<string, unknown>[];
+	const rowCount = response.data?.row_count ?? rows.length;
+	const truncated = response.metadata?.truncated === true;
+	return {
+		query,
+		success: true,
+		data: { columns, rows, rowCount, truncated },
+		executionTime,
+		truncated
+	};
 }
 
 export const queryService = {
-  execute: async (params: ExecuteQueryParams): Promise<ExecuteQueryResponse> => {
-    const resolved = resolveSessionId(params.sessionId);
-    if (resolved === undefined) {
-      return {
-        success: false,
-        error: { code: 'NO_SESSION', message: 'Missing session id for query execution' },
-      };
-    }
-    try {
-      const startTime = Date.now();
-      // The HTTP layer attaches `X-Session-ID` from storage for auth; the body
-      // carries the statement text plus the session id required by the wire contract.
-      const body: Record<string, unknown> = { query: params.query, session_id: resolved };
-      if (params.parameters !== undefined) body.parameters = params.parameters;
-      if (params.sessionVariables !== undefined) body.session_variables = params.sessionVariables;
-      const response = await post<QueryEnvelope>('/v1/query', body);
-      const result = toStatementResult(params.query, response, Date.now() - startTime);
-      return {
-        success: result.success,
-        data: result.data,
-        error: result.error,
-        executionTime: result.executionTime,
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: {
-          code: 'EXECUTION_ERROR',
-          message: error instanceof Error ? error.message : 'Failed to execute query',
-        },
-      };
-    }
-  },
+	execute: async (params: ExecuteQueryParams): Promise<ExecuteQueryResponse> => {
+		const resolved = resolveSessionId(params.sessionId);
+		if (resolved === undefined) {
+			return {
+				success: false,
+				error: { code: 'NO_SESSION', message: 'Missing session id for query execution' }
+			};
+		}
+		try {
+			const startTime = Date.now();
+			// The HTTP layer attaches `X-Session-ID` from storage for auth; the body
+			// carries the statement text plus the session id required by the wire contract.
+			const body: QueryRequest = { query: params.query, session_id: resolved };
+			if (params.parameters !== undefined) body.parameters = params.parameters;
+			if (params.sessionVariables !== undefined) body.session_variables = params.sessionVariables;
+			const response = await call<QueryResponse>(client.POST('/v1/query', { body }));
+			const result = toStatementResult(params.query, response, Date.now() - startTime);
+			return {
+				success: result.success,
+				data: result.data,
+				error: result.error,
+				executionTime: result.executionTime
+			};
+		} catch (error) {
+			return {
+				success: false,
+				error: {
+					code: 'EXECUTION_ERROR',
+					message: error instanceof Error ? error.message : 'Failed to execute query'
+				}
+			};
+		}
+	},
 
-  /**
-   * Run several auto-commit statements through the server-side batch window,
-   * which shares one commit boundary across all statements. The editor's raw
-   * script is split client-side so blank lines and comments are dropped before
-   * the statements leave the browser.
-   */
-  executeBatch: async (script: string, options?: BatchExecuteOptions): Promise<BatchExecuteResponse> => {
-    const startTime = Date.now();
-    const statements = splitQueries(script);
-    if (statements.length === 0) {
-      return { results: [], totalExecutionTime: 0, success: false };
-    }
-    const resolved = resolveSessionId(options?.sessionId);
-    if (resolved === undefined) {
-      return {
-        results: statements.map((query) => ({
-          query,
-          success: false,
-          error: { code: 'NO_SESSION', message: 'Missing session id for batch execution' },
-          executionTime: 0,
-        })),
-        totalExecutionTime: 0,
-        success: false,
-      };
-    }
-    try {
-      const batchBody: Record<string, unknown> = {
-        session_id: resolved,
-        statements,
-      };
-      if (options?.parameters !== undefined) batchBody.parameters = options.parameters;
-      if (options?.sessionVariables !== undefined) batchBody.session_variables = options.sessionVariables;
-      const response = await post<BatchEnvelope>('/v1/query/batch', batchBody);
-      const envelopes = response.results ?? [];
-      const fallbackMs = Math.round((Date.now() - startTime) / statements.length);
-      const results = statements.map((query, index) => {
-        const envelope = envelopes[index];
-        if (!envelope) {
-          return {
-            query,
-            success: false,
-            error: { code: 'MISSING_RESULT', message: 'Server returned no result for this statement' },
-            executionTime: 0,
-          };
-        }
-        return toStatementResult(query, envelope, fallbackMs);
-      });
-      return {
-        results,
-        totalExecutionTime: Date.now() - startTime,
-        success: results.every((r) => r.success),
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to execute batch';
-      return {
-        results: statements.map((query) => ({
-          query,
-          success: false,
-          error: { code: 'EXECUTION_ERROR', message },
-          executionTime: 0,
-        })),
-        totalExecutionTime: Date.now() - startTime,
-        success: false,
-      };
-    }
-  },
+	/**
+	 * Run several auto-commit statements through the server-side batch window,
+	 * which shares one commit boundary across all statements. The editor's raw
+	 * script is split client-side so blank lines and comments are dropped before
+	 * the statements leave the browser.
+	 */
+	executeBatch: async (script: string, options?: BatchExecuteOptions): Promise<BatchExecuteResponse> => {
+		const startTime = Date.now();
+		const statements = splitQueries(script);
+		if (statements.length === 0) {
+			return { results: [], totalExecutionTime: 0, success: false };
+		}
+		const resolved = resolveSessionId(options?.sessionId);
+		if (resolved === undefined) {
+			return {
+				results: statements.map((query) => ({
+					query,
+					success: false,
+					error: { code: 'NO_SESSION', message: 'Missing session id for batch execution' },
+					executionTime: 0
+				})),
+				totalExecutionTime: 0,
+				success: false
+			};
+		}
+		try {
+			const batchBody: BatchQueryRequest = {
+				session_id: resolved,
+				statements
+			};
+			if (options?.parameters !== undefined) batchBody.parameters = options.parameters;
+			if (options?.sessionVariables !== undefined)
+				batchBody.session_variables = options.sessionVariables;
+			const response = await call<components['schemas']['BatchQueryResponse']>(
+				client.POST('/v1/query/batch', { body: batchBody })
+			);
+			const envelopes = response.results ?? [];
+			const fallbackMs = Math.round((Date.now() - startTime) / statements.length);
+			const results = statements.map((query, index) => {
+				const envelope = envelopes[index];
+				if (!envelope) {
+					return {
+						query,
+						success: false,
+						error: { code: 'MISSING_RESULT', message: 'Server returned no result for this statement' },
+						executionTime: 0
+					};
+				}
+				return toStatementResult(query, envelope, fallbackMs);
+			});
+			return {
+				results,
+				totalExecutionTime: Date.now() - startTime,
+				success: results.every((r) => r.success)
+			};
+		} catch (error) {
+			const message = error instanceof Error ? error.message : 'Failed to execute batch';
+			return {
+				results: statements.map((query) => ({
+					query,
+					success: false,
+					error: { code: 'EXECUTION_ERROR', message },
+					executionTime: 0
+				})),
+				totalExecutionTime: Date.now() - startTime,
+				success: false
+			};
+		}
+	},
 
-  /**
-   * Parse and bind a statement without executing it, so the console can flag
-   * syntax/semantic problems before the user commits to a run. The server
-   * also attaches an advisory row estimate used for automatic routing.
-   */
-  validate: async (
-    query: string,
-    sessionId?: number,
-    needEstimate?: boolean,
-  ): Promise<{ valid: boolean; message: string; estimatedRows: number | null }> => {
-    const resolved = resolveSessionId(sessionId);
-    if (resolved === undefined) {
-      return { valid: false, message: 'Missing session id for validation', estimatedRows: null };
-    }
-    try {
-      const response = await post<{ valid: boolean; message: string; estimated_rows?: number | null }>(
-        '/v1/query/validate',
-        {
-          query,
-          session_id: resolved,
-          need_estimate: needEstimate === true,
-        },
-      );
-      const estimated = response.estimated_rows;
-      return {
-        valid: response.valid,
-        message: response.message,
-        estimatedRows: typeof estimated === 'number' && Number.isFinite(estimated) ? estimated : null,
-      };
-    } catch (error) {
-      return {
-        valid: false,
-        message: error instanceof Error ? error.message : 'Failed to validate query',
-        estimatedRows: null,
-      };
-    }
-  },
+	/**
+	 * Parse and bind a statement without executing it, so the console can flag
+	 * syntax/semantic problems before the user commits to a run. The server
+	 * also attaches an advisory row estimate used for automatic routing.
+	 */
+	validate: async (
+		query: string,
+		sessionId?: number,
+		needEstimate?: boolean
+	): Promise<{ valid: boolean; message: string; estimatedRows: number | null }> => {
+		const resolved = resolveSessionId(sessionId);
+		if (resolved === undefined) {
+			return { valid: false, message: 'Missing session id for validation', estimatedRows: null };
+		}
+		try {
+			const body: ValidateRequest = {
+				query,
+				session_id: resolved,
+				need_estimate: needEstimate === true
+			};
+			const response = await call<components['schemas']['ValidateResponse']>(
+				client.POST('/v1/query/validate', { body })
+			);
+			const estimated = response.estimated_rows;
+			return {
+				valid: response.valid,
+				message: response.message,
+				estimatedRows: typeof estimated === 'number' && Number.isFinite(estimated) ? estimated : null
+			};
+		} catch (error) {
+			return {
+				valid: false,
+				message: error instanceof Error ? error.message : 'Failed to validate query',
+				estimatedRows: null
+			};
+		}
+	}
 };
 
 export default queryService;

@@ -319,6 +319,7 @@ pub enum ConditionType {
     },
     /// Match any of the given values (OR semantics).
     MatchAny {
+        #[schema(value_type = Vec<serde_json::Value>)]
         values: Vec<PayloadValue>,
     },
     /// Numeric range over the field value.

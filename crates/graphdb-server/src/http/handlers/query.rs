@@ -15,6 +15,7 @@ use crate::storage::{
 
 #[utoipa::path(
     post,
+    operation_id = "post_v1_query",
     path = "/v1/query",
     tag = "Query",
     request_body = QueryRequest,

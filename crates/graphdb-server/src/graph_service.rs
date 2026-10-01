@@ -985,7 +985,7 @@ impl<
         let mut parser = Parser::new(text);
         let _ = parser.parse();
         parser
-            .errors()
+            .take_errors()
             .iter()
             .any(|error| error.message.contains("after end of statement"))
     }

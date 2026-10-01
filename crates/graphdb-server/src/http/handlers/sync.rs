@@ -28,6 +28,7 @@ pub struct SyncStatusResponse {
 
 #[utoipa::path(
     get,
+    operation_id = "get_v1_sync_status",
     path = "/v1/sync/status",
     tag = "Sync",
     responses(

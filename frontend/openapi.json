@@ -201,7 +201,7 @@
         "parameters": [
           {
             "name": "space",
-            "in": "path",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string"
@@ -209,7 +209,7 @@
           },
           {
             "name": "src",
-            "in": "path",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string"
@@ -217,7 +217,7 @@
           },
           {
             "name": "dst",
-            "in": "path",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string"
@@ -225,7 +225,7 @@
           },
           {
             "name": "edge_type",
-            "in": "path",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string"
@@ -233,8 +233,8 @@
           },
           {
             "name": "rank",
-            "in": "path",
-            "required": true,
+            "in": "query",
+            "required": false,
             "schema": {
               "type": "integer",
               "format": "int64"
@@ -279,7 +279,7 @@
           },
           {
             "name": "space",
-            "in": "path",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string"
@@ -324,7 +324,7 @@
           },
           {
             "name": "space",
-            "in": "path",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string"
@@ -332,23 +332,20 @@
           },
           {
             "name": "direction",
-            "in": "path",
+            "in": "query",
             "description": "Direction: OUT, IN, or BOTH",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             }
           },
           {
             "name": "edge_type",
-            "in": "path",
+            "in": "query",
             "description": "Edge type filter",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -713,7 +710,7 @@
           "WebSchema"
         ],
         "summary": "List all spaces",
-        "operationId": "list_spaces",
+        "operationId": "get_api_v1_schema_spaces",
         "responses": {
           "200": {
             "description": "Space list",
@@ -775,7 +772,7 @@
           "WebSchema"
         ],
         "summary": "List all edge types in a space",
-        "operationId": "list_edge_types",
+        "operationId": "get_api_v1_schema_spaces_name_edge_types",
         "parameters": [
           {
             "name": "name",
@@ -811,7 +808,7 @@
           "WebSchema"
         ],
         "summary": "Create a new edge type",
-        "operationId": "create_edge_type",
+        "operationId": "post_api_v1_schema_spaces_name_edge_types",
         "parameters": [
           {
             "name": "name",
@@ -1004,7 +1001,7 @@
           "WebSchema"
         ],
         "summary": "List all indexes in a space",
-        "operationId": "list_indexes",
+        "operationId": "get_api_v1_schema_spaces_name_indexes",
         "parameters": [
           {
             "name": "name",
@@ -1040,7 +1037,7 @@
           "WebSchema"
         ],
         "summary": "Create a new index",
-        "operationId": "create_index",
+        "operationId": "post_api_v1_schema_spaces_name_indexes",
         "parameters": [
           {
             "name": "name",
@@ -1265,7 +1262,7 @@
           "WebSchema"
         ],
         "summary": "List all tags in a space",
-        "operationId": "list_tags",
+        "operationId": "get_api_v1_schema_spaces_name_tags",
         "parameters": [
           {
             "name": "name",
@@ -1301,7 +1298,7 @@
           "WebSchema"
         ],
         "summary": "Create a new tag",
-        "operationId": "create_tag",
+        "operationId": "post_api_v1_schema_spaces_name_tags",
         "parameters": [
           {
             "name": "name",
@@ -1553,7 +1550,7 @@
           "Batch"
         ],
         "summary": "Create batch tasks",
-        "operationId": "create",
+        "operationId": "post_v1_batch",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1587,7 +1584,7 @@
           "Batch"
         ],
         "summary": "Obtaining the status of batch tasks",
-        "operationId": "status",
+        "operationId": "get_v1_batch_id",
         "parameters": [
           {
             "name": "id",
@@ -1692,7 +1689,7 @@
           "Batch"
         ],
         "summary": "Perform batch tasks",
-        "operationId": "execute",
+        "operationId": "post_v1_batch_id_execute",
         "parameters": [
           {
             "name": "id",
@@ -1959,12 +1956,14 @@
         "tags": [
           "Export"
         ],
+        "summary": "Re-execute a single query and stream the result out as a download.",
+        "description": "Rows are pulled chunk-at-a-time and encoded straight into the response\nbody, so peak memory stays flat regardless of result size. This is a\nfresh execution, not a snapshot of what the browser buffered: data may\nhave changed between display and export. Only `csv` and `jsonl` are\nsupported; `jsonl` carries one object per line because a JSON array\ncannot be appended to without backtracking.\n\nTransport note: this route sits behind the session-header auth\nmiddleware, so browsers fetch it with script (which can attach the\nsession header) and buffer the body before saving. A native anchor\ndownload is not used because it cannot send the header, and passing the\nsession through the URL would leak it via history and logs.",
         "operationId": "export_data",
         "parameters": [
           {
             "name": "space",
             "in": "query",
-            "description": "Space to export",
+            "description": "Space to export (reserved, session space applies)",
             "required": false,
             "schema": {
               "type": "string"
@@ -1973,7 +1972,7 @@
           {
             "name": "format",
             "in": "query",
-            "description": "Export format: csv, json or jsonl",
+            "description": "Export format: csv or jsonl",
             "required": false,
             "schema": {
               "type": "string"
@@ -1991,16 +1990,29 @@
           {
             "name": "all",
             "in": "query",
-            "description": "Export all data when set",
+            "description": "Reserved",
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "description": "Session id executing the export query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
             }
           }
         ],
         "responses": {
           "200": {
             "description": "Export file download"
+          },
+          "400": {
+            "description": "Invalid export request"
           },
           "500": {
             "description": "Internal error"
@@ -2666,7 +2678,7 @@
         "tags": [
           "Query"
         ],
-        "operationId": "execute",
+        "operationId": "post_v1_query",
         "requestBody": {
           "content": {
             "application/json": {
@@ -2720,6 +2732,117 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/query/cursor/close": {
+      "post": {
+        "tags": [
+          "Cursor"
+        ],
+        "summary": "Release a cursor.",
+        "operationId": "close_cursor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseCursorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Cursor closed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloseCursorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor request"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/query/cursor/fetch": {
+      "post": {
+        "tags": [
+          "Cursor"
+        ],
+        "summary": "Fetch one page from a cursor.",
+        "operationId": "fetch_cursor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FetchCursorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Cursor page fetched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchCursorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor request"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/query/cursor/open": {
+      "post": {
+        "tags": [
+          "Cursor"
+        ],
+        "summary": "Open a forward-only cursor over a single statement's result.",
+        "operationId": "open_cursor",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenCursorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Cursor opened",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenCursorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor request"
           },
           "500": {
             "description": "Internal error"
@@ -2942,7 +3065,7 @@
           "Schema"
         ],
         "summary": "List all graph spaces",
-        "operationId": "list_spaces",
+        "operationId": "get_v1_schema_spaces",
         "responses": {
           "200": {
             "description": "Space list",
@@ -3058,7 +3181,7 @@
           "Schema"
         ],
         "summary": "List all edge types",
-        "operationId": "list_edge_types",
+        "operationId": "get_v1_schema_spaces_name_edge_types",
         "parameters": [
           {
             "name": "name",
@@ -3089,7 +3212,7 @@
           "Schema"
         ],
         "summary": "Creating Edge Types",
-        "operationId": "create_edge_type",
+        "operationId": "post_v1_schema_spaces_name_edge_types",
         "parameters": [
           {
             "name": "name",
@@ -3132,7 +3255,7 @@
           "Schema"
         ],
         "summary": "List all tags",
-        "operationId": "list_tags",
+        "operationId": "get_v1_schema_spaces_name_tags",
         "parameters": [
           {
             "name": "name",
@@ -3163,7 +3286,7 @@
           "Schema"
         ],
         "summary": "Creating Tags",
-        "operationId": "create_tag",
+        "operationId": "post_v1_schema_spaces_name_tags",
         "parameters": [
           {
             "name": "name",
@@ -3256,7 +3379,7 @@
         "tags": [
           "Session"
         ],
-        "operationId": "create",
+        "operationId": "post_v1_sessions",
         "requestBody": {
           "content": {
             "application/json": {
@@ -3480,7 +3603,7 @@
           "Statistics"
         ],
         "summary": "Obtain search statistics",
-        "operationId": "search",
+        "operationId": "get_v1_statistics_search",
         "responses": {
           "200": {
             "description": "Search statistics",
@@ -3847,7 +3970,7 @@
           "Sync"
         ],
         "summary": "Get sync status",
-        "operationId": "status",
+        "operationId": "get_v1_sync_status",
         "responses": {
           "200": {
             "description": "Sync status",
@@ -4265,7 +4388,7 @@
           "Vector"
         ],
         "summary": "List all vector indexes",
-        "operationId": "list_indexes",
+        "operationId": "get_v1_vector_indexes",
         "responses": {
           "200": {
             "description": "Vector index list",
@@ -4287,7 +4410,7 @@
           "Vector"
         ],
         "summary": "Create a vector index",
-        "operationId": "create_index",
+        "operationId": "post_v1_vector_indexes",
         "requestBody": {
           "content": {
             "application/json": {
@@ -4667,7 +4790,7 @@
           "Vector"
         ],
         "summary": "Search vectors",
-        "operationId": "search",
+        "operationId": "post_v1_vector_search",
         "requestBody": {
           "content": {
             "application/json": {
@@ -5447,6 +5570,90 @@
                 }
               }
             ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VertexData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "update_vertex"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UpdateEdgeData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "update_edge"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeleteVertexData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "delete_vertex"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeleteEdgeData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "delete_edge"
+                    ]
+                  }
+                }
+              }
+            ]
           }
         ],
         "description": "Batch data"
@@ -5456,7 +5663,9 @@
         "description": "Batch item type",
         "enum": [
           "vertex",
-          "edge"
+          "edge",
+          "update",
+          "delete"
         ]
       },
       "BatchProgress": {
@@ -5504,9 +5713,25 @@
           "statements"
         ],
         "properties": {
+          "parameters": {
+            "type": "object",
+            "description": "Query parameters bound to `@name` references in every statement.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "session_id": {
             "type": "integer",
             "format": "int64"
+          },
+          "session_variables": {
+            "type": "object",
+            "description": "Session variables bound to `$name` references in every statement.\nWhen omitted, the session-managed snapshot is used.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "statements": {
             "type": "array",
@@ -5539,9 +5764,19 @@
           "edges_inserted"
         ],
         "properties": {
+          "edges_deleted": {
+            "type": "integer",
+            "description": "Number of edges deleted",
+            "minimum": 0
+          },
           "edges_inserted": {
             "type": "integer",
             "description": "Number of edges inserted",
+            "minimum": 0
+          },
+          "edges_updated": {
+            "type": "integer",
+            "description": "Number of edges updated",
             "minimum": 0
           },
           "errors": {
@@ -5551,9 +5786,19 @@
             },
             "description": "Error message"
           },
+          "vertices_deleted": {
+            "type": "integer",
+            "description": "Number of vertices deleted",
+            "minimum": 0
+          },
           "vertices_inserted": {
             "type": "integer",
             "description": "Number of vertices inserted",
+            "minimum": 0
+          },
+          "vertices_updated": {
+            "type": "integer",
+            "description": "Number of vertices updated",
             "minimum": 0
           }
         }
@@ -5814,6 +6059,203 @@
           }
         }
       },
+      "CloseCursorRequest": {
+        "type": "object",
+        "description": "Release a cursor.",
+        "required": [
+          "session_id",
+          "cursor_id"
+        ],
+        "properties": {
+          "cursor_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "session_id": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "CloseCursorResponse": {
+        "type": "object",
+        "description": "Cursor release outcome: false when the id was already gone.",
+        "required": [
+          "closed"
+        ],
+        "properties": {
+          "closed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConditionType": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Match a scalar field value.",
+            "required": [
+              "Match"
+            ],
+            "properties": {
+              "Match": {
+                "type": "object",
+                "description": "Match a scalar field value.",
+                "required": [
+                  "value"
+                ],
+                "properties": {
+                  "value": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Match any of the given values (OR semantics).",
+            "required": [
+              "MatchAny"
+            ],
+            "properties": {
+              "MatchAny": {
+                "type": "object",
+                "description": "Match any of the given values (OR semantics).",
+                "required": [
+                  "values"
+                ],
+                "properties": {
+                  "values": {
+                    "type": "array",
+                    "items": {}
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Numeric range over the field value.",
+            "required": [
+              "Range"
+            ],
+            "properties": {
+              "Range": {
+                "$ref": "#/components/schemas/RangeCondition",
+                "description": "Numeric range over the field value."
+              }
+            }
+          },
+          {
+            "type": "string",
+            "enum": [
+              "IsEmpty"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "IsNull"
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "HasId"
+            ],
+            "properties": {
+              "HasId": {
+                "type": "object",
+                "required": [
+                  "ids"
+                ],
+                "properties": {
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "Nested"
+            ],
+            "properties": {
+              "Nested": {
+                "type": "object",
+                "required": [
+                  "filter"
+                ],
+                "properties": {
+                  "filter": {
+                    "$ref": "#/components/schemas/VectorFilter"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "GeoRadius"
+            ],
+            "properties": {
+              "GeoRadius": {
+                "$ref": "#/components/schemas/GeoRadius"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "GeoBoundingBox"
+            ],
+            "properties": {
+              "GeoBoundingBox": {
+                "$ref": "#/components/schemas/GeoBoundingBox"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "ValuesCount"
+            ],
+            "properties": {
+              "ValuesCount": {
+                "$ref": "#/components/schemas/ValuesCountCondition"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "Contains"
+            ],
+            "properties": {
+              "Contains": {
+                "type": "object",
+                "required": [
+                  "value"
+                ],
+                "properties": {
+                  "value": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "Predicate of a [`FilterCondition`]."
+      },
       "CreateBatchRequest": {
         "type": "object",
         "description": "Create batch task request",
@@ -6053,11 +6495,38 @@
             "minimum": 0
           },
           "tag_name": {
-            "type": "string"
+            "type": "string",
+            "description": "Vertex tag name. Vector indexes are vertex-only; edge type names are\nrejected."
           },
           "vector_size": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      },
+      "DeleteEdgeData": {
+        "type": "object",
+        "description": "Edge delete data",
+        "required": [
+          "edge_type",
+          "src_vid",
+          "dst_vid"
+        ],
+        "properties": {
+          "dst_vid": {
+            "description": "Target vertex ID"
+          },
+          "edge_type": {
+            "type": "string",
+            "description": "Edge type"
+          },
+          "rank": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Edge rank within (src, dst, type)"
+          },
+          "src_vid": {
+            "description": "Source vertex ID"
           }
         }
       },
@@ -6094,6 +6563,25 @@
           },
           "tag_name": {
             "type": "string"
+          }
+        }
+      },
+      "DeleteVertexData": {
+        "type": "object",
+        "description": "Vertex delete data",
+        "required": [
+          "vid"
+        ],
+        "properties": {
+          "tag_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tag names to delete the vertex from (incident edges are removed too)"
+          },
+          "vid": {
+            "description": "Vertex ID"
           }
         }
       },
@@ -6250,6 +6738,78 @@
           }
         }
       },
+      "FetchCursorRequest": {
+        "type": "object",
+        "description": "Fetch one page from a cursor.",
+        "required": [
+          "session_id",
+          "cursor_id"
+        ],
+        "properties": {
+          "cursor_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "session_id": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "FetchCursorResponse": {
+        "type": "object",
+        "description": "One fetched page: rows in column order plus exhaustion flag.",
+        "required": [
+          "has_more",
+          "returned"
+        ],
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "returned": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "FilterCondition": {
+        "type": "object",
+        "description": "A single filter condition: field plus its predicate.",
+        "required": [
+          "field",
+          "condition"
+        ],
+        "properties": {
+          "condition": {
+            "$ref": "#/components/schemas/ConditionType"
+          },
+          "field": {
+            "type": "string"
+          }
+        }
+      },
       "FulltextRebuildStatusResponse": {
         "type": "object",
         "description": "Fulltext rebuild task status.",
@@ -6306,6 +6866,58 @@
           "status": {
             "type": "string",
             "description": "Task status (`running`, `completed`, `failed`)"
+          }
+        }
+      },
+      "GeoBoundingBox": {
+        "type": "object",
+        "description": "Lat/lon bounding-box filter.",
+        "required": [
+          "top_left",
+          "bottom_right"
+        ],
+        "properties": {
+          "bottom_right": {
+            "$ref": "#/components/schemas/GeoPoint"
+          },
+          "top_left": {
+            "$ref": "#/components/schemas/GeoPoint"
+          }
+        }
+      },
+      "GeoPoint": {
+        "type": "object",
+        "description": "Geographic point (`lat`, `lon` in degrees).",
+        "required": [
+          "lat",
+          "lon"
+        ],
+        "properties": {
+          "lat": {
+            "type": "number",
+            "format": "double"
+          },
+          "lon": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "GeoRadius": {
+        "type": "object",
+        "description": "Radius filter around a geographic center.",
+        "required": [
+          "center",
+          "radius"
+        ],
+        "properties": {
+          "center": {
+            "$ref": "#/components/schemas/GeoPoint"
+          },
+          "radius": {
+            "type": "number",
+            "format": "double",
+            "description": "Radius in meters."
           }
         }
       },
@@ -6575,6 +7187,63 @@
           }
         }
       },
+      "MinShouldCondition": {
+        "type": "object",
+        "description": "`should` clause with an explicit minimum match count.",
+        "required": [
+          "conditions",
+          "min_count"
+        ],
+        "properties": {
+          "conditions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FilterCondition"
+            }
+          },
+          "min_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "OpenCursorRequest": {
+        "type": "object",
+        "description": "Open a forward-only cursor over a single statement's result.",
+        "required": [
+          "session_id",
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "OpenCursorResponse": {
+        "type": "object",
+        "description": "Open cursor response: server-assigned id plus upfront column names.",
+        "required": [
+          "cursor_id"
+        ],
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cursor_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "PropertyDef": {
         "type": "object",
         "description": "Property definition",
@@ -6674,6 +7343,10 @@
             ],
             "format": "int64",
             "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "The result was cut at the configured row ceiling; `rows_returned`\nholds the rows actually delivered."
           }
         }
       },
@@ -6765,6 +7438,40 @@
           },
           "success": {
             "type": "boolean"
+          }
+        }
+      },
+      "RangeCondition": {
+        "type": "object",
+        "description": "Numeric range bounds; absent bounds are open.",
+        "properties": {
+          "gt": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "gte": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "lt": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "lte": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           }
         }
       },
@@ -6890,12 +7597,9 @@
       },
       "RegisterFunctionRequest": {
         "type": "object",
-        "description": "Registration function request",
+        "description": "Registration function request.\n\nOnly `name` and `implementation` (local dynamic-library path) decide\nregistration. The remaining metadata fields are accepted for client\ncompatibility but ignored; the loaded library is the source of truth.",
         "required": [
-          "name",
-          "type",
-          "parameters",
-          "return_type"
+          "name"
         ],
         "properties": {
           "description": {
@@ -7218,7 +7922,7 @@
       },
       "StreamQueryRequest": {
         "type": "object",
-        "description": "Streaming query request (SSE `/stream` endpoint).",
+        "description": "Streaming query request (SSE `/stream` endpoint).\n\nSingle-statement mode uses `query`. Batch-streaming mode uses\n`statements` (with shared `parameters` / `session_variables`, mirroring\n[`BatchQueryRequest`]) and emits one `statement_begin` /\n`statement_end` event pair per statement. The two modes are mutually\nexclusive: a non-empty `query` together with non-empty `statements` is\nrejected by the server.",
         "required": [
           "query",
           "session_id"
@@ -7228,12 +7932,39 @@
             "type": "integer",
             "minimum": 0
           },
+          "fail_fast": {
+            "type": "boolean",
+            "description": "Stop the batch at the first failing statement (default true).\nAlready produced statements are kept either way."
+          },
+          "parameters": {
+            "type": "object",
+            "description": "Query parameters bound to `@name` references in every statement\n(batch-streaming mode only).",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "query": {
             "type": "string"
           },
           "session_id": {
             "type": "integer",
             "format": "int64"
+          },
+          "session_variables": {
+            "type": "object",
+            "description": "Session variables bound to `$name` references in every statement\n(batch-streaming mode only). When omitted, the session-managed\nsnapshot is used, same as [`BatchQueryRequest`].",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "statements": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Batch-streaming statements. Empty means single-statement mode."
           }
         }
       },
@@ -7371,6 +8102,40 @@
           "value": {}
         }
       },
+      "UpdateEdgeData": {
+        "type": "object",
+        "description": "Edge update data (edge identity includes rank, unlike inserts)",
+        "required": [
+          "edge_type",
+          "src_vid",
+          "dst_vid"
+        ],
+        "properties": {
+          "dst_vid": {
+            "description": "Target vertex ID"
+          },
+          "edge_type": {
+            "type": "string",
+            "description": "Edge type"
+          },
+          "properties": {
+            "type": "object",
+            "description": "Properties",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "rank": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Edge rank within (src, dst, type)"
+          },
+          "src_vid": {
+            "description": "Source vertex ID"
+          }
+        }
+      },
       "UpdateEdgeTypeRequest": {
         "type": "object",
         "description": "Update edge type request",
@@ -7452,8 +8217,7 @@
         ],
         "properties": {
           "need_estimate": {
-            "type": "boolean",
-            "default": false
+            "type": "boolean"
           },
           "query": {
             "type": "string"
@@ -7477,7 +8241,8 @@
               "integer",
               "null"
             ],
-            "format": "uint64",
+            "format": "int64",
+            "description": "Planner root-operator row estimate for automatic routing.\nAbsent when the statement is not stream-shaped or the plan\ncarries no estimate; callers treat a missing value as \"stream\".",
             "minimum": 0
           },
           "message": {
@@ -7485,6 +8250,44 @@
           },
           "valid": {
             "type": "boolean"
+          }
+        }
+      },
+      "ValuesCountCondition": {
+        "type": "object",
+        "description": "Range bound on the number of values an array field holds.",
+        "properties": {
+          "gt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "gte": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "lt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "lte": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
           }
         }
       },

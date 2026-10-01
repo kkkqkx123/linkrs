@@ -37,6 +37,12 @@ export interface StreamQueryOutcome {
   streamError: { code: string; message: string } | null;
 }
 
+/**
+ * Streaming exception: the SSE endpoint streams `text/event-stream` frames,
+ * which OpenAPI cannot model, so it uses raw fetch with the session helpers
+ * and is not covered by codegen.
+ */
+
 export function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
 }

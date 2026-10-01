@@ -92,6 +92,7 @@ pub fn create_routes<
 /// List all spaces
 #[utoipa::path(
     get,
+    operation_id = "get_api_v1_schema_spaces",
     path = "/api/v1/schema/spaces",
     tag = "WebSchema",
     responses(
@@ -276,6 +277,7 @@ async fn get_space_statistics<
 /// List all tags in a space
 #[utoipa::path(
     get,
+    operation_id = "get_api_v1_schema_spaces_name_tags",
     path = "/api/v1/schema/spaces/{name}/tags",
     tag = "WebSchema",
     params(("name" = String, Path, description = "Space name")),
@@ -338,6 +340,7 @@ async fn list_tags<
 /// Create a new tag
 #[utoipa::path(
     post,
+    operation_id = "post_api_v1_schema_spaces_name_tags",
     path = "/api/v1/schema/spaces/{name}/tags",
     tag = "WebSchema",
     params(("name" = String, Path, description = "Space name")),
@@ -616,6 +619,7 @@ async fn delete_tag<
 /// List all edge types in a space
 #[utoipa::path(
     get,
+    operation_id = "get_api_v1_schema_spaces_name_edge_types",
     path = "/api/v1/schema/spaces/{name}/edge-types",
     tag = "WebSchema",
     params(("name" = String, Path, description = "Space name")),
@@ -678,6 +682,7 @@ async fn list_edge_types<
 /// Create a new edge type
 #[utoipa::path(
     post,
+    operation_id = "post_api_v1_schema_spaces_name_edge_types",
     path = "/api/v1/schema/spaces/{name}/edge-types",
     tag = "WebSchema",
     params(("name" = String, Path, description = "Space name")),
@@ -955,6 +960,7 @@ async fn delete_edge_type<
 /// List all indexes in a space
 #[utoipa::path(
     get,
+    operation_id = "get_api_v1_schema_spaces_name_indexes",
     path = "/api/v1/schema/spaces/{name}/indexes",
     tag = "WebSchema",
     params(("name" = String, Path, description = "Space name")),
@@ -1019,6 +1025,7 @@ async fn list_indexes<
 /// Create a new index
 #[utoipa::path(
     post,
+    operation_id = "post_api_v1_schema_spaces_name_indexes",
     path = "/api/v1/schema/spaces/{name}/indexes",
     tag = "WebSchema",
     params(("name" = String, Path, description = "Space name")),

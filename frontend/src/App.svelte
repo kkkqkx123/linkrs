@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Router, Route, navigate } from 'svelte-routing';
-  import { setUnauthorizedHandler } from '$utils/http';
+  import { setUnauthorizedHandler } from '$lib/api/client';
   import { theme } from '$stores/theme';
   import Login from '$pages/Login/Login.svelte';
   import ProtectedRoute from '$components/layout/ProtectedRoute.svelte';

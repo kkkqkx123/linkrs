@@ -17,6 +17,7 @@ use crate::storage::{
 
 #[utoipa::path(
     post,
+    operation_id = "post_v1_batch",
     path = "/v1/batch",
     tag = "Batch",
     request_body = CreateBatchRequest,
@@ -56,6 +57,7 @@ pub async fn create<
 
 #[utoipa::path(
     get,
+    operation_id = "get_v1_batch_id",
     path = "/v1/batch/{id}",
     tag = "Batch",
     params(("id" = String, Path, description = "Batch task id")),
@@ -146,6 +148,7 @@ pub async fn add_items<
 
 #[utoipa::path(
     post,
+    operation_id = "post_v1_batch_id_execute",
     path = "/v1/batch/{id}/execute",
     tag = "Batch",
     params(("id" = String, Path, description = "Batch task id")),

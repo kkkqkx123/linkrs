@@ -1,7 +1,12 @@
 import { writable } from 'svelte/store';
 import { schemaService } from '$services/schema';
 import { queryService } from '$services/query';
-import type { Space, SpaceDetail, SpaceStatistics, Tag, EdgeType, IndexInfo, CreateTagParams, CreateEdgeTypeParams, CreateIndexParams, UpdateTagParams, UpdateEdgeTypeParams } from '$types/schema';
+import type { Space, Tag, EdgeType, CreateTagParams, CreateEdgeTypeParams, CreateIndexParams, UpdateTagParams, UpdateEdgeTypeParams } from '$types/schema';
+import type { components } from '$types/schema.gen';
+
+type SpaceDetail = components['schemas']['SpaceDetail'];
+type SpaceStatistics = components['schemas']['SpaceStatistics'];
+type IndexInfo = components['schemas']['IndexInfo'];
 
 export interface CreateSpaceParams {
   name: string;

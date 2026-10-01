@@ -372,6 +372,7 @@ pub async fn system<
 
 #[utoipa::path(
     get,
+    operation_id = "get_v1_statistics_search",
     path = "/v1/statistics/search",
     tag = "Statistics",
     responses(

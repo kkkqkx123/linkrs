@@ -12,6 +12,7 @@ use crate::storage::{
 
 #[utoipa::path(
     post,
+    operation_id = "post_v1_sessions",
     path = "/v1/sessions",
     tag = "Session",
     request_body = CreateSessionRequest,

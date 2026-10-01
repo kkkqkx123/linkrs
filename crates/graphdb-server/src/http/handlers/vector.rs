@@ -124,6 +124,7 @@ pub struct VectorIndexDetailsResponse {
 
 #[utoipa::path(
     post,
+    operation_id = "post_v1_vector_indexes",
     path = "/v1/vector/indexes",
     tag = "Vector",
     request_body = CreateVectorIndexRequest,
@@ -387,6 +388,7 @@ pub async fn get_index_info<
 
 #[utoipa::path(
     get,
+    operation_id = "get_v1_vector_indexes",
     path = "/v1/vector/indexes",
     tag = "Vector",
     responses(
@@ -423,6 +425,7 @@ pub async fn list_indexes<
 
 #[utoipa::path(
     post,
+    operation_id = "post_v1_vector_search",
     path = "/v1/vector/search",
     tag = "Vector",
     request_body = VectorSearchRequest,

@@ -1,57 +1,100 @@
-import { get } from '$utils/http';
+import { call, client, unwrap } from '$lib/api/client';
 import { compileFilter } from '$utils/filterExpression';
 import type { VertexListResponse, EdgeListResponse, FilterGroup, Statistics, VertexData, EdgeData } from '$types/dataBrowser';
-import type { ApiResponse_PaginatedResponse_Value } from '$types/schema';
+import type { components } from '$types/schema.gen';
+
+type Paginated = components['schemas']['ApiResponse_PaginatedResponse_Value'];
+type SpaceStatistics = components['schemas']['SpaceStatistics'];
 
 export const dataBrowserService = {
-  getVertices: async (
-    space: string, tag: string, page: number, pageSize: number,
-    sort: { field: string; order: 'asc' | 'desc' }, filters: FilterGroup,
-  ): Promise<VertexListResponse> => {
-    const params: Record<string, string | number> = {
-      limit: pageSize, offset: (page - 1) * pageSize,
-      sort_by: sort.field, sort_order: sort.order.toUpperCase(),
-    };
-    const filterExpression = compileFilter(filters);
-    if (filterExpression) params.filter = filterExpression;
+	getVertices: async (
+		space: string,
+		tag: string,
+		page: number,
+		pageSize: number,
+		sort: { field: string; order: 'asc' | 'desc' },
+		filters: FilterGroup
+	): Promise<VertexListResponse> => {
+		const filterExpression = compileFilter(filters);
+		const paged = await unwrap(
+			await call<Paginated>(
+				client.GET('/api/v1/data/spaces/{name}/tags/{tag_name}/vertices', {
+					params: {
+						path: { name: space, tag_name: tag },
+						query: {
+							limit: pageSize,
+							offset: (page - 1) * pageSize,
+							sort_by: sort.field,
+							sort_order: sort.order.toUpperCase(),
+							filter: filterExpression || undefined
+						}
+					}
+				})
+			)
+		);
+		return {
+			data: (paged.items || []) as VertexData[],
+			total: paged.total || 0,
+			page,
+			pageSize
+		} as VertexListResponse;
+	},
 
-    const res = await get<ApiResponse_PaginatedResponse_Value>(
-      `/api/v1/data/spaces/${space}/tags/${tag}/vertices`,
-      params
-    );
-    const data = (res.data ?? {}) as { items?: unknown[]; total?: number };
-    return {
-      data: (data.items || []) as VertexData[],
-      total: data.total || 0,
-      page,
-      pageSize,
-    } as VertexListResponse;
-  },
+	getEdges: async (
+		space: string,
+		type: string,
+		page: number,
+		pageSize: number,
+		sort: { field: string; order: 'asc' | 'desc' },
+		filters: FilterGroup
+	): Promise<EdgeListResponse> => {
+		const filterExpression = compileFilter(filters);
+		const paged = await unwrap(
+			await call<Paginated>(
+				client.GET('/api/v1/data/spaces/{name}/edge-types/{edge_name}/edges', {
+					params: {
+						path: { name: space, edge_name: type },
+						query: {
+							limit: pageSize,
+							offset: (page - 1) * pageSize,
+							sort_by: sort.field,
+							sort_order: sort.order.toUpperCase(),
+							filter: filterExpression || undefined
+						}
+					}
+				})
+			)
+		);
+		return {
+			data: (paged.items || []) as EdgeData[],
+			total: paged.total || 0,
+			page,
+			pageSize
+		} as EdgeListResponse;
+	},
 
-  getEdges: async (
-    space: string, type: string, page: number, pageSize: number,
-    sort: { field: string; order: 'asc' | 'desc' }, filters: FilterGroup,
-  ): Promise<EdgeListResponse> => {
-    const params: Record<string, string | number> = {
-      limit: pageSize, offset: (page - 1) * pageSize,
-      sort_by: sort.field, sort_order: sort.order.toUpperCase(),
-    };
-    const filterExpression = compileFilter(filters);
-    if (filterExpression) params.filter = filterExpression;
-
-    const res = await get<ApiResponse_PaginatedResponse_Value>(
-      `/api/v1/data/spaces/${space}/edge-types/${type}/edges`,
-      params
-    );
-    const data = (res.data ?? {}) as { items?: unknown[]; total?: number };
-    return {
-      data: (data.items || []) as EdgeData[],
-      total: data.total || 0,
-      page,
-      pageSize,
-    } as EdgeListResponse;
-  },
-
-  getStatistics: async (space: string): Promise<Statistics> =>
-    await get<Statistics>('/api/v1/schema/spaces/' + space + '/statistics'),
+	getStatistics: async (space: string): Promise<Statistics> => {
+		const stats = unwrap(
+			await call<components['schemas']['ApiResponse_SpaceStatistics']>(
+				client.GET('/api/v1/schema/spaces/{name}/statistics', {
+					params: { path: { name: space } }
+				})
+			)
+		);
+		return toStatistics(stats);
+	}
 };
+
+/** Map the contract statistics onto the browser view model. */
+function toStatistics(stats: SpaceStatistics): Statistics {
+	return {
+		totalVertices: stats.estimated_vertex_count ?? 0,
+		totalEdges: stats.estimated_edge_count ?? 0,
+		tagCount: stats.tag_count ?? 0,
+		edgeTypeCount: stats.edge_type_count ?? 0,
+		tagDistribution: [],
+		edgeTypeDistribution: []
+	};
+}
+
+export default dataBrowserService;
