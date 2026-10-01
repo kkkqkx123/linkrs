@@ -84,6 +84,10 @@ pub struct QueryMetadata {
     pub rows_returned: usize,
     #[serde(default)]
     pub space_id: Option<u64>,
+    /// The result was cut at the configured row ceiling; `rows_returned`
+    /// holds the rows actually delivered.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// Query error.
@@ -100,15 +104,99 @@ pub struct QueryError {
 pub struct ValidateResponse {
     pub valid: bool,
     pub message: String,
+    /// Planner root-operator row estimate for automatic routing.
+    /// Absent when the statement is not stream-shaped or the plan
+    /// carries no estimate; callers treat a missing value as "stream".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_rows: Option<u64>,
 }
 
 /// Streaming query request (SSE `/stream` endpoint).
+///
+/// Single-statement mode uses `query`. Batch-streaming mode uses
+/// `statements` (with shared `parameters` / `session_variables`, mirroring
+/// [`BatchQueryRequest`]) and emits one `statement_begin` /
+/// `statement_end` event pair per statement. The two modes are mutually
+/// exclusive: a non-empty `query` together with non-empty `statements` is
+/// rejected by the server.
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct StreamQueryRequest {
     pub query: String,
     pub session_id: i64,
     #[serde(default = "default_buffer_capacity")]
     pub event_buffer_capacity: usize,
+    /// Batch-streaming statements. Empty means single-statement mode.
+    #[serde(default)]
+    pub statements: Vec<String>,
+    /// Query parameters bound to `@name` references in every statement
+    /// (batch-streaming mode only).
+    #[serde(default)]
+    pub parameters: HashMap<String, serde_json::Value>,
+    /// Session variables bound to `$name` references in every statement
+    /// (batch-streaming mode only). When omitted, the session-managed
+    /// snapshot is used, same as [`BatchQueryRequest`].
+    #[serde(default)]
+    pub session_variables: HashMap<String, serde_json::Value>,
+    /// Stop the batch at the first failing statement (default true).
+    /// Already produced statements are kept either way.
+    #[serde(default = "default_fail_fast")]
+    pub fail_fast: bool,
+}
+
+fn default_fail_fast() -> bool {
+    true
+}
+
+/// Open a forward-only cursor over a single statement's result.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OpenCursorRequest {
+    pub session_id: i64,
+    pub query: String,
+}
+
+/// Open cursor response: server-assigned id plus upfront column names.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OpenCursorResponse {
+    pub cursor_id: u64,
+    #[serde(default)]
+    pub columns: Vec<String>,
+}
+
+/// Fetch one page from a cursor.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct FetchCursorRequest {
+    pub session_id: i64,
+    pub cursor_id: u64,
+    #[serde(default = "default_cursor_page_size")]
+    pub page_size: usize,
+}
+
+/// One fetched page: rows in column order plus exhaustion flag.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct FetchCursorResponse {
+    #[serde(default)]
+    pub columns: Vec<String>,
+    #[serde(default)]
+    pub rows: Vec<HashMap<String, serde_json::Value>>,
+    pub has_more: bool,
+    pub returned: usize,
+}
+
+/// Release a cursor.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CloseCursorRequest {
+    pub session_id: i64,
+    pub cursor_id: u64,
+}
+
+/// Cursor release outcome: false when the id was already gone.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CloseCursorResponse {
+    pub closed: bool,
+}
+
+fn default_cursor_page_size() -> usize {
+    500
 }
 
 fn default_buffer_capacity() -> usize {
@@ -264,6 +352,30 @@ mod tests {
             Some(&serde_json::Value::from(1))
         );
         assert_eq!(result.metadata.space_id, Some(1));
+    }
+
+    #[test]
+    fn stream_batch_request_defaults() {
+        let request: StreamQueryRequest = serde_json::from_str(r#"{"query": "", "session_id": 3}"#)
+            .expect("stream request should parse");
+        assert!(request.statements.is_empty());
+        assert!(request.parameters.is_empty());
+        assert!(request.session_variables.is_empty());
+        assert!(request.fail_fast);
+
+        let batch: StreamQueryRequest = serde_json::from_str(
+            r#"{
+                "query": "",
+                "session_id": 3,
+                "statements": ["RETURN 1", "RETURN 2"],
+                "parameters": {"p": 1},
+                "fail_fast": false
+            }"#,
+        )
+        .expect("batch stream request should parse");
+        assert_eq!(batch.statements.len(), 2);
+        assert_eq!(batch.parameters.get("p"), Some(&serde_json::Value::from(1)));
+        assert!(!batch.fail_fast);
     }
 
     #[test]

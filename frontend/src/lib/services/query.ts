@@ -1,4 +1,4 @@
-import { post } from '$utils/http';
+import { post, resolveSessionId } from '$utils/http';
 import type { QueryResult, QueryError } from '$types/query';
 import { splitQueries } from '$utils/gql';
 
@@ -29,6 +29,7 @@ export interface BatchStatementResult {
   data?: QueryResult;
   error?: QueryError;
   executionTime?: number;
+  truncated?: boolean;
 }
 
 /** Aggregated outcome of running a multi-statement script. */
@@ -46,19 +47,11 @@ interface QueryEnvelope {
     row_count?: number;
   };
   error?: { code?: string; message?: string };
-  metadata?: { execution_time_ms?: number; rows_returned?: number };
+  metadata?: { execution_time_ms?: number; rows_returned?: number; truncated?: boolean };
 }
 
 interface BatchEnvelope {
   results?: QueryEnvelope[];
-}
-
-function resolveSessionId(explicit?: number): number | undefined {
-  if (explicit !== undefined) return explicit;
-  const stored = localStorage.getItem('sessionId');
-  if (!stored) return undefined;
-  const parsed = Number(stored);
-  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 /** Convert one utterance of the wire envelope into a typed result. */
@@ -78,11 +71,13 @@ function toStatementResult(query: string, response: QueryEnvelope, fallbackMs: n
   const columns = response.data?.columns ?? [];
   const rows = response.data?.rows ?? [];
   const rowCount = response.data?.row_count ?? rows.length;
+  const truncated = response.metadata?.truncated === true;
   return {
     query,
     success: true,
-    data: { columns, rows, rowCount },
+    data: { columns, rows, rowCount, truncated },
     executionTime,
+    truncated,
   };
 }
 
@@ -190,23 +185,36 @@ export const queryService = {
 
   /**
    * Parse and bind a statement without executing it, so the console can flag
-   * syntax/semantic problems before the user commits to a run.
+   * syntax/semantic problems before the user commits to a run. The server
+   * also attaches an advisory row estimate used for automatic routing.
    */
-  validate: async (query: string, sessionId?: number): Promise<{ valid: boolean; message: string }> => {
+  validate: async (
+    query: string,
+    sessionId?: number,
+  ): Promise<{ valid: boolean; message: string; estimatedRows: number | null }> => {
     const resolved = resolveSessionId(sessionId);
     if (resolved === undefined) {
-      return { valid: false, message: 'Missing session id for validation' };
+      return { valid: false, message: 'Missing session id for validation', estimatedRows: null };
     }
     try {
-      const response = await post<{ valid: boolean; message: string }>('/v1/query/validate', {
-        query,
-        session_id: resolved,
-      });
-      return { valid: response.valid, message: response.message };
+      const response = await post<{ valid: boolean; message: string; estimated_rows?: number | null }>(
+        '/v1/query/validate',
+        {
+          query,
+          session_id: resolved,
+        },
+      );
+      const estimated = response.estimated_rows;
+      return {
+        valid: response.valid,
+        message: response.message,
+        estimatedRows: typeof estimated === 'number' && Number.isFinite(estimated) ? estimated : null,
+      };
     } catch (error) {
       return {
         valid: false,
         message: error instanceof Error ? error.message : 'Failed to validate query',
+        estimatedRows: null,
       };
     }
   },

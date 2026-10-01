@@ -67,6 +67,7 @@ pub async fn execute<
     };
 
     // Executing Queries with GraphService
+    let row_limit = result_size_limit(&state);
     let result = match graph_service
         .execute_with_consistency(
             request.session_id,
@@ -88,7 +89,7 @@ pub async fn execute<
                 &store,
                 config_path.as_deref(),
             ) {
-                Ok(resolved) => Ok::<_, HttpError>(query_result_to_response(resolved)),
+                Ok(resolved) => Ok::<_, HttpError>(query_result_to_response(resolved, row_limit)),
                 Err(e) => {
                     Ok::<_, HttpError>(QueryResponse::error("CONFIG_ERROR".to_string(), e, None))
                 }
@@ -144,6 +145,7 @@ pub async fn execute_batch<
 
     let store = state.server.config_store();
     let config_path = state.server.get_config_path();
+    let row_limit = result_size_limit(&state);
     let results = outcomes
         .into_iter()
         .map(|outcome| match outcome {
@@ -153,7 +155,7 @@ pub async fn execute_batch<
                     &store,
                     config_path.as_deref(),
                 ) {
-                    Ok(resolved) => query_result_to_response(resolved),
+                    Ok(resolved) => query_result_to_response(resolved, row_limit),
                     Err(e) => QueryResponse::error("CONFIG_ERROR".to_string(), e, None),
                 }
             }
@@ -184,18 +186,34 @@ pub async fn validate<
         + Sync
         + 'static,
 >(
-    State(_state): State<AppState<S>>,
+    State(state): State<AppState<S>>,
     Json(request): Json<QueryRequest>,
 ) -> Result<JsonResponse<ValidateResponse>, HttpError> {
     // Real validation: parse plus binder name resolution, without executing.
     match validate_gql(&request.query) {
-        Ok(_) => Ok(JsonResponse(ValidateResponse {
-            valid: true,
-            message: "Query is valid".to_string(),
-        })),
+        Ok(_) => {
+            // Advisory row estimate for automatic routing. Command-like
+            // statements never stream, so they carry no estimate.
+            let estimated_rows =
+                if crate::graph_service::GraphService::<S>::is_command_like(&request.query) {
+                    None
+                } else {
+                    state
+                        .server
+                        .get_graph_service()
+                        .estimate_rows(request.session_id, &request.query)
+                        .await
+                };
+            Ok(JsonResponse(ValidateResponse {
+                valid: true,
+                message: "Query is valid".to_string(),
+                estimated_rows,
+            }))
+        }
         Err(e) => Ok(JsonResponse(ValidateResponse {
             valid: false,
             message: e,
+            estimated_rows: None,
         })),
     }
 }
@@ -247,16 +265,19 @@ pub(crate) fn extract_parameter_names(query: &str) -> Vec<String> {
 }
 
 /// Convert a core-layer [`QueryResult`] into the wire `QueryResponse`.
-///
 /// The core result carries the engine `ExecutionResult` unchanged; each
 /// variant is rendered here into the JSON wire shape (rows stay in column
-/// order, no intermediate map conversion).
-fn query_result_to_response(result: graphdb_api::api_core::QueryResult) -> QueryResponse {
+/// order, no intermediate map conversion). When `row_limit` is set, rows
+/// past the ceiling are dropped and the response is marked truncated.
+fn query_result_to_response(
+    result: graphdb_api::api_core::QueryResult,
+    row_limit: Option<usize>,
+) -> QueryResponse {
     // `metadata.space_id` surfaces the switched-to space. The engine executes
     // USE as a DataSet with a `space_id` column (the `SpaceSwitched` variant
     // is never produced); `QueryResult::space_summary` recognizes both.
     let space_id = result.space_summary().map(|s| s.id);
-    let (columns, rows): (
+    let (columns, mut rows): (
         Vec<String>,
         Vec<std::collections::HashMap<String, serde_json::Value>>,
     ) = match result.execution {
@@ -300,6 +321,13 @@ fn query_result_to_response(result: graphdb_api::api_core::QueryResult) -> Query
         }
         _ => (vec![], vec![]),
     };
+    let truncated = match row_limit {
+        Some(limit) if rows.len() > limit => {
+            rows.truncate(limit);
+            true
+        }
+        _ => false,
+    };
     let row_count = rows.len();
 
     QueryResponse::success(
@@ -309,13 +337,39 @@ fn query_result_to_response(result: graphdb_api::api_core::QueryResult) -> Query
             rows_scanned: result.metadata.rows_scanned,
             rows_returned: row_count,
             space_id,
+            truncated,
         },
     )
 }
 
+/// Read the configured result row ceiling (`None` means unlimited).
+/// Shared by the materialized, streaming, and export paths so one
+/// configuration value guards every result shape.
+pub(crate) fn result_size_limit<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    state: &AppState<S>,
+) -> Option<usize> {
+    let store = state.server.config_store();
+    let guard = store.read();
+    let resources = guard.query_resource();
+    if resources.has_result_size_limit() {
+        Some(resources.max_result_size)
+    } else {
+        None
+    }
+}
+
 /// Convert an HTTP request's JSON parameter map to core `Value` bindings.
 /// Empty maps are passed through as `None` so the core sees no bindings.
-fn json_params_to_core(
+pub(crate) fn json_params_to_core(
     params: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Option<std::collections::HashMap<String, graphdb_core::Value>> {
     if params.is_empty() {

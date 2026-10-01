@@ -1,6 +1,7 @@
 use graphdb_api::api_core::{QueryApi, QueryResult, SyncApi};
 
 use crate::auth::{Authenticator, AuthenticatorFactory, PasswordAuthenticator};
+use crate::client::cursor_context::CursorPage;
 use crate::config::Config;
 use crate::permission::PermissionManager;
 use crate::query::executor::streaming::pool::SharedScheduler;
@@ -727,7 +728,42 @@ impl<
             .session_manager
             .find_session(session_id)
             .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
+        let snapshot = session.variables_snapshot();
+        self.build_streaming_result(&session, stmt, None, Some(snapshot))
+            .await
+    }
 
+    /// Execute a query with caller-supplied bindings and return a streaming handle.
+    ///
+    /// Batch streaming drives one statement at a time through this entry so
+    /// every statement shares the batch request's parameters and session
+    /// variables, mirroring the materialized batch endpoint. `None` maps
+    /// fall back to the session-managed snapshot, same as [`execute`].
+    pub async fn execute_stream_with_params(
+        &self,
+        session_id: i64,
+        stmt: &str,
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
+    ) -> Result<StreamingQueryResult, String> {
+        let session = self
+            .session_manager
+            .find_session(session_id)
+            .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
+        self.build_streaming_result(&session, stmt, parameters, session_variables)
+            .await
+    }
+
+    /// Shared streaming setup behind [`execute_stream`] and
+    /// [`execute_stream_with_params`].
+    async fn build_streaming_result(
+        &self,
+        session: &Arc<ClientSession>,
+        stmt: &str,
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
+    ) -> Result<StreamingQueryResult, String> {
+        let session_id = session.id();
         // Transaction / session commands are forwarded to the materialized
         // `execute` path: the streaming path does not build a session
         // controller (no CommandScope branch in the stream executor), and
@@ -736,7 +772,7 @@ impl<
             Err(parse_error) => return Err(parse_error),
             Ok(Some(_)) => {
                 return self
-                    .execute(session_id, stmt)
+                    .execute_with_params(session_id, stmt, parameters, session_variables)
                     .await
                     .map(|result| StreamingQueryResult::from_execution_result(result.execution));
             }
@@ -752,8 +788,8 @@ impl<
             space_name: session.space().map(|s| s.name),
             auto_commit: session.is_auto_commit(),
             transaction_id: session.current_transaction(),
-            parameters: None,
-            session_variables: Some(session.variables_snapshot()),
+            parameters,
+            session_variables,
             query_id: Some(query_id as u64),
             parsed_statement: None,
             consistency: Default::default(),
@@ -806,12 +842,122 @@ impl<
         Ok(result)
     }
 
+    /// Best-effort output row estimate for automatic routing.
+    ///
+    /// Plans the statement through `EXPLAIN` (compile only, no data scan)
+    /// and reads the root-ward operator's estimated cardinality. The value
+    /// is advisory: `None` is returned whenever the statement cannot be
+    /// planned or the plan carries no estimate, and callers route a
+    /// missing estimate to the streaming path (the safe direction).
+    pub async fn estimate_rows(&self, session_id: i64, stmt: &str) -> Option<u64> {
+        let trimmed = stmt.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let explain = if trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("explain") {
+            trimmed.to_string()
+        } else {
+            format!("EXPLAIN {trimmed}")
+        };
+        let result = self
+            .execute_with_params(session_id, &explain, None, None)
+            .await
+            .ok()?;
+        let text = match result.first_value() {
+            Some(value) => crate::value::to_json(value.clone()),
+            None => return None,
+        };
+        Self::extract_root_estimate(text.as_str()?)
+    }
+
+    /// Scan an EXPLAIN table for `est_rows:<n>` markers and return the
+    /// last one: the description lists producers before consumers, so the
+    /// final marker belongs to the operator closest to the output.
+    fn extract_root_estimate(plan_text: &str) -> Option<u64> {
+        const MARKER: &str = "est_rows:";
+        let mut estimate: Option<u64> = None;
+        let mut rest = plan_text;
+        while let Some(pos) = rest.find(MARKER) {
+            rest = &rest[pos + MARKER.len()..];
+            let len = rest
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .map(|c| c.len_utf8())
+                .sum::<usize>();
+            if len > 0 {
+                if let Ok(parsed) = rest[..len].parse::<f64>() {
+                    estimate = Some(parsed.round().max(0.0) as u64);
+                }
+                rest = &rest[len..];
+            } else {
+                match rest.chars().next() {
+                    Some(c) => rest = &rest[c.len_utf8()..],
+                    None => break,
+                }
+            }
+        }
+        estimate
+    }
+
+    /// Open a forward-only cursor over a single statement's result.
+    ///
+    /// Commands are rejected (they materialize single-row results with no
+    /// paging value). The execution behind the cursor follows statement
+    /// snapshot semantics and is deregistered on close, timeout, or
+    /// session drop, mirroring streaming queries.
+    pub async fn open_cursor(
+        &self,
+        session_id: i64,
+        stmt: &str,
+    ) -> Result<(u64, Vec<String>), String> {
+        let session = self
+            .session_manager
+            .find_session(session_id)
+            .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
+        if Self::is_command_like(stmt) {
+            return Err(
+                "Cursors support single data statements only; commands run on the materialized path"
+                    .to_string(),
+            );
+        }
+        let result = self.execute_stream(session_id, stmt).await?;
+        let columns = result.column_names().unwrap_or_default();
+        let cursor_id = session.open_cursor(stmt.to_string(), result, columns.clone())?;
+        Ok((cursor_id, columns))
+    }
+
+    /// Fetch one page from a cursor. Chunk pulls run off the async
+    /// runtime; a failed execution drops the cursor and reports the error.
+    pub async fn fetch_cursor(
+        &self,
+        session_id: i64,
+        cursor_id: u64,
+        page_size: usize,
+    ) -> Result<CursorPage, String> {
+        let session = self
+            .session_manager
+            .find_session(session_id)
+            .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
+        tokio::task::spawn_blocking(move || session.fetch_cursor_page(cursor_id, page_size))
+            .await
+            .map_err(|e| format!("Cursor fetch task failed: {e}"))?
+    }
+
+    /// Release a cursor. Unknown ids report `closed: false`, never an error.
+    pub async fn close_cursor(&self, session_id: i64, cursor_id: u64) -> Result<bool, String> {
+        let session = self
+            .session_manager
+            .find_session(session_id)
+            .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
+        Ok(session.close_cursor(cursor_id))
+    }
+
     // ==================== Unified transaction / session commands ====================
 
     /// Whether the statement text begins with a transaction / session
     /// command keyword (used to surface the first specific parse error for
     /// malformed commands instead of the generic recovery abort).
-    fn is_command_like(stmt: &str) -> bool {
+    pub(crate) fn is_command_like(stmt: &str) -> bool {
         let upper = stmt.trim().to_uppercase();
         upper == "BEGIN"
             || upper.starts_with("BEGIN ")
@@ -2189,6 +2335,29 @@ mod tests {
             bare_let.contains("Invalid session variable name"),
             "unexpected error: {}",
             bare_let
+        );
+    }
+
+    #[test]
+    fn root_estimate_takes_the_last_marker() {
+        // Plan descriptions list producers before consumers, so the final
+        // marker belongs to the root-ward operator.
+        let plan = "info est_rows:10,other:1\nmore est_rows:250\ntail without marker";
+        assert_eq!(
+            GraphService::<MockStorage>::extract_root_estimate(plan),
+            Some(250)
+        );
+    }
+
+    #[test]
+    fn root_estimate_absent_without_markers() {
+        assert_eq!(
+            GraphService::<MockStorage>::extract_root_estimate("no estimates here"),
+            None
+        );
+        assert_eq!(
+            GraphService::<MockStorage>::extract_root_estimate("est_rows:"),
+            None
         );
     }
 }

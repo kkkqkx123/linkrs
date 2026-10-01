@@ -145,6 +145,19 @@ pub fn create_router<
         .route("/functions/{name}", get(function_info).delete(unregister))
         // Streaming Query Routing
         .route("/query/stream", post(execute_stream))
+        // Forward-only result cursor routing
+        .route(
+            "/query/cursor/open",
+            post(super::handlers::cursor::open_cursor),
+        )
+        .route(
+            "/query/cursor/fetch",
+            post(super::handlers::cursor::fetch_cursor),
+        )
+        .route(
+            "/query/cursor/close",
+            post(super::handlers::cursor::close_cursor),
+        )
         // Sync Management Routes
         .route("/sync/status", get(sync::status))
         .route("/sync/outbox/retry", post(sync::retry_outbox))

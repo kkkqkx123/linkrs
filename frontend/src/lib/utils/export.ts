@@ -1,4 +1,5 @@
 import type { QueryResult } from '$types/query';
+import { getApiBaseUrl, getSessionHeaders, resolveSessionId } from '$utils/http';
 
 export const exportToCSV = (result: QueryResult, filename?: string): void => {
   if (!result || !result.columns || result.columns.length === 0) return;
@@ -50,6 +51,46 @@ export const downloadFile = (content: string, filename: string, mimeType: string
   const url = URL.createObjectURL(blob);
   link.setAttribute('href', url);
   link.setAttribute('download', filename);
+  link.style.visibility = 'hidden';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
+/**
+ * Export a stream result through the server: the server re-executes the
+ * statement and writes CSV/JSONL straight into the download, so the browser
+ * never buffers the full result. A failed download leaves no partial file.
+ */
+export const exportStreamViaServer = async (
+  query: string,
+  format: 'csv' | 'jsonl',
+): Promise<void> => {
+  const sessionId = resolveSessionId();
+  if (sessionId === undefined) {
+    throw new Error('Missing session id for server export');
+  }
+  const params = new URLSearchParams({
+    session_id: String(sessionId),
+    format,
+    query,
+  });
+  const response = await fetch(`${getApiBaseUrl()}/v1/export?${params.toString()}`, {
+    method: 'GET',
+    headers: { ...getSessionHeaders() },
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(
+      `Server export failed with status ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`,
+    );
+  }
+  const blob = await response.blob();
+  const link = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  link.setAttribute('href', url);
+  link.setAttribute('download', `query_result_${Date.now()}.${format}`);
   link.style.visibility = 'hidden';
   document.body.appendChild(link);
   link.click();

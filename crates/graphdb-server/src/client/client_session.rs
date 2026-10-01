@@ -4,7 +4,9 @@ use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 use graphdb_query::executor::streaming::runtime::ExecutionRuntime;
+use graphdb_query::executor::streaming::StreamingQueryResult;
 
+use super::cursor_context::{CursorContext, CursorPage};
 use super::query_context::QueryContext;
 use super::role_context::RoleContext;
 use super::session::Session;
@@ -24,6 +26,7 @@ pub struct ClientSession {
     query_context: QueryContext,
     transaction_context: TransactionContext,
     statistics_context: StatisticsContext,
+    cursor_context: CursorContext,
     idle_start_time: Arc<RwLock<Instant>>,
     /// Session-scoped user variables (`$name`) with transaction overlay.
     session_variables: Arc<SessionVariables>,
@@ -38,6 +41,7 @@ impl ClientSession {
             query_context: QueryContext::new(),
             transaction_context: TransactionContext::new(),
             statistics_context: StatisticsContext::new(),
+            cursor_context: CursorContext::new(),
             idle_start_time: Arc::new(RwLock::new(Instant::now())),
             session_variables: Arc::new(SessionVariables::new()),
         })
@@ -168,6 +172,35 @@ impl ClientSession {
     pub fn kill_multiple_queries(&self, query_ids: &[u32]) -> Vec<QueryResult<()>> {
         self.query_context
             .kill_multiple_queries(query_ids, self.id())
+    }
+
+    /// Open a forward-only cursor over an already-started streaming result.
+    pub fn open_cursor(
+        &self,
+        query: String,
+        result: StreamingQueryResult,
+        columns: Vec<String>,
+    ) -> Result<u64, String> {
+        self.cursor_context.open(query, result, columns)
+    }
+
+    /// Fetch one page from a cursor (blocking; run off the async runtime).
+    pub fn fetch_cursor_page(
+        &self,
+        cursor_id: u64,
+        page_size: usize,
+    ) -> Result<CursorPage, String> {
+        self.cursor_context.fetch(cursor_id, page_size)
+    }
+
+    /// Release a cursor; returns false when the id was unknown.
+    pub fn close_cursor(&self, cursor_id: u64) -> bool {
+        self.cursor_context.close(cursor_id)
+    }
+
+    /// Number of currently open cursors.
+    pub fn cursor_count(&self) -> usize {
+        self.cursor_context.active_count()
     }
 
     pub fn current_transaction(&self) -> Option<graphdb_transaction::TransactionId> {

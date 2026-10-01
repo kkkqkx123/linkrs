@@ -11,6 +11,26 @@ export function setUnauthorizedHandler(handler: () => void) {
   onUnauthorized = handler;
 }
 
+export function getApiBaseUrl(): string {
+  return import.meta.env.VITE_API_BASE_URL || 'http://localhost:9758';
+}
+
+export function getSessionHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const sessionId = localStorage.getItem('sessionId');
+  if (sessionId) headers['X-Session-ID'] = sessionId;
+  return headers;
+}
+
+/** Numeric session id for request bodies; undefined when not logged in. */
+export function resolveSessionId(explicit?: number): number | undefined {
+  if (explicit !== undefined) return explicit;
+  const stored = localStorage.getItem('sessionId');
+  if (!stored) return undefined;
+  const parsed = Number(stored);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 const initService = (service?: AxiosInstance) => {
   if (service) {
     serviceInstance = service;
@@ -18,7 +38,7 @@ const initService = (service?: AxiosInstance) => {
   }
 
   serviceInstance = axios.create({
-    baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:9758',
+    baseURL: getApiBaseUrl(),
     timeout: 30000,
     transformResponse: [
       (data) => {

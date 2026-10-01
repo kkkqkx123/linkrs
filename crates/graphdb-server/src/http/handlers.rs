@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod batch;
 pub mod config;
+pub mod cursor;
 pub mod export;
 pub mod function;
 pub mod health;
@@ -23,6 +24,7 @@ pub use batch::{
     execute as execute_batch, status as batch_status,
 };
 pub use config::{get, get_key, reset_key, update, update_key};
+pub use cursor::{close_cursor, fetch_cursor, open_cursor};
 pub use export::{export_data, ExportQuery};
 pub use function::{info as function_info, list, register, unregister};
 pub use health::check;

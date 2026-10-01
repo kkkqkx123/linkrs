@@ -321,3 +321,56 @@ export const getQueryAtCursor = (content: string, cursorPosition: number): { que
   const last = statements[statements.length - 1];
   return { ...last };
 };
+
+export type StreamBlockReason = 'empty' | 'command';
+
+export type StreamMode = 'single' | 'batch' | null;
+
+export interface StreamEligibility {
+  eligible: boolean;
+  reason: StreamBlockReason | null;
+  statement: string;
+  count: number;
+  /** Execution shape: one statement streams alone, several stream as a batch. */
+  mode: StreamMode;
+  statements: string[];
+}
+
+export function isCommandLikeStatement(text: string): boolean {
+  const upper = text.trim().toUpperCase();
+  return (
+    upper === 'BEGIN' ||
+    upper.startsWith('BEGIN ') ||
+    upper.startsWith('START TRANSACTION') ||
+    upper.startsWith('COMMIT') ||
+    upper.startsWith('ROLLBACK') ||
+    upper.startsWith('SAVEPOINT') ||
+    upper.startsWith('RELEASE SAVEPOINT') ||
+    upper === 'LET' ||
+    upper.startsWith('LET ')
+  );
+}
+
+export function getStreamEligibility(content: string): StreamEligibility {
+  const statements = splitQueries(content);
+  if (statements.length === 0) {
+    return { eligible: false, reason: 'empty', statement: '', count: 0, mode: null, statements: [] };
+  }
+  if (statements.length > 1) {
+    // Multi-statement scripts stream as a batch; per-statement command
+    // fallback stays server-side, so no client-side exclusion applies.
+    return {
+      eligible: true,
+      reason: null,
+      statement: '',
+      count: statements.length,
+      mode: 'batch',
+      statements,
+    };
+  }
+  const statement = statements[0];
+  if (isCommandLikeStatement(statement)) {
+    return { eligible: false, reason: 'command', statement, count: 1, mode: null, statements };
+  }
+  return { eligible: true, reason: null, statement, count: 1, mode: 'single', statements };
+}
