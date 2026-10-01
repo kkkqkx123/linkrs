@@ -1,7 +1,7 @@
 /**
  * Typed API client built on openapi-fetch.
  * Paths, methods, params and bodies are checked against the generated
- * OpenAPI contract (schema.gen.d.ts).
+ * OpenAPI contract (schema.d.ts).
  *
  * Response parsing preserves the previous json-bigint behavior (large
  * integers arrive as strings) via a custom fetch wrapper. The
@@ -10,7 +10,7 @@
 
 import createClient from 'openapi-fetch';
 import JSONBigint from 'json-bigint';
-import type { paths } from '$types/schema.gen';
+import type { paths } from './schema';
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:9758';
 

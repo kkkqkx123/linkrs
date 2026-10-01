@@ -11,7 +11,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "gen:api": "npm run gen --prefix ../tools/openapi-codegen"
   },
   "devDependencies": {
     "@dvaji/vite-plugin-monaco-editor": "^2.0.0",

@@ -11,7 +11,7 @@ npm run gen
 ```
 
 - `frontend/openapi.json` is the committed snapshot (single source of truth)
-- `frontend/src/lib/types/schema.gen.d.ts` is the generated artifact (checked in, full `paths`/`operations`/`components`)
+- `frontend/src/lib/api/schema.d.ts` is the generated artifact (checked in, full `paths`/`operations`/`components`)
 - `node_modules` is not checked in
 
 This matches the design pattern from `code-context-engine` and keeps tooling separate from the application.
