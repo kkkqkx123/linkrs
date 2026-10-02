@@ -4,8 +4,8 @@
 //! the resulting data with count, filter, aggregate, and traversal queries.
 
 use crate::common::{
-    assert_count_eq, assert_query_row_count, assert_row_count, create_test_db, load_gql_file,
-    load_gql_file_grouped, setup_test_space,
+    assert_count_eq, assert_query_row_count, assert_row_count, create_test_db,
+    create_test_db_in_memory, load_gql_file, load_gql_file_grouped, setup_test_space,
 };
 use graphdb::core::Value;
 
@@ -170,8 +170,11 @@ fn test_geography_vertex_counts() {
 
 #[test]
 fn test_optimizer_vertex_count() {
-    let mut db = create_test_db();
-    load_gql_file(&mut db, &format!("{}/optimizer_data.gql", DATA_DIR))
+    // Logic-only assertions (row count); durability is covered by the
+    // staged-WAL bounds test, so run in-memory and group-commit the bulk
+    // load to avoid one fsync per statement.
+    let mut db = create_test_db_in_memory();
+    load_gql_file_grouped(&mut db, &format!("{}/optimizer_data.gql", DATA_DIR), 500)
         .expect("Failed to load optimizer_data.gql");
 
     assert_count_eq(
@@ -208,8 +211,10 @@ fn test_load_bounds_staged_wal_and_retired_generations() {
 
 #[test]
 fn test_optimizer_aggregate() {
-    let mut db = create_test_db();
-    load_gql_file(&mut db, &format!("{}/optimizer_data.gql", DATA_DIR))
+    // Logic-only assertions (sum / group-by); see vertex-count test for
+    // why this runs in-memory with a group-commit load.
+    let mut db = create_test_db_in_memory();
+    load_gql_file_grouped(&mut db, &format!("{}/optimizer_data.gql", DATA_DIR), 500)
         .expect("Failed to load optimizer_data.gql");
 
     // SUM of salaries
@@ -239,7 +244,9 @@ fn test_optimizer_aggregate() {
 
 #[test]
 fn test_batch_load_reuses_dml_plan() {
-    let mut db = create_test_db();
+    // Non-grouped representative for per-statement auto-commit batching;
+    // durability-independent assertions, so in-memory (no fsync per row).
+    let mut db = create_test_db_in_memory();
     // 10000 person INSERTs (one shape) followed by 10000 works_at edge INSERTs
     // (another shape) must reuse the same-shape physical plan instead of
     // re-extracting params / rebuilding cache keys per statement.
@@ -279,7 +286,8 @@ fn test_batch_load_reuses_dml_plan() {
 
 #[test]
 fn test_batch_load_grouped_commit() {
-    let mut db = create_test_db();
+    // Group-commit bulk load; assertions are durability-independent.
+    let mut db = create_test_db_in_memory();
     load_gql_file_grouped(&mut db, &format!("{}/optimizer_data.gql", DATA_DIR), 500)
         .expect("Failed to load optimizer_data.gql (grouped)");
 
@@ -317,7 +325,7 @@ fn test_dml_shape_cache_roundtrip() {
     setup_test_space(
         &mut db,
         "cache_space",
-        &["CREATE TAG person(name: STRING, age: INT, city: STRING)"],
+        &["CREATE TAG person(person_id: STRING, name: STRING, age: INT, city: STRING)"],
         &[],
     )
     .expect("setup space");
@@ -332,8 +340,7 @@ fn test_dml_shape_cache_roundtrip() {
     ];
     for (vid, name, age, city) in rows {
         let query = format!(
-            "INSERT VERTEX person(name, age, city) VALUES \"{}\": (\"{}\", {}, \"{}\")",
-            vid, name, age, city
+            "INSERT VERTEX person(person_id, name, age, city) VALUES \"{vid}\": (\"{vid}\", \"{name}\", {age}, \"{city}\")"
         );
         db.execute_query(&query).expect("insert should succeed");
     }
@@ -380,8 +387,8 @@ fn test_dml_shape_cache_edge_roundtrip() {
         &mut db,
         "edge_cache_space",
         &[
-            "CREATE TAG person(name: STRING)",
-            "CREATE TAG company(name: STRING)",
+            "CREATE TAG person(person_id: STRING, name: STRING)",
+            "CREATE TAG company(company_id: STRING, name: STRING)",
         ],
         &["CREATE EDGE works_at(position: STRING, salary: INT) FROM person TO company"],
     )
@@ -398,8 +405,7 @@ fn test_dml_shape_cache_edge_roundtrip() {
         ("p003", "Person C"),
     ] {
         db.execute_query(&format!(
-            "INSERT VERTEX person(name) VALUES \"{}\": (\"{}\")",
-            vid, name
+            "INSERT VERTEX person(person_id, name) VALUES \"{vid}\": (\"{vid}\", \"{name}\")"
         ))
         .expect("person insert should succeed");
     }
@@ -409,8 +415,7 @@ fn test_dml_shape_cache_edge_roundtrip() {
         ("c003", "Company C"),
     ] {
         db.execute_query(&format!(
-            "INSERT VERTEX company(name) VALUES \"{}\": (\"{}\")",
-            vid, name
+            "INSERT VERTEX company(company_id, name) VALUES \"{vid}\": (\"{vid}\", \"{name}\")"
         ))
         .expect("company insert should succeed");
     }
@@ -435,11 +440,11 @@ fn test_read_streaming_plan_cache_hit() {
     setup_test_space(
         &mut db,
         "stream_cache_space",
-        &["CREATE TAG person(name: STRING)"],
+        &["CREATE TAG person(person_id: STRING, name: STRING)"],
         &[],
     )
     .expect("setup space");
-    db.execute_query("INSERT VERTEX person(name) VALUES \"p1\": (\"Alice\")")
+    db.execute_query("INSERT VERTEX person(person_id, name) VALUES \"p1\": (\"p1\", \"Alice\")")
         .expect("insert should succeed");
 
     let query = "MATCH (p:person) WHERE id(p) == \"p1\" RETURN p.name";

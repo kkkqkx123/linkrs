@@ -5,6 +5,7 @@
 
 use crate::encoding::EncodingType;
 use graphdb_core::{DataType, Value};
+use std::sync::Arc;
 
 /// Default version chain capacity for property storage
 pub const DEFAULT_VERSION_CHAIN_CAP: usize = 64;
@@ -12,7 +13,7 @@ pub const DEFAULT_VERSION_CHAIN_CAP: usize = 64;
 /// Property schema definition
 #[derive(Debug, Clone)]
 pub struct PropertySchema {
-    pub name: String,
+    pub name: Arc<str>,
     pub prop_id: i32,
     pub data_type: DataType,
     pub nullable: bool,
@@ -21,9 +22,9 @@ pub struct PropertySchema {
 }
 
 impl PropertySchema {
-    pub fn new(name: String, prop_id: i32, data_type: DataType) -> Self {
+    pub fn new(name: impl Into<Arc<str>>, prop_id: i32, data_type: DataType) -> Self {
         Self {
-            name,
+            name: name.into(),
             prop_id,
             data_type,
             nullable: false,

@@ -165,6 +165,17 @@ pub async fn execute_stream<
     ))
 }
 
+/// Parameter bindings carried through one streamed statement:
+/// `(query parameters, session variables)`.
+type StatementBindings = (
+    Option<HashMap<String, graphdb_core::Value>>,
+    Option<HashMap<String, graphdb_core::Value>>,
+);
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "streaming handler context; grouping would obscure call sites"
+)]
 /// Batch-streaming driver: statements run sequentially in request order,
 /// each framed by `statement_begin` / `statement_end`. Every statement
 /// shares the batch request's bindings. A client disconnect cancels the
@@ -236,6 +247,7 @@ async fn run_batch_stream<
 /// Stream one statement's schema / rows / metadata (or a single error
 /// event on failure). The terminal `done` marker and, in batch mode, the
 /// boundary events are the caller's responsibility.
+#[allow(clippy::too_many_arguments)]
 async fn stream_statement_body<
     S: StorageClient
         + StorageSchemaContextOps
@@ -251,10 +263,7 @@ async fn stream_statement_body<
     stats_manager: &Arc<graphdb_metrics::StatsManager>,
     session_id: i64,
     stmt: &str,
-    bindings: Option<(
-        Option<HashMap<String, graphdb_core::Value>>,
-        Option<HashMap<String, graphdb_core::Value>>,
-    )>,
+    bindings: Option<StatementBindings>,
     row_limit: Option<usize>,
     stmt_index: usize,
     trace_id: String,
@@ -410,7 +419,7 @@ async fn stream_statement_body<
             // Send metadata summary AFTER all rows.
             let metadata = StreamMetadata {
                 rows_returned: total_rows,
-                execution_time_ms: (elapsed_us / 1000) as u64,
+                execution_time_ms: (elapsed_us / 1000),
                 columns: Vec::new(), // schema was sent upfront
                 stmt: stmt_index,
                 trace_id: Some(trace_id.clone()),
@@ -438,7 +447,7 @@ async fn stream_statement_body<
             );
             StatementOutcome {
                 rows_returned: total_rows,
-                execution_time_ms: (elapsed_us / 1000) as u64,
+                execution_time_ms: (elapsed_us / 1000),
                 disconnected: false,
                 failure: None,
                 trace_id: trace_id.clone(),
@@ -537,7 +546,7 @@ enum PullOutcome {
 
 /// Send a raw string payload; returns false when the client is gone.
 async fn send_event(tx: &EventSender, event: &str, data: &str) -> bool {
-    tx.send(Ok(Event::default().event(event).data(data.to_string())))
+    tx.send(Ok(Event::default().event(event).data(data)))
         .await
         .is_ok()
 }

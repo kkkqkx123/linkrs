@@ -10,7 +10,6 @@ pub(crate) mod routing;
 mod schema;
 pub(crate) mod write;
 
-pub use read::VertexStorageSnapshot;
 pub(crate) use write::CommitApplied;
 
 /// Read-only redistribution preview: live rows plus their distribution under
@@ -70,6 +69,7 @@ impl ShardedVertexTable {
 
     /// Build a table with an explicit shard count. Test and offline
     /// redistribution only; production creation goes through `with_estimate`.
+    #[allow(dead_code)]
     pub fn with_config(
         label: graphdb_core::types::LabelId,
         label_name: String,
@@ -246,10 +246,8 @@ impl ShardedVertexTable {
                         continue;
                     };
                     let Some(_) = self.get_by_internal_id_offline(old_global, ts) else {
-                        return Err(graphdb_core::StorageError::invalid_operation(format!(
-                            "reshard refused: indexed text key maps to a missing record; \
-                             refusing a partial edge-translation map",
-                        )));
+                        return Err(graphdb_core::StorageError::invalid_operation("reshard refused: indexed text key maps to a missing record; \
+                             refusing a partial edge-translation map".to_string()));
                     };
                     let shard = (routing::fxhash(name) as usize) & mask;
                     per_shard_rows[shard] += 1;
@@ -994,7 +992,7 @@ mod tests {
 
     #[test]
     fn test_pk_delta_baseline_plus_incremental_reload() {
-        use crate::vertex::vertex_table::sharded::persistence::COMMIT_MANIFEST_FILE_NAME;
+        use crate::vertex::vertex_table::sharded::persistence::commit_manifest::COMMIT_MANIFEST_FILE_NAME;
         let base = std::env::temp_dir().join(format!("pk_base_{}", std::process::id()));
         let incr = std::env::temp_dir().join(format!("pk_incr_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
@@ -1295,7 +1293,7 @@ mod tests {
                 "dense shard survivors must not move"
             );
         }
-        for (old, _) in &mapping {
+        for old in mapping.keys() {
             let (shard, _) = table.decode_id(*old);
             assert_eq!(
                 shard, 0,

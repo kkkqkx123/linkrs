@@ -89,9 +89,9 @@ impl super::SyncManager {
         }
         #[cfg(not(feature = "embedding"))]
         {
-            return Err(SyncError::VectorError(
+            Err(SyncError::VectorError(
                 "auto_embed_text requires the embedding feature and service".to_string(),
-            ));
+            ))
         }
         #[cfg(feature = "embedding")]
         {

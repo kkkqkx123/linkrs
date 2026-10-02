@@ -80,7 +80,7 @@ impl EdgeStore {
             .properties
             .property_schema()
             .iter()
-            .position(|schema| schema.name == name)
+            .position(|schema| &*schema.name == name)
             .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
         let Some(column_backup) = self.properties.column_cloned(name) else {
             return Err(StorageError::column_not_found(name.to_string()));
@@ -128,7 +128,7 @@ impl EdgeStore {
             }
         }
         if let Err(error) = self.record_schema_change(ChangeDetails::PropertyRemoved {
-            name: pending.schema_backup.name.clone(),
+            name: pending.schema_backup.name.to_string(),
             data_type: pending.schema_backup.data_type.clone(),
         }) {
             self.restore_dropped_column(&pending);

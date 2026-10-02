@@ -16,6 +16,5 @@ mod flush;
 mod gc;
 mod memory;
 mod pk_stats;
-mod thresholds;
+pub(crate) mod thresholds;
 
-pub(crate) use thresholds::SHARD_FRAGMENTATION_THRESHOLD;

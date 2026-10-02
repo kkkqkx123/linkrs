@@ -123,7 +123,7 @@ pub async fn fetch_cursor<
         .map(|row| {
             page.columns
                 .iter()
-                .zip(row.into_iter())
+                .zip(row)
                 .map(|(col, value)| (col.clone(), value_to_json(value)))
                 .collect()
         })

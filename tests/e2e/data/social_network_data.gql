@@ -7,6 +7,7 @@ USE e2e_social_network
 
 -- Create tags
 CREATE TAG IF NOT EXISTS person(
+    person_id: STRING NOT NULL,
     name: STRING NOT NULL,
     age: INT,
     email: STRING,
@@ -15,6 +16,7 @@ CREATE TAG IF NOT EXISTS person(
 )
 
 CREATE TAG IF NOT EXISTS company(
+    company_id: STRING NOT NULL,
     name: STRING NOT NULL,
     industry: STRING,
     founded_year: INT,
@@ -26,13 +28,13 @@ CREATE EDGE IF NOT EXISTS friend(
     degree: FLOAT DEFAULT 0.5,
     since: DATE,
     trust_level: INT
-)
+) FROM person TO person
 
 CREATE EDGE IF NOT EXISTS works_at(
     position: STRING,
     since: DATE,
     salary_range: STRING
-)
+) FROM person TO company
 
 -- Create city tag before lives_in edge (edge requires FROM person TO city)
 CREATE TAG IF NOT EXISTS city(
@@ -55,58 +57,58 @@ CREATE TAG INDEX IF NOT EXISTS idx_person_age ON person(age)
 CREATE TAG INDEX IF NOT EXISTS idx_person_city ON person(city)
 
 -- Generate 20 persons
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p1":
-    ("Alice", 34, "alice@example.com", "Beijing", "2020-01-13T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p2":
-    ("Bob", 35, "bob@example.com", "Shenzhen", "2020-05-05T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p3":
-    ("Charlie", 27, "charlie@example.com", "Shanghai", "2020-02-22T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p4":
-    ("David", 34, "david@example.com", "Beijing", "2020-10-29T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p5":
-    ("Eve", 30, "eve@example.com", "Beijing", "2020-01-16T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p6":
-    ("Frank", 25, "frank@example.com", "Shanghai", "2020-04-29T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p7":
-    ("Grace", 32, "grace@example.com", "Beijing", "2020-10-14T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p8":
-    ("Henry", 27, "henry@example.com", "Guangzhou", "2020-04-22T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p9":
-    ("Ivy", 31, "ivy@example.com", "Shenzhen", "2020-01-04T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p10":
-    ("Jack", 36, "jack@example.com", "Shanghai", "2020-12-23T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p11":
-    ("Kate", 30, "kate@example.com", "Shenzhen", "2020-05-22T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p12":
-    ("Leo", 26, "leo@example.com", "Shanghai", "2020-06-21T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p13":
-    ("Mary", 25, "mary@example.com", "Beijing", "2020-07-13T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p14":
-    ("Nick", 25, "nick@example.com", "Shenzhen", "2020-06-25T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p15":
-    ("Olivia", 33, "olivia@example.com", "Shenzhen", "2020-01-23T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p16":
-    ("Paul", 35, "paul@example.com", "Guangzhou", "2020-10-01T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p17":
-    ("Quinn", 25, "quinn@example.com", "Guangzhou", "2020-02-10T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p18":
-    ("Rose", 32, "rose@example.com", "Shenzhen", "2020-11-17T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p19":
-    ("Sam", 33, "sam@example.com", "Shenzhen", "2020-10-22T00:00:00")
-INSERT VERTEX person(name, age, email, city, created_at) VALUES "p20":
-    ("Tom", 27, "tom@example.com", "Beijing", "2020-01-24T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p1":
+    ("p1", "Alice", 34, "alice@example.com", "Beijing", "2020-01-13T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p2":
+    ("p2", "Bob", 35, "bob@example.com", "Shenzhen", "2020-05-05T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p3":
+    ("p3", "Charlie", 27, "charlie@example.com", "Shanghai", "2020-02-22T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p4":
+    ("p4", "David", 34, "david@example.com", "Beijing", "2020-10-29T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p5":
+    ("p5", "Eve", 30, "eve@example.com", "Beijing", "2020-01-16T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p6":
+    ("p6", "Frank", 25, "frank@example.com", "Shanghai", "2020-04-29T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p7":
+    ("p7", "Grace", 32, "grace@example.com", "Beijing", "2020-10-14T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p8":
+    ("p8", "Henry", 27, "henry@example.com", "Guangzhou", "2020-04-22T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p9":
+    ("p9", "Ivy", 31, "ivy@example.com", "Shenzhen", "2020-01-04T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p10":
+    ("p10", "Jack", 36, "jack@example.com", "Shanghai", "2020-12-23T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p11":
+    ("p11", "Kate", 30, "kate@example.com", "Shenzhen", "2020-05-22T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p12":
+    ("p12", "Leo", 26, "leo@example.com", "Shanghai", "2020-06-21T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p13":
+    ("p13", "Mary", 25, "mary@example.com", "Beijing", "2020-07-13T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p14":
+    ("p14", "Nick", 25, "nick@example.com", "Shenzhen", "2020-06-25T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p15":
+    ("p15", "Olivia", 33, "olivia@example.com", "Shenzhen", "2020-01-23T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p16":
+    ("p16", "Paul", 35, "paul@example.com", "Guangzhou", "2020-10-01T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p17":
+    ("p17", "Quinn", 25, "quinn@example.com", "Guangzhou", "2020-02-10T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p18":
+    ("p18", "Rose", 32, "rose@example.com", "Shenzhen", "2020-11-17T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p19":
+    ("p19", "Sam", 33, "sam@example.com", "Shenzhen", "2020-10-22T00:00:00")
+INSERT VERTEX person(person_id, name, age, email, city, created_at) VALUES "p20":
+    ("p20", "Tom", 27, "tom@example.com", "Beijing", "2020-01-24T00:00:00")
 
 -- Generate 5 companies
-INSERT VERTEX company(name, industry, founded_year, headquarters) VALUES "c1":
-    ("TechCorp", "Technology", 2010, "Beijing")
-INSERT VERTEX company(name, industry, founded_year, headquarters) VALUES "c2":
-    ("SoftSys", "Software", 2012, "Shanghai")
-INSERT VERTEX company(name, industry, founded_year, headquarters) VALUES "c3":
-    ("CloudNet", "Cloud Services", 2015, "Shenzhen")
-INSERT VERTEX company(name, industry, founded_year, headquarters) VALUES "c4":
-    ("DataWise", "Consulting", 2008, "Beijing")
-INSERT VERTEX company(name, industry, founded_year, headquarters) VALUES "c5":
-    ("WebPlus", "Internet", 2016, "Guangzhou")
+INSERT VERTEX company(company_id, name, industry, founded_year, headquarters) VALUES "c1":
+    ("c1", "TechCorp", "Technology", 2010, "Beijing")
+INSERT VERTEX company(company_id, name, industry, founded_year, headquarters) VALUES "c2":
+    ("c2", "SoftSys", "Software", 2012, "Shanghai")
+INSERT VERTEX company(company_id, name, industry, founded_year, headquarters) VALUES "c3":
+    ("c3", "CloudNet", "Cloud Services", 2015, "Shenzhen")
+INSERT VERTEX company(company_id, name, industry, founded_year, headquarters) VALUES "c4":
+    ("c4", "DataWise", "Consulting", 2008, "Beijing")
+INSERT VERTEX company(company_id, name, industry, founded_year, headquarters) VALUES "c5":
+    ("c5", "WebPlus", "Internet", 2016, "Guangzhou")
 
 -- Generate 30 friend relationships
 INSERT EDGE friend(degree, since, trust_level) VALUES "p8" -> "p3" @0:

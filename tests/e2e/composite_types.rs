@@ -36,7 +36,7 @@ fn test_insert_and_read_struct_array() {
     setup_person_space(&mut db, "e2e_composite_insert");
 
     let result = db.execute_query(
-        "INSERT VERTEX Person(id, addr, coords) VALUES 'p1': (1, \
+        "INSERT VERTEX Person(id, addr, coords) VALUES '1': (1, \
          STRUCT{city: 'shanghai', street: 'nanjing rd', geo: STRUCT{lat: 31.2, lon: 121.5}}, \
          ARRAY[1.0, 2.0, 3.0])",
     );
@@ -93,7 +93,7 @@ fn test_struct_field_access() {
     setup_person_space(&mut db, "e2e_composite_field");
 
     let result = db.execute_query(
-        "INSERT VERTEX Person(id, addr, coords) VALUES 'p1': (1, \
+        "INSERT VERTEX Person(id, addr, coords) VALUES '1': (1, \
          STRUCT{city: 'shanghai', street: 'nanjing rd', geo: STRUCT{lat: 31.2, lon: 121.5}}, \
          ARRAY[1.0, 2.0, 3.0])",
     );
@@ -135,7 +135,7 @@ fn test_subscript_access() {
     setup_person_space(&mut db, "e2e_composite_subscript");
 
     let result = db.execute_query(
-        "INSERT VERTEX Person(id, addr, coords) VALUES 'p1': (1, \
+        "INSERT VERTEX Person(id, addr, coords) VALUES '1': (1, \
          STRUCT{city: 'shanghai', street: 'nanjing rd', geo: STRUCT{lat: 31.2, lon: 121.5}}, \
          ARRAY[1.0, 2.0, 3.0])",
     );
@@ -155,7 +155,7 @@ fn test_struct_literal_standalone() {
     setup_test_space(
         &mut db,
         "e2e_composite_literal",
-        &["CREATE TAG T (v STRUCT<a INT, b STRING>)"],
+        &["CREATE TAG T (id INT, v STRUCT<a INT, b STRING>)"],
         &[],
     )
     .expect("Failed to setup test space");
@@ -171,7 +171,7 @@ fn test_composite_casts() {
     setup_person_space(&mut db, "e2e_composite_cast");
 
     let result = db.execute_query(
-        "INSERT VERTEX Person(id, addr, coords) VALUES 'p1': (1, \
+        "INSERT VERTEX Person(id, addr, coords) VALUES '1': (1, \
          STRUCT{city: 'shanghai', street: 'nanjing rd', geo: STRUCT{lat: 31.2, lon: 121.5}}, \
          ARRAY[1.0, 2.0, 3.0])",
     );

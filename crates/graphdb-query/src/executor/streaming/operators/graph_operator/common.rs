@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::executor::expression::evaluator::traits::ExpressionContext;
@@ -14,7 +15,7 @@ use crate::storage::QueryStorage;
 use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::storage_ids::VertexId;
-use graphdb_core::{EdgeDirection, Value};
+use graphdb_core::{Edge, EdgeDirection, Value};
 
 use super::super::visited_set::VisitedSet;
 use super::ExpandCtx;
@@ -222,10 +223,21 @@ pub(super) fn expand_single_step(
         return Ok(Some(DataChunk::new_with_layout(out_rows, output_layout)));
     }
 
-    for (vid, seed_row) in seed_vids.iter().zip(seed_rows.iter()) {
-        let edges = reader.get_node_edges(space_name, vid, direction, edge_types)?;
+    // Materialized path: per-seed edge fanout keeps the `Edge` objects
+    // the edge slot must bind, then destination vertices resolve with one
+    // batched read per tag group instead of one point lookup per edge.
+    struct PendingExpand {
+        seed_idx: usize,
+        edge: Edge,
+        dst: VertexId,
+        tag: String,
+    }
 
-        for edge in &edges {
+    let mut pending: Vec<PendingExpand> = Vec::new();
+    let mut tag_groups: HashMap<String, Vec<VertexId>> = HashMap::new();
+    for (seed_idx, vid) in seed_vids.iter().enumerate() {
+        let edges = reader.get_node_edges(space_name, vid, direction, edge_types)?;
+        for edge in edges {
             let dst_vid = match direction {
                 EdgeDirection::Out => *edge.dst(),
                 EdgeDirection::In => *edge.src(),
@@ -237,23 +249,47 @@ pub(super) fn expand_single_step(
                     }
                 }
             };
-
-            let Some(neighbor_tag) = crate::executor::traversal::graph_reader::resolve_neighbor_tag(
-                reader,
-                space_name,
+            let Some(neighbor_tag) =
+                crate::executor::traversal::graph_reader::resolve_neighbor_tag(
+                    reader,
+                    space_name,
+                    &edge,
+                    &dst_vid,
+                    ctx.dst_tag,
+                )
+            else {
+                continue;
+            };
+            tag_groups
+                .entry(neighbor_tag.clone())
+                .or_default()
+                .push(dst_vid);
+            pending.push(PendingExpand {
+                seed_idx,
                 edge,
-                &dst_vid,
-                ctx.dst_tag,
-            ) else {
-                continue;
-            };
-            let Some(dst_vertex) = reader.get_vertex(space_name, &neighbor_tag, &dst_vid)? else {
-                continue;
-            };
+                dst: dst_vid,
+                tag: neighbor_tag,
+            });
+        }
+    }
+
+    // Batch-read vertices per tag group.
+    let mut vertex_map: HashMap<(String, VertexId), Value> = HashMap::new();
+    for (tag, ids) in &tag_groups {
+        let vertices = reader.get_vertices_batch(space_name, tag, ids)?;
+        for (id, vertex) in ids.iter().zip(vertices.iter()) {
+            if let Some(v) = vertex {
+                vertex_map.insert((tag.clone(), *id), Value::Vertex(Box::new(v.clone())));
+            }
+        }
+    }
+
+    for req in &pending {
+        if let Some(dst_vertex) = vertex_map.get(&(req.tag.clone(), req.dst)) {
             buf.push_row(
-                seed_row,
-                Value::Edge(Box::new(edge.clone())),
-                Value::Vertex(Box::new(dst_vertex)),
+                &seed_rows[req.seed_idx],
+                Value::Edge(Box::new(req.edge.clone())),
+                dst_vertex.clone(),
             );
         }
     }

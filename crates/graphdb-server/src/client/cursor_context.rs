@@ -61,6 +61,12 @@ pub struct CursorContext {
     next_id: AtomicU64,
 }
 
+impl Default for CursorContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CursorContext {
     pub fn new() -> Self {
         Self {

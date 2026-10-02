@@ -178,7 +178,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                             .is_some_and(|actual| values_equal(actual, value))
                     })
                 })
-                .map(|vertex| vertex.vid.clone())
+                .map(|vertex| vertex.vid)
         };
 
         let scope = request.transaction_scope.clone();

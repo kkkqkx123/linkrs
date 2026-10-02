@@ -471,8 +471,8 @@ fn edge_table_stats_snapshot_tracks_live_and_holes() {
             .insert_edge(
                 "test_space",
                 Edge::new(
-                    src.clone(),
-                    dst.clone(),
+                    *src,
+                    *dst,
                     "KNOWS".to_string(),
                     rank,
                     Default::default(),

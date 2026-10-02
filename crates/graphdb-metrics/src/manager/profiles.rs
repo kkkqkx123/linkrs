@@ -214,7 +214,7 @@ Executor details: {}{}",
                 }
             })
             .collect();
-        out.sort_by(|a, b| b.total_time_ms.cmp(&a.total_time_ms));
+        out.sort_by_key(|p| std::cmp::Reverse(p.total_time_ms));
         out
     }
 

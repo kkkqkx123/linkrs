@@ -128,7 +128,7 @@ mod bench_coverage_tests {
         let _ = super::flush_trigger::MAX_BASELINE_AGE_MS;
         let _ = super::flush_trigger::MIN_BASELINE_AGE_MS;
         let _ = super::flush_trigger::PAGE_MERGE_RATIO;
-        let _ = super::sharded::maintenance::SHARD_FRAGMENTATION_THRESHOLD;
+        let _ = super::sharded::maintenance::thresholds::SHARD_FRAGMENTATION_THRESHOLD;
         let _ = crate::vertex::column::EVICTION_SEGMENT_BYTES;
         let _ = crate::vertex::column::MAX_BACKGROUND_LOAD_CHUNKS;
         let _ = graphdb_transaction::TransactionManagerConfig::default().default_lease_ttl;

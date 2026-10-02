@@ -525,12 +525,7 @@ async fn simulate_http_query_execute(request: QueryRequest) -> QueryResponse {
     let query_upper = request.query.trim().to_uppercase();
 
     let empty_data = QueryData::empty();
-    let empty_metadata = QueryMetadata {
-        execution_time_ms: 0,
-        rows_scanned: 0,
-        rows_returned: 0,
-        space_id: None,
-    };
+    let empty_metadata = QueryMetadata::default();
 
     if query_upper.starts_with("BEGIN") {
         // Simulate successful BEGIN

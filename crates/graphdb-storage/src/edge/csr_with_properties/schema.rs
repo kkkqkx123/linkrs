@@ -9,7 +9,7 @@ impl CsrWithProperties {
         let mut property_columns = Vec::with_capacity(property_schema.len());
         for schema in &property_schema {
             let col = Column::new(
-                schema.name.clone(),
+                schema.name.to_string(),
                 schema.prop_id,
                 schema.data_type.clone(),
                 schema.nullable,
@@ -74,7 +74,7 @@ impl CsrWithProperties {
         self.column_index.clear();
         self.prop_id_index.clear();
         for (idx, schema) in self.property_schema.iter().enumerate() {
-            self.column_index.insert(schema.name.clone(), idx);
+            self.column_index.insert(schema.name.to_string(), idx);
             self.prop_id_index.insert(schema.prop_id, idx);
         }
     }
@@ -84,7 +84,7 @@ impl CsrWithProperties {
         self.prop_id_index
             .get(&prop_id)
             .and_then(|&idx| self.property_schema.get(idx))
-            .map(|schema| schema.name.as_str())
+            .map(|schema| &*schema.name)
     }
 
     /// Clear per-column dirt after a successful checkpoint.
@@ -175,7 +175,7 @@ impl CsrWithProperties {
         self.dirty_columns
             .iter()
             .filter_map(|idx| self.property_schema.get(*idx))
-            .map(|schema| schema.name.clone())
+            .map(|schema| schema.name.to_string())
             .collect()
     }
 
@@ -214,7 +214,7 @@ impl CsrWithProperties {
             .get(old_name)
             .copied()
             .ok_or_else(|| StorageError::column_not_found(old_name.to_string()))?;
-        self.property_schema[idx].name = new_name.to_string();
+        self.property_schema[idx].name = new_name.into();
         if let Some(col) = self.property_columns.get_mut(idx) {
             col.name = new_name.to_string();
         }
@@ -250,7 +250,7 @@ impl CsrWithProperties {
     /// are skipped. The allocator moves past the maximum restored id.
     pub fn restore_prop_ids(&mut self, ids: &HashMap<String, i32>) {
         for (idx, schema) in self.property_schema.iter_mut().enumerate() {
-            if let Some(id) = ids.get(&schema.name) {
+            if let Some(id) = ids.get(schema.name.as_ref()) {
                 schema.prop_id = *id;
                 if let Some(col) = self.property_columns.get_mut(idx) {
                     col.col_id = *id;

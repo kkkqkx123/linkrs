@@ -161,7 +161,7 @@ impl StatsManager {
                 index_latency_ms: get(MetricType::IndexLatencyMs),
             });
         }
-        out.sort_by(|a, b| b.search_queries.cmp(&a.search_queries));
+        out.sort_by_key(|s| std::cmp::Reverse(s.search_queries));
         out.truncate(50);
         out
     }

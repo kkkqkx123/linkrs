@@ -32,7 +32,7 @@
 //! - `flush`: full plus incremental checkpoint writes.
 //! - `load`: strict recovery reads plus delta apply.
 
-mod commit_manifest;
+pub(crate) mod commit_manifest;
 mod common;
 mod flush;
 mod health;
@@ -43,15 +43,5 @@ mod table_manifest;
 #[cfg(test)]
 mod tests;
 
-pub use commit_manifest::CorruptionClass;
-pub(crate) use commit_manifest::{
-    commit_manifest_checksum, commit_manifest_path, verify_commit_manifest_content, CommitKind,
-    CommitManifest, CommitManifestInput, COMMIT_MANIFEST_FILE_NAME,
-};
-pub(crate) use common::{now_ms, MANIFEST_FORMAT_VERSION};
-pub use health::{CommitHealthReport, GlobalCommitHealth};
-pub(crate) use sidecar::SnapshotSidecarRecord;
-pub(crate) use table_manifest::{
-    table_manifest_checksum, verify_table_manifest, ManifestLineage, TableManifest,
-    TableManifestInput, TABLE_MANIFEST_FILE_NAME,
-};
+pub(crate) use commit_manifest::CommitKind;
+pub(crate) use common::now_ms;

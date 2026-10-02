@@ -18,7 +18,7 @@ impl CsrWithProperties {
             .enumerate()
             .map(|(idx, schema)| {
                 let current = self.property_columns.get(idx).and_then(|col| col.get(pos));
-                (schema.name.clone(), current)
+                (schema.name.to_string(), current)
             })
             .collect();
         Some((vis.create_ts, vis.delete_ts, values))

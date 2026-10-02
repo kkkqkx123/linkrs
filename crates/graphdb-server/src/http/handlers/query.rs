@@ -281,9 +281,9 @@ pub async fn validate<
         Ok(_) => {
             // Advisory row estimate for automatic routing. Command-like
             // statements never stream, so they carry no estimate.
-            let estimated_rows = if !request.need_estimate {
-                None
-            } else if crate::graph_service::GraphService::<S>::is_command_like(&request.query) {
+            let estimated_rows = if !request.need_estimate
+                || crate::graph_service::GraphService::<S>::is_command_like(&request.query)
+            {
                 None
             } else {
                 state
@@ -375,7 +375,7 @@ fn error_with_trace(
     let mut response = QueryResponse::error(code, message, None);
     response.metadata.trace_id = Some(trace_id);
     response.metadata.stages = Some(stages_for_elapsed_us(elapsed_us));
-    response.metadata.execution_time_ms = (elapsed_us / 1000) as u64;
+    response.metadata.execution_time_ms = elapsed_us / 1000 ;
     response
 }
 
@@ -492,7 +492,7 @@ fn query_result_to_response(
     };
     let row_count = rows.len();
     let execution_time_ms = if result.metadata.execution_time_ms == 0 {
-        (elapsed_us / 1000) as u64
+        elapsed_us / 1000 
     } else {
         result.metadata.execution_time_ms
     };

@@ -651,6 +651,7 @@ impl ColumnStore {
     }
 
     /// Buffered overwrite entries across all columns awaiting re-encode.
+    #[allow(dead_code)]
     pub fn overlay_entry_count(&self) -> usize {
         let columns = self.columns.read();
         let mut total = 0usize;
@@ -963,6 +964,7 @@ impl ColumnStore {
     /// corrupt files still count here and are distinguished at load time.
     /// Per-directory inventory for tooling; manifest-pinned verification
     /// lives in the commit health inspection.
+    #[allow(dead_code)]
     pub fn snapshot_sidecar_stats(dir: &std::path::Path) -> (usize, u64) {
         let mut files = 0usize;
         let mut bytes = 0u64;

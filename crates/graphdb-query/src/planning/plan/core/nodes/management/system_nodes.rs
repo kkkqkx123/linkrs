@@ -168,6 +168,10 @@ define_plan_node! {
 }
 
 impl LoadFromNode {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the LOAD FROM clause structure"
+    )]
     pub fn new(
         id: i64,
         source_kind: String,

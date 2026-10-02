@@ -482,6 +482,7 @@ impl VertexTable {
     }
 
     /// Checkpoint-epoch floor below which attribute history is not retained.
+    #[allow(dead_code)]
     pub fn history_floor(&self) -> Timestamp {
         self.history_floor
     }
@@ -641,6 +642,7 @@ impl VertexTable {
     /// created after the query timestamp. Row liveness stays with the caller
     /// through the single gate; never-written windows yield `Ok(None)` and
     /// corrupt payloads yield `Err` with the column and row.
+    #[allow(dead_code)]
     pub fn try_get_projected_by_internal_id(
         &self,
         internal_id: u32,
@@ -997,6 +999,7 @@ impl VertexTable {
         self.columns.unavailable_columns()
     }
 
+    #[allow(dead_code)]
     pub fn is_column_unavailable(&self, name: &str) -> bool {
         self.columns.is_column_unavailable(name)
     }

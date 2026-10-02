@@ -1,5 +1,11 @@
 use super::super::ShardedVertexTable;
-use super::*;
+use super::commit_manifest::{
+    commit_manifest_checksum, CommitKind, CommitManifestInput, COMMIT_MANIFEST_FILE_NAME,
+};
+use super::sidecar::SnapshotSidecarRecord;
+use super::table_manifest::{
+    table_manifest_checksum, TABLE_MANIFEST_FILE_NAME, TableManifestInput,
+};
 use crate::compression::CompressionType;
 use crate::types::StoragePropertyDef;
 use graphdb_core::types::Timestamp;

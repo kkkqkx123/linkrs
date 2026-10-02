@@ -146,9 +146,12 @@ impl ShardedVertexTable {
                     }
                     let mut table = shard.write();
                     table.load(&shard_dir).map_err(|e| {
+                        // Shard-scoped damage: the failing shard is known,
+                        // so report the isolatable class naming it instead
+                        // of a table-wide fatal. Strict open still refuses.
                         graphdb_core::StorageError::deserialize_error(format!(
                             "class={} checkpoint epoch {} shard {} corrupt at file={}: {}",
-                            CorruptionClass::Fatal.as_str(),
+                            CorruptionClass::Isolatable.as_str(),
                             manifest.epoch,
                             i,
                             shard_dir.display(),

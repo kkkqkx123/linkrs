@@ -1181,7 +1181,7 @@ mod tests {
         // Informative leaves: the small table sorts first, so the reviewer
         // strictly improves the order and records the algorithm decision.
         let stats = StatisticsManager::new();
-        let mut tag_scan = |tag: &str, rows: u64| {
+        let tag_scan = |tag: &str, rows: u64| {
             let mut tag_stats = TagStatistics::new(tag.to_string());
             tag_stats.vertex_count = rows;
             stats.update_tag_stats("test", tag_stats);
@@ -1543,7 +1543,7 @@ mod tests {
         // Informative leaves: row counts differ, so the reviewer strictly
         // improves the order and emits its decision note.
         let stats = StatisticsManager::new();
-        let mut tag_scan = |tag: &str, rows: u64| {
+        let tag_scan = |tag: &str, rows: u64| {
             let mut tag_stats = TagStatistics::new(tag.to_string());
             tag_stats.vertex_count = rows;
             stats.update_tag_stats("test", tag_stats);

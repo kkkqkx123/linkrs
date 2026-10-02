@@ -1721,44 +1721,6 @@ fn batch_insert_vertices_offline_chunked(
     Ok(ids)
 }
 
-#[cfg(test)]
-mod batch_prefix_tests {
-    use super::*;
-
-    #[test]
-    fn prefix_error_roundtrips_committed_count() {
-        let cause = StorageError::capacity_exceeded();
-        let err = batch_prefix_error(4096, 10000, &cause);
-        assert_eq!(batch_prefix_committed(&err), Some((4096, 10000)));
-        assert!(batch_prefix_committed(&cause).is_none());
-    }
-
-    #[test]
-    fn single_batch_limit_stays_as_backpressure() {
-        // The per-request bound is unchanged; over-limit entries auto-split
-        // instead of rejecting, so the constant must stay finite and small.
-        assert_eq!(crate::vertex::MAX_WRITE_SCOPE_KEYS, 4096);
-    }
-
-    #[test]
-    fn over_limit_error_guides_split_batching() {
-        let err = over_limit_split_error(crate::vertex::MAX_WRITE_SCOPE_KEYS + 1);
-        assert_eq!(
-            err.kind(),
-            graphdb_core::error::storage::StorageErrorKind::CapacityExceeded
-        );
-        let message = err.message().to_string();
-        assert!(
-            message.contains(&crate::vertex::MAX_WRITE_SCOPE_KEYS.to_string()),
-            "capacity error must name the limit: {message}"
-        );
-        assert!(
-            message.contains("split"),
-            "capacity error must guide split batching: {message}"
-        );
-    }
-}
-
 /// Online auto-batch: one timestamp for the whole statement, one scope per
 /// chunk absorbed sequentially into the transaction buffer. Cross-chunk
 /// primary-key duplicates fail like same-scope duplicates (no extra
@@ -1987,4 +1949,42 @@ fn batch_insert_vertices_online_chunked(
         staged_all.extend(staged);
     }
     Ok(staged_all.into_iter().map(|row| row.vid).collect())
+}
+
+#[cfg(test)]
+mod batch_prefix_tests {
+    use super::*;
+
+    #[test]
+    fn prefix_error_roundtrips_committed_count() {
+        let cause = StorageError::capacity_exceeded();
+        let err = batch_prefix_error(4096, 10000, &cause);
+        assert_eq!(batch_prefix_committed(&err), Some((4096, 10000)));
+        assert!(batch_prefix_committed(&cause).is_none());
+    }
+
+    #[test]
+    fn single_batch_limit_stays_as_backpressure() {
+        // The per-request bound is unchanged; over-limit entries auto-split
+        // instead of rejecting, so the constant must stay finite and small.
+        assert_eq!(crate::vertex::MAX_WRITE_SCOPE_KEYS, 4096);
+    }
+
+    #[test]
+    fn over_limit_error_guides_split_batching() {
+        let err = over_limit_split_error(crate::vertex::MAX_WRITE_SCOPE_KEYS + 1);
+        assert_eq!(
+            err.kind(),
+            graphdb_core::error::storage::StorageErrorKind::CapacityExceeded
+        );
+        let message = err.message().to_string();
+        assert!(
+            message.contains(&crate::vertex::MAX_WRITE_SCOPE_KEYS.to_string()),
+            "capacity error must name the limit: {message}"
+        );
+        assert!(
+            message.contains("split"),
+            "capacity error must guide split batching: {message}"
+        );
+    }
 }

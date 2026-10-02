@@ -377,7 +377,7 @@ impl EdgeStore {
         let shard_cols: HashSet<String> = shard
             .property_schema()
             .iter()
-            .map(|s| s.name.clone())
+            .map(|s| s.name.to_string())
             .collect();
         for name in dirty_columns {
             if !shard_cols.contains(name) {
@@ -496,11 +496,11 @@ impl EdgeStore {
             {
                 if let Some(enc) = shard.column_encoding_type(&column) {
                     if enc != crate::encoding::EncodingType::None {
-                        encodings.entry(column.clone()).or_insert(enc);
+                        encodings.entry(column.to_string()).or_insert(enc);
                     }
                 }
                 if let Some(id) = shard.prop_id_of(&column) {
-                    prop_ids.entry(column).or_insert(id);
+                    prop_ids.entry(column.to_string()).or_insert(id);
                 }
             }
             for edge_id in shard.edge_ids().collect::<Vec<_>>() {

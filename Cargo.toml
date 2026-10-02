@@ -319,3 +319,23 @@ harness = false
 [[bench]]
 name = "edge_property_tables_bench"
 harness = false
+
+[[bench]]
+name = "query_stage_bench"
+harness = false
+
+[[bench]]
+name = "wal_bench"
+harness = false
+
+[[bench]]
+name = "crash_recovery_bench"
+harness = false
+
+[[bench]]
+name = "edge_read_alloc_bench"
+harness = false
+
+[[bench]]
+name = "txn_conflict_bench"
+harness = false

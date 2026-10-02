@@ -688,6 +688,7 @@ impl ShardedVertexTable {
     /// Shards are read without a global lock, so the fields may come from
     /// different instants under concurrent writes. Use the result for sizing
     /// and maintenance signals, never as a strongly consistent census.
+    #[allow(dead_code)]
     pub fn storage_snapshot(&self, ts: Timestamp) -> VertexStorageSnapshot {
         let mut snapshot = VertexStorageSnapshot::default();
         for shard in &self.shards {
@@ -720,6 +721,7 @@ impl ShardedVertexTable {
 /// Column deleted-row bytes stay resident until reclamation and remain part
 /// of the version and buffer totals rather than a separate hole-bytes field.
 #[derive(Debug, Clone, Copy, Default)]
+#[allow(dead_code)]
 pub struct VertexStorageSnapshot {
     pub live: usize,
     pub allocated: usize,

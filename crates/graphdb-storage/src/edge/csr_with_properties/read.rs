@@ -65,7 +65,7 @@ impl CsrWithProperties {
                 .property_schema
                 .iter()
                 .enumerate()
-                .map(|(i, s)| (i, s.name.as_str()))
+                .map(|(i, s)| (i, &*s.name))
                 .collect(),
             Some(names) => {
                 if names.is_empty() {
@@ -75,8 +75,8 @@ impl CsrWithProperties {
                 self.property_schema
                     .iter()
                     .enumerate()
-                    .filter(|(_, s)| wanted.contains(s.name.as_str()))
-                    .map(|(i, s)| (i, s.name.as_str()))
+                    .filter(|(_, s)| wanted.contains(&*s.name))
+                    .map(|(i, s)| (i, &*s.name))
                     .collect()
             }
         }
@@ -275,7 +275,7 @@ impl CsrWithProperties {
             .enumerate()
             .filter_map(|(i, s)| {
                 let v = self.property_columns[i].get(pos)?;
-                Some((s.name.clone(), v))
+                Some((s.name.to_string(), v))
             })
             .collect();
         if result.is_empty() {
