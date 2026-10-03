@@ -470,13 +470,7 @@ fn edge_table_stats_snapshot_tracks_live_and_holes() {
         storage
             .insert_edge(
                 "test_space",
-                Edge::new(
-                    *src,
-                    *dst,
-                    "KNOWS".to_string(),
-                    rank,
-                    Default::default(),
-                ),
+                Edge::new(*src, *dst, "KNOWS".to_string(), rank, Default::default()),
             )
             .expect("insert should succeed");
     }

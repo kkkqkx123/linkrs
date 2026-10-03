@@ -1,9 +1,15 @@
+use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::AtomicU64;
+
 use graphdb_core::{DataType, StorageError, StorageResult, Value};
 
 use crate::column_stats::ColumnStats;
 use crate::encoding::{ColumnEncoding, EncodingType, FsstColumn, FsstEncoder};
 use graphdb_core::NullBitmap;
+use parking_lot::RwLock;
 
+use super::chunk::ColumnChunk;
+use super::chunk_residency::{next_tick, ChunkResidency};
 use super::Column;
 
 // ---------------------------------------------------------------------------
@@ -332,5 +338,351 @@ fn build_alp(data_type: &DataType, values: &[Option<Value>]) -> StorageResult<Co
             "ALP encoding not supported for {:?}",
             data_type
         ))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Chunk-level encoding application and flush views
+// ---------------------------------------------------------------------------
+
+impl Column {
+    /// Encode one row slice into a chunk-local encoding of the given type.
+    /// A failed or infeasible build yields `None` (the chunk stays raw).
+    pub(super) fn encode_slice(
+        values: &[Option<Value>],
+        data_type: &DataType,
+        encoding_type: crate::encoding::EncodingType,
+        fsst_max_symbols: usize,
+    ) -> ColumnEncoding {
+        if values.is_empty() {
+            return ColumnEncoding::None;
+        }
+        Self::build_chunk_encoding(data_type, values, encoding_type, fsst_max_symbols)
+            .unwrap_or(ColumnEncoding::None)
+    }
+
+    /// Enforce the chunk window invariant: windows are contiguous from row
+    /// zero and no chunk exceeds `chunk_capacity`.
+    ///
+    /// Writes and loads maintain this shape directly, so this is normally a
+    /// no-op. It does real work only after a capacity shrink strands an
+    /// oversized chunk (split at the capacity boundary) and it drops
+    /// reserved zero-row tail chunks left behind by `reserve`.
+    ///
+    /// Exclusive-only: rewriting windows while point operations route by
+    /// them would misroute reads and writes. All callers run under the
+    /// shard write lock.
+    pub fn materialize_chunks(&self) {
+        let mut chunks = self.chunks.write();
+        while chunks.last().is_some_and(|chunk| chunk.row_count == 0) {
+            chunks.pop();
+        }
+        let capacity = self.chunk_capacity().max(1);
+        let mut idx = 0;
+        while idx < chunks.len() {
+            if chunks[idx].row_count <= capacity {
+                idx += 1;
+                continue;
+            }
+            let offset = chunks[idx].row_offset;
+            let at = capacity.min(chunks[idx].row_count);
+            let right_count = chunks[idx].row_count - at;
+            // Splits operate on raw buffers: decode first so the cut never
+            // drops overlay entries (decode merges them into the base).
+            self.decode_locked(&chunks, idx);
+            let right_state = {
+                let chunk = &chunks[idx];
+                let mut state = chunk.write_state();
+                debug_assert_eq!(state.overlay.len(), 0);
+                let (left_raw, right_raw) = Self::split_raw(&state.raw, at);
+                state.raw = left_raw;
+                let right_chains = state.version_chains.as_mut().map(|c| {
+                    let mut right = std::collections::HashMap::new();
+                    c.retain(|local, chain| {
+                        if *local < at {
+                            true
+                        } else {
+                            right.insert(*local - at, std::mem::take(chain));
+                            false
+                        }
+                    });
+                    right
+                });
+                let right_vis = state.visibility.split_off(at);
+                // Dirty pages are global ids: a page stays with the side
+                // holding its first row. A straddling page stays left; its
+                // flush covers both sides at page granularity.
+                let cut_row = offset + at;
+                let mut right_dirty = BTreeSet::new();
+                state.dirty_pages.retain(|page| {
+                    if (*page as usize)
+                        .saturating_mul(crate::persistence::dirty_page::ROWS_PER_PAGE)
+                        < cut_row
+                    {
+                        true
+                    } else {
+                        right_dirty.insert(*page);
+                        false
+                    }
+                });
+                let mut right_overflow = HashMap::new();
+                state.overflow_rows.retain(|local, handle| {
+                    if (*local as usize) < at {
+                        true
+                    } else {
+                        right_overflow.insert(*local - at as u32, *handle);
+                        false
+                    }
+                });
+                crate::vertex::column::chunk::ChunkState {
+                    raw: right_raw,
+                    encoding: ColumnEncoding::None,
+                    overlay: super::chunk_encoding::UpdateOverlay::new(
+                        super::chunk_encoding::overlay_capacity_for(right_count),
+                    ),
+                    encoding_meta: crate::encoding::ChunkEncodingMeta::default(),
+                    updates_since_encode: 0,
+                    version_chains: right_chains,
+                    visibility: right_vis,
+                    dirty_pages: right_dirty,
+                    overflow_rows: right_overflow,
+                    residency: ChunkResidency::Resident,
+                }
+            };
+            chunks[idx].row_count = at;
+            let right = ColumnChunk {
+                row_offset: offset + at,
+                row_count: right_count,
+                element_size: chunks[idx].element_size,
+                state: RwLock::new(right_state),
+                last_access: AtomicU64::new(next_tick()),
+            };
+            chunks.insert(idx + 1, right);
+            idx += 1;
+        }
+    }
+
+    /// Per-chunk flush view: window plus cloned payload descriptors for
+    /// persistence serialization. The clones are taken under one segment
+    /// read latch each so the serialized record is chunk-consistent.
+    /// Evicted chunks (possible only when flush-time promotion failed) are
+    /// materialized row-wise from their snapshot into raw buffers.
+    pub(crate) fn chunk_flush_view(&self, idx: usize) -> Option<super::ChunkFlushView> {
+        let chunks = self.chunks.read();
+        let chunk = chunks.get(idx)?;
+        let state = chunk.read_state();
+        let raw_form = !state.encoding.is_encoded();
+        let (raw_data, raw_offsets, raw_bitmap) = if !raw_form {
+            (Vec::new(), Vec::new(), None)
+        } else if state.residency.is_evicted() {
+            let (data, offsets, bitmap) = self.values_into_buffers(
+                (chunk.row_offset..chunk.row_offset + chunk.row_count)
+                    .map(|row| self.raw_base_value_in(&chunks, row)),
+            );
+            (data, offsets, bitmap)
+        } else {
+            state.raw.as_storage().get_flush_data()
+        };
+        let overlay: Vec<(u32, Option<Value>)> = if state.residency.is_evicted() {
+            // Evicted windows carry no live overlay (writes promote first),
+            // and the materialized buffers above already merged any values.
+            Vec::new()
+        } else {
+            state.overlay.iter().map(|(k, v)| (*k, v.clone())).collect()
+        };
+        Some(super::ChunkFlushView {
+            row_offset: chunk.row_offset,
+            row_count: chunk.row_count,
+            encoding_meta: state.encoding_meta.clone(),
+            encoding: state.encoding.clone(),
+            overlay,
+            raw_form,
+            raw_data,
+            raw_offsets,
+            raw_bitmap,
+        })
+    }
+
+    /// Every chunk's flush view, in row order.
+    pub(crate) fn chunk_flush_views(&self) -> Vec<super::ChunkFlushView> {
+        let count = self.chunks.read().len();
+        (0..count)
+            .filter_map(|idx| self.chunk_flush_view(idx))
+            .collect()
+    }
+
+    /// Per-chunk encoding metadata: (chunk_idx, encoding type, row count).
+    /// Evicted chunks report their pre-evict scheme so sidecars and chunk
+    /// profiles keep describing the flushed layout.
+    pub fn chunk_encoding_metadata(&self) -> Vec<(usize, crate::encoding::EncodingType, usize)> {
+        let chunks = self.chunks.read();
+        chunks
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (i, c.evicted_encoding(), c.row_count))
+            .collect()
+    }
+
+    /// Re-evict one resident chunk from checkpoint sidecar pages without
+    /// decoding them onto the heap. Matches by row window; a mismatch or
+    /// an already-evicted chunk keeps current state and reports false so
+    /// the caller stays resident. Used by reload to restore the persisted
+    /// eviction state. Exclusive-only (load path).
+    pub fn restore_mapped_chunk(
+        &self,
+        record: super::chunk_residency::MappedChunk,
+        map: &std::sync::Arc<memmap2::Mmap>,
+    ) -> bool {
+        let chunks = self.chunks.read();
+        let Some(chunk) = chunks.iter().find(|c| {
+            c.row_offset == record.row_offset as usize && c.row_count == record.rows as usize
+        }) else {
+            log::warn!(
+                "snapshot sidecar window [{}, {}) matches no chunk of column {}",
+                record.row_offset,
+                record.row_offset as usize + record.rows as usize,
+                self.name,
+            );
+            return false;
+        };
+        let mut state = chunk.write_state();
+        if !state.residency.is_resident() {
+            return false;
+        }
+        let snapshot = super::chunk_residency::EvictedSnapshot::from_mapped(
+            record.rows,
+            record.encoding,
+            record.meta,
+            record.uncompressed_bytes,
+            map.clone(),
+            record.frames,
+        );
+        state.raw.as_storage_mut().clear();
+        state.encoding = crate::encoding::ColumnEncoding::None;
+        state.residency = ChunkResidency::Evicted(snapshot);
+        true
+    }
+
+    /// Apply one selected encoding to this column, chunk by chunk.
+    ///
+    /// Each resident chunk selects and stores its own encoding so point
+    /// updates only decode the affected chunk. Exclusive-only (flush/encode
+    /// path): it rewrites chunk payloads wholesale.
+    pub fn apply_selected_encoding(
+        &self,
+        encoding_type: crate::encoding::EncodingType,
+        fsst_max_symbols: usize,
+    ) -> StorageResult<()> {
+        if self.is_empty() {
+            return Ok(());
+        }
+        self.apply_encoding_to_chunks(encoding_type, fsst_max_symbols)
+    }
+
+    /// Apply an encoding type independently per chunk.
+    ///
+    /// Each chunk is resolved and encoded in isolation (bounded by chunk
+    /// capacity): no full-column value vector is ever materialized. Hot
+    /// chunks encode first so write hotspots become evictable sooner; cold
+    /// chunks keep their rhythm. When a chunk selects `None`, its
+    /// overlay-merged values are written back to the raw buffer before the
+    /// overlay is cleared so no update is lost. Overlay-full chunks already
+    /// mark hot on the write path and never wait for a whole-column
+    /// fallback.
+    pub fn apply_encoding_to_chunks(
+        &self,
+        encoding_type: crate::encoding::EncodingType,
+        fsst_max_symbols: usize,
+    ) -> StorageResult<()> {
+        // Bind the check so the read guard drops before materialize_chunks:
+        // parking_lot locks are not reentrant.
+        let empty = self.chunks.read().is_empty();
+        if empty {
+            self.materialize_chunks();
+        }
+        if self.chunks.read().is_empty() {
+            return Ok(());
+        }
+        // Encoding rebuilds need decoded buffers: promote evicted chunks
+        // first so every chunk below is resident. Load failures propagate
+        // instead of silently encoding a partial column.
+        let len = self.chunks.read().len();
+        for idx in 0..len {
+            self.ensure_resident(idx)?;
+        }
+        let total = self.len();
+        let order: Vec<usize> = {
+            let chunks = self.chunks.read();
+            let mut scored: Vec<(u64, usize)> = chunks
+                .iter()
+                .enumerate()
+                .map(|(idx, chunk)| {
+                    let hot = chunk.read_state().updates_since_encode;
+                    (hot, idx)
+                })
+                .collect();
+            scored.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+            scored.into_iter().map(|(_, idx)| idx).collect()
+        };
+        for &idx in &order {
+            let (start, end) = {
+                let chunks = self.chunks.read();
+                let Some(chunk) = chunks.get(idx) else {
+                    continue;
+                };
+                let start = chunk.row_offset;
+                (start, start.saturating_add(chunk.row_count).min(total))
+            };
+            // Per-chunk slice only (overlay-merged base; overflow rows as
+            // placeholders whose payloads stay in the sidecar).
+            let values: Vec<Option<Value>> =
+                (start..end).map(|r| self.encoding_base_value(r)).collect();
+            let selected = match encoding_type {
+                crate::encoding::EncodingType::None => crate::encoding::EncodingType::None,
+                _ => {
+                    let selector = crate::encoding::EncodingSelector::default();
+                    selector.select_for_chunk(&self.data_type, &values)
+                }
+            };
+            let chunks = self.chunks.read();
+            let Some(chunk) = chunks.get(idx) else {
+                continue;
+            };
+            if selected == crate::encoding::EncodingType::None {
+                // Preserve overlay-merged values: the raw buffer still holds
+                // the pre-overlay base, so write merged values back first.
+                drop(chunks);
+                for (off, v) in values.iter().enumerate() {
+                    let row = start + off;
+                    let _ = self.write_raw_inner(row, v.as_ref());
+                }
+                let chunks = self.chunks.read();
+                if let Some(chunk) = chunks.get(idx) {
+                    let mut state = chunk.write_state();
+                    state.encoding = ColumnEncoding::None;
+                    state.overlay.clear();
+                    state.updates_since_encode = 0;
+                    state.encoding_meta.scheme = crate::encoding::EncodingType::None;
+                    state.encoding_meta.num_values =
+                        values.iter().filter(|v| v.is_some()).count() as u32;
+                    state.encoding_meta.all_null = state.encoding_meta.num_values == 0;
+                }
+                continue;
+            }
+            // Encode this chunk slice in isolation (chunk-local indexes).
+            let encoded = Self::encode_slice(&values, &self.data_type, selected, fsst_max_symbols);
+            if encoded.is_encoded() {
+                let num_values = values.iter().filter(|v| v.is_some()).count() as u32;
+                let mut state = chunk.write_state();
+                state.encoding = encoded;
+                state.overlay.clear();
+                state.updates_since_encode = 0;
+                state.encoding_meta.scheme = state.encoding.encoding_type();
+                state.encoding_meta.num_values = num_values;
+                state.encoding_meta.all_null = num_values == 0;
+                state.encoding_meta.compressed_size = state.encoding.memory_usage() as u64;
+            }
+        }
+        Ok(())
     }
 }

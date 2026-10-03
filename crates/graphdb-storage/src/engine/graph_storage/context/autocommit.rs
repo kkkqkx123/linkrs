@@ -11,6 +11,7 @@ use graphdb_transaction::{
     MutationEntityKey, MutationResult, TransactionError, UndoLogEntry, VertexId,
 };
 
+use super::GraphStorageContext;
 use crate::StorageOperationContext;
 
 /// Cumulative gate admission statistics (acquisitions and total wait time).
@@ -461,4 +462,310 @@ impl Drop for AutoCommitBatchWindow {
     fn drop(&mut self) {
         self.unregister_snapshots();
     }
+}
+
+impl GraphStorageContext {
+    pub(crate) fn begin_auto_commit_batch(
+        &self,
+    ) -> StorageResult<Arc<super::AutoCommitBatchWindow>> {
+        let write_gate_lease = self.persistent.auto_commit_write_gate.acquire();
+        let mut clean = self.clone();
+        clean.operation_context = None;
+        clean.write_timestamp_lease = None;
+        clean.write_gate_lease = None;
+        clean.auto_commit_undo = None;
+        clean.auto_commit_write_set = None;
+        clean.auto_commit_window = None;
+        Ok(Arc::new(super::AutoCommitBatchWindow {
+            base_ctx: Arc::new(clean),
+            gate_lease: write_gate_lease,
+            first_ts: parking_lot::Mutex::new(None),
+            statement_count: std::sync::atomic::AtomicU64::new(0),
+            snapshot_rounds: std::sync::atomic::AtomicU64::new(0),
+            group: std::sync::atomic::AtomicBool::new(false),
+            group_undo: None,
+            group_write_sets: parking_lot::Mutex::new(Vec::new()),
+            group_transaction_id: parking_lot::Mutex::new(None),
+        }))
+    }
+
+    pub(crate) fn begin_auto_commit_group(
+        &self,
+    ) -> StorageResult<Arc<super::AutoCommitBatchWindow>> {
+        let write_gate_lease = self.persistent.auto_commit_write_gate.acquire();
+        let mut clean = self.clone();
+        clean.operation_context = None;
+        clean.write_timestamp_lease = None;
+        clean.write_gate_lease = None;
+        clean.auto_commit_undo = None;
+        clean.auto_commit_write_set = None;
+        clean.auto_commit_window = None;
+        Ok(Arc::new(super::AutoCommitBatchWindow {
+            base_ctx: Arc::new(clean),
+            gate_lease: write_gate_lease,
+            first_ts: parking_lot::Mutex::new(None),
+            statement_count: std::sync::atomic::AtomicU64::new(0),
+            snapshot_rounds: std::sync::atomic::AtomicU64::new(0),
+            group: std::sync::atomic::AtomicBool::new(true),
+            group_undo: Some(Arc::new(parking_lot::Mutex::new(
+                graphdb_transaction::UndoLogManager::new(),
+            ))),
+            group_write_sets: parking_lot::Mutex::new(Vec::new()),
+            group_transaction_id: parking_lot::Mutex::new(None),
+        }))
+    }
+
+    pub(crate) fn restore_auto_transaction_id(&self, max_transaction_id: u64) {
+        self.persistent
+            .next_auto_transaction_id
+            .fetch_max(max_transaction_id.saturating_add(1), Ordering::SeqCst);
+    }
+
+    pub(crate) fn abort_write_timestamp(&self, timestamp: Timestamp) {
+        if let Some(lease) = &self.write_timestamp_lease {
+            lease.abort();
+        } else if self.operation_context.is_none() {
+            self.persistent
+                .version_manager
+                .abort_write_timestamp(timestamp);
+        }
+    }
+
+    /// Settle an auto-commit write timestamp in commit order.
+    ///
+    /// Reserves a commit timestamp for `start` and publishes visibility
+    /// over both slots, so auto-commit statements share the
+    /// commit-ordered coordinate with explicit transactions (conflict
+    /// windows and the read frontier alike). Returns the commit
+    /// timestamp for conflict-index publication. Re-settling an
+    /// already-settled slot is a benign no-op success reporting `start`:
+    /// writer helpers and operation finalization settle the same timestamp
+    /// by construction (per-statement commits stay visible to later
+    /// statements while the finalizer still settles), and the lease
+    /// `finalized` flag already carries exactly-once intent. Ordering is
+    /// guaranteed for the first settle of an acquired slot; the strict
+    /// fail-closed check lives in `VersionManager::commit_ordered`.
+    pub(crate) fn commit_write_timestamp_ordered(
+        &self,
+        start: Timestamp,
+    ) -> StorageResult<Timestamp> {
+        let version_manager = &self.persistent.version_manager;
+        let commit_ts = match version_manager.commit_ordered(start) {
+            Ok(commit_ts) => commit_ts,
+            Err(graphdb_transaction::VersionManagerError::InvalidTimestamp(_)) => start,
+            Err(error) => return Err(StorageError::db_error(error.to_string())),
+        };
+        if let Some(lease) = &self.write_timestamp_lease {
+            lease.finalized.store(true, Ordering::SeqCst);
+        }
+        Ok(commit_ts)
+    }
+
+    pub(crate) fn finalize_operation(&self, committed: bool) -> StorageResult<()> {
+        let Some(operation) = &self.operation_context else {
+            return Ok(());
+        };
+        if !operation.auto_commit {
+            return Ok(());
+        }
+
+        if self.auto_commit_window.is_none() {
+            self.unregister_statement_snapshots(operation);
+        }
+
+        if operation.read_only {
+            return Ok(());
+        }
+
+        // Group mode: per-statement finalize — certify against recently
+        // committed write sets; on failure rewind only this statement's
+        // staging segment and WAL tail. The group's vertex apply and WAL
+        // flush happen once at `finalize_group`. Do NOT commit/abort the
+        // write timestamp, release the gate, or unregister snapshots —
+        // those are deferred to `finalize_group`.
+        if let Some(window) = &self.auto_commit_window {
+            if window.is_grouped() {
+                let timestamp = operation.write_timestamp.ok_or_else(|| {
+                    StorageError::db_error("Group operation has no write timestamp")
+                })?;
+                let rewind = |ctx: &Self| {
+                    if let Some(txid) = operation.transaction_id {
+                        let staging_start = operation.auto_commit_staging_start.unwrap_or((0, 0));
+                        ctx.rewind_grouped_statement(
+                            txid,
+                            staging_start,
+                            operation.auto_commit_wal_start,
+                        );
+                    }
+                };
+                if committed {
+                    if let Some(conflict) = self.auto_commit_conflict(operation) {
+                        if let Some(undo) = &self.auto_commit_undo {
+                            let mut log = undo.lock();
+                            let start = operation.auto_commit_group_start.unwrap_or(0);
+                            if let Err(error) = log.execute_undo_from_index(self, timestamp, start)
+                            {
+                                log::error!("Group statement rollback failed: {}", error);
+                            }
+                        }
+                        rewind(self);
+                        self.maybe_run_index_gc();
+                        return Err(conflict);
+                    }
+                    if let Some(write_set) = self.auto_commit_write_set.as_ref() {
+                        let set = write_set.lock().clone();
+                        if !set.is_empty() {
+                            window.group_write_sets.lock().push(set);
+                        }
+                    }
+                } else {
+                    if let Some(undo) = &self.auto_commit_undo {
+                        let mut log = undo.lock();
+                        let start = operation.auto_commit_group_start.unwrap_or(0);
+                        if let Err(error) = log.execute_undo_from_index(self, timestamp, start) {
+                            log::error!("Group statement rollback failed: {}", error);
+                        }
+                    }
+                    rewind(self);
+                }
+                self.maybe_run_index_gc();
+                return Ok(());
+            }
+        }
+
+        let timestamp = operation.write_timestamp.ok_or_else(|| {
+            StorageError::db_error("Auto-commit operation has no write timestamp")
+        })?;
+        let transaction_id = operation.transaction_id;
+
+        if committed {
+            if let Some(conflict) = self.auto_commit_conflict(operation) {
+                if let Some(undo) = &self.auto_commit_undo {
+                    let mut log = undo.lock();
+                    if let Err(error) = log.execute_undo(self, timestamp) {
+                        log::error!("Auto-commit rollback failed: {}", error);
+                    }
+                }
+                self.abort_write_timestamp(timestamp);
+                if let Some(lease) = &self.write_gate_lease {
+                    lease.release();
+                }
+                if let Some(transaction_id) = transaction_id {
+                    self.abort_staged_writes(transaction_id);
+                }
+                self.maybe_run_index_gc();
+                return Err(conflict);
+            }
+            // Commit point: staged vertex rows are installed after the
+            // conflict certification and before the timestamp publishes
+            // visibility. A failing apply leaves nothing installed; the
+            // statement then unwinds like any other conflict.
+            if let Some(transaction_id) = transaction_id {
+                if let Err(error) = self.apply_txn_staging(transaction_id) {
+                    if let Some(undo) = &self.auto_commit_undo {
+                        let mut log = undo.lock();
+                        if let Err(undo_error) = log.execute_undo(self, timestamp) {
+                            log::error!("Auto-commit rollback failed: {}", undo_error);
+                        }
+                    }
+                    self.abort_write_timestamp(timestamp);
+                    if let Some(lease) = &self.write_gate_lease {
+                        lease.release();
+                    }
+                    self.abort_staged_writes(transaction_id);
+                    self.maybe_run_index_gc();
+                    return Err(error);
+                }
+            }
+            // Commit-ordered visibility: the conflict window below is
+            // indexed by the same commit timestamp that advances the
+            // read frontier, matching explicit transactions.
+            let commit_ts = self.commit_write_timestamp_ordered(timestamp)?;
+            self.publish_auto_commit_write_set(commit_ts);
+        } else {
+            if let Some(undo) = &self.auto_commit_undo {
+                let mut log = undo.lock();
+                if let Err(error) = log.execute_undo(self, timestamp) {
+                    log::error!("Auto-commit rollback failed: {}", error);
+                }
+            }
+            self.abort_write_timestamp(timestamp);
+        }
+        if let Some(lease) = &self.write_gate_lease {
+            lease.release();
+        }
+        if let Some(transaction_id) = transaction_id {
+            self.persistent.staged_wal.remove(&transaction_id);
+            // After a successful apply the buffer is already gone; this is
+            // the release point for the failed-statement buffer.
+            self.discard_txn_staging_for(transaction_id);
+        }
+        self.maybe_run_index_gc();
+        Ok(())
+    }
+
+    /// Check the active auto-commit statement against recently committed
+    /// write sets. Returns a write-write conflict error when the statement
+    /// overlaps a commit newer than its read timestamp.
+    fn auto_commit_conflict(&self, operation: &StorageOperationContext) -> Option<StorageError> {
+        let write_set = self.auto_commit_write_set.as_ref()?.lock().clone();
+        if write_set.is_empty() {
+            return None;
+        }
+        if self
+            .persistent
+            .committed_write_sets
+            .has_conflict(&write_set, operation.read_timestamp)
+        {
+            return Some(StorageError::write_write_conflict(format!(
+                "auto-commit statement at ts={} overlaps a recently committed write",
+                operation.read_timestamp,
+            )));
+        }
+        None
+    }
+
+    /// Test oracle for group-commit publication: whether `write_set`
+    /// overlaps a committed entry newer than `read_ts`.
+    #[cfg(test)]
+    pub(crate) fn committed_write_conflict_probe(
+        &self,
+        write_set: &graphdb_transaction::types::WriteSet,
+        read_ts: Timestamp,
+    ) -> bool {
+        self.persistent
+            .committed_write_sets
+            .has_conflict(write_set, read_ts)
+    }
+
+    /// Publish the active auto-commit statement's write set for future
+    /// commit-time certification.
+    fn publish_auto_commit_write_set(&self, commit_ts: Timestamp) {
+        let Some(write_set) = self.auto_commit_write_set.as_ref() else {
+            return;
+        };
+        let write_set = write_set.lock().clone();
+        self.publish_committed_write_set(commit_ts, write_set);
+    }
+
+    /// Publish an externally committed write set (explicit-transaction
+    /// bridge). Lets the transaction manager feed explicit commits into the
+    /// storage certification window so auto-commit statements certify
+    /// against them.
+    pub(crate) fn publish_committed_write_set(
+        &self,
+        commit_ts: Timestamp,
+        write_set: graphdb_transaction::types::WriteSet,
+    ) {
+        let horizon = self
+            .persistent
+            .version_manager
+            .snapshot_tracker()
+            .cleanup_threshold();
+        self.persistent
+            .committed_write_sets
+            .publish(commit_ts, write_set, horizon);
+    }
+
+    fn unregister_statement_snapshots(&self, _operation: &StorageOperationContext) {}
 }

@@ -4,7 +4,7 @@ use super::commit_manifest::{
 };
 use super::sidecar::SnapshotSidecarRecord;
 use super::table_manifest::{
-    table_manifest_checksum, TABLE_MANIFEST_FILE_NAME, TableManifestInput,
+    table_manifest_checksum, TableManifestInput, TABLE_MANIFEST_FILE_NAME,
 };
 use crate::compression::CompressionType;
 use crate::types::StoragePropertyDef;
@@ -1224,11 +1224,6 @@ fn column_overflow_missing_degrades_single_column() {
     reloaded
         .load(&dir)
         .expect("single-column loss must not refuse the table");
-    let unavailable = reloaded.unavailable_columns();
-    assert!(
-        unavailable.iter().any(|(_, col, _)| col == "bio"),
-        "degraded column must be reported with its name: {unavailable:?}"
-    );
     assert!(
         reloaded.get_internal_id("v1", ts).is_some(),
         "identity must stay usable after column isolation"

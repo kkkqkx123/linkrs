@@ -1111,9 +1111,14 @@ mod tests {
             .unwrap()
             .num_shards();
         assert_eq!(small_shards, 1);
-        let large = ctx
-            .create_vertex_type_with_estimate("LargeTag", name_prop(), "name", Some(500_000))
-            .expect("large table creation succeeds");
+        let large = super::create_vertex_type_with_estimate(
+            &ctx,
+            "LargeTag",
+            name_prop(),
+            "name",
+            Some(500_000),
+        )
+        .expect("large table creation succeeds");
         let large_shards = ctx
             .data_store()
             .test_read_vertex_tables()

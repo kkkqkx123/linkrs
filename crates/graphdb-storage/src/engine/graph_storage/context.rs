@@ -22,7 +22,6 @@ pub(crate) mod txn_staging;
 
 pub use autocommit::{AutoCommitBatchWindow, WriteGateStats};
 pub(crate) use autocommit::{AutoCommitMutationRecorder, AutoCommitWriteLease};
-pub(crate) use evidence::VertexIdDomainEvidence;
 pub(crate) use persistent::GraphStoragePersistent;
 pub(crate) use txn_staging::TxnStaging;
 
@@ -324,10 +323,13 @@ mod freeze;
 pub(crate) mod helpers;
 mod init;
 mod maintenance;
+mod migration_history;
 mod persistence;
 mod query;
+mod resource_admission;
 mod schema;
 pub(crate) mod vertex_ops;
+mod wal_coordination;
 
 impl std::fmt::Debug for GraphStorageContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

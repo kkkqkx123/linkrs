@@ -348,7 +348,7 @@ pub(crate) fn delete_vertex_data(
     let raw = parse_user_vertex_id(vertex_id)?;
     let vid = VertexId::normalize_for_vid_type(&space_info.vid_type, raw)?;
 
-    super::vertex::delete_vertex(ctx, space, tag, &vid)?;
+    super::vertex_delete::delete_vertex(ctx, space, tag, &vid)?;
     Ok(true)
 }
 

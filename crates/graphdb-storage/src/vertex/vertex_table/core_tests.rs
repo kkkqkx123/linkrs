@@ -1,8 +1,9 @@
 use super::*;
 use crate::types::StoragePropertyDef;
+use crate::vertex::IdKey;
 use graphdb_core::error::storage::StorageErrorKind;
 use graphdb_core::types::Timestamp;
-use graphdb_core::DataType;
+use graphdb_core::{DataType, Value};
 
 /// Tri-state lookup collapsed to its visible id for single-table tests.
 fn lookup_visible(table: &VertexTable, key: &str, ts: Timestamp) -> Option<u32> {

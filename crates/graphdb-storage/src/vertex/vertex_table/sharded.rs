@@ -85,19 +85,6 @@ impl ShardedVertexTable {
         )
     }
 
-    /// Unavailable columns across all shards as `(shard, column, reason)`,
-    /// sorted for stable output. Empty when every column is healthy.
-    pub fn unavailable_columns(&self) -> Vec<(usize, String, String)> {
-        let mut out = Vec::new();
-        for (idx, shard) in self.shards.iter().enumerate() {
-            for (col, reason) in shard.read().unavailable_columns() {
-                out.push((idx, col, reason));
-            }
-        }
-        out.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
-        out
-    }
-
     /// Build a table under an explicit versioned layout. New tables use
     /// [`ShardLayout::for_new_table_with_estimate`] with generation zero;
     /// opened tables use the layout and generation pinned in their manifest.
@@ -246,8 +233,11 @@ impl ShardedVertexTable {
                         continue;
                     };
                     let Some(_) = self.get_by_internal_id_offline(old_global, ts) else {
-                        return Err(graphdb_core::StorageError::invalid_operation("reshard refused: indexed text key maps to a missing record; \
-                             refusing a partial edge-translation map".to_string()));
+                        return Err(graphdb_core::StorageError::invalid_operation(
+                            "reshard refused: indexed text key maps to a missing record; \
+                             refusing a partial edge-translation map"
+                                .to_string(),
+                        ));
                     };
                     let shard = (routing::fxhash(name) as usize) & mask;
                     per_shard_rows[shard] += 1;

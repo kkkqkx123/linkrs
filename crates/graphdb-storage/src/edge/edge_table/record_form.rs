@@ -1032,7 +1032,7 @@ mod tests {
             .expect_err("pure plan must fail");
         assert!(
             err.to_string()
-                .contains(crate::edge::PURE_REQUIRES_ZERO_PROPERTIES_MSG),
+                .contains(crate::edge::record_form_policy::PURE_REQUIRES_ZERO_PROPERTIES_MSG),
             "unexpected wording: {}",
             err
         );

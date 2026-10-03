@@ -24,11 +24,13 @@ pub mod chunk_encoding;
 pub mod chunk_residency;
 #[allow(clippy::module_inception)]
 pub mod column;
+pub mod column_eviction;
 pub mod column_store;
 pub mod encoding;
 pub mod fixed_width;
 pub mod mvcc;
 pub mod overflow;
+pub mod page_io;
 pub mod variable_width;
 pub mod zone_map;
 

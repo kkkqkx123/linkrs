@@ -11,9 +11,9 @@ use graphdb_transaction::wal::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
     DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
-    DeleteVertexPropsRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo,
-    InsertEdgeRedo, RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
-    UpdateEdgePropRedo, UpdateSequenceRedo,
+    DeleteVertexPropsRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo,
+    DropTagIndexRedo, InsertEdgeRedo, RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo,
+    RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
 };
 
 impl RecoveryApplier for GraphStorageContext {

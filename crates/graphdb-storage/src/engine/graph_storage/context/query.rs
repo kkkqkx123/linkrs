@@ -4,22 +4,6 @@ use graphdb_core::StorageResult;
 use super::GraphStorageContext;
 
 impl GraphStorageContext {
-    /// Columns degraded to unavailable for one vertex label.
-    ///
-    /// Returns `(shard, column, reason)` triples, empty when every column
-    /// is healthy. Read-only observability over the column-isolated open.
-    pub fn vertex_unavailable_columns(&self, label: LabelId) -> Vec<(usize, String, String)> {
-        self.persistent
-            .data_store
-            .catalog_read_snapshot()
-            .with_vertex_tables(|tables| {
-                tables
-                    .get(&label)
-                    .map(|table| table.unavailable_columns())
-                    .unwrap_or_default()
-            })
-    }
-
     pub fn scan_vertices(
         &self,
         label: LabelId,

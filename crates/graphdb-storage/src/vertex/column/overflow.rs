@@ -5,9 +5,12 @@
 //! buffer; flush persists it and load rebuilds the index. Deletes never
 //! reclaim entries eagerly; flush rebuilds the file from live rows only.
 
+use std::collections::HashMap;
 use std::io::Read;
 
-use graphdb_core::{StorageError, StorageResult};
+use graphdb_core::{StorageError, StorageResult, Value};
+
+use super::Column;
 
 /// Default payload size above which a string spills to the overflow file.
 pub const DEFAULT_OVERFLOW_THRESHOLD: usize = 1024;
@@ -280,6 +283,187 @@ impl OverflowStore {
             });
         }
         self.pending = cursor.to_vec();
+        Ok(())
+    }
+}
+
+impl Column {
+    /// Base value for encoding inputs and persisted buffers: overflow rows
+    /// contribute their inline placeholder (the payload travels in the
+    /// sidecar). Point reads use `get`, which serves the side store.
+    pub(super) fn encoding_base_value(&self, row_idx: usize) -> Option<Value> {
+        let chunks = self.chunks.read();
+        self.encoding_base_value_in(&chunks, row_idx)
+    }
+
+    /// Collect every overflow mapping as global rows. The segment latch is
+    /// released before touching the side store.
+    pub(super) fn collect_overflow_rows(&self) -> Vec<(usize, OverflowHandle)> {
+        let chunks = self.chunks.read();
+        let mut rows = Vec::new();
+        for chunk in chunks.iter() {
+            let state = chunk.read_state();
+            rows.extend(
+                state
+                    .overflow_rows
+                    .iter()
+                    .map(|(local, handle)| (chunk.row_offset + *local as usize, *handle)),
+            );
+        }
+        rows
+    }
+
+    /// Rebuild the overflow store from live rows only (flush-time GC).
+    /// Exclusive-only (flush path): it replaces the store and repartitions
+    /// every mapping.
+    pub fn rebuild_overflow(&self) -> StorageResult<()> {
+        let rows = self.collect_overflow_rows();
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let threshold = self.overflow_threshold();
+        // Main buffers hold placeholders for overflow rows, so payloads are
+        // re-read from the side store itself; rows whose payload vanished
+        // (overwritten with a short value since) are dropped.
+        let mut live_rows: Vec<usize> = Vec::new();
+        let mut live_payloads: Vec<Vec<u8>> = Vec::new();
+        {
+            let store = self.overflow_store.lock();
+            for (row, handle) in &rows {
+                match store.get(handle) {
+                    Some(payload) if payload.len() > threshold => {
+                        live_rows.push(*row);
+                        live_payloads.push(payload);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut order: Vec<usize> = (0..live_rows.len()).collect();
+        order.sort_by_key(|&i| live_rows[i]);
+        let sorted_payloads: Vec<Vec<u8>> =
+            order.iter().map(|&i| live_payloads[i].clone()).collect();
+        self.overflow_store
+            .lock()
+            .rebuild_from_live(&sorted_payloads)?;
+        // Rebuild preserves row order, so entry ids follow the sorted rows.
+        let mut sorted_rows: Vec<usize> = live_rows;
+        sorted_rows.sort_unstable();
+        let capacity = self.chunk_capacity();
+        let chunks = self.chunks.read();
+        for chunk in chunks.iter() {
+            chunk.write_state().overflow_rows.clear();
+        }
+        for (entry_id, row) in sorted_rows.into_iter().enumerate() {
+            let handle = OverflowHandle {
+                entry_id: u32::try_from(entry_id).map_err(|_| {
+                    StorageError::invalid_input(format!(
+                        "overflow entry count {} exceeds the handle limit",
+                        entry_id
+                    ))
+                })?,
+            };
+            if let Some(chunk) = chunks.get(row / capacity.max(1)) {
+                if row >= chunk.row_offset && row < chunk.row_offset + chunk.row_count {
+                    chunk
+                        .write_state()
+                        .overflow_rows
+                        .insert((row - chunk.row_offset) as u32, handle);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Serialize overflow state for the `<col>.overflow` sidecar.
+    pub fn serialize_overflow(&self) -> StorageResult<Vec<u8>> {
+        let mut store_buf = Vec::new();
+        {
+            let store = self.overflow_store.lock();
+            store.flush_to_sidecar_buffer(&mut store_buf)?;
+        }
+        let mut rows = self.collect_overflow_rows();
+        let mut buf = Vec::new();
+        buf.push(1u8);
+        buf.extend_from_slice(&(store_buf.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&store_buf);
+        buf.extend_from_slice(&(rows.len() as u32).to_le_bytes());
+        rows.sort_by_key(|(row, _)| *row);
+        for (row, handle) in rows {
+            buf.extend_from_slice(&(row as u32).to_le_bytes());
+            buf.extend_from_slice(&handle.entry_id.to_le_bytes());
+        }
+        let crc = crc32fast::hash(&buf);
+        buf.extend_from_slice(&crc.to_le_bytes());
+        Ok(buf)
+    }
+
+    /// Restore overflow state from a sidecar buffer.
+    pub fn load_overflow_bytes(&self, bytes: &[u8]) -> StorageResult<()> {
+        if bytes.len() < 10 {
+            return Err(StorageError::deserialize_error(
+                "overflow sidecar too small".to_string(),
+            ));
+        }
+        let crc_tail: [u8; 4] = bytes[bytes.len() - 4..].try_into().map_err(|_| {
+            StorageError::deserialize_error("overflow sidecar CRC tail malformed".to_string())
+        })?;
+        let stored_crc = u32::from_le_bytes(crc_tail);
+        let computed = crc32fast::hash(&bytes[..bytes.len() - 4]);
+        if stored_crc != computed {
+            return Err(StorageError::deserialize_error(format!(
+                "overflow sidecar CRC mismatch: stored={:#x} computed={:#x}",
+                stored_crc, computed
+            )));
+        }
+        let mut cursor = &bytes[..bytes.len() - 4];
+        let mut ver = [0u8; 1];
+        cursor.read_exact(&mut ver)?;
+        if ver[0] != 1 {
+            return Err(StorageError::deserialize_error(format!(
+                "unsupported overflow version {}",
+                ver[0]
+            )));
+        }
+        let mut len_buf = [0u8; 4];
+        cursor.read_exact(&mut len_buf)?;
+        let store_len = u32::from_le_bytes(len_buf) as usize;
+        if store_len > cursor.len() {
+            return Err(StorageError::deserialize_error(
+                "overflow sidecar truncated".to_string(),
+            ));
+        }
+        let mut store = OverflowStore::new(self.overflow_threshold());
+        store.load_from_bytes(&cursor[..store_len])?;
+        cursor = &cursor[store_len..];
+        cursor.read_exact(&mut len_buf)?;
+        let map_len = u32::from_le_bytes(len_buf) as usize;
+        let mut rows = HashMap::new();
+        for _ in 0..map_len {
+            let mut b = [0u8; 4];
+            cursor.read_exact(&mut b)?;
+            let row = u32::from_le_bytes(b) as usize;
+            cursor.read_exact(&mut b)?;
+            let entry = u32::from_le_bytes(b);
+            rows.insert(row, OverflowHandle { entry_id: entry });
+        }
+        *self.overflow_store.lock() = store;
+        // Repartition the global mappings into their owning segments.
+        let capacity = self.chunk_capacity();
+        let chunks = self.chunks.read();
+        for chunk in chunks.iter() {
+            chunk.write_state().overflow_rows.clear();
+        }
+        for (row, handle) in rows {
+            if let Some(chunk) = chunks.get(row / capacity.max(1)) {
+                if row >= chunk.row_offset && row < chunk.row_offset + chunk.row_count {
+                    chunk
+                        .write_state()
+                        .overflow_rows
+                        .insert((row - chunk.row_offset) as u32, handle);
+                }
+            }
+        }
         Ok(())
     }
 }
