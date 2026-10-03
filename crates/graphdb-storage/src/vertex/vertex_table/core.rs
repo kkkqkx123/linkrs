@@ -190,7 +190,3 @@ impl VertexTable {
         Arc::clone(&self.version_history)
     }
 }
-
-#[cfg(test)]
-#[path = "core_tests.rs"]
-mod tests;

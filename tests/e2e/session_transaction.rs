@@ -50,8 +50,10 @@ fn test_begin_read_only_consistent_snapshot_across_statements() {
 
     // Concurrent auto-commit write from another session commits after the
     // snapshot was taken.
-    db.execute_external("INSERT VERTEX person(person_id, name, age) VALUES 'p2': ('p2', 'Bob', 25)")
-        .expect("external INSERT should succeed");
+    db.execute_external(
+        "INSERT VERTEX person(person_id, name, age) VALUES 'p2': ('p2', 'Bob', 25)",
+    )
+    .expect("external INSERT should succeed");
 
     // Statement 2 inside the transaction: the externally committed vertex
     // must NOT be visible — both statements share the snapshot.
@@ -86,7 +88,9 @@ fn test_read_only_transaction_rejects_dml() {
     let result = db.execute_query("BEGIN READ ONLY");
     assert_query_ok(result, "BEGIN READ ONLY should succeed");
 
-    let result = db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)");
+    let result = db.execute_query(
+        "INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)",
+    );
     assert_query_err(result, "INSERT inside a read-only transaction must fail");
 
     // The transaction is still usable for reads after the rejected write.

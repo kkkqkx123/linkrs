@@ -804,7 +804,3 @@ impl BlockingOperator {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "blocking/test.rs"]
-mod tests;

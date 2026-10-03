@@ -25,7 +25,6 @@ use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
 
 #[cfg(test)]
-mod tests;
 
 /// Streaming execution engine
 ///

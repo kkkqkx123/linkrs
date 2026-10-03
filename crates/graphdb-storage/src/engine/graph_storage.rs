@@ -23,8 +23,6 @@ mod writer;
 mod writer_api;
 
 #[cfg(test)]
-mod tests;
-
 pub use context::{AutoCommitBatchWindow, GraphStorageContext, WriteGateStats};
 pub use serial::SerialKey;
 

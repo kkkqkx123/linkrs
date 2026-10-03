@@ -123,8 +123,13 @@ fn setup_graph() -> GraphStorage {
 
 fn read_edge_once(storage: &GraphStorage) {
     let edge = storage
-        .get_edge("alloc_bench", &VertexId::try_from_int64(7).expect("vid"),
-                  &VertexId::try_from_int64(8).expect("vid"), "Link", 0)
+        .get_edge(
+            "alloc_bench",
+            &VertexId::try_from_int64(7).expect("vid"),
+            &VertexId::try_from_int64(8).expect("vid"),
+            "Link",
+            0,
+        )
         .expect("get_edge");
     black_box(edge);
 }
@@ -147,7 +152,8 @@ fn bench_edge_read(c: &mut Criterion) {
     let bytes_per_op = ALLOC_BYTES.load(Ordering::Relaxed) as f64 / iters as f64;
     let calls_per_op = ALLOC_COUNT.load(Ordering::Relaxed) as f64 / iters as f64;
 
-    let mut report = String::from("edge property read path allocation accounting (debug build)\n\n");
+    let mut report =
+        String::from("edge property read path allocation accounting (debug build)\n\n");
     report.push_str(&format!(
         "dataset: {} vertices, {} edges/vertex, {} edge properties\n\n",
         VERTEX_COUNT, EDGES_PER_VERTEX, PROP_COUNT

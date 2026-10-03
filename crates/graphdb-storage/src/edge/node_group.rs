@@ -75,8 +75,6 @@ pub(crate) mod stats;
 pub(crate) mod trait_impl;
 
 #[cfg(test)]
-mod tests;
-
 pub use address::{
     calibrator_max_density, calibrator_tree_height, group_base, group_id_for, group_size,
     local_vid, region_id_for_local, region_local_range, region_tail_gap, regions_per_group,

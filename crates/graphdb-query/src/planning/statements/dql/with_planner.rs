@@ -350,8 +350,8 @@ impl Planner for WithPlanner {
         };
         let mut current_logical: LogicalNodeEnum = logical_start_root();
 
-        let project_node =
-            ProjectNode::new(current_node.clone(), yield_columns.clone()).map_err(|e| {
+        let project_node = ProjectNode::new(current_node.clone(), yield_columns.clone())
+            .map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
             })?
             .with_subqueries(yield_subqueries.clone());
@@ -376,8 +376,8 @@ impl Planner for WithPlanner {
                 &outer_col_names,
                 &mut id_alloc,
             )?;
-            let filter_node =
-                FilterNode::new(current_node.clone(), ctx_expr.clone()).map_err(|e| {
+            let filter_node = FilterNode::new(current_node.clone(), ctx_expr.clone())
+                .map_err(|e| {
                     PlannerError::PlanGenerationFailed(format!(
                         "Failed to create FilterNode: {}",
                         e

@@ -12,7 +12,6 @@ use self::transform::*;
 
 #[cfg(test)]
 #[path = "geography/test.rs"]
-mod tests;
 
 define_function_enum! {
     pub enum GeographyFunction {

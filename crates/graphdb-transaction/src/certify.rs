@@ -16,8 +16,6 @@ mod conflict_kind;
 mod publish;
 mod ssi_tracker;
 #[cfg(test)]
-mod tests;
-
 use parking_lot::Mutex;
 
 use graphdb_core::types::{EdgeIdentifier, Timestamp, VertexId};

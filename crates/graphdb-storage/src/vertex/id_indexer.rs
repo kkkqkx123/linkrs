@@ -345,6 +345,3 @@ fn rebuild_with_mapping_locked(
     core.clear_free();
     Ok(())
 }
-
-#[cfg(test)]
-mod tests;

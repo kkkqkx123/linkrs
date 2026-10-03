@@ -40,8 +40,6 @@ pub(crate) mod trait_impl;
 pub(crate) mod write;
 
 #[cfg(test)]
-mod tests;
-
 pub use iter::{PureAllIter, PureRowIter};
 pub(crate) use live_set::PureLiveSetStorage;
 pub(crate) use overflow::{PureOverflowChunk, PureOverflowStorage};

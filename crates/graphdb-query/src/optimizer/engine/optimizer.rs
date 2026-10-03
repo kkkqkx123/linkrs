@@ -1,14 +1,10 @@
-use std::sync::Arc;
-
 use crate::optimizer::cost_based::subquery_unnesting::UnnestDecision;
+use crate::optimizer::cost_based::AggregateContext;
 use crate::optimizer::cost_based::{
-    AggregateContext, AggregateStrategySelector, IndexSelector, SortEliminationOptimizer,
+    AggregateStrategySelector, IndexSelector, SortEliminationOptimizer,
 };
-use crate::optimizer::heuristic::batch::{BatchStatistics, OptimizationBatch};
 use crate::optimizer::partitioning::PartitioningLayoutInfo;
 use crate::optimizer::stats::StatsView;
-use crate::optimizer::CostCalculator;
-use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::ExecutionPlan;
 use crate::planning::plan::PlanNodeEnum;
 

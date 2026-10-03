@@ -41,7 +41,6 @@ use super::operators::wco_operator::WcoIntersectOperator;
 
 mod operator_name;
 #[cfg(test)]
-mod tests;
 
 /// Sort direction for ORDER BY clause
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

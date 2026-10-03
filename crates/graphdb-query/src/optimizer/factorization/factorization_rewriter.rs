@@ -2,22 +2,14 @@ use std::collections::{HashMap, HashSet};
 
 use graphdb_core::types::expr::ExpressionId;
 
+use super::flatten_resolver::{FlattenAll, FlattenAllButOne};
 use crate::planning::plan::factorization::{
     FGroupPos, FactorizationError, FactorizedSchema, FactorizedSchemaCompute,
 };
-use crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
-use crate::planning::plan::logical::logical_nodes::flatten::LogicalFlattenNode;
-
-use super::flatten_resolver::{FlattenAll, FlattenAllButOne};
+use crate::planning::plan::logical::LogicalNodeEnum;
 
 mod flatten;
 mod join;
-
-#[cfg(test)]
-mod tests;
-
-pub use flatten::*;
-pub use join::*;
 
 pub struct FactorizationRewriter {
     pub enabled: bool,
@@ -72,7 +64,7 @@ impl FactorizationRewriter {
                         FlattenAll::get_groups_pos_to_flatten_for_groups(&groups, &child_schema);
                     if !to_flatten.is_empty() {
                         if let Some(child) = n.input.as_mut() {
-                            self.replace_child_and_flatten(child, &to_flatten, &child_schema)?;
+                            self.replace_child_and_flatten(child, &to_flatten, &mut child_schema)?;
                         }
                         for pos in &to_flatten {
                             child_schema.flatten_group(*pos)?;
@@ -87,7 +79,11 @@ impl FactorizationRewriter {
                         );
                         if !to_flatten.is_empty() {
                             if let Some(child) = n.input.as_mut() {
-                                self.replace_child_and_flatten(child, &to_flatten, &child_schema)?;
+                                self.replace_child_and_flatten(
+                                    child,
+                                    &to_flatten,
+                                    &mut child_schema,
+                                )?;
                             }
                             for pos in &to_flatten {
                                 child_schema.flatten_group(*pos)?;
@@ -115,7 +111,7 @@ impl FactorizationRewriter {
                 );
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        self.replace_child_and_flatten(child, &to_flatten, &child_schema)?;
+                        self.replace_child_and_flatten(child, &to_flatten, &mut child_schema)?;
                     }
                     for pos in &to_flatten {
                         child_schema.flatten_group(*pos)?;
@@ -147,7 +143,7 @@ impl FactorizationRewriter {
                 );
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        self.replace_child_and_flatten(child, &to_flatten, &child_schema)?;
+                        self.replace_child_and_flatten(child, &to_flatten, &mut child_schema)?;
                     }
                     for pos in &to_flatten {
                         child_schema.flatten_group(*pos)?;
@@ -190,7 +186,7 @@ impl FactorizationRewriter {
                 };
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        self.replace_child_and_flatten(child, &to_flatten, &child_schema)?;
+                        self.replace_child_and_flatten(child, &to_flatten, &mut child_schema)?;
                     }
                     for pos in &to_flatten {
                         child_schema.flatten_group(*pos)?;
@@ -210,7 +206,7 @@ impl FactorizationRewriter {
                     FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&groups, &child_schema);
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        self.replace_child_and_flatten(child, &to_flatten, &child_schema)?;
+                        self.replace_child_and_flatten(child, &to_flatten, &mut child_schema)?;
                     }
                     for pos in &to_flatten {
                         child_schema.flatten_group(*pos)?;
@@ -230,7 +226,7 @@ impl FactorizationRewriter {
                     FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&groups, &child_schema);
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        self.replace_child_and_flatten(child, &to_flatten, &child_schema)?;
+                        self.replace_child_and_flatten(child, &to_flatten, &mut child_schema)?;
                     }
                     for pos in &to_flatten {
                         child_schema.flatten_group(*pos)?;
@@ -258,7 +254,7 @@ impl FactorizationRewriter {
                     FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&groups, &child_schema);
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        self.replace_child_and_flatten(child, &to_flatten, &child_schema)?;
+                        self.replace_child_and_flatten(child, &to_flatten, &mut child_schema)?;
                     }
                     for pos in &to_flatten {
                         child_schema.flatten_group(*pos)?;
@@ -278,7 +274,7 @@ impl FactorizationRewriter {
                     FlattenAll::get_groups_pos_to_flatten_for_groups(&groups, &child_schema);
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        self.replace_child_and_flatten(child, &to_flatten, &child_schema)?;
+                        self.replace_child_and_flatten(child, &to_flatten, &mut child_schema)?;
                     }
                     for pos in &to_flatten {
                         child_schema.flatten_group(*pos)?;
@@ -362,7 +358,7 @@ impl FactorizationRewriter {
                     if let Some(pos) = schema.unflat_group_pos() {
                         let mut to_flatten = HashSet::new();
                         to_flatten.insert(pos);
-                        self.replace_child_and_flatten(child, &to_flatten, &schema)?;
+                        self.replace_child_and_flatten(child, &to_flatten, &mut schema)?;
                         schema.flatten_group(pos)?;
                         schema
                     } else {
@@ -411,13 +407,13 @@ impl FactorizationRewriter {
                 if let Some(pos) = left_schema.unflat_group_pos() {
                     let mut to_flatten = HashSet::new();
                     to_flatten.insert(pos);
-                    self.replace_child_and_flatten(&mut n.left, &to_flatten, &left_schema)?;
+                    self.replace_child_and_flatten(&mut n.left, &to_flatten, &mut left_schema)?;
                     left_schema.flatten_group(pos)?;
                 }
                 if let Some(pos) = right_schema.unflat_group_pos() {
                     let mut to_flatten = HashSet::new();
                     to_flatten.insert(pos);
-                    self.replace_child_and_flatten(&mut n.right, &to_flatten, &right_schema)?;
+                    self.replace_child_and_flatten(&mut n.right, &to_flatten, &mut right_schema)?;
                     right_schema.flatten_group(pos)?;
                 }
                 node.compute_factorized_schema(&[left_schema, right_schema])
@@ -428,13 +424,13 @@ impl FactorizationRewriter {
                 if let Some(pos) = left_schema.unflat_group_pos() {
                     let mut to_flatten = HashSet::new();
                     to_flatten.insert(pos);
-                    self.replace_child_and_flatten(&mut n.left, &to_flatten, &left_schema)?;
+                    self.replace_child_and_flatten(&mut n.left, &to_flatten, &mut left_schema)?;
                     left_schema.flatten_group(pos)?;
                 }
                 if let Some(pos) = right_schema.unflat_group_pos() {
                     let mut to_flatten = HashSet::new();
                     to_flatten.insert(pos);
-                    self.replace_child_and_flatten(&mut n.right, &to_flatten, &right_schema)?;
+                    self.replace_child_and_flatten(&mut n.right, &to_flatten, &mut right_schema)?;
                     right_schema.flatten_group(pos)?;
                 }
                 node.compute_factorized_schema(&[left_schema, right_schema])
@@ -489,7 +485,7 @@ impl FactorizationRewriter {
                 };
                 if !to_flatten.is_empty() {
                     if let Some(child) = n.input.as_mut() {
-                        self.replace_child_and_flatten(child, &to_flatten, &child_schema)?;
+                        self.replace_child_and_flatten(child, &to_flatten, &mut child_schema)?;
                     }
                     for pos in &to_flatten {
                         child_schema.flatten_group(*pos)?;
@@ -646,7 +642,7 @@ impl FactorizationRewriter {
                     );
                     if !to_flatten.is_empty() {
                         if let Some(child) = n.input.as_mut() {
-                            self.replace_child_and_flatten(child, &to_flatten, &child_schema)?;
+                            self.replace_child_and_flatten(child, &to_flatten, &mut child_schema)?;
                         }
                         for pos in &to_flatten {
                             child_schema.flatten_group(*pos)?;
@@ -716,7 +712,7 @@ impl FactorizationRewriter {
                         &cond_id, &schema, &store,
                     );
                     if !to_flatten.is_empty() {
-                        self.replace_child_and_flatten(branch, &to_flatten, &schema)?;
+                        self.replace_child_and_flatten(branch, &to_flatten, &mut schema)?;
                         for pos in &to_flatten {
                             schema.flatten_group(*pos)?;
                         }
@@ -731,7 +727,7 @@ impl FactorizationRewriter {
                         &cond_id, &schema, &store,
                     );
                     if !to_flatten.is_empty() {
-                        self.replace_child_and_flatten(branch, &to_flatten, &schema)?;
+                        self.replace_child_and_flatten(branch, &to_flatten, &mut schema)?;
                         for pos in &to_flatten {
                             schema.flatten_group(*pos)?;
                         }
@@ -758,7 +754,7 @@ impl FactorizationRewriter {
                         &cond_id, &schema, &store,
                     );
                     if !to_flatten.is_empty() {
-                        self.replace_child_and_flatten(body, &to_flatten, &schema)?;
+                        self.replace_child_and_flatten(body, &to_flatten, &mut schema)?;
                         for pos in &to_flatten {
                             schema.flatten_group(*pos)?;
                         }

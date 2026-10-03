@@ -1,18 +1,14 @@
-use std::sync::Arc;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
-use crate::optimizer::cost_based::{
-    AggregateStrategySelector, IndexSelector, SortEliminationOptimizer,
-};
 use crate::optimizer::heuristic::{LogicalBatchOptimizer, PhysicalHeuristicOptimizer};
-use crate::optimizer::partitioning::{PartitioningConfig, PartitioningLayoutInfo, PartitioningPlanner};
+use crate::optimizer::partitioning::{PartitioningConfig, PartitioningPlanner};
 use crate::optimizer::stats::feedback::cardinality::CardinalityFeedbackManager;
 use crate::optimizer::stats::feedback::decision::DecisionFeedbackStore;
 use crate::optimizer::stats::feedback::history::QueryFeedbackHistory;
 use crate::optimizer::stats::feedback::selectivity::SelectivityFeedbackManager;
 use crate::optimizer::stats::feedback::trigger::AutoFeedbackTrigger;
-use crate::optimizer::stats::StatsView;
 use crate::optimizer::{
     BatchPlanAnalyzer, CostCalculator, CostModelConfig, CteCacheManager, SelectivityEstimator,
     StatisticsManager, SubqueryUnnestingOptimizer,
@@ -275,7 +271,12 @@ impl OptimizerEngine {
         &self.physical_heuristic
     }
 
-    pub fn last_batch_statistics(&self) -> Vec<(crate::optimizer::heuristic::batch::OptimizationBatch, crate::optimizer::heuristic::batch::BatchStatistics)> {
+    pub fn last_batch_statistics(
+        &self,
+    ) -> Vec<(
+        crate::optimizer::heuristic::batch::OptimizationBatch,
+        crate::optimizer::heuristic::batch::BatchStatistics,
+    )> {
         match self.last_batch_statistics.lock() {
             Ok(guard) => guard.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),

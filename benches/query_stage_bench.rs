@@ -17,11 +17,13 @@ use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, Vertex
 use graphdb::core::vertex_edge_path::Tag;
 use graphdb::core::{DataType, Edge, Value, Vertex};
 use graphdb::query::binder::Binder;
+use graphdb::query::optimizer::OptimizerEngine;
 use graphdb::query::parser::Parser;
 use graphdb::query::pipeline::QueryPipelineManager;
-use graphdb::query::optimizer::OptimizerEngine;
 use graphdb::query::QueryRequestContext;
-use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaContextOps, StorageSchemaOps, StorageWriter};
+use graphdb::storage::{
+    GraphStorage, StorageReader, StorageSchemaContextOps, StorageSchemaOps, StorageWriter,
+};
 use graphdb_metrics::StatsManager;
 use parking_lot::RwLock;
 use std::path::PathBuf;
@@ -32,10 +34,22 @@ const VERTEX_COUNT: usize = 500;
 const EDGES_PER_VERTEX: usize = 4;
 
 const QUERIES: &[(&str, &str)] = &[
-    ("point", "MATCH (n:Node) WHERE n.name == 'n42' RETURN n.name, n.value"),
-    ("filter_scan", "MATCH (n:Node) WHERE n.value > 100.0 RETURN count(n)"),
-    ("one_hop", "MATCH (a:Node)-[r:Link]->(b:Node) WHERE id(a) == 42 RETURN b.name, r.weight"),
-    ("two_hop", "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) WHERE id(a) == 0 RETURN count(c)"),
+    (
+        "point",
+        "MATCH (n:Node) WHERE n.name == 'n42' RETURN n.name, n.value",
+    ),
+    (
+        "filter_scan",
+        "MATCH (n:Node) WHERE n.value > 100.0 RETURN count(n)",
+    ),
+    (
+        "one_hop",
+        "MATCH (a:Node)-[r:Link]->(b:Node) WHERE id(a) == 42 RETURN b.name, r.weight",
+    ),
+    (
+        "two_hop",
+        "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) WHERE id(a) == 0 RETURN count(c)",
+    ),
     ("aggregate", "MATCH (n:Node) RETURN sum(n.value)"),
 ];
 
@@ -126,8 +140,8 @@ fn setup_graph() -> GraphStorage {
 
 fn bench_query_stages(c: &mut Criterion) {
     let storage = Arc::new(RwLock::new(setup_graph()));
-    let schema_manager = StorageSchemaContextOps::get_schema_manager(&*storage.read())
-        .expect("schema manager");
+    let schema_manager =
+        StorageSchemaContextOps::get_schema_manager(&*storage.read()).expect("schema manager");
     let space = storage
         .read()
         .get_space("stage_bench")

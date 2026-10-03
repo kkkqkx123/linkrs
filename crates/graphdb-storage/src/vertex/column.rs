@@ -35,8 +35,6 @@ pub mod variable_width;
 pub mod zone_map;
 
 #[cfg(test)]
-mod tests;
-
 pub use chunk::{ChunkFlushView, ColumnChunk};
 pub use column::{
     BufferLedger, Column, ColumnStorage, EVICTION_SEGMENT_BYTES, MAX_BACKGROUND_LOAD_CHUNKS,

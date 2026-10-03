@@ -36,8 +36,7 @@ fn record_writes(mgr: &TransactionManager, txn: TransactionId, seed: usize, over
         let key = if overlap >= 1.0 {
             i % KEY_SPACE
         } else {
-            ((seed * 7919 + i * 104729) % ((KEY_SPACE as f64 * (1.0 - overlap)) as usize))
-                .max(i)
+            ((seed * 7919 + i * 104729) % ((KEY_SPACE as f64 * (1.0 - overlap)) as usize)).max(i)
         };
         ctx.record_vertex_write(VertexId::try_from_int64(key as i64).expect("valid vertex id"));
     }
@@ -79,7 +78,8 @@ fn run_contention_rounds(
 }
 
 fn bench_conflict(c: &mut Criterion) {
-    let mut report = String::from("multi-client write-write conflict (transaction layer, debug build)\n\n");
+    let mut report =
+        String::from("multi-client write-write conflict (transaction layer, debug build)\n\n");
     report.push_str(&format!(
         "write-set size: {} keys, key space: {}\n\n",
         WRITE_SET_SIZE, KEY_SPACE
@@ -89,10 +89,13 @@ fn bench_conflict(c: &mut Criterion) {
     for overlap in &[0.0f64, 0.5, 1.0] {
         for clients in &[1usize, 4, 8] {
             let mgr = Arc::new(TransactionManager::new(TransactionManagerConfig::default()));
-            let (committed, aborted, elapsed) =
-                run_contention_rounds(&mgr, *clients, *overlap, 20);
+            let (committed, aborted, elapsed) = run_contention_rounds(&mgr, *clients, *overlap, 20);
             let total = committed + aborted;
-            let rate = if total > 0 { aborted as f64 / total as f64 } else { 0.0 };
+            let rate = if total > 0 {
+                aborted as f64 / total as f64
+            } else {
+                0.0
+            };
             report.push_str(&format!(
                 "| {} | {:.0}% | {} | {} | {:.1}% | {:.2} ms |\n",
                 clients,

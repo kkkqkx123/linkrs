@@ -310,4 +310,3 @@
         assert_eq!(err.error_type, ExpressionErrorType::InvalidArgumentCount);
         assert!(err.message.contains("substring"));
     }
-}

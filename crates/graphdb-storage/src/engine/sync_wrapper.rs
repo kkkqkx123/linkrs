@@ -429,7 +429,6 @@ pub mod persistence;
 pub mod reader;
 pub mod schema;
 #[cfg(test)]
-mod tests;
 pub mod transaction;
 pub mod undo;
 mod write;

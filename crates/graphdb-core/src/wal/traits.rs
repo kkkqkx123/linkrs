@@ -8,8 +8,8 @@ use super::redo::{
     CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
     DeleteVertexPropRedo, DeleteVertexPropsRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo,
     DropMacroRedo, DropSpaceRedo, DropTagIndexRedo, DropTypeAliasRedo, InsertEdgeRedo,
-    RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
-    UpdateSequenceRedo,
+    RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
+    UpdateEdgePropRedo, UpdateSequenceRedo,
 };
 use super::types::{WalOpType, WalResult};
 

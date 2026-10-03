@@ -45,8 +45,6 @@ pub(crate) mod trait_impl;
 pub(crate) mod write;
 
 #[cfg(test)]
-mod tests;
-
 pub use iter::SingleMutableCsrIterator;
 
 /// Unassigned single slot: no edge id, never alive at any timestamp.

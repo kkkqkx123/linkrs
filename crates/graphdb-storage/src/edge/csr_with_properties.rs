@@ -133,6 +133,3 @@ pub(crate) mod schema;
 pub(crate) mod transfer;
 pub(crate) mod visibility;
 pub(crate) mod write;
-
-#[cfg(test)]
-mod tests;

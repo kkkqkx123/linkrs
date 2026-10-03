@@ -60,10 +60,7 @@ fn populate(path: &std::path::Path, checkpoint: bool) {
         )
         .expect("create tag");
     storage
-        .create_edge_type(
-            &space_name,
-            &EdgeTypeInfo::new("Link".to_string()),
-        )
+        .create_edge_type(&space_name, &EdgeTypeInfo::new("Link".to_string()))
         .expect("create edge type");
 
     // Schema metadata plus half the vertices are checkpointed first so the
@@ -134,7 +131,9 @@ fn bench_restart(c: &mut Criterion) {
         VERTEX_COUNT,
         VERTEX_COUNT * EDGES_PER_VERTEX
     ));
-    report.push_str("| scenario | open latency (median of criterion) | one-shot wall |\n|---|---|---|\n");
+    report.push_str(
+        "| scenario | open latency (median of criterion) | one-shot wall |\n|---|---|---|\n",
+    );
 
     for (label, checkpoint) in &[("clean_checkpoint", true), ("wal_tail_replay", false)] {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -189,7 +188,9 @@ fn bench_restart(c: &mut Criterion) {
 
         report.push_str(&format!(
             "| {} | see criterion group `restart/{}` | {:.2} ms |\n",
-            label, label, wall.as_secs_f64() * 1000.0
+            label,
+            label,
+            wall.as_secs_f64() * 1000.0
         ));
     }
 

@@ -308,8 +308,10 @@ fn test_go_multiple_steps() {
         .expect("INSERT VERTEX should succeed");
     db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p2': ('p2', 'Bob', 25)")
         .expect("INSERT VERTEX should succeed");
-    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p3': ('p3', 'Charlie', 35)")
-        .expect("INSERT VERTEX should succeed");
+    db.execute_query(
+        "INSERT VERTEX person(person_id, name, age) VALUES 'p3': ('p3', 'Charlie', 35)",
+    )
+    .expect("INSERT VERTEX should succeed");
     db.execute_query("INSERT EDGE friend(degree) VALUES 'p1' -> 'p2': (0.8)")
         .expect("INSERT EDGE should succeed");
     db.execute_query("INSERT EDGE friend(degree) VALUES 'p2' -> 'p3': (0.7)")
@@ -400,7 +402,9 @@ fn test_transaction_commit() {
     assert_query_ok(result, "BEGIN should succeed");
 
     // Insert data
-    let result = db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'tx1': ('tx1', 'TX_Test', 20)");
+    let result = db.execute_query(
+        "INSERT VERTEX person(person_id, name, age) VALUES 'tx1': ('tx1', 'TX_Test', 20)",
+    );
     assert_query_ok(result, "INSERT should succeed");
 
     // Commit
@@ -425,7 +429,9 @@ fn test_transaction_rollback() {
     assert_query_ok(result, "BEGIN should succeed");
 
     // Insert data
-    let result = db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'tx2': ('tx2', 'Rollback', 25)");
+    let result = db.execute_query(
+        "INSERT VERTEX person(person_id, name, age) VALUES 'tx2': ('tx2', 'Rollback', 25)",
+    );
     assert_query_ok(result, "INSERT should succeed");
 
     // Rollback

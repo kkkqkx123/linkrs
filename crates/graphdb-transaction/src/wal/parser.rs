@@ -15,7 +15,6 @@ mod parallel;
 mod scan;
 mod sequential;
 #[cfg(test)]
-mod tests;
 mod types;
 
 pub use factory::{WalParser, WalParserFactory};

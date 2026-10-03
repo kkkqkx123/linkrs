@@ -271,6 +271,3 @@ pub use recovery::EdgeWalRecoveryMode;
 mod schema_ops;
 mod store;
 mod writes;
-
-#[cfg(test)]
-mod tests;

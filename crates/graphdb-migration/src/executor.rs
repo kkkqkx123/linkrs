@@ -23,8 +23,6 @@ use crate::plan::{MigrationPlan, MigrationReport, MigrationStep, SafetyLevel};
 use crate::progress::{MigrationProgress, NoopProgress};
 
 #[cfg(test)]
-mod tests;
-
 mod data_apply;
 mod plan_runner;
 

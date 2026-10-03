@@ -55,6 +55,18 @@ impl TableScanState {
     }
 }
 
+struct WalkContext<'a> {
+    store: &'a EdgeStore,
+    ctx: &'a GraphStorageContext,
+    td: &'a TableDef,
+}
+
+struct ScanConfig<'a> {
+    ts: Timestamp,
+    src_id_range: &'a Option<Range<i64>>,
+    predicate: &'a [crate::cursor::ScanPredicate],
+}
+
 pub(crate) struct GraphEdgeCursor {
     ctx: Arc<GraphStorageContext>,
     limit: Option<usize>,
@@ -235,12 +247,16 @@ impl GraphEdgeCursor {
                 let raw_count = std::cell::Cell::new(0usize);
                 let mut capacity_full = || out_srcs.len() + raw_count.get() >= batch_size;
                 let table_done = walk_mutable_entries(
-                    store,
-                    &ctx,
-                    td,
-                    ts,
-                    &src_id_range,
-                    &predicate,
+                    &WalkContext {
+                        store,
+                        ctx: &ctx,
+                        td,
+                    },
+                    &ScanConfig {
+                        ts,
+                        src_id_range: &src_id_range,
+                        predicate: &predicate,
+                    },
                     &mut self.table_state,
                     &mut self.malformed_skipped,
                     &mut capacity_full,
@@ -674,17 +690,19 @@ enum EntryVerdict {
 /// Returns `true` when every remaining group was consumed (the caller marks
 /// the table done), `false` when the walk stopped early.
 fn walk_mutable_entries(
-    store: &EdgeStore,
-    ctx: &GraphStorageContext,
-    td: &TableDef,
-    ts: Timestamp,
-    src_id_range: &Option<Range<i64>>,
-    predicate: &[crate::cursor::ScanPredicate],
+    walk: &WalkContext<'_>,
+    config: &ScanConfig<'_>,
     state: &mut TableScanState,
     malformed: &mut u64,
     pre_stop: &mut dyn FnMut() -> bool,
     mut emit: impl FnMut(u32, Nbr, &mut u64) -> EntryVerdict,
 ) -> bool {
+    let WalkContext { store, ctx, td } = walk;
+    let ScanConfig {
+        ts,
+        src_id_range,
+        predicate,
+    } = config;
     let gate = ctx.pending_gate();
 
     // Segment pruning before decoding: groups whose flushed statistics
@@ -751,7 +769,7 @@ fn walk_mutable_entries(
             if pre_stop() {
                 return false;
             }
-            if !store.is_visible_with_gate(nbr.edge_id, ts, &gate) {
+            if !store.is_visible_with_gate(nbr.edge_id, *ts, &gate) {
                 continue;
             }
             let Some(local) = local_vid.as_internal_u32() else {
@@ -768,7 +786,7 @@ fn walk_mutable_entries(
                 let src_internal = VertexId::from_u32(global)
                     .as_internal_u32()
                     .unwrap_or(u32::MAX);
-                let Some(src_ext) = resolve_vertex_id(ctx, src_internal, td.tbl_src, ts) else {
+                let Some(src_ext) = resolve_vertex_id(ctx, src_internal, td.tbl_src, *ts) else {
                     *malformed += 1;
                     continue;
                 };
@@ -848,12 +866,12 @@ fn scan_mutable(args: ScanArgs) {
 
     let mut no_stop = || false;
     let table_done = walk_mutable_entries(
-        store,
-        ctx,
-        td,
-        ts,
-        src_id_range,
-        predicate,
+        &WalkContext { store, ctx, td },
+        &ScanConfig {
+            ts,
+            src_id_range,
+            predicate,
+        },
         state,
         malformed,
         &mut no_stop,

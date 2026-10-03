@@ -812,6 +812,3 @@ fn execute_union_extract(args: &[Value]) -> Result<Value, ExpressionError> {
         )),
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -249,15 +249,13 @@ pub(super) fn expand_single_step(
                     }
                 }
             };
-            let Some(neighbor_tag) =
-                crate::executor::traversal::graph_reader::resolve_neighbor_tag(
-                    reader,
-                    space_name,
-                    &edge,
-                    &dst_vid,
-                    ctx.dst_tag,
-                )
-            else {
+            let Some(neighbor_tag) = crate::executor::traversal::graph_reader::resolve_neighbor_tag(
+                reader,
+                space_name,
+                &edge,
+                &dst_vid,
+                ctx.dst_tag,
+            ) else {
                 continue;
             };
             tag_groups

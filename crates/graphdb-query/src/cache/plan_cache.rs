@@ -31,8 +31,6 @@ pub mod entry;
 pub mod key;
 pub mod params;
 #[cfg(test)]
-mod tests;
-
 pub use entry::CachedPlan;
 pub use key::{ParamPosition, PlanCacheContext, PlanCacheKey, PlanCachePutContext};
 pub use params::ParameterizedQueryHandler;

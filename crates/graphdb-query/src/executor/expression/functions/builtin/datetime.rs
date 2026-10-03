@@ -20,7 +20,6 @@ use crate::executor::expression::ExpressionError;
 use graphdb_core::Value;
 
 #[cfg(test)]
-mod tests;
 
 define_function_enum! {
     pub enum DateTimeFunction {

@@ -25,7 +25,7 @@ use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
 use graphdb_core::types::operators::AggregateFunction;
 use graphdb_core::types::{ContextualExpression, Expression};
 
-use super::{PlannedSubquery, to_contextual, and_join};
+use super::{and_join, to_contextual, PlannedSubquery};
 
 pub fn wrap_pattern_apply(
     left: SubPlan,

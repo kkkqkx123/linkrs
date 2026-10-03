@@ -22,32 +22,12 @@ use std::sync::Arc;
 use crate::binder::validation::ValidationInfo;
 use crate::optimizer::cost_based::subquery_unnesting::SubqueryUnnestingOptimizer;
 use crate::parser::ast::pattern::PatternUtils;
-use crate::planning::plan::core::next_node_id;
-use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
-use crate::planning::plan::core::nodes::control_flow::ArgumentNode;
-use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
-use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::CorrelatedApplyNode;
-use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::PatternApplyNode;
-use crate::planning::plan::core::nodes::join::join_node::SemiJoinNode;
-use crate::planning::plan::core::nodes::join::CrossJoinNode;
-use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
-use crate::planning::plan::logical::logical_nodes::control_flow::LogicalArgumentNode;
-use crate::planning::plan::logical::logical_nodes::graph_ops::LogicalCorrelatedApplyNode;
-use crate::planning::plan::logical::logical_nodes::graph_ops::LogicalPatternApplyNode;
-use crate::planning::plan::logical::logical_nodes::join::LogicalCrossJoinNode;
-use crate::planning::plan::logical::logical_nodes::join::LogicalSemiJoinNode;
-use crate::planning::plan::logical::logical_nodes::operation::LogicalFilterNode;
-use crate::planning::plan::logical::logical_nodes::operation::{
-    LogicalAggregateNode, LogicalProjectNode,
-};
-use crate::planning::plan::logical::LogicalNodeEnum;
-use crate::planning::plan::SubPlan;
 use crate::planning::planner::PlannerError;
 use crate::planning::statements::pattern_planner::{self, PlanningContext};
 use crate::planning::statements::plan_combiner;
 use crate::QueryContext;
 use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_core::types::operators::{AggregateFunction, BinaryOperator};
+use graphdb_core::types::operators::BinaryOperator;
 use graphdb_core::types::{ContextualExpression, Expression};
 
 pub use exists_types::{

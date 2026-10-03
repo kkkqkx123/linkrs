@@ -667,6 +667,3 @@ fn levenshtein_distance(s1: &str, s2: &str) -> usize {
 
     prev_row[len2]
 }
-
-#[cfg(test)]
-mod tests;

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::planning::plan::factorization::{FactorizationError, FactorizedSchema, FGroupPos};
+use crate::planning::plan::factorization::{FGroupPos, FactorizationError, FactorizedSchema};
 use crate::planning::plan::logical::LogicalNodeEnum;
 
 use super::FactorizationRewriter;
@@ -59,18 +59,24 @@ impl FactorizationRewriter {
             if allow_probe_skip && !Self::require_flat_probe_keys(hash_keys, probe_keys, right) {
                 HashSet::new()
             } else {
-                crate::optimizer::factorization::FlattenAll::get_groups_pos_to_flatten_for_groups(&left_keys, left_schema)
+                crate::optimizer::factorization::FlattenAll::get_groups_pos_to_flatten_for_groups(
+                    &left_keys,
+                    left_schema,
+                )
             };
         let right_to_flatten =
-            crate::optimizer::factorization::FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&right_keys, right_schema);
+            crate::optimizer::factorization::FlattenAllButOne::get_groups_pos_to_flatten_for_groups(
+                &right_keys,
+                right_schema,
+            );
         if !left_to_flatten.is_empty() {
-            self.replace_child_and_flatten(left, &left_to_flatten, left_schema)?;
+            self.replace_child_and_flatten(left, &left_to_flatten, &mut *left_schema)?;
             for pos in &left_to_flatten {
                 left_schema.flatten_group(*pos)?;
             }
         }
         if !right_to_flatten.is_empty() {
-            self.replace_child_and_flatten(right, &right_to_flatten, right_schema)?;
+            self.replace_child_and_flatten(right, &right_to_flatten, &mut *right_schema)?;
             for pos in &right_to_flatten {
                 right_schema.flatten_group(*pos)?;
             }
@@ -134,17 +140,23 @@ impl FactorizationRewriter {
         let left_keys = Self::contextual_keys_to_groups(hash_keys, left_schema);
         let right_keys = Self::contextual_keys_to_groups(probe_keys, right_schema);
         let left_to_flatten =
-            crate::optimizer::factorization::FlattenAllButOne::get_groups_pos_to_flatten_for_groups(&left_keys, left_schema);
+            crate::optimizer::factorization::FlattenAllButOne::get_groups_pos_to_flatten_for_groups(
+                &left_keys,
+                left_schema,
+            );
         let right_to_flatten =
-            crate::optimizer::factorization::FlattenAll::get_groups_pos_to_flatten_for_groups(&right_keys, right_schema);
+            crate::optimizer::factorization::FlattenAll::get_groups_pos_to_flatten_for_groups(
+                &right_keys,
+                right_schema,
+            );
         if !left_to_flatten.is_empty() {
-            self.replace_child_and_flatten(left, &left_to_flatten, left_schema)?;
+            self.replace_child_and_flatten(left, &left_to_flatten, &mut *left_schema)?;
             for pos in &left_to_flatten {
                 left_schema.flatten_group(*pos)?;
             }
         }
         if !right_to_flatten.is_empty() {
-            self.replace_child_and_flatten(right, &right_to_flatten, right_schema)?;
+            self.replace_child_and_flatten(right, &right_to_flatten, &mut *right_schema)?;
             for pos in &right_to_flatten {
                 right_schema.flatten_group(*pos)?;
             }
@@ -164,17 +176,23 @@ impl FactorizationRewriter {
         let left_keys = Self::contextual_keys_to_groups(hash_keys, left_schema);
         let right_keys = Self::contextual_keys_to_groups(probe_keys, right_schema);
         let left_to_flatten =
-            crate::optimizer::factorization::FlattenAll::get_groups_pos_to_flatten_for_groups(&left_keys, left_schema);
+            crate::optimizer::factorization::FlattenAll::get_groups_pos_to_flatten_for_groups(
+                &left_keys,
+                left_schema,
+            );
         let right_to_flatten =
-            crate::optimizer::factorization::FlattenAll::get_groups_pos_to_flatten_for_groups(&right_keys, right_schema);
+            crate::optimizer::factorization::FlattenAll::get_groups_pos_to_flatten_for_groups(
+                &right_keys,
+                right_schema,
+            );
         if !left_to_flatten.is_empty() {
-            self.replace_child_and_flatten(left, &left_to_flatten, left_schema)?;
+            self.replace_child_and_flatten(left, &left_to_flatten, &mut *left_schema)?;
             for pos in &left_to_flatten {
                 left_schema.flatten_group(*pos)?;
             }
         }
         if !right_to_flatten.is_empty() {
-            self.replace_child_and_flatten(right, &right_to_flatten, right_schema)?;
+            self.replace_child_and_flatten(right, &right_to_flatten, &mut *right_schema)?;
             for pos in &right_to_flatten {
                 right_schema.flatten_group(*pos)?;
             }

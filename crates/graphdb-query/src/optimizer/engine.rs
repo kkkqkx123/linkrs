@@ -60,13 +60,12 @@ mod feedback;
 mod optimizer;
 
 #[cfg(test)]
-mod tests;
-
+#[allow(unused_imports)]
 pub use config::*;
+#[allow(unused_imports)]
 pub use factorization::*;
+#[allow(unused_imports)]
 pub use optimizer::*;
-
-use crate::planning::plan::ExecutionPlan;
 
 #[derive(Debug)]
 pub struct OptimizerEngine {

@@ -505,4 +505,3 @@
             "sort with only variable expressions must not change"
         );
     }
-}

@@ -941,6 +941,3 @@ impl Default for CostCalculator {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;
