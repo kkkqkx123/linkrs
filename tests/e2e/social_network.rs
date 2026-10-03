@@ -38,12 +38,12 @@ fn test_create_tags_and_edges() {
         &mut db,
         "e2e_social_network_tags",
         &[
-            "CREATE TAG IF NOT EXISTS person(name: STRING NOT NULL, age: INT, email: STRING, city: STRING)",
+            "CREATE TAG IF NOT EXISTS person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT, email: STRING, city: STRING)",
             "CREATE TAG IF NOT EXISTS company(name: STRING NOT NULL, industry: STRING)",
         ],
         &[
-            "CREATE EDGE IF NOT EXISTS friend(degree: FLOAT)",
-            "CREATE EDGE IF NOT EXISTS works_at(position: STRING)",
+            "CREATE EDGE IF NOT EXISTS friend(degree: FLOAT) FROM person TO person",
+            "CREATE EDGE IF NOT EXISTS works_at(position: STRING) FROM person TO company",
         ],
     ).expect("Failed to setup test space");
 
@@ -63,7 +63,7 @@ fn test_show_tags() {
     setup_test_space(
         &mut db,
         "e2e_show_tags",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");
@@ -79,8 +79,8 @@ fn test_show_edges() {
     setup_test_space(
         &mut db,
         "e2e_show_edges",
-        &["CREATE TAG person(name: STRING NOT NULL)"],
-        &["CREATE EDGE friend(degree: FLOAT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL)"],
+        &["CREATE EDGE friend(degree: FLOAT) FROM person TO person"],
     )
     .expect("Failed to setup test space");
 
@@ -95,13 +95,13 @@ fn test_insert_vertex() {
     setup_test_space(
         &mut db,
         "e2e_insert_vertex",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT, email: STRING)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT, email: STRING)"],
         &[],
     )
     .expect("Failed to setup test space");
 
     let result = db.execute_query(
-        "INSERT VERTEX person(name, age, email) VALUES 'p1': ('Alice', 30, 'alice@example.com')",
+        "INSERT VERTEX person(person_id, name, age, email) VALUES 'p1': ('p1', 'Alice', 30, 'alice@example.com')",
     );
     assert_query_ok(result, "INSERT VERTEX should succeed");
 }
@@ -113,13 +113,13 @@ fn test_insert_multiple_vertices() {
     setup_test_space(
         &mut db,
         "e2e_insert_multiple",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");
 
     let result = db.execute_query(
-        "INSERT VERTEX person(name, age) VALUES 'p1': ('Alice', 30), 'p2': ('Bob', 25)",
+        "INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30), 'p2': ('p2', 'Bob', 25)",
     );
     assert_query_ok(result, "INSERT VERTEX with multiple values should succeed");
 }
@@ -131,15 +131,15 @@ fn test_insert_edge() {
     setup_test_space(
         &mut db,
         "e2e_insert_edge",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
-        &["CREATE EDGE friend(degree: FLOAT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
+        &["CREATE EDGE friend(degree: FLOAT) FROM person TO person"],
     )
     .expect("Failed to setup test space");
 
     // Insert vertices first
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p1': ('Alice', 30)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)")
         .expect("INSERT VERTEX should succeed");
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p2': ('Bob', 25)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p2': ('p2', 'Bob', 25)")
         .expect("INSERT VERTEX should succeed");
 
     // Insert edge
@@ -154,14 +154,14 @@ fn test_fetch_vertex() {
     setup_test_space(
         &mut db,
         "e2e_fetch_vertex",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT, email: STRING)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT, email: STRING)"],
         &[],
     )
     .expect("Failed to setup test space");
 
     // Insert vertex
     db.execute_query(
-        "INSERT VERTEX person(name, age, email) VALUES 'p_fetch': ('Alice', 30, 'alice@test.com')",
+        "INSERT VERTEX person(person_id, name, age, email) VALUES 'p_fetch': ('p_fetch', 'Alice', 30, 'alice@test.com')",
     )
     .expect("INSERT VERTEX should succeed");
 
@@ -177,15 +177,15 @@ fn test_fetch_edge() {
     setup_test_space(
         &mut db,
         "e2e_fetch_edge",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
-        &["CREATE EDGE friend(degree: FLOAT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
+        &["CREATE EDGE friend(degree: FLOAT) FROM person TO person"],
     )
     .expect("Failed to setup test space");
 
     // Insert vertices and edge
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p1': ('Alice', 30)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)")
         .expect("INSERT VERTEX should succeed");
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p2': ('Bob', 25)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p2': ('p2', 'Bob', 25)")
         .expect("INSERT VERTEX should succeed");
     db.execute_query("INSERT EDGE friend(degree) VALUES 'p1' -> 'p2' @0: (0.8)")
         .expect("INSERT EDGE should succeed");
@@ -202,15 +202,15 @@ fn test_match_basic() {
     setup_test_space(
         &mut db,
         "e2e_match_basic",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT, city: STRING)"],
-        &["CREATE EDGE friend(degree: FLOAT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT, city: STRING)"],
+        &["CREATE EDGE friend(degree: FLOAT) FROM person TO person"],
     )
     .expect("Failed to setup test space");
 
     // Insert data
-    db.execute_query("INSERT VERTEX person(name, age, city) VALUES 'p1': ('Alice', 30, 'Beijing')")
+    db.execute_query("INSERT VERTEX person(person_id, name, age, city) VALUES 'p1': ('p1', 'Alice', 30, 'Beijing')")
         .expect("INSERT VERTEX should succeed");
-    db.execute_query("INSERT VERTEX person(name, age, city) VALUES 'p2': ('Bob', 25, 'Shanghai')")
+    db.execute_query("INSERT VERTEX person(person_id, name, age, city) VALUES 'p2': ('p2', 'Bob', 25, 'Shanghai')")
         .expect("INSERT VERTEX should succeed");
 
     // Match query
@@ -225,14 +225,14 @@ fn test_match_with_filter() {
     setup_test_space(
         &mut db,
         "e2e_match_filter",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");
 
     // Insert data
     db.execute_query(
-        "INSERT VERTEX person(name, age) VALUES 'p1': ('Alice', 30), 'p2': ('Bob', 25)",
+        "INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30), 'p2': ('p2', 'Bob', 25)",
     )
     .expect("INSERT VERTEX should succeed");
 
@@ -248,15 +248,15 @@ fn test_match_path() {
     setup_test_space(
         &mut db,
         "e2e_match_path",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
-        &["CREATE EDGE friend(degree: FLOAT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
+        &["CREATE EDGE friend(degree: FLOAT) FROM person TO person"],
     )
     .expect("Failed to setup test space");
 
     // Insert data
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p1': ('Alice', 30)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)")
         .expect("INSERT VERTEX should succeed");
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p2': ('Bob', 25)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p2': ('p2', 'Bob', 25)")
         .expect("INSERT VERTEX should succeed");
     db.execute_query("INSERT EDGE friend(degree) VALUES 'p1' -> 'p2': (0.8)")
         .expect("INSERT EDGE should succeed");
@@ -273,15 +273,15 @@ fn test_go_traversal() {
     setup_test_space(
         &mut db,
         "e2e_go_traversal",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
-        &["CREATE EDGE friend(degree: FLOAT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
+        &["CREATE EDGE friend(degree: FLOAT) FROM person TO person"],
     )
     .expect("Failed to setup test space");
 
     // Insert data
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p1': ('Alice', 30)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)")
         .expect("INSERT VERTEX should succeed");
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p2': ('Bob', 25)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p2': ('p2', 'Bob', 25)")
         .expect("INSERT VERTEX should succeed");
     db.execute_query("INSERT EDGE friend(degree) VALUES 'p1' -> 'p2': (0.8)")
         .expect("INSERT EDGE should succeed");
@@ -298,17 +298,17 @@ fn test_go_multiple_steps() {
     setup_test_space(
         &mut db,
         "e2e_go_multi",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
-        &["CREATE EDGE friend(degree: FLOAT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
+        &["CREATE EDGE friend(degree: FLOAT) FROM person TO person"],
     )
     .expect("Failed to setup test space");
 
     // Insert data
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p1': ('Alice', 30)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)")
         .expect("INSERT VERTEX should succeed");
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p2': ('Bob', 25)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p2': ('p2', 'Bob', 25)")
         .expect("INSERT VERTEX should succeed");
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p3': ('Charlie', 35)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p3': ('p3', 'Charlie', 35)")
         .expect("INSERT VERTEX should succeed");
     db.execute_query("INSERT EDGE friend(degree) VALUES 'p1' -> 'p2': (0.8)")
         .expect("INSERT EDGE should succeed");
@@ -327,7 +327,7 @@ fn test_lookup_index() {
     setup_test_space(
         &mut db,
         "e2e_lookup",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");
@@ -337,7 +337,7 @@ fn test_lookup_index() {
         .expect("CREATE INDEX should succeed");
 
     // Insert data
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p1': ('Alice', 30)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)")
         .expect("INSERT VERTEX should succeed");
 
     // LOOKUP
@@ -352,7 +352,7 @@ fn test_explain_basic() {
     setup_test_space(
         &mut db,
         "e2e_explain",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");
@@ -369,13 +369,13 @@ fn test_profile_query() {
     setup_test_space(
         &mut db,
         "e2e_profile",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");
 
     // Insert data
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p1': ('Alice', 30)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)")
         .expect("INSERT VERTEX should succeed");
 
     // PROFILE
@@ -390,7 +390,7 @@ fn test_transaction_commit() {
     setup_test_space(
         &mut db,
         "e2e_tx_commit",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");
@@ -400,7 +400,7 @@ fn test_transaction_commit() {
     assert_query_ok(result, "BEGIN should succeed");
 
     // Insert data
-    let result = db.execute_query("INSERT VERTEX person(name, age) VALUES 'tx1': ('TX_Test', 20)");
+    let result = db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'tx1': ('tx1', 'TX_Test', 20)");
     assert_query_ok(result, "INSERT should succeed");
 
     // Commit
@@ -415,7 +415,7 @@ fn test_transaction_rollback() {
     setup_test_space(
         &mut db,
         "e2e_tx_rollback",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");
@@ -425,7 +425,7 @@ fn test_transaction_rollback() {
     assert_query_ok(result, "BEGIN should succeed");
 
     // Insert data
-    let result = db.execute_query("INSERT VERTEX person(name, age) VALUES 'tx2': ('Rollback', 25)");
+    let result = db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'tx2': ('tx2', 'Rollback', 25)");
     assert_query_ok(result, "INSERT should succeed");
 
     // Rollback

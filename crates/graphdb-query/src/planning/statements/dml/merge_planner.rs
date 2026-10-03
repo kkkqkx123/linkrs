@@ -486,6 +486,47 @@ impl Planner for MergePlanner {
             }
         };
 
+        // Unified entry for expression-level EXISTS / IN (mirrors
+        // `transform`): the bound path must also reject subqueries in MERGE
+        // pattern property values or ON MATCH / ON CREATE SET values at
+        // planning time with the precise error.
+        let merge_stmt = self.extract_merge_stmt(validated.stmt())?;
+        let check_space_id = qctx.space_id().unwrap_or(1);
+        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        let pattern_props: Option<&ContextualExpression> = match &merge_stmt.pattern {
+            Pattern::Node(node_pattern) => node_pattern.properties.as_ref(),
+            Pattern::Edge(edge_pattern) => edge_pattern.properties.as_ref(),
+            _ => None,
+        };
+        if let Some(props_expr) = pattern_props {
+            if let Some(expr_meta) = props_expr.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    check_space_id,
+                    &check_space_name,
+                    &outer_col_names,
+                )?;
+            }
+        }
+        for set_clause in [&merge_stmt.on_match, &merge_stmt.on_create]
+            .into_iter()
+            .flatten()
+        {
+            for assignment in &set_clause.assignments {
+                if let Some(expr_meta) = assignment.value.expression() {
+                    exists_planner::check_expression_subqueries(
+                        expr_meta.inner(),
+                        &qctx,
+                        check_space_id,
+                        &check_space_name,
+                        &outer_col_names,
+                    )?;
+                }
+            }
+        }
+
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
         let expr_ctx = validated.expr_context().clone();
 

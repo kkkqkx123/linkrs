@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::writeset::WriteSet;
-use graphdb_core::types::{Timestamp, TransactionId};
+use graphdb_core::types::{StagedWriteMark, Timestamp, TransactionId};
 
 /// Savepoint ID
 pub type SavepointId = u64;
@@ -32,6 +32,10 @@ pub struct SavepointInfo {
     /// boundary that drives truncation of all derived logs.
     pub journal_len: usize,
     pub journal_next_sequence: u64,
+    /// Storage-staged write boundary captured at creation (`None` when the
+    /// storage target held no staged writes). The savepoint rollback rewinds
+    /// the staging buffer to this mark in addition to executing undo logs.
+    pub staged_write_mark: Option<StagedWriteMark>,
 }
 
 /// Transaction Info (for monitoring)

@@ -7,10 +7,11 @@ use std::time::Duration;
 use crate::context::TransactionContext;
 use crate::types::{DurabilityLevel, TransactionConfig, TransactionId, TransactionState};
 use crate::undo_log::{InsertEdgeUndo, UndoLogEntry};
-use crate::undo_log::{UndoLogResult, UndoTarget};
+use crate::undo_log::{UndoLogError, UndoLogResult, UndoTarget};
 use crate::TransactionErrorKind;
 use graphdb_core::types::{
-    ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, LabelId, Timestamp, VertexIdentifier,
+    ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, LabelId, StagedWriteMark, Timestamp,
+    VertexIdentifier,
 };
 
 struct MockUndoTarget;
@@ -84,6 +85,22 @@ impl UndoTarget for MockUndoTarget {
         _original_names: &[String],
     ) -> UndoLogResult<()> {
         Ok(())
+    }
+    fn staged_write_mark(&self, _txn_id: TransactionId) -> Option<StagedWriteMark> {
+        None
+    }
+    fn rollback_staged_writes(
+        &self,
+        _txn_id: TransactionId,
+        mark: StagedWriteMark,
+    ) -> UndoLogResult<()> {
+        if mark.is_empty() {
+            Ok(())
+        } else {
+            Err(UndoLogError::UndoFailed(
+                "mock undo target holds no staged writes".to_string(),
+            ))
+        }
     }
 }
 

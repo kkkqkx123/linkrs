@@ -65,7 +65,7 @@ mod initialization {
             .expect("Failed to setup test space");
 
         let result =
-            db.execute_query("CREATE TAG IF NOT EXISTS test_person(name STRING NOT NULL, age INT)");
+            db.execute_query("CREATE TAG IF NOT EXISTS test_person(test_person_id STRING NOT NULL, name STRING NOT NULL, age INT)");
         assert_query_ok(
             result,
             "CREATE TAG failed - schema_manager may not be initialized",
@@ -79,7 +79,7 @@ mod initialization {
         setup_test_space(
             &mut db,
             "schema_manager_test_space",
-            &["CREATE TAG IF NOT EXISTS test_person(name STRING NOT NULL, age INT)"],
+            &["CREATE TAG IF NOT EXISTS test_person(test_person_id STRING NOT NULL, name STRING NOT NULL, age INT)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -98,13 +98,13 @@ mod initialization {
         setup_test_space(
             &mut db,
             "schema_manager_test_space",
-            &["CREATE TAG IF NOT EXISTS test_person(name STRING NOT NULL, age INT)"],
+            &["CREATE TAG IF NOT EXISTS test_person(test_person_id STRING NOT NULL, name STRING NOT NULL, age INT)"],
             &[],
         )
         .expect("Failed to setup test space");
 
         let result =
-            db.execute_query("INSERT VERTEX test_person(name, age) VALUES 'p1': ('Alice', 30)");
+            db.execute_query("INSERT VERTEX test_person(test_person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)");
         assert_query_ok(
             result,
             "INSERT VERTEX failed - schema_manager may not be initialized",
@@ -118,13 +118,13 @@ mod initialization {
         setup_test_space(
             &mut db,
             "schema_manager_test_space",
-            &["CREATE TAG IF NOT EXISTS test_person(name STRING NOT NULL, age INT)"],
+            &["CREATE TAG IF NOT EXISTS test_person(test_person_id STRING NOT NULL, name STRING NOT NULL, age INT)"],
             &[],
         )
         .expect("Failed to setup test space");
 
         // Insert vertex
-        db.execute_query("INSERT VERTEX test_person(name, age) VALUES 'p_fetch': ('Bob', 25)")
+        db.execute_query("INSERT VERTEX test_person(test_person_id, name, age) VALUES 'p_fetch': ('p_fetch', 'Bob', 25)")
             .expect("INSERT should succeed");
 
         let result = db.execute_query("FETCH PROP ON test_person 'p_fetch'");
@@ -141,13 +141,13 @@ mod initialization {
         setup_test_space(
             &mut db,
             "schema_manager_test_space",
-            &["CREATE TAG IF NOT EXISTS test_person(name STRING NOT NULL, age INT)"],
+            &["CREATE TAG IF NOT EXISTS test_person(test_person_id STRING NOT NULL, name STRING NOT NULL, age INT)"],
             &[],
         )
         .expect("Failed to setup test space");
 
         // Insert vertex
-        db.execute_query("INSERT VERTEX test_person(name, age) VALUES 'p1': ('Alice', 30)")
+        db.execute_query("INSERT VERTEX test_person(test_person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)")
             .expect("INSERT should succeed");
 
         let result = db.execute_query("MATCH (v:test_person) RETURN v LIMIT 1");

@@ -188,10 +188,10 @@ fn test_savepoint_creation_no_deadlock() {
         .expect("Failed to begin transaction");
 
     let sp1 = manager
-        .create_savepoint(txn_id, Some("sp1".to_string()))
+        .create_savepoint(txn_id, Some("sp1".to_string()), None)
         .expect("Failed to create savepoint 1");
     let sp2 = manager
-        .create_savepoint(txn_id, Some("sp2".to_string()))
+        .create_savepoint(txn_id, Some("sp2".to_string()), None)
         .expect("Failed to create savepoint 2");
 
     assert_ne!(sp1, sp2);
@@ -251,10 +251,10 @@ fn test_multiple_savepoints_with_release() {
         .expect("Failed to begin transaction");
 
     let sp1 = manager
-        .create_savepoint(txn_id, Some("sp1".to_string()))
+        .create_savepoint(txn_id, Some("sp1".to_string()), None)
         .expect("Failed to create savepoint 1");
     let sp2 = manager
-        .create_savepoint(txn_id, Some("sp2".to_string()))
+        .create_savepoint(txn_id, Some("sp2".to_string()), None)
         .expect("Failed to create savepoint 2");
 
     manager

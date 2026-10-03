@@ -81,6 +81,37 @@ impl Planner for UnwindPlanner {
             }
         };
 
+        // Unified entry for expression-level EXISTS / IN (mirrors
+        // `transform`): the bound path must also reject subqueries in the
+        // UNWIND list expression at planning time with the precise error.
+        let (unwind_expression, _, unwind_return_columns) =
+            self.extract_unwind_info(ctx.validated.stmt())?;
+        let check_space_id = qctx.space_id().unwrap_or(1);
+        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        if let Some(expr_meta) = unwind_expression.expression() {
+            exists_planner::check_expression_subqueries(
+                expr_meta.inner(),
+                &qctx,
+                check_space_id,
+                &check_space_name,
+                &outer_col_names,
+            )?;
+        }
+        if let Some(columns) = &unwind_return_columns {
+            for col in columns {
+                if let Some(expr_meta) = col.expression.expression() {
+                    exists_planner::check_expression_subqueries(
+                        expr_meta.inner(),
+                        &qctx,
+                        check_space_id,
+                        &check_space_name,
+                        &outer_col_names,
+                    )?;
+                }
+            }
+        }
+
         let expr_ctx = ctx.validated.expr_context().clone();
         let list_expr = crate::binder::expr_converter::bound_expr_to_contextual(
             &unwind_stmt.expression,

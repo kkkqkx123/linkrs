@@ -260,7 +260,7 @@ fn test_savepoint_rollback() {
         .expect("Failed to begin transaction");
 
     let sp_id = manager
-        .create_savepoint(txn_id, Some("initial".to_string()))
+        .create_savepoint(txn_id, Some("initial".to_string()), None)
         .expect("Failed to create savepoint");
 
     let savepoint = manager.get_savepoint(txn_id, sp_id);
@@ -284,10 +284,10 @@ fn test_savepoint_multiple_rollback() {
         .expect("Failed to begin transaction");
 
     let sp1 = manager
-        .create_savepoint(txn_id, Some("sp1".to_string()))
+        .create_savepoint(txn_id, Some("sp1".to_string()), None)
         .expect("Failed to create savepoint 1");
     let _sp2 = manager
-        .create_savepoint(txn_id, Some("sp2".to_string()))
+        .create_savepoint(txn_id, Some("sp2".to_string()), None)
         .expect("Failed to create savepoint 2");
 
     let savepoints = manager.get_active_savepoints(txn_id);

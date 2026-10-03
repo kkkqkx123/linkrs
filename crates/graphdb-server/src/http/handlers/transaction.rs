@@ -261,7 +261,14 @@ pub async fn create_savepoint<
             .get_txn_manager()
             .check_transaction_owner(txn_id.into(), owner.as_deref())
             .map_err(|error| HttpError::transaction_message(error.to_string()))?;
-        match txn_api.create_savepoint(handle, request.name.clone()) {
+        // Capture the storage-staged write boundary before the savepoint so
+        // ROLLBACK TO can rewind rows staged after it.
+        let staged_mark = {
+            let storage = state.server.get_storage();
+            let storage_guard = storage.read();
+            graphdb_storage::UndoTarget::staged_write_mark(&*storage_guard, txn_id.into())
+        };
+        match txn_api.create_savepoint(handle, request.name.clone(), staged_mark) {
             Ok(sp_id) => Ok::<_, HttpError>(SavepointResponse {
                 savepoint_id: sp_id.0,
                 transaction_id: txn_id,

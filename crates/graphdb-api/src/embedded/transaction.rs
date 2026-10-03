@@ -359,8 +359,12 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget>
         self.check_active()?;
 
         let txn_manager = self.session.txn_manager();
+        let staged_mark = {
+            let storage = self.session.storage_mut();
+            graphdb_storage::UndoTarget::staged_write_mark(&*storage, self.txn_handle.0)
+        };
         txn_manager
-            .create_savepoint(self.txn_handle.0, name)
+            .create_savepoint(self.txn_handle.0, name, staged_mark)
             .map_err(|e| CoreError::TransactionFailed(e.to_string()))
     }
 

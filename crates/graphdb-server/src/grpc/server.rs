@@ -541,8 +541,15 @@ impl<
         manager
             .check_transaction_owner(txn_id, request.session_id.as_deref())
             .map_err(transaction_status)?;
+        // Capture the storage-staged write boundary before the savepoint so
+        // ROLLBACK TO can rewind rows staged after it.
+        let staged_mark = {
+            let storage = self.app_state.server.get_storage();
+            let storage_guard = storage.read();
+            crate::storage::UndoTarget::staged_write_mark(&*storage_guard, txn_id)
+        };
         let savepoint_id = manager
-            .create_savepoint(txn_id, request.name)
+            .create_savepoint(txn_id, request.name, staged_mark)
             .map_err(transaction_status)?;
         Ok(Response::new(CreateSavepointResponse {
             success: true,

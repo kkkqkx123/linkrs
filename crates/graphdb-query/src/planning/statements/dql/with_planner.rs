@@ -14,7 +14,7 @@ use crate::planning::planner::{Planner, PlannerEnum, PlannerError, ValidatedStat
 use crate::planning::statements::clauses::exists_planner;
 use crate::planning::statements::plan_combiner::{
     logical_start_root, wrap_logical_dedup, wrap_logical_filter, wrap_logical_limit,
-    wrap_logical_project, wrap_logical_project_with, wrap_logical_sort,
+    wrap_logical_project_with, wrap_logical_sort,
 };
 use crate::planning::statements::projection_util::return_item_to_yield_column;
 use crate::QueryContext;
@@ -301,7 +301,7 @@ impl Planner for WithPlanner {
             graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );
 
-        let yield_columns: Vec<YieldColumn> = with_stmt
+        let mut yield_columns: Vec<YieldColumn> = with_stmt
             .items
             .iter()
             .map(|item| {
@@ -309,6 +309,27 @@ impl Planner for WithPlanner {
                     .map_err(PlannerError::PlanGenerationFailed)
             })
             .collect::<Result<Vec<_>, PlannerError>>()?;
+
+        // Compile expression-level EXISTS / IN in WITH assignments (mirrors
+        // `transform` and return's bound path): the planned subqueries ride
+        // on the Project node and execute per row. Plain expressions are
+        // untouched, so existing WITH queries are unaffected.
+        let space_id = qctx.space_id().unwrap_or(1);
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        let mut id_alloc = exists_planner::SubqueryIdAllocator::new();
+        let mut yield_subqueries: Vec<exists_planner::PlannedSubquery> = Vec::new();
+        for col in &mut yield_columns {
+            let subqueries = exists_planner::plan_contextual_subqueries(
+                &mut col.expression,
+                &qctx,
+                space_id,
+                &space_name,
+                &outer_col_names,
+                &mut id_alloc,
+            )?;
+            yield_subqueries.extend(subqueries);
+        }
 
         let start_node = StartNode::new();
         // A CTE fixpoint replaces the single empty seed row: the WITH items
@@ -332,25 +353,37 @@ impl Planner for WithPlanner {
         let project_node =
             ProjectNode::new(current_node.clone(), yield_columns.clone()).map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
-            })?;
+            })?
+            .with_subqueries(yield_subqueries.clone());
         current_node = PlanNodeEnum::Project(project_node);
-        current_logical = wrap_logical_project(
+        current_logical = wrap_logical_project_with(
             current_logical,
             yield_columns,
+            yield_subqueries,
+            false,
             current_node.col_names().to_vec(),
         );
 
         if let Some(ref condition) = with_stmt.condition {
-            let ctx_expr =
+            let mut ctx_expr =
                 crate::binder::expr_converter::bound_expr_to_contextual(condition, &expr_ctx)
                     .map_err(PlannerError::PlanGenerationFailed)?;
+            let where_subqueries = exists_planner::plan_contextual_subqueries(
+                &mut ctx_expr,
+                &qctx,
+                space_id,
+                &space_name,
+                &outer_col_names,
+                &mut id_alloc,
+            )?;
             let filter_node =
                 FilterNode::new(current_node.clone(), ctx_expr.clone()).map_err(|e| {
                     PlannerError::PlanGenerationFailed(format!(
                         "Failed to create FilterNode: {}",
                         e
                     ))
-                })?;
+                })?
+                .with_subqueries(where_subqueries);
             current_node = PlanNodeEnum::Filter(filter_node);
             current_logical =
                 wrap_logical_filter(current_logical, ctx_expr, current_node.col_names().to_vec());

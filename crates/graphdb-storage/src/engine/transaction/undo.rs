@@ -4,8 +4,8 @@ use crate::engine::transaction::{
     EdgeTypeLabelParams, RevertDeleteEdgeParams, TransactionOps, UpdateEdgePropertyUndoParams,
 };
 use graphdb_core::types::{
-    ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, LabelId, Timestamp, UndoLogError,
-    UndoLogResult, UndoTarget, VertexIdentifier,
+    ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, LabelId, StagedWriteMark, Timestamp,
+    TransactionId, UndoLogError, UndoLogResult, UndoTarget, VertexIdentifier,
 };
 
 fn checked_internal_vertex_id(vid: &graphdb_core::types::VertexId) -> UndoLogResult<u32> {
@@ -314,6 +314,39 @@ impl UndoTarget for GraphStorageContext {
         if let Some(label) = edge_label_id {
             self.mark_edge_modified(label);
         }
+        Ok(())
+    }
+
+    fn staged_write_mark(&self, txn_id: TransactionId) -> Option<StagedWriteMark> {
+        let staged_wal_len = self.staged_wal_len_for(txn_id);
+        match self.peek_txn_staging_mark(txn_id) {
+            Some((staging_journal_len, staging_index_len)) => Some(StagedWriteMark {
+                staging_journal_len,
+                staging_index_len,
+                staged_wal_len,
+            }),
+            None if staged_wal_len > 0 => Some(StagedWriteMark {
+                staging_journal_len: 0,
+                staging_index_len: 0,
+                staged_wal_len,
+            }),
+            None => None,
+        }
+    }
+
+    fn rollback_staged_writes(
+        &self,
+        txn_id: TransactionId,
+        mark: StagedWriteMark,
+    ) -> UndoLogResult<()> {
+        // Same rewind a failed grouped statement uses: the staging buffer
+        // returns to the savepoint mark (settling id reservations) and the
+        // staged WAL redo truncates to the savepoint length.
+        self.rewind_grouped_statement(
+            txn_id,
+            (mark.staging_journal_len, mark.staging_index_len),
+            mark.staged_wal_len,
+        );
         Ok(())
     }
 }

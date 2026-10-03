@@ -7,7 +7,7 @@ USE e2e_geography
 
 -- Create tags
 CREATE TAG IF NOT EXISTS location(
-    id STRING,
+    location_id: STRING NOT NULL,
     name: STRING NOT NULL,
     coord: GEOGRAPHY,
     address: STRING,
@@ -15,7 +15,7 @@ CREATE TAG IF NOT EXISTS location(
 )
 
 CREATE TAG IF NOT EXISTS city(
-    id STRING,
+    city_id: STRING NOT NULL,
     name: STRING NOT NULL,
     center: GEOGRAPHY,
     population: INT,
@@ -26,431 +26,431 @@ CREATE TAG IF NOT EXISTS city(
 CREATE EDGE IF NOT EXISTS nearby(
     distance_km: DOUBLE,
     walking_time_min: INT
-)
+) FROM location TO location
 
 -- Generate cities
-INSERT VERTEX city(name, center, population, area_km2) VALUES "city1":
-    ("Beijing", st_geogfromtext("POINT(116.4074 39.9042)"), 21540000, 24182.8)
-INSERT VERTEX city(name, center, population, area_km2) VALUES "city2":
-    ("Shanghai", st_geogfromtext("POINT(121.4737 31.2304)"), 24280000, 5750.32)
-INSERT VERTEX city(name, center, population, area_km2) VALUES "city3":
-    ("Guangzhou", st_geogfromtext("POINT(113.2644 23.1291)"), 14043500, 13250.88)
-INSERT VERTEX city(name, center, population, area_km2) VALUES "city4":
-    ("Shenzhen", st_geogfromtext("POINT(114.0579 22.5431)"), 12528300, 11696.32)
-INSERT VERTEX city(name, center, population, area_km2) VALUES "city5":
-    ("Chengdu", st_geogfromtext("POINT(104.0668 30.5728)"), 16330000, 27094.14)
-INSERT VERTEX city(name, center, population, area_km2) VALUES "city6":
-    ("Hangzhou", st_geogfromtext("POINT(120.1551 30.2741)"), 10360000, 25300.98)
-INSERT VERTEX city(name, center, population, area_km2) VALUES "city7":
-    ("Wuhan", st_geogfromtext("POINT(114.3055 30.5928)"), 11212000, 31765.39)
-INSERT VERTEX city(name, center, population, area_km2) VALUES "city8":
-    ("Xi'an", st_geogfromtext("POINT(108.9398 34.3416)"), 12952900, 7608.16)
-INSERT VERTEX city(name, center, population, area_km2) VALUES "city9":
-    ("Nanjing", st_geogfromtext("POINT(118.7969 32.0603)"), 8500000, 17657.65)
-INSERT VERTEX city(name, center, population, area_km2) VALUES "city10":
-    ("Chongqing", st_geogfromtext("POINT(106.5516 29.563)"), 32054100, 5893.92)
+INSERT VERTEX city(city_id, name, center, population, area_km2) VALUES "city1":
+    ("city1", "Beijing", st_geogfromtext("POINT(116.4074 39.9042)"), 21540000, 24182.8)
+INSERT VERTEX city(city_id, name, center, population, area_km2) VALUES "city2":
+    ("city2", "Shanghai", st_geogfromtext("POINT(121.4737 31.2304)"), 24280000, 5750.32)
+INSERT VERTEX city(city_id, name, center, population, area_km2) VALUES "city3":
+    ("city3", "Guangzhou", st_geogfromtext("POINT(113.2644 23.1291)"), 14043500, 13250.88)
+INSERT VERTEX city(city_id, name, center, population, area_km2) VALUES "city4":
+    ("city4", "Shenzhen", st_geogfromtext("POINT(114.0579 22.5431)"), 12528300, 11696.32)
+INSERT VERTEX city(city_id, name, center, population, area_km2) VALUES "city5":
+    ("city5", "Chengdu", st_geogfromtext("POINT(104.0668 30.5728)"), 16330000, 27094.14)
+INSERT VERTEX city(city_id, name, center, population, area_km2) VALUES "city6":
+    ("city6", "Hangzhou", st_geogfromtext("POINT(120.1551 30.2741)"), 10360000, 25300.98)
+INSERT VERTEX city(city_id, name, center, population, area_km2) VALUES "city7":
+    ("city7", "Wuhan", st_geogfromtext("POINT(114.3055 30.5928)"), 11212000, 31765.39)
+INSERT VERTEX city(city_id, name, center, population, area_km2) VALUES "city8":
+    ("city8", "Xi'an", st_geogfromtext("POINT(108.9398 34.3416)"), 12952900, 7608.16)
+INSERT VERTEX city(city_id, name, center, population, area_km2) VALUES "city9":
+    ("city9", "Nanjing", st_geogfromtext("POINT(118.7969 32.0603)"), 8500000, 17657.65)
+INSERT VERTEX city(city_id, name, center, population, area_km2) VALUES "city10":
+    ("city10", "Chongqing", st_geogfromtext("POINT(106.5516 29.563)"), 32054100, 5893.92)
 
 -- Generate 200 locations
-INSERT VERTEX location(name, coord, address, category) VALUES "loc001":
-    ("Location_001", st_geogfromtext("POINT(113.9510 22.5839)"), "204 Shenzhen Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc002":
-    ("Location_002", st_geogfromtext("POINT(118.7647 32.0400)"), "829 Nanjing Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc003":
-    ("Location_003", st_geogfromtext("POINT(116.5109 39.7681)"), "349 Beijing Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc004":
-    ("Location_004", st_geogfromtext("POINT(103.9290 30.7557)"), "105 Chengdu Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc005":
-    ("Location_005", st_geogfromtext("POINT(121.4257 31.1740)"), "619 Shanghai Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc006":
-    ("Location_006", st_geogfromtext("POINT(104.1897 30.6647)"), "128 Chengdu Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc007":
-    ("Location_007", st_geogfromtext("POINT(114.1370 30.5101)"), "907 Wuhan Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc008":
-    ("Location_008", st_geogfromtext("POINT(120.1860 30.3559)"), "678 Hangzhou Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc009":
-    ("Location_009", st_geogfromtext("POINT(114.1671 22.7372)"), "888 Shenzhen Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc010":
-    ("Location_010", st_geogfromtext("POINT(121.4258 31.2118)"), "167 Shanghai Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc011":
-    ("Location_011", st_geogfromtext("POINT(120.0972 30.3422)"), "624 Hangzhou Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc012":
-    ("Location_012", st_geogfromtext("POINT(113.2781 23.0270)"), "389 Guangzhou Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc013":
-    ("Location_013", st_geogfromtext("POINT(104.2626 30.6288)"), "225 Chengdu Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc014":
-    ("Location_014", st_geogfromtext("POINT(120.2922 30.3845)"), "842 Hangzhou Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc015":
-    ("Location_015", st_geogfromtext("POINT(116.5294 39.8647)"), "217 Beijing Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc016":
-    ("Location_016", st_geogfromtext("POINT(106.7021 29.4889)"), "406 Chongqing Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc017":
-    ("Location_017", st_geogfromtext("POINT(108.7969 34.1975)"), "552 Xi'an Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc018":
-    ("Location_018", st_geogfromtext("POINT(104.1656 30.5442)"), "409 Chengdu Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc019":
-    ("Location_019", st_geogfromtext("POINT(120.0428 30.4731)"), "506 Hangzhou Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc020":
-    ("Location_020", st_geogfromtext("POINT(121.5760 31.3748)"), "643 Shanghai Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc021":
-    ("Location_021", st_geogfromtext("POINT(113.3812 23.0980)"), "395 Guangzhou Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc022":
-    ("Location_022", st_geogfromtext("POINT(114.3439 30.5800)"), "995 Wuhan Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc023":
-    ("Location_023", st_geogfromtext("POINT(118.9412 31.8649)"), "699 Nanjing Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc024":
-    ("Location_024", st_geogfromtext("POINT(118.8973 32.1677)"), "115 Nanjing Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc025":
-    ("Location_025", st_geogfromtext("POINT(104.0407 30.5543)"), "996 Chengdu Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc026":
-    ("Location_026", st_geogfromtext("POINT(118.9017 32.0634)"), "892 Nanjing Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc027":
-    ("Location_027", st_geogfromtext("POINT(104.2035 30.5759)"), "157 Chengdu Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc028":
-    ("Location_028", st_geogfromtext("POINT(120.2601 30.2899)"), "941 Hangzhou Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc029":
-    ("Location_029", st_geogfromtext("POINT(116.4470 39.8996)"), "952 Beijing Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc030":
-    ("Location_030", st_geogfromtext("POINT(120.3066 30.4068)"), "246 Hangzhou Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc031":
-    ("Location_031", st_geogfromtext("POINT(116.3037 39.9311)"), "88 Beijing Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc032":
-    ("Location_032", st_geogfromtext("POINT(109.0662 34.5328)"), "785 Xi'an Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc033":
-    ("Location_033", st_geogfromtext("POINT(113.1158 23.1192)"), "170 Guangzhou Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc034":
-    ("Location_034", st_geogfromtext("POINT(104.0779 30.6154)"), "952 Chengdu Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc035":
-    ("Location_035", st_geogfromtext("POINT(118.8990 32.1362)"), "409 Nanjing Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc036":
-    ("Location_036", st_geogfromtext("POINT(120.1303 30.2811)"), "254 Hangzhou Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc037":
-    ("Location_037", st_geogfromtext("POINT(113.8835 22.3515)"), "236 Shenzhen Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc038":
-    ("Location_038", st_geogfromtext("POINT(106.4397 29.3914)"), "235 Chongqing Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc039":
-    ("Location_039", st_geogfromtext("POINT(121.6359 31.3743)"), "527 Shanghai Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc040":
-    ("Location_040", st_geogfromtext("POINT(113.9693 22.5373)"), "136 Shenzhen Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc041":
-    ("Location_041", st_geogfromtext("POINT(106.5821 29.4602)"), "827 Chongqing Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc042":
-    ("Location_042", st_geogfromtext("POINT(114.1817 30.4316)"), "363 Wuhan Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc043":
-    ("Location_043", st_geogfromtext("POINT(114.2699 30.7383)"), "690 Wuhan Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc044":
-    ("Location_044", st_geogfromtext("POINT(121.2979 31.3217)"), "255 Shanghai Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc045":
-    ("Location_045", st_geogfromtext("POINT(113.9340 22.5225)"), "188 Shenzhen Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc046":
-    ("Location_046", st_geogfromtext("POINT(104.0519 30.7226)"), "454 Chengdu Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc047":
-    ("Location_047", st_geogfromtext("POINT(118.6361 32.1212)"), "857 Nanjing Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc048":
-    ("Location_048", st_geogfromtext("POINT(116.5950 40.0747)"), "171 Beijing Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc049":
-    ("Location_049", st_geogfromtext("POINT(114.2998 30.4783)"), "925 Wuhan Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc050":
-    ("Location_050", st_geogfromtext("POINT(116.2733 39.7051)"), "272 Beijing Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc051":
-    ("Location_051", st_geogfromtext("POINT(108.8539 34.4202)"), "678 Xi'an Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc052":
-    ("Location_052", st_geogfromtext("POINT(108.8017 34.2603)"), "594 Xi'an Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc053":
-    ("Location_053", st_geogfromtext("POINT(118.6213 31.9857)"), "599 Nanjing Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc054":
-    ("Location_054", st_geogfromtext("POINT(108.9409 34.4827)"), "59 Xi'an Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc055":
-    ("Location_055", st_geogfromtext("POINT(118.6289 31.9346)"), "70 Nanjing Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc056":
-    ("Location_056", st_geogfromtext("POINT(114.0194 22.7197)"), "253 Shenzhen Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc057":
-    ("Location_057", st_geogfromtext("POINT(106.5894 29.6108)"), "674 Chongqing Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc058":
-    ("Location_058", st_geogfromtext("POINT(106.5777 29.4895)"), "210 Chongqing Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc059":
-    ("Location_059", st_geogfromtext("POINT(120.0506 30.2324)"), "469 Hangzhou Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc060":
-    ("Location_060", st_geogfromtext("POINT(120.3267 30.4484)"), "470 Hangzhou Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc061":
-    ("Location_061", st_geogfromtext("POINT(106.7510 29.7614)"), "551 Chongqing Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc062":
-    ("Location_062", st_geogfromtext("POINT(114.0603 22.3961)"), "903 Shenzhen Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc063":
-    ("Location_063", st_geogfromtext("POINT(121.6254 31.1782)"), "449 Shanghai Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc064":
-    ("Location_064", st_geogfromtext("POINT(118.8783 32.1050)"), "9 Nanjing Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc065":
-    ("Location_065", st_geogfromtext("POINT(118.7167 32.1257)"), "271 Nanjing Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc066":
-    ("Location_066", st_geogfromtext("POINT(121.6296 31.3274)"), "279 Shanghai Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc067":
-    ("Location_067", st_geogfromtext("POINT(104.1087 30.6598)"), "704 Chengdu Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc068":
-    ("Location_068", st_geogfromtext("POINT(104.0690 30.4732)"), "95 Chengdu Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc069":
-    ("Location_069", st_geogfromtext("POINT(114.4372 30.4104)"), "790 Wuhan Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc070":
-    ("Location_070", st_geogfromtext("POINT(113.3192 23.0339)"), "565 Guangzhou Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc071":
-    ("Location_071", st_geogfromtext("POINT(114.3299 30.4375)"), "559 Wuhan Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc072":
-    ("Location_072", st_geogfromtext("POINT(116.5412 39.9372)"), "441 Beijing Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc073":
-    ("Location_073", st_geogfromtext("POINT(113.0811 23.0750)"), "921 Guangzhou Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc074":
-    ("Location_074", st_geogfromtext("POINT(120.0391 30.1739)"), "363 Hangzhou Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc075":
-    ("Location_075", st_geogfromtext("POINT(118.9506 32.0229)"), "768 Nanjing Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc076":
-    ("Location_076", st_geogfromtext("POINT(113.4347 23.0238)"), "820 Guangzhou Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc077":
-    ("Location_077", st_geogfromtext("POINT(113.4170 22.9390)"), "802 Guangzhou Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc078":
-    ("Location_078", st_geogfromtext("POINT(114.4264 30.7384)"), "274 Wuhan Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc079":
-    ("Location_079", st_geogfromtext("POINT(113.3793 22.9723)"), "880 Guangzhou Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc080":
-    ("Location_080", st_geogfromtext("POINT(108.8288 34.4682)"), "359 Xi'an Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc081":
-    ("Location_081", st_geogfromtext("POINT(104.1950 30.7213)"), "25 Chengdu Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc082":
-    ("Location_082", st_geogfromtext("POINT(114.0173 22.4545)"), "991 Shenzhen Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc083":
-    ("Location_083", st_geogfromtext("POINT(104.0073 30.5766)"), "340 Chengdu Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc084":
-    ("Location_084", st_geogfromtext("POINT(116.2535 40.0924)"), "595 Beijing Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc085":
-    ("Location_085", st_geogfromtext("POINT(103.8821 30.6114)"), "747 Chengdu Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc086":
-    ("Location_086", st_geogfromtext("POINT(120.1297 30.4678)"), "395 Hangzhou Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc087":
-    ("Location_087", st_geogfromtext("POINT(106.4276 29.3808)"), "2 Chongqing Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc088":
-    ("Location_088", st_geogfromtext("POINT(118.9671 32.0757)"), "373 Nanjing Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc089":
-    ("Location_089", st_geogfromtext("POINT(114.1335 30.6585)"), "639 Wuhan Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc090":
-    ("Location_090", st_geogfromtext("POINT(120.2205 30.1240)"), "520 Hangzhou Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc091":
-    ("Location_091", st_geogfromtext("POINT(104.1336 30.5033)"), "568 Chengdu Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc092":
-    ("Location_092", st_geogfromtext("POINT(113.1411 23.1951)"), "694 Guangzhou Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc093":
-    ("Location_093", st_geogfromtext("POINT(113.3106 23.0495)"), "854 Guangzhou Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc094":
-    ("Location_094", st_geogfromtext("POINT(116.3289 39.7883)"), "622 Beijing Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc095":
-    ("Location_095", st_geogfromtext("POINT(120.1411 30.2510)"), "524 Hangzhou Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc096":
-    ("Location_096", st_geogfromtext("POINT(109.0573 34.5255)"), "675 Xi'an Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc097":
-    ("Location_097", st_geogfromtext("POINT(121.3872 31.2959)"), "344 Shanghai Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc098":
-    ("Location_098", st_geogfromtext("POINT(121.6011 31.3309)"), "231 Shanghai Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc099":
-    ("Location_099", st_geogfromtext("POINT(113.9168 22.3616)"), "626 Shenzhen Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc100":
-    ("Location_100", st_geogfromtext("POINT(121.4559 31.3849)"), "200 Shanghai Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc101":
-    ("Location_101", st_geogfromtext("POINT(114.3033 30.4904)"), "915 Wuhan Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc102":
-    ("Location_102", st_geogfromtext("POINT(121.5851 31.1179)"), "476 Shanghai Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc103":
-    ("Location_103", st_geogfromtext("POINT(116.4304 40.0712)"), "468 Beijing Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc104":
-    ("Location_104", st_geogfromtext("POINT(113.3850 23.1961)"), "610 Guangzhou Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc105":
-    ("Location_105", st_geogfromtext("POINT(120.3351 30.4307)"), "835 Hangzhou Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc106":
-    ("Location_106", st_geogfromtext("POINT(118.7676 32.2230)"), "919 Nanjing Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc107":
-    ("Location_107", st_geogfromtext("POINT(113.3619 23.1190)"), "770 Guangzhou Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc108":
-    ("Location_108", st_geogfromtext("POINT(114.1938 22.4540)"), "497 Shenzhen Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc109":
-    ("Location_109", st_geogfromtext("POINT(113.9677 22.3741)"), "241 Shenzhen Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc110":
-    ("Location_110", st_geogfromtext("POINT(104.0011 30.7300)"), "142 Chengdu Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc111":
-    ("Location_111", st_geogfromtext("POINT(113.1569 23.2067)"), "66 Guangzhou Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc112":
-    ("Location_112", st_geogfromtext("POINT(114.2685 30.6098)"), "64 Wuhan Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc113":
-    ("Location_113", st_geogfromtext("POINT(114.1911 22.4989)"), "969 Shenzhen Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc114":
-    ("Location_114", st_geogfromtext("POINT(116.5501 40.0104)"), "489 Beijing Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc115":
-    ("Location_115", st_geogfromtext("POINT(116.5845 39.8236)"), "874 Beijing Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc116":
-    ("Location_116", st_geogfromtext("POINT(114.3208 30.6867)"), "920 Wuhan Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc117":
-    ("Location_117", st_geogfromtext("POINT(114.0532 22.4523)"), "30 Shenzhen Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc118":
-    ("Location_118", st_geogfromtext("POINT(114.2400 30.6645)"), "742 Wuhan Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc119":
-    ("Location_119", st_geogfromtext("POINT(113.4006 23.2969)"), "547 Guangzhou Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc120":
-    ("Location_120", st_geogfromtext("POINT(116.5702 39.9410)"), "86 Beijing Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc121":
-    ("Location_121", st_geogfromtext("POINT(114.1598 30.5775)"), "267 Wuhan Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc122":
-    ("Location_122", st_geogfromtext("POINT(114.2364 30.5747)"), "780 Wuhan Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc123":
-    ("Location_123", st_geogfromtext("POINT(114.2168 30.7733)"), "259 Wuhan Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc124":
-    ("Location_124", st_geogfromtext("POINT(121.4618 31.3300)"), "975 Shanghai Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc125":
-    ("Location_125", st_geogfromtext("POINT(120.0448 30.1015)"), "773 Hangzhou Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc126":
-    ("Location_126", st_geogfromtext("POINT(116.5872 39.7839)"), "637 Beijing Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc127":
-    ("Location_127", st_geogfromtext("POINT(113.1598 23.1185)"), "578 Guangzhou Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc128":
-    ("Location_128", st_geogfromtext("POINT(114.0439 22.4456)"), "172 Shenzhen Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc129":
-    ("Location_129", st_geogfromtext("POINT(106.5945 29.6622)"), "797 Chongqing Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc130":
-    ("Location_130", st_geogfromtext("POINT(113.4503 22.9723)"), "952 Guangzhou Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc131":
-    ("Location_131", st_geogfromtext("POINT(104.0971 30.7360)"), "407 Chengdu Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc132":
-    ("Location_132", st_geogfromtext("POINT(113.8883 22.6193)"), "105 Shenzhen Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc133":
-    ("Location_133", st_geogfromtext("POINT(104.2069 30.6130)"), "816 Chengdu Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc134":
-    ("Location_134", st_geogfromtext("POINT(106.6647 29.5019)"), "678 Chongqing Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc135":
-    ("Location_135", st_geogfromtext("POINT(119.9827 30.3331)"), "870 Hangzhou Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc136":
-    ("Location_136", st_geogfromtext("POINT(114.4344 30.4350)"), "651 Wuhan Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc137":
-    ("Location_137", st_geogfromtext("POINT(109.0227 34.3158)"), "989 Xi'an Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc138":
-    ("Location_138", st_geogfromtext("POINT(104.1132 30.7406)"), "477 Chengdu Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc139":
-    ("Location_139", st_geogfromtext("POINT(114.4358 30.6298)"), "873 Wuhan Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc140":
-    ("Location_140", st_geogfromtext("POINT(114.1902 22.3778)"), "250 Shenzhen Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc141":
-    ("Location_141", st_geogfromtext("POINT(108.9677 34.4089)"), "30 Xi'an Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc142":
-    ("Location_142", st_geogfromtext("POINT(109.0802 34.2143)"), "364 Xi'an Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc143":
-    ("Location_143", st_geogfromtext("POINT(104.0029 30.7249)"), "570 Chengdu Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc144":
-    ("Location_144", st_geogfromtext("POINT(116.4141 39.7806)"), "738 Beijing Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc145":
-    ("Location_145", st_geogfromtext("POINT(114.3009 30.6961)"), "662 Wuhan Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc146":
-    ("Location_146", st_geogfromtext("POINT(108.9191 34.1485)"), "227 Xi'an Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc147":
-    ("Location_147", st_geogfromtext("POINT(114.3822 30.5153)"), "378 Wuhan Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc148":
-    ("Location_148", st_geogfromtext("POINT(108.9612 34.2791)"), "339 Xi'an Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc149":
-    ("Location_149", st_geogfromtext("POINT(120.2362 30.1825)"), "237 Hangzhou Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc150":
-    ("Location_150", st_geogfromtext("POINT(121.5622 31.1566)"), "974 Shanghai Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc151":
-    ("Location_151", st_geogfromtext("POINT(113.1410 23.2245)"), "742 Guangzhou Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc152":
-    ("Location_152", st_geogfromtext("POINT(106.7422 29.5729)"), "103 Chongqing Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc153":
-    ("Location_153", st_geogfromtext("POINT(113.9764 22.4875)"), "15 Shenzhen Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc154":
-    ("Location_154", st_geogfromtext("POINT(118.6475 31.8785)"), "567 Nanjing Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc155":
-    ("Location_155", st_geogfromtext("POINT(104.1458 30.4233)"), "106 Chengdu Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc156":
-    ("Location_156", st_geogfromtext("POINT(116.4370 39.8920)"), "349 Beijing Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc157":
-    ("Location_157", st_geogfromtext("POINT(113.4506 23.0301)"), "117 Guangzhou Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc158":
-    ("Location_158", st_geogfromtext("POINT(121.4340 31.0600)"), "156 Shanghai Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc159":
-    ("Location_159", st_geogfromtext("POINT(113.3889 23.3088)"), "255 Guangzhou Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc160":
-    ("Location_160", st_geogfromtext("POINT(121.4969 31.1969)"), "810 Shanghai Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc161":
-    ("Location_161", st_geogfromtext("POINT(106.4419 29.5720)"), "931 Chongqing Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc162":
-    ("Location_162", st_geogfromtext("POINT(108.8587 34.3770)"), "313 Xi'an Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc163":
-    ("Location_163", st_geogfromtext("POINT(106.6000 29.6069)"), "971 Chongqing Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc164":
-    ("Location_164", st_geogfromtext("POINT(114.1081 22.4490)"), "161 Shenzhen Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc165":
-    ("Location_165", st_geogfromtext("POINT(113.9274 22.3731)"), "419 Shenzhen Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc166":
-    ("Location_166", st_geogfromtext("POINT(109.0155 34.3296)"), "238 Xi'an Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc167":
-    ("Location_167", st_geogfromtext("POINT(104.1496 30.6540)"), "73 Chengdu Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc168":
-    ("Location_168", st_geogfromtext("POINT(114.2275 22.6582)"), "678 Shenzhen Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc169":
-    ("Location_169", st_geogfromtext("POINT(114.0280 22.5609)"), "931 Shenzhen Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc170":
-    ("Location_170", st_geogfromtext("POINT(104.1975 30.4014)"), "812 Chengdu Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc171":
-    ("Location_171", st_geogfromtext("POINT(104.1048 30.7025)"), "450 Chengdu Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc172":
-    ("Location_172", st_geogfromtext("POINT(121.4612 31.1520)"), "966 Shanghai Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc173":
-    ("Location_173", st_geogfromtext("POINT(104.0670 30.5703)"), "613 Chengdu Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc174":
-    ("Location_174", st_geogfromtext("POINT(116.5632 39.9980)"), "257 Beijing Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc175":
-    ("Location_175", st_geogfromtext("POINT(116.2439 40.0890)"), "602 Beijing Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc176":
-    ("Location_176", st_geogfromtext("POINT(116.6072 39.9731)"), "591 Beijing Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc177":
-    ("Location_177", st_geogfromtext("POINT(116.5126 39.7743)"), "668 Beijing Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc178":
-    ("Location_178", st_geogfromtext("POINT(109.1062 34.2142)"), "447 Xi'an Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc179":
-    ("Location_179", st_geogfromtext("POINT(109.1274 34.3296)"), "342 Xi'an Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc180":
-    ("Location_180", st_geogfromtext("POINT(120.2232 30.4172)"), "422 Hangzhou Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc181":
-    ("Location_181", st_geogfromtext("POINT(108.8551 34.5197)"), "38 Xi'an Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc182":
-    ("Location_182", st_geogfromtext("POINT(108.7750 34.2426)"), "994 Xi'an Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc183":
-    ("Location_183", st_geogfromtext("POINT(114.4515 30.7228)"), "674 Wuhan Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc184":
-    ("Location_184", st_geogfromtext("POINT(118.7817 31.8820)"), "371 Nanjing Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc185":
-    ("Location_185", st_geogfromtext("POINT(106.6542 29.6132)"), "209 Chongqing Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc186":
-    ("Location_186", st_geogfromtext("POINT(104.0865 30.7439)"), "902 Chengdu Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc187":
-    ("Location_187", st_geogfromtext("POINT(108.7884 34.5309)"), "819 Xi'an Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc188":
-    ("Location_188", st_geogfromtext("POINT(114.1418 22.4674)"), "566 Shenzhen Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc189":
-    ("Location_189", st_geogfromtext("POINT(114.1428 30.7897)"), "473 Wuhan Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc190":
-    ("Location_190", st_geogfromtext("POINT(121.5328 31.0920)"), "522 Shanghai Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc191":
-    ("Location_191", st_geogfromtext("POINT(104.0330 30.5658)"), "250 Chengdu Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc192":
-    ("Location_192", st_geogfromtext("POINT(108.9603 34.2950)"), "521 Xi'an Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc193":
-    ("Location_193", st_geogfromtext("POINT(113.4100 23.0396)"), "349 Guangzhou Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc194":
-    ("Location_194", st_geogfromtext("POINT(118.7038 31.8613)"), "858 Nanjing Road", "attraction")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc195":
-    ("Location_195", st_geogfromtext("POINT(106.5836 29.6270)"), "458 Chongqing Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc196":
-    ("Location_196", st_geogfromtext("POINT(118.7906 31.9933)"), "387 Nanjing Road", "park")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc197":
-    ("Location_197", st_geogfromtext("POINT(109.1129 34.4894)"), "586 Xi'an Road", "hotel")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc198":
-    ("Location_198", st_geogfromtext("POINT(114.1989 30.7030)"), "326 Wuhan Road", "restaurant")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc199":
-    ("Location_199", st_geogfromtext("POINT(109.0219 34.4662)"), "680 Xi'an Road", "shop")
-INSERT VERTEX location(name, coord, address, category) VALUES "loc200":
-    ("Location_200", st_geogfromtext("POINT(113.2625 22.9439)"), "989 Guangzhou Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc001":
+    ("loc001", "Location_001", st_geogfromtext("POINT(113.9510 22.5839)"), "204 Shenzhen Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc002":
+    ("loc002", "Location_002", st_geogfromtext("POINT(118.7647 32.0400)"), "829 Nanjing Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc003":
+    ("loc003", "Location_003", st_geogfromtext("POINT(116.5109 39.7681)"), "349 Beijing Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc004":
+    ("loc004", "Location_004", st_geogfromtext("POINT(103.9290 30.7557)"), "105 Chengdu Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc005":
+    ("loc005", "Location_005", st_geogfromtext("POINT(121.4257 31.1740)"), "619 Shanghai Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc006":
+    ("loc006", "Location_006", st_geogfromtext("POINT(104.1897 30.6647)"), "128 Chengdu Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc007":
+    ("loc007", "Location_007", st_geogfromtext("POINT(114.1370 30.5101)"), "907 Wuhan Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc008":
+    ("loc008", "Location_008", st_geogfromtext("POINT(120.1860 30.3559)"), "678 Hangzhou Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc009":
+    ("loc009", "Location_009", st_geogfromtext("POINT(114.1671 22.7372)"), "888 Shenzhen Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc010":
+    ("loc010", "Location_010", st_geogfromtext("POINT(121.4258 31.2118)"), "167 Shanghai Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc011":
+    ("loc011", "Location_011", st_geogfromtext("POINT(120.0972 30.3422)"), "624 Hangzhou Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc012":
+    ("loc012", "Location_012", st_geogfromtext("POINT(113.2781 23.0270)"), "389 Guangzhou Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc013":
+    ("loc013", "Location_013", st_geogfromtext("POINT(104.2626 30.6288)"), "225 Chengdu Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc014":
+    ("loc014", "Location_014", st_geogfromtext("POINT(120.2922 30.3845)"), "842 Hangzhou Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc015":
+    ("loc015", "Location_015", st_geogfromtext("POINT(116.5294 39.8647)"), "217 Beijing Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc016":
+    ("loc016", "Location_016", st_geogfromtext("POINT(106.7021 29.4889)"), "406 Chongqing Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc017":
+    ("loc017", "Location_017", st_geogfromtext("POINT(108.7969 34.1975)"), "552 Xi'an Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc018":
+    ("loc018", "Location_018", st_geogfromtext("POINT(104.1656 30.5442)"), "409 Chengdu Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc019":
+    ("loc019", "Location_019", st_geogfromtext("POINT(120.0428 30.4731)"), "506 Hangzhou Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc020":
+    ("loc020", "Location_020", st_geogfromtext("POINT(121.5760 31.3748)"), "643 Shanghai Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc021":
+    ("loc021", "Location_021", st_geogfromtext("POINT(113.3812 23.0980)"), "395 Guangzhou Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc022":
+    ("loc022", "Location_022", st_geogfromtext("POINT(114.3439 30.5800)"), "995 Wuhan Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc023":
+    ("loc023", "Location_023", st_geogfromtext("POINT(118.9412 31.8649)"), "699 Nanjing Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc024":
+    ("loc024", "Location_024", st_geogfromtext("POINT(118.8973 32.1677)"), "115 Nanjing Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc025":
+    ("loc025", "Location_025", st_geogfromtext("POINT(104.0407 30.5543)"), "996 Chengdu Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc026":
+    ("loc026", "Location_026", st_geogfromtext("POINT(118.9017 32.0634)"), "892 Nanjing Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc027":
+    ("loc027", "Location_027", st_geogfromtext("POINT(104.2035 30.5759)"), "157 Chengdu Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc028":
+    ("loc028", "Location_028", st_geogfromtext("POINT(120.2601 30.2899)"), "941 Hangzhou Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc029":
+    ("loc029", "Location_029", st_geogfromtext("POINT(116.4470 39.8996)"), "952 Beijing Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc030":
+    ("loc030", "Location_030", st_geogfromtext("POINT(120.3066 30.4068)"), "246 Hangzhou Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc031":
+    ("loc031", "Location_031", st_geogfromtext("POINT(116.3037 39.9311)"), "88 Beijing Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc032":
+    ("loc032", "Location_032", st_geogfromtext("POINT(109.0662 34.5328)"), "785 Xi'an Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc033":
+    ("loc033", "Location_033", st_geogfromtext("POINT(113.1158 23.1192)"), "170 Guangzhou Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc034":
+    ("loc034", "Location_034", st_geogfromtext("POINT(104.0779 30.6154)"), "952 Chengdu Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc035":
+    ("loc035", "Location_035", st_geogfromtext("POINT(118.8990 32.1362)"), "409 Nanjing Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc036":
+    ("loc036", "Location_036", st_geogfromtext("POINT(120.1303 30.2811)"), "254 Hangzhou Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc037":
+    ("loc037", "Location_037", st_geogfromtext("POINT(113.8835 22.3515)"), "236 Shenzhen Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc038":
+    ("loc038", "Location_038", st_geogfromtext("POINT(106.4397 29.3914)"), "235 Chongqing Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc039":
+    ("loc039", "Location_039", st_geogfromtext("POINT(121.6359 31.3743)"), "527 Shanghai Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc040":
+    ("loc040", "Location_040", st_geogfromtext("POINT(113.9693 22.5373)"), "136 Shenzhen Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc041":
+    ("loc041", "Location_041", st_geogfromtext("POINT(106.5821 29.4602)"), "827 Chongqing Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc042":
+    ("loc042", "Location_042", st_geogfromtext("POINT(114.1817 30.4316)"), "363 Wuhan Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc043":
+    ("loc043", "Location_043", st_geogfromtext("POINT(114.2699 30.7383)"), "690 Wuhan Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc044":
+    ("loc044", "Location_044", st_geogfromtext("POINT(121.2979 31.3217)"), "255 Shanghai Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc045":
+    ("loc045", "Location_045", st_geogfromtext("POINT(113.9340 22.5225)"), "188 Shenzhen Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc046":
+    ("loc046", "Location_046", st_geogfromtext("POINT(104.0519 30.7226)"), "454 Chengdu Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc047":
+    ("loc047", "Location_047", st_geogfromtext("POINT(118.6361 32.1212)"), "857 Nanjing Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc048":
+    ("loc048", "Location_048", st_geogfromtext("POINT(116.5950 40.0747)"), "171 Beijing Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc049":
+    ("loc049", "Location_049", st_geogfromtext("POINT(114.2998 30.4783)"), "925 Wuhan Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc050":
+    ("loc050", "Location_050", st_geogfromtext("POINT(116.2733 39.7051)"), "272 Beijing Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc051":
+    ("loc051", "Location_051", st_geogfromtext("POINT(108.8539 34.4202)"), "678 Xi'an Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc052":
+    ("loc052", "Location_052", st_geogfromtext("POINT(108.8017 34.2603)"), "594 Xi'an Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc053":
+    ("loc053", "Location_053", st_geogfromtext("POINT(118.6213 31.9857)"), "599 Nanjing Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc054":
+    ("loc054", "Location_054", st_geogfromtext("POINT(108.9409 34.4827)"), "59 Xi'an Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc055":
+    ("loc055", "Location_055", st_geogfromtext("POINT(118.6289 31.9346)"), "70 Nanjing Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc056":
+    ("loc056", "Location_056", st_geogfromtext("POINT(114.0194 22.7197)"), "253 Shenzhen Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc057":
+    ("loc057", "Location_057", st_geogfromtext("POINT(106.5894 29.6108)"), "674 Chongqing Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc058":
+    ("loc058", "Location_058", st_geogfromtext("POINT(106.5777 29.4895)"), "210 Chongqing Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc059":
+    ("loc059", "Location_059", st_geogfromtext("POINT(120.0506 30.2324)"), "469 Hangzhou Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc060":
+    ("loc060", "Location_060", st_geogfromtext("POINT(120.3267 30.4484)"), "470 Hangzhou Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc061":
+    ("loc061", "Location_061", st_geogfromtext("POINT(106.7510 29.7614)"), "551 Chongqing Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc062":
+    ("loc062", "Location_062", st_geogfromtext("POINT(114.0603 22.3961)"), "903 Shenzhen Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc063":
+    ("loc063", "Location_063", st_geogfromtext("POINT(121.6254 31.1782)"), "449 Shanghai Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc064":
+    ("loc064", "Location_064", st_geogfromtext("POINT(118.8783 32.1050)"), "9 Nanjing Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc065":
+    ("loc065", "Location_065", st_geogfromtext("POINT(118.7167 32.1257)"), "271 Nanjing Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc066":
+    ("loc066", "Location_066", st_geogfromtext("POINT(121.6296 31.3274)"), "279 Shanghai Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc067":
+    ("loc067", "Location_067", st_geogfromtext("POINT(104.1087 30.6598)"), "704 Chengdu Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc068":
+    ("loc068", "Location_068", st_geogfromtext("POINT(104.0690 30.4732)"), "95 Chengdu Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc069":
+    ("loc069", "Location_069", st_geogfromtext("POINT(114.4372 30.4104)"), "790 Wuhan Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc070":
+    ("loc070", "Location_070", st_geogfromtext("POINT(113.3192 23.0339)"), "565 Guangzhou Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc071":
+    ("loc071", "Location_071", st_geogfromtext("POINT(114.3299 30.4375)"), "559 Wuhan Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc072":
+    ("loc072", "Location_072", st_geogfromtext("POINT(116.5412 39.9372)"), "441 Beijing Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc073":
+    ("loc073", "Location_073", st_geogfromtext("POINT(113.0811 23.0750)"), "921 Guangzhou Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc074":
+    ("loc074", "Location_074", st_geogfromtext("POINT(120.0391 30.1739)"), "363 Hangzhou Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc075":
+    ("loc075", "Location_075", st_geogfromtext("POINT(118.9506 32.0229)"), "768 Nanjing Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc076":
+    ("loc076", "Location_076", st_geogfromtext("POINT(113.4347 23.0238)"), "820 Guangzhou Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc077":
+    ("loc077", "Location_077", st_geogfromtext("POINT(113.4170 22.9390)"), "802 Guangzhou Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc078":
+    ("loc078", "Location_078", st_geogfromtext("POINT(114.4264 30.7384)"), "274 Wuhan Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc079":
+    ("loc079", "Location_079", st_geogfromtext("POINT(113.3793 22.9723)"), "880 Guangzhou Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc080":
+    ("loc080", "Location_080", st_geogfromtext("POINT(108.8288 34.4682)"), "359 Xi'an Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc081":
+    ("loc081", "Location_081", st_geogfromtext("POINT(104.1950 30.7213)"), "25 Chengdu Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc082":
+    ("loc082", "Location_082", st_geogfromtext("POINT(114.0173 22.4545)"), "991 Shenzhen Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc083":
+    ("loc083", "Location_083", st_geogfromtext("POINT(104.0073 30.5766)"), "340 Chengdu Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc084":
+    ("loc084", "Location_084", st_geogfromtext("POINT(116.2535 40.0924)"), "595 Beijing Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc085":
+    ("loc085", "Location_085", st_geogfromtext("POINT(103.8821 30.6114)"), "747 Chengdu Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc086":
+    ("loc086", "Location_086", st_geogfromtext("POINT(120.1297 30.4678)"), "395 Hangzhou Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc087":
+    ("loc087", "Location_087", st_geogfromtext("POINT(106.4276 29.3808)"), "2 Chongqing Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc088":
+    ("loc088", "Location_088", st_geogfromtext("POINT(118.9671 32.0757)"), "373 Nanjing Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc089":
+    ("loc089", "Location_089", st_geogfromtext("POINT(114.1335 30.6585)"), "639 Wuhan Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc090":
+    ("loc090", "Location_090", st_geogfromtext("POINT(120.2205 30.1240)"), "520 Hangzhou Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc091":
+    ("loc091", "Location_091", st_geogfromtext("POINT(104.1336 30.5033)"), "568 Chengdu Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc092":
+    ("loc092", "Location_092", st_geogfromtext("POINT(113.1411 23.1951)"), "694 Guangzhou Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc093":
+    ("loc093", "Location_093", st_geogfromtext("POINT(113.3106 23.0495)"), "854 Guangzhou Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc094":
+    ("loc094", "Location_094", st_geogfromtext("POINT(116.3289 39.7883)"), "622 Beijing Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc095":
+    ("loc095", "Location_095", st_geogfromtext("POINT(120.1411 30.2510)"), "524 Hangzhou Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc096":
+    ("loc096", "Location_096", st_geogfromtext("POINT(109.0573 34.5255)"), "675 Xi'an Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc097":
+    ("loc097", "Location_097", st_geogfromtext("POINT(121.3872 31.2959)"), "344 Shanghai Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc098":
+    ("loc098", "Location_098", st_geogfromtext("POINT(121.6011 31.3309)"), "231 Shanghai Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc099":
+    ("loc099", "Location_099", st_geogfromtext("POINT(113.9168 22.3616)"), "626 Shenzhen Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc100":
+    ("loc100", "Location_100", st_geogfromtext("POINT(121.4559 31.3849)"), "200 Shanghai Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc101":
+    ("loc101", "Location_101", st_geogfromtext("POINT(114.3033 30.4904)"), "915 Wuhan Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc102":
+    ("loc102", "Location_102", st_geogfromtext("POINT(121.5851 31.1179)"), "476 Shanghai Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc103":
+    ("loc103", "Location_103", st_geogfromtext("POINT(116.4304 40.0712)"), "468 Beijing Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc104":
+    ("loc104", "Location_104", st_geogfromtext("POINT(113.3850 23.1961)"), "610 Guangzhou Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc105":
+    ("loc105", "Location_105", st_geogfromtext("POINT(120.3351 30.4307)"), "835 Hangzhou Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc106":
+    ("loc106", "Location_106", st_geogfromtext("POINT(118.7676 32.2230)"), "919 Nanjing Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc107":
+    ("loc107", "Location_107", st_geogfromtext("POINT(113.3619 23.1190)"), "770 Guangzhou Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc108":
+    ("loc108", "Location_108", st_geogfromtext("POINT(114.1938 22.4540)"), "497 Shenzhen Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc109":
+    ("loc109", "Location_109", st_geogfromtext("POINT(113.9677 22.3741)"), "241 Shenzhen Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc110":
+    ("loc110", "Location_110", st_geogfromtext("POINT(104.0011 30.7300)"), "142 Chengdu Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc111":
+    ("loc111", "Location_111", st_geogfromtext("POINT(113.1569 23.2067)"), "66 Guangzhou Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc112":
+    ("loc112", "Location_112", st_geogfromtext("POINT(114.2685 30.6098)"), "64 Wuhan Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc113":
+    ("loc113", "Location_113", st_geogfromtext("POINT(114.1911 22.4989)"), "969 Shenzhen Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc114":
+    ("loc114", "Location_114", st_geogfromtext("POINT(116.5501 40.0104)"), "489 Beijing Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc115":
+    ("loc115", "Location_115", st_geogfromtext("POINT(116.5845 39.8236)"), "874 Beijing Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc116":
+    ("loc116", "Location_116", st_geogfromtext("POINT(114.3208 30.6867)"), "920 Wuhan Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc117":
+    ("loc117", "Location_117", st_geogfromtext("POINT(114.0532 22.4523)"), "30 Shenzhen Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc118":
+    ("loc118", "Location_118", st_geogfromtext("POINT(114.2400 30.6645)"), "742 Wuhan Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc119":
+    ("loc119", "Location_119", st_geogfromtext("POINT(113.4006 23.2969)"), "547 Guangzhou Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc120":
+    ("loc120", "Location_120", st_geogfromtext("POINT(116.5702 39.9410)"), "86 Beijing Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc121":
+    ("loc121", "Location_121", st_geogfromtext("POINT(114.1598 30.5775)"), "267 Wuhan Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc122":
+    ("loc122", "Location_122", st_geogfromtext("POINT(114.2364 30.5747)"), "780 Wuhan Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc123":
+    ("loc123", "Location_123", st_geogfromtext("POINT(114.2168 30.7733)"), "259 Wuhan Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc124":
+    ("loc124", "Location_124", st_geogfromtext("POINT(121.4618 31.3300)"), "975 Shanghai Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc125":
+    ("loc125", "Location_125", st_geogfromtext("POINT(120.0448 30.1015)"), "773 Hangzhou Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc126":
+    ("loc126", "Location_126", st_geogfromtext("POINT(116.5872 39.7839)"), "637 Beijing Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc127":
+    ("loc127", "Location_127", st_geogfromtext("POINT(113.1598 23.1185)"), "578 Guangzhou Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc128":
+    ("loc128", "Location_128", st_geogfromtext("POINT(114.0439 22.4456)"), "172 Shenzhen Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc129":
+    ("loc129", "Location_129", st_geogfromtext("POINT(106.5945 29.6622)"), "797 Chongqing Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc130":
+    ("loc130", "Location_130", st_geogfromtext("POINT(113.4503 22.9723)"), "952 Guangzhou Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc131":
+    ("loc131", "Location_131", st_geogfromtext("POINT(104.0971 30.7360)"), "407 Chengdu Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc132":
+    ("loc132", "Location_132", st_geogfromtext("POINT(113.8883 22.6193)"), "105 Shenzhen Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc133":
+    ("loc133", "Location_133", st_geogfromtext("POINT(104.2069 30.6130)"), "816 Chengdu Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc134":
+    ("loc134", "Location_134", st_geogfromtext("POINT(106.6647 29.5019)"), "678 Chongqing Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc135":
+    ("loc135", "Location_135", st_geogfromtext("POINT(119.9827 30.3331)"), "870 Hangzhou Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc136":
+    ("loc136", "Location_136", st_geogfromtext("POINT(114.4344 30.4350)"), "651 Wuhan Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc137":
+    ("loc137", "Location_137", st_geogfromtext("POINT(109.0227 34.3158)"), "989 Xi'an Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc138":
+    ("loc138", "Location_138", st_geogfromtext("POINT(104.1132 30.7406)"), "477 Chengdu Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc139":
+    ("loc139", "Location_139", st_geogfromtext("POINT(114.4358 30.6298)"), "873 Wuhan Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc140":
+    ("loc140", "Location_140", st_geogfromtext("POINT(114.1902 22.3778)"), "250 Shenzhen Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc141":
+    ("loc141", "Location_141", st_geogfromtext("POINT(108.9677 34.4089)"), "30 Xi'an Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc142":
+    ("loc142", "Location_142", st_geogfromtext("POINT(109.0802 34.2143)"), "364 Xi'an Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc143":
+    ("loc143", "Location_143", st_geogfromtext("POINT(104.0029 30.7249)"), "570 Chengdu Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc144":
+    ("loc144", "Location_144", st_geogfromtext("POINT(116.4141 39.7806)"), "738 Beijing Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc145":
+    ("loc145", "Location_145", st_geogfromtext("POINT(114.3009 30.6961)"), "662 Wuhan Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc146":
+    ("loc146", "Location_146", st_geogfromtext("POINT(108.9191 34.1485)"), "227 Xi'an Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc147":
+    ("loc147", "Location_147", st_geogfromtext("POINT(114.3822 30.5153)"), "378 Wuhan Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc148":
+    ("loc148", "Location_148", st_geogfromtext("POINT(108.9612 34.2791)"), "339 Xi'an Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc149":
+    ("loc149", "Location_149", st_geogfromtext("POINT(120.2362 30.1825)"), "237 Hangzhou Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc150":
+    ("loc150", "Location_150", st_geogfromtext("POINT(121.5622 31.1566)"), "974 Shanghai Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc151":
+    ("loc151", "Location_151", st_geogfromtext("POINT(113.1410 23.2245)"), "742 Guangzhou Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc152":
+    ("loc152", "Location_152", st_geogfromtext("POINT(106.7422 29.5729)"), "103 Chongqing Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc153":
+    ("loc153", "Location_153", st_geogfromtext("POINT(113.9764 22.4875)"), "15 Shenzhen Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc154":
+    ("loc154", "Location_154", st_geogfromtext("POINT(118.6475 31.8785)"), "567 Nanjing Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc155":
+    ("loc155", "Location_155", st_geogfromtext("POINT(104.1458 30.4233)"), "106 Chengdu Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc156":
+    ("loc156", "Location_156", st_geogfromtext("POINT(116.4370 39.8920)"), "349 Beijing Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc157":
+    ("loc157", "Location_157", st_geogfromtext("POINT(113.4506 23.0301)"), "117 Guangzhou Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc158":
+    ("loc158", "Location_158", st_geogfromtext("POINT(121.4340 31.0600)"), "156 Shanghai Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc159":
+    ("loc159", "Location_159", st_geogfromtext("POINT(113.3889 23.3088)"), "255 Guangzhou Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc160":
+    ("loc160", "Location_160", st_geogfromtext("POINT(121.4969 31.1969)"), "810 Shanghai Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc161":
+    ("loc161", "Location_161", st_geogfromtext("POINT(106.4419 29.5720)"), "931 Chongqing Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc162":
+    ("loc162", "Location_162", st_geogfromtext("POINT(108.8587 34.3770)"), "313 Xi'an Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc163":
+    ("loc163", "Location_163", st_geogfromtext("POINT(106.6000 29.6069)"), "971 Chongqing Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc164":
+    ("loc164", "Location_164", st_geogfromtext("POINT(114.1081 22.4490)"), "161 Shenzhen Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc165":
+    ("loc165", "Location_165", st_geogfromtext("POINT(113.9274 22.3731)"), "419 Shenzhen Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc166":
+    ("loc166", "Location_166", st_geogfromtext("POINT(109.0155 34.3296)"), "238 Xi'an Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc167":
+    ("loc167", "Location_167", st_geogfromtext("POINT(104.1496 30.6540)"), "73 Chengdu Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc168":
+    ("loc168", "Location_168", st_geogfromtext("POINT(114.2275 22.6582)"), "678 Shenzhen Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc169":
+    ("loc169", "Location_169", st_geogfromtext("POINT(114.0280 22.5609)"), "931 Shenzhen Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc170":
+    ("loc170", "Location_170", st_geogfromtext("POINT(104.1975 30.4014)"), "812 Chengdu Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc171":
+    ("loc171", "Location_171", st_geogfromtext("POINT(104.1048 30.7025)"), "450 Chengdu Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc172":
+    ("loc172", "Location_172", st_geogfromtext("POINT(121.4612 31.1520)"), "966 Shanghai Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc173":
+    ("loc173", "Location_173", st_geogfromtext("POINT(104.0670 30.5703)"), "613 Chengdu Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc174":
+    ("loc174", "Location_174", st_geogfromtext("POINT(116.5632 39.9980)"), "257 Beijing Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc175":
+    ("loc175", "Location_175", st_geogfromtext("POINT(116.2439 40.0890)"), "602 Beijing Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc176":
+    ("loc176", "Location_176", st_geogfromtext("POINT(116.6072 39.9731)"), "591 Beijing Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc177":
+    ("loc177", "Location_177", st_geogfromtext("POINT(116.5126 39.7743)"), "668 Beijing Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc178":
+    ("loc178", "Location_178", st_geogfromtext("POINT(109.1062 34.2142)"), "447 Xi'an Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc179":
+    ("loc179", "Location_179", st_geogfromtext("POINT(109.1274 34.3296)"), "342 Xi'an Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc180":
+    ("loc180", "Location_180", st_geogfromtext("POINT(120.2232 30.4172)"), "422 Hangzhou Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc181":
+    ("loc181", "Location_181", st_geogfromtext("POINT(108.8551 34.5197)"), "38 Xi'an Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc182":
+    ("loc182", "Location_182", st_geogfromtext("POINT(108.7750 34.2426)"), "994 Xi'an Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc183":
+    ("loc183", "Location_183", st_geogfromtext("POINT(114.4515 30.7228)"), "674 Wuhan Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc184":
+    ("loc184", "Location_184", st_geogfromtext("POINT(118.7817 31.8820)"), "371 Nanjing Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc185":
+    ("loc185", "Location_185", st_geogfromtext("POINT(106.6542 29.6132)"), "209 Chongqing Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc186":
+    ("loc186", "Location_186", st_geogfromtext("POINT(104.0865 30.7439)"), "902 Chengdu Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc187":
+    ("loc187", "Location_187", st_geogfromtext("POINT(108.7884 34.5309)"), "819 Xi'an Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc188":
+    ("loc188", "Location_188", st_geogfromtext("POINT(114.1418 22.4674)"), "566 Shenzhen Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc189":
+    ("loc189", "Location_189", st_geogfromtext("POINT(114.1428 30.7897)"), "473 Wuhan Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc190":
+    ("loc190", "Location_190", st_geogfromtext("POINT(121.5328 31.0920)"), "522 Shanghai Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc191":
+    ("loc191", "Location_191", st_geogfromtext("POINT(104.0330 30.5658)"), "250 Chengdu Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc192":
+    ("loc192", "Location_192", st_geogfromtext("POINT(108.9603 34.2950)"), "521 Xi'an Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc193":
+    ("loc193", "Location_193", st_geogfromtext("POINT(113.4100 23.0396)"), "349 Guangzhou Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc194":
+    ("loc194", "Location_194", st_geogfromtext("POINT(118.7038 31.8613)"), "858 Nanjing Road", "attraction")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc195":
+    ("loc195", "Location_195", st_geogfromtext("POINT(106.5836 29.6270)"), "458 Chongqing Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc196":
+    ("loc196", "Location_196", st_geogfromtext("POINT(118.7906 31.9933)"), "387 Nanjing Road", "park")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc197":
+    ("loc197", "Location_197", st_geogfromtext("POINT(109.1129 34.4894)"), "586 Xi'an Road", "hotel")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc198":
+    ("loc198", "Location_198", st_geogfromtext("POINT(114.1989 30.7030)"), "326 Wuhan Road", "restaurant")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc199":
+    ("loc199", "Location_199", st_geogfromtext("POINT(109.0219 34.4662)"), "680 Xi'an Road", "shop")
+INSERT VERTEX location(location_id, name, coord, address, category) VALUES "loc200":
+    ("loc200", "Location_200", st_geogfromtext("POINT(113.2625 22.9439)"), "989 Guangzhou Road", "park")
 
 -- Generate nearby relationships
 INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc001" -> "loc025" @0:

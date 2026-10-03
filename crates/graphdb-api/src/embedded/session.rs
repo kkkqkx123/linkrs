@@ -1003,8 +1003,14 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
             }
             Stmt::Savepoint(savepoint_stmt) => {
                 let txn_id = require_transaction("create savepoint")?;
+                // Capture the storage-staged write boundary before the
+                // savepoint so ROLLBACK TO can rewind staged rows.
+                let staged_mark = {
+                    let storage = self.storage_mut();
+                    graphdb_storage::UndoTarget::staged_write_mark(&*storage, txn_id)
+                };
                 txn_manager
-                    .create_savepoint(txn_id, Some(savepoint_stmt.name.clone()))
+                    .create_savepoint(txn_id, Some(savepoint_stmt.name.clone()), staged_mark)
                     .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
                 self.session_variables
                     .push_variable_savepoint(&savepoint_stmt.name);
@@ -1686,8 +1692,12 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         txn_handle: &crate::api_core::types::TransactionHandle,
         name: &str,
     ) -> CoreResult<crate::api_core::types::SavepointId> {
+        let staged_mark = {
+            let storage = self.storage_mut();
+            graphdb_storage::UndoTarget::staged_write_mark(&*storage, txn_handle.0)
+        };
         self.txn_manager()
-            .create_savepoint(txn_handle.0, Some(name.to_string()))
+            .create_savepoint(txn_handle.0, Some(name.to_string()), staged_mark)
             .map_err(|e| CoreError::TransactionFailed(e.to_string()))
             .map(crate::api_core::types::SavepointId)
     }

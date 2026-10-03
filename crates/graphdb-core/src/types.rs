@@ -534,7 +534,7 @@ pub use self::sync_protocol::{
 pub use self::table_tracker::{TableId, TableTracker, TableTrackerConfig, TableType};
 pub use self::transaction_config::{DurabilityLevel, TransactionIsolationLevel};
 pub use self::transaction_context::TransactionContextInfo;
-pub use self::undo::{UndoLogError, UndoLogResult, UndoTarget};
+pub use self::undo::{StagedWriteMark, UndoLogError, UndoLogResult, UndoTarget};
 
 pub use EdgeTypeInfo as EdgeTypeSchema;
 

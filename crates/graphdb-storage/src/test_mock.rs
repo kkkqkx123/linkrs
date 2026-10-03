@@ -719,6 +719,21 @@ impl UndoTarget for MockStorage {
             original_names,
         )
     }
+
+    fn staged_write_mark(
+        &self,
+        txn_id: graphdb_core::types::TransactionId,
+    ) -> Option<graphdb_core::types::StagedWriteMark> {
+        self.graph.staged_write_mark(txn_id)
+    }
+
+    fn rollback_staged_writes(
+        &self,
+        txn_id: graphdb_core::types::TransactionId,
+        mark: graphdb_core::types::StagedWriteMark,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        self.graph.rollback_staged_writes(txn_id, mark)
+    }
 }
 
 impl StorageRecoveryOps for MockStorage {

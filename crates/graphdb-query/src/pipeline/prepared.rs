@@ -5,6 +5,7 @@ use crate::executor::streaming::instance::ResultSink;
 use crate::executor::streaming::transaction_scope::TransactionScope;
 use crate::executor::streaming::StreamingQueryResult;
 use crate::parser::ast::Stmt;
+use crate::planning::statements::clauses::exists_planner;
 use crate::storage::QueryStorage;
 use crate::QueryContext;
 use crate::QueryRequestContext;
@@ -574,6 +575,60 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     /// [`execute_prepared`](Self::execute_prepared) wrapper handles storage
     /// finalization; DDL executed through a streaming sink is materialized
     /// then re-wrapped as a stream.
+    /// Reject expression-level EXISTS / IN in conditional-MERGE actions.
+    ///
+    /// The probe-then-branch orchestration path bypasses `MergePlanner`, so
+    /// the same planning-time rejection applied there must run here:
+    /// subqueries in MERGE pattern property values or ON MATCH / ON CREATE
+    /// SET values fail with the precise error instead of reaching execution.
+    fn reject_conditional_merge_subqueries(request: &PreparedRequest) -> DBResult<()> {
+        let Stmt::Merge(merge_stmt) = &request.stmt else {
+            return Ok(());
+        };
+        let qctx = &request.query_context;
+        let check_space_id = qctx.space_id().unwrap_or(1);
+        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        let map_err = |e: crate::planning::planner::PlannerError| {
+            DBError::from(QueryError::pipeline_planning_error(e))
+        };
+        let pattern_props = match &merge_stmt.pattern {
+            crate::parser::ast::Pattern::Node(node_pattern) => node_pattern.properties.as_ref(),
+            crate::parser::ast::Pattern::Edge(edge_pattern) => edge_pattern.properties.as_ref(),
+            _ => None,
+        };
+        if let Some(props_expr) = pattern_props {
+            if let Some(expr_meta) = props_expr.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    qctx,
+                    check_space_id,
+                    &check_space_name,
+                    &outer_col_names,
+                )
+                .map_err(map_err)?;
+            }
+        }
+        for set_clause in [&merge_stmt.on_match, &merge_stmt.on_create]
+            .into_iter()
+            .flatten()
+        {
+            for assignment in &set_clause.assignments {
+                if let Some(expr_meta) = assignment.value.expression() {
+                    exists_planner::check_expression_subqueries(
+                        expr_meta.inner(),
+                        qctx,
+                        check_space_id,
+                        &check_space_name,
+                        &outer_col_names,
+                    )
+                    .map_err(map_err)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn execute_prepared_inner(
         &mut self,
         request: &PreparedRequest,
@@ -608,6 +663,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // no cached plan is served or stored for it.
         if let Some(bound) = request.bound_statement.as_ref() {
             if super::merge_conditional::is_conditional_node_merge(bound) {
+                // The orchestration path bypasses MergePlanner, so reject
+                // expression-level EXISTS / IN in the MERGE actions here
+                // with the same precise planning error.
+                Self::reject_conditional_merge_subqueries(request)?;
                 let result = self.execute_conditional_merge(request)?;
                 return Ok(match sink {
                     ResultSink::Materialize => PreparedOutcome::Materialized(result),

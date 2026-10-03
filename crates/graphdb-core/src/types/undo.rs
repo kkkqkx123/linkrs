@@ -3,8 +3,8 @@
 //! Provides the core trait and error types for transaction undo/rollback operations.
 
 use super::storage_ids::{
-    ColumnId, EdgeDeletionContext, EdgeId, EdgeIdentifier, EdgeKey, LabelId, Timestamp, VertexId,
-    VertexIdentifier,
+    ColumnId, EdgeDeletionContext, EdgeId, EdgeIdentifier, EdgeKey, LabelId, Timestamp,
+    TransactionId, VertexId, VertexIdentifier,
 };
 use crate::Value;
 
@@ -32,6 +32,31 @@ pub enum UndoLogError {
 
 /// Undo log result type
 pub type UndoLogResult<T> = Result<T, UndoLogError>;
+
+/// Boundary of storage-staged (not yet undo-logged) writes captured at
+/// savepoint creation.
+///
+/// Online vertex writes accumulate in a per-transaction staging buffer
+/// (plus staged WAL redo) instead of the undo log, so rolling back to a
+/// savepoint must rewind this buffer in addition to executing undo logs.
+/// `None` at a savepoint means the target held no staged writes and the
+/// rollback skips the rewind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StagedWriteMark {
+    /// Staging-buffer journal length at the savepoint.
+    pub staging_journal_len: usize,
+    /// Staging-buffer index-operation length at the savepoint.
+    pub staging_index_len: usize,
+    /// Staged WAL redo length at the savepoint.
+    pub staged_wal_len: usize,
+}
+
+impl StagedWriteMark {
+    /// An all-zero mark rewinds nothing.
+    pub fn is_empty(self) -> bool {
+        self.staging_journal_len == 0 && self.staging_index_len == 0 && self.staged_wal_len == 0
+    }
+}
 
 /// Target for undo operations
 pub trait UndoTarget: Send + Sync {
@@ -93,5 +118,23 @@ pub trait UndoTarget: Send + Sync {
         edge_label: &str,
         current_names: &[String],
         original_names: &[String],
+    ) -> UndoLogResult<()>;
+    /// Capture this target's staged-write boundary for `txn_id`.
+    ///
+    /// Returns `None` when the target holds no staged writes for the
+    /// transaction. Targets that stage uncommitted writes outside the undo
+    /// log must override this and [`Self::rollback_staged_writes`]; every
+    /// other implementor reports `None`.
+    fn staged_write_mark(&self, txn_id: TransactionId) -> Option<StagedWriteMark>;
+    /// Rewind staged writes of `txn_id` to a mark previously captured by
+    /// [`Self::staged_write_mark`].
+    ///
+    /// Called only with marks this target produced. An all-zero mark is a
+    /// no-op; anything else a non-staging target receives is rejected
+    /// loudly instead of leaving staged rows behind.
+    fn rollback_staged_writes(
+        &self,
+        txn_id: TransactionId,
+        mark: StagedWriteMark,
     ) -> UndoLogResult<()>;
 }

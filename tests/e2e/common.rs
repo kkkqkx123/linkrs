@@ -9,7 +9,9 @@ use graphdb::api::api_core::CoreResult;
 use graphdb::core::metadata::SchemaManager;
 use graphdb::core::Value;
 use graphdb::query::executor::streaming::StreamingQueryResult;
-use graphdb::storage::{GraphStorage, StorageOperationContextOps, StorageSchemaContextOps};
+use graphdb::storage::{
+    GraphStorage, StorageOperationContextOps, StorageSchemaContextOps, SyncWrapper,
+};
 use graphdb::sync::SyncManager;
 use graphdb::transaction::{
     TransactionId, TransactionManager, TransactionManagerConfig, TransactionOptions,
@@ -146,11 +148,17 @@ impl TestDb {
             schema_manager.clone(),
             sync_manager,
         );
-        let transaction_manager = Arc::new(TransactionManager::with_shared_version_manager(
-            TransactionManagerConfig::default(),
-            stats_manager.clone(),
-            storage.read().version_manager(),
-        ));
+        let transaction_manager = Arc::new(
+            TransactionManager::with_shared_version_manager(
+                TransactionManagerConfig::default(),
+                stats_manager.clone(),
+                storage.read().version_manager(),
+            )
+            // Explicit-transaction COMMIT must apply the staging buffer
+            // through the storage commit sink (mirrors production startup);
+            // without it staged writes would never become visible.
+            .with_commit_sink(Arc::new(SyncWrapper::new(storage.read().clone()))),
+        );
 
         Self {
             temp_dir: Some(temp_dir),
@@ -194,11 +202,14 @@ impl TestDb {
             schema_manager.clone(),
             sync_manager,
         );
-        let transaction_manager = Arc::new(TransactionManager::with_shared_version_manager(
-            TransactionManagerConfig::default(),
-            stats_manager.clone(),
-            storage.read().version_manager(),
-        ));
+        let transaction_manager = Arc::new(
+            TransactionManager::with_shared_version_manager(
+                TransactionManagerConfig::default(),
+                stats_manager.clone(),
+                storage.read().version_manager(),
+            )
+            .with_commit_sink(Arc::new(SyncWrapper::new(storage.read().clone()))),
+        );
 
         Self {
             temp_dir: None,
@@ -270,8 +281,14 @@ impl TestDb {
                     "No active transaction, cannot create savepoint".to_string(),
                 )
             })?;
+            // Capture the storage-staged write boundary before the savepoint
+            // so ROLLBACK TO can rewind rows staged after it.
+            let staged_mark = {
+                let storage = self.storage.read();
+                graphdb::storage::UndoTarget::staged_write_mark(&*storage, txn_id)
+            };
             self.transaction_manager
-                .create_savepoint(txn_id, Some(name))
+                .create_savepoint(txn_id, Some(name), staged_mark)
                 .map_err(|e| {
                     graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
                 })?;

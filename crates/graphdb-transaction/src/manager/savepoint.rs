@@ -4,13 +4,20 @@ use super::TransactionManager;
 use crate::error::TransactionError;
 use crate::types::*;
 use crate::undo_log::UndoTarget;
+use graphdb_core::types::StagedWriteMark;
 
 impl TransactionManager {
     /// Create savepoint
+    ///
+    /// `staged_mark` is the storage-staged write boundary the caller peeked
+    /// from the undo target before this call (`None` when the target holds
+    /// no staged writes). It is required explicitly so a staging target can
+    /// never silently skip the savepoint mark.
     pub fn create_savepoint(
         &self,
         txn_id: TransactionId,
         name: Option<String>,
+        staged_mark: Option<StagedWriteMark>,
     ) -> Result<SavepointId, TransactionError> {
         let context = self.get_context(txn_id)?;
         let sync_sequence = self
@@ -18,7 +25,9 @@ impl TransactionManager {
             .as_ref()
             .map(|manager| manager.pending_transaction_intent_sequence(txn_id))
             .unwrap_or(0);
-        Ok(context.create_savepoint(name, sync_sequence))
+        let id = context.create_savepoint(name, sync_sequence);
+        context.set_savepoint_staging_mark(id, staged_mark)?;
+        Ok(id)
     }
 
     /// Get savepoint info

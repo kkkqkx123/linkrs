@@ -6,6 +6,7 @@
 //! serialization and rollback, restoring the original value instead of Null.
 
 use graphdb_core::types::storage_ids::{EdgeIdentifier, VertexIdentifier};
+use graphdb_core::types::StagedWriteMark;
 use graphdb_core::value::date_time::{DateTimeValue, DateValue};
 use graphdb_core::value::decimal128::Decimal128Value;
 use graphdb_core::value::null::NullType;
@@ -16,6 +17,7 @@ use graphdb_transaction::undo_log::{
     UndoLogEntry, UndoLogError, UndoLogResult, UndoTarget, UpdateEdgePropUndo,
 };
 use graphdb_transaction::wal::{ColumnId, LabelId, Timestamp, VertexId};
+use graphdb_transaction::TransactionId;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -122,6 +124,24 @@ impl UndoTarget for RecordingUndoTarget {
         _original_names: &[String],
     ) -> UndoLogResult<()> {
         Ok(())
+    }
+
+    fn staged_write_mark(&self, _txn_id: TransactionId) -> Option<StagedWriteMark> {
+        None
+    }
+
+    fn rollback_staged_writes(
+        &self,
+        _txn_id: TransactionId,
+        mark: StagedWriteMark,
+    ) -> UndoLogResult<()> {
+        if mark.is_empty() {
+            Ok(())
+        } else {
+            Err(UndoLogError::UndoFailed(
+                "mock undo target holds no staged writes".to_string(),
+            ))
+        }
     }
 }
 
@@ -306,6 +326,24 @@ fn failing_undo_returns_error() {
             _original_names: &[String],
         ) -> UndoLogResult<()> {
             Ok(())
+        }
+
+        fn staged_write_mark(&self, _txn_id: TransactionId) -> Option<StagedWriteMark> {
+            None
+        }
+
+        fn rollback_staged_writes(
+            &self,
+            _txn_id: TransactionId,
+            mark: StagedWriteMark,
+        ) -> UndoLogResult<()> {
+            if mark.is_empty() {
+                Ok(())
+            } else {
+                Err(UndoLogError::UndoFailed(
+                    "mock undo target holds no staged writes".to_string(),
+                ))
+            }
         }
     }
 

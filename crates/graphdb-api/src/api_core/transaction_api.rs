@@ -84,6 +84,9 @@ impl TransactionApi {
     /// # Parameters
     /// - `handle`: transaction handle
     /// - `name`: optional savepoint name
+    /// - `staged_mark`: storage-staged write boundary peeked from the undo
+    ///   target before this call (`None` when the target holds no staged
+    ///   writes)
     ///
     /// # Returns
     /// Savepoint ID on success
@@ -91,9 +94,10 @@ impl TransactionApi {
         &self,
         handle: TransactionHandle,
         name: Option<String>,
+        staged_mark: Option<graphdb_storage::StagedWriteMark>,
     ) -> CoreResult<SavepointId> {
         self.txn_manager
-            .create_savepoint(handle.0, name)
+            .create_savepoint(handle.0, name, staged_mark)
             .map_err(|e| CoreError::TransactionFailed(e.to_string()))
             .map(SavepointId)
     }

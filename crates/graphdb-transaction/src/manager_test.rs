@@ -680,7 +680,7 @@ fn test_savepoint_basic() {
         .expect("Failed to begin transaction");
 
     let sp_id = manager
-        .create_savepoint(txn_id, Some("test_savepoint".to_string()))
+        .create_savepoint(txn_id, Some("test_savepoint".to_string()), None)
         .expect("Failed to create savepoint");
 
     let sp = manager
@@ -1259,10 +1259,10 @@ fn test_concurrent_final_review_no_false_abort() {
 fn test_abort_without_sink_executes_undo_against_target() {
     use std::sync::atomic::AtomicUsize;
 
-    use crate::undo_log::{InsertEdgeUndo, UndoLogEntry, UndoLogResult, UndoTarget};
+    use crate::undo_log::{InsertEdgeUndo, UndoLogEntry, UndoLogError, UndoLogResult, UndoTarget};
     use graphdb_core::types::{
-        ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, Timestamp, VertexId,
-        VertexIdentifier,
+        ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, StagedWriteMark, Timestamp,
+        VertexId, VertexIdentifier,
     };
 
     struct CountingTarget {
@@ -1340,6 +1340,22 @@ fn test_abort_without_sink_executes_undo_against_target() {
             _original_names: &[String],
         ) -> UndoLogResult<()> {
             Ok(())
+        }
+        fn staged_write_mark(&self, _txn_id: TransactionId) -> Option<StagedWriteMark> {
+            None
+        }
+        fn rollback_staged_writes(
+            &self,
+            _txn_id: TransactionId,
+            mark: StagedWriteMark,
+        ) -> UndoLogResult<()> {
+            if mark.is_empty() {
+                Ok(())
+            } else {
+                Err(UndoLogError::UndoFailed(
+                    "mock undo target holds no staged writes".to_string(),
+                ))
+            }
         }
     }
 

@@ -349,7 +349,7 @@ impl Default for UndoLogManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::types::VertexIdentifier;
+    use graphdb_core::types::{StagedWriteMark, TransactionId, VertexIdentifier};
 
     struct MockUndoTarget;
 
@@ -433,6 +433,24 @@ mod tests {
             _original_names: &[String],
         ) -> UndoLogResult<()> {
             Ok(())
+        }
+
+        fn staged_write_mark(&self, _txn_id: TransactionId) -> Option<StagedWriteMark> {
+            None
+        }
+
+        fn rollback_staged_writes(
+            &self,
+            _txn_id: TransactionId,
+            mark: StagedWriteMark,
+        ) -> UndoLogResult<()> {
+            if mark.is_empty() {
+                Ok(())
+            } else {
+                Err(UndoLogError::UndoFailed(
+                    "mock undo target holds no staged writes".to_string(),
+                ))
+            }
         }
     }
 

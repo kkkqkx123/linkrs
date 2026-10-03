@@ -1105,9 +1105,10 @@ pub(super) fn rollback_context_timestamp(
 mod tests {
     use super::*;
     use crate::error::TransactionErrorKind;
-    use crate::undo_log::{UndoLogResult, UndoTarget};
+    use crate::undo_log::{UndoLogError, UndoLogResult, UndoTarget};
     use graphdb_core::types::{
-        ColumnId, CommitLsn, EdgeDeletionContext, EdgeIdentifier, EdgeKey, VertexIdentifier,
+        ColumnId, CommitLsn, EdgeDeletionContext, EdgeIdentifier, EdgeKey, StagedWriteMark,
+        VertexIdentifier,
     };
     use std::sync::atomic::AtomicUsize;
 
@@ -1471,7 +1472,7 @@ mod tests {
             .expect("Failed to begin transaction");
 
         let sp_id = manager
-            .create_savepoint(txn_id, Some("test".to_string()))
+            .create_savepoint(txn_id, Some("test".to_string()), None)
             .expect("Failed to create savepoint");
 
         let sp = manager
@@ -1587,6 +1588,22 @@ mod tests {
             ) -> UndoLogResult<()> {
                 Ok(())
             }
+            fn staged_write_mark(&self, _txn_id: TransactionId) -> Option<StagedWriteMark> {
+                None
+            }
+            fn rollback_staged_writes(
+                &self,
+                _txn_id: TransactionId,
+                mark: StagedWriteMark,
+            ) -> UndoLogResult<()> {
+                if mark.is_empty() {
+                    Ok(())
+                } else {
+                    Err(UndoLogError::UndoFailed(
+                        "mock undo target holds no staged writes".to_string(),
+                    ))
+                }
+            }
         }
 
         let sync_manager = Arc::new(SyncManager::new_without_fulltext());
@@ -1597,7 +1614,7 @@ mod tests {
             .begin_insert_transaction(TransactionOptions::default())
             .expect("Failed to begin transaction");
         let sp_id = manager
-            .create_savepoint(txn_id, Some("sp".to_string()))
+            .create_savepoint(txn_id, Some("sp".to_string()), None)
             .expect("Failed to create savepoint");
 
         let dummy = MockUndoTarget;

@@ -28,13 +28,13 @@ fn test_begin_read_only_consistent_snapshot_across_statements() {
     setup_test_space(
         &mut db,
         "e2e_readonly_snapshot",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");
 
     // Committed before the transaction starts.
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p1': ('Alice', 30)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)")
         .expect("pre-transaction INSERT should succeed");
 
     // Start a read-only transaction.
@@ -50,7 +50,7 @@ fn test_begin_read_only_consistent_snapshot_across_statements() {
 
     // Concurrent auto-commit write from another session commits after the
     // snapshot was taken.
-    db.execute_external("INSERT VERTEX person(name, age) VALUES 'p2': ('Bob', 25)")
+    db.execute_external("INSERT VERTEX person(person_id, name, age) VALUES 'p2': ('p2', 'Bob', 25)")
         .expect("external INSERT should succeed");
 
     // Statement 2 inside the transaction: the externally committed vertex
@@ -78,7 +78,7 @@ fn test_read_only_transaction_rejects_dml() {
     setup_test_space(
         &mut db,
         "e2e_readonly_dml",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");
@@ -86,7 +86,7 @@ fn test_read_only_transaction_rejects_dml() {
     let result = db.execute_query("BEGIN READ ONLY");
     assert_query_ok(result, "BEGIN READ ONLY should succeed");
 
-    let result = db.execute_query("INSERT VERTEX person(name, age) VALUES 'p1': ('Alice', 30)");
+    let result = db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)");
     assert_query_err(result, "INSERT inside a read-only transaction must fail");
 
     // The transaction is still usable for reads after the rejected write.
@@ -100,7 +100,7 @@ fn test_read_only_transaction_rejects_dml() {
     assert_query_ok(result, "ROLLBACK should succeed");
 
     // Data written after the transaction is unaffected.
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p1': ('Alice', 30)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)")
         .expect("INSERT after ROLLBACK should succeed");
     assert_eq!(count_persons(&mut db, "person"), 1);
 }
@@ -113,7 +113,7 @@ fn test_savepoint_rollback_to_restores_data() {
     setup_test_space(
         &mut db,
         "e2e_savepoint",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");
@@ -121,13 +121,13 @@ fn test_savepoint_rollback_to_restores_data() {
     let result = db.execute_query("BEGIN");
     assert_query_ok(result, "BEGIN should succeed");
 
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p1': ('Alice', 30)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)")
         .expect("INSERT p1 should succeed");
 
     let result = db.execute_query("SAVEPOINT sp1");
     assert_query_ok(result, "SAVEPOINT sp1 should succeed");
 
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p2': ('Bob', 25)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p2': ('p2', 'Bob', 25)")
         .expect("INSERT p2 should succeed");
     assert_eq!(count_persons(&mut db, "person"), 2, "both vertices visible");
 
@@ -145,7 +145,7 @@ fn test_savepoint_rollback_to_restores_data() {
     assert_query_ok(result, "RELEASE SAVEPOINT sp1 should succeed");
 
     // Data written after rollback-to is retained on COMMIT.
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p2': ('Bob', 25)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p2': ('p2', 'Bob', 25)")
         .expect("INSERT p2 again should succeed");
 
     let result = db.execute_query("COMMIT");
@@ -160,7 +160,7 @@ fn test_rollback_to_released_savepoint_fails() {
     setup_test_space(
         &mut db,
         "e2e_savepoint_release",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");

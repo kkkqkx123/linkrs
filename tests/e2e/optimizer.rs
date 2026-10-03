@@ -20,7 +20,7 @@ mod index {
         setup_test_space(
             &mut db,
             "e2e_optimizer",
-            &["CREATE TAG person(name: STRING NOT NULL, age: INT, city: STRING, salary: INT)"],
+            &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT, city: STRING, salary: INT)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -43,8 +43,8 @@ mod index {
             let salary = 5000 + (i * 100);
 
             db.execute_query(&format!(
-                "INSERT VERTEX person(name, age, city, salary) VALUES 'p{:03}': ('{}', {}, '{}', {})",
-                i, name, age, city, salary
+                "INSERT VERTEX person(person_id, name, age, city, salary) VALUES 'p{:03}': ('p{:03}', '{}', {}, '{}', {})",
+                i, i, name, age, city, salary
             )).expect("INSERT should succeed");
         }
 
@@ -60,7 +60,7 @@ mod index {
         setup_test_space(
             &mut db,
             "e2e_optimizer_range",
-            &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+            &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -72,7 +72,8 @@ mod index {
         // Insert test data
         for i in 0..100 {
             db.execute_query(&format!(
-                "INSERT VERTEX person(name, age) VALUES 'p{:03}': ('Person_{:03}', {})",
+                "INSERT VERTEX person(person_id, name, age) VALUES 'p{:03}': ('p{:03}', 'Person_{:03}', {})",
+                i,
                 i,
                 i,
                 20 + (i % 40)
@@ -94,7 +95,7 @@ mod index {
         setup_test_space(
             &mut db,
             "e2e_optimizer_scan",
-            &["CREATE TAG person(name: STRING NOT NULL, salary: INT)"],
+            &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, salary: INT)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -102,7 +103,8 @@ mod index {
         // Insert test data (no index on salary)
         for i in 0..50 {
             db.execute_query(&format!(
-                "INSERT VERTEX person(name, salary) VALUES 'p{:03}': ('Person_{:03}', {})",
+                "INSERT VERTEX person(person_id, name, salary) VALUES 'p{:03}': ('p{:03}', 'Person_{:03}', {})",
+                i,
                 i,
                 i,
                 5000 + i * 100
@@ -128,14 +130,14 @@ mod wco {
         setup_test_space(
             &mut db,
             "e2e_wco_debug",
-            &["CREATE TAG person(name: STRING NOT NULL)"],
-            &["CREATE EDGE knows()"],
+            &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL)"],
+            &["CREATE EDGE knows() FROM person TO person"],
         )
         .expect("Failed to setup test space");
 
         let inserts = [
-            "INSERT VERTEX person(name) VALUES 'a': ('Alice')",
-            "INSERT VERTEX person(name) VALUES 'b': ('Bob')",
+            "INSERT VERTEX person(person_id, name) VALUES 'a': ('a', 'Alice')",
+            "INSERT VERTEX person(person_id, name) VALUES 'b': ('b', 'Bob')",
             "INSERT EDGE knows() VALUES 'a' -> 'b': ()",
         ];
         for stmt in &inserts {
@@ -188,7 +190,7 @@ mod wco {
         let r = db
             .execute_query("PROFILE MATCH (a)-[e:knows]->(b) RETURN a.name, b.name")
             .expect("profile should succeed");
-        let rows: Vec<Vec<String>> = r
+        let profile_rows: Vec<Vec<String>> = r
             .rows()
             .iter()
             .map(|row| {
@@ -200,7 +202,7 @@ mod wco {
                     .collect()
             })
             .collect();
-        eprintln!("Profile: {} rows: {:?}", rows.len(), rows);
+        eprintln!("Profile: {} rows: {:?}", profile_rows.len(), profile_rows);
 
         // Expect 1 edge row (a->b)
         assert_eq!(
@@ -209,6 +211,16 @@ mod wco {
             "expected 1 edge row, got {}: {:?}",
             rows.len(),
             rows
+        );
+        // PROFILE returns one row per plan operator; the ExpandAll row must
+        // show exactly one processed row.
+        assert!(
+            profile_rows
+                .iter()
+                .flatten()
+                .any(|cell| cell.contains("rows: 1")),
+            "expected a profile row with `rows: 1`, got: {:?}",
+            profile_rows
         );
     }
 
@@ -219,15 +231,15 @@ mod wco {
         setup_test_space(
             &mut db,
             "e2e_wco_explain",
-            &["CREATE TAG person(name: STRING NOT NULL)"],
-            &["CREATE EDGE knows()"],
+            &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL)"],
+            &["CREATE EDGE knows() FROM person TO person"],
         )
         .expect("Failed to setup test space");
 
         let inserts = [
-            "INSERT VERTEX person(name) VALUES 'a': ('A')",
-            "INSERT VERTEX person(name) VALUES 'b': ('B')",
-            "INSERT VERTEX person(name) VALUES 'c': ('C')",
+            "INSERT VERTEX person(person_id, name) VALUES 'a': ('a', 'A')",
+            "INSERT VERTEX person(person_id, name) VALUES 'b': ('b', 'B')",
+            "INSERT VERTEX person(person_id, name) VALUES 'c': ('c', 'C')",
             "INSERT EDGE knows() VALUES 'a' -> 'b': ()",
             "INSERT EDGE knows() VALUES 'b' -> 'c': ()",
             "INSERT EDGE knows() VALUES 'a' -> 'c': ()",
@@ -264,18 +276,18 @@ mod join {
             &mut db,
             "e2e_optimizer_join",
             &[
-                "CREATE TAG company(name: STRING NOT NULL, industry: STRING)",
-                "CREATE TAG employee(name: STRING NOT NULL, salary: INT)",
+                "CREATE TAG company(company_id: STRING NOT NULL, name: STRING NOT NULL, industry: STRING)",
+                "CREATE TAG employee(employee_id: STRING NOT NULL, name: STRING NOT NULL, salary: INT)",
             ],
-            &["CREATE EDGE works_at(position: STRING)"],
+            &["CREATE EDGE works_at(position: STRING) FROM employee TO company"],
         )
         .expect("Failed to setup test space");
 
         // Insert companies (fewer)
         for i in 0..10 {
             db.execute_query(&format!(
-                "INSERT VERTEX company(name, industry) VALUES 'c{:02}': ('Company_{:02}', 'Tech')",
-                i, i
+                "INSERT VERTEX company(company_id, name, industry) VALUES 'c{:02}': ('c{:02}', 'Company_{:02}', 'Tech')",
+                i, i, i
             ))
             .expect("INSERT should succeed");
         }
@@ -283,7 +295,8 @@ mod join {
         // Insert employees (more)
         for i in 0..100 {
             db.execute_query(&format!(
-                "INSERT VERTEX employee(name, salary) VALUES 'e{:03}': ('Employee_{:03}', {})",
+                "INSERT VERTEX employee(employee_id, name, salary) VALUES 'e{:03}': ('e{:03}', 'Employee_{:03}', {})",
+                i,
                 i,
                 i,
                 5000 + i * 100
@@ -320,7 +333,7 @@ mod aggregate {
         setup_test_space(
             &mut db,
             "e2e_optimizer_agg",
-            &["CREATE TAG sales(product: STRING NOT NULL, amount: INT, category: STRING)"],
+            &["CREATE TAG sales(sale_id: STRING NOT NULL, product: STRING NOT NULL, amount: INT, category: STRING)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -336,8 +349,8 @@ mod aggregate {
             };
 
             db.execute_query(&format!(
-                "INSERT VERTEX sales(product, amount, category) VALUES 's{:04}': ('{}', {}, '{}')",
-                i, product, amount, category
+                "INSERT VERTEX sales(sale_id, product, amount, category) VALUES 's{:04}': ('s{:04}', '{}', {}, '{}')",
+                i, i, product, amount, category
             ))
             .expect("INSERT should succeed");
         }
@@ -361,15 +374,15 @@ mod topn {
         setup_test_space(
             &mut db,
             "e2e_optimizer_topn",
-            &["CREATE TAG product(name: STRING NOT NULL, price: INT, sales: INT)"],
+            &["CREATE TAG product(product_id: STRING NOT NULL, name: STRING NOT NULL, price: INT, sales: INT)"],
             &[],
         )
         .expect("Failed to setup test space");
 
         for i in 0..100 {
             db.execute_query(&format!(
-                "INSERT VERTEX product(name, price, sales) VALUES 'p{:03}': ('Product_{:03}', {}, {})",
-                i, i, 10 + (i % 1000), i * 10
+                "INSERT VERTEX product(product_id, name, price, sales) VALUES 'p{:03}': ('p{:03}', 'Product_{:03}', {}, {})",
+                i, i, i, 10 + (i % 1000), i * 10
             )).expect("INSERT should succeed");
         }
 
@@ -392,7 +405,7 @@ mod explain_format {
         setup_test_space(
             &mut db,
             "e2e_optimizer_explain",
-            &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+            &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -409,7 +422,7 @@ mod explain_format {
         setup_test_space(
             &mut db,
             "e2e_optimizer_dot",
-            &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+            &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -431,14 +444,15 @@ mod profile {
         setup_test_space(
             &mut db,
             "e2e_optimizer_profile",
-            &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
+            &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
             &[],
         )
         .expect("Failed to setup test space");
 
         for i in 0..50 {
             db.execute_query(&format!(
-                "INSERT VERTEX person(name, age) VALUES 'p{:03}': ('Person_{:03}', {})",
+                "INSERT VERTEX person(person_id, name, age) VALUES 'p{:03}': ('p{:03}', 'Person_{:03}', {})",
+                i,
                 i,
                 i,
                 20 + i

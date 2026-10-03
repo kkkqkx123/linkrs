@@ -12,18 +12,18 @@ fn setup_person_graph(db: &mut crate::common::TestDb) {
     setup_test_space(
         db,
         "e2e_subquery",
-        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
-        &["CREATE EDGE friend(degree: FLOAT)"],
+        &["CREATE TAG person(person_id: STRING NOT NULL, name: STRING NOT NULL, age: INT)"],
+        &["CREATE EDGE friend(degree: FLOAT) FROM person TO person"],
     )
     .expect("Failed to setup test space");
 
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p1': ('Alice', 30)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p1': ('p1', 'Alice', 30)")
         .expect("INSERT should succeed");
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p2': ('Bob', 25)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p2': ('p2', 'Bob', 25)")
         .expect("INSERT should succeed");
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p3': ('Carol', 35)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p3': ('p3', 'Carol', 35)")
         .expect("INSERT should succeed");
-    db.execute_query("INSERT VERTEX person(name, age) VALUES 'p4': ('Dave', 20)")
+    db.execute_query("INSERT VERTEX person(person_id, name, age) VALUES 'p4': ('p4', 'Dave', 20)")
         .expect("INSERT should succeed");
 
     db.execute_query("INSERT EDGE friend(degree) VALUES 'p1' -> 'p2': (0.8)")
@@ -645,7 +645,7 @@ fn test_dml_values_rejected_at_planning() {
     );
     assert_expression_subquery_rejected(
         &mut db,
-        "INSERT VERTEX person(name) VALUES 'p9': (EXISTS { MATCH (p:person) })",
+        "INSERT VERTEX person(person_id, name) VALUES 'p9': ('p9', EXISTS { MATCH (p:person) })",
     );
     assert_expression_subquery_rejected(
         &mut db,

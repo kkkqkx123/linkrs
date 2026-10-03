@@ -1190,8 +1190,12 @@ impl<
                 let txn_id = session
                     .current_transaction()
                     .ok_or("No active transaction, cannot create savepoint")?;
+                // Capture the storage-staged write boundary before the
+                // savepoint so ROLLBACK TO can rewind rows staged after it.
+                let staged_mark =
+                    crate::storage::UndoTarget::staged_write_mark(self.storage.as_ref(), txn_id);
                 let savepoint_id = txn_manager
-                    .create_savepoint(txn_id, Some(savepoint_stmt.name.clone()))
+                    .create_savepoint(txn_id, Some(savepoint_stmt.name.clone()), staged_mark)
                     .map_err(|e| format!("Failed to create savepoint: {}", e))?;
                 info!(
                     "Session {} created savepoint {} in transaction {} (ID: {})",
@@ -1689,8 +1693,12 @@ impl<
                 let txn_id = session
                     .current_transaction()
                     .ok_or("No active transaction, cannot create savepoint")?;
+                // Capture the storage-staged write boundary before the
+                // savepoint so ROLLBACK TO can rewind rows staged after it.
+                let staged_mark =
+                    crate::storage::UndoTarget::staged_write_mark(self.storage.as_ref(), txn_id);
                 let savepoint_id = txn_manager
-                    .create_savepoint(txn_id, Some(savepoint_stmt.name.clone()))
+                    .create_savepoint(txn_id, Some(savepoint_stmt.name.clone()), staged_mark)
                     .map_err(|e| format!("Failed to create savepoint: {}", e))?;
                 let result = self.run_transaction_command_plan_with_consistency(
                     session.id(),

@@ -139,6 +139,37 @@ impl Planner for UpdatePlanner {
             }
         };
 
+        // Unified entry for expression-level EXISTS / IN (mirrors
+        // `transform`): the bound path must also reject subqueries in
+        // UPDATE SET values or the UPDATE WHERE condition at planning time
+        // with the precise error.
+        let update_stmt = self.extract_update_stmt(validated.stmt())?;
+        let check_space_id = qctx.space_id().unwrap_or(1);
+        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        for assignment in &update_stmt.set_clause.assignments {
+            if let Some(expr_meta) = assignment.value.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    check_space_id,
+                    &check_space_name,
+                    &outer_col_names,
+                )?;
+            }
+        }
+        if let Some(where_cond) = &update_stmt.where_clause {
+            if let Some(expr_meta) = where_cond.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    check_space_id,
+                    &check_space_name,
+                    &outer_col_names,
+                )?;
+            }
+        }
+
         let space_name = qctx
             .space_name()
             .map(|s| s.to_string())

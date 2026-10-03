@@ -54,7 +54,7 @@ pub use engine::resource_budget::{
     ResourceSnapshot,
 };
 pub use engine::sync_wrapper::SyncWrapper;
-pub use engine::transaction::UndoTarget;
+pub use engine::transaction::{StagedWriteMark, UndoTarget};
 pub use engine::WalMetrics;
 pub use index::{
     GenerationBuildState, GenerationState, IndexManifest, IndexShard, ManifestCatalog,

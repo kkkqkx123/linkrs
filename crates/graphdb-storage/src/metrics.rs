@@ -1045,6 +1045,21 @@ impl<S: graphdb_transaction::UndoTarget + StorageClient> graphdb_transaction::Un
             original_names,
         )
     }
+
+    fn staged_write_mark(
+        &self,
+        txn_id: graphdb_core::types::TransactionId,
+    ) -> Option<graphdb_core::types::StagedWriteMark> {
+        graphdb_transaction::UndoTarget::staged_write_mark(&self.inner, txn_id)
+    }
+
+    fn rollback_staged_writes(
+        &self,
+        txn_id: graphdb_core::types::TransactionId,
+        mark: graphdb_core::types::StagedWriteMark,
+    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
+        graphdb_transaction::UndoTarget::rollback_staged_writes(&self.inner, txn_id, mark)
+    }
 }
 
 #[cfg(test)]

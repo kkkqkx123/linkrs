@@ -381,7 +381,8 @@ mod tests {
     use super::*;
     use crate::wal::{LabelId, VertexId};
     use graphdb_core::types::{
-        ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, UndoLogError, VertexIdentifier,
+        ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, StagedWriteMark, TransactionId,
+        UndoLogError, VertexIdentifier,
     };
     use std::sync::Mutex;
 
@@ -517,6 +518,24 @@ mod tests {
             self.record(format!(
                 "revert_rename_edge_properties:{src_label}:{dst_label}:{edge_label}:{current_names:?}:{original_names:?}"
             ))
+        }
+
+        fn staged_write_mark(&self, _txn_id: TransactionId) -> Option<StagedWriteMark> {
+            None
+        }
+
+        fn rollback_staged_writes(
+            &self,
+            _txn_id: TransactionId,
+            mark: StagedWriteMark,
+        ) -> UndoLogResult<()> {
+            if mark.is_empty() {
+                Ok(())
+            } else {
+                Err(UndoLogError::UndoFailed(
+                    "mock undo target holds no staged writes".to_string(),
+                ))
+            }
         }
     }
 

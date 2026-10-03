@@ -18,13 +18,13 @@ mod geography {
         setup_test_space(
         &mut db,
             "e2e_geography",
-            &["CREATE TAG location(name: STRING NOT NULL, coord: GEOGRAPHY, address: STRING, category: STRING)"],
+            &["CREATE TAG location(location_id: STRING NOT NULL, name: STRING NOT NULL, coord: GEOGRAPHY, address: STRING, category: STRING)"],
             &[],
         ).expect("Failed to setup test space");
 
         // Insert point
         let result = db.execute_query(
-            "INSERT VERTEX location(name, coord, category) VALUES 'loc_test': ('Test Location', ST_Point(116.4, 39.9), 'test')"
+            "INSERT VERTEX location(location_id, name, coord, category) VALUES 'loc_test': ('loc_test', 'Test Location', ST_Point(116.4, 39.9), 'test')"
         );
         assert_query_ok(result, "INSERT with ST_Point should succeed");
     }
@@ -36,14 +36,14 @@ mod geography {
         setup_test_space(
             &mut db,
             "e2e_geography_wkt",
-            &["CREATE TAG location(name: STRING NOT NULL, coord: GEOGRAPHY, category: STRING)"],
+            &["CREATE TAG location(location_id: STRING NOT NULL, name: STRING NOT NULL, coord: GEOGRAPHY, category: STRING)"],
             &[],
         )
         .expect("Failed to setup test space");
 
         // Insert point from WKT
         let result = db.execute_query(
-            "INSERT VERTEX location(name, coord, category) VALUES 'loc_wkt': ('WKT Location', ST_GeogFromText('POINT(116.5 39.8)'), 'test')"
+            "INSERT VERTEX location(location_id, name, coord, category) VALUES 'loc_wkt': ('loc_wkt', 'WKT Location', ST_GeogFromText('POINT(116.5 39.8)'), 'test')"
         );
         assert_query_ok(result, "INSERT with WKT should succeed");
     }
@@ -55,17 +55,17 @@ mod geography {
         setup_test_space(
             &mut db,
             "e2e_geography_dist",
-            &["CREATE TAG location(name: STRING NOT NULL, coord: GEOGRAPHY)"],
+            &["CREATE TAG location(location_id: STRING NOT NULL, name: STRING NOT NULL, coord: GEOGRAPHY)"],
             &[],
         )
         .expect("Failed to setup test space");
 
         // Insert points
         db.execute_query(
-            "INSERT VERTEX location(name, coord) VALUES 'loc1': ('Tiananmen', ST_Point(116.3974, 39.9093))"
+            "INSERT VERTEX location(location_id, name, coord) VALUES 'loc1': ('loc1', 'Tiananmen', ST_Point(116.3974, 39.9093))"
         ).expect("INSERT should succeed");
         db.execute_query(
-            "INSERT VERTEX location(name, coord) VALUES 'loc2': ('Forbidden City', ST_Point(116.3972, 39.9163))"
+            "INSERT VERTEX location(location_id, name, coord) VALUES 'loc2': ('loc2', 'Forbidden City', ST_Point(116.3972, 39.9163))"
         ).expect("INSERT should succeed");
 
         // Calculate distance
@@ -82,17 +82,17 @@ mod geography {
         setup_test_space(
             &mut db,
             "e2e_geography_within",
-            &["CREATE TAG location(name: STRING NOT NULL, coord: GEOGRAPHY)"],
+            &["CREATE TAG location(location_id: STRING NOT NULL, name: STRING NOT NULL, coord: GEOGRAPHY)"],
             &[],
         )
         .expect("Failed to setup test space");
 
         // Insert points
         db.execute_query(
-            "INSERT VERTEX location(name, coord) VALUES 'center': ('Tiananmen', ST_Point(116.4, 39.9))"
+            "INSERT VERTEX location(location_id, name, coord) VALUES 'center': ('center', 'Tiananmen', ST_Point(116.4, 39.9))"
         ).expect("INSERT should succeed");
         db.execute_query(
-            "INSERT VERTEX location(name, coord) VALUES 'loc1': ('Forbidden City', ST_Point(116.3972, 39.9163))"
+            "INSERT VERTEX location(location_id, name, coord) VALUES 'loc1': ('loc1', 'Forbidden City', ST_Point(116.3972, 39.9163))"
         ).expect("INSERT should succeed");
 
         // Find within distance
@@ -109,14 +109,14 @@ mod geography {
         setup_test_space(
             &mut db,
             "e2e_geography_explain",
-            &["CREATE TAG location(name: STRING NOT NULL, coord: GEOGRAPHY)"],
+            &["CREATE TAG location(location_id: STRING NOT NULL, name: STRING NOT NULL, coord: GEOGRAPHY)"],
             &[],
         )
         .expect("Failed to setup test space");
 
         // Insert data
         db.execute_query(
-            "INSERT VERTEX location(name, coord) VALUES 'loc1': ('Beijing', ST_Point(116.4, 39.9))",
+            "INSERT VERTEX location(location_id, name, coord) VALUES 'loc1': ('loc1', 'Beijing', ST_Point(116.4, 39.9))",
         )
         .expect("INSERT should succeed");
 
@@ -159,7 +159,7 @@ mod vector {
             .join(", ");
 
         let result = db.execute_query(&format!(
-            "INSERT VERTEX product_vector(product_id, name, category, embedding, price) VALUES 'pv_test': ('TEST001', 'Test Product', 'test', [{}]::VECTOR, 99.99)",
+            "INSERT VERTEX product_vector(product_id, name, category, embedding, price) VALUES 'pv_test': ('pv_test', 'Test Product', 'test', [{}]::VECTOR, 99.99)",
             vector_str
         ));
         assert_query_ok(result, "INSERT VECTOR should succeed");
@@ -190,7 +190,7 @@ mod vector {
                 .join(", ");
 
             db.execute_query(&format!(
-                "INSERT VERTEX product_vector(product_id, name, embedding) VALUES 'pv{:03}': ('PROD{:03}', 'Product {}', [{}]::VECTOR)",
+                "INSERT VERTEX product_vector(product_id, name, embedding) VALUES 'pv{:03}': ('pv{:03}', 'Product {}', [{}]::VECTOR)",
                 i, i, i, vector_str
             )).expect("INSERT should succeed");
         }
@@ -240,7 +240,7 @@ mod vector {
                 .join(", ");
 
             db.execute_query(&format!(
-                "INSERT VERTEX product_vector(product_id, name, embedding, price) VALUES 'pv{:03}': ('PROD{:03}', 'Product {}', [{}]::VECTOR, {}.0)",
+                "INSERT VERTEX product_vector(product_id, name, embedding, price) VALUES 'pv{:03}': ('pv{:03}', 'Product {}', [{}]::VECTOR, {}.0)",
                 i, i, i, vector_str, i * 10
             )).expect("INSERT should succeed");
         }
@@ -293,7 +293,7 @@ mod vector {
             .collect::<Vec<_>>()
             .join(", ");
         db.execute_query(&format!(
-            "INSERT VERTEX product_vector(product_id, name, embedding) VALUES 'pv001': ('PROD001', 'Product 1', [{}]::VECTOR)",
+            "INSERT VERTEX product_vector(product_id, name, embedding) VALUES 'pv001': ('pv001', 'Product 1', [{}]::VECTOR)",
             vector_str
         )).expect("INSERT should succeed");
 

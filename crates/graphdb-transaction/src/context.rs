@@ -18,6 +18,7 @@ use super::undo_log::{UndoLogEntry, UndoLogManager, UndoTarget};
 use super::wal::buffer::LocalWalBuffer;
 use super::wal::Timestamp;
 use graphdb_core::types::CommitLsn;
+use graphdb_core::types::StagedWriteMark;
 use graphdb_core::types::VertexId;
 
 /// Transaction Context
@@ -183,9 +184,23 @@ impl SavepointManager {
             modified_tables: params.modified_tables,
             journal_len: params.journal_len,
             journal_next_sequence: params.journal_next_sequence,
+            staged_write_mark: None,
         };
         self.savepoints.insert(id, info);
         id
+    }
+
+    fn set_staging_mark(
+        &mut self,
+        id: SavepointId,
+        mark: Option<StagedWriteMark>,
+    ) -> Result<(), TransactionError> {
+        let savepoint = self
+            .savepoints
+            .get_mut(&id)
+            .ok_or(TransactionError::savepoint_not_found(id))?;
+        savepoint.staged_write_mark = mark;
+        Ok(())
     }
 
     fn get_savepoint(&self, id: SavepointId) -> Option<&SavepointInfo> {
@@ -1129,6 +1144,19 @@ impl TransactionContext {
         manager.create_savepoint(params)
     }
 
+    /// Attach the storage-staged write boundary captured at savepoint
+    /// creation. The transaction layer cannot observe the storage staging
+    /// buffer, so the savepoint creator (session / service / test harness)
+    /// records the mark it peeked from the undo target here.
+    pub fn set_savepoint_staging_mark(
+        &self,
+        id: SavepointId,
+        mark: Option<StagedWriteMark>,
+    ) -> Result<(), TransactionError> {
+        let mut manager = self.savepoint_manager.write();
+        manager.set_staging_mark(id, mark)
+    }
+
     /// Get savepoint info
     pub fn get_savepoint(&self, id: SavepointId) -> Option<SavepointInfo> {
         let manager = self.savepoint_manager.read();
@@ -1227,6 +1255,15 @@ impl TransactionContext {
 
         self.execute_undo_logs_from_index(target, savepoint_info.undo_log_index)
             .map_err(|e| TransactionError::rollback_failed(e.to_string()))?;
+
+        // Staged (not yet undo-logged) writes rewind to the savepoint mark.
+        // Without this, rows staged after the savepoint stay visible inside
+        // the transaction after ROLLBACK TO.
+        if let Some(mark) = savepoint_info.staged_write_mark {
+            target
+                .rollback_staged_writes(self.id, mark)
+                .map_err(|e| TransactionError::rollback_failed(e.to_string()))?;
+        }
 
         self.restore_write_set(savepoint_info.write_set);
         self.restore_read_set(savepoint_info.read_set);
