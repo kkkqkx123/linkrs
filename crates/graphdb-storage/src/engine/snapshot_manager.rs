@@ -437,36 +437,9 @@ impl SnapshotManager {
     }
 
     fn sync_directory(&self, dir: &Path) -> StorageResult<()> {
-        for entry in fs::read_dir(dir).map_err(|e| {
-            StorageError::io_error(format!("Failed to read directory for sync: {}", e))
-        })? {
-            let entry = entry
-                .map_err(|e| StorageError::io_error(format!("Failed to read entry: {}", e)))?;
-            let path = entry.path();
-
-            let file_type = entry
-                .file_type()
-                .map_err(|e| StorageError::io_error(format!("Failed to get file type: {}", e)))?;
-
-            if file_type.is_dir() {
-                self.sync_directory(&path)?;
-            } else if file_type.is_file() {
-                let file = fs::File::open(&path).map_err(|e| {
-                    StorageError::io_error(format!("Failed to open file for sync: {}", e))
-                })?;
-                file.sync_all()
-                    .map_err(|e| StorageError::io_error(format!("Failed to sync file: {}", e)))?;
-            }
-        }
-
-        fs::File::open(dir)
-            .map_err(|e| {
-                StorageError::io_error(format!("Failed to open directory for sync: {}", e))
-            })?
-            .sync_all()
-            .map_err(|e| StorageError::io_error(format!("Failed to sync directory: {}", e)))?;
-
-        Ok(())
+        // Shared durability helper: fsync every file, then directories
+        // bottom-up (same protocol the checkpoint writer uses).
+        crate::engine::persistence_coordinator::fs_util::sync_tree(dir)
     }
 
     /// Get snapshot info by ID

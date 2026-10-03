@@ -47,12 +47,16 @@ use graphdb_transaction::wal::{CheckpointManager, Lsn, WalConfig};
 
 #[path = "persistence/checkpoint.rs"]
 pub mod checkpoint;
+#[path = "persistence/checkpoint_meta.rs"]
+pub mod checkpoint_meta;
 #[path = "persistence/checkpoint_scheduler.rs"]
 pub mod checkpoint_scheduler;
 #[path = "persistence/config.rs"]
 pub mod config;
 #[path = "persistence/diagnostics.rs"]
 pub mod diagnostics;
+#[path = "persistence/fs_util.rs"]
+pub mod fs_util;
 
 pub use checkpoint::{
     CheckpointData, CheckpointInfo, CheckpointStats, CHECKPOINT_FORMAT_VERSION,

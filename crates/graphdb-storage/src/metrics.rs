@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use crate::cursor::{EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor};
-use crate::macros::forward_methods;
+use crate::macros::{
+    forward_methods, forward_timed_read_methods, forward_timed_write_methods, forward_undo_methods,
+};
 use crate::{
     StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
     StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps, StorageReader,
@@ -145,34 +147,10 @@ impl<S: StorageClient + crate::AutoCommitGroupOps> crate::AutoCommitGroupOps for
 }
 
 impl<S: StorageClient> StorageReader for MetricsStorage<S> {
-    fn get_vertex(
-        &self,
-        space: &str,
-        tag: &str,
-        id: &VertexId,
-    ) -> Result<Option<Vertex>, StorageError> {
-        let start = std::time::Instant::now();
-        let result = self.inner.get_vertex(space, tag, id);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_read(start);
-        result
-    }
-
-    fn scan_vertices_by_tag(&self, space: &str, tag: &str) -> Result<Vec<Vertex>, StorageError> {
-        let start = std::time::Instant::now();
-        let result = self.inner.scan_vertices_by_tag(space, tag);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_read(start);
-        result
-    }
+    forward_timed_read_methods!(inner;
+        fn get_vertex(&self, space: &str, tag: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
+        fn scan_vertices_by_tag(&self, space: &str, tag: &str) -> Result<Vec<Vertex>, StorageError>;
+    );
 
     fn get_vertex_projected(
         &self,
@@ -453,271 +431,26 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
 }
 
 impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
-    fn insert_vertex(&mut self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::insert_vertex(&mut self.inner, space, vertex);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::insert_edge(&mut self.inner, space, edge);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::update_vertex(&mut self.inner, space, vertex);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn update_vertex_replace(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::update_vertex_replace(&mut self.inner, space, vertex);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn delete_vertex_with_edges(
-        &mut self,
-        space: &str,
-        tag: &str,
-        id: &VertexId,
-    ) -> Result<(), StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::delete_vertex_with_edges(&mut self.inner, space, tag, id);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn batch_delete_vertices_with_edges(
-        &mut self,
-        space: &str,
-        tag: &str,
-        ids: &[VertexId],
-    ) -> Result<usize, StorageError> {
-        let start = std::time::Instant::now();
-        let result =
-            StorageWriter::batch_delete_vertices_with_edges(&mut self.inner, space, tag, ids);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn batch_insert_vertices(
-        &mut self,
-        space: &str,
-        vertices: Vec<Vertex>,
-    ) -> Result<Vec<VertexId>, StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::batch_insert_vertices(&mut self.inner, space, vertices);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::update_edge(&mut self.inner, space, edge);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn update_edge_replace(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::update_edge_replace(&mut self.inner, space, edge);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn batch_insert_edges(&mut self, space: &str, edges: Vec<Edge>) -> Result<(), StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::batch_insert_edges(&mut self.inner, space, edges);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn batch_delete_edges(
-        &mut self,
-        space: &str,
-        deletes: &[EdgeDeleteKey],
-    ) -> Result<usize, StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::batch_delete_edges(&mut self.inner, space, deletes);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn insert_vertex_data(
-        &mut self,
-        space: &str,
-        info: &InsertVertexInfo,
-    ) -> Result<bool, StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::insert_vertex_data(&mut self.inner, space, info);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn insert_edge_data(
-        &mut self,
-        space: &str,
-        info: &InsertEdgeInfo,
-    ) -> Result<bool, StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::insert_edge_data(&mut self.inner, space, info);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn delete_vertex_data(
-        &mut self,
-        space: &str,
-        tag: &str,
-        vertex_id: &str,
-    ) -> Result<bool, StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::delete_vertex_data(&mut self.inner, space, tag, vertex_id);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn delete_edge_data(
-        &mut self,
-        space: &str,
-        src: &str,
-        dst: &str,
-        rank: i64,
-    ) -> Result<bool, StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::delete_edge_data(&mut self.inner, space, src, dst, rank);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn update_data(
-        &mut self,
-        space: &str,
-        space_id: u64,
-        info: &UpdateInfo,
-    ) -> Result<bool, StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::update_data(&mut self.inner, space, space_id, info);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn delete_vertex(&mut self, space: &str, tag: &str, id: &VertexId) -> Result<(), StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::delete_vertex(&mut self.inner, space, tag, id);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
-
-    fn delete_edge(
-        &mut self,
-        space: &str,
-        src: &VertexId,
-        dst: &VertexId,
-        edge_type: &str,
-        rank: i64,
-    ) -> Result<(), StorageError> {
-        let start = std::time::Instant::now();
-        let result = StorageWriter::delete_edge(&mut self.inner, space, src, dst, edge_type, rank);
-        if result.is_err() {
-            if let Some(stats) = &self.stats {
-                stats.record_storage_error();
-            }
-        }
-        self.record_write(start);
-        result
-    }
+    forward_timed_write_methods!(inner;
+        fn insert_vertex(&mut self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError>;
+        fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
+        fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError>;
+        fn update_vertex_replace(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError>;
+        fn delete_vertex_with_edges(&mut self, space: &str, tag: &str, id: &VertexId) -> Result<(), StorageError>;
+        fn batch_delete_vertices_with_edges(&mut self, space: &str, tag: &str, ids: &[VertexId]) -> Result<usize, StorageError>;
+        fn batch_insert_vertices(&mut self, space: &str, vertices: Vec<Vertex>) -> Result<Vec<VertexId>, StorageError>;
+        fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
+        fn update_edge_replace(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
+        fn batch_insert_edges(&mut self, space: &str, edges: Vec<Edge>) -> Result<(), StorageError>;
+        fn batch_delete_edges(&mut self, space: &str, deletes: &[EdgeDeleteKey]) -> Result<usize, StorageError>;
+        fn insert_vertex_data(&mut self, space: &str, info: &InsertVertexInfo) -> Result<bool, StorageError>;
+        fn insert_edge_data(&mut self, space: &str, info: &InsertEdgeInfo) -> Result<bool, StorageError>;
+        fn delete_vertex_data(&mut self, space: &str, tag: &str, vertex_id: &str) -> Result<bool, StorageError>;
+        fn delete_edge_data(&mut self, space: &str, src: &str, dst: &str, rank: i64) -> Result<bool, StorageError>;
+        fn update_data(&mut self, space: &str, space_id: u64, info: &UpdateInfo) -> Result<bool, StorageError>;
+        fn delete_vertex(&mut self, space: &str, tag: &str, id: &VertexId) -> Result<(), StorageError>;
+        fn delete_edge(&mut self, space: &str, src: &VertexId, dst: &VertexId, edge_type: &str, rank: i64) -> Result<(), StorageError>;
+    );
 }
 
 impl<S: StorageClient> StorageSchemaOps for MetricsStorage<S> {
@@ -904,162 +637,23 @@ impl<S: crate::client::StorageClient + StorageSnapshotOps + 'static>
 impl<S: graphdb_transaction::UndoTarget + StorageClient> graphdb_transaction::UndoTarget
     for MetricsStorage<S>
 {
-    fn delete_vertex_type(
-        &self,
-        label: graphdb_core::types::LabelId,
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_transaction::UndoTarget::delete_vertex_type(&self.inner, label)
-    }
-
-    fn delete_edge_type(
-        &self,
-        edge_key: graphdb_core::types::EdgeKey,
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_transaction::UndoTarget::delete_edge_type(&self.inner, edge_key)
-    }
-
-    fn delete_vertex(
-        &self,
-        vertex: graphdb_core::types::VertexIdentifier,
-        ts: graphdb_transaction::wal::Timestamp,
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_transaction::UndoTarget::delete_vertex(&self.inner, vertex, ts)
-    }
-
-    fn delete_edge(
-        &self,
-        edge_ctx: graphdb_core::types::EdgeDeletionContext,
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_transaction::UndoTarget::delete_edge(&self.inner, edge_ctx)
-    }
-
-    fn restore_edge(
-        &self,
-        edge: graphdb_core::types::EdgeIdentifier,
-        properties: Vec<(String, graphdb_core::Value)>,
-        ts: graphdb_transaction::wal::Timestamp,
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_transaction::UndoTarget::restore_edge(&self.inner, edge, properties, ts)
-    }
-
-    fn undo_update_edge_property(
-        &self,
-        edge_id: graphdb_core::types::EdgeIdentifier,
-        col_id: graphdb_core::types::ColumnId,
-        value: graphdb_core::Value,
-        ts: graphdb_transaction::wal::Timestamp,
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_transaction::UndoTarget::undo_update_edge_property(
-            &self.inner,
-            edge_id,
-            col_id,
-            value,
-            ts,
-        )
-    }
-
-    fn revert_delete_edge(
-        &self,
-        edge_ctx: graphdb_core::types::EdgeDeletionContext,
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_transaction::UndoTarget::revert_delete_edge(&self.inner, edge_ctx)
-    }
-
-    fn revert_delete_vertex_properties(
-        &self,
-        label_name: &str,
-        prop_names: &[String],
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_transaction::UndoTarget::revert_delete_vertex_properties(
-            &self.inner,
-            label_name,
-            prop_names,
-        )
-    }
-
-    fn revert_delete_edge_properties(
-        &self,
-        src_label: &str,
-        dst_label: &str,
-        edge_label: &str,
-        prop_names: &[String],
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_transaction::UndoTarget::revert_delete_edge_properties(
-            &self.inner,
-            src_label,
-            dst_label,
-            edge_label,
-            prop_names,
-        )
-    }
-
-    fn revert_delete_vertex_label(
-        &self,
-        label_name: &str,
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_transaction::UndoTarget::revert_delete_vertex_label(&self.inner, label_name)
-    }
-
-    fn revert_delete_edge_label(
-        &self,
-        src_label: &str,
-        dst_label: &str,
-        edge_label: &str,
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_transaction::UndoTarget::revert_delete_edge_label(
-            &self.inner,
-            src_label,
-            dst_label,
-            edge_label,
-        )
-    }
-
-    fn revert_rename_vertex_properties(
-        &self,
-        label_name: &str,
-        current_names: &[String],
-        original_names: &[String],
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_transaction::UndoTarget::revert_rename_vertex_properties(
-            &self.inner,
-            label_name,
-            current_names,
-            original_names,
-        )
-    }
-
-    fn revert_rename_edge_properties(
-        &self,
-        src_label: &str,
-        dst_label: &str,
-        edge_label: &str,
-        current_names: &[String],
-        original_names: &[String],
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_transaction::UndoTarget::revert_rename_edge_properties(
-            &self.inner,
-            src_label,
-            dst_label,
-            edge_label,
-            current_names,
-            original_names,
-        )
-    }
-
-    fn staged_write_mark(
-        &self,
-        txn_id: graphdb_core::types::TransactionId,
-    ) -> Option<graphdb_core::types::StagedWriteMark> {
-        graphdb_transaction::UndoTarget::staged_write_mark(&self.inner, txn_id)
-    }
-
-    fn rollback_staged_writes(
-        &self,
-        txn_id: graphdb_core::types::TransactionId,
-        mark: graphdb_core::types::StagedWriteMark,
-    ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
-        graphdb_transaction::UndoTarget::rollback_staged_writes(&self.inner, txn_id, mark)
-    }
+    forward_undo_methods!(inner;
+        fn delete_vertex_type(&self, label: graphdb_core::types::LabelId) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn delete_edge_type(&self, edge_key: graphdb_core::types::EdgeKey) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn delete_vertex(&self, vertex: graphdb_core::types::VertexIdentifier, ts: graphdb_transaction::wal::Timestamp) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn delete_edge(&self, edge_ctx: graphdb_core::types::EdgeDeletionContext) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn restore_edge(&self, edge: graphdb_core::types::EdgeIdentifier, properties: Vec<(String, graphdb_core::Value)>, ts: graphdb_transaction::wal::Timestamp) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn undo_update_edge_property(&self, edge_id: graphdb_core::types::EdgeIdentifier, col_id: graphdb_core::types::ColumnId, value: graphdb_core::Value, ts: graphdb_transaction::wal::Timestamp) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn revert_delete_edge(&self, edge_ctx: graphdb_core::types::EdgeDeletionContext) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn revert_delete_vertex_properties(&self, label_name: &str, prop_names: &[String]) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn revert_delete_edge_properties(&self, src_label: &str, dst_label: &str, edge_label: &str, prop_names: &[String]) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn revert_delete_vertex_label(&self, label_name: &str) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn revert_delete_edge_label(&self, src_label: &str, dst_label: &str, edge_label: &str) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn revert_rename_vertex_properties(&self, label_name: &str, current_names: &[String], original_names: &[String]) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn revert_rename_edge_properties(&self, src_label: &str, dst_label: &str, edge_label: &str, current_names: &[String], original_names: &[String]) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn staged_write_mark(&self, txn_id: graphdb_core::types::TransactionId) -> Option<graphdb_core::types::StagedWriteMark>;
+        fn rollback_staged_writes(&self, txn_id: graphdb_core::types::TransactionId, mark: graphdb_core::types::StagedWriteMark) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+    );
 }
 
 #[cfg(test)]

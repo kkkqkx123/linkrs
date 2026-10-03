@@ -174,7 +174,6 @@ impl GraphEdgeCursor {
         let ctx = Arc::clone(&self.ctx);
         let ts = self.ts;
         let predicate = self.predicate.clone();
-        let predicate_columns = self.predicate_columns.clone();
         let src_id_range = self.src_id_range.clone();
         let targets = self.targets.clone();
 
@@ -210,7 +209,6 @@ impl GraphEdgeCursor {
                 };
                 let guard = arc.read();
                 let store: &EdgeStore = &guard;
-                let gate = ctx.pending_gate();
 
                 // Missing out leg reads as empty by contract, but distinguish
                 // it from a genuinely empty stored leg via the capability note.
@@ -229,115 +227,33 @@ impl GraphEdgeCursor {
                     continue;
                 }
 
-                let mut pruned: std::collections::HashSet<usize> = std::collections::HashSet::new();
-                if !predicate.is_empty() {
-                    for gid in store.out_csr.existing_group_ids() {
-                        if !store.segment_may_contain(gid as u32, &predicate) {
-                            pruned.insert(gid);
-                        }
-                    }
-                }
-
-                let existing = store.out_csr.existing_group_ids();
-                let group_bits = store.out_csr.group_bits();
-                let start_pos =
-                    existing.partition_point(|gid| *gid < self.table_state.resume_group);
                 let mut raw_src: Vec<u32> = Vec::new();
                 let mut raw_dst: Vec<u32> = Vec::new();
                 let mut raw_rank: Vec<i64> = Vec::new();
                 let mut raw_edge: Vec<graphdb_core::types::EdgeId> = Vec::new();
                 let mut raw_row: Vec<u32> = Vec::new();
-                let mut table_done = true;
-
-                for gid in existing.into_iter().skip(start_pos) {
-                    if out_srcs.len() + raw_src.len() >= batch_size {
-                        table_done = false;
-                        break;
-                    }
-                    if pruned.contains(&gid) {
-                        self.table_state.resume_group = gid + 1;
-                        self.table_state.skip_in_group = 0;
-                        continue;
-                    }
-                    let Some(variant) = store.out_csr.group_variant(gid) else {
-                        self.malformed_skipped += 1;
-                        self.table_state.resume_group = gid + 1;
-                        self.table_state.skip_in_group = 0;
-                        continue;
-                    };
-                    let base = crate::edge::node_group::group_base(gid, group_bits);
-                    let mut iter = variant.iter_all();
-                    if gid == self.table_state.resume_group {
-                        let skip = self.table_state.skip_in_group;
-                        for _ in 0..skip {
-                            if iter.next().is_none() {
-                                break;
-                            }
-                        }
-                    } else {
-                        self.table_state.resume_group = gid;
-                        self.table_state.skip_in_group = 0;
-                    }
-                    for (local_vid, nbr) in iter.by_ref() {
-                        self.table_state.skip_in_group += 1;
-                        if out_srcs.len() + raw_src.len() >= batch_size {
-                            table_done = false;
-                            break;
-                        }
-                        if !store.is_visible_with_gate(nbr.edge_id, ts, &gate) {
-                            continue;
-                        }
-                        let Some(local) = local_vid.as_internal_u32() else {
-                            self.malformed_skipped += 1;
-                            continue;
-                        };
-                        let Some(global) = local.checked_add(base) else {
-                            self.malformed_skipped += 1;
-                            continue;
-                        };
-                        if let Some(ref r) = src_id_range {
-                            let src_internal = VertexId::from_u32(global)
-                                .as_internal_u32()
-                                .unwrap_or(u32::MAX);
-                            let Some(src_ext) =
-                                resolve_vertex_id(&ctx, src_internal, td.tbl_src, ts)
-                            else {
-                                self.malformed_skipped += 1;
-                                continue;
-                            };
-                            let src_int = match src_ext.as_int64() {
-                                Some(v) => v,
-                                None => match src_ext.as_u64() {
-                                    Some(v) => match i64::try_from(v) {
-                                        Ok(v) => v,
-                                        Err(_) => {
-                                            self.malformed_skipped += 1;
-                                            continue;
-                                        }
-                                    },
-                                    None => {
-                                        self.malformed_skipped += 1;
-                                        continue;
-                                    }
-                                },
-                            };
-                            if src_int < r.start || src_int >= r.end {
-                                continue;
-                            }
-                        }
+                let raw_count = std::cell::Cell::new(0usize);
+                let mut capacity_full = || out_srcs.len() + raw_count.get() >= batch_size;
+                let table_done = walk_mutable_entries(
+                    store,
+                    &ctx,
+                    td,
+                    ts,
+                    &src_id_range,
+                    &predicate,
+                    &mut self.table_state,
+                    &mut self.malformed_skipped,
+                    &mut capacity_full,
+                    |global, nbr, _| {
                         raw_src.push(global);
                         raw_dst.push(nbr.endpoint);
                         raw_rank.push(nbr.rank);
                         raw_edge.push(nbr.edge_id);
                         raw_row.push(global);
-                    }
-                    if out_srcs.len() + raw_src.len() >= batch_size {
-                        table_done = false;
-                        break;
-                    }
-                    self.table_state.resume_group = gid + 1;
-                    self.table_state.skip_in_group = 0;
-                }
+                        raw_count.set(raw_src.len());
+                        EntryVerdict::Take
+                    },
+                );
 
                 if raw_src.is_empty() {
                     if table_done {
@@ -424,7 +340,6 @@ impl GraphEdgeCursor {
                             col.select(&selection);
                         }
                     }
-                    let _ = &predicate_columns;
                 }
 
                 if !raw_src.is_empty() && self.offset_remaining > 0 {
@@ -729,24 +644,48 @@ struct ScanArgs<'a> {
 // Free-function scan helpers
 // ---------------------------------------------------------------------------
 
-fn scan_mutable(args: ScanArgs) {
-    let gate = args.ctx.pending_gate();
+/// Verdict returned by the per-entry callback of [`walk_mutable_entries`].
+enum EntryVerdict {
+    /// Entry accepted; keep walking.
+    Take,
+    /// Stop walking: the caller's output is full. Resume stays at the
+    /// current (group, skip) so the next call continues after it.
+    BatchFull,
+    /// Stop walking: the scan is complete (limit reached). Resume advances
+    /// past the current group.
+    StopAll,
+}
 
-    // Column pruning: fetch the projection plus any predicate-only columns
-    // in one storage read instead of decoding every column per edge.
-    // `None` still means all columns.
-    let fetch_columns: Option<Vec<String>> = match *args.projection {
-        None => None,
-        Some(ref names) => {
-            let mut cols = names.clone();
-            for extra in args.predicate_columns.iter() {
-                if !cols.iter().any(|c| c == extra) {
-                    cols.push(extra.clone());
-                }
-            }
-            Some(cols)
-        }
-    };
+/// Shared "group traversal + resume + filtering" walk over the mutable
+/// out-CSR of one edge table, from the current resume point in `state`.
+///
+/// Advances `state.resume_group` / `state.skip_in_group` exactly like a full
+/// scan: every consumed entry increments `skip_in_group`, finished groups
+/// advance `resume_group` and reset the skip. Per entry, visibility and
+/// corruption are filtered (corrupt rows counted in `malformed`), the
+/// src-id range is enforced, and accepted `(global src, nbr)` pairs go to
+/// `emit`, which may also count decode failures through the passed
+/// malformed counter.
+///
+/// `pre_stop` is polled at group start and once per consumed entry (before
+/// the entry is decoded); when it fires the walk stops early with
+/// `false` and resume positioned after the last consumed entry.
+///
+/// Returns `true` when every remaining group was consumed (the caller marks
+/// the table done), `false` when the walk stopped early.
+fn walk_mutable_entries(
+    store: &EdgeStore,
+    ctx: &GraphStorageContext,
+    td: &TableDef,
+    ts: Timestamp,
+    src_id_range: &Option<Range<i64>>,
+    predicate: &[crate::cursor::ScanPredicate],
+    state: &mut TableScanState,
+    malformed: &mut u64,
+    pre_stop: &mut dyn FnMut() -> bool,
+    mut emit: impl FnMut(u32, Nbr, &mut u64) -> EntryVerdict,
+) -> bool {
+    let gate = ctx.pending_gate();
 
     // Segment pruning before decoding: groups whose flushed statistics
     // provably exclude the predicates are skipped without touching property
@@ -754,9 +693,9 @@ fn scan_mutable(args: ScanArgs) {
     // only widen, and dirty groups never prune; the resume accounting below
     // advances past skipped groups exactly like a full walk.
     let mut pruned: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    if !args.predicate.is_empty() {
-        for gid in args.store.out_csr.existing_group_ids() {
-            if !args.store.segment_may_contain(gid as u32, args.predicate) {
+    if !predicate.is_empty() {
+        for gid in store.out_csr.existing_group_ids() {
+            if !store.segment_may_contain(gid as u32, predicate) {
                 pruned.insert(gid);
             }
         }
@@ -764,35 +703,38 @@ fn scan_mutable(args: ScanArgs) {
             log::debug!(
                 "edge scan pruned {} of {} groups",
                 pruned.len(),
-                args.store.out_csr.existing_group_ids().len()
+                store.out_csr.existing_group_ids().len()
             );
         }
     }
 
-    let existing = args.store.out_csr.existing_group_ids();
-    let group_bits = args.store.out_csr.group_bits();
-    let start_pos = existing.partition_point(|gid| *gid < args.state.resume_group);
+    let existing = store.out_csr.existing_group_ids();
+    let group_bits = store.out_csr.group_bits();
+    let start_pos = existing.partition_point(|gid| *gid < state.resume_group);
     for gid in existing.into_iter().skip(start_pos) {
+        if pre_stop() {
+            return false;
+        }
         if pruned.contains(&gid) {
             // Fully consumed without decoding: pruned groups yield no
             // candidates, so batches never end inside them and resume
             // advances past the whole group.
-            args.state.resume_group = gid + 1;
-            args.state.skip_in_group = 0;
+            state.resume_group = gid + 1;
+            state.skip_in_group = 0;
             continue;
         }
-        let Some(variant) = args.store.out_csr.group_variant(gid) else {
+        let Some(variant) = store.out_csr.group_variant(gid) else {
             // Listed as existing but unreadable: metadata inconsistency,
             // counted instead of silently dropped.
-            *args.malformed += 1;
-            args.state.resume_group = gid + 1;
-            args.state.skip_in_group = 0;
+            *malformed += 1;
+            state.resume_group = gid + 1;
+            state.skip_in_group = 0;
             continue;
         };
         let base = crate::edge::node_group::group_base(gid, group_bits);
         let mut iter = variant.iter_all();
-        if gid == args.state.resume_group {
-            let skip = args.state.skip_in_group;
+        if gid == state.resume_group {
+            let skip = state.skip_in_group;
             for _ in 0..skip {
                 if iter.next().is_none() {
                     break;
@@ -801,31 +743,33 @@ fn scan_mutable(args: ScanArgs) {
             // Keep the absolute physical offset: entries below keep incrementing
             // it so the next batch resumes after all consumed entries.
         } else {
-            args.state.resume_group = gid;
-            args.state.skip_in_group = 0;
+            state.resume_group = gid;
+            state.skip_in_group = 0;
         }
         for (local_vid, nbr) in iter.by_ref() {
-            args.state.skip_in_group += 1;
-            if !args.store.is_visible_with_gate(nbr.edge_id, args.ts, &gate) {
+            state.skip_in_group += 1;
+            if pre_stop() {
+                return false;
+            }
+            if !store.is_visible_with_gate(nbr.edge_id, ts, &gate) {
                 continue;
             }
             let Some(local) = local_vid.as_internal_u32() else {
                 // A stored group row that is not an internal id indicates
                 // corruption; count it instead of silently dropping it.
-                *args.malformed += 1;
+                *malformed += 1;
                 continue;
             };
             let Some(global) = local.checked_add(base) else {
-                *args.malformed += 1;
+                *malformed += 1;
                 continue;
             };
-            let src_vid = VertexId::from_u32(global);
-            if let Some(ref r) = *args.src_id_range {
-                let src_internal = src_vid.as_internal_u32().unwrap_or(u32::MAX);
-                let Some(src_ext) =
-                    resolve_vertex_id(args.ctx, src_internal, args.td.tbl_src, args.ts)
-                else {
-                    *args.malformed += 1;
+            if let Some(ref r) = *src_id_range {
+                let src_internal = VertexId::from_u32(global)
+                    .as_internal_u32()
+                    .unwrap_or(u32::MAX);
+                let Some(src_ext) = resolve_vertex_id(ctx, src_internal, td.tbl_src, ts) else {
+                    *malformed += 1;
                     continue;
                 };
                 // An external id outside the integer domain cannot satisfy a
@@ -837,12 +781,12 @@ fn scan_mutable(args: ScanArgs) {
                         Some(v) => match i64::try_from(v) {
                             Ok(v) => v,
                             Err(_) => {
-                                *args.malformed += 1;
+                                *malformed += 1;
                                 continue;
                             }
                         },
                         None => {
-                            *args.malformed += 1;
+                            *malformed += 1;
                             continue;
                         }
                     },
@@ -851,6 +795,70 @@ fn scan_mutable(args: ScanArgs) {
                     continue;
                 }
             }
+            match emit(global, nbr, malformed) {
+                EntryVerdict::Take => {}
+                EntryVerdict::BatchFull => return false,
+                EntryVerdict::StopAll => {
+                    state.resume_group = gid + 1;
+                    state.skip_in_group = 0;
+                    return false;
+                }
+            }
+        }
+        state.resume_group = gid + 1;
+        state.skip_in_group = 0;
+    }
+    true
+}
+
+fn scan_mutable(args: ScanArgs) {
+    let ScanArgs {
+        ctx,
+        store,
+        target,
+        td,
+        ts,
+        src_id_range,
+        projection,
+        predicate,
+        predicate_columns,
+        limit,
+        emitted,
+        offset_remaining,
+        state,
+        batch,
+        batch_size,
+        malformed,
+    } = args;
+    // Column pruning: fetch the projection plus any predicate-only columns
+    // in one storage read instead of decoding every column per edge.
+    // `None` still means all columns.
+    let fetch_columns: Option<Vec<String>> = match *projection {
+        None => None,
+        Some(ref names) => {
+            let mut cols = names.clone();
+            for extra in predicate_columns.iter() {
+                if !cols.iter().any(|c| c == extra) {
+                    cols.push(extra.clone());
+                }
+            }
+            Some(cols)
+        }
+    };
+
+    let mut no_stop = || false;
+    let table_done = walk_mutable_entries(
+        store,
+        ctx,
+        td,
+        ts,
+        src_id_range,
+        predicate,
+        state,
+        malformed,
+        &mut no_stop,
+        |global, nbr, malformed| {
+            let src_vid = VertexId::from_u32(global);
 
             // Decode once with predicate columns included so pushed predicates
             // can be evaluated; matching rows are then trimmed back to the
@@ -859,34 +867,29 @@ fn scan_mutable(args: ScanArgs) {
             // first on predicate columns only, and hits decode the fetch
             // set afterwards; misses never materialize a record and nulls
             // use bitmap semantics (missing never matches).
-            if !args.predicate.is_empty() {
-                match try_decode_edge_properties(
-                    args.store,
-                    nbr.edge_id,
-                    args.ts,
-                    Some(args.predicate_columns),
-                ) {
-                    None => continue,
+            if !predicate.is_empty() {
+                match try_decode_edge_properties(store, nbr.edge_id, ts, Some(predicate_columns)) {
+                    None => return EntryVerdict::Take,
                     Some(Err(e)) => {
                         log::warn!(
                             "edge {:?} predicate decode failed: {}; counting as malformed",
                             nbr.edge_id,
                             e
                         );
-                        *args.malformed += 1;
-                        continue;
+                        *malformed += 1;
+                        return EntryVerdict::Take;
                     }
                     Some(Ok(probe)) => {
-                        if !args.predicate.iter().all(|p| p.matches(probe.as_slice())) {
-                            continue;
+                        if !predicate.iter().all(|p| p.matches(probe.as_slice())) {
+                            return EntryVerdict::Take;
                         }
                     }
                 }
             }
             let mut properties = match try_decode_edge_properties(
-                args.store,
+                store,
                 nbr.edge_id,
-                args.ts,
+                ts,
                 fetch_columns.as_deref(),
             ) {
                 None => Vec::new(),
@@ -897,49 +900,43 @@ fn scan_mutable(args: ScanArgs) {
                         nbr.edge_id,
                         e
                     );
-                    *args.malformed += 1;
-                    continue;
+                    *malformed += 1;
+                    return EntryVerdict::Take;
                 }
             };
-            if !args
-                .predicate
-                .iter()
-                .all(|p| p.matches(properties.as_slice()))
-            {
-                continue;
+            if !predicate.iter().all(|p| p.matches(properties.as_slice())) {
+                return EntryVerdict::Take;
             }
-            trim_to_projection(&mut properties, args.projection);
+            trim_to_projection(&mut properties, projection);
 
-            if *args.offset_remaining > 0 {
-                *args.offset_remaining -= 1;
-                continue;
+            if *offset_remaining > 0 {
+                *offset_remaining -= 1;
+                return EntryVerdict::Take;
             }
 
             let edge = build_edge_candidate(EdgeBuildArgs {
-                target: args.target,
-                td: args.td,
+                target,
+                td,
                 src_vid: &src_vid,
                 nbr,
                 props: properties,
             });
-            args.batch.push(edge);
-            *args.emitted += 1;
+            batch.push(edge);
+            *emitted += 1;
 
-            if args.batch.len() >= args.batch_size {
-                args.state.resume_group = gid;
-                return;
+            if batch.len() >= batch_size {
+                return EntryVerdict::BatchFull;
             }
-            if args.limit.is_some_and(|l| *args.emitted >= l) {
-                args.state.resume_group = gid + 1;
-                args.state.skip_in_group = 0;
-                return;
+            if limit.is_some_and(|l| *emitted >= l) {
+                return EntryVerdict::StopAll;
             }
-        }
-        args.state.resume_group = gid + 1;
-        args.state.skip_in_group = 0;
+            EntryVerdict::Take
+        },
+    );
+
+    if table_done {
+        state.phase = TablePhase::Done;
     }
-
-    args.state.phase = TablePhase::Done;
 }
 
 // ---------------------------------------------------------------------------

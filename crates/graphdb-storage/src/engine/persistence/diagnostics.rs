@@ -111,7 +111,7 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
             removed += 1;
         }
         if removed > 0 {
-            Self::sync_directory(&self.config.checkpoint_dir)?;
+            super::fs_util::sync_directory(&self.config.checkpoint_dir)?;
         }
         Ok(removed)
     }
