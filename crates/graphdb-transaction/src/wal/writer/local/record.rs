@@ -96,23 +96,13 @@ impl LocalWalWriter {
                 first_lsn = new_lsn;
             }
 
-            let record_type = if total_chunks == 1 {
-                RecordType::Full
-            } else if chunk_index == 0 {
-                RecordType::First
-            } else if chunk_index == total_chunks - 1 {
-                RecordType::Last
-            } else {
-                RecordType::Middle
-            };
-
             let header = self.build_wal_header(WalHeaderParams {
                 op_type,
                 timestamp,
                 payload_len: chunk_size,
                 prev_lsn,
                 new_lsn,
-                record_type,
+                record_type: chunk_record_type(total_chunks, chunk_index),
                 payload: chunk_data,
                 compression,
             });
@@ -426,5 +416,132 @@ impl LocalWalWriter {
         compression_mod::decompress_payload(payload, compression)
     }
 
+    /// Append a WAL entry to the async buffer instead of directly to file.
+    ///
+    /// Builds the WAL header + compressed payload, serializes them to bytes,
+    /// and appends to the per-thread buffer. The flush coordinator will drain
+    /// the buffer to disk periodically.
+    pub(crate) fn append_entry_buffered(
+        &mut self,
+        op_type: WalOpType,
+        timestamp: Timestamp,
+        payload: &[u8],
+    ) -> WalResult<()> {
+        self.check_poisoned()?;
+        if !self.is_open.load(Ordering::SeqCst) {
+            return Err(WalError::Closed);
+        }
+
+        let buffer = self
+            .buffer
+            .as_ref()
+            .ok_or_else(|| WalError::InvalidOperation("async buffer not enabled".to_string()))?;
+
+        let (final_payload, compression) = self.compressor.compress(payload)?;
+
+        if final_payload.len() > WAL_MAX_RECORD_SIZE {
+            return self.append_fragmented_buffered(
+                op_type,
+                timestamp,
+                &final_payload,
+                compression,
+            );
+        }
+
+        let prev_lsn = Lsn::new(self.current_lsn.load(Ordering::SeqCst));
+        let new_lsn = Lsn::new(prev_lsn.as_u64() + (WAL_HEADER_SIZE + final_payload.len()) as u64);
+
+        let header = self.build_wal_header(WalHeaderParams {
+            op_type,
+            timestamp,
+            payload_len: final_payload.len(),
+            prev_lsn,
+            new_lsn,
+            record_type: RecordType::Full,
+            payload: &final_payload,
+            compression,
+        });
+
+        // Entries are written contiguously with no padding so the flushed
+        // byte stream is identical to synchronous writes and recovery is
+        // unchanged.
+        buffer.append(&serialize_record(&header, &final_payload));
+
+        self.current_lsn.store(new_lsn.as_u64(), Ordering::SeqCst);
+        self.buffered_lsn.store(new_lsn.as_u64(), Ordering::SeqCst);
+
+        // Wake the flush thread when the buffer crosses its threshold.
+        if buffer.needs_flush() {
+            self.request_flush();
+        }
+
+        Ok(())
+    }
+
+    /// Buffered variant of fragmented writes: each fragment is serialized
+    /// into the per-thread buffer with First/Middle/Last record types.
+    fn append_fragmented_buffered(
+        &mut self,
+        op_type: WalOpType,
+        timestamp: Timestamp,
+        payload: &[u8],
+        compression: WalCompression,
+    ) -> WalResult<()> {
+        let buffer = self
+            .buffer
+            .as_ref()
+            .ok_or_else(|| WalError::InvalidOperation("async buffer not enabled".to_string()))?;
+        let total_chunks = payload.len().div_ceil(WAL_MAX_RECORD_SIZE);
+        let mut offset = 0;
+        let mut chunk_index = 0;
+        while offset < payload.len() {
+            let chunk_end = (offset + WAL_MAX_RECORD_SIZE).min(payload.len());
+            let chunk_data = &payload[offset..chunk_end];
+            let prev_lsn = Lsn::new(self.current_lsn.load(Ordering::SeqCst));
+            let new_lsn = Lsn::new(prev_lsn.as_u64() + (WAL_HEADER_SIZE + chunk_data.len()) as u64);
+            let header = self.build_wal_header(WalHeaderParams {
+                op_type,
+                timestamp,
+                payload_len: chunk_data.len(),
+                prev_lsn,
+                new_lsn,
+                record_type: chunk_record_type(total_chunks, chunk_index),
+                payload: chunk_data,
+                compression,
+            });
+            buffer.append(&serialize_record(&header, chunk_data));
+            self.current_lsn.store(new_lsn.as_u64(), Ordering::SeqCst);
+            self.buffered_lsn.store(new_lsn.as_u64(), Ordering::SeqCst);
+            offset = chunk_end;
+            chunk_index += 1;
+        }
+        if buffer.needs_flush() {
+            self.request_flush();
+        }
+        Ok(())
+    }
+
     // ── Getters and Setters ──
+}
+
+/// Record type for chunk `chunk_index` of `total_chunks`.
+fn chunk_record_type(total_chunks: usize, chunk_index: usize) -> RecordType {
+    if total_chunks == 1 {
+        RecordType::Full
+    } else if chunk_index == 0 {
+        RecordType::First
+    } else if chunk_index == total_chunks - 1 {
+        RecordType::Last
+    } else {
+        RecordType::Middle
+    }
+}
+
+/// Serialize header + payload into the contiguous on-disk byte stream.
+fn serialize_record(header: &WalHeader, payload: &[u8]) -> Vec<u8> {
+    let header_bytes = header.as_bytes();
+    let mut entry_bytes = Vec::with_capacity(header_bytes.len() + payload.len());
+    entry_bytes.extend_from_slice(&header_bytes);
+    entry_bytes.extend_from_slice(payload);
+    entry_bytes
 }

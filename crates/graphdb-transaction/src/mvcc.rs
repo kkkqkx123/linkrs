@@ -12,6 +12,18 @@
 //! This module uses `parking_lot::Condvar` for efficient waiting instead of
 //! spin-wait loops. This reduces CPU usage during contention and provides
 //! proper timeout support.
+//!
+//! ## Layout
+//!
+//! Pure types live in [`types`], timestamp allocation in [`allocator`], read
+//! admission and the RAII guard in [`read`], the write slot state machine in
+//! [`write`], and frontier advancement, reaping and resets in [`frontier`].
+
+mod allocator;
+mod frontier;
+mod read;
+mod types;
+mod write;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
@@ -23,67 +35,13 @@ use parking_lot::{Condvar, Mutex};
 use super::snapshot_tracker::SnapshotTracker;
 use graphdb_core::types::Timestamp;
 
-/// Released timestamp sentinel value (0 means timestamp has been released)
-/// Note: distinct from Timestamp::MAX which may be used as a sentinel elsewhere
-pub const RELEASED_TIMESTAMP: Timestamp = 0;
+use types::WriteTimestampState;
 
-#[derive(Debug, Clone, thiserror::Error)]
-pub enum VersionManagerError {
-    #[error("Too many concurrent transactions")]
-    TooManyTransactions,
-
-    #[error("Invalid timestamp: {0}")]
-    InvalidTimestamp(Timestamp),
-
-    #[error("Timeout waiting for transaction")]
-    Timeout,
-
-    #[error("Failed to track snapshot for timestamp")]
-    SnapshotTrackingFailed,
-
-    #[error("Timestamp space exhausted")]
-    TimestampExhausted,
-}
-
-pub type VersionManagerResult<T> = Result<T, VersionManagerError>;
-
-#[derive(Debug, Clone)]
-pub struct VersionManagerConfig {
-    pub max_concurrent_reads: u32,
-    pub wait_timeout: Duration,
-    /// Minimum age of a `Pending` write timestamp before
-    /// [`VersionManager::reap_expired_write_timestamps`] aborts it as stale.
-    ///
-    /// This replaces the former force-advance (`max_frontier_stall`) which was
-    /// unreachable and, if configured, could publish uncommitted writes.
-    pub write_reap_timeout: Duration,
-}
-
-impl Default for VersionManagerConfig {
-    fn default() -> Self {
-        Self {
-            max_concurrent_reads: 1000,
-            wait_timeout: Duration::from_secs(5),
-            write_reap_timeout: Duration::from_secs(60),
-        }
-    }
-}
-
-impl VersionManagerConfig {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_max_concurrent_reads(mut self, max: u32) -> Self {
-        self.max_concurrent_reads = max;
-        self
-    }
-
-    pub fn with_write_reap_timeout(mut self, timeout: Duration) -> Self {
-        self.write_reap_timeout = timeout;
-        self
-    }
-}
+pub use read::ReadTimestampGuard;
+pub use types::{
+    TimestampSlot, VersionManagerConfig, VersionManagerError, VersionManagerResult,
+    RELEASED_TIMESTAMP,
+};
 
 pub struct VersionManager {
     write_ts: AtomicU64,
@@ -102,28 +60,6 @@ pub struct VersionManager {
     config: VersionManagerConfig,
     snapshot_tracker: Arc<SnapshotTracker>,
     write_states: Mutex<BTreeMap<Timestamp, (Instant, WriteTimestampState)>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WriteTimestampState {
-    Pending,
-    Committed,
-    Aborted,
-}
-
-/// Observable state of one write-timestamp slot.
-///
-/// `Vanished` covers every timestamp absent from the slot map: slots of
-/// long-committed writes are removed when the read frontier advances over a
-/// run of terminal slots, and read-only snapshots never own a write slot at
-/// all. Vanished slots carry no pending write, so visibility predicates can
-/// trust the plain timestamp comparison for them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TimestampSlot {
-    Pending,
-    Committed,
-    Aborted,
-    Vanished,
 }
 
 impl VersionManager {
@@ -147,431 +83,8 @@ impl VersionManager {
         }
     }
 
-    pub fn init_ts(&self, ts: Timestamp) {
-        // `write_ts` is the last allocated timestamp. Keeping the baseline at
-        // the recovered timestamp makes the next allocation checked and
-        // contiguous, including at the u64 boundary.
-        self.write_ts.store(ts, Ordering::Release);
-        self.read_ts.store(ts, Ordering::Release);
-        self.write_states.lock().clear();
-        // Restart rebuild: pins held by the previous process are gone with
-        // it, so the tracker must restart empty. Otherwise the minimum
-        // stays behind and GC stalls forever.
-        self.snapshot_tracker.clear();
-    }
-
-    pub fn clear(&self) {
-        // Preserve write_ts so that subsequent writes and checkpoints
-        // use timestamps >= the compact timestamp, ensuring persisted
-        // data remains visible after reload.
-        self.read_ts.store(0, Ordering::Release);
-        self.read_pending.store(0, Ordering::Relaxed);
-        self.write_pending.store(0, Ordering::Relaxed);
-        self.write_states.lock().clear();
-        // The counters above are meaningless while stale pins survive:
-        // drain the tracker as well so the safe-GC waterfront is not
-        // pinned by snapshots that no longer exist.
-        self.snapshot_tracker.clear();
-    }
-
-    pub fn write_timestamp(&self) -> Timestamp {
-        self.write_ts.load(Ordering::Acquire)
-    }
-
-    /// Allocate the next write timestamp.
-    pub fn next_write_timestamp(&self) -> VersionManagerResult<Timestamp> {
-        self.try_next_write_timestamp()
-    }
-
-    pub fn try_next_write_timestamp(&self) -> VersionManagerResult<Timestamp> {
-        let ts = self.reserve_timestamp()?;
-        self.write_pending.fetch_add(1, Ordering::Relaxed);
-        self.snapshot_tracker
-            .add_snapshot(ts)
-            .map_err(|_| VersionManagerError::SnapshotTrackingFailed)?;
-        self.write_states
-            .lock()
-            .insert(ts, (Instant::now(), WriteTimestampState::Pending));
-        Ok(ts)
-    }
-
-    fn reserve_timestamp(&self) -> VersionManagerResult<Timestamp> {
-        let mut current = self.write_ts.load(Ordering::Acquire);
-        loop {
-            let next = current
-                .checked_add(1)
-                .ok_or(VersionManagerError::TimestampExhausted)?;
-            // The allocator shares the u64 domain with sentinel values, so it
-            // must stop before either sentinel instead of handing one out as a
-            // transaction timestamp.
-            debug_assert!(
-                graphdb_core::types::is_allocatable_timestamp(next),
-                "timestamp allocator reached reserved sentinel"
-            );
-            if !graphdb_core::types::is_allocatable_timestamp(next) {
-                return Err(VersionManagerError::TimestampExhausted);
-            }
-            match self
-                .write_ts
-                .compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
-            {
-                Ok(_) => return Ok(next),
-                Err(observed) => current = observed,
-            }
-        }
-    }
-
-    pub fn read_timestamp(&self) -> Timestamp {
-        self.read_ts.load(Ordering::Acquire)
-    }
-
-    pub fn acquire_read_timestamp(&self) -> VersionManagerResult<Timestamp> {
-        let mut guard = self.read_lock.lock();
-        loop {
-            let pr = self.read_pending.load(Ordering::Relaxed);
-            if pr >= 0 {
-                if pr >= self.config.max_concurrent_reads as i32 {
-                    log::warn!(
-                        "Too many pending read requests: {}. Max concurrent reads: {}. \
-                        Consider increasing max_concurrent_reads or reducing read intensity.",
-                        pr,
-                        self.config.max_concurrent_reads,
-                    );
-                    self.read_condvar.wait(&mut guard);
-                    continue;
-                }
-                self.read_pending.fetch_add(1, Ordering::Relaxed);
-                let ts = self.read_ts.load(Ordering::Acquire);
-                drop(guard);
-                if let Err(e) = self.snapshot_tracker.add_snapshot(ts) {
-                    log::error!("Failed to track read snapshot {}: {}", ts, e);
-                    self.read_pending.fetch_sub(1, Ordering::Relaxed);
-                    self.read_condvar.notify_all();
-                    return Err(VersionManagerError::SnapshotTrackingFailed);
-                }
-                return Ok(ts);
-            }
-            self.read_condvar.wait(&mut guard);
-        }
-    }
-
-    pub fn acquire_read_timestamp_with_timeout(&self, timeout: Duration) -> Option<Timestamp> {
-        let start = Instant::now();
-        let mut guard = self.read_lock.lock();
-        loop {
-            let pr = self.read_pending.load(Ordering::Relaxed);
-            if pr >= 0 {
-                if pr >= self.config.max_concurrent_reads as i32 {
-                    log::warn!(
-                        "Too many pending read requests: {}. Max concurrent reads: {}.",
-                        pr,
-                        self.config.max_concurrent_reads,
-                    );
-                    let elapsed = start.elapsed();
-                    if elapsed >= timeout {
-                        return None;
-                    }
-                    let remaining = timeout - elapsed;
-                    let result = self.read_condvar.wait_for(&mut guard, remaining);
-                    if result.timed_out() {
-                        return None;
-                    }
-                    continue;
-                }
-                self.read_pending.fetch_add(1, Ordering::Relaxed);
-                let ts = self.read_ts.load(Ordering::Acquire);
-                drop(guard);
-                if let Err(e) = self.snapshot_tracker.add_snapshot(ts) {
-                    log::error!("Failed to track read snapshot {}: {}", ts, e);
-                    self.read_pending.fetch_sub(1, Ordering::Relaxed);
-                    return None;
-                }
-                return Some(ts);
-            }
-
-            let elapsed = start.elapsed();
-            if elapsed >= timeout {
-                return None;
-            }
-
-            let remaining = timeout - elapsed;
-            let result = self.read_condvar.wait_for(&mut guard, remaining);
-            if result.timed_out() {
-                return None;
-            }
-        }
-    }
-
-    pub fn release_read_timestamp(&self) {
-        let ts = self.read_ts.load(Ordering::Acquire);
-        self.release_read_timestamp_at(ts);
-    }
-
-    pub fn release_read_timestamp_at(&self, ts: Timestamp) {
-        if let Err(e) = self.snapshot_tracker.release_snapshot(ts) {
-            log::error!("Failed to release snapshot {}: {}", ts, e);
-            // Continue anyway - we still need to decrement read_pending
-        }
-        self.read_pending.fetch_sub(1, Ordering::Relaxed);
-        self.read_condvar.notify_all();
-    }
-
-    pub fn acquire_insert_timestamp(&self) -> VersionManagerResult<Timestamp> {
-        let _guard = self.write_lock.lock();
-        let ts = self.reserve_timestamp()?;
-        if let Err(e) = self.snapshot_tracker.add_snapshot(ts) {
-            log::error!("Failed to pre-reserve snapshot {}: {}", ts, e);
-            return Err(VersionManagerError::SnapshotTrackingFailed);
-        }
-        self.write_states
-            .lock()
-            .insert(ts, (Instant::now(), WriteTimestampState::Pending));
-        self.write_pending.fetch_add(1, Ordering::Relaxed);
-        drop(_guard);
-        Ok(ts)
-    }
-
-    pub fn abort_write_timestamp(&self, ts: Timestamp) {
-        // Retires a timestamp that will never become visible. Aborting a
-        // user transaction must go through the manager abort protocol so
-        // SSI locks, leases and undo logs are released together with the
-        // timestamp.
-        self.finish_write_timestamp(ts, WriteTimestampState::Aborted);
-    }
-
-    /// Settle a system write timestamp in commit order.
-    ///
-    /// Reserves a commit timestamp for `start` and publishes visibility
-    /// over both slots, so system commits share the commit-ordered
-    /// coordinate with explicit transactions. Fails closed when the start
-    /// slot is not a live pending write; callers must propagate the error
-    /// instead of falling back to start-ordered publishing.
-    pub fn commit_ordered(&self, start: Timestamp) -> VersionManagerResult<Timestamp> {
-        let commit_ts = self.reserve_commit_timestamp(start)?;
-        self.publish_reserved_commit(start, commit_ts);
-        Ok(commit_ts)
-    }
-
-    /// Allocate a commit timestamp at commit time and retire the start slot.
-    ///
-    /// This restores Ladybug semantics (`commitTS = ++lastTimestamp`): read
-    /// visibility is ordered by commit time, not by transaction start time.
-    /// The start slot is retired as `Committed` (releasing its snapshot and
-    /// pending count) and the freshly allocated commit timestamp is inserted
-    /// as `Committed`, so the read frontier advances over both in one step.
-    /// Out-of-order commits therefore never pin the frontier behind a
-    /// still-pending start timestamp: every allocated timestamp reaches a
-    /// terminal state exactly once, at commit time.
-    ///
-    /// Must only be called after the commit is durable (WAL) and storage
-    /// finalization succeeded; otherwise unfinalized writes would become
-    /// visible to new readers.
-    ///
-    /// Prefer the split `reserve_commit_timestamp` /
-    /// `publish_reserved_commit` pair for new commit paths: reserving
-    /// before finalization lets conflict certification index the exact
-    /// commit timestamp while keeping visibility gated on finalization.
-    /// This combined helper stays for recovery re-drives and tests.
-    pub fn allocate_commit_timestamp(
-        &self,
-        start_ts: Timestamp,
-    ) -> VersionManagerResult<Timestamp> {
-        let _guard = self.write_lock.lock();
-        let commit_ts = self.reserve_timestamp()?;
-        let mut states = self.write_states.lock();
-        if let Some((_, entry)) = states.get_mut(&start_ts) {
-            if *entry == WriteTimestampState::Pending {
-                *entry = WriteTimestampState::Committed;
-                let _ = self.snapshot_tracker.release_snapshot(start_ts);
-                self.write_pending.fetch_sub(1, Ordering::Relaxed);
-            }
-        }
-        states.insert(commit_ts, (Instant::now(), WriteTimestampState::Committed));
-        self.advance_read_frontier(&mut states);
-        drop(states);
-        self.write_condvar.notify_all();
-        Ok(commit_ts)
-    }
-
-    /// Reserve a commit timestamp before storage finalization.
-    ///
-    /// The reserved timestamp is `Pending`, so the read frontier cannot
-    /// cross it: visibility stays gated even though the exact commit
-    /// timestamp is already known to conflict certification. The caller
-    /// must settle the reservation exactly once, either with
-    /// `publish_reserved_commit` on success or with
-    /// `abort_write_timestamp` on failure (both are idempotent by slot
-    /// state, so double-settling is safe).
-    ///
-    /// Refuses when the start slot is not a live `Pending` write: ordering
-    /// visibility against a vanished owner would publish ownerless writes.
-    pub fn reserve_commit_timestamp(&self, start_ts: Timestamp) -> VersionManagerResult<Timestamp> {
-        let _guard = self.write_lock.lock();
-        let mut states = self.write_states.lock();
-        match states.get(&start_ts).map(|(_, state)| *state) {
-            Some(WriteTimestampState::Pending) => {}
-            _ => return Err(VersionManagerError::InvalidTimestamp(start_ts)),
-        }
-        let commit_ts = self.reserve_timestamp()?;
-        states.insert(commit_ts, (Instant::now(), WriteTimestampState::Pending));
-        Ok(commit_ts)
-    }
-
-    /// Settle a reservation made by `reserve_commit_timestamp`.
-    ///
-    /// Retires the start slot and marks the reserved commit timestamp
-    /// `Committed`, then advances the read frontier over both. Must only
-    /// be called after WAL durability and storage finalization succeeded.
-    /// Tolerates missing slots (restart re-drives) by treating them as
-    /// already settled instead of failing the commit.
-    pub fn publish_reserved_commit(&self, start_ts: Timestamp, commit_ts: Timestamp) {
-        let _guard = self.write_lock.lock();
-        let mut states = self.write_states.lock();
-        if let Some((_, entry)) = states.get_mut(&start_ts) {
-            if *entry == WriteTimestampState::Pending {
-                *entry = WriteTimestampState::Committed;
-                let _ = self.snapshot_tracker.release_snapshot(start_ts);
-                self.write_pending.fetch_sub(1, Ordering::Relaxed);
-            }
-        }
-        if let Some((_, entry)) = states.get_mut(&commit_ts) {
-            if *entry == WriteTimestampState::Pending {
-                *entry = WriteTimestampState::Committed;
-            }
-        } else {
-            states.insert(commit_ts, (Instant::now(), WriteTimestampState::Committed));
-        }
-        self.advance_read_frontier(&mut states);
-        drop(states);
-        self.write_condvar.notify_all();
-    }
-
-    fn finish_write_timestamp(&self, ts: Timestamp, state: WriteTimestampState) {
-        let mut states = self.write_states.lock();
-        if let Some((_, entry)) = states.get_mut(&ts) {
-            if *entry == WriteTimestampState::Pending {
-                *entry = state;
-                let _ = self.snapshot_tracker.release_snapshot(ts);
-                self.write_pending.fetch_sub(1, Ordering::Relaxed);
-            }
-        }
-
-        self.advance_read_frontier(&mut states);
-        drop(states);
-        self.write_condvar.notify_all();
-    }
-
-    /// Advance the read frontier over terminal (Committed/Aborted) timestamps.
-    ///
-    /// The frontier never crosses a live `Pending` write: a pending timestamp
-    /// is an in-flight write whose data must not become visible to readers.
-    /// Crossing it would publish the transaction's partial writes (dirty read).
-    /// Long-lived pending writes are instead terminated by
-    /// [`VersionManager::reap_expired_write_timestamps`] (driven by the
-    /// transaction manager's periodic cleanup).
-    fn advance_read_frontier(
-        &self,
-        states: &mut BTreeMap<Timestamp, (Instant, WriteTimestampState)>,
-    ) {
-        let mut frontier = self.read_ts.load(Ordering::Acquire);
-        loop {
-            let next = frontier.saturating_add(1);
-            match states.get(&next).map(|(_, state)| *state) {
-                Some(WriteTimestampState::Committed | WriteTimestampState::Aborted) => {
-                    frontier = next;
-                    states.remove(&next);
-                }
-                _ => break,
-            }
-        }
-        self.read_ts.store(frontier, Ordering::Release);
-    }
-
-    /// Abort `Pending` write timestamps older than `write_reap_timeout`,
-    /// advancing the read frontier so version GC can proceed.
-    ///
-    /// This is a safety net for write timestamps whose owning path vanished
-    /// (orphaned write). Callers must pass the set of timestamps currently
-    /// owned by live write transactions so those are never reaped; reaping a
-    /// live transaction's timestamp would silently discard its writes.
-    ///
-    /// Returns the number of timestamps reaped.
-    pub fn reap_expired_write_timestamps(
-        &self,
-        timeout: Duration,
-        owned: &std::collections::HashSet<Timestamp>,
-    ) -> usize {
-        let now = Instant::now();
-        let mut states = self.write_states.lock();
-        let expired: Vec<Timestamp> = states
-            .iter()
-            .filter(|(ts, (acquired, state))| {
-                *state == WriteTimestampState::Pending
-                    && !owned.contains(ts)
-                    && now.duration_since(*acquired) > timeout
-            })
-            .map(|(ts, _)| *ts)
-            .collect();
-
-        let mut reaped = 0;
-        for ts in expired {
-            if let Some((_, entry)) = states.get_mut(&ts) {
-                if *entry == WriteTimestampState::Pending {
-                    *entry = WriteTimestampState::Aborted;
-                    let _ = self.snapshot_tracker.release_snapshot(ts);
-                    self.write_pending.fetch_sub(1, Ordering::Relaxed);
-                    reaped += 1;
-                }
-            }
-        }
-
-        if reaped > 0 {
-            self.advance_read_frontier(&mut states);
-        }
-        drop(states);
-        self.write_condvar.notify_all();
-        reaped
-    }
-
     pub fn pending_count(&self) -> i32 {
         self.read_pending.load(Ordering::Relaxed) + self.write_pending.load(Ordering::Relaxed)
-    }
-
-    /// Return the observable state of one write-timestamp slot.
-    ///
-    /// Read-only probe for pending-aware visibility: storage asks about the
-    /// creation/deletion stamp it just read and hides stamps owned by foreign
-    /// pending transactions. Absent slots report `Vanished`; they were either
-    /// reclaimed after the read frontier swallowed a run of terminal slots
-    /// (their data is undone or committed and the plain predicate applies) or
-    /// never owned a write slot at all.
-    pub fn timestamp_slot(&self, ts: Timestamp) -> TimestampSlot {
-        match self.write_states.lock().get(&ts).map(|(_, state)| *state) {
-            Some(WriteTimestampState::Pending) => TimestampSlot::Pending,
-            Some(WriteTimestampState::Committed) => TimestampSlot::Committed,
-            Some(WriteTimestampState::Aborted) => TimestampSlot::Aborted,
-            None => TimestampSlot::Vanished,
-        }
-    }
-
-    /// Ages of all currently `Pending` write timestamps.
-    ///
-    /// Lets the cleanup path tell a live long-running transaction (its
-    /// timestamp appears in the caller-supplied `owned` set and must never be
-    /// reaped, but it still pins the read frontier) apart from a crash
-    /// orphan (unowned and eligible for reaping). Sorted oldest-first so the
-    /// worst frontier blocker is reported first.
-    pub fn pending_write_ages(&self) -> Vec<(Timestamp, Duration)> {
-        let now = Instant::now();
-        let states = self.write_states.lock();
-        let mut ages: Vec<(Timestamp, Duration)> = states
-            .iter()
-            .filter(|(_, (_, state))| *state == WriteTimestampState::Pending)
-            .map(|(ts, (acquired, _))| (*ts, now.duration_since(*acquired)))
-            .collect();
-        ages.sort_by_key(|(_, age)| *age);
-        ages.reverse();
-        ages
     }
 
     /// Timeout after which a `Pending` write timestamp is reaped by
@@ -588,44 +101,11 @@ impl VersionManager {
     pub fn snapshot_tracker(&self) -> &SnapshotTracker {
         &self.snapshot_tracker
     }
-
-    #[cfg(test)]
-    fn backdate_write_timestamp(&self, ts: Timestamp, elapsed: Duration) {
-        if let Some((acquired, _)) = self.write_states.lock().get_mut(&ts) {
-            *acquired = Instant::now() - elapsed;
-        }
-    }
 }
 
 impl Default for VersionManager {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-pub struct ReadTimestampGuard {
-    version_manager: Arc<VersionManager>,
-    timestamp: Timestamp,
-}
-
-impl ReadTimestampGuard {
-    pub fn new(version_manager: Arc<VersionManager>) -> VersionManagerResult<Self> {
-        let timestamp = version_manager.acquire_read_timestamp()?;
-        Ok(Self {
-            version_manager,
-            timestamp,
-        })
-    }
-
-    pub fn timestamp(&self) -> Timestamp {
-        self.timestamp
-    }
-}
-
-impl Drop for ReadTimestampGuard {
-    fn drop(&mut self) {
-        self.version_manager
-            .release_read_timestamp_at(self.timestamp);
     }
 }
 
