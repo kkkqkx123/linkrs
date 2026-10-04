@@ -64,7 +64,7 @@ impl FactorizationRewriter {
                     output_var: None,
                     col_names: vec![],
                     column_types: vec![],
-                    expected_groups: Some(0),
+                    expected_groups: None,
                     group_columns: vec![],
                 },
             );

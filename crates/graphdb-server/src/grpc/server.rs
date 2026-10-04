@@ -298,9 +298,9 @@ impl<
         let session_id = inner.session_id.parse::<i64>().unwrap_or(0);
         match crate::http::handlers::query::validate_gql(&inner.query) {
             Ok(parameter_names) => {
-                let (estimated_rows, has_estimate) = if !inner.need_estimate {
-                    (0, false)
-                } else if crate::graph_service::GraphService::<S>::is_command_like(&inner.query) {
+                let (estimated_rows, has_estimate) = if !inner.need_estimate
+                    || crate::graph_service::GraphService::<S>::is_command_like(&inner.query)
+                {
                     (0, false)
                 } else {
                     match self

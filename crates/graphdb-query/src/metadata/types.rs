@@ -4,6 +4,7 @@
 //! and execution process.
 
 use graphdb_core::types::DataType;
+use graphdb_core::Value;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -196,25 +197,4 @@ impl std::fmt::Display for PropertyType {
     }
 }
 
-/// Value type (simplified for metadata)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Value {
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    String(String),
-    Null,
-}
 
-impl std::fmt::Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Value::Bool(b) => write!(f, "{}", b),
-            Value::Int(i) => write!(f, "{}", i),
-            Value::Float(fl) => write!(f, "{}", fl),
-            Value::String(s) => write!(f, "{}", s),
-            Value::Null => write!(f, "NULL"),
-        }
-    }
-}

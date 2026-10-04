@@ -1,63 +1,22 @@
-use super::QueryPipelineManager;
-use crate::binder::BoundStatement;
-use crate::executor::base::ExecutionResult;
-use crate::executor::streaming::instance::ResultSink;
+use std::sync::Arc;
+
+use graphdb_core::error::DBResult;
+use graphdb_core::types::SpaceInfo;
+use parking_lot::RwLock;
+
 use crate::executor::streaming::transaction_scope::TransactionScope;
-use crate::executor::streaming::StreamingQueryResult;
-use crate::parser::ast::Stmt;
-use crate::planning::statements::clauses::exists_planner;
 use crate::storage::QueryStorage;
+
+mod classify;
+mod result;
+mod transaction;
+
+pub use classify::{StatementClass, build_validated_fallback, classify_statement, is_analyze, is_ddl, is_diagnostic, is_read_only_cacheable, is_transaction, requires_write_storage};
+pub use result::PreparedOutcome;
+use crate::binder::BoundStatement;
+use crate::parser::ast::Stmt;
 use crate::QueryContext;
 use crate::QueryRequestContext;
-use graphdb_core::error::{DBError, DBResult, QueryError};
-use graphdb_core::types::SpaceInfo;
-use graphdb_core::types::Timestamp;
-use graphdb_core::types::TransactionId;
-use graphdb_core::types::TransactionIsolationLevel;
-use parking_lot::RwLock;
-use std::sync::Arc;
-use std::time::Instant;
-
-/// Classification of a prepared statement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StatementClass {
-    Analyze,
-    ReadOnly,
-    Dml,
-    Ddl,
-    Transaction,
-    Diagnostic,
-}
-
-/// Check whether a statement performs any write operations to storage.
-///
-/// This detects both standalone DML (INSERT/DELETE/UPDATE), MATCH statements
-/// with embedded DELETE clauses, and DML nested inside pipe or set-operation
-/// statements.
-pub fn requires_write_storage(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Match(m) => m.delete_clause.is_some(),
-        Stmt::Pipe(pipe) => {
-            requires_write_storage(&pipe.left) || requires_write_storage(&pipe.right)
-        }
-        Stmt::SetOperation(set_op) => {
-            requires_write_storage(&set_op.left) || requires_write_storage(&set_op.right)
-        }
-        _ => requires_auto_commit(stmt),
-    }
-}
-
-/// Outcome of executing a prepared request.
-///
-/// Returned by [`QueryPipelineManager::execute_prepared`] regardless of the
-/// sink: a materialized [`ExecutionResult`] or a streaming
-/// [`StreamingQueryResult`].
-pub(crate) enum PreparedOutcome {
-    /// Fully materialized result for `ResultSink::Materialize`.
-    Materialized(ExecutionResult),
-    /// Streaming result for `ResultSink::Stream`.
-    Stream(StreamingQueryResult),
-}
 
 /// A fully prepared request ready for execution.
 ///
@@ -72,7 +31,7 @@ pub struct PreparedRequest {
     /// Whether `operation_storage` was auto-bound during `prepare_request`
     /// (i.e. not provided by the caller). The pipeline owns its lifecycle and
     /// must call `finalize_operation` after execution; otherwise one MVCC
-    /// snapshot per statement is leaked, degrading loads to O(n²).
+    /// snapshot per statement is leaked, degrading loads to O(n^2).
     pub owns_operation_storage: bool,
     /// Fully resolved bound IR, produced by the Binder.
     pub bound_statement: Option<BoundStatement>,
@@ -92,7 +51,7 @@ impl PreparedRequest {
     /// during binding and commits/releases the write-timestamp lease. Skipping
     /// this leaks one `active_snapshots` entry per statement; every later
     /// `register_snapshot` then rescans the growing map to recompute
-    /// `min_active_snapshot_ts`, degrading bulk loads to O(n²).
+    /// `min_active_snapshot_ts`, degrading bulk loads to O(n^2).
     ///
     /// No-op unless this request owns its operation storage (i.e. it was
     /// auto-bound by `prepare_request` rather than supplied by the caller).
@@ -104,196 +63,13 @@ impl PreparedRequest {
             storage
                 .write()
                 .finalize_operation(committed)
-                .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
+                .map_err(|error| graphdb_core::error::DBError::from(graphdb_core::error::QueryError::execution(error.to_string())))?;
         }
         Ok(())
     }
 }
 
-// ── Statement classification ───────────────────────────────────────────────
-
-pub fn classify_statement(stmt: &Stmt) -> StatementClass {
-    if is_diagnostic(stmt) {
-        StatementClass::Diagnostic
-    } else if is_analyze(stmt) {
-        StatementClass::Analyze
-    } else if is_transaction(stmt) {
-        StatementClass::Transaction
-    } else if is_ddl(stmt) {
-        StatementClass::Ddl
-    } else if requires_write_storage(stmt) {
-        StatementClass::Dml
-    } else {
-        StatementClass::ReadOnly
-    }
-}
-
-pub fn is_analyze(stmt: &Stmt) -> bool {
-    matches!(stmt, Stmt::Analyze(_))
-}
-
-pub fn requires_auto_commit(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Pipe(pipe) => requires_auto_commit(&pipe.left) || requires_auto_commit(&pipe.right),
-        Stmt::SetOperation(set_op) => {
-            requires_auto_commit(&set_op.left) || requires_auto_commit(&set_op.right)
-        }
-        _ => is_direct_write_statement(stmt),
-    }
-}
-
-/// Direct write statements (DML plus DCL) that must run on the auto-commit
-/// write path, not the read-only snapshot path. Shared with
-/// [`requires_auto_commit`] so the write-routing set stays in one place.
-///
-/// This is deliberately broader than [`is_direct_dml_statement`]: DCL
-/// statements write the user/privilege store but are *not* DML and are
-/// never shape-normalized.
-fn is_direct_write_statement(stmt: &Stmt) -> bool {
-    is_direct_dml_statement(stmt) || is_direct_dcl(stmt)
-}
-
-/// Whether the statement is one of the direct DML forms eligible for shape
-/// normalization. Shared with the shape-cache candidate check in
-/// [`prepare_request`] so the candidate set stays in one place.
-///
-/// Note: `normalize_shape` accepts a subset of this set (INSERT / DELETE /
-/// UPDATE / MERGE / SET / REMOVE — no COPY); anything else falls through to
-/// the non-cached path there.
-fn is_direct_dml_statement(stmt: &Stmt) -> bool {
-    matches!(
-        stmt,
-        Stmt::Insert(_)
-            | Stmt::Copy(_)
-            | Stmt::Delete(_)
-            | Stmt::Update(_)
-            | Stmt::Merge(_)
-            | Stmt::Set(_)
-            | Stmt::Remove(_)
-    )
-}
-
-/// Direct DCL statements that write the user/privilege store: they must run
-/// on the auto-commit write path, not the read-only snapshot path.
-fn is_direct_dcl(stmt: &Stmt) -> bool {
-    matches!(
-        stmt,
-        Stmt::CreateUser(_)
-            | Stmt::AlterUser(_)
-            | Stmt::DropUser(_)
-            | Stmt::ChangePassword(_)
-            | Stmt::Grant(_)
-            | Stmt::Revoke(_)
-            | Stmt::UpdateConfigs(_)
-    )
-}
-
-pub fn is_transaction(stmt: &Stmt) -> bool {
-    matches!(
-        stmt,
-        Stmt::BeginTransaction(..)
-            | Stmt::CommitTransaction(..)
-            | Stmt::RollbackTransaction(..)
-            | Stmt::Savepoint(..)
-            | Stmt::ReleaseSavepoint(..)
-    )
-}
-
-pub fn is_ddl(stmt: &Stmt) -> bool {
-    matches!(
-        stmt,
-        Stmt::Create(_)
-            | Stmt::Drop(_)
-            | Stmt::Alter(_)
-            | Stmt::ClearSpace(_)
-            | Stmt::CreateFulltextIndex(_)
-            | Stmt::DropFulltextIndex(_)
-            | Stmt::AlterFulltextIndex(_)
-            | Stmt::CreateVectorIndex(_)
-            | Stmt::DropVectorIndex(_)
-            | Stmt::CreateMacro(_)
-            | Stmt::DropMacro(_)
-            | Stmt::CreateType(_)
-            | Stmt::DropType(_)
-            | Stmt::CommentOn(_)
-    )
-}
-
-pub fn is_diagnostic(stmt: &Stmt) -> bool {
-    matches!(stmt, Stmt::Explain(_) | Stmt::Profile(_))
-}
-
-pub fn is_read_only_cacheable(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Pipe(pipe) => {
-            is_read_only_cacheable(&pipe.left) && is_read_only_cacheable(&pipe.right)
-        }
-        Stmt::SetOperation(set_op) => {
-            is_read_only_cacheable(&set_op.left) && is_read_only_cacheable(&set_op.right)
-        }
-        _ => !matches!(
-            stmt,
-            Stmt::Insert(_)
-                | Stmt::Copy(_)
-                | Stmt::Update(_)
-                | Stmt::Delete(_)
-                | Stmt::Set(_)
-                | Stmt::Remove(_)
-                | Stmt::Merge(_)
-                | Stmt::Create(_)
-                | Stmt::Drop(_)
-                | Stmt::Alter(_)
-                | Stmt::ClearSpace(_)
-                | Stmt::CreateFulltextIndex(_)
-                | Stmt::DropFulltextIndex(_)
-                | Stmt::AlterFulltextIndex(_)
-                | Stmt::CreateVectorIndex(_)
-                | Stmt::DropVectorIndex(_)
-                | Stmt::CreateMacro(_)
-                | Stmt::DropMacro(_)
-                | Stmt::CreateType(_)
-                | Stmt::DropType(_)
-                | Stmt::CreateUser(_)
-                | Stmt::AlterUser(_)
-                | Stmt::DropUser(_)
-                | Stmt::ChangePassword(_)
-                | Stmt::Grant(_)
-                | Stmt::Revoke(_)
-                | Stmt::UpdateConfigs(_)
-                | Stmt::BeginTransaction(_)
-                | Stmt::CommitTransaction(_)
-                | Stmt::RollbackTransaction(_)
-                | Stmt::Explain(_)
-                | Stmt::Profile(_)
-                | Stmt::Analyze(_)
-                | Stmt::CommentOn(_)
-                | Stmt::Checkpoint(_)
-                | Stmt::ExportDatabase(_)
-                | Stmt::ImportDatabase(_)
-                | Stmt::AttachDatabase(_)
-                | Stmt::DetachDatabase(_)
-        ),
-    }
-}
-
-/// Build a minimal `ValidatedStatement` for the `plan_bound` → `transform` fallback path.
-///
-/// When a planner does not yet implement `plan_bound`, we fall back to the
-/// `transform` interface.  This helper constructs a lightweight `ValidatedStatement`
-/// with an empty `ValidationInfo` — sufficient because `transform` primarily reads
-/// from the AST, not from `ValidationInfo`.
-pub(crate) fn build_validated_fallback(
-    ast: &Arc<crate::parser::ast::stmt::Ast>,
-) -> crate::binder::validation::ValidatedStatement {
-    crate::binder::validation::ValidatedStatement::new(
-        ast.clone(),
-        crate::binder::validation::ValidationInfo::new(),
-    )
-}
-
-// ── Prepared lifecycle ─────────────────────────────────────────────────────
-
-impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
+impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
     /// Parse and bind once, producing a [`PreparedRequest`].
     pub(crate) fn prepare_request(
         &mut self,
@@ -301,20 +77,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         rctx: Arc<QueryRequestContext>,
         space_info: Option<SpaceInfo>,
     ) -> DBResult<PreparedRequest> {
-        // The API layer may already have parsed the statement (classification
-        // pass); reuse that AST to keep the pipeline single-parse. The AST
-        // carries its own expression analysis context, so expression ids stay
-        // consistent with the plan generated from it.
         let mut parser_result = match rctx.parsed_statement.clone() {
             Some(ast) => crate::parser::parsing::ParserResult { ast },
             None => self.parse_into_context(query_text)?,
         };
 
-        // shape-normalize DML statements so structurally identical
-        // INSERT/UPDATE/DELETE reuse a cached physical plan, binding their
-        // literal values as parameters at execution time.
         let (effective_query, effective_rctx, dml_shape_cacheable) = if self.dml_shape_cache_enabled
-            && is_direct_dml_statement(parser_result.ast.stmt())
+            && classify::is_direct_dml_statement(parser_result.ast.stmt())
             && !rctx
                 .parameters
                 .iter()
@@ -373,25 +142,17 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         let needs_write = requires_write_storage(parser_result.ast.stmt());
         let is_ddl_statement = is_ddl(parser_result.ast.stmt());
-        // Read-only auto-commit statements get a statement-level snapshot
-        // context too (T2): every operator observes one fixed read timestamp
-        // and the per-table MVCC snapshots pin the versions until finalize.
-        // Diagnostic / ANALYZE / transaction statements are excluded.
         let is_read_only_statement = !needs_write
             && !is_ddl_statement
             && !is_diagnostic(parser_result.ast.stmt())
             && !is_analyze(parser_result.ast.stmt())
             && !is_transaction(parser_result.ast.stmt());
-        // DML *and* DDL bind through the write path: both mutate state, so
-        // both need the auto-commit operation scope that authorizes writes.
         let auto_commit_needs_binding = effective_rctx.operation_storage.is_none()
             && effective_rctx.auto_commit
             && (needs_write || is_ddl_statement || is_read_only_statement);
 
         let (operation_storage, effective_rctx, owns_operation_storage) =
             if auto_commit_needs_binding {
-                // DML *and* DDL take the write binding: both need the
-                // auto-commit transaction id that authorizes writes.
                 let storage = if needs_write || is_ddl_statement {
                     self.bind_auto_commit_storage()?
                 } else {
@@ -413,10 +174,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         let query_context = self.query_context_for_request(effective_rctx, space_info.as_ref());
         let ast = parser_result.ast.clone();
-        // First layer of the DML fast path: if a plan for this exact shape is
-        // memoized, skip binding entirely (`bound = None`) and let
-        // `compile_or_get_cached` serve (and re-validate) the memoized plan.
-        // The key must be constructed identically on both layers.
         let memo_hit = if dml_shape_cacheable {
             let planning_config = self.dml_planning_config();
             let key = super::DmlPlanMemoKey {
@@ -458,11 +215,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         )
     }
 
-    /// Parse and bind, with auto-commit storage for DML.
-    ///
-    /// Delegates to [`prepare_request`] which now handles auto-commit storage
-    /// binding internally when `rctx.auto_commit` is true and the statement
-    /// requires write storage.
     pub(crate) fn prepare_request_with_auto_commit(
         &mut self,
         query_text: &str,
@@ -472,7 +224,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         if let Some(ref name) = space_info.as_ref().map(|s| s.space_name.clone()) {
             rctx.space_name = Some(name.clone());
         }
-        // QueryRequestContext::new() already sets auto_commit: true
         self.prepare_request(query_text, Arc::new(rctx), space_info)
     }
 
@@ -488,7 +239,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let stmt = ast.stmt().clone();
         let statement_class = classify_statement(&stmt);
         let transaction_scope =
-            Self::resolve_transaction_scope(&stmt, query_context.request_context());
+            transaction::resolve_transaction_scope(&stmt, query_context.request_context());
         Ok(PreparedRequest {
             query_text: query_text.to_string(),
             query_context,
@@ -503,362 +254,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         })
     }
 
-    /// Compile (or get cached) and execute a prepared request with a
-    /// materialized or streaming sink, finalizing auto-bound operation
-    /// storage on success/failure.
-    ///
-    /// Single unified entry point (replaces the three former
-    /// `execute_prepared*` variants): diagnostic, analyze, and DDL
-    /// statements take their dedicated paths, everything else shares one
-    /// compile + execute core distinguished only by the sink.
-    pub(crate) fn execute_prepared(
-        &mut self,
-        request: &PreparedRequest,
-        transaction_id: Option<TransactionId>,
-        sink: ResultSink,
-    ) -> DBResult<PreparedOutcome> {
-        match sink {
-            ResultSink::Discard => Err(DBError::from(QueryError::execution(
-                "Discard sink must be handled by the caller".to_string(),
-            ))),
-            ResultSink::Materialize => match self.execute_prepared_inner(request, None, sink) {
-                Ok(outcome) => {
-                    request.finalize_owned_operation(true)?;
-                    Ok(outcome)
-                }
-                Err(error) => {
-                    let _ = request.finalize_owned_operation(false);
-                    Err(error)
-                }
-            },
-            ResultSink::Stream => {
-                match self.execute_prepared_inner(request, transaction_id, sink) {
-                    Ok(PreparedOutcome::Stream(stream)) => {
-                        if request.owns_operation_storage {
-                            if let Some(storage) = request.operation_storage.clone() {
-                                // Finalize when the stream ends: commit after full
-                                // consumption, abort on error, cancellation, or drop.
-                                let commit_storage = storage.clone();
-                                let abort_storage = storage;
-                                stream.set_transaction_finalizer_with_result(
-                                    Box::new(move || {
-                                        commit_storage
-                                            .write()
-                                            .finalize_operation(true)
-                                            .map_err(|error| error.to_string())
-                                    }),
-                                    Box::new(move || {
-                                        abort_storage
-                                            .write()
-                                            .finalize_operation(false)
-                                            .map_err(|error| error.to_string())
-                                    }),
-                                );
-                            }
-                        }
-                        Ok(PreparedOutcome::Stream(stream))
-                    }
-                    Ok(other) => Ok(other),
-                    Err(error) => {
-                        let _ = request.finalize_owned_operation(false);
-                        Err(error)
-                    }
-                }
-            }
-        }
-    }
-
-    /// Shared inner execution core.
-    ///
-    /// Compile (or fetch from the plan cache), execute with the requested
-    /// sink, and record cache/DDL bookkeeping.  The outer
-    /// [`execute_prepared`](Self::execute_prepared) wrapper handles storage
-    /// finalization; DDL executed through a streaming sink is materialized
-    /// then re-wrapped as a stream.
-    /// Reject expression-level EXISTS / IN in conditional-MERGE actions.
-    ///
-    /// The probe-then-branch orchestration path bypasses `MergePlanner`, so
-    /// the same planning-time rejection applied there must run here:
-    /// subqueries in MERGE pattern property values or ON MATCH / ON CREATE
-    /// SET values fail with the precise error instead of reaching execution.
-    fn reject_conditional_merge_subqueries(request: &PreparedRequest) -> DBResult<()> {
-        let Stmt::Merge(merge_stmt) = &request.stmt else {
-            return Ok(());
-        };
-        let qctx = &request.query_context;
-        let check_space_id = qctx.space_id().unwrap_or(1);
-        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-        let outer_col_names: Vec<String> = Vec::new();
-        let map_err = |e: crate::planning::planner::PlannerError| {
-            DBError::from(QueryError::pipeline_planning_error(e))
-        };
-        let pattern_props = match &merge_stmt.pattern {
-            crate::parser::ast::Pattern::Node(node_pattern) => node_pattern.properties.as_ref(),
-            crate::parser::ast::Pattern::Edge(edge_pattern) => edge_pattern.properties.as_ref(),
-            _ => None,
-        };
-        if let Some(props_expr) = pattern_props {
-            if let Some(expr_meta) = props_expr.expression() {
-                exists_planner::check_expression_subqueries(
-                    expr_meta.inner(),
-                    qctx,
-                    check_space_id,
-                    &check_space_name,
-                    &outer_col_names,
-                )
-                .map_err(map_err)?;
-            }
-        }
-        for set_clause in [&merge_stmt.on_match, &merge_stmt.on_create]
-            .into_iter()
-            .flatten()
-        {
-            for assignment in &set_clause.assignments {
-                if let Some(expr_meta) = assignment.value.expression() {
-                    exists_planner::check_expression_subqueries(
-                        expr_meta.inner(),
-                        qctx,
-                        check_space_id,
-                        &check_space_name,
-                        &outer_col_names,
-                    )
-                    .map_err(map_err)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn execute_prepared_inner(
-        &mut self,
-        request: &PreparedRequest,
-        transaction_id: Option<TransactionId>,
-        sink: ResultSink,
-    ) -> DBResult<PreparedOutcome> {
-        // Classification-specific paths: no plan is compiled.
-        if request.statement_class == StatementClass::Diagnostic {
-            return Ok(match sink {
-                ResultSink::Materialize => {
-                    PreparedOutcome::Materialized(self.execute_diagnostic(request)?)
-                }
-                ResultSink::Stream => PreparedOutcome::Stream(
-                    StreamingQueryResult::from_execution_result(self.execute_diagnostic(request)?),
-                ),
-                ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
-            });
-        }
-        if request.statement_class == StatementClass::Analyze {
-            let result = self.execute_analyze(request)?;
-            return Ok(match sink {
-                ResultSink::Materialize => PreparedOutcome::Materialized(result),
-                ResultSink::Stream => {
-                    PreparedOutcome::Stream(StreamingQueryResult::from_execution_result(result))
-                }
-                ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
-            });
-        }
-        // Conditional MERGE (`ON MATCH` / `ON CREATE` on a node pattern)
-        // plans to a scalar conditional the streaming assembler cannot
-        // execute, so it takes the probe-then-branch orchestration path:
-        // no cached plan is served or stored for it.
-        if let Some(bound) = request.bound_statement.as_ref() {
-            if super::merge_conditional::is_conditional_node_merge(bound) {
-                // The orchestration path bypasses MergePlanner, so reject
-                // expression-level EXISTS / IN in the MERGE actions here
-                // with the same precise planning error.
-                Self::reject_conditional_merge_subqueries(request)?;
-                let result = self.execute_conditional_merge(request)?;
-                return Ok(match sink {
-                    ResultSink::Materialize => PreparedOutcome::Materialized(result),
-                    ResultSink::Stream => {
-                        PreparedOutcome::Stream(StreamingQueryResult::from_execution_result(result))
-                    }
-                    ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
-                });
-            }
-        }
-        // Configuration statements bypass planning: the engine carries no
-        // global configuration store. `UPDATE CONFIGS` evaluates its value
-        // and returns an application intent; `SHOW CONFIGS` returns a
-        // listing intent. The host resolves both against live configuration.
-        if let Stmt::UpdateConfigs(update) = &request.stmt {
-            let result = Self::prepare_config_update_intent(request, update)?;
-            return Ok(match sink {
-                ResultSink::Materialize => PreparedOutcome::Materialized(result),
-                ResultSink::Stream => {
-                    PreparedOutcome::Stream(StreamingQueryResult::from_execution_result(result))
-                }
-                ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
-            });
-        }
-        if let Stmt::ShowConfigs(show) = &request.stmt {
-            let result = ExecutionResult::ShowConfigs {
-                module: show.module.clone(),
-            };
-            return Ok(match sink {
-                ResultSink::Materialize => PreparedOutcome::Materialized(result),
-                ResultSink::Stream => {
-                    PreparedOutcome::Stream(StreamingQueryResult::from_execution_result(result))
-                }
-                ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
-            });
-        }
-        // DDL has no streaming semantics: materialize and wrap.
-        let stream_ddl =
-            sink == ResultSink::Stream && request.statement_class == StatementClass::Ddl;
-
-        let physical_plan = self.compile_or_get_cached(
-            &request.query_text,
-            request.query_context.clone(),
-            request.bound_statement.as_ref(),
-            &request.stmt,
-            &request.ast,
-            request.dml_shape_cacheable,
-        )?;
-        // Transaction commands keep the resolved CommandScope even when the
-        // caller passes a transaction id (COMMIT/ROLLBACK carry the finished
-        // transaction id); regular statements inside an explicit transaction
-        // bind the caller-provided id as an explicit scope.
-        let scope = if is_transaction(&request.stmt) {
-            request.transaction_scope.clone()
-        } else {
-            transaction_id
-                .map(|id| TransactionScope::explicit(id, true))
-                .unwrap_or_else(|| request.transaction_scope.clone())
-        };
-
-        if stream_ddl || sink == ResultSink::Materialize {
-            let start = Instant::now();
-            let result = self.execute_compiled_with_scope(
-                physical_plan,
-                request.query_context.clone(),
-                ResultSink::Materialize,
-                scope,
-            )?;
-            self.record_cache_execution(
-                &request.query_text,
-                &request.query_context,
-                &request.stmt,
-                start.elapsed().as_secs_f64() * 1000.0,
-            );
-            if request.statement_class == StatementClass::Ddl {
-                self.invalidate_after_ddl(request.query_context.space_name().as_deref());
-            }
-            if stream_ddl {
-                return Ok(PreparedOutcome::Stream(
-                    StreamingQueryResult::from_execution_result(result),
-                ));
-            }
-            return Ok(PreparedOutcome::Materialized(result));
-        }
-
-        let stream = self.execute_compiled_stream_with_scope(
-            physical_plan,
-            request.query_context.clone(),
-            scope,
-        )?;
-        self.attach_stream_cache_execution_stats(&stream, request);
-        Ok(PreparedOutcome::Stream(stream))
-    }
-
-    pub(crate) fn execute_diagnostic(
-        &mut self,
-        request: &PreparedRequest,
-    ) -> DBResult<ExecutionResult> {
-        match &request.stmt {
-            Stmt::Explain(ref explain_stmt) => {
-                if explain_stmt.analyze {
-                    self.execute_explain_analyze(
-                        explain_stmt,
-                        request.query_context.clone(),
-                        request.transaction_scope.clone(),
-                    )
-                } else {
-                    self.execute_explain(explain_stmt, request.query_context.clone())
-                }
-            }
-            Stmt::Profile(ref profile_stmt) => self.execute_profile(
-                profile_stmt,
-                request.query_context.clone(),
-                request.transaction_scope.clone(),
-            ),
-            _ => Err(DBError::from(QueryError::execution(
-                "Not a diagnostic statement".to_string(),
-            ))),
-        }
-    }
-
-    /// Execute an ANALYZE statement: collect statistics for the target space.
-    ///
-    /// This is a bypass path: no plan is generated, statistics are written to
-    /// the optimizer's `StatisticsManager` only.
-    pub(crate) fn execute_analyze(
-        &mut self,
-        request: &PreparedRequest,
-    ) -> DBResult<ExecutionResult> {
-        let space_name = match &request.stmt {
-            Stmt::Analyze(analyze) => analyze
-                .space
-                .clone()
-                .or_else(|| request.query_context.space_name())
-                .or_else(|| request.query_context.request_context().space_name.clone()),
-            _ => request.query_context.space_name(),
-        };
-        let space_name = space_name.ok_or_else(|| {
-            DBError::from(QueryError::execution(
-                "ANALYZE requires a space: use ANALYZE SPACE <name> or USE <space> first"
-                    .to_string(),
-            ))
-        })?;
-        self.collect_statistics(&space_name, true)
-            .map_err(|error| DBError::from(QueryError::execution(error)))?;
-        log::info!("ANALYZE completed for space '{}'", space_name);
-        Ok(ExecutionResult::Success)
-    }
-
-    /// Evaluate an `UPDATE CONFIGS` assignment into an application intent.
-    ///
-    /// Bypass path: no plan is generated. The value expression is evaluated
-    /// as a constant (literals, parameters, session variables, deterministic
-    /// scalar expressions); anything needing row input fails loudly instead
-    /// of producing a silently wrong configuration value.
-    fn prepare_config_update_intent(
-        request: &PreparedRequest,
-        update: &crate::parser::ast::UpdateConfigsStmt,
-    ) -> DBResult<ExecutionResult> {
-        let expression = update.config_value.get_expression().ok_or_else(|| {
-            DBError::from(QueryError::execution(
-                "UPDATE CONFIGS value has no evaluable expression".to_string(),
-            ))
-        })?;
-        let request_context = request.query_context.request_context();
-        let value = super::merge_conditional::eval_const_expression(
-            &expression,
-            &request_context.parameters,
-            &request_context.session_variables,
-        )
-        .map_err(|error| {
-            DBError::from(QueryError::execution(format!(
-                "UPDATE CONFIGS value must be a constant expression: {error}"
-            )))
-        })?;
-        Ok(ExecutionResult::ConfigUpdate {
-            module: update.module.clone(),
-            name: update.config_name.clone(),
-            value,
-        })
-    }
-
-    // ── Request context construction ──────────────────────────────────────
-
-    /// Build a [`QueryContext`] from a request context and optional space info.
     pub(crate) fn query_context_for_request(
         &self,
         rctx: Arc<QueryRequestContext>,
         space_info: Option<&SpaceInfo>,
     ) -> Arc<QueryContext> {
-        let snapshot_ts = snapshot_ts_for_request(&rctx);
-        let isolation_level = isolation_level_for_request(&rctx);
+        let snapshot_ts = transaction::snapshot_ts_for_request(&rctx);
+        let isolation_level = transaction::isolation_level_for_request(&rctx);
         let mut builder = QueryContext::builder(rctx);
         if let Some(ts) = snapshot_ts {
             builder = builder.with_snapshot_ts(ts);
@@ -870,252 +272,35 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         if let Some(space) = space_info {
             query_context.set_space_info(space.clone());
         }
-        // `QueryContext` is `Send` but not `Sync` (it owns a bump arena),
-        // yet it must be shared across planner/executor threads, so the
-        // `Arc` here is intentional. Scoped to this site instead of the
-        // module level so no future `Arc` misuse is silently allowed.
         #[allow(clippy::arc_with_non_send_sync)]
         Arc::new(query_context)
     }
 
-    // ── Transaction scope resolution ──────────────────────────────────────
-
-    /// Resolve the [`TransactionScope`] from a statement and request context.
-    pub(crate) fn resolve_transaction_scope(
-        stmt: &Stmt,
-        request: &QueryRequestContext,
-    ) -> TransactionScope {
-        // Transaction commands (BEGIN / COMMIT / ROLLBACK / SAVEPOINT /
-        // RELEASE) always run in the transient CommandScope: the API layer
-        // performs the TransactionManager operations and the plan only
-        // validates/tracks state through the session controller. This check
-        // must precede the transaction_id short-circuit — COMMIT/ROLLBACK
-        // carry the finished transaction id on the request and must NOT be
-        // treated as an explicit statement within that transaction.
-        if is_transaction(stmt) {
-            return TransactionScope::CommandScope;
-        }
-        if let Some(scope) = Self::scope_for_bound_request(request) {
-            return scope;
-        }
-        if let Some(transaction_id) = request.transaction_id {
-            if request.auto_commit {
-                TransactionScope::auto_commit(transaction_id)
-            } else {
-                TransactionScope::explicit(transaction_id, !request.read_only)
-            }
-        } else {
-            TransactionScope::None
-        }
-    }
-
-    fn scope_for_bound_request(request: &QueryRequestContext) -> Option<TransactionScope> {
-        request
-            .transaction_id
-            .or_else(|| {
-                request
-                    .operation_context
-                    .as_ref()
-                    .and_then(|context| context.transaction_id)
-            })
-            .map(|transaction_id| {
-                if request.auto_commit {
-                    TransactionScope::auto_commit(transaction_id)
-                } else {
-                    TransactionScope::explicit(transaction_id, !request.read_only)
-                }
-            })
-    }
-
-    // ── Operation storage lifecycle ────────────────────────────────────────
-
     pub(crate) fn bind_auto_commit_storage(&self) -> DBResult<Arc<RwLock<dyn QueryStorage>>> {
         let storage = self.storage.as_ref().ok_or_else(|| {
-            DBError::from(QueryError::execution(
+            graphdb_core::error::DBError::from(graphdb_core::error::QueryError::execution(
                 "DML requires a storage binding".to_string(),
             ))
         })?;
         let bound = storage
             .read()
             .bind_auto_commit_context()
-            .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
+            .map_err(|error| graphdb_core::error::DBError::from(graphdb_core::error::QueryError::execution(error.to_string())))?;
         Ok(Arc::new(RwLock::new(bound)))
     }
 
-    /// Bind a read-only statement context with a fixed snapshot timestamp.
-    ///
-    /// Every storage access of the statement observes the same read
-    /// timestamp, and per-table MVCC snapshots are lazily registered so GC
-    /// cannot terminate versions the statement may still read. The bound
-    /// handle is finalized (snapshot unregistration) by the same
-    /// `finalize_owned_operation` lifecycle as auto-commit DML.
     pub(crate) fn bind_read_operation_storage(&self) -> DBResult<Arc<RwLock<dyn QueryStorage>>> {
         let storage = self.storage.as_ref().ok_or_else(|| {
-            DBError::from(QueryError::execution(
+            graphdb_core::error::DBError::from(graphdb_core::error::QueryError::execution(
                 "Read requires a storage binding".to_string(),
             ))
         })?;
         let bound = storage
             .read()
             .bind_read_operation_context()
-            .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
+            .map_err(|error| graphdb_core::error::DBError::from(graphdb_core::error::QueryError::execution(error.to_string())))?;
         Ok(Arc::new(RwLock::new(bound)))
     }
-
-    // ── Cache helpers ──────────────────────────────────────────────────────
-
-    pub(crate) fn invalidate_after_ddl(&self, space_name: Option<&str>) {
-        // Bump the schema generation so every version-keyed cache (plan
-        // cache, DML plan memo) misses on entries planned before this DDL.
-        // Stale memo entries never match new lookups and age out through the
-        // memo capacity cap, so no explicit eviction is needed here.
-        self.schema_generation
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.optimizer_engine
-            .stats_manager()
-            .invalidate_space(space_name);
-        self.optimizer_engine.invalidate_space_feedback(space_name);
-        if let Some(space_name) = space_name {
-            let removed = self.plan_cache.invalidate_space(space_name);
-            if removed > 0 {
-                log::info!(
-                    "Invalidated {} cached plans for space '{}' after committed DDL",
-                    removed,
-                    space_name
-                );
-            }
-        } else {
-            self.plan_cache.clear();
-        }
-    }
-
-    pub(crate) fn record_cache_execution(
-        &self,
-        query_text: &str,
-        query_context: &QueryContext,
-        stmt: &Stmt,
-        execution_time_ms: f64,
-    ) {
-        if !is_read_only_cacheable(stmt) {
-            return;
-        }
-        let space_name = query_context
-            .space_name()
-            .or_else(|| query_context.request_context().space_name.clone());
-        let schema_version = Some(
-            self.schema_generation
-                .load(std::sync::atomic::Ordering::Relaxed),
-        );
-        let index_version = Some(
-            self.index_generation
-                .load(std::sync::atomic::Ordering::Relaxed),
-        );
-        let param_type_signature =
-            self.current_param_type_signature(query_text, query_context.request_context());
-        self.plan_cache.record_execution_with_space(
-            query_text,
-            execution_time_ms,
-            space_name,
-            schema_version,
-            index_version,
-            param_type_signature,
-        );
-    }
-
-    fn attach_stream_cache_execution_stats(
-        &self,
-        stream: &StreamingQueryResult,
-        request: &PreparedRequest,
-    ) {
-        if !is_read_only_cacheable(&request.stmt) {
-            return;
-        }
-        let space_name = request
-            .query_context
-            .space_name()
-            .or_else(|| request.query_context.request_context().space_name.clone());
-        let schema_version = Some(
-            self.schema_generation
-                .load(std::sync::atomic::Ordering::Relaxed),
-        );
-        let index_version = Some(
-            self.index_generation
-                .load(std::sync::atomic::Ordering::Relaxed),
-        );
-        let param_type_signature = self.current_param_type_signature(
-            &request.query_text,
-            request.query_context.request_context(),
-        );
-
-        let plan_cache = Arc::clone(&self.plan_cache);
-        let query_text = request.query_text.clone();
-        let space_name2 = space_name.clone();
-        let execution_start = Instant::now();
-        stream.set_on_drop(Box::new(move || {
-            plan_cache.record_execution_with_space(
-                &query_text,
-                execution_start.elapsed().as_secs_f64() * 1000.0,
-                space_name2,
-                schema_version,
-                index_version,
-                param_type_signature,
-            );
-        }));
-    }
-
-    /// Hash of the parameter *types* in the current request, matching the
-    /// dimension used by the plan-cache put path so execution-time feedback
-    /// updates the correct cache entry.
-    fn current_param_type_signature(
-        &self,
-        query_text: &str,
-        request: &QueryRequestContext,
-    ) -> Option<u64> {
-        let mut param_positions = self.param_handler.extract_params(query_text);
-        for position in &mut param_positions {
-            let name = position
-                .name
-                .clone()
-                .unwrap_or_else(|| position.index.to_string());
-            position.expected_type = request.parameters.get(&name).map(|value| value.data_type());
-        }
-        crate::cache::plan_cache::QueryPlanCache::compute_param_type_signature(&param_positions)
-    }
-}
-
-/// Derive the MVCC snapshot timestamp for a request.
-///
-/// Statements inside an explicit transaction inherit the transaction's
-/// snapshot timestamp (effective snapshot → storage operation context read
-/// timestamp). Auto-commit statements return `None` so they read the current
-/// version of the data.
-fn snapshot_ts_for_request(rctx: &QueryRequestContext) -> Option<Timestamp> {
-    if rctx.auto_commit {
-        return None;
-    }
-    rctx.operation_context
-        .as_ref()
-        .map(|context| context.read_timestamp)
-}
-
-/// Derive the transaction isolation level for a request.
-///
-/// The API layer injects the level for queries inside an explicit transaction
-/// (from `TransactionExecution`). When it was not injected but the request is
-/// still a non-auto-commit transaction statement, fall back to the
-/// transaction manager's default (`RepeatableRead`). Auto-commit statements
-/// keep `None` (statement-level snapshot semantics).
-fn isolation_level_for_request(rctx: &QueryRequestContext) -> Option<TransactionIsolationLevel> {
-    if rctx.auto_commit {
-        return None;
-    }
-    rctx.isolation_level.or_else(|| {
-        if rctx.transaction_id.is_some() {
-            Some(TransactionIsolationLevel::default())
-        } else {
-            None
-        }
-    })
 }
 
 #[cfg(test)]
@@ -1144,10 +329,8 @@ mod tests {
         ];
         for query in cases {
             let stmt = parse(query);
-            assert!(is_direct_dml_statement(&stmt), "direct DML: {query}");
-            // Every direct DML statement is also a direct write statement
-            // (auto-commit write routing is a superset of shape candidates).
-            assert!(is_direct_write_statement(&stmt), "direct write: {query}");
+            assert!(classify::is_direct_dml_statement(&stmt), "direct DML: {query}");
+            assert!(classify::is_direct_write_statement(&stmt), "direct write: {query}");
         }
     }
 
@@ -1161,19 +344,16 @@ mod tests {
         ];
         for query in cases {
             let stmt = parse(query);
-            assert!(!is_direct_dml_statement(&stmt), "not direct DML: {query}");
+            assert!(!classify::is_direct_dml_statement(&stmt), "not direct DML: {query}");
         }
     }
 
     #[test]
     fn direct_write_covers_dcl_but_not_shape_candidates() {
-        // DCL writes the user/privilege store, so it takes the auto-commit
-        // write path — but it is not DML and must never enter shape
-        // normalization.
         let stmt = parse("CREATE USER alice WITH PASSWORD 'secret'");
-        assert!(is_direct_dcl(&stmt));
-        assert!(is_direct_write_statement(&stmt));
-        assert!(!is_direct_dml_statement(&stmt));
+        assert!(classify::is_direct_dcl(&stmt));
+        assert!(classify::is_direct_write_statement(&stmt));
+        assert!(!classify::is_direct_dml_statement(&stmt));
         assert!(crate::planning::dml_shape::normalize_shape(&stmt).is_none());
     }
 
@@ -1190,7 +370,7 @@ mod tests {
         rctx.auto_commit = false;
         rctx.operation_context = Some(op_ctx);
 
-        assert_eq!(snapshot_ts_for_request(&rctx), Some(42));
+        assert_eq!(transaction::snapshot_ts_for_request(&rctx), Some(42));
     }
 
     #[test]
@@ -1206,7 +386,7 @@ mod tests {
         rctx.auto_commit = true;
         rctx.operation_context = Some(op_ctx);
 
-        assert_eq!(snapshot_ts_for_request(&rctx), None);
+        assert_eq!(transaction::snapshot_ts_for_request(&rctx), None);
     }
 
     #[test]
@@ -1215,6 +395,6 @@ mod tests {
         rctx.auto_commit = false;
         rctx.operation_context = None;
 
-        assert_eq!(snapshot_ts_for_request(&rctx), None);
+        assert_eq!(transaction::snapshot_ts_for_request(&rctx), None);
     }
 }

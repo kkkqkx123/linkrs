@@ -8,8 +8,6 @@ use crate::parser::ast::pattern::{
 };
 use crate::parser::ast::stmt::*;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
-use crate::parser::parsing::clause_parser::ClauseParser;
-use crate::parser::parsing::dml_parser::DmlParser;
 use crate::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
@@ -17,11 +15,16 @@ use graphdb_core::types::expr::contextual::ContextualExpression;
 use graphdb_core::types::expr::Expression as CoreExpression;
 use graphdb_core::types::graph_schema::EdgeDirection;
 
+mod find_path;
+mod get_subgraph;
+mod go;
+mod r#match;
+
 /// Graph Traversal Parser
 pub struct TraversalParser;
 
 /// The body of one MATCH clause, used when merging consecutive MATCH clauses.
-struct ParsedMatchClause {
+pub(crate) struct ParsedMatchClause {
     patterns: Vec<Pattern>,
     join_hint: Option<JoinHintAst>,
     where_clause: Option<ContextualExpression>,
@@ -35,607 +38,10 @@ impl TraversalParser {
         Self
     }
 
-    /// Analyzing the MATCH statement
-    pub fn parse_match_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-
-        // Check whether it is an OPTIONAL MATCH.
-        let mut optional = ctx.match_token(TokenKind::Optional);
-
-        ctx.expect_token(TokenKind::Match)?;
-
-        let first = self.parse_match_clause(ctx)?;
-        let mut patterns = first.patterns;
-        let mut join_hint = first.join_hint;
-        let mut where_clause = first.where_clause;
-        let mut where_explicit = first.where_explicit;
-        let mut return_clause = first.return_clause;
-        let mut delete_clause = first.delete_clause;
-
-        // Consecutive plain MATCH clauses (`MATCH a MATCH b ...`) are merged
-        // into a single statement: all patterns combine, WHERE clauses are
-        // AND-ed, and RETURN/DELETE come from the last clause providing one.
-        // An OPTIONAL MATCH continuation (`MATCH a OPTIONAL MATCH b ...`)
-        // is merged the same way and marks the whole statement as optional.
-        // Chains starting with OPTIONAL MATCH are left unchanged; a trailing
-        // MATCH there is still reported by the outer parser.
-        while !optional
-            && return_clause.is_none()
-            && delete_clause.is_none()
-            && (ctx.check_token(TokenKind::Match)
-                || (ctx.check_token(TokenKind::Optional)
-                    && ctx.peek_token().kind == TokenKind::Match))
-        {
-            if ctx.check_token(TokenKind::Optional) {
-                ctx.expect_token(TokenKind::Optional)?;
-                optional = true;
-            }
-            ctx.expect_token(TokenKind::Match)?;
-            let next = self.parse_match_clause(ctx)?;
-            patterns.extend(next.patterns);
-
-            match (where_explicit, next.where_explicit) {
-                (false, true) => where_clause = next.where_clause,
-                (true, true) => {
-                    if let (Some(left), Some(right)) = (&where_clause, &next.where_clause) {
-                        if let Some(combined) = ctx.expression_context().and(left, right) {
-                            where_clause = Some(combined);
-                        }
-                    }
-                }
-                _ => {}
-            }
-            where_explicit |= next.where_explicit;
-
-            if let Some(rc) = next.return_clause {
-                return_clause = Some(rc);
-            }
-            if let Some(dc) = next.delete_clause {
-                delete_clause = Some(dc);
-            }
-            if next.join_hint.is_some() {
-                join_hint = next.join_hint;
-            }
-        }
-
-        let (order_by, limit, skip) = if let Some(ref rc) = return_clause {
-            (rc.order_by.clone(), rc.limit.clone(), rc.skip.clone())
-        } else {
-            (None, None, None)
-        };
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-
-        Ok(Stmt::Match(MatchStmt {
-            span,
-            patterns,
-            join_hint,
-            where_clause,
-            return_clause,
-            order_by,
-            limit,
-            skip,
-            optional,
-            delete_clause,
-        }))
-    }
-
-    /// Parses the body of one MATCH clause: comma-separated patterns, an
-    /// optional WHERE expression (defaulting to a literal true), an optional
-    /// RETURN clause, and an optional DELETE clause.
-    fn parse_match_clause(
-        &mut self,
-        ctx: &mut ParseContext,
-    ) -> Result<ParsedMatchClause, ParseError> {
-        let mut patterns = Vec::new();
-        loop {
-            let Some(pattern) = ctx.recover_clause(
-                |c| {
-                    Ok(Some(Pattern::Variable(VariablePattern {
-                        span: c.current_span(),
-                        name: String::new(),
-                    })))
-                },
-                |c| self.parse_pattern(c).map(Some),
-            )?
-            else {
-                break;
-            };
-            patterns.push(pattern);
-            if !ctx.match_token(TokenKind::Comma) {
-                break;
-            }
-        }
-
-        // Optional join hint right after the patterns
-        // (`MATCH ... USING JOIN BINARY(e1, e2)`), mirroring Neo4j's
-        // USING placement. Soft keywords only: a plain `using` variable
-        // elsewhere still parses as an identifier.
-        let join_hint = if ctx.check_keyword_sequence(&["USING", "JOIN"]) {
-            Some(self.parse_join_hint(ctx)?)
-        } else {
-            None
-        };
-
-        let (mut where_clause, mut where_explicit) = if ctx.match_token(TokenKind::Where) {
-            (
-                Some(
-                    ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?,
-                ),
-                true,
-            )
-        } else {
-            (Some(Self::create_true_expression(ctx)?), false)
-        };
-
-        let return_clause = if ctx.match_token(TokenKind::Return) {
-            ctx.recover_clause(
-                |_| Ok(None),
-                |c| ClauseParser::new().parse_return_clause(c).map(Some),
-            )?
-        } else {
-            None
-        };
-
-        let delete_clause = if ctx.match_token(TokenKind::Delete) {
-            ctx.recover_clause(
-                |_| Ok(None),
-                |c| self.parse_match_delete_clause(c).map(Some),
-            )?
-        } else {
-            None
-        };
-
-        // Accept a WHERE clause after RETURN (`RETURN ... WHERE ...`): the
-        // filter is AND-ed with any pre-RETURN WHERE, mirroring the
-        // consecutive-clause merge behavior.
-        if ctx.match_token(TokenKind::Where) {
-            let post =
-                ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?;
-            if let Some(ref pre) = where_clause {
-                if let Some(combined) = ctx.expression_context().and(pre, &post) {
-                    where_clause = Some(combined);
-                } else {
-                    where_clause = Some(post);
-                }
-            } else {
-                where_clause = Some(post);
-            }
-            where_explicit = true;
-        }
-
-        // Accept a trailing MERGE clause (`MATCH ... MERGE ...`). It is
-        // parsed for syntax validation but not stored on the MATCH
-        // statement: the matched rows are returned unchanged.
-        if ctx.check_token(TokenKind::Merge) {
-            DmlParser::new().parse_merge_statement(ctx)?;
-        }
-
-        Ok(ParsedMatchClause {
-            patterns,
-            join_hint,
-            where_clause,
-            where_explicit,
-            return_clause,
-            delete_clause,
-        })
-    }
-
-    /// Parse the hint body after `USING JOIN`: `BINARY(a, b)` pins a
-    /// binary hash join of two scans; `MULTIWAY(p, b1, b2, ...)` runs a
-    /// WCO intersect with `p` probing and the rest building.
-    fn parse_join_hint(&mut self, ctx: &mut ParseContext) -> Result<JoinHintAst, ParseError> {
-        ctx.consume_keyword("USING")?;
-        ctx.consume_keyword("JOIN")?;
-        if ctx.check_keyword("BINARY") {
-            ctx.consume_keyword("BINARY")?;
-            ctx.expect_token(TokenKind::LParen)?;
-            let left = ctx.expect_identifier()?;
-            ctx.expect_token(TokenKind::Comma)?;
-            let right = ctx.expect_identifier()?;
-            ctx.expect_token(TokenKind::RParen)?;
-            Ok(JoinHintAst::Binary { left, right })
-        } else if ctx.check_keyword("MULTIWAY") {
-            ctx.consume_keyword("MULTIWAY")?;
-            ctx.expect_token(TokenKind::LParen)?;
-            let probe = ctx.expect_identifier()?;
-            let mut builds = Vec::new();
-            while ctx.match_token(TokenKind::Comma) {
-                builds.push(ctx.expect_identifier()?);
-            }
-            ctx.expect_token(TokenKind::RParen)?;
-            if builds.is_empty() {
-                let pos = ctx.current_position();
-                return Err(ParseError::new(
-                    ParseErrorKind::UnexpectedToken,
-                    "MULTIWAY needs at least a probe and one build variable".to_string(),
-                    pos,
-                ));
-            }
-            Ok(JoinHintAst::Multiway { probe, builds })
-        } else {
-            let pos = ctx.current_position();
-            Err(ParseError::new(
-                ParseErrorKind::UnexpectedToken,
-                "Expected BINARY or MULTIWAY after USING JOIN".to_string(),
-                pos,
-            )
-            .with_expected_tokens(vec!["BINARY".to_string(), "MULTIWAY".to_string()]))
-        }
-    }
-
-    fn parse_match_delete_clause(
-        &mut self,
-        ctx: &mut ParseContext,
-    ) -> Result<MatchDeleteClause, ParseError> {
-        // `->` inside this clause is an edge arrow, not a lambda arrow, so
-        // expressions such as `a -> b` must not parse as lambdas here.
-        ctx.with_edge_syntax_mode(|ctx| {
-            let start_span = ctx.current_span();
-
-            let target = if ctx.match_token(TokenKind::Vertex) {
-                let vertex_ids = self.parse_expression_list(ctx)?;
-                MatchDeleteTarget::Vertices(vertex_ids)
-            } else if ctx.match_token(TokenKind::Edge) {
-                // Two sub-syntaxes:
-                // 1) Edge variable: DELETE EDGE e [, e2, ...]
-                // 2) Edge refs:     DELETE EDGE a -> b [@rank] [, a2 -> b2 @rank2, ...]
-                // Disambiguate: parse first expression, then check for Arrow token
-                let first_expr = self.parse_expression(ctx)?;
-                if ctx.check_token(TokenKind::Arrow) {
-                    // Syntax 2: a -> b [@rank] [, ...]
-                    let mut edge_refs = Vec::new();
-                    let mut current_src = first_expr;
-                    loop {
-                        ctx.expect_token(TokenKind::Arrow)?;
-                        let dst = self.parse_expression(ctx)?;
-                        let rank = if ctx.match_token(TokenKind::At) {
-                            Some(self.parse_expression(ctx)?)
-                        } else {
-                            None
-                        };
-                        edge_refs.push((current_src, dst, rank));
-                        if ctx.match_token(TokenKind::Comma) {
-                            current_src = self.parse_expression(ctx)?;
-                        } else {
-                            break;
-                        }
-                    }
-                    MatchDeleteTarget::EdgeRefs(edge_refs)
-                } else {
-                    // Syntax 1: edge variable e [, e2, ...]
-                    let mut edge_refs = vec![first_expr];
-                    while ctx.match_token(TokenKind::Comma) {
-                        edge_refs.push(self.parse_expression(ctx)?);
-                    }
-                    MatchDeleteTarget::Edges(edge_refs)
-                }
-            } else {
-                return Err(ParseError::new(
-                    ParseErrorKind::UnexpectedToken,
-                    "Expected VERTEX or EDGE after DELETE".to_string(),
-                    ctx.current_position(),
-                ));
-            };
-
-            let with_edge = if ctx.match_token(TokenKind::With) {
-                ctx.expect_token(TokenKind::Edge)?;
-                true
-            } else {
-                false
-            };
-
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
-
-            Ok(MatchDeleteClause {
-                span,
-                target,
-                with_edge,
-            })
-        })
-    }
-
-    /// Analyzing GO statements
-    pub fn parse_go_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Go)?;
-
-        let steps = self.parse_steps(ctx)?;
-
-        // Consumption of optional STEP/STEP keywords
-        ctx.match_token(TokenKind::Step);
-
-        ctx.expect_token(TokenKind::From)?;
-        let from_span = ctx.current_span();
-        let from_clause = ctx.recover_clause(
-            |c| {
-                Ok(FromClause {
-                    span: c.current_span(),
-                    vertices: Vec::new(),
-                })
-            },
-            |c| {
-                let vertices = self.parse_expression_list(c)?;
-                Ok(FromClause {
-                    span: from_span,
-                    vertices,
-                })
-            },
-        )?;
-
-        let over = if ctx.match_token(TokenKind::Over) {
-            ctx.recover_clause(
-                |_| Ok(None),
-                |c| ClauseParser::new().parse_over_clause(c).map(Some),
-            )?
-        } else {
-            None
-        };
-
-        let where_clause = if ctx.match_token(TokenKind::Where) {
-            Some(ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?)
-        } else {
-            Some(Self::create_true_expression(ctx)?)
-        };
-
-        let yield_clause = if ctx.match_token(TokenKind::Yield) {
-            ctx.recover_clause(
-                |_| Ok(None),
-                |c| ClauseParser::new().parse_yield_clause(c).map(Some),
-            )?
-        } else {
-            None
-        };
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-
-        Ok(Stmt::Go(GoStmt {
-            span,
-            steps,
-            from: from_clause,
-            over,
-            where_clause,
-            yield_clause,
-        }))
-    }
-
-    /// Analysis of the FIND PATH statement
-    pub fn parse_find_path_statement(
-        &mut self,
-        ctx: &mut ParseContext,
-    ) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Find)?;
-
-        // Path type analysis: SHORTEST, ALL
-        let shortest = if ctx.match_token(TokenKind::Shortest) {
-            true
-        } else {
-            !ctx.match_token(TokenKind::All)
-        };
-
-        ctx.expect_token(TokenKind::Path)?;
-
-        // Optional options: WITH LOOP / WITH CYCLE
-        let mut with_loop = false;
-        let mut with_cycle = false;
-        while ctx.match_token(TokenKind::With) {
-            if ctx.match_token(TokenKind::Loop) {
-                with_loop = true;
-            } else if ctx.match_token(TokenKind::Cycle) {
-                with_cycle = true;
-            }
-        }
-
-        ctx.expect_token(TokenKind::From)?;
-        let from_span = ctx.current_span();
-        let from_clause = ctx.recover_clause(
-            |c| {
-                Ok(FromClause {
-                    span: c.current_span(),
-                    vertices: Vec::new(),
-                })
-            },
-            |c| {
-                let vertices = self.parse_expression_list(c)?;
-                Ok(FromClause {
-                    span: from_span,
-                    vertices,
-                })
-            },
-        )?;
-
-        let to_present = ctx.recover_clause(
-            |_| Ok(false),
-            |c| {
-                c.expect_token(TokenKind::To)?;
-                Ok(true)
-            },
-        )?;
-        let to_vertex = if to_present {
-            ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?
-        } else {
-            Self::create_true_expression(ctx)?
-        };
-
-        let over_present = ctx.recover_clause(
-            |_| Ok(false),
-            |c| {
-                c.expect_token(TokenKind::Over)?;
-                Ok(true)
-            },
-        )?;
-        let over = if over_present {
-            ctx.recover_clause(
-                |c| {
-                    Ok(OverClause {
-                        span: c.current_span(),
-                        edge_types: Vec::new(),
-                        direction: EdgeDirection::Out,
-                    })
-                },
-                |c| ClauseParser::new().parse_over_clause(c),
-            )?
-        } else {
-            OverClause {
-                span: ctx.current_span(),
-                edge_types: Vec::new(),
-                direction: EdgeDirection::Out,
-            }
-        };
-
-        // Optional: Up to N steps
-        let mut max_steps = None;
-        if ctx.match_token(TokenKind::Upto) {
-            let steps = ctx.recover_clause(
-                |_| Ok(None),
-                |c| c.expect_integer_literal().map(|n| n as usize).map(Some),
-            )?;
-            if let Some(n) = steps {
-                max_steps = Some(n);
-                ctx.expect_token(TokenKind::Step)?;
-            }
-        }
-
-        // Optional WEIGHT clause
-        let weight_expression = if ctx.match_token(TokenKind::Weight) {
-            ctx.recover_clause(|_| Ok(None), |c| c.expect_identifier().map(Some))?
-        } else {
-            None
-        };
-
-        // Optional WHERE clause
-        let where_clause = if ctx.match_token(TokenKind::Where) {
-            Some(ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?)
-        } else {
-            Some(Self::create_true_expression(ctx)?)
-        };
-
-        // Optional YIELD clause
-        let yield_clause = if ctx.match_token(TokenKind::Yield) {
-            ctx.recover_clause(
-                |_| Ok(None),
-                |c| ClauseParser::new().parse_yield_clause(c).map(Some),
-            )?
-        } else {
-            None
-        };
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-
-        Ok(Stmt::FindPath(FindPathStmt {
-            span,
-            from: from_clause,
-            to: to_vertex,
-            over: Some(over),
-            where_clause,
-            shortest,
-            max_steps,
-            limit: None,
-            skip: None,
-            yield_clause,
-            weight_expression,
-            heuristic_expression: None,
-            with_loop,
-            with_cycle,
-        }))
-    }
-
-    /// Analysis of the GET SUBGRAPH statement
-    pub fn parse_subgraph_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Get)?;
-
-        ctx.expect_token(TokenKind::Subgraph)?;
-
-        let with_prop = ctx.match_token(TokenKind::With) && ctx.match_token(TokenKind::Prop);
-
-        let _with_edge = if !with_prop {
-            ctx.match_token(TokenKind::With) && ctx.match_token(TokenKind::Edge)
-        } else {
-            false
-        };
-
-        let steps = if matches!(ctx.current_token().kind, TokenKind::IntegerLiteral(_)) {
-            // Canonical form: GET SUBGRAPH <n> STEPS FROM ...
-            let n = ctx.expect_integer_literal()?;
-            ctx.expect_token(TokenKind::Step)?;
-            Steps::Fixed(n as usize)
-        } else if ctx.match_token(TokenKind::Step) {
-            // Alternate form: GET SUBGRAPH STEPS <n> FROM ...
-            self.parse_steps(ctx)?
-        } else {
-            Steps::Fixed(1)
-        };
-
-        // Canonical form requires FROM: GET SUBGRAPH <n> STEPS FROM ...
-        ctx.expect_token(TokenKind::From)?;
-        let from_span = ctx.current_span();
-        let from_clause = ctx.recover_clause(
-            |c| {
-                Ok(FromClause {
-                    span: c.current_span(),
-                    vertices: Vec::new(),
-                })
-            },
-            |c| {
-                let vertices = self.parse_expression_list(c)?;
-                Ok(FromClause {
-                    span: from_span,
-                    vertices,
-                })
-            },
-        )?;
-
-        let over = if ctx.match_token(TokenKind::Over) {
-            ctx.recover_clause(
-                |_| Ok(None),
-                |c| ClauseParser::new().parse_over_clause(c).map(Some),
-            )?
-        } else {
-            None
-        };
-
-        let where_clause = if ctx.match_token(TokenKind::Where) {
-            Some(ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?)
-        } else {
-            Some(Self::create_true_expression(ctx)?)
-        };
-
-        let yield_clause = if ctx.match_token(TokenKind::Yield) {
-            ctx.recover_clause(
-                |_| Ok(None),
-                |c| ClauseParser::new().parse_yield_clause(c).map(Some),
-            )?
-        } else {
-            None
-        };
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-
-        Ok(Stmt::Subgraph(SubgraphStmt {
-            span,
-            steps,
-            from: from_clause,
-            over,
-            where_clause,
-            yield_clause,
-        }))
-    }
-
     /// Analysis mode
     pub fn parse_pattern(&mut self, ctx: &mut ParseContext) -> Result<Pattern, ParseError> {
         let start_span = ctx.current_span();
 
-        // Named path binding (`p = (a)-[]->(b)`): an identifier directly
-        // followed by `=` introduces a path name. Anything else falls
-        // through to the plain pattern forms. `==` is not assignment, so
-        // only a single `=` triggers this branch.
         if let TokenKind::Identifier(_) = ctx.current_token().kind {
             let ckpt = ctx.checkpoint();
             if let Ok(candidate) = ctx.expect_identifier() {
@@ -650,11 +56,6 @@ impl TraversalParser {
     }
 
     /// Parse the remainder of a named path binding after `name =`.
-    ///
-    /// Only node and path patterns qualify; a bare variable reference is
-    /// rejected because it carries no traversable structure. A lone node
-    /// is lifted into a single-element path so downstream stages observe a
-    /// uniform named-path shape.
     fn parse_named_path(
         &mut self,
         ctx: &mut ParseContext,
@@ -696,11 +97,9 @@ impl TraversalParser {
         ctx: &mut ParseContext,
         start_span: crate::parser::ast::types::Span,
     ) -> Result<Pattern, ParseError> {
-        // Check whether it is in node mode (starting with ()).
         if ctx.match_token(TokenKind::LParen) {
             let node = self.parse_node_pattern(ctx, start_span)?;
 
-            // Check whether there is a chain edge pattern.
             if ctx.check_token(TokenKind::LeftArrow)
                 || ctx.check_token(TokenKind::RightArrow)
                 || ctx.check_token(TokenKind::Minus)
@@ -713,7 +112,6 @@ impl TraversalParser {
             return Ok(Pattern::Node(node));
         }
 
-        // Check whether it is in variable mode.
         if let TokenKind::Identifier(ref name) = ctx.current_token().kind.clone() {
             let name = name.clone();
             let span = ctx.current_span();
@@ -738,20 +136,13 @@ impl TraversalParser {
         let mut labels = Vec::new();
         let mut properties = None;
 
-        // Analyzing variable names (optional)
         if let TokenKind::Identifier(ref name) = ctx.current_token().kind.clone() {
             let name = name.clone();
             ctx.next_token();
-
-            // A bare identifier without a trailing colon is a variable
-            // reference with no tag restriction (`(n)` matches any tag);
-            // use `(:label)` or `(var:label)` to restrict tags.
             variable = Some(name);
         }
 
-        // Analyzing the tags
         if ctx.match_token(TokenKind::Colon) {
-            // Parse the list of tags (multiple tags are supported, e.g.: Person:Actor)
             loop {
                 let label = ctx.expect_identifier()?;
                 if ctx.match_token(TokenKind::Dot) {
@@ -767,17 +158,15 @@ impl TraversalParser {
                 if !ctx.check_token(TokenKind::Colon) {
                     break;
                 }
-                ctx.next_token(); // Consume the next colon.
+                ctx.next_token();
             }
         }
 
-        // Parse attribute (optional)
         if ctx.match_token(TokenKind::LBrace) {
             properties = Some(self.parse_properties_expr(ctx)?);
             ctx.expect_token(TokenKind::RBrace)?;
         }
 
-        // Expected a right parenthesis.
         ctx.expect_token(TokenKind::RParen)?;
 
         let end_span = ctx.current_span();
@@ -801,7 +190,6 @@ impl TraversalParser {
         let start_span = start_node.span;
         let mut elements = vec![PathElement::Node(start_node)];
 
-        // Analyzing the chained structure of edges and nodes
         while ctx.check_token(TokenKind::LeftArrow)
             || ctx.check_token(TokenKind::RightArrow)
             || ctx.check_token(TokenKind::Minus)
@@ -811,7 +199,6 @@ impl TraversalParser {
             let edge = self.parse_edge_pattern(ctx)?;
             elements.push(PathElement::Edge(edge));
 
-            // It is expected that a node follows.
             if ctx.match_token(TokenKind::LParen) {
                 let node_span = ctx.current_span();
                 let node = self.parse_node_pattern(ctx, node_span)?;
@@ -871,7 +258,6 @@ impl TraversalParser {
 
             if ctx.match_token(TokenKind::Colon) {
                 loop {
-                    // Handle optional colon before edge type (e.g., :KNOWS|:FOLLOWS or :KNOWS|FOLLOWS)
                     ctx.match_token(TokenKind::Colon);
                     let edge_type = ctx.expect_identifier()?;
                     if ctx.match_token(TokenKind::Dot) {
@@ -896,7 +282,6 @@ impl TraversalParser {
             }
 
             if ctx.match_token(TokenKind::Star) {
-                // Check for path semantic keywords after *
                 if ctx.match_token(TokenKind::Trail) {
                     path_semantic = Some(PathSemantic::Trail);
                     range = Some(EdgeRange::any());
@@ -909,48 +294,36 @@ impl TraversalParser {
                 } else if ctx.match_token(TokenKind::AllShortestPaths)
                     || (ctx.match_token(TokenKind::All) && ctx.match_token(TokenKind::Shortest))
                 {
-                    // `*ALL SHORTEST` (also accepted as the single
-                    // `*ALLSHORTESTPATHS` token).
                     path_semantic = Some(PathSemantic::AllShortest);
                     range = Some(EdgeRange::any());
                 } else if ctx.match_token(TokenKind::Weighted) {
-                    // `*WEIGHTED(weight_prop)` - parse the weight property in
-                    // parens and record it on the semantic itself so the
-                    // executor can run a weighted (Dijkstra) traversal.
                     ctx.expect_token(TokenKind::LParen)?;
                     let weight_prop = ctx.expect_identifier()?;
                     ctx.expect_token(TokenKind::RParen)?;
                     path_semantic = Some(PathSemantic::WeightedShortest(weight_prop));
                     range = Some(EdgeRange::any());
                 } else if ctx.match_token(TokenKind::LParen) {
-                    // `*(v, r | WHERE ... | {proj}, {proj})` - recursive comprehension
                     let start_span = ctx.current_span();
-                    // Parse node variable
                     let variable = ctx.expect_identifier()?;
 
-                    // Parse optional edge variable
                     let mut edge_variable = None;
                     if ctx.match_token(TokenKind::Comma) {
                         edge_variable = Some(ctx.expect_identifier()?);
                     }
 
-                    // Parse optional filter predicate
                     let mut filter_predicate = None;
                     if ctx.match_token(TokenKind::Pipe) && ctx.check_keyword("WHERE") {
                         ctx.consume_keyword("WHERE")?;
                         filter_predicate = Some(self.parse_expression(ctx)?);
                     }
 
-                    // Parse optional projections
                     let mut node_projection = None;
                     let mut edge_projection = None;
                     if ctx.match_token(TokenKind::Pipe) {
-                        // First projection is node
                         if ctx.match_token(TokenKind::LBrace) {
                             node_projection = Some(self.parse_expression(ctx)?);
                             ctx.expect_token(TokenKind::RBrace)?;
                         }
-                        // Optional edge projection
                         if ctx.match_token(TokenKind::Comma) && ctx.match_token(TokenKind::LBrace) {
                             edge_projection = Some(self.parse_expression(ctx)?);
                             ctx.expect_token(TokenKind::RBrace)?;
@@ -962,8 +335,6 @@ impl TraversalParser {
                     let end_span = ctx.current_span();
                     let span = ctx.merge_span(start_span.start, end_span.end);
 
-                    // Create RecursiveComprehension and store it in EdgePattern
-                    // We signal this via a special path_semantic + the recursive_comprehension field
                     let rc = RecursiveComprehension {
                         span,
                         variable,
@@ -972,15 +343,9 @@ impl TraversalParser {
                         node_projection,
                         edge_projection,
                     };
-                    // Store the recursive comprehension directly
-                    // We'll need to modify the EdgePattern construction below
-                    path_semantic = Some(PathSemantic::Walk); // Marker for planner
+                    path_semantic = Some(PathSemantic::Walk);
                     range = Some(EdgeRange::any());
 
-                    // Store in a temporary location - we'll attach it after EdgePattern construction
-                    // For now, use a thread-local or just return a different structure
-                    // Actually, we can modify the return to include the RC
-                    // Let's add it as a field on the returned EdgePattern
                     ctx.set_recursive_comprehension(rc);
                 } else if ctx.match_token(TokenKind::LBracket) {
                     let min = if matches!(ctx.current_token().kind, TokenKind::IntegerLiteral(_)) {
@@ -1070,17 +435,13 @@ impl TraversalParser {
 
     /// Analysis steps
     fn parse_steps(&mut self, ctx: &mut ParseContext) -> Result<Steps, ParseError> {
-        // Try to parse the numbers or ranges.
         let token = ctx.current_token();
         match token.kind {
             TokenKind::IntegerLiteral(n) => {
                 ctx.next_token();
                 Ok(Steps::Fixed(n as usize))
             }
-            _ => {
-                // Default: 1 step
-                Ok(Steps::Fixed(1))
-            }
+            _ => Ok(Steps::Fixed(1)),
         }
     }
 
