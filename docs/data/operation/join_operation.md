@@ -137,7 +137,9 @@ join_operator/
 ├── hash_join.rs        # HashJoin / HashLeftJoin 执行器（build + probe 两个阶段）
 ├── merge_join.rs       # Merge Join 执行器（有序输入归并连接）
 ├── nested_loop_join.rs # NestedLoopJoin 执行器
-└── cross_semi_join.rs  # CrossSemiJoin / SemiJoin 执行器
+├── grace_join.rs       # Grace Join 分区溢出执行器
+├── cross_join.rs       # CrossJoin 执行器
+└── semi_join.rs        # SemiJoin / AntiJoin 执行器
 ```
 
 ### 4.2 Hash Join 执行器（`hash_join.rs`）
@@ -163,7 +165,7 @@ join_operator/
 
 对应 `JoinSpec::NestedLoopJoin`：适用于**非等值连接条件**或无索引的小表场景，双重循环逐行匹配。
 
-### 4.5 Cross / Semi Join 执行器（`cross_semi_join.rs`）
+### 4.5 Cross / Semi Join 执行器（`cross_join.rs` / `semi_join.rs`）
 
 对应 `JoinSpec::CrossJoin` / `JoinSpec::SemiJoin`：笛卡尔积 / 半连接（存在性检测）。
 
@@ -275,7 +277,8 @@ pub(super) fn build_join_with_keys(
 | **哈希连接** | `.../join_operator/hash_join.rs` |
 | **归并连接** | `.../join_operator/merge_join.rs` |
 | **嵌套循环** | `.../join_operator/nested_loop_join.rs` |
-| **交叉/半连接** | `.../join_operator/cross_semi_join.rs` |
+| **交叉连接** | `.../join_operator/cross_join.rs` |
+| **半连接** | `.../join_operator/semi_join.rs` |
 | **物理映射（等值键 → Hash）** | `.../streaming/plan/arena_builder/specs.rs` |
 | **物理规划器** | `crates/graphdb-query/src/query/planning/physical_planner.rs` |
 | **连接重排（启发式）** | `.../optimizer/heuristic/join_optimization/join_reorder.rs` |

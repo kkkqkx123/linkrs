@@ -14,86 +14,6 @@ use graphdb_core::Value;
 use super::finalize_join_output;
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn next_cross_join(
-    all_left_rows: &mut Vec<Vec<Value>>,
-    all_right_rows: &mut Vec<Vec<Value>>,
-    left_consumed: &mut bool,
-    right_consumed: &mut bool,
-    output_done: &mut bool,
-    memory_tracker: &mut MemoryTracker,
-    right_col_names: &mut Vec<String>,
-    left: &mut StreamingExecutor,
-    right: &mut StreamingExecutor,
-    runtime: &Option<Arc<ExecutionRuntime>>,
-    output_layout: &Arc<SlotLayout>,
-) -> Result<Option<DataChunk>, QueryError> {
-    // The full cartesian product is emitted in a single chunk; subsequent
-    // pulls must report exhaustion instead of re-emitting it forever.
-    if *output_done {
-        return Ok(None);
-    }
-    if !*left_consumed {
-        while let Some(mut chunk) = left.advance()? {
-            chunk.normalize_for_opaque("CrossSemiJoin");
-            if let Some(rt) = runtime.as_ref() {
-                rt.ensure_not_cancelled()?;
-            }
-            for row in &chunk.rows {
-                memory_tracker.try_reserve_row(row)?;
-            }
-            all_left_rows.extend(chunk.rows);
-        }
-        *left_consumed = true;
-    }
-
-    if !*right_consumed {
-        let mut captured_right_names = Vec::new();
-        while let Some(mut chunk) = right.advance()? {
-            chunk.normalize_for_opaque("CrossSemiJoin");
-            if let Some(rt) = runtime.as_ref() {
-                rt.ensure_not_cancelled()?;
-            }
-            if captured_right_names.is_empty() {
-                captured_right_names = chunk.col_names();
-            }
-            for row in &chunk.rows {
-                memory_tracker.try_reserve_row(row)?;
-            }
-            all_right_rows.extend(chunk.rows);
-        }
-        *right_col_names = captured_right_names;
-        *right_consumed = true;
-    }
-
-    if all_left_rows.is_empty() || all_right_rows.is_empty() {
-        *output_done = true;
-        return Ok(None);
-    }
-
-    let mut result_rows = Vec::new();
-    for left_row in all_left_rows.iter() {
-        if let Some(rt) = runtime.as_ref() {
-            rt.ensure_not_cancelled()?;
-        }
-        for right_row in all_right_rows.iter() {
-            let mut joined_row = left_row.clone();
-            joined_row.extend(right_row.clone());
-            result_rows.push(joined_row);
-        }
-    }
-
-    *output_done = true;
-    if result_rows.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(finalize_join_output(
-            DataChunk::new_with_layout(result_rows, Arc::clone(output_layout)),
-            runtime,
-        )))
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
 pub(super) fn next_semi_join(
     join_condition: &mut Option<Expression>,
     anti: bool,
@@ -108,7 +28,7 @@ pub(super) fn next_semi_join(
 ) -> Result<Option<DataChunk>, QueryError> {
     if !*right_consumed {
         while let Some(mut chunk) = right.advance()? {
-            chunk.normalize_for_opaque("CrossSemiJoin");
+            chunk.normalize_for_opaque("SemiJoin");
             if let Some(rt) = runtime.as_ref() {
                 rt.ensure_not_cancelled()?;
             }
@@ -124,7 +44,7 @@ pub(super) fn next_semi_join(
     }
 
     while let Some(mut left_chunk) = left.advance()? {
-        left_chunk.normalize_for_opaque("CrossSemiJoin");
+        left_chunk.normalize_for_opaque("SemiJoin");
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -170,17 +90,6 @@ pub(super) fn next_semi_join(
     }
 
     Ok(None)
-}
-
-pub(super) fn close_cross(
-    memory_tracker: &mut MemoryTracker,
-    all_left_rows: &mut Vec<Vec<Value>>,
-    all_right_rows: &mut Vec<Vec<Value>>,
-) -> Result<(), QueryError> {
-    memory_tracker.reset();
-    all_left_rows.clear();
-    all_right_rows.clear();
-    Ok(())
 }
 
 pub(super) fn close_semi(

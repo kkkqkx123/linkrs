@@ -10,7 +10,7 @@ use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::Value;
 
-use super::{evaluate_join_key, HashJoinBuildSide, JoinKeyValue};
+use super::hash_join::{evaluate_join_key, HashJoinBuildSide, JoinKeyValue};
 
 /// Partition index for a join key.
 ///
