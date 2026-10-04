@@ -12,7 +12,6 @@ mod transform;
 pub use parameterize::ParameterizingTransformer;
 pub use transform::TemplateExtractor;
 
-
 /// Parameterized results
 #[derive(Debug, Clone)]
 pub struct ParameterizedResult {

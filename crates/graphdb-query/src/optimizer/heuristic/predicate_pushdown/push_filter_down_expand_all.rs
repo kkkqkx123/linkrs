@@ -81,29 +81,41 @@ impl RewriteRule for PushFilterDownExpandAllRule {
         // Obtain the filtering criteria
         let filter_condition = filter_node.condition();
 
-        // Check if the filter references columns that are available in the ExpandAll's output
-        // This is important for multi-hop MATCH queries where a filter on an earlier variable
-        // should not be pushed down to a later ExpandAll that doesn't produce that variable
-        if !Self::can_push_filter_to_expand(filter_condition, expand_all) {
-            return Ok(None);
-        }
-
         // If the filter references only the anchor (input) columns, push it
         // BELOW the expand so only matching anchor vertices are expanded.
         // Example: `WHERE a.value < 100` on `(a)-[:R]->(b)` should filter the
         // anchor scan, not expand all 100k anchors and filter afterwards.
+        //
+        // This is attempted before the output-column guard: a multi-hop filter
+        // over an earlier variable (`WHERE id(a)==0` above the second expand)
+        // references `a`, which is absent from the second expand's own output
+        // but present in its anchor input. The output guard would reject it
+        // outright, so the anchor-only rewrite must run first.
         if Self::filter_references_only_input(filter_condition, expand_all) {
-            let mut new_filter = filter_node.clone();
+            let new_filter = filter_node.clone();
             let mut new_expand_all = expand_all.clone();
             if let Some(anchor) = expand_all.inputs().first() {
-                new_filter.set_input(anchor.clone());
+                // Descend through row-preserving `Flatten` wrappers so the
+                // filter lands directly above the node that produces the
+                // anchor variable. Otherwise the filter stops above the
+                // wrapper and the earlier hop still expands every scanned
+                // anchor. `Flatten` replays child rows without evaluating
+                // columns, so a filter below it observes the same rows.
+                let rebuilt = insert_filter_below_row_preserving(anchor, new_filter);
                 new_expand_all.inputs_mut().clear();
-                new_expand_all.add_input(PlanNodeEnum::Filter(new_filter));
+                new_expand_all.add_input(rebuilt);
                 let mut result = TransformResult::new();
                 result.erase_curr = true;
                 result.add_new_node(PlanNodeEnum::ExpandAll(new_expand_all));
                 return Ok(Some(result));
             }
+        }
+
+        // Check if the filter references columns that are available in the ExpandAll's output
+        // This is important for multi-hop MATCH queries where a filter on an earlier variable
+        // should not be pushed down to a later ExpandAll that doesn't produce that variable
+        if !Self::can_push_filter_to_expand(filter_condition, expand_all) {
+            return Ok(None);
         }
 
         // Create a new ExpandAll node.
@@ -136,7 +148,7 @@ impl PushFilterDownExpandAllRule {
         let Some(first_input) = expand_all.inputs().first() else {
             return false;
         };
-        let input_cols = first_input.col_names();
+        let input_cols = subtree_columns(first_input);
         referenced_vars.iter().all(|var| input_cols.contains(var))
     }
     /// Check if a filter can be pushed down to an ExpandAll node.
@@ -180,6 +192,43 @@ impl PushFilterDownExpandAllRule {
         }
 
         true
+    }
+}
+
+/// Columns produced anywhere in `node`'s subtree.
+///
+/// Row-preserving wrappers such as `Flatten` carry no `col_names` of their
+/// own, so a filter that references an upstream variable must look through
+/// them to find the node that actually produces it.
+fn subtree_columns(node: &PlanNodeEnum) -> Vec<String> {
+    let mut cols = node.col_names().to_vec();
+    for child in node.children() {
+        for name in subtree_columns(child) {
+            if !cols.contains(&name) {
+                cols.push(name);
+            }
+        }
+    }
+    cols
+}
+
+/// Insert `filter` directly above the first non-`Flatten` node in `node`,
+/// rebuilding any row-preserving `Flatten` wrappers on top.
+fn insert_filter_below_row_preserving(
+    node: &PlanNodeEnum,
+    mut filter: crate::planning::plan::core::nodes::operation::filter_node::FilterNode,
+) -> PlanNodeEnum {
+    match node {
+        PlanNodeEnum::Flatten(flatten) => {
+            let mut new_flatten = flatten.clone();
+            let below = insert_filter_below_row_preserving(flatten.input(), filter);
+            new_flatten.set_input(below);
+            PlanNodeEnum::Flatten(new_flatten)
+        }
+        _ => {
+            filter.set_input(node.clone());
+            PlanNodeEnum::Filter(filter)
+        }
     }
 }
 

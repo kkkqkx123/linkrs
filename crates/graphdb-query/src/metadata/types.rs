@@ -196,5 +196,3 @@ impl std::fmt::Display for PropertyType {
         }
     }
 }
-
-

@@ -113,13 +113,14 @@ pub(crate) fn vertex_record_to_vertex(record: &VertexRecord, tag_name: &str) -> 
 }
 
 pub(crate) fn edge_record_to_edge(
-    record: &EdgeRecord,
+    record: EdgeRecord,
     edge_type: &str,
     src_vid: VertexId,
     dst_vid: VertexId,
 ) -> Edge {
-    let props: HashMap<String, Value> = record.properties.iter().cloned().collect();
-    edge_record_to_edge_with_props(record, edge_type, src_vid, dst_vid, props)
+    let rank = record.rank;
+    let props: HashMap<String, Value> = record.properties.into_iter().collect();
+    edge_record_to_edge_with_props(rank, edge_type, src_vid, dst_vid, props)
 }
 
 /// Like [`edge_record_to_edge`] but decodes only the requested properties.
@@ -129,27 +130,27 @@ pub(crate) fn edge_record_to_edge(
 /// empty projection decodes every property (same "empty means everything"
 /// convention as the other projected read paths).
 pub(crate) fn edge_record_to_edge_projected(
-    record: &EdgeRecord,
+    record: EdgeRecord,
     edge_type: &str,
     src_vid: VertexId,
     dst_vid: VertexId,
     projection: &[String],
 ) -> Edge {
+    let rank = record.rank;
     let props: HashMap<String, Value> = if projection.is_empty() {
-        record.properties.iter().cloned().collect()
+        record.properties.into_iter().collect()
     } else {
         record
             .properties
-            .iter()
+            .into_iter()
             .filter(|(key, _)| projection.contains(key))
-            .map(|(key, value)| (key.clone(), value.clone()))
             .collect()
     };
-    edge_record_to_edge_with_props(record, edge_type, src_vid, dst_vid, props)
+    edge_record_to_edge_with_props(rank, edge_type, src_vid, dst_vid, props)
 }
 
 fn edge_record_to_edge_with_props(
-    record: &EdgeRecord,
+    rank: i64,
     edge_type: &str,
     src_vid: VertexId,
     dst_vid: VertexId,
@@ -159,7 +160,7 @@ fn edge_record_to_edge_with_props(
         src: src_vid,
         dst: dst_vid,
         edge_type: edge_type.to_string(),
-        ranking: record.rank,
+        ranking: rank,
         props,
     }
 }
@@ -346,7 +347,7 @@ pub(crate) fn find_dangling_edges(
                         .or_else(|| ctx.get_external_id_by_internal_id(dst_label_id, internal))
                 })
                 .unwrap_or(record.dst_vid);
-            let edge = edge_record_to_edge(&record, edge_type_name, src_external, dst_external);
+            let edge = edge_record_to_edge(record, edge_type_name, src_external, dst_external);
             dangling_edges.push(edge);
         }
     }
@@ -443,7 +444,7 @@ mod tests {
             properties: vec![("since".to_string(), Value::Int(2020))],
         };
 
-        let edge = edge_record_to_edge(&record, "KNOWS", src_vid, dst_vid);
+        let edge = edge_record_to_edge(record, "KNOWS", src_vid, dst_vid);
 
         assert_eq!(edge.src, src_vid);
         assert_eq!(edge.dst, dst_vid);
@@ -463,7 +464,7 @@ mod tests {
             properties: vec![],
         };
 
-        let edge = edge_record_to_edge(&record, "FRIEND_OF", src_vid, dst_vid);
+        let edge = edge_record_to_edge(record, "FRIEND_OF", src_vid, dst_vid);
 
         assert_eq!(edge.src, src_vid);
         assert_eq!(edge.dst, dst_vid);

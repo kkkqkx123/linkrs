@@ -1,6 +1,11 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::engine::graph_storage::context::helpers;
 use crate::engine::graph_storage::GraphStorageContext;
 use crate::engine::params::EdgeOperationParams;
 use crate::engine::transaction::{AddEdgeParams, TransactionOps};
+use crate::vertex::ShardedVertexTable;
 use graphdb_core::metadata::IndexMetadataManager;
 use graphdb_core::types::{LabelId, Timestamp, UndoLogError, VertexId};
 use graphdb_core::{StorageError, StorageResult, Value};
@@ -73,18 +78,8 @@ pub(crate) fn replay_insert_edge(
     ts: Timestamp,
 ) -> StorageResult<()> {
     let endpoints_exist = ctx.data_store().with_vertex_tables(|vertex_tables| {
-        let src_exists = vertex_tables
-            .get(&redo.src_label)
-            .map(|t| t.as_ref())
-            .and_then(|table| TransactionOps::resolve_vertex_id(table, redo.src_vid, ts))
-            .is_some();
-
-        let dst_exists = vertex_tables
-            .get(&redo.dst_label)
-            .map(|t| t.as_ref())
-            .and_then(|table| TransactionOps::resolve_vertex_id(table, redo.dst_vid, ts))
-            .is_some();
-        src_exists && dst_exists
+        resolve_endpoint(ctx, vertex_tables, redo.src_label, redo.src_vid, ts).is_some()
+            && resolve_endpoint(ctx, vertex_tables, redo.dst_label, redo.dst_vid, ts).is_some()
     });
 
     if !endpoints_exist {
@@ -101,12 +96,8 @@ pub(crate) fn replay_delete_edge(
     ts: Timestamp,
 ) -> StorageResult<()> {
     let endpoints_exist = ctx.data_store().with_vertex_tables(|vertex_tables| {
-        let src_exists = vertex_tables.contains_key(&redo.src_label)
-            && resolve_external_vid(vertex_tables, redo.src_label, redo.src_vid, ts).is_some();
-
-        let dst_exists = vertex_tables.contains_key(&redo.dst_label)
-            && resolve_external_vid(vertex_tables, redo.dst_label, redo.dst_vid, ts).is_some();
-        src_exists && dst_exists
+        resolve_endpoint(ctx, vertex_tables, redo.src_label, redo.src_vid, ts).is_some()
+            && resolve_endpoint(ctx, vertex_tables, redo.dst_label, redo.dst_vid, ts).is_some()
     });
 
     if !endpoints_exist {
@@ -233,23 +224,27 @@ pub(crate) fn replay_delete_vertex_props(
     Ok(())
 }
 
-pub(crate) fn resolve_external_vid(
-    vertex_tables: &std::collections::HashMap<
-        LabelId,
-        std::sync::Arc<crate::vertex::ShardedVertexTable>,
-    >,
+/// Resolve one edge endpoint to its owning label and internal row id.
+///
+/// A label of `0` means the endpoint tag was unspecified when the edge was
+/// written; the live insert path finds the owning label by scanning the
+/// vertex tables, so replay does the same instead of looking up label `0`
+/// directly (which has no vertex table).
+fn resolve_endpoint(
+    ctx: &GraphStorageContext,
+    vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
     label: LabelId,
     vid: VertexId,
     ts: Timestamp,
-) -> Option<u32> {
-    let table = vertex_tables.get(&label)?;
-    if let Some(int_id) = vid.as_int64() {
-        table.get_internal_id_by_i64(int_id, ts)
-    } else if let Some(str_id) = vid.as_str() {
-        table.get_internal_id(str_id, ts)
+) -> Option<(LabelId, u32)> {
+    let actual_label = if label == 0 {
+        helpers::resolve_internal_id_label(ctx, vertex_tables, &vid, ts)?
     } else {
-        None
-    }
+        label
+    };
+    let table = vertex_tables.get(&actual_label)?;
+    let internal = TransactionOps::resolve_vertex_id(table, vid, ts)?;
+    Some((actual_label, internal))
 }
 
 impl GraphStorageContext {
@@ -258,47 +253,66 @@ impl GraphStorageContext {
         redo: &InsertEdgeRedo,
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let (src_internal, dst_internal) =
-            self.data_store()
-                .with_vertex_tables(|vertex_tables| -> StorageResult<(u32, u32)> {
-                    let src_table = vertex_tables.get(&redo.src_label).ok_or_else(|| {
-                        StorageError::db_error(format!(
-                            "Source vertex label not found during recovery: label={}",
-                            redo.src_label
-                        ))
-                    })?;
-                    let dst_table = vertex_tables.get(&redo.dst_label).ok_or_else(|| {
-                        StorageError::db_error(format!(
-                            "Destination vertex label not found during recovery: label={}",
-                            redo.dst_label
-                        ))
-                    })?;
-
-                    let src_internal =
-                        TransactionOps::resolve_vertex_id(src_table, redo.src_vid, ts).ok_or_else(
-                            || {
+        let (src_internal, dst_internal, actual_src_label, actual_dst_label) =
+            self.data_store().with_vertex_tables(
+                |vertex_tables| -> StorageResult<(u32, u32, LabelId, LabelId)> {
+                    let (actual_src_label, src_internal) =
+                        resolve_endpoint(self, vertex_tables, redo.src_label, redo.src_vid, ts)
+                            .ok_or_else(|| {
                                 StorageError::db_error(format!(
                                     "Source vertex not found during recovery: label={}, vid={:?}",
                                     redo.src_label, redo.src_vid
                                 ))
-                            },
-                        )?;
-                    let dst_internal =
-                        TransactionOps::resolve_vertex_id(dst_table, redo.dst_vid, ts).ok_or_else(
-                            || {
-                                StorageError::db_error(format!(
+                            })?;
+                    let (actual_dst_label, dst_internal) = resolve_endpoint(
+                        self,
+                        vertex_tables,
+                        redo.dst_label,
+                        redo.dst_vid,
+                        ts,
+                    )
+                    .ok_or_else(|| {
+                        StorageError::db_error(format!(
                             "Destination vertex not found during recovery: label={}, vid={:?}",
                             redo.dst_label, redo.dst_vid
                         ))
-                            },
-                        )?;
-                    Ok((src_internal, dst_internal))
-                })?;
+                    })?;
+                    Ok((
+                        src_internal,
+                        dst_internal,
+                        actual_src_label,
+                        actual_dst_label,
+                    ))
+                },
+            )?;
+
+        // Materialize the target partition before the insert. A wildcard
+        // endpoint resolves to a concrete label pair whose partition may not
+        // exist yet when the edge is the first write after a checkpoint.
+        self.data_store().with_edge_partition_mut(
+            crate::engine::data_store::EdgeTableKey::new(
+                actual_src_label,
+                actual_dst_label,
+                redo.edge_label,
+            ),
+            crate::engine::data_store::EdgeTableKey::new(0, 0, redo.edge_label),
+            |template| {
+                let mut schema = template.schema().clone();
+                schema.src_label = actual_src_label;
+                schema.dst_label = actual_dst_label;
+                let mut table = crate::edge::EdgeStore::new(schema)?;
+                if let Some(stats) = self.stats_manager().cloned() {
+                    table.set_stats_manager(stats);
+                }
+                Ok(table)
+            },
+            |_| Ok(()),
+        )?;
 
         let params = AddEdgeParams {
-            src_label: redo.src_label,
+            src_label: actual_src_label,
             src_vid: src_internal,
-            dst_label: redo.dst_label,
+            dst_label: actual_dst_label,
             dst_vid: dst_internal,
             edge_label: redo.edge_label,
             rank: redo.rank,
@@ -332,33 +346,39 @@ impl GraphStorageContext {
         redo: &DeleteEdgeRedo,
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let key = crate::engine::data_store::EdgeTableKey::new(
-            redo.src_label,
-            redo.dst_label,
-            redo.edge_label,
-        );
-
-        let (src_internal, dst_internal) =
-            self.data_store()
-                .with_vertex_tables(|vertex_tables| -> StorageResult<(u32, u32)> {
-                    let src_internal =
-                        resolve_external_vid(vertex_tables, redo.src_label, redo.src_vid, ts)
+        let (src_internal, dst_internal, actual_src_label, actual_dst_label) =
+            self.data_store().with_vertex_tables(
+                |vertex_tables| -> StorageResult<(u32, u32, LabelId, LabelId)> {
+                    let (actual_src_label, src_internal) =
+                        resolve_endpoint(self, vertex_tables, redo.src_label, redo.src_vid, ts)
                             .ok_or_else(|| {
                                 StorageError::db_error(format!(
                         "Source vertex not found during delete-edge recovery: label={}, vid={:?}",
                         redo.src_label, redo.src_vid
                     ))
                             })?;
-                    let dst_internal =
-                        resolve_external_vid(vertex_tables, redo.dst_label, redo.dst_vid, ts)
+                    let (actual_dst_label, dst_internal) =
+                        resolve_endpoint(self, vertex_tables, redo.dst_label, redo.dst_vid, ts)
                             .ok_or_else(|| {
                                 StorageError::db_error(format!(
                     "Destination vertex not found during delete-edge recovery: label={}, vid={:?}",
                     redo.dst_label, redo.dst_vid
                 ))
                             })?;
-                    Ok((src_internal, dst_internal))
-                })?;
+                    Ok((
+                        src_internal,
+                        dst_internal,
+                        actual_src_label,
+                        actual_dst_label,
+                    ))
+                },
+            )?;
+
+        let key = crate::engine::data_store::EdgeTableKey::new(
+            actual_src_label,
+            actual_dst_label,
+            redo.edge_label,
+        );
 
         let arc = self
             .data_store()

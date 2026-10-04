@@ -4,6 +4,7 @@
 //! path; unregistration and pruning delegate to the tracker and index
 //! containers.
 
+use std::ops::Bound::{Excluded, Unbounded};
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -83,25 +84,27 @@ impl Certifier {
                 )));
             }
         }
-        for (commit_ts, ws) in committed.iter() {
-            if *commit_ts <= start_timestamp {
-                continue;
-            }
-            if write_set.has_conflict_with(ws) {
-                stats.record_txn_conflict_with_type(ConflictType::WriteWrite);
-                log::warn!(
-                    "certification conflict (publish) txn={} type={}",
-                    txn_id,
-                    ConflictType::WriteWrite
-                );
-                return Err(TransactionError::serialization_failed(format!(
-                    "conflict {} write-write with committed batch (publish)",
-                    ConflictType::WriteWrite,
-                )));
+        for (_, sets) in committed.range((Excluded(start_timestamp), Unbounded)) {
+            for ws in sets {
+                if write_set.has_conflict_with(ws) {
+                    stats.record_txn_conflict_with_type(ConflictType::WriteWrite);
+                    log::warn!(
+                        "certification conflict (publish) txn={} type={}",
+                        txn_id,
+                        ConflictType::WriteWrite
+                    );
+                    return Err(TransactionError::serialization_failed(format!(
+                        "conflict {} write-write with committed batch (publish)",
+                        ConflictType::WriteWrite,
+                    )));
+                }
             }
         }
 
-        committed.push((write_timestamp, write_set.clone()));
+        committed
+            .entry(write_timestamp)
+            .or_default()
+            .push(write_set.clone());
         self.index_write_set(txn_id, write_timestamp, write_set);
 
         // SSI: unregister read locks and register write locks.
@@ -129,13 +132,16 @@ impl Certifier {
         let _cert_guard = self.commit_lock.lock();
         let mut committed = self.committed_write_sets.lock();
         if committed
-            .iter()
-            .any(|(ts, ws)| *ts == commit_timestamp && *ws == *write_set)
+            .get(&commit_timestamp)
+            .is_some_and(|sets| sets.iter().any(|ws| *ws == *write_set))
         {
             self.ssi_tracker.unregister_reads(txn_id);
             return;
         }
-        committed.push((commit_timestamp, write_set.clone()));
+        committed
+            .entry(commit_timestamp)
+            .or_default()
+            .push(write_set.clone());
         self.index_write_set(txn_id, commit_timestamp, write_set);
         self.ssi_tracker.unregister_reads(txn_id);
     }
@@ -167,7 +173,7 @@ impl Certifier {
     /// are safe to remove.
     pub fn prune(&self, oldest_active_ts: Timestamp) {
         let mut committed = self.committed_write_sets.lock();
-        committed.retain(|(ts, _)| *ts > oldest_active_ts);
+        committed.retain(|ts, _| *ts > oldest_active_ts);
 
         self.vertex_writes.prune(oldest_active_ts);
         self.edge_writes.prune(oldest_active_ts);

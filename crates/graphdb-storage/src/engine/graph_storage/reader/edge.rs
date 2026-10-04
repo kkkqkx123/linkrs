@@ -100,7 +100,7 @@ fn get_edge_impl(
         None => ctx.get_edge(&params, ts),
     };
     if let Some(record) = record {
-        let edge = edge_record_to_edge_with_projection(&record, edge_type, src, dst, projection);
+        let edge = edge_record_to_edge_with_projection(record, edge_type, src, dst, projection);
         return Ok(Some(edge));
     }
 
@@ -109,7 +109,7 @@ fn get_edge_impl(
 
 /// Materialize an edge record, honoring an optional property projection.
 fn edge_record_to_edge_with_projection(
-    record: &EdgeRecord,
+    record: EdgeRecord,
     edge_type: &str,
     src_vid: VertexId,
     dst_vid: VertexId,
@@ -195,11 +195,12 @@ pub(crate) fn get_node_edges_projected(
                         .unwrap_or_default(),
                 };
                 for record in records {
+                    let dst = record.dst_vid;
                     let edge = edge_record_to_edge_with_projection(
-                        &record,
+                        record,
                         edge_type_name,
                         node_vid,
-                        record.dst_vid,
+                        dst,
                         projection,
                     );
                     edges.push(edge);
@@ -222,10 +223,11 @@ pub(crate) fn get_node_edges_projected(
                         .unwrap_or_default(),
                 };
                 for record in records {
+                    let src = record.src_vid;
                     let edge = edge_record_to_edge_with_projection(
-                        &record,
+                        record,
                         edge_type_name,
-                        record.src_vid,
+                        src,
                         node_vid,
                         projection,
                     );
@@ -256,11 +258,12 @@ pub(crate) fn get_node_edges_projected(
                     if !seen.insert((node_vid, record.dst_vid, record.rank)) {
                         continue;
                     }
+                    let dst = record.dst_vid;
                     let edge = edge_record_to_edge_with_projection(
-                        &record,
+                        record,
                         edge_type_name,
                         node_vid,
-                        record.dst_vid,
+                        dst,
                         projection,
                     );
                     edges.push(edge);
@@ -288,10 +291,11 @@ pub(crate) fn get_node_edges_projected(
                     if !seen.insert((record.src_vid, node_vid, record.rank)) {
                         continue;
                     }
+                    let src = record.src_vid;
                     let edge = edge_record_to_edge_with_projection(
-                        &record,
+                        record,
                         edge_type_name,
-                        record.src_vid,
+                        src,
                         node_vid,
                         projection,
                     );

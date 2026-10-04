@@ -171,6 +171,7 @@ pub(crate) fn initialize_with_recovery(
 
     if !needs_recovery(ctx) {
         super::serial::seed_serial_allocators(ctx)?;
+        ctx.ensure_checkpoint_scheduler();
         return Ok(None);
     }
 
@@ -187,6 +188,12 @@ pub(crate) fn initialize_with_recovery(
     // rows (redo entries carry final property values; the counters themselves
     // are never replayed).
     super::serial::seed_serial_allocators(ctx)?;
+
+    // Background checkpointing starts only after recovery has finished: the
+    // recovery tail creates its own checkpoint, and a scheduler racing it
+    // would either observe an already-active persistence state or collide on
+    // the checkpoint directory rename.
+    ctx.ensure_checkpoint_scheduler();
 
     Ok(Some(stats))
 }

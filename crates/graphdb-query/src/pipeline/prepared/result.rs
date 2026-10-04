@@ -12,9 +12,9 @@ use crate::storage::QueryStorage;
 use super::classify::{is_read_only_cacheable, is_transaction};
 use super::{PreparedRequest, StatementClass};
 use crate::executor::streaming::transaction_scope::TransactionScope;
-use crate::QueryContext;
-use crate::planning::statements::clauses::exists_planner;
 use crate::planning::planner::PlannerError;
+use crate::planning::statements::clauses::exists_planner;
+use crate::QueryContext;
 
 pub enum PreparedOutcome {
     Materialized(ExecutionResult),
@@ -88,9 +88,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         let check_space_id = qctx.space_id().unwrap_or(1);
         let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
         let outer_col_names: Vec<String> = Vec::new();
-        let map_err = |e: PlannerError| {
-            DBError::from(QueryError::pipeline_planning_error(e))
-        };
+        let map_err = |e: PlannerError| DBError::from(QueryError::pipeline_planning_error(e));
         let pattern_props = match &merge_stmt.pattern {
             crate::parser::ast::Pattern::Node(node_pattern) => node_pattern.properties.as_ref(),
             crate::parser::ast::Pattern::Edge(edge_pattern) => edge_pattern.properties.as_ref(),

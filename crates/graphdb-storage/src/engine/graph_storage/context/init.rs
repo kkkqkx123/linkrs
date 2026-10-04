@@ -30,7 +30,9 @@ impl GraphStorageContext {
 
     pub fn new_with_path(path: PathBuf) -> StorageResult<Self> {
         let config = crate::engine::PersistenceConfig::for_work_dir(&path);
-        Self::new_with_persistence(path, config)
+        let ctx = Self::new_with_persistence(path, config)?;
+        ctx.ensure_checkpoint_scheduler();
+        Ok(ctx)
     }
 
     pub fn new_with_persistence(path: PathBuf, config: PersistenceConfig) -> StorageResult<Self> {
@@ -51,7 +53,6 @@ impl GraphStorageContext {
                 checkpoint_scheduler: Arc::new(Mutex::new(None)),
             }
             .with_default_index_gc();
-            ctx.ensure_checkpoint_scheduler();
             ctx
         })
     }
@@ -167,7 +168,13 @@ impl GraphStorageContext {
         if guard.is_some() {
             return;
         }
-        let ctx_clone = self.clone();
+        // The executor is stored inside the scheduler, which itself lives in
+        // `checkpoint_scheduler`. A captured context must therefore not retain
+        // that same `Arc`, or executor and scheduler form a reference cycle
+        // that outlives the last storage handle and keeps background
+        // checkpoints writing to a directory the next `open` recovers.
+        let mut ctx_clone = self.clone();
+        ctx_clone.checkpoint_scheduler = Arc::new(Mutex::new(None));
         let executor: std::sync::Arc<
             dyn Fn(
                     crate::engine::persistence_coordinator::PersistenceStateGuard,

@@ -1,5 +1,5 @@
 use super::unary::{parse_not_expression, parse_unary_expression};
-use super::{ParseResult, parse_postfix_expression};
+use super::{parse_postfix_expression, ParseResult};
 use crate::parser::core::error::ParseError;
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
@@ -38,7 +38,9 @@ pub(crate) fn parse_and_expression(ctx: &mut ParseContext<'_>) -> Result<ParseRe
     Ok(left)
 }
 
-pub(crate) fn parse_comparison_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, ParseError> {
+pub(crate) fn parse_comparison_expression(
+    ctx: &mut ParseContext<'_>,
+) -> Result<ParseResult, ParseError> {
     let mut left = parse_bitwise_expression(ctx)?;
 
     if let Some(op) = parse_comparison_op(ctx) {
@@ -101,7 +103,9 @@ pub(crate) fn parse_comparison_op(ctx: &mut ParseContext<'_>) -> Option<BinaryOp
     }
 }
 
-pub(crate) fn parse_bitwise_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, ParseError> {
+pub(crate) fn parse_bitwise_expression(
+    ctx: &mut ParseContext<'_>,
+) -> Result<ParseResult, ParseError> {
     let mut left = parse_additive_expression(ctx)?;
 
     while let Some(op) = parse_bitwise_op(ctx) {
@@ -141,7 +145,9 @@ pub(crate) fn parse_bitwise_op(ctx: &mut ParseContext<'_>) -> Option<BinaryOpera
     }
 }
 
-pub(crate) fn parse_additive_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, ParseError> {
+pub(crate) fn parse_additive_expression(
+    ctx: &mut ParseContext<'_>,
+) -> Result<ParseResult, ParseError> {
     let mut left = parse_multiplicative_expression(ctx)?;
 
     while let Some(op) = parse_additive_op(ctx) {
@@ -170,7 +176,9 @@ pub(crate) fn parse_additive_op(ctx: &mut ParseContext<'_>) -> Option<BinaryOper
     }
 }
 
-pub(crate) fn parse_multiplicative_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, ParseError> {
+pub(crate) fn parse_multiplicative_expression(
+    ctx: &mut ParseContext<'_>,
+) -> Result<ParseResult, ParseError> {
     let mut left = parse_unary_expression(ctx)?;
 
     while let Some(op) = parse_multiplicative_op(ctx) {
@@ -203,7 +211,9 @@ pub(crate) fn parse_multiplicative_op(ctx: &mut ParseContext<'_>) -> Option<Bina
     }
 }
 
-pub(crate) fn parse_exponentiation_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, ParseError> {
+pub(crate) fn parse_exponentiation_expression(
+    ctx: &mut ParseContext<'_>,
+) -> Result<ParseResult, ParseError> {
     let mut expression = parse_postfix_expression(ctx)?;
 
     if ctx.match_token(TokenKind::Exp) {

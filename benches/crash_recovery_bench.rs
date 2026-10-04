@@ -65,9 +65,7 @@ fn populate(path: &std::path::Path, checkpoint: bool) {
 
     // Schema metadata plus half the vertices are checkpointed first so the
     // restart scenarios below isolate data-recovery cost (space lookup must
-    // survive reopen). NOTE: edge WAL tails currently fail replay with
-    // "Source vertex label not found during recovery" (see docs/issue), so
-    // the tail scenario uses vertex-only ops.
+    // survive reopen).
     let head: Vec<Vertex> = (0..VERTEX_COUNT as i64 / 2).map(make_vertex).collect();
     storage
         .batch_insert_vertices(&space_name, head)
@@ -98,30 +96,39 @@ fn populate(path: &std::path::Path, checkpoint: bool) {
             .expect("insert edges");
         storage.create_checkpoint().expect("full checkpoint");
     } else {
-        // Un-checkpointed WAL tail: the remaining vertex writes only.
+        // Un-checkpointed WAL tail: remaining vertices plus edges among them,
+        // so edge WAL replay and its deferred-endpoint ordering are exercised.
         let tail: Vec<Vertex> = ((VERTEX_COUNT / 2) as i64..VERTEX_COUNT as i64)
             .map(make_vertex)
             .collect();
         storage
             .batch_insert_vertices(&space_name, tail)
             .expect("insert tail vertices");
+        let edges: Vec<Edge> = ((VERTEX_COUNT / 2) as i64..VERTEX_COUNT as i64)
+            .flat_map(|src| {
+                (1..=EDGES_PER_VERTEX).map(move |k| Edge {
+                    src: VertexId::try_from_int64(src).expect("valid vertex id"),
+                    dst: VertexId::try_from_int64((src + k as i64) % VERTEX_COUNT as i64)
+                        .expect("valid vertex id"),
+                    edge_type: "Link".to_string(),
+                    ranking: 0,
+                    props: Default::default(),
+                })
+            })
+            .collect();
+        storage
+            .batch_insert_edges(&space_name, edges)
+            .expect("insert tail edges");
     }
     drop(storage);
 }
 
-/// Open a store, retrying while a background persistence operation (dropped at
-/// the end of `populate`) is still in flight. Returns the opened storage.
+/// Reopen a store after the writer handle is dropped.
+///
+/// Drop drains the background checkpoint scheduler and any in-flight
+/// checkpoint, so a direct open is expected to succeed without retrying.
 fn open_settled(path: &std::path::Path) -> GraphStorage {
-    for _ in 0..100 {
-        match GraphStorage::open(path.to_path_buf()) {
-            Ok(storage) => return storage,
-            Err(err) if err.to_string().contains("already active") => {
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(err) => panic!("reopen failed: {err}"),
-        }
-    }
-    panic!("persistence never settled after 100 retries");
+    GraphStorage::open(path.to_path_buf()).expect("reopen after drop")
 }
 
 fn bench_restart(c: &mut Criterion) {

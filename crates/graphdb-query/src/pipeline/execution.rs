@@ -89,7 +89,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         &mut self,
         query_text: &str,
     ) -> DBResult<(ExecutionResult, QueryMetrics)> {
-        self.execute_query_with_session(query_text, 0)
+        self.execute_query_with_session(query_text, 0, None)
             .map(|(result, metrics, _)| (result, metrics))
     }
 
@@ -97,14 +97,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         &mut self,
         query_text: &str,
         session_id: i64,
+        space_info: Option<SpaceInfo>,
     ) -> DBResult<(ExecutionResult, QueryMetrics, QueryProfile)> {
-        self.execute_query_with_profile(query_text, session_id)
+        self.execute_query_with_profile(query_text, session_id, space_info)
     }
 
     pub fn execute_query_with_profile(
         &mut self,
         query_text: &str,
         session_id: i64,
+        space_info: Option<SpaceInfo>,
     ) -> DBResult<(ExecutionResult, QueryMetrics, QueryProfile)> {
         self.stats_manager.add_value(MetricType::NumQueries);
         self.stats_manager.add_value(MetricType::NumActiveQueries);
@@ -127,7 +129,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         // Use prepared lifecycle for parse + validate
         let prepare_start = Instant::now();
-        let request = match self.prepare_request_with_auto_commit(query_text, None) {
+        let request = match self.prepare_request_with_auto_commit(query_text, space_info) {
             Ok(req) => {
                 profile.stages.parse_us = prepare_start.elapsed().as_micros() as u64;
                 profile.stages.validate_us = 0;

@@ -457,9 +457,7 @@ impl ShardRuntime {
             std::mem::take(&mut *wal_guard)
         };
 
-        for entry in &entries {
-            wal::append_wal_entry(&self.wal_file, entry)?;
-        }
+        wal::append_wal_entries(&self.wal_file, &entries)?;
         Ok(())
     }
 

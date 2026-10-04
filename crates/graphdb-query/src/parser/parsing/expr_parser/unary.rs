@@ -20,7 +20,9 @@ pub(crate) fn parse_not_expression(ctx: &mut ParseContext<'_>) -> Result<ParseRe
     }
 }
 
-pub(crate) fn parse_unary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, ParseError> {
+pub(crate) fn parse_unary_expression(
+    ctx: &mut ParseContext<'_>,
+) -> Result<ParseResult, ParseError> {
     if ctx.match_token(TokenKind::Minus) {
         let op = UnaryOperator::Minus;
         let operand = parse_unary_expression(ctx)?;

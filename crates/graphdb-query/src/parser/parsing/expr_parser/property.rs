@@ -1,5 +1,5 @@
 use super::container::parse_primary_expression;
-use super::{ParseResult, parse_expression, parse_subquery_body, parse_sql_subquery_body};
+use super::{parse_expression, parse_sql_subquery_body, parse_subquery_body, ParseResult};
 use crate::parser::ast::pattern::Pattern;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
@@ -10,7 +10,9 @@ use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
 use graphdb_core::types::{DataType, Position};
 use graphdb_core::Value;
 
-pub(crate) fn parse_postfix_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, ParseError> {
+pub(crate) fn parse_postfix_expression(
+    ctx: &mut ParseContext<'_>,
+) -> Result<ParseResult, ParseError> {
     let mut expression = parse_primary_expression(ctx)?;
 
     loop {

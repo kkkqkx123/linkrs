@@ -145,11 +145,12 @@ pub(super) fn handle_all(
     let lightweight_source = *lightweight_source;
     let path_semantic = path_semantic.clone();
 
-    let use_fast_path = step_limit == 1
-        && filter_expr.is_none()
-        && src_vids.is_empty()
-        && !emit_raw_ids
-        && path_semantic.is_none();
+    // The raw-id fast path (`emit_raw_ids`) is handled inside
+    // `expand_single_step`; it is not a reason to fall back to the generic
+    // runtime path. Only a real filter, literal seed ids or a path semantic
+    // require the generic walk.
+    let use_fast_path =
+        step_limit == 1 && filter_expr.is_none() && src_vids.is_empty() && path_semantic.is_none();
 
     let cancel_token = op.runtime.as_ref().map(|rt| rt.cancel_token());
     while let Some(chunk) = input.advance()? {

@@ -15,9 +15,9 @@ mod container;
 mod function;
 mod property;
 mod subquery;
-mod unary;
 #[cfg(test)]
 mod tests;
+mod unary;
 
 pub(crate) use binary::parse_or_expression;
 pub(crate) use property::parse_postfix_expression;

@@ -169,19 +169,19 @@ pub(crate) fn lookup_edges_by_property_range(
         })
     };
 
-    for (record_src_label, record_dst_label, record) in &records {
+    for (record_src_label, record_dst_label, record) in records {
         let src_internal = record.src_vid.as_internal_u32();
         let dst_internal = record.dst_vid.as_internal_u32();
         let src_external = match src_internal {
-            Some(internal) if *record_src_label != 0 => {
-                internal_to_external_vertex_id(ctx, *record_src_label, internal, ts)
+            Some(internal) if record_src_label != 0 => {
+                internal_to_external_vertex_id(ctx, record_src_label, internal, ts)
                     .unwrap_or(record.src_vid)
             }
             _ => record.src_vid,
         };
         let dst_external = match dst_internal {
-            Some(internal) if *record_dst_label != 0 => {
-                internal_to_external_vertex_id(ctx, *record_dst_label, internal, ts)
+            Some(internal) if record_dst_label != 0 => {
+                internal_to_external_vertex_id(ctx, record_dst_label, internal, ts)
                     .unwrap_or(record.dst_vid)
             }
             _ => record.dst_vid,

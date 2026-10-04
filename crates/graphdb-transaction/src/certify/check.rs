@@ -2,6 +2,8 @@
 //! scan, committed write-set index probes, phantom checks and SSI
 //! dangerous-structure detection.
 
+use std::collections::BTreeMap;
+use std::ops::Bound::{Excluded, Unbounded};
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -95,12 +97,7 @@ impl Certifier {
 
         if serializable {
             self.probe_committed_reads(txn_id, ctx.start_timestamp, &txn_read_set, stats)?;
-            self.check_range_phantoms_and_full_scan(
-                &ctx,
-                &txn_read_set,
-                committed.as_slice(),
-                stats,
-            )?;
+            self.check_range_phantoms_and_full_scan(&ctx, &txn_read_set, &committed, stats)?;
             // Dangerous-structure detection: T_current writes R, T_other read
             // R, AND T_current read something T_other writes (O(W × K) where
             // W = write set size and K = max readers per resource).
@@ -334,22 +331,25 @@ impl Certifier {
         &self,
         ctx: &Arc<TransactionContext>,
         txn_read_set: &WriteSet,
-        committed: &[(Timestamp, WriteSet)],
+        committed: &BTreeMap<Timestamp, Vec<WriteSet>>,
         stats: &TransactionStats,
     ) -> Result<(), TransactionError> {
         // A concurrent committed write whose vertex falls inside a read range
-        // committed after our start indicates a phantom.
+        // committed after our start indicates a phantom. The ordered map
+        // narrows the scan to commits newer than the start timestamp.
         if !txn_read_set.read_ranges.is_empty() {
-            for (commit_ts, ws) in committed.iter() {
-                if *commit_ts <= ctx.start_timestamp {
-                    continue;
-                }
-                if txn_read_set.has_read_range_conflict_with(ws) {
-                    stats.record_txn_conflict_with_type(ConflictType::Phantom);
-                    return Err(TransactionError::serialization_failed(format!(
-                        "phantom conflict: {} on range",
-                        ConflictType::Phantom
-                    )));
+            for sets in committed
+                .range((Excluded(ctx.start_timestamp), Unbounded))
+                .map(|(_, sets)| sets)
+            {
+                for ws in sets {
+                    if txn_read_set.has_read_range_conflict_with(ws) {
+                        stats.record_txn_conflict_with_type(ConflictType::Phantom);
+                        return Err(TransactionError::serialization_failed(format!(
+                            "phantom conflict: {} on range",
+                            ConflictType::Phantom
+                        )));
+                    }
                 }
             }
         }
@@ -361,9 +361,12 @@ impl Certifier {
         if let Some(threshold) = ctx.serializable_full_scan_threshold() {
             let read_size = txn_read_set.size() + txn_read_set.read_ranges.len();
             if read_size >= threshold {
-                let has_conflicting_commit = committed.iter().any(|(commit_ts, ws)| {
-                    *commit_ts > ctx.start_timestamp && txn_read_set.has_read_conflict_with(ws)
-                });
+                let has_conflicting_commit = committed
+                    .range((Excluded(ctx.start_timestamp), Unbounded))
+                    .any(|(_, sets)| {
+                        sets.iter()
+                            .any(|ws| txn_read_set.has_read_conflict_with(ws))
+                    });
                 if has_conflicting_commit {
                     stats.record_txn_conflict_with_type(ConflictType::Phantom);
                     return Err(TransactionError::serialization_failed(

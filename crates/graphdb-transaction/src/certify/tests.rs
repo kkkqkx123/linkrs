@@ -161,5 +161,5 @@ fn test_force_publish_is_idempotent() {
     certifier.force_publish(TransactionId(10), 15, &write_set);
 
     let committed = certifier.committed_write_sets.lock();
-    assert_eq!(committed.iter().filter(|(ts, _)| *ts == 15).count(), 1);
+    assert_eq!(committed.get(&15).map(|sets| sets.len()), Some(1));
 }

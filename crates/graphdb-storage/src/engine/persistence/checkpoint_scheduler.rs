@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 
 use graphdb_core::StorageResult;
 use graphdb_metrics::{CheckpointTriggerReason, StatsManager};
@@ -28,6 +28,10 @@ pub struct CheckpointScheduler {
     stats: Arc<Mutex<Option<Arc<StatsManager>>>>,
     pending: Arc<AtomicBool>,
     pending_request: Arc<Mutex<Option<CheckpointRequest>>>,
+    /// In-flight checkpoint tasks spawned onto the pool. `stop` drains this
+    /// count so shutdown cannot leave a checkpoint writing to the storage
+    /// directory after the owning handle is gone.
+    active: Arc<(Mutex<usize>, Condvar)>,
     handle: Option<BackgroundTaskHandle>,
     poll_interval: Duration,
     enabled: bool,
@@ -57,6 +61,7 @@ impl CheckpointScheduler {
             stats: Arc::new(Mutex::new(stats)),
             pending: Arc::new(AtomicBool::new(false)),
             pending_request: Arc::new(Mutex::new(None)),
+            active: Arc::new((Mutex::new(0), Condvar::new())),
             handle: None,
             poll_interval,
             enabled,
@@ -99,6 +104,7 @@ impl CheckpointScheduler {
         let pending = self.pending.clone();
         let pending_request = self.pending_request.clone();
         let executor = self.executor.clone();
+        let active = self.active.clone();
         let thread_pool_clone = self.thread_pool.clone();
 
         let running = Arc::new(AtomicBool::new(false));
@@ -151,32 +157,42 @@ impl CheckpointScheduler {
                             let exec = executor.clone();
                             let reason = req.reason;
                             let pool = thread_pool_clone.clone();
+                            let active_task = active.clone();
+                            *active_task.0.lock() += 1;
                             // Spawn checkpoint on the shared pool so the periodic
                             // poll loop is never blocked by a long-running checkpoint.
-                            pool.spawn(move || match exec(guard, reason) {
-                                Ok(cs) => {
-                                    if let Some(s) = stats_clone.lock().as_ref().cloned() {
-                                        s.record_checkpoint_success(
-                                            cs.duration,
-                                            cs.bytes_flushed,
-                                            cs.wal_files_truncated as u64,
+                            pool.spawn(move || {
+                                match exec(guard, reason) {
+                                    Ok(cs) => {
+                                        if let Some(s) = stats_clone.lock().as_ref().cloned() {
+                                            s.record_checkpoint_success(
+                                                cs.duration,
+                                                cs.bytes_flushed,
+                                                cs.wal_files_truncated as u64,
+                                            );
+                                        }
+                                        log::info!(
+                                            "Async checkpoint completed: id={} reason={:?}",
+                                            cs.checkpoint_id,
+                                            reason
                                         );
                                     }
-                                    log::info!(
-                                        "Async checkpoint completed: id={} reason={:?}",
-                                        cs.checkpoint_id,
-                                        reason
-                                    );
-                                }
-                                Err(e) => {
-                                    if let Some(s) = stats_clone.lock().as_ref().cloned() {
-                                        s.record_checkpoint_failure();
+                                    Err(e) => {
+                                        if let Some(s) = stats_clone.lock().as_ref().cloned() {
+                                            s.record_checkpoint_failure();
+                                        }
+                                        log::warn!(
+                                            "Async checkpoint failed (reason={:?}): {}",
+                                            reason,
+                                            e
+                                        );
                                     }
-                                    log::warn!(
-                                        "Async checkpoint failed (reason={:?}): {}",
-                                        reason,
-                                        e
-                                    );
+                                }
+                                let (lock, cv) = &*active_task;
+                                let mut count = lock.lock();
+                                *count = count.saturating_sub(1);
+                                if *count == 0 {
+                                    cv.notify_all();
                                 }
                             });
                         }
@@ -199,6 +215,13 @@ impl CheckpointScheduler {
         }
         self.pending.store(false, Ordering::Release);
         *self.pending_request.lock() = None;
+        // Drain in-flight checkpoint tasks so a dropped handle cannot leave a
+        // checkpoint writing to the directory a subsequent open recovers.
+        let (lock, cv) = &*self.active;
+        let mut count = lock.lock();
+        while *count > 0 {
+            cv.wait(&mut count);
+        }
     }
 
     pub fn is_running(&self) -> bool {

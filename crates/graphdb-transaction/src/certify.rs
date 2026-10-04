@@ -17,6 +17,8 @@ mod publish;
 mod ssi_tracker;
 use parking_lot::Mutex;
 
+use std::collections::BTreeMap;
+
 use graphdb_core::types::{EdgeIdentifier, Timestamp, VertexId};
 
 use super::types::WriteSet;
@@ -49,8 +51,10 @@ pub struct Certifier {
     /// check-then-publish critical section.
     commit_lock: Mutex<()>,
     /// Committed write sets retained until no transaction can have started
-    /// before the corresponding commit timestamp.
-    committed_write_sets: Mutex<Vec<(Timestamp, WriteSet)>>,
+    /// before the corresponding commit timestamp. Keyed by commit timestamp
+    /// so the final-review range scan touches only commits newer than the
+    /// committer's start timestamp instead of every retained commit.
+    committed_write_sets: Mutex<BTreeMap<Timestamp, Vec<WriteSet>>>,
     /// Spatial index for O(1) vertex conflict lookup.
     /// Maps each vertex ID to committed write timestamps + transaction IDs.
     vertex_writes: ConflictIndex<VertexId>,
@@ -71,7 +75,7 @@ impl Certifier {
     pub fn new() -> Self {
         Self {
             commit_lock: Mutex::new(()),
-            committed_write_sets: Mutex::new(Vec::new()),
+            committed_write_sets: Mutex::new(BTreeMap::new()),
             vertex_writes: ConflictIndex::new(),
             edge_writes: ConflictIndex::new(),
             schema_writes: ConflictIndex::new(),

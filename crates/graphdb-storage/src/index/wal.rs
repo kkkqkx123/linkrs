@@ -191,8 +191,18 @@ pub(crate) fn read_and_validate_wal_header<R: std::io::Read>(
     Ok(())
 }
 
-/// Append a WAL entry to the WAL file.
-pub(crate) fn append_wal_entry<P: AsRef<Path>>(wal_path: P, entry: &WalEntry) -> StorageResult<()> {
+/// Append a batch of WAL entries with one flush and one fsync.
+///
+/// Group commit for the index WAL: one durability barrier covers the whole
+/// batch instead of one per entry, so a bulk index build amortizes fsync
+/// across every entry staged before the flush.
+pub(crate) fn append_wal_entries<P: AsRef<Path>>(
+    wal_path: P,
+    entries: &[WalEntry],
+) -> StorageResult<()> {
+    if entries.is_empty() {
+        return Ok(());
+    }
     let path = wal_path.as_ref();
     let is_new = !path.exists();
 
@@ -205,9 +215,11 @@ pub(crate) fn append_wal_entry<P: AsRef<Path>>(wal_path: P, entry: &WalEntry) ->
     if is_new {
         write_wal_header(&mut writer).map_err(|e| StorageError::io_error(e.to_string()))?;
     }
-    entry
-        .serialize_into(&mut writer)
-        .map_err(|e| StorageError::io_error(e.to_string()))?;
+    for entry in entries {
+        entry
+            .serialize_into(&mut writer)
+            .map_err(|e| StorageError::io_error(e.to_string()))?;
+    }
     writer
         .flush()
         .map_err(|e| StorageError::io_error(e.to_string()))?;
@@ -361,9 +373,7 @@ mod tests {
             },
         ];
 
-        for entry in &entries {
-            append_wal_entry(&wal_path, entry).unwrap();
-        }
+        append_wal_entries(&wal_path, &entries).unwrap();
 
         let loaded = read_wal_entries(&wal_path).unwrap();
         assert_eq!(loaded.len(), 2);

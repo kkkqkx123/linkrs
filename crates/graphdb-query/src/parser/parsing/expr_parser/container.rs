@@ -1,5 +1,5 @@
 use super::property::try_parse_inline_pattern_predicate;
-use super::{ParseResult, parse_expression, parse_function_call};
+use super::{parse_expression, parse_function_call, ParseResult};
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
@@ -7,7 +7,9 @@ use graphdb_core::types::expr::Expression;
 use graphdb_core::types::Position;
 use graphdb_core::{ArrayValue, NullType, StructValue, Value};
 
-pub(crate) fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, ParseError> {
+pub(crate) fn parse_primary_expression(
+    ctx: &mut ParseContext<'_>,
+) -> Result<ParseResult, ParseError> {
     let token = ctx.current_token().clone();
     let start_pos = ctx.current_position();
 
@@ -405,7 +407,9 @@ pub(crate) fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<Par
     }
 }
 
-pub(crate) fn parse_expression_list(ctx: &mut ParseContext<'_>) -> Result<Vec<ParseResult>, ParseError> {
+pub(crate) fn parse_expression_list(
+    ctx: &mut ParseContext<'_>,
+) -> Result<Vec<ParseResult>, ParseError> {
     let mut expressions = Vec::new();
     expressions.push(parse_expression(ctx)?);
     while ctx.match_token(TokenKind::Comma) {
@@ -430,7 +434,10 @@ pub(crate) fn parse_property_list(
     Ok(properties)
 }
 
-pub(crate) fn eval_literal_expression(expr: &Expression, position: Position) -> Result<Value, ParseError> {
+pub(crate) fn eval_literal_expression(
+    expr: &Expression,
+    position: Position,
+) -> Result<Value, ParseError> {
     use crate::executor::expression::evaluation_context::DefaultExpressionContext;
     use crate::executor::expression::evaluator::ExpressionEvaluator;
 

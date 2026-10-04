@@ -11,12 +11,15 @@ mod classify;
 mod result;
 mod transaction;
 
-pub use classify::{StatementClass, build_validated_fallback, classify_statement, is_analyze, is_ddl, is_diagnostic, is_read_only_cacheable, is_transaction, requires_write_storage};
-pub use result::PreparedOutcome;
 use crate::binder::BoundStatement;
 use crate::parser::ast::Stmt;
 use crate::QueryContext;
 use crate::QueryRequestContext;
+pub use classify::{
+    build_validated_fallback, classify_statement, is_analyze, is_ddl, is_diagnostic,
+    is_read_only_cacheable, is_transaction, requires_write_storage, StatementClass,
+};
+pub use result::PreparedOutcome;
 
 /// A fully prepared request ready for execution.
 ///
@@ -63,7 +66,11 @@ impl PreparedRequest {
             storage
                 .write()
                 .finalize_operation(committed)
-                .map_err(|error| graphdb_core::error::DBError::from(graphdb_core::error::QueryError::execution(error.to_string())))?;
+                .map_err(|error| {
+                    graphdb_core::error::DBError::from(graphdb_core::error::QueryError::execution(
+                        error.to_string(),
+                    ))
+                })?;
         }
         Ok(())
     }
@@ -282,10 +289,11 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                 "DML requires a storage binding".to_string(),
             ))
         })?;
-        let bound = storage
-            .read()
-            .bind_auto_commit_context()
-            .map_err(|error| graphdb_core::error::DBError::from(graphdb_core::error::QueryError::execution(error.to_string())))?;
+        let bound = storage.read().bind_auto_commit_context().map_err(|error| {
+            graphdb_core::error::DBError::from(graphdb_core::error::QueryError::execution(
+                error.to_string(),
+            ))
+        })?;
         Ok(Arc::new(RwLock::new(bound)))
     }
 
@@ -298,7 +306,11 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         let bound = storage
             .read()
             .bind_read_operation_context()
-            .map_err(|error| graphdb_core::error::DBError::from(graphdb_core::error::QueryError::execution(error.to_string())))?;
+            .map_err(|error| {
+                graphdb_core::error::DBError::from(graphdb_core::error::QueryError::execution(
+                    error.to_string(),
+                ))
+            })?;
         Ok(Arc::new(RwLock::new(bound)))
     }
 }
@@ -329,8 +341,14 @@ mod tests {
         ];
         for query in cases {
             let stmt = parse(query);
-            assert!(classify::is_direct_dml_statement(&stmt), "direct DML: {query}");
-            assert!(classify::is_direct_write_statement(&stmt), "direct write: {query}");
+            assert!(
+                classify::is_direct_dml_statement(&stmt),
+                "direct DML: {query}"
+            );
+            assert!(
+                classify::is_direct_write_statement(&stmt),
+                "direct write: {query}"
+            );
         }
     }
 
@@ -344,7 +362,10 @@ mod tests {
         ];
         for query in cases {
             let stmt = parse(query);
-            assert!(!classify::is_direct_dml_statement(&stmt), "not direct DML: {query}");
+            assert!(
+                !classify::is_direct_dml_statement(&stmt),
+                "not direct DML: {query}"
+            );
         }
     }
 

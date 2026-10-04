@@ -80,7 +80,8 @@ impl SinkOperatorUtil {
         result_schema: &mut FactorizedSchema,
     ) -> Result<(), FactorizationError> {
         let mut flat_payloads = Vec::new();
-        let mut unflat_per_group: HashMap<FGroupPos, Vec<graphdb_core::types::expr::ExpressionId>> = HashMap::new();
+        let mut unflat_per_group: HashMap<FGroupPos, Vec<graphdb_core::types::expr::ExpressionId>> =
+            HashMap::new();
         for expr_id in expressions_to_merge {
             let Some(pos) = input_schema.get_group_pos(expr_id) else {
                 continue;

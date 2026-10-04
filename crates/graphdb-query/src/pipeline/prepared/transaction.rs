@@ -6,10 +6,7 @@ use graphdb_core::types::TransactionIsolationLevel;
 use super::classify::is_transaction;
 
 /// Resolve the [`TransactionScope`] from a statement and request context.
-pub fn resolve_transaction_scope(
-    stmt: &Stmt,
-    request: &QueryRequestContext,
-) -> TransactionScope {
+pub fn resolve_transaction_scope(stmt: &Stmt, request: &QueryRequestContext) -> TransactionScope {
     if is_transaction(stmt) {
         return TransactionScope::CommandScope;
     }
@@ -51,7 +48,9 @@ fn scope_for_bound_request(request: &QueryRequestContext) -> Option<TransactionS
 /// snapshot timestamp (effective snapshot -> storage operation context read
 /// timestamp). Auto-commit statements return `None` so they read the current
 /// version of the data.
-pub fn snapshot_ts_for_request(rctx: &QueryRequestContext) -> Option<graphdb_core::types::Timestamp> {
+pub fn snapshot_ts_for_request(
+    rctx: &QueryRequestContext,
+) -> Option<graphdb_core::types::Timestamp> {
     if rctx.auto_commit {
         return None;
     }
@@ -67,7 +66,9 @@ pub fn snapshot_ts_for_request(rctx: &QueryRequestContext) -> Option<graphdb_cor
 /// still a non-auto-commit transaction statement, fall back to the
 /// transaction manager's default (`RepeatableRead`). Auto-commit statements
 /// keep `None` (statement-level snapshot semantics).
-pub fn isolation_level_for_request(rctx: &QueryRequestContext) -> Option<TransactionIsolationLevel> {
+pub fn isolation_level_for_request(
+    rctx: &QueryRequestContext,
+) -> Option<TransactionIsolationLevel> {
     if rctx.auto_commit {
         return None;
     }
