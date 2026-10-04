@@ -619,7 +619,7 @@ fn run_query_and_accumulate(
     let result = pipeline
         .execute_query_stream_with_request(query, rctx, Some(space.clone()))
         .expect("query should succeed");
-    while let Ok(Some(chunk)) = result.next_chunk() {
+    while let Some(chunk) = result.next_chunk().expect("chunk ok") {
         black_box(chunk.len());
     }
     result.close().ok();

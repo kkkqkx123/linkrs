@@ -207,11 +207,9 @@ fn bench_query_stages(c: &mut Criterion) {
         }
 
         // Collect per-stage numbers for the report (outside criterion timing).
-        // The profiled entry (`execute_query_with_profile`) resolves the space
-        // only from the request context, which we cannot set from outside the
-        // crate, so the report uses: parse (direct), bind (direct, criterion),
-        // and e2e wall via the stream entry; plan+optimize+execute is derived
-        // as the remainder.
+        // Parse and bind are measured directly; the e2e wall comes from the
+        // stream entry, which receives the space explicitly, and
+        // plan+optimize+execute is derived as the remainder.
         let iters = 30;
         let mut wall_total = Duration::ZERO;
         let mut parse_ns = 0u128;

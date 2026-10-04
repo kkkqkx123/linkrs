@@ -148,7 +148,12 @@ impl PushFilterDownExpandAllRule {
         let Some(first_input) = expand_all.inputs().first() else {
             return false;
         };
-        let input_cols = subtree_columns(first_input);
+        // Use the first real anchor node's own output columns, not the whole
+        // subtree: a deeper node may produce a variable that an intervening
+        // column-dropping operator (aggregate/project) removes before it
+        // reaches the expand input. `Flatten` is row-preserving but may carry
+        // no `col_names` of its own, so it is transparent here.
+        let input_cols = available_columns(first_input);
         referenced_vars.iter().all(|var| input_cols.contains(var))
     }
     /// Check if a filter can be pushed down to an ExpandAll node.
@@ -195,21 +200,15 @@ impl PushFilterDownExpandAllRule {
     }
 }
 
-/// Columns produced anywhere in `node`'s subtree.
-///
-/// Row-preserving wrappers such as `Flatten` carry no `col_names` of their
-/// own, so a filter that references an upstream variable must look through
-/// them to find the node that actually produces it.
-fn subtree_columns(node: &PlanNodeEnum) -> Vec<String> {
-    let mut cols = node.col_names().to_vec();
-    for child in node.children() {
-        for name in subtree_columns(child) {
-            if !cols.contains(&name) {
-                cols.push(name);
-            }
-        }
+/// Columns visible at `node`'s output, looking through row-preserving
+/// `Flatten` wrappers. A `Flatten` replays its child's rows and may carry no
+/// `col_names`, so it is transparent; the first non-wrapper node's output
+/// columns are the variables a filter may safely reference at this point.
+fn available_columns(node: &PlanNodeEnum) -> &[String] {
+    match node {
+        PlanNodeEnum::Flatten(flatten) => available_columns(flatten.input()),
+        _ => node.col_names(),
     }
-    cols
 }
 
 /// Insert `filter` directly above the first non-`Flatten` node in `node`,
@@ -362,6 +361,110 @@ mod tests {
         assert!(matches!(pushed.input(), PlanNodeEnum::ScanVertices(_)));
         // The expand itself carries no filter anymore.
         assert!(expanded.filter().is_none());
+    }
+
+    #[test]
+    fn pushes_earlier_variable_filter_through_flatten_to_anchor() {
+        use crate::planning::plan::core::nodes::operation::flatten_node::FlattenNode;
+
+        let mut expand1 = ExpandAllNode::new(1, vec!["Link".to_string()], "OUT");
+        expand1.set_col_names(vec!["a".to_string(), "edge".to_string(), "b".to_string()]);
+        expand1.add_input(anchor_scan("a"));
+
+        let mut flatten = FlattenNode::new(PlanNodeEnum::ExpandAll(expand1), 0).expect("flatten");
+        // Production `Flatten` nodes are built from a logical node whose
+        // `col_names` may be empty; the rule must see through the wrapper to
+        // the first hop's output columns.
+        flatten.set_col_names(Vec::new());
+        let flatten_enum = PlanNodeEnum::Flatten(flatten);
+
+        let mut expand2 = ExpandAllNode::new(1, vec!["Link".to_string()], "OUT");
+        expand2.set_col_names(vec![
+            "a".to_string(),
+            "edge".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+        ]);
+        expand2.add_input(flatten_enum);
+
+        let filter = filter_above(
+            anchor_filter_expr("a", "value"),
+            PlanNodeEnum::ExpandAll(expand2),
+        );
+
+        let rule = PushFilterDownExpandAllRule::new();
+        let result = rule
+            .apply(
+                &mut crate::optimizer::heuristic::context::RewriteContext::new(),
+                &filter,
+            )
+            .expect("rewrite")
+            .expect("some result");
+
+        let new_node = result.new_nodes.first().expect("node");
+        let PlanNodeEnum::ExpandAll(expanded) = new_node else {
+            panic!("expected ExpandAll root, got {new_node:?}");
+        };
+        // The filter must descend through the Flatten and land directly above
+        // the first hop, so the earlier-variable predicate runs before the
+        // second expansion.
+        let PlanNodeEnum::Flatten(rebuilt_flatten) = expanded.inputs().first().expect("input")
+        else {
+            panic!("expected Flatten below expand");
+        };
+        let PlanNodeEnum::Filter(pushed) = rebuilt_flatten.input() else {
+            panic!("expected Filter below Flatten");
+        };
+        assert!(matches!(pushed.input(), PlanNodeEnum::ExpandAll(_)));
+    }
+
+    #[test]
+    fn does_not_push_filter_over_column_dropping_anchor() {
+        use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
+        use graphdb_core::types::expr::expression_context::ExpressionAnalysisContext;
+        use graphdb_core::types::expr::ExpressionMeta;
+        use graphdb_core::types::ContextualExpression;
+        use graphdb_core::Expression;
+        use graphdb_core::YieldColumn;
+        use std::sync::Arc;
+
+        // Anchor subtree produces `x`, but the projection drops it: only `a`
+        // reaches the expand input. A filter on `x` must not be pushed below
+        // the expand, because `x` is unavailable there.
+        let scan = anchor_scan("x");
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        let id = expr_ctx
+            .register_expression(ExpressionMeta::new(Expression::Variable("a".to_string())));
+        let project = ProjectNode::new(
+            scan,
+            vec![YieldColumn {
+                expression: ContextualExpression::new(id, expr_ctx),
+                alias: "a".to_string(),
+            }],
+        )
+        .expect("project");
+        let anchor = PlanNodeEnum::Project(project);
+
+        let mut expand = ExpandAllNode::new(1, vec!["Link".to_string()], "OUT");
+        expand.set_col_names(vec!["a".to_string(), "edge".to_string(), "b".to_string()]);
+        expand.add_input(anchor);
+
+        let filter = filter_above(
+            anchor_filter_expr("x", "value"),
+            PlanNodeEnum::ExpandAll(expand),
+        );
+
+        let rule = PushFilterDownExpandAllRule::new();
+        let result = rule
+            .apply(
+                &mut crate::optimizer::heuristic::context::RewriteContext::new(),
+                &filter,
+            )
+            .expect("rewrite");
+        assert!(
+            result.is_none(),
+            "filter over a dropped variable must not be pushed"
+        );
     }
 
     #[test]

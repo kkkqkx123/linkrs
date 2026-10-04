@@ -18,6 +18,7 @@ mod ssi_tracker;
 use parking_lot::Mutex;
 
 use std::collections::BTreeMap;
+use std::sync::atomic::AtomicUsize;
 
 use graphdb_core::types::{EdgeIdentifier, Timestamp, VertexId};
 
@@ -69,7 +70,16 @@ pub struct Certifier {
     index_writes: ConflictIndex<String>,
     /// SSI rw-dependency tracker for Serializable isolation.
     ssi_tracker: SsiTracker,
+    /// Countdown to the next full GC pass. Pruning is an O(retained) scan
+    /// under every conflict-index lock; running it on every commit/abort puts
+    /// that scan on the commit critical path. Stale entries are harmless
+    /// (they sit at or below the oldest active timestamp, so no active
+    /// transaction can observe them as newer), so the pass is batched.
+    prune_countdown: AtomicUsize,
 }
+
+/// Number of commit/abort prune requests between full GC passes.
+const PRUNE_INTERVAL: usize = 64;
 
 impl Certifier {
     pub fn new() -> Self {
@@ -81,6 +91,7 @@ impl Certifier {
             schema_writes: ConflictIndex::new(),
             index_writes: ConflictIndex::new(),
             ssi_tracker: SsiTracker::new(),
+            prune_countdown: AtomicUsize::new(1),
         }
     }
 }

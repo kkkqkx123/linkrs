@@ -175,7 +175,7 @@ pub(crate) fn replay_create_edge_type(
             .map(|t| t.tag_id)
             .ok_or_else(|| {
                 StorageError::db_error(format!(
-                    "Source vertex label not found during recovery: {}",
+                    "Edge type endpoint tag not found during recovery: {}",
                     tag_name
                 ))
             })

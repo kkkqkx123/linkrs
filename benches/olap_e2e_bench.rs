@@ -216,7 +216,7 @@ fn run_query(
         .execute_query_stream_with_request(query, rctx, Some(space.clone()))
         .unwrap_or_else(|e| panic!("query failed: {e}: {query}"));
     let mut rows = 0usize;
-    while let Ok(Some(chunk)) = result.next_chunk() {
+    while let Some(chunk) = result.next_chunk().expect("chunk ok") {
         rows += chunk.len();
     }
     result.close().ok();

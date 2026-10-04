@@ -223,9 +223,11 @@ pub(crate) fn append_wal_entries<P: AsRef<Path>>(
     writer
         .flush()
         .map_err(|e| StorageError::io_error(e.to_string()))?;
+    // Append-only redo log: `sync_data` is the correct barrier, flushing the
+    // batch payload without the redundant metadata flush of `sync_all`.
     writer
         .get_ref()
-        .sync_all()
+        .sync_data()
         .map_err(|e| StorageError::io_error(e.to_string()))?;
     Ok(())
 }

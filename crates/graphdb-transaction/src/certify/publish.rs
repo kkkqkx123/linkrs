@@ -5,6 +5,7 @@
 //! containers.
 
 use std::ops::Bound::{Excluded, Unbounded};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -171,7 +172,28 @@ impl Certifier {
     /// Prune committed write sets that are no longer needed by any active
     /// transaction. Entries with commit timestamps <= `oldest_active_ts`
     /// are safe to remove.
+    ///
+    /// The pass is batched: a full scan of every retained write set and
+    /// conflict-index entry runs once per [`super::PRUNE_INTERVAL`] requests
+    /// instead of on every commit/abort. Stale entries never affect a
+    /// conflict verdict — they are at or below the oldest active timestamp,
+    /// so `conflicts_after` and the phantom range scans cannot observe them
+    /// as newer — so delaying reclamation only retains bounded memory.
     pub fn prune(&self, oldest_active_ts: Timestamp) {
+        let previous = self
+            .prune_countdown
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                Some(if remaining <= 1 {
+                    super::PRUNE_INTERVAL
+                } else {
+                    remaining - 1
+                })
+            })
+            .unwrap_or(1);
+        if previous > 1 {
+            return;
+        }
+
         let mut committed = self.committed_write_sets.lock();
         committed.retain(|ts, _| *ts > oldest_active_ts);
 

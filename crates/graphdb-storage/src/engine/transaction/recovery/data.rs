@@ -264,19 +264,14 @@ impl GraphStorageContext {
                                     redo.src_label, redo.src_vid
                                 ))
                             })?;
-                    let (actual_dst_label, dst_internal) = resolve_endpoint(
-                        self,
-                        vertex_tables,
-                        redo.dst_label,
-                        redo.dst_vid,
-                        ts,
-                    )
-                    .ok_or_else(|| {
-                        StorageError::db_error(format!(
+                    let (actual_dst_label, dst_internal) =
+                        resolve_endpoint(self, vertex_tables, redo.dst_label, redo.dst_vid, ts)
+                            .ok_or_else(|| {
+                                StorageError::db_error(format!(
                             "Destination vertex not found during recovery: label={}, vid={:?}",
                             redo.dst_label, redo.dst_vid
                         ))
-                    })?;
+                            })?;
                     Ok((
                         src_internal,
                         dst_internal,

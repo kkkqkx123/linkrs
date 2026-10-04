@@ -134,7 +134,10 @@ pub(crate) fn append_ops(dir: &Path, ops: &[EdgeWalOp]) -> StorageResult<()> {
             StorageError::io_error(format!("Failed to write edge WAL entry: {}", e))
         })?;
     }
-    file.sync_all()
+    // Append-only redo log: only the data needs a durability barrier, not
+    // file metadata, so `sync_data` avoids the extra metadata flush that
+    // `sync_all` would pay on every commit.
+    file.sync_data()
         .map_err(|e| StorageError::io_error(format!("Failed to sync edge WAL: {}", e)))?;
     Ok(())
 }
