@@ -433,3 +433,6 @@ pub mod undo;
 mod write;
 mod write_edge;
 mod write_vertex;
+
+#[cfg(test)]
+mod tests;

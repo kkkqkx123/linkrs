@@ -71,3 +71,6 @@ pub use typed::{TypedColumn, TypedKind};
 pub const VECTORIZED_BATCH_SIZE: usize = 2048;
 /// Alias for the default chunk size (kept in sync with `ExecutionContext::DEFAULT_CHUNK_SIZE`).
 pub const DEFAULT_CHUNK_SIZE: usize = VECTORIZED_BATCH_SIZE;
+
+#[cfg(test)]
+mod tests;

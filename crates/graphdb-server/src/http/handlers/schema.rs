@@ -3,6 +3,10 @@ use axum::{
     extract::{Json, Path, State},
     response::Json as JsonResponse,
 };
+use graphdb_wire::migration::{
+    MigrationExecuteRequest, MigrationExecuteResponse, MigrationHistoryResponse,
+    MigrationPlanQuery, MigrationPlanResponse, MigrationRollbackRequest, MigrationStatusResponse,
+};
 use graphdb_wire::schema::{CreateEdgeTypeRequest, CreateSpaceRequest, CreateTagRequest};
 use tokio::task;
 
@@ -745,24 +749,6 @@ pub async fn detect_breaking_changes<
 
 // ==================== Migration ====================
 
-#[derive(serde::Deserialize, utoipa::ToSchema)]
-pub struct MigrationPlanQuery {
-    pub from_version: Option<u64>,
-    pub to_version: Option<u64>,
-    pub is_edge: Option<bool>,
-    pub expand_contract: Option<bool>,
-}
-
-#[derive(serde::Deserialize, utoipa::ToSchema)]
-pub struct MigrationExecuteRequest {
-    pub plan_json: String,
-}
-
-#[derive(serde::Deserialize, utoipa::ToSchema)]
-pub struct MigrationRollbackRequest {
-    pub plan_json: String,
-}
-
 #[utoipa::path(
     post,
     path = "/v1/migration/plan/{space}/{label}",
@@ -776,7 +762,7 @@ pub struct MigrationRollbackRequest {
         ("expand_contract" = Option<bool>, Query, description = "Use expand-contract plan")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Migration plan"),
+        (status = 200, body = MigrationPlanResponse, description = "Migration plan"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -793,13 +779,11 @@ pub async fn create_migration_plan<
     State(state): State<AppState<S>>,
     Path((space, label)): Path<(String, String)>,
     axum::extract::Query(query): axum::extract::Query<MigrationPlanQuery>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<MigrationPlanResponse>, HttpError> {
     let from_version = query
-        .from_version
-        .ok_or_else(|| HttpError::BadRequest("from_version required".into()))?;
-    let to_version = query
-        .to_version
-        .ok_or_else(|| HttpError::BadRequest("to_version required".into()))?;
+        .require_from_version()
+        .map_err(HttpError::BadRequest)?;
+    let to_version = query.require_to_version().map_err(HttpError::BadRequest)?;
     let is_edge = query.is_edge.unwrap_or(false);
     let expand_contract = query.expand_contract.unwrap_or(false);
 
@@ -847,10 +831,12 @@ pub async fn create_migration_plan<
         }
         .map_err(|e| HttpError::InternalError(e.to_string()))?;
 
-        Ok::<_, HttpError>(serde_json::json!({
-            "plan": plan,
-            "plan_json": serde_json::to_string(&plan).unwrap(),
-        }))
+        let plan_json = serde_json::to_string(&plan).unwrap();
+        let plan_value = serde_json::to_value(&plan).unwrap();
+        Ok::<_, HttpError>(MigrationPlanResponse {
+            plan: plan_value,
+            plan_json,
+        })
     })
     .await
     .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
@@ -864,7 +850,7 @@ pub async fn create_migration_plan<
     tag = "Migration",
     request_body = MigrationExecuteRequest,
     responses(
-        (status = 200, body = serde_json::Value, description = "Migration execution report"),
+        (status = 200, body = MigrationExecuteResponse, description = "Migration execution report"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -880,7 +866,7 @@ pub async fn execute_migration<
 >(
     State(state): State<AppState<S>>,
     Json(req): Json<MigrationExecuteRequest>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<MigrationExecuteResponse>, HttpError> {
     let plan: graphdb_migration::MigrationPlan =
         serde_json::from_str(&req.plan_json).map_err(|e| HttpError::BadRequest(e.to_string()))?;
 
@@ -909,12 +895,13 @@ pub async fn execute_migration<
             Err(_) => stats.record_migration_failure(elapsed),
         }
         let report = report?;
-        Ok::<_, HttpError>(serde_json::json!({
-            "success": report.success,
-            "steps_completed": report.steps_completed,
-            "rows_migrated": report.rows_migrated,
-            "errors": report.errors,
-        }))
+        Ok::<_, HttpError>(MigrationExecuteResponse {
+            success: report.success,
+            steps_completed: report.steps_completed,
+            rows_migrated: report.rows_migrated,
+            errors: report.errors,
+            preview: None,
+        })
     })
     .await
     .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
@@ -928,7 +915,7 @@ pub async fn execute_migration<
     tag = "Migration",
     request_body = MigrationRollbackRequest,
     responses(
-        (status = 200, body = serde_json::Value, description = "Migration rollback report"),
+        (status = 200, body = MigrationExecuteResponse, description = "Migration rollback report"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -944,7 +931,7 @@ pub async fn rollback_migration<
 >(
     State(state): State<AppState<S>>,
     Json(req): Json<MigrationRollbackRequest>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<MigrationExecuteResponse>, HttpError> {
     let plan: graphdb_migration::MigrationPlan =
         serde_json::from_str(&req.plan_json).map_err(|e| HttpError::BadRequest(e.to_string()))?;
 
@@ -954,12 +941,13 @@ pub async fn rollback_migration<
         let report = graphdb_migration::rollback_migration(&mut *storage_write, &plan)
             .map_err(|e| HttpError::InternalError(e.to_string()))?;
 
-        Ok::<_, HttpError>(serde_json::json!({
-            "success": report.success,
-            "steps_completed": report.steps_completed,
-            "rows_migrated": report.rows_migrated,
-            "errors": report.errors,
-        }))
+        Ok::<_, HttpError>(MigrationExecuteResponse {
+            success: report.success,
+            steps_completed: report.steps_completed,
+            rows_migrated: report.rows_migrated,
+            errors: report.errors,
+            preview: None,
+        })
     })
     .await
     .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
@@ -973,7 +961,7 @@ pub async fn rollback_migration<
     tag = "Migration",
     request_body = MigrationExecuteRequest,
     responses(
-        (status = 200, body = serde_json::Value, description = "Migration dry-run preview"),
+        (status = 200, body = MigrationExecuteResponse, description = "Migration dry-run preview"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -989,7 +977,7 @@ pub async fn dry_run_migration<
 >(
     State(state): State<AppState<S>>,
     Json(req): Json<MigrationExecuteRequest>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<MigrationExecuteResponse>, HttpError> {
     let mut plan: graphdb_migration::MigrationPlan =
         serde_json::from_str(&req.plan_json).map_err(|e| HttpError::BadRequest(e.to_string()))?;
     plan.dry_run = true;
@@ -1000,13 +988,13 @@ pub async fn dry_run_migration<
         let report = graphdb_migration::execute_migration_plan(&mut *storage_write, &plan)
             .map_err(|e| HttpError::InternalError(e.to_string()))?;
 
-        Ok::<_, HttpError>(serde_json::json!({
-            "success": report.success,
-            "steps_completed": report.steps_completed,
-            "rows_migrated": report.rows_migrated,
-            "errors": report.errors,
-            "preview": true,
-        }))
+        Ok::<_, HttpError>(MigrationExecuteResponse {
+            success: report.success,
+            steps_completed: report.steps_completed,
+            rows_migrated: report.rows_migrated,
+            errors: report.errors,
+            preview: Some(true),
+        })
     })
     .await
     .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
@@ -1024,7 +1012,7 @@ pub async fn dry_run_migration<
         ("is_edge" = Option<bool>, Query, description = "Whether the label is an edge type")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Migration history"),
+        (status = 200, body = MigrationHistoryResponse, description = "Migration history"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -1041,7 +1029,7 @@ pub async fn migration_history<
     State(state): State<AppState<S>>,
     Path((space, label)): Path<(String, String)>,
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<MigrationHistoryResponse>, HttpError> {
     let is_edge = parse_is_edge_param(&query)?;
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
@@ -1052,13 +1040,17 @@ pub async fn migration_history<
         let versions = storage_read
             .get_applied_versions(&space, &label, is_edge)
             .map_err(|e| HttpError::InternalError(e.to_string()))?;
-        Ok::<_, HttpError>(serde_json::json!({
-            "space": space,
-            "label": label,
-            "is_edge": is_edge,
-            "applied_versions": versions,
-            "history": history,
-        }))
+        let history: Vec<serde_json::Value> = history
+            .into_iter()
+            .map(|r| serde_json::to_value(&r).unwrap())
+            .collect();
+        Ok::<_, HttpError>(MigrationHistoryResponse {
+            space,
+            label,
+            is_edge,
+            applied_versions: versions,
+            history,
+        })
     })
     .await
     .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
@@ -1076,7 +1068,7 @@ pub async fn migration_history<
         ("is_edge" = Option<bool>, Query, description = "Whether the label is an edge type")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Migration status"),
+        (status = 200, body = MigrationStatusResponse, description = "Migration status"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -1093,7 +1085,7 @@ pub async fn migration_status<
     State(state): State<AppState<S>>,
     Path((space, label)): Path<(String, String)>,
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<MigrationStatusResponse>, HttpError> {
     let is_edge = parse_is_edge_param(&query)?;
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
@@ -1105,14 +1097,14 @@ pub async fn migration_status<
             .list_migration_history(&space, &label, is_edge)
             .map_err(|e| HttpError::InternalError(e.to_string()))?;
         let latest = applied.iter().max().copied().unwrap_or(0);
-        Ok::<_, HttpError>(serde_json::json!({
-            "space": space,
-            "label": label,
-            "is_edge": is_edge,
-            "latest_applied_version": latest,
-            "applied_versions": applied,
-            "history_count": history.len(),
-        }))
+        Ok::<_, HttpError>(MigrationStatusResponse {
+            space: Some(space),
+            label: Some(label),
+            is_edge: Some(is_edge),
+            latest_applied_version: Some(latest),
+            applied_versions: applied,
+            history_count: history.len(),
+        })
     })
     .await
     .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;

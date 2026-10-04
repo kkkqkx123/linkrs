@@ -1136,3 +1136,6 @@ impl<'a> Lexer<'a> {
         self.current_token.kind == kind
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -217,7 +217,7 @@ impl OptimizerEngine {
         acc
     }
 
-    fn validate_factorized_invariant(root: &LogicalNodeEnum) -> bool {
+    pub(super) fn validate_factorized_invariant(root: &LogicalNodeEnum) -> bool {
         Self::compute_schema_tree(root).is_ok()
     }
 

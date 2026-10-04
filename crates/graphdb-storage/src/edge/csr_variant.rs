@@ -148,3 +148,6 @@ pub enum CsrVariant {
     /// No-edge placeholder: vertices exist but have no outgoing edges
     None { vertex_capacity: usize },
 }
+
+#[cfg(test)]
+mod tests;

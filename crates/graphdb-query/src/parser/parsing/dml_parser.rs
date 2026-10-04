@@ -15,12 +15,12 @@ use graphdb_core::types::expr::contextual::ContextualExpression;
 use graphdb_core::types::expr::Expression as CoreExpression;
 use graphdb_core::types::EdgeDirection;
 
-mod insert;
-mod delete;
-mod update;
-mod merge;
-mod create;
 mod copy;
+mod create;
+mod delete;
+mod insert;
+mod merge;
+mod update;
 
 /// Data Modification Parser
 pub struct DmlParser;

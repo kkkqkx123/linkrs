@@ -35,14 +35,12 @@ pub(super) fn handle_insert_vertices(
             let params = op.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
             for row in &chunk.rows {
-                let mut context =
-                    row_context(row.clone(), layout.clone(), params.clone());
+                let mut context = row_context(row.clone(), layout.clone(), params.clone());
 
                 let vid = if let Some((_name, expr)) = vertex_properties.first() {
                     let val = eval_expr(expr, &mut context)?;
-                    VertexId::try_from(&val).map_err(|e| {
-                        QueryError::execution(format!("Invalid vertex id: {}", e))
-                    })?
+                    VertexId::try_from(&val)
+                        .map_err(|e| QueryError::execution(format!("Invalid vertex id: {}", e)))?
                 } else {
                     return Err(QueryError::execution(
                         "InsertVertices requires a vertex id expression".to_string(),
@@ -60,9 +58,7 @@ pub(super) fn handle_insert_vertices(
 
                 let mut props = HashMap::new();
                 for name in tag_property_names.iter() {
-                    if let Some((_n, expr)) =
-                        vertex_properties.iter().find(|(n, _)| n == name)
-                    {
+                    if let Some((_n, expr)) = vertex_properties.iter().find(|(n, _)| n == name) {
                         if let Ok(val) = eval_expr(expr, &mut context) {
                             props.insert(name.clone(), val);
                         }
@@ -123,8 +119,7 @@ pub(super) fn handle_insert_edges(
             let params = op.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
             for row in &chunk.rows {
-                let mut context =
-                    row_context(row.clone(), layout.clone(), params.clone());
+                let mut context = row_context(row.clone(), layout.clone(), params.clone());
                 let src_val = context
                     .get_variable(src_col)
                     .unwrap_or(Value::Null(graphdb_core::NullType::Null));
@@ -132,9 +127,8 @@ pub(super) fn handle_insert_edges(
                     .get_variable(dst_col)
                     .unwrap_or(Value::Null(graphdb_core::NullType::Null));
 
-                let src = VertexId::try_from(&src_val).map_err(|e| {
-                    QueryError::execution(format!("Invalid edge source id: {}", e))
-                })?;
+                let src = VertexId::try_from(&src_val)
+                    .map_err(|e| QueryError::execution(format!("Invalid edge source id: {}", e)))?;
                 let dst = VertexId::try_from(&dst_val).map_err(|e| {
                     QueryError::execution(format!("Invalid edge destination id: {}", e))
                 })?;

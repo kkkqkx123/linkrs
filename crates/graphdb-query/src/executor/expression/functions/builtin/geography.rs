@@ -224,3 +224,6 @@ define_function_enum! {
         },
     }
 }
+
+#[cfg(test)]
+mod test;

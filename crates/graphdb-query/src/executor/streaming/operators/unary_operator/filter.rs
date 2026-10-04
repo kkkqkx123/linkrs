@@ -88,7 +88,8 @@ pub(super) fn handle(
     loop {
         match input.advance()? {
             Some(mut chunk) => {
-                let results = UnaryOperator::evaluate_filter_predicate(&mut chunk, predicate, state)?;
+                let results =
+                    UnaryOperator::evaluate_filter_predicate(&mut chunk, predicate, state)?;
                 // Build a selection vector restricted to the
                 // currently-visible rows (a nested filter keeps the
                 // absolute row indices).

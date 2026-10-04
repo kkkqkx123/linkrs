@@ -101,3 +101,6 @@ impl Default for OptimizerEngine {
         Self::new(CostModelConfig::default())
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -701,3 +701,6 @@ impl Default for StreamingExecutionEngine {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests;

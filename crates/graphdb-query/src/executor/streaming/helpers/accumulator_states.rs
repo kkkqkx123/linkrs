@@ -949,3 +949,6 @@ fn f64_list_from_value(value: &Value) -> Vec<f64> {
         _ => Vec::new(),
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -961,3 +961,6 @@ impl graphdb_transaction::UndoTarget for GraphStorage {
         graphdb_core::types::UndoTarget::rollback_staged_writes(&*self.ctx, txn_id, mark)
     }
 }
+
+#[cfg(test)]
+mod tests;

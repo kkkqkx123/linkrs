@@ -34,3 +34,6 @@ pub use traversal_parser::TraversalParser;
 pub use user_parser::UserParser;
 pub use util_stmt_parser::UtilStmtParser;
 pub use vector_parser::parse_vector;
+
+#[cfg(test)]
+mod tests;

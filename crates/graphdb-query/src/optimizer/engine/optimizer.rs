@@ -311,7 +311,7 @@ impl OptimizerEngine {
         plan.set_logical_plan(updated_logical);
     }
 
-    fn apply_join_order_logical(
+    pub(super) fn apply_join_order_logical(
         &self,
         stats: &StatsView,
         space: Option<&str>,

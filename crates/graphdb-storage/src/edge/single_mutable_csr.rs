@@ -288,3 +288,6 @@ impl Default for SingleMutableCsr {
 }
 
 use super::{Timestamp, INVALID_EDGE_ID};
+
+#[cfg(test)]
+mod tests;

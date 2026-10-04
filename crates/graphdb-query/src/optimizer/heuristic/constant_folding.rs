@@ -596,3 +596,6 @@ impl RewriteRule for FoldConstantsRule {
         Self::apply(self, ctx, node)
     }
 }
+
+#[cfg(test)]
+mod tests;

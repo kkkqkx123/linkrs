@@ -142,12 +142,19 @@ pub struct SinkOperator {
     pub config: OperatorConfig,
 }
 
-pub(super) fn make_modify_result(output_layout: Arc<SlotLayout>, op: &str, count: u64) -> DataChunk {
+pub(super) fn make_modify_result(
+    output_layout: Arc<SlotLayout>,
+    op: &str,
+    count: u64,
+) -> DataChunk {
     let row = vec![Value::string(op), Value::BigInt(count as i64)];
     DataChunk::new_with_layout(vec![row], output_layout)
 }
 
-pub(super) fn eval_expr(expr: &Expression, context: &mut ValueRowContext) -> Result<Value, QueryError> {
+pub(super) fn eval_expr(
+    expr: &Expression,
+    context: &mut ValueRowContext,
+) -> Result<Value, QueryError> {
     ExpressionEvaluator::evaluate(expr, context).map_err(|e| QueryError::execution(e.to_string()))
 }
 
@@ -251,7 +258,10 @@ fn is_transaction_conflict_message(message: &str) -> bool {
         || lowered.contains("rollback_only")
 }
 
-pub(super) fn resolve_edge_endpoints(src_val: &Value, dst_val: &Value) -> Option<(VertexId, VertexId)> {
+pub(super) fn resolve_edge_endpoints(
+    src_val: &Value,
+    dst_val: &Value,
+) -> Option<(VertexId, VertexId)> {
     match (src_val, dst_val) {
         (Value::Edge(edge), _) => Some((edge.src, edge.dst)),
         (_, Value::Edge(edge)) => Some((edge.src, edge.dst)),

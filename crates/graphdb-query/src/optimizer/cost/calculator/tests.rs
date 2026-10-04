@@ -1,3 +1,5 @@
+use super::*;
+
 use super::super::config::ESTIMATED_ROW_WIDTH_BYTES;
 
 #[test]
@@ -282,14 +284,13 @@ fn test_get_type_cost_factor() {
 
     // Variable-length types
     assert_eq!(
-        calculator.get_type_cost_factor(&Value::String("test")),
+        calculator.get_type_cost_factor(&Value::string("test")),
         calculator.config.variable_type_cost_factor
     );
 
     // Complex types
     assert_eq!(
-        calculator
-            .get_type_cost_factor(&Value::List(Box::<graphdb_core::value::List>::default())),
+        calculator.get_type_cost_factor(&Value::List(Box::<graphdb_core::value::List>::default())),
         calculator.config.complex_type_cost_factor
     );
 
@@ -297,10 +298,7 @@ fn test_get_type_cost_factor() {
     use graphdb_core::vertex_edge_path::Vertex;
     let vertex = Vertex::new(
         graphdb_core::types::VertexId::try_from_int64(1).expect("valid vertex id"),
-        graphdb_core::vertex_edge_path::Tag::new(
-            String::new(),
-            std::collections::HashMap::new(),
-        ),
+        graphdb_core::vertex_edge_path::Tag::new(String::new(), std::collections::HashMap::new()),
     );
     assert_eq!(
         calculator.get_type_cost_factor(&Value::Vertex(Box::new(vertex))),

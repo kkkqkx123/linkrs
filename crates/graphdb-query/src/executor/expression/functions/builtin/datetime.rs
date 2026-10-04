@@ -292,3 +292,6 @@ impl DateTimeFunction {
         self.execute(args)
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -287,3 +287,6 @@ impl fmt::Debug for CsrShardSet {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests;

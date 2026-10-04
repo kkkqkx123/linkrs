@@ -86,3 +86,6 @@ impl Default for Certifier {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests;

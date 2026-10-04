@@ -151,3 +151,6 @@ impl ShardedVertexTable {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

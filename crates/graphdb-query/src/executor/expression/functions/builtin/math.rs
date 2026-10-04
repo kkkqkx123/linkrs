@@ -754,3 +754,6 @@ fn execute_bit_shift_right(args: &[Value]) -> Result<Value, ExpressionError> {
         )),
     }
 }
+
+#[cfg(test)]
+mod tests;

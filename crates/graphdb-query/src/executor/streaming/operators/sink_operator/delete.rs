@@ -35,9 +35,8 @@ pub(super) fn handle_delete_vertices(
                     if matches!(vid_val, Value::Null(_)) {
                         continue;
                     }
-                    let vid = VertexId::try_from(&vid_val).map_err(|e| {
-                        QueryError::execution(format!("Invalid vertex id: {}", e))
-                    })?;
+                    let vid = VertexId::try_from(&vid_val)
+                        .map_err(|e| QueryError::execution(format!("Invalid vertex id: {}", e)))?;
                     {
                         if *cascade {
                             StorageWriter::delete_vertex_with_edges(
@@ -48,13 +47,8 @@ pub(super) fn handle_delete_vertices(
                             )
                             .map_err(|e| QueryError::execution(e.to_string()))?;
                         } else {
-                            StorageWriter::delete_vertex(
-                                &mut *writer,
-                                space_name,
-                                tag,
-                                &vid,
-                            )
-                            .map_err(|e| QueryError::execution(e.to_string()))?;
+                            StorageWriter::delete_vertex(&mut *writer, space_name, tag, &vid)
+                                .map_err(|e| QueryError::execution(e.to_string()))?;
                         }
                         *rows_deleted += 1;
                     }
@@ -113,25 +107,14 @@ pub(super) fn handle_delete_edges(
                 let dst_val = context
                     .get_variable(dst_col)
                     .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                if matches!(src_val, Value::Null(_))
-                    || matches!(dst_val, Value::Null(_))
-                {
+                if matches!(src_val, Value::Null(_)) || matches!(dst_val, Value::Null(_)) {
                     continue;
                 }
                 let (src, dst) = resolve_edge_endpoints(&src_val, &dst_val)
-                    .ok_or_else(|| {
-                        QueryError::execution("Invalid edge endpoint id".to_string())
-                    })?;
+                    .ok_or_else(|| QueryError::execution("Invalid edge endpoint id".to_string()))?;
                 {
-                    StorageWriter::delete_edge(
-                        &mut *writer,
-                        space_name,
-                        &src,
-                        &dst,
-                        edge_type,
-                        0,
-                    )
-                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                    StorageWriter::delete_edge(&mut *writer, space_name, &src, &dst, edge_type, 0)
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
                     *rows_deleted += 1;
                 }
             }
@@ -188,25 +171,14 @@ pub(super) fn handle_pipe_delete_edges(
                 let dst_val = context
                     .get_variable(dst_col)
                     .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                if matches!(src_val, Value::Null(_))
-                    || matches!(dst_val, Value::Null(_))
-                {
+                if matches!(src_val, Value::Null(_)) || matches!(dst_val, Value::Null(_)) {
                     continue;
                 }
                 let (src, dst) = resolve_edge_endpoints(&src_val, &dst_val)
-                    .ok_or_else(|| {
-                        QueryError::execution("Invalid edge endpoint id".to_string())
-                    })?;
+                    .ok_or_else(|| QueryError::execution("Invalid edge endpoint id".to_string()))?;
                 {
-                    StorageWriter::delete_edge(
-                        &mut *writer,
-                        space_name,
-                        &src,
-                        &dst,
-                        edge_type,
-                        0,
-                    )
-                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                    StorageWriter::delete_edge(&mut *writer, space_name, &src, &dst, edge_type, 0)
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
                     *rows_deleted += 1;
                 }
             }
@@ -279,13 +251,8 @@ pub(super) fn handle_pipe_delete_vertices(
                             )
                             .map_err(|e| QueryError::execution(e.to_string()))?;
                         } else {
-                            StorageWriter::delete_vertex(
-                                &mut *writer,
-                                space_name,
-                                &tag,
-                                &vid,
-                            )
-                            .map_err(|e| QueryError::execution(e.to_string()))?;
+                            StorageWriter::delete_vertex(&mut *writer, space_name, &tag, &vid)
+                                .map_err(|e| QueryError::execution(e.to_string()))?;
                         }
                         *rows_deleted += 1;
                     }

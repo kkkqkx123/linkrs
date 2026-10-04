@@ -33,11 +33,7 @@ pub(super) fn handle(
             for row in chunk.rows {
                 let mut new_row = row.clone();
                 let mut ctx = if let Some(ref params) = state.env.params {
-                    ValueRowContext::with_parameters(
-                        row.clone(),
-                        layout.clone(),
-                        params.clone(),
-                    )
+                    ValueRowContext::with_parameters(row.clone(), layout.clone(), params.clone())
                 } else {
                     ValueRowContext::new(row.clone(), layout.clone())
                 };
@@ -45,15 +41,14 @@ pub(super) fn handle(
                     Ok(val) => val,
                     Err(_) => Value::Null(graphdb_core::NullType::Null),
                 };
-                let vid =
-                    match graphdb_core::types::storage_ids::VertexId::try_from(&entity) {
-                        Ok(vid) => vid,
-                        Err(_) => {
-                            new_row.push(Value::Null(graphdb_core::NullType::Null));
-                            result_rows.push(new_row);
-                            continue;
-                        }
-                    };
+                let vid = match graphdb_core::types::storage_ids::VertexId::try_from(&entity) {
+                    Ok(vid) => vid,
+                    Err(_) => {
+                        new_row.push(Value::Null(graphdb_core::NullType::Null));
+                        result_rows.push(new_row);
+                        continue;
+                    }
+                };
                 if tag.is_empty() {
                     return Err(QueryError::execution(
                         "AppendVertices requires a tag qualifier".to_string(),
@@ -63,9 +58,11 @@ pub(super) fn handle(
                     Ok(Some(vertex)) => {
                         if flat {
                             for prop in prop_names.iter() {
-                                new_row.push(vertex.property_value(prop).unwrap_or_else(
-                                    || Value::Null(graphdb_core::NullType::Null),
-                                ));
+                                new_row.push(
+                                    vertex.property_value(prop).unwrap_or_else(|| {
+                                        Value::Null(graphdb_core::NullType::Null)
+                                    }),
+                                );
                             }
                         } else {
                             new_row.push(Value::Vertex(Box::new(vertex)));

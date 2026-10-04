@@ -342,3 +342,6 @@ impl Drop for LocalWalWriter {
         self.close();
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -933,3 +933,6 @@ impl Spillable for StreamingExecutor {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

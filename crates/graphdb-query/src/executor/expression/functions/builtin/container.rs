@@ -885,3 +885,6 @@ fn execute_map_values(args: &[Value]) -> Result<Value, ExpressionError> {
         )),
     }
 }
+
+#[cfg(test)]
+mod tests;

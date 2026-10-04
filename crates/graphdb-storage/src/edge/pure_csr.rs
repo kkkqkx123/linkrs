@@ -97,3 +97,6 @@ impl Default for PureTopologyCsr {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -804,3 +804,6 @@ impl BlockingOperator {
         }
     }
 }
+
+#[cfg(test)]
+mod test;

@@ -10,3 +10,6 @@ pub mod config;
 pub mod planner;
 pub use config::{PartitioningConfig, PartitioningDecision, PartitioningLayoutInfo};
 pub use planner::PartitioningPlanner;
+
+#[cfg(test)]
+mod tests;

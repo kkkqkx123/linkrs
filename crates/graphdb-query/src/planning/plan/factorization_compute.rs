@@ -313,3 +313,6 @@ impl FactorizedSchemaCompute for LogicalNodeEnum {
         Ok(result)
     }
 }
+
+#[cfg(test)]
+mod tests;

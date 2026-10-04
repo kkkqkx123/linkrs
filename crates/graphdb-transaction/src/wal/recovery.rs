@@ -12,3 +12,6 @@ mod replay;
 pub use config::{RecoveryConfig, RecoveryStats};
 pub use graphdb_core::wal::traits::RecoveryApplier;
 pub use manager::RecoveryManager;
+
+#[cfg(test)]
+mod tests;

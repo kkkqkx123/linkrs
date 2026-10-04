@@ -207,3 +207,6 @@ impl fmt::Debug for MutableCsr {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests;

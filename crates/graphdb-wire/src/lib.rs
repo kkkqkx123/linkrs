@@ -12,6 +12,7 @@
 pub mod batch;
 pub mod fulltext;
 pub mod meta;
+pub mod migration;
 pub mod query;
 pub mod schema;
 pub mod vector;

@@ -1,4 +1,6 @@
 use super::*;
+use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+use crate::planning::ExecutionPlan;
 
 #[test]
 fn test_optimizer_engine_creation() {

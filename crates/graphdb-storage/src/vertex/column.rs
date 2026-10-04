@@ -77,3 +77,6 @@ pub fn is_variable_length_type(data_type: &DataType) -> bool {
 }
 
 pub(crate) use column_store::{ensure_bitmap_len, value_payload_bytes};
+
+#[cfg(test)]
+mod tests;

@@ -1118,3 +1118,6 @@ impl Drop for SpillManager {
         let _ = std::fs::remove_dir_all(&self.base_dir);
     }
 }
+
+#[cfg(test)]
+mod tests;

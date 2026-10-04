@@ -10,10 +10,12 @@ pub struct MigrationPlanQuery {
 
 impl MigrationPlanQuery {
     pub fn require_from_version(&self) -> Result<u64, String> {
-        self.from_version.ok_or_else(|| "from_version required".to_string())
+        self.from_version
+            .ok_or_else(|| "from_version required".to_string())
     }
     pub fn require_to_version(&self) -> Result<u64, String> {
-        self.to_version.ok_or_else(|| "to_version required".to_string())
+        self.to_version
+            .ok_or_else(|| "to_version required".to_string())
     }
 }
 
@@ -39,6 +41,8 @@ pub struct MigrationExecuteResponse {
     pub steps_completed: usize,
     pub rows_migrated: u64,
     pub errors: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

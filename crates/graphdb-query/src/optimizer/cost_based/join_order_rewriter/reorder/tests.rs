@@ -1,3 +1,5 @@
+use super::*;
+
 use super::super::flatten::logical_output_var;
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::stats::StatisticsManager;
@@ -5,8 +7,7 @@ use crate::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 
 fn make_scan(id: &str, _rows: u64) -> PlanNodeEnum {
     // Use a StartNode as a stand-in leaf for testing
-    let mut node =
-        crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new();
+    let mut node = crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new();
     node.set_output_var(id.to_string());
     node.set_col_names(vec![id.to_string()]);
     PlanNodeEnum::Start(node)
@@ -79,13 +80,8 @@ fn test_non_join_unchanged() {
     let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
     let stats_view = StatsView::new(&stats, None);
     let mut notes = Vec::new();
-    let result = walk_and_optimize_joins_with_decisions(
-        &a,
-        &stats_view,
-        &cost_calc,
-        &mut notes,
-        &mut None,
-    );
+    let result =
+        walk_and_optimize_joins_with_decisions(&a, &stats_view, &cost_calc, &mut notes, &mut None);
     // StartNode is preserved (same variant)
     assert!(matches!(result, PlanNodeEnum::Start(_)));
     // Output var is preserved
@@ -360,8 +356,7 @@ fn test_left_join_acts_as_boundary() {
         graphdb_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
     );
     use crate::planning::plan::core::nodes::join::join_node::LeftJoinNode;
-    let left_join =
-        PlanNodeEnum::LeftJoin(LeftJoinNode::new(inner, c, vec![], vec![]).unwrap());
+    let left_join = PlanNodeEnum::LeftJoin(LeftJoinNode::new(inner, c, vec![], vec![]).unwrap());
 
     let stats = StatisticsManager::new();
     let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
@@ -516,8 +511,7 @@ fn test_logical_three_table_reorder_emits_note() {
     let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
     let stats_view = StatsView::new(&stats, Some("test"));
     let mut notes = Vec::new();
-    let optimized =
-        walk_and_optimize_joins_logical(&join2, &stats_view, &cost_calc, &mut notes);
+    let optimized = walk_and_optimize_joins_logical(&join2, &stats_view, &cost_calc, &mut notes);
 
     // The reordered logical tree is a logical InnerJoin (no physical
     // InnerJoin can appear in the logical tree).
@@ -563,8 +557,7 @@ fn test_logical_left_join_acts_as_boundary() {
     let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
     let stats_view = StatsView::new(&stats, None);
     let mut notes = Vec::new();
-    let result =
-        walk_and_optimize_joins_logical(&left_join, &stats_view, &cost_calc, &mut notes);
+    let result = walk_and_optimize_joins_logical(&left_join, &stats_view, &cost_calc, &mut notes);
 
     // The root stays a LeftJoin; the inner join below it may be reordered.
     assert!(matches!(result, LogicalNodeEnum::LeftJoin(_)));

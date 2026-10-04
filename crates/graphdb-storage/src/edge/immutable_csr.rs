@@ -71,3 +71,6 @@ impl Default for ImmutableCsr {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests;

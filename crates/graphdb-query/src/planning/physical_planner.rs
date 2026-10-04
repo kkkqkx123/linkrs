@@ -7,24 +7,24 @@ use crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
 use crate::QueryContext;
 
 mod access;
-mod operation;
-mod join;
-mod traversal;
+mod algorithm;
 mod control_flow;
 mod data_processing;
-mod algorithm;
-mod search;
 mod dml;
+mod join;
+mod operation;
+mod search;
+mod traversal;
 
 use access::*;
-use operation::*;
-use join::*;
-use traversal::*;
+use algorithm::*;
 use control_flow::*;
 use data_processing::*;
-use algorithm::*;
-use search::*;
 use dml::*;
+use join::*;
+use operation::*;
+use search::*;
+use traversal::*;
 
 pub trait PhysicalPlanner: Send + Sync + std::fmt::Debug {
     fn plan(&self, logical: LogicalNodeEnum, qctx: &QueryContext) -> PlanNodeEnum;

@@ -1049,3 +1049,6 @@ pub fn walk_and_optimize_joins_logical(
         _ => root.clone(),
     }
 }
+
+#[cfg(test)]
+mod tests;

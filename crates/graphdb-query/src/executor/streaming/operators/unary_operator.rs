@@ -13,16 +13,16 @@ use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::Value;
 
-mod filter;
-mod project;
-mod limit;
-mod dedup;
-mod assign;
-mod remove;
-mod unwind;
 mod append_vertices;
-mod sample;
+mod assign;
+mod dedup;
+mod filter;
 mod flatten;
+mod limit;
+mod project;
+mod remove;
+mod sample;
+mod unwind;
 
 #[derive(Debug, Default)]
 pub struct UnaryOperatorState {
@@ -314,16 +314,36 @@ impl UnaryOperator {
     }
 
     pub fn next(&mut self, input: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
-        if matches!(&self.kind, UnaryOperatorKind::Filter { .. }) { return filter::handle(self, input); }
-        if matches!(&self.kind, UnaryOperatorKind::Project { .. }) { return project::handle(self, input); }
-        if matches!(&self.kind, UnaryOperatorKind::Limit { .. }) { return limit::handle(self, input); }
-        if matches!(&self.kind, UnaryOperatorKind::Dedup { .. }) { return dedup::handle(self, input); }
-        if matches!(&self.kind, UnaryOperatorKind::Assign { .. }) { return assign::handle(self, input); }
-        if matches!(&self.kind, UnaryOperatorKind::Remove { .. }) { return remove::handle(self, input); }
-        if matches!(&self.kind, UnaryOperatorKind::Unwind { .. }) { return unwind::handle(self, input); }
-        if matches!(&self.kind, UnaryOperatorKind::AppendVertices { .. }) { return append_vertices::handle(self, input); }
-        if matches!(&self.kind, UnaryOperatorKind::Sample { .. }) { return sample::handle(self, input); }
-        if matches!(&self.kind, UnaryOperatorKind::Flatten { .. }) { return flatten::handle(self, input); }
+        if matches!(&self.kind, UnaryOperatorKind::Filter { .. }) {
+            return filter::handle(self, input);
+        }
+        if matches!(&self.kind, UnaryOperatorKind::Project { .. }) {
+            return project::handle(self, input);
+        }
+        if matches!(&self.kind, UnaryOperatorKind::Limit { .. }) {
+            return limit::handle(self, input);
+        }
+        if matches!(&self.kind, UnaryOperatorKind::Dedup { .. }) {
+            return dedup::handle(self, input);
+        }
+        if matches!(&self.kind, UnaryOperatorKind::Assign { .. }) {
+            return assign::handle(self, input);
+        }
+        if matches!(&self.kind, UnaryOperatorKind::Remove { .. }) {
+            return remove::handle(self, input);
+        }
+        if matches!(&self.kind, UnaryOperatorKind::Unwind { .. }) {
+            return unwind::handle(self, input);
+        }
+        if matches!(&self.kind, UnaryOperatorKind::AppendVertices { .. }) {
+            return append_vertices::handle(self, input);
+        }
+        if matches!(&self.kind, UnaryOperatorKind::Sample { .. }) {
+            return sample::handle(self, input);
+        }
+        if matches!(&self.kind, UnaryOperatorKind::Flatten { .. }) {
+            return flatten::handle(self, input);
+        }
         unreachable!("unary_operator::next called for an unknown kind")
     }
 
@@ -683,8 +703,8 @@ mod tests {
 
 #[cfg(test)]
 mod project_fast_path_tests {
-    use super::*;
     use super::project::is_passthrough_or_const;
+    use super::*;
     use graphdb_core::Value;
 
     fn layout() -> Arc<SlotLayout> {

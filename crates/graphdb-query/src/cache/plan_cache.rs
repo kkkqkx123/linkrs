@@ -685,3 +685,6 @@ impl Default for QueryPlanCache {
         Self::new(PlanCacheConfig::default())
     }
 }
+
+#[cfg(test)]
+mod tests;

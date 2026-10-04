@@ -80,3 +80,6 @@ impl Default for BundledCsr {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests;

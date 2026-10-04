@@ -21,3 +21,6 @@ pub use parallel::ParallelWalParser;
 pub use scan::{compute_checksum_public, verify_entry_checksum};
 pub use sequential::LocalWalParser;
 pub use types::{ParsedWalEntry, RecoveryResult, WalEntryIter};
+
+#[cfg(test)]
+mod tests;

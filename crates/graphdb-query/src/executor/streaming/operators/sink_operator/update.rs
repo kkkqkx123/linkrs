@@ -36,8 +36,7 @@ pub(super) fn handle_update_vertices(
             let params = op.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
             for row in &chunk.rows {
-                let mut context =
-                    row_context(row.clone(), layout.clone(), params.clone());
+                let mut context = row_context(row.clone(), layout.clone(), params.clone());
                 let vid_val = context
                     .get_variable("vid")
                     .or_else(|| row.first().cloned())
@@ -45,9 +44,8 @@ pub(super) fn handle_update_vertices(
                 if matches!(vid_val, Value::Null(_)) {
                     continue;
                 }
-                let vid = VertexId::try_from(&vid_val).map_err(|e| {
-                    QueryError::execution(format!("Invalid vertex id: {}", e))
-                })?;
+                let vid = VertexId::try_from(&vid_val)
+                    .map_err(|e| QueryError::execution(format!("Invalid vertex id: {}", e)))?;
                 if tag_name.is_empty() {
                     return Err(QueryError::execution(
                         "UPDATE vertex requires a tag qualifier".to_string(),
@@ -60,19 +58,11 @@ pub(super) fn handle_update_vertices(
                     Some(ev) => ev,
                     None => {
                         if *is_upsert {
-                            let props = eval_update_props(
-                                updates,
-                                *replace_properties,
-                                &mut context,
-                            )?;
-                            let vertex =
-                                Vertex::new(vid, Tag::new(tag_name.clone(), props));
-                            StorageWriter::insert_vertex(
-                                &mut *writer,
-                                space_name,
-                                vertex,
-                            )
-                            .map_err(|e| QueryError::execution(e.to_string()))?;
+                            let props =
+                                eval_update_props(updates, *replace_properties, &mut context)?;
+                            let vertex = Vertex::new(vid, Tag::new(tag_name.clone(), props));
+                            StorageWriter::insert_vertex(&mut *writer, space_name, vertex)
+                                .map_err(|e| QueryError::execution(e.to_string()))?;
                             *rows_updated += 1;
                         } else {
                             return Err(QueryError::execution(format!(
@@ -95,8 +85,7 @@ pub(super) fn handle_update_vertices(
                         continue;
                     }
                 }
-                let props =
-                    eval_update_props(updates, *replace_properties, &mut context)?;
+                let props = eval_update_props(updates, *replace_properties, &mut context)?;
                 let tag = if *replace_properties {
                     Tag::new(existing.tag.name.clone(), props)
                 } else if *tag_name == existing.tag.name {
@@ -110,12 +99,8 @@ pub(super) fn handle_update_vertices(
                 };
                 let vertex = Vertex::new(vid, tag);
                 if *replace_properties {
-                    StorageWriter::update_vertex_replace(
-                        &mut *writer,
-                        space_name,
-                        vertex,
-                    )
-                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                    StorageWriter::update_vertex_replace(&mut *writer, space_name, vertex)
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
                 } else {
                     StorageWriter::update_vertex(&mut *writer, space_name, vertex)
                         .map_err(|e| QueryError::execution(e.to_string()))?;
@@ -173,8 +158,7 @@ pub(super) fn handle_update_edges(
             let params = op.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
             for row in &chunk.rows {
-                let mut context =
-                    row_context(row.clone(), layout.clone(), params.clone());
+                let mut context = row_context(row.clone(), layout.clone(), params.clone());
                 let src_val = context
                     .get_variable(src_col)
                     .or_else(|| row.first().cloned())
@@ -184,14 +168,11 @@ pub(super) fn handle_update_edges(
                     .or_else(|| row.get(1).cloned())
                     .unwrap_or(Value::Null(graphdb_core::NullType::Null));
 
-                if matches!(src_val, Value::Null(_))
-                    || matches!(dst_val, Value::Null(_))
-                {
+                if matches!(src_val, Value::Null(_)) || matches!(dst_val, Value::Null(_)) {
                     continue;
                 }
-                let src = VertexId::try_from(&src_val).map_err(|e| {
-                    QueryError::execution(format!("Invalid edge source id: {}", e))
-                })?;
+                let src = VertexId::try_from(&src_val)
+                    .map_err(|e| QueryError::execution(format!("Invalid edge source id: {}", e)))?;
                 let dst = VertexId::try_from(&dst_val).map_err(|e| {
                     QueryError::execution(format!("Invalid edge destination id: {}", e))
                 })?;
@@ -203,19 +184,11 @@ pub(super) fn handle_update_edges(
                         Some(edge) => edge,
                         None => {
                             if *is_upsert {
-                                let props = eval_update_props(
-                                    updates,
-                                    *replace_properties,
-                                    &mut context,
-                                )?;
-                                let edge =
-                                    Edge::new(src, dst, edge_type.clone(), 0, props);
-                                StorageWriter::insert_edge(
-                                    &mut *writer,
-                                    space_name,
-                                    edge,
-                                )
-                                .map_err(|e| QueryError::execution(e.to_string()))?;
+                                let props =
+                                    eval_update_props(updates, *replace_properties, &mut context)?;
+                                let edge = Edge::new(src, dst, edge_type.clone(), 0, props);
+                                StorageWriter::insert_edge(&mut *writer, space_name, edge)
+                                    .map_err(|e| QueryError::execution(e.to_string()))?;
                                 *rows_updated += 1;
                             } else {
                                 return Err(QueryError::execution(format!(
@@ -235,17 +208,12 @@ pub(super) fn handle_update_edges(
                             continue;
                         }
                     }
-                    let props =
-                        eval_update_props(updates, *replace_properties, &mut context)?;
+                    let props = eval_update_props(updates, *replace_properties, &mut context)?;
                     let mut edge = Edge::new_empty(src, dst, edge_type.clone(), 0);
                     edge.props = props;
                     if *replace_properties {
-                        StorageWriter::update_edge_replace(
-                            &mut *writer,
-                            space_name,
-                            edge,
-                        )
-                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                        StorageWriter::update_edge_replace(&mut *writer, space_name, edge)
+                            .map_err(|e| QueryError::execution(e.to_string()))?;
                     } else {
                         StorageWriter::update_edge(&mut *writer, space_name, edge)
                             .map_err(|e| QueryError::execution(e.to_string()))?;

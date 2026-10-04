@@ -21,8 +21,7 @@ pub(super) fn handle(
                 let multiplicity = chunk.multiplicity();
                 let remaining = (*count - *consumed) as usize;
                 let take_count = chunk.rows.len().min(remaining);
-                let rows: Vec<Vec<Value>> =
-                    chunk.rows.into_iter().take(take_count).collect();
+                let rows: Vec<Vec<Value>> = chunk.rows.into_iter().take(take_count).collect();
                 *consumed += take_count as u64;
                 if !rows.is_empty() {
                     return Ok(Some(
