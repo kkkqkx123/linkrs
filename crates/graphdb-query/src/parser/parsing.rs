@@ -19,7 +19,6 @@ mod user_parser;
 mod util_stmt_parser;
 mod vector_parser;
 
-#[cfg(test)]
 pub use clause_parser::ClauseParser;
 pub use ddl_parser::DdlParser;
 pub use dml_parser::DmlParser;

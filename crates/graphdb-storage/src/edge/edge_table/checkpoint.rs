@@ -69,7 +69,6 @@ pub mod snapshot_cache;
 pub mod timestamps;
 pub mod topology;
 
-#[cfg(test)]
 pub use layout::{
     in_append_file, in_group_file, out_append_file, out_group_file, props_group_file,
     ts_group_file, GROUPS_MANIFEST_FILE, SEGMENT_STATS_FILE,

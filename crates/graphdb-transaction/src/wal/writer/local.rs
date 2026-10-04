@@ -15,7 +15,6 @@ mod header;
 mod poison;
 mod record;
 mod sync;
-#[cfg(test)]
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;

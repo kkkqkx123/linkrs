@@ -9,7 +9,6 @@ mod read;
 mod reshard;
 pub(crate) mod routing;
 mod schema;
-#[cfg(test)]
 pub(crate) mod write;
 
 pub(crate) use write::CommitApplied;

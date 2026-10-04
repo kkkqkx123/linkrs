@@ -9,7 +9,6 @@ mod config;
 mod filter;
 mod manager;
 mod replay;
-#[cfg(test)]
 pub use config::{RecoveryConfig, RecoveryStats};
 pub use graphdb_core::wal::traits::RecoveryApplier;
 pub use manager::RecoveryManager;

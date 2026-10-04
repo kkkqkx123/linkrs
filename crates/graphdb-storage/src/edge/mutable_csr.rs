@@ -70,7 +70,6 @@ pub(crate) mod stats;
 pub(crate) mod trait_impl;
 pub(crate) mod write;
 
-#[cfg(test)]
 pub use iter::{MutableCsrIterator, VertexEdgesIter};
 pub use overflow::{OverflowChunk, OverflowStorage};
 pub use write::EdgePosition;

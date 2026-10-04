@@ -22,7 +22,6 @@ use crate::metrics::global_migration_metrics;
 use crate::plan::{MigrationPlan, MigrationReport, MigrationStep, SafetyLevel};
 use crate::progress::{MigrationProgress, NoopProgress};
 
-#[cfg(test)]
 mod data_apply;
 mod plan_runner;
 

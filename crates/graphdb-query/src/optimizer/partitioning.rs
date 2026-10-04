@@ -8,6 +8,5 @@
 
 pub mod config;
 pub mod planner;
-#[cfg(test)]
 pub use config::{PartitioningConfig, PartitioningDecision, PartitioningLayoutInfo};
 pub use planner::PartitioningPlanner;

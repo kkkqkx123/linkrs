@@ -22,7 +22,6 @@ mod stats_reader_impl;
 mod writer;
 mod writer_api;
 
-#[cfg(test)]
 pub use context::{AutoCommitBatchWindow, GraphStorageContext, WriteGateStats};
 pub use serial::SerialKey;
 

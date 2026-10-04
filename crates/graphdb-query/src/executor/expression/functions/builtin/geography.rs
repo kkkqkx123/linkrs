@@ -10,9 +10,6 @@ use self::predicates::*;
 use self::serialization::*;
 use self::transform::*;
 
-#[cfg(test)]
-#[path = "geography/test.rs"]
-
 define_function_enum! {
     pub enum GeographyFunction {
         StPoint => {

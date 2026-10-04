@@ -52,7 +52,6 @@ pub(crate) mod read;
 pub(crate) mod trait_impl;
 pub(crate) mod write;
 
-#[cfg(test)]
 pub use codec::{decode_scalar, encode_scalar};
 pub(crate) use overflow_values::BundledOverflowValues;
 

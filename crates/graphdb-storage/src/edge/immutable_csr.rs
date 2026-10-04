@@ -42,7 +42,6 @@ pub(crate) mod persistence;
 pub(crate) mod read;
 pub(crate) mod trait_impl;
 
-#[cfg(test)]
 pub use iter::{FrozenRowIter, ImmutableCsrIterator};
 
 /// Packed immutable adjacency of one group.

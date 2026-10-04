@@ -18,6 +18,11 @@ use graphdb_core::types::storage_ids::VertexId;
 use graphdb_core::vertex_edge_path::{Edge, Tag, Vertex};
 use graphdb_core::Value;
 
+mod copy;
+mod delete;
+mod insert;
+mod update;
+
 #[derive(Debug)]
 pub enum SinkOperatorKind {
     CopyFrom {
@@ -137,16 +142,16 @@ pub struct SinkOperator {
     pub config: OperatorConfig,
 }
 
-fn make_modify_result(output_layout: Arc<SlotLayout>, op: &str, count: u64) -> DataChunk {
+pub(super) fn make_modify_result(output_layout: Arc<SlotLayout>, op: &str, count: u64) -> DataChunk {
     let row = vec![Value::string(op), Value::BigInt(count as i64)];
     DataChunk::new_with_layout(vec![row], output_layout)
 }
 
-fn eval_expr(expr: &Expression, context: &mut ValueRowContext) -> Result<Value, QueryError> {
+pub(super) fn eval_expr(expr: &Expression, context: &mut ValueRowContext) -> Result<Value, QueryError> {
     ExpressionEvaluator::evaluate(expr, context).map_err(|e| QueryError::execution(e.to_string()))
 }
 
-fn eval_update_props(
+pub(super) fn eval_update_props(
     updates: &[(String, Expression)],
     replace_properties: bool,
     context: &mut ValueRowContext,
@@ -200,7 +205,7 @@ fn eval_update_props(
 /// Sink operators evaluate shape-normalized DML expressions (`$__dml_N`
 /// placeholders), so the context must carry the runtime parameter values —
 /// otherwise parameter resolution fails with "Undefined parameter".
-fn row_context(
+pub(super) fn row_context(
     row: Vec<Value>,
     layout: Arc<SlotLayout>,
     params: Option<Arc<HashMap<String, Value>>>,
@@ -213,7 +218,7 @@ fn row_context(
 
 /// Row predicate semantics for update conditions (`WHEN`/`WHERE`), matching
 /// the filter operator: false/null/zero/empty reject the row.
-fn condition_matches(value: &Value) -> bool {
+pub(super) fn condition_matches(value: &Value) -> bool {
     match value {
         Value::Bool(b) => *b,
         Value::Null(_) => false,
@@ -246,7 +251,7 @@ fn is_transaction_conflict_message(message: &str) -> bool {
         || lowered.contains("rollback_only")
 }
 
-fn resolve_edge_endpoints(src_val: &Value, dst_val: &Value) -> Option<(VertexId, VertexId)> {
+pub(super) fn resolve_edge_endpoints(src_val: &Value, dst_val: &Value) -> Option<(VertexId, VertexId)> {
     match (src_val, dst_val) {
         (Value::Edge(edge), _) => Some((edge.src, edge.dst)),
         (_, Value::Edge(edge)) => Some((edge.src, edge.dst)),
@@ -516,774 +521,37 @@ impl SinkOperator {
         &mut self,
         input: &mut StreamingExecutor,
     ) -> Result<Option<DataChunk>, QueryError> {
-        match &mut self.kind {
-            SinkOperatorKind::InsertVertices {
-                storage,
-                space_name,
-                vertex_properties,
-                tag,
-                tag_property_names,
-                if_not_exists,
-                rows_inserted,
-                summary_returned,
-                ..
-            } => {
-                if *summary_returned {
-                    return Ok(None);
-                }
-
-                while let Some(mut chunk) = input.advance()? {
-                    chunk.normalize_for_opaque("Sink");
-                    if let Some(rt) = self.runtime.as_ref() {
-                        rt.ensure_not_cancelled()?;
-                    }
-                    if let Some(storage_lock) = storage {
-                        let mut writer = storage_lock.write();
-                        let layout = chunk.get_layout();
-                        let params = self.runtime.as_ref().and_then(|rt| rt.parameter_values());
-
-                        for row in &chunk.rows {
-                            let mut context =
-                                row_context(row.clone(), layout.clone(), params.clone());
-
-                            let vid = if let Some((_name, expr)) = vertex_properties.first() {
-                                let val = eval_expr(expr, &mut context)?;
-                                VertexId::try_from(&val).map_err(|e| {
-                                    QueryError::execution(format!("Invalid vertex id: {}", e))
-                                })?
-                            } else {
-                                return Err(QueryError::execution(
-                                    "InsertVertices requires a vertex id expression".to_string(),
-                                ));
-                            };
-
-                            if *if_not_exists
-                                && writer
-                                    .get_vertex(space_name, tag, &vid)
-                                    .map_err(|e| QueryError::execution(e.to_string()))?
-                                    .is_some()
-                            {
-                                continue;
-                            }
-
-                            let mut props = HashMap::new();
-                            for name in tag_property_names.iter() {
-                                if let Some((_n, expr)) =
-                                    vertex_properties.iter().find(|(n, _)| n == name)
-                                {
-                                    if let Ok(val) = eval_expr(expr, &mut context) {
-                                        props.insert(name.clone(), val);
-                                    }
-                                }
-                            }
-
-                            let vertex = Vertex::new(vid, Tag::new(tag.clone(), props));
-                            StorageWriter::insert_vertex(&mut *writer, space_name, vertex)
-                                .map_err(|e| QueryError::execution(e.to_string()))?;
-                            *rows_inserted += 1;
-                        }
-                    } else {
-                        *rows_inserted += chunk.rows.len() as u64;
-                    }
-                }
-
-                *summary_returned = true;
-                Ok(Some(make_modify_result(
-                    Arc::clone(&self.output_layout),
-                    "insert_vertices",
-                    *rows_inserted,
-                )))
-            }
-
-            SinkOperatorKind::InsertEdges {
-                storage,
-                space_name,
-                src_col,
-                dst_col,
-                edge_type,
-                edge_properties,
-                if_not_exists,
-                rows_inserted,
-                summary_returned,
-                ..
-            } => {
-                if *summary_returned {
-                    return Ok(None);
-                }
-
-                while let Some(mut chunk) = input.advance()? {
-                    chunk.normalize_for_opaque("Sink");
-                    if let Some(rt) = self.runtime.as_ref() {
-                        rt.ensure_not_cancelled()?;
-                    }
-                    if let Some(storage_lock) = storage {
-                        let mut writer = storage_lock.write();
-                        let layout = chunk.get_layout();
-                        let params = self.runtime.as_ref().and_then(|rt| rt.parameter_values());
-
-                        for row in &chunk.rows {
-                            let mut context =
-                                row_context(row.clone(), layout.clone(), params.clone());
-                            let src_val = context
-                                .get_variable(src_col)
-                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                            let dst_val = context
-                                .get_variable(dst_col)
-                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-
-                            let src = VertexId::try_from(&src_val).map_err(|e| {
-                                QueryError::execution(format!("Invalid edge source id: {}", e))
-                            })?;
-                            let dst = VertexId::try_from(&dst_val).map_err(|e| {
-                                QueryError::execution(format!("Invalid edge destination id: {}", e))
-                            })?;
-                            // Multi-edge semantics: the storage layer
-                            // assigns an increasing rank when a
-                            // (src, dst, edge_type) pair already exists,
-                            // so plain INSERT always succeeds. The
-                            // if-not-exists guard only skips duplicates.
-                            if *if_not_exists
-                                && writer
-                                    .get_edge(space_name, &src, &dst, edge_type, 0)
-                                    .map_err(|e| QueryError::execution(e.to_string()))?
-                                    .is_some()
-                            {
-                                continue;
-                            }
-                            let mut props = HashMap::new();
-                            for (prop_name, expr) in edge_properties.iter() {
-                                let val = eval_expr(expr, &mut context)?;
-                                props.insert(prop_name.clone(), val);
-                            }
-                            let edge = Edge::new(src, dst, edge_type.clone(), 0, props);
-                            StorageWriter::insert_edge(&mut *writer, space_name, edge)
-                                .map_err(|e| QueryError::execution(e.to_string()))?;
-                            *rows_inserted += 1;
-                        }
-                    } else {
-                        *rows_inserted += chunk.rows.len() as u64;
-                    }
-                }
-
-                *summary_returned = true;
-                Ok(Some(make_modify_result(
-                    Arc::clone(&self.output_layout),
-                    "insert_edges",
-                    *rows_inserted,
-                )))
-            }
-
-            SinkOperatorKind::UpdateVertices {
-                storage,
-                space_name,
-                tag_name,
-                updates,
-                condition,
-                is_upsert,
-                replace_properties,
-                rows_updated,
-                summary_returned,
-                ..
-            } => {
-                if *summary_returned {
-                    return Ok(None);
-                }
-
-                while let Some(mut chunk) = input.advance()? {
-                    chunk.normalize_for_opaque("Sink");
-                    if let Some(rt) = self.runtime.as_ref() {
-                        rt.ensure_not_cancelled()?;
-                    }
-                    if let Some(storage_lock) = storage {
-                        let mut writer = storage_lock.write();
-                        let layout = chunk.get_layout();
-                        let params = self.runtime.as_ref().and_then(|rt| rt.parameter_values());
-
-                        for row in &chunk.rows {
-                            let mut context =
-                                row_context(row.clone(), layout.clone(), params.clone());
-                            let vid_val = context
-                                .get_variable("vid")
-                                .or_else(|| row.first().cloned())
-                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                            if matches!(vid_val, Value::Null(_)) {
-                                continue;
-                            }
-                            let vid = VertexId::try_from(&vid_val).map_err(|e| {
-                                QueryError::execution(format!("Invalid vertex id: {}", e))
-                            })?;
-                            if tag_name.is_empty() {
-                                return Err(QueryError::execution(
-                                    "UPDATE vertex requires a tag qualifier".to_string(),
-                                ));
-                            }
-                            let existing = writer
-                                .get_vertex(space_name, tag_name, &vid)
-                                .map_err(|e| QueryError::execution(e.to_string()))?;
-                            let existing = match existing {
-                                Some(ev) => ev,
-                                None => {
-                                    if *is_upsert {
-                                        let props = eval_update_props(
-                                            updates,
-                                            *replace_properties,
-                                            &mut context,
-                                        )?;
-                                        let vertex =
-                                            Vertex::new(vid, Tag::new(tag_name.clone(), props));
-                                        StorageWriter::insert_vertex(
-                                            &mut *writer,
-                                            space_name,
-                                            vertex,
-                                        )
-                                        .map_err(|e| QueryError::execution(e.to_string()))?;
-                                        *rows_updated += 1;
-                                    } else {
-                                        return Err(QueryError::execution(format!(
-                                            "Vertex not found: {}",
-                                            vid
-                                        )));
-                                    }
-                                    continue;
-                                }
-                            };
-                            // Load existing properties into context so expressions
-                            // like `SET stock = stock - 1` and conditions like
-                            // `WHEN age > 100` can resolve existing columns.
-                            for (k, v) in &existing.tag.properties {
-                                context.set_variable(k.clone(), v.clone());
-                            }
-                            if let Some(cond) = condition {
-                                let keep = eval_expr(cond, &mut context)?;
-                                if !condition_matches(&keep) {
-                                    continue;
-                                }
-                            }
-                            let props =
-                                eval_update_props(updates, *replace_properties, &mut context)?;
-                            let tag = if *replace_properties {
-                                Tag::new(existing.tag.name.clone(), props)
-                            } else if *tag_name == existing.tag.name {
-                                let mut merged = existing.tag.properties.clone();
-                                for (k, v) in &props {
-                                    merged.insert(k.clone(), v.clone());
-                                }
-                                Tag::new(existing.tag.name.clone(), merged)
-                            } else {
-                                Tag::new(tag_name.clone(), props)
-                            };
-                            let vertex = Vertex::new(vid, tag);
-                            if *replace_properties {
-                                StorageWriter::update_vertex_replace(
-                                    &mut *writer,
-                                    space_name,
-                                    vertex,
-                                )
-                                .map_err(|e| QueryError::execution(e.to_string()))?;
-                            } else {
-                                StorageWriter::update_vertex(&mut *writer, space_name, vertex)
-                                    .map_err(|e| QueryError::execution(e.to_string()))?;
-                            }
-                            *rows_updated += 1;
-                        }
-                    } else {
-                        *rows_updated += chunk.rows.len() as u64;
-                    }
-                }
-
-                *summary_returned = true;
-                Ok(Some(make_modify_result(
-                    Arc::clone(&self.output_layout),
-                    "update_vertices",
-                    *rows_updated,
-                )))
-            }
-
-            SinkOperatorKind::UpdateEdges {
-                storage,
-                space_name,
-                src_col,
-                dst_col,
-                edge_type,
-                updates,
-                condition,
-                is_upsert,
-                replace_properties,
-                rows_updated,
-                summary_returned,
-                ..
-            } => {
-                if *summary_returned {
-                    return Ok(None);
-                }
-
-                while let Some(mut chunk) = input.advance()? {
-                    chunk.normalize_for_opaque("Sink");
-                    if let Some(rt) = self.runtime.as_ref() {
-                        rt.ensure_not_cancelled()?;
-                    }
-                    if let Some(storage_lock) = storage {
-                        let mut writer = storage_lock.write();
-                        let layout = chunk.get_layout();
-                        let params = self.runtime.as_ref().and_then(|rt| rt.parameter_values());
-
-                        for row in &chunk.rows {
-                            let mut context =
-                                row_context(row.clone(), layout.clone(), params.clone());
-                            let src_val = context
-                                .get_variable(src_col)
-                                .or_else(|| row.first().cloned())
-                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                            let dst_val = context
-                                .get_variable(dst_col)
-                                .or_else(|| row.get(1).cloned())
-                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-
-                            if matches!(src_val, Value::Null(_))
-                                || matches!(dst_val, Value::Null(_))
-                            {
-                                continue;
-                            }
-                            let src = VertexId::try_from(&src_val).map_err(|e| {
-                                QueryError::execution(format!("Invalid edge source id: {}", e))
-                            })?;
-                            let dst = VertexId::try_from(&dst_val).map_err(|e| {
-                                QueryError::execution(format!("Invalid edge destination id: {}", e))
-                            })?;
-                            {
-                                let existing = writer
-                                    .get_edge(space_name, &src, &dst, edge_type, 0)
-                                    .map_err(|e| QueryError::execution(e.to_string()))?;
-                                let existing = match existing {
-                                    Some(edge) => edge,
-                                    None => {
-                                        if *is_upsert {
-                                            let props = eval_update_props(
-                                                updates,
-                                                *replace_properties,
-                                                &mut context,
-                                            )?;
-                                            let edge =
-                                                Edge::new(src, dst, edge_type.clone(), 0, props);
-                                            StorageWriter::insert_edge(
-                                                &mut *writer,
-                                                space_name,
-                                                edge,
-                                            )
-                                            .map_err(|e| QueryError::execution(e.to_string()))?;
-                                            *rows_updated += 1;
-                                        } else {
-                                            return Err(QueryError::execution(format!(
-                                                "Edge not found: {} -> {} of {}",
-                                                src, dst, edge_type
-                                            )));
-                                        }
-                                        continue;
-                                    }
-                                };
-                                for (k, v) in &existing.props {
-                                    context.set_variable(k.clone(), v.clone());
-                                }
-                                if let Some(cond) = condition {
-                                    let keep = eval_expr(cond, &mut context)?;
-                                    if !condition_matches(&keep) {
-                                        continue;
-                                    }
-                                }
-                                let props =
-                                    eval_update_props(updates, *replace_properties, &mut context)?;
-                                let mut edge = Edge::new_empty(src, dst, edge_type.clone(), 0);
-                                edge.props = props;
-                                if *replace_properties {
-                                    StorageWriter::update_edge_replace(
-                                        &mut *writer,
-                                        space_name,
-                                        edge,
-                                    )
-                                    .map_err(|e| QueryError::execution(e.to_string()))?;
-                                } else {
-                                    StorageWriter::update_edge(&mut *writer, space_name, edge)
-                                        .map_err(|e| QueryError::execution(e.to_string()))?;
-                                }
-                                *rows_updated += 1;
-                            }
-                        }
-                    } else {
-                        *rows_updated += chunk.rows.len() as u64;
-                    }
-                }
-
-                *summary_returned = true;
-                Ok(Some(make_modify_result(
-                    Arc::clone(&self.output_layout),
-                    "update_edges",
-                    *rows_updated,
-                )))
-            }
-
-            SinkOperatorKind::DeleteVertices {
-                storage,
-                space_name,
-                tag,
-                vertex_id_col,
-                cascade,
-                rows_deleted,
-                summary_returned,
-                ..
-            } => {
-                if *summary_returned {
-                    return Ok(None);
-                }
-
-                while let Some(mut chunk) = input.advance()? {
-                    chunk.normalize_for_opaque("Sink");
-                    if let Some(storage_lock) = storage {
-                        let mut writer = storage_lock.write();
-                        let layout = chunk.get_layout();
-
-                        for row in &chunk.rows {
-                            let context = ValueRowContext::new(row.clone(), layout.clone());
-                            if let Some(vid_val) = context.get_variable(vertex_id_col) {
-                                if matches!(vid_val, Value::Null(_)) {
-                                    continue;
-                                }
-                                let vid = VertexId::try_from(&vid_val).map_err(|e| {
-                                    QueryError::execution(format!("Invalid vertex id: {}", e))
-                                })?;
-                                {
-                                    if *cascade {
-                                        StorageWriter::delete_vertex_with_edges(
-                                            &mut *writer,
-                                            space_name,
-                                            tag,
-                                            &vid,
-                                        )
-                                        .map_err(|e| QueryError::execution(e.to_string()))?;
-                                    } else {
-                                        StorageWriter::delete_vertex(
-                                            &mut *writer,
-                                            space_name,
-                                            tag,
-                                            &vid,
-                                        )
-                                        .map_err(|e| QueryError::execution(e.to_string()))?;
-                                    }
-                                    *rows_deleted += 1;
-                                }
-                            }
-                        }
-                    } else {
-                        *rows_deleted += chunk.rows.len() as u64;
-                    }
-                }
-
-                *summary_returned = true;
-                Ok(Some(make_modify_result(
-                    Arc::clone(&self.output_layout),
-                    "delete_vertices",
-                    *rows_deleted,
-                )))
-            }
-
-            SinkOperatorKind::DeleteEdges {
-                storage,
-                space_name,
-                src_col,
-                dst_col,
-                edge_type,
-                rows_deleted,
-                summary_returned,
-                ..
-            } => {
-                if *summary_returned {
-                    return Ok(None);
-                }
-
-                while let Some(mut chunk) = input.advance()? {
-                    chunk.normalize_for_opaque("Sink");
-                    if let Some(rt) = self.runtime.as_ref() {
-                        rt.ensure_not_cancelled()?;
-                    }
-                    if let Some(storage_lock) = storage {
-                        let mut writer = storage_lock.write();
-                        let layout = chunk.get_layout();
-
-                        for row in &chunk.rows {
-                            let context = ValueRowContext::new(row.clone(), layout.clone());
-                            let src_val = context
-                                .get_variable(src_col)
-                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                            let dst_val = context
-                                .get_variable(dst_col)
-                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                            if matches!(src_val, Value::Null(_))
-                                || matches!(dst_val, Value::Null(_))
-                            {
-                                continue;
-                            }
-                            let (src, dst) = resolve_edge_endpoints(&src_val, &dst_val)
-                                .ok_or_else(|| {
-                                    QueryError::execution("Invalid edge endpoint id".to_string())
-                                })?;
-                            {
-                                StorageWriter::delete_edge(
-                                    &mut *writer,
-                                    space_name,
-                                    &src,
-                                    &dst,
-                                    edge_type,
-                                    0,
-                                )
-                                .map_err(|e| QueryError::execution(e.to_string()))?;
-                                *rows_deleted += 1;
-                            }
-                        }
-                    } else {
-                        *rows_deleted += chunk.rows.len() as u64;
-                    }
-                }
-
-                *summary_returned = true;
-                Ok(Some(make_modify_result(
-                    Arc::clone(&self.output_layout),
-                    "delete_edges",
-                    *rows_deleted,
-                )))
-            }
-
-            SinkOperatorKind::PipeDeleteEdges {
-                storage,
-                space_name,
-                src_col,
-                dst_col,
-                edge_type,
-                rows_deleted,
-                summary_returned,
-                ..
-            } => {
-                if *summary_returned {
-                    return Ok(None);
-                }
-
-                while let Some(mut chunk) = input.advance()? {
-                    chunk.normalize_for_opaque("Sink");
-                    if let Some(rt) = self.runtime.as_ref() {
-                        rt.ensure_not_cancelled()?;
-                    }
-                    if let Some(storage_lock) = storage {
-                        let mut writer = storage_lock.write();
-                        let layout = chunk.get_layout();
-
-                        for row in &chunk.rows {
-                            let context = ValueRowContext::new(row.clone(), layout.clone());
-                            let src_val = context
-                                .get_variable(src_col)
-                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                            let dst_val = context
-                                .get_variable(dst_col)
-                                .unwrap_or(Value::Null(graphdb_core::NullType::Null));
-                            if matches!(src_val, Value::Null(_))
-                                || matches!(dst_val, Value::Null(_))
-                            {
-                                continue;
-                            }
-                            let (src, dst) = resolve_edge_endpoints(&src_val, &dst_val)
-                                .ok_or_else(|| {
-                                    QueryError::execution("Invalid edge endpoint id".to_string())
-                                })?;
-                            {
-                                StorageWriter::delete_edge(
-                                    &mut *writer,
-                                    space_name,
-                                    &src,
-                                    &dst,
-                                    edge_type,
-                                    0,
-                                )
-                                .map_err(|e| QueryError::execution(e.to_string()))?;
-                                *rows_deleted += 1;
-                            }
-                        }
-                    } else {
-                        *rows_deleted += chunk.rows.len() as u64;
-                    }
-                }
-
-                *summary_returned = true;
-                Ok(Some(make_modify_result(
-                    Arc::clone(&self.output_layout),
-                    "delete_edges",
-                    *rows_deleted,
-                )))
-            }
-
-            SinkOperatorKind::PipeDeleteVertices {
-                storage,
-                space_name,
-                vertex_id_col,
-                cascade,
-                rows_deleted,
-                summary_returned,
-                ..
-            } => {
-                if *summary_returned {
-                    return Ok(None);
-                }
-
-                while let Some(mut chunk) = input.advance()? {
-                    chunk.normalize_for_opaque("Sink");
-                    if let Some(rt) = self.runtime.as_ref() {
-                        rt.ensure_not_cancelled()?;
-                    }
-                    if let Some(storage_lock) = storage {
-                        let mut writer = storage_lock.write();
-                        let layout = chunk.get_layout();
-
-                        for row in &chunk.rows {
-                            let context = ValueRowContext::new(row.clone(), layout.clone());
-                            if let Some(vid_val) = context.get_variable(vertex_id_col) {
-                                if matches!(vid_val, Value::Null(_)) {
-                                    continue;
-                                }
-                                let (tag, vid) = match &vid_val {
-                                    Value::Vertex(vertex) => (vertex.tag.name.clone(), vertex.vid),
-                                    _ => {
-                                        return Err(QueryError::execution(
-                                            "Pipe DELETE VERTEX requires a vertex value with tag; bare id is illegal".to_string(),
-                                        ));
-                                    }
-                                };
-                                {
-                                    if *cascade {
-                                        StorageWriter::delete_vertex_with_edges(
-                                            &mut *writer,
-                                            space_name,
-                                            &tag,
-                                            &vid,
-                                        )
-                                        .map_err(|e| QueryError::execution(e.to_string()))?;
-                                    } else {
-                                        StorageWriter::delete_vertex(
-                                            &mut *writer,
-                                            space_name,
-                                            &tag,
-                                            &vid,
-                                        )
-                                        .map_err(|e| QueryError::execution(e.to_string()))?;
-                                    }
-                                    *rows_deleted += 1;
-                                }
-                            }
-                        }
-                    } else {
-                        *rows_deleted += chunk.rows.len() as u64;
-                    }
-                }
-
-                *summary_returned = true;
-                Ok(Some(make_modify_result(
-                    Arc::clone(&self.output_layout),
-                    "pipe_delete_vertices",
-                    *rows_deleted,
-                )))
-            }
-
-            SinkOperatorKind::CopyFrom {
-                storage,
-                space_name,
-                target,
-                file_paths,
-                by_column,
-                header,
-                delimiter,
-                batch_size,
-                rows_inserted,
-                summary_returned,
-                ..
-            } => {
-                if *summary_returned {
-                    return Ok(None);
-                }
-                // Drain input (dummy single row)
-                while let Some(mut chunk) = input.advance()? {
-                    chunk.normalize_for_opaque("CopyFrom");
-                    if let Some(rt) = self.runtime.as_ref() {
-                        rt.ensure_not_cancelled()?;
-                    }
-                }
-                if let Some(rt) = self.runtime.as_ref() {
-                    rt.ensure_not_cancelled()?;
-                }
-                if let Some(storage_lock) = storage {
-                    let count = super::copy::execute_copy_from(
-                        storage_lock,
-                        space_name,
-                        target,
-                        file_paths,
-                        *by_column,
-                        *header,
-                        *delimiter,
-                        *batch_size,
-                        self.runtime.as_ref().map(|r| r.clone()),
-                    )?;
-                    *rows_inserted = count;
-                } else {
-                    // Mock storage: estimate from file line count if possible
-                    *rows_inserted = 0;
-                }
-                *summary_returned = true;
-                Ok(Some(make_modify_result(
-                    Arc::clone(&self.output_layout),
-                    "copy_from",
-                    *rows_inserted,
-                )))
-            }
-            SinkOperatorKind::CopyTo {
-                storage,
-                space_name,
-                target,
-                file_path,
-                header,
-                delimiter,
-                rows_exported,
-                summary_returned,
-                ..
-            } => {
-                if *summary_returned {
-                    return Ok(None);
-                }
-                // Drain input (dummy single row)
-                while let Some(mut chunk) = input.advance()? {
-                    chunk.normalize_for_opaque("CopyTo");
-                    if let Some(rt) = self.runtime.as_ref() {
-                        rt.ensure_not_cancelled()?;
-                    }
-                }
-                if let Some(rt) = self.runtime.as_ref() {
-                    rt.ensure_not_cancelled()?;
-                }
-                if let Some(storage_lock) = storage {
-                    let count = super::copy::execute_copy_to(
-                        storage_lock,
-                        space_name,
-                        target,
-                        file_path,
-                        *header,
-                        *delimiter,
-                    )?;
-                    *rows_exported = count;
-                } else {
-                    // Mock storage: nothing to scan.
-                    *rows_exported = 0;
-                }
-                *summary_returned = true;
-                Ok(Some(make_modify_result(
-                    Arc::clone(&self.output_layout),
-                    "copy_to",
-                    *rows_exported,
-                )))
-            }
+        if matches!(&self.kind, SinkOperatorKind::CopyFrom { .. }) {
+            return copy::handle_copy_from(self, input);
         }
+        if matches!(&self.kind, SinkOperatorKind::CopyTo { .. }) {
+            return copy::handle_copy_to(self, input);
+        }
+        if matches!(&self.kind, SinkOperatorKind::InsertVertices { .. }) {
+            return insert::handle_insert_vertices(self, input);
+        }
+        if matches!(&self.kind, SinkOperatorKind::InsertEdges { .. }) {
+            return insert::handle_insert_edges(self, input);
+        }
+        if matches!(&self.kind, SinkOperatorKind::UpdateVertices { .. }) {
+            return update::handle_update_vertices(self, input);
+        }
+        if matches!(&self.kind, SinkOperatorKind::UpdateEdges { .. }) {
+            return update::handle_update_edges(self, input);
+        }
+        if matches!(&self.kind, SinkOperatorKind::DeleteVertices { .. }) {
+            return delete::handle_delete_vertices(self, input);
+        }
+        if matches!(&self.kind, SinkOperatorKind::DeleteEdges { .. }) {
+            return delete::handle_delete_edges(self, input);
+        }
+        if matches!(&self.kind, SinkOperatorKind::PipeDeleteVertices { .. }) {
+            return delete::handle_pipe_delete_vertices(self, input);
+        }
+        if matches!(&self.kind, SinkOperatorKind::PipeDeleteEdges { .. }) {
+            return delete::handle_pipe_delete_edges(self, input);
+        }
+        unreachable!("sink_operator::next_inner called for an unknown kind")
     }
 
     pub fn stop(&mut self) -> Result<(), QueryError> {

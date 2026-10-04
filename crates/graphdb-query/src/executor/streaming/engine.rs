@@ -24,8 +24,6 @@ use crate::executor::streaming::spill::{SpillConfig, SpillManager};
 use graphdb_core::error::QueryError;
 use graphdb_core::types::expr::Expression;
 
-#[cfg(test)]
-
 /// Streaming execution engine
 ///
 /// Drives a single root executor (or multiple partition executors) via

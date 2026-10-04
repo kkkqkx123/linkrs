@@ -94,7 +94,6 @@ pub(crate) mod read;
 pub(crate) mod trait_impl;
 pub(crate) mod values;
 
-#[cfg(test)]
 pub use iter::{CsrIterator, CsrRowIter};
 
 /// Polymorphic CSR wrapper supporting multiple implementation strategies.

@@ -56,7 +56,6 @@ mod schema;
 mod selection;
 mod typed;
 
-#[cfg(test)]
 // Re-export public API
 pub use collector::{LocalChunkCollector, COLLECTOR_BLOCK_ROWS};
 pub use columnar_batch::{BatchColumn, ColumnarBatch};

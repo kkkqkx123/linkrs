@@ -40,7 +40,6 @@ use super::operators::vector_operator::VectorOperator;
 use super::operators::wco_operator::WcoIntersectOperator;
 
 mod operator_name;
-#[cfg(test)]
 
 /// Sort direction for ORDER BY clause
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

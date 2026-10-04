@@ -19,8 +19,6 @@ use truncation::*;
 use crate::executor::expression::ExpressionError;
 use graphdb_core::Value;
 
-#[cfg(test)]
-
 define_function_enum! {
     pub enum DateTimeFunction {
         Now => {
