@@ -1,10 +1,10 @@
 # GraphDB 前端技术栈
 
-**文档版本**: v2.0  
+**文档版本**: v3.0  
 **创建日期**: 2026-03-29  
-**最后更新**: 2026-04-15
+**最后更新**: 2026-10-05
 
-> 本文档描述前端**实际采用**的技术栈。v1.0 曾按 React 生态规划（React 18 / Ant Design / Zustand / React Router），但工程实现阶段改为 Svelte 生态；本版已按 `frontend/package.json` 与 `frontend/src/**` 的真实代码全面修订，消除文档与代码的偏差。
+> 本文档描述前端**实际采用**的技术栈。v1.0 曾按 React 生态规划（React 18 / Ant Design / Zustand / React Router），v2.0 记录了 Svelte 5 + Vite + `svelte-routing` 的实现；v3.0 反映迁移到 SvelteKit 3 与 Paraglide JS 后的真实代码。
 
 ---
 
@@ -12,17 +12,17 @@
 
 | 类别 | 技术选择 | 版本 | 说明 |
 |------|---------|------|------|
-| **前端框架** | Svelte | ^5.56.8 | 基于 Runes（`$state`/`$props`/`$effect`）的响应式组件模型 |
+| **应用框架** | SvelteKit | ^3.0.0 | 文件路由、`load`、`adapter-static`；SPA 模式（`ssr = false`） |
+| **组件模型** | Svelte | ^5.57.1 | 基于 Runes（`$state`/`$props`/`$effect`）的响应式模型 |
 | **开发语言** | TypeScript | ~6.0.2 | 类型安全，`svelte-check` + `tsc` 校验 |
 | **构建工具** | Vite | ^8.2.0 | rolldown 内核，含 HMR 与生产构建优化 |
 | **样式方案** | Tailwind CSS | ^4.3.3 | 通过 `@tailwindcss/vite` 插件接入，原子化类名 |
 | **状态管理** | Svelte Store | 内置 | `writable` store（`$stores/*`），无需额外依赖 |
-| **路由** | svelte-routing | ^2.13.0 | 声明式 `<Router>` / `<Route>` |
-| **HTTP 客户端** | Axios | ^1.19.0 | 统一封装于 `$utils/http.ts`，含拦截器与 BigInt 解析 |
+| **HTTP 客户端** | openapi-fetch | ^0.17.0 | 按 OpenAPI 契约做类型校验，封装于 `$lib/api/client`，含 BigInt 解析与 `X-Session-ID` 注入 |
 | **代码编辑器** | Monaco Editor | ^0.57.0 | Cypher 语法高亮 + 关键字/Schema 自动补全 |
 | **图可视化** | Cytoscape.js | ^3.34.0 | 力导向/环形/网格/层级布局，样式与交互定制 |
-| **国际化** | svelte-i18n | ^4.0.1 | `en` / `zh` 两套词条，`$t()` 取词 |
-| **工具库** | clsx / lodash-es / dayjs / json-bigint | 见依赖清单 | 类名组合、工具函数、时间处理、大整数 JSON |
+| **国际化** | Paraglide JS | ^2.25.4 | 编译期生成消息函数，`en` / `zh` 两套词条，`t()` 取词 |
+| **大整数 JSON** | json-bigint | ^1.0.0 | 保留超过 JS 安全整数范围的大整数 |
 
 ---
 
@@ -71,15 +71,10 @@ npm run check   # svelte-check + tsc
 
 **选型理由**:
 - 极速冷启动（基于 ESM）
-- 与 `@sveltejs/vite-plugin-svelte` 深度集成
-- 生产构建支持 `manualChunks` 分块
+- 由 `@sveltejs/kit` 插件接管 SvelteKit 的构建与路由
+- 词条由 `@inlang/paraglide-js` 插件编译，产物按路由自动分包
 
-**分块策略**（`vite.config.ts`）:
-- `monaco-vendor` —— Monaco Editor（懒加载）
-- `cytoscape-vendor` —— Cytoscape.js
-- `utils-vendor` —— axios / lodash / dayjs / json-bigint
-
-**开发代理**: `/v1` 与 `/api` 转发至 `http://localhost:9758`。
+**开发代理**: `/v1` 与 `/api` 转发至 `http://localhost:9758`（mock 模式下无后端，全部请求在浏览器内被拦截）。
 
 ### 2.4 样式方案: Tailwind CSS 4
 
@@ -94,24 +89,30 @@ npm run check   # svelte-check + tsc
 
 **选型理由**:
 - 框架内置，零额外依赖
-- 与组件订阅天然契合（`onMount` 内 `store.subscribe`）
-- 类型友好
+- `svelte/store` 在 Svelte 5 中仍是受支持 API；组件侧用 `fromStore()` 把 store 桥接进 runes
 
-**现有 store**: `connection` / `console` / `schema` / `graph` / `dataBrowser` / `theme` / `notification`。
+**现有 store**: `connection` / `console` / `schema` / `graph` / `dataBrowser` / `monitoring` / `theme` / `notification`。
 
-### 2.6 路由: svelte-routing
+### 2.6 路由: SvelteKit 文件路由
 
-**路由结构**（`App.svelte`）:
+**渲染模式**: SPA。根 `+layout.ts` 导出 `ssr = false`，产物由 `adapter-static` 输出为单页应用（`fallback: index.html`）。会话凭据在 `localStorage`、SSE 与 Monaco / Cytoscape 均浏览器专属，服务端渲染只能产出加载骨架。
+
+**路由结构**（`src/routes/`）:
 - `/login` —— 登录页
-- `/` —— 主布局（受 `ProtectedRoute` 保护）
+- `(app)` —— 受鉴权守卫保护的主布局（`(app)/+layout.svelte`）
+  - `/` —— 首页
   - `/console` —— 查询控制台
-  - `/schema` —— Schema 管理（含 ER 关系图）
+  - `/schema/spaces|edges|indexes|visualization` —— Schema 各子页，tab 即路由，深链接与刷新均可恢复
   - `/graph` —— 图可视化
   - `/data-browser` —— 数据浏览
+  - `/monitoring` —— 监控指标
+- `+error.svelte` —— 兜住未匹配路由（`goto()` 对未解析 URL 会 reject）
 
-### 2.7 HTTP 客户端: Axios
+### 2.7 HTTP 客户端: openapi-fetch
 
-**封装**（`$utils/http.ts`）: 统一 `get`/`post`/`put`/`_delete`，请求拦截注入 `X-Session-ID`，响应拦截统一取 `data`，`transformResponse` 使用 `json-bigint` 处理大整数，401 触发登出跳转。
+**封装**（`$lib/api/client.ts`）: 路径、方法、参数与请求体按生成的 OpenAPI 契约（`schema.d.ts`）做类型校验；自定义 fetch 用 `json-bigint` 解析响应以保留大整数，请求拦截注入 `X-Session-ID`，401 清理会话并跳转登录页。
+
+设置 `USE_MOCK` 时，`$lib/mock` 提供的同签名代理接管全部请求，无需后端即可运行完整界面。
 
 ### 2.8 查询编辑器: Monaco Editor
 
@@ -136,9 +137,9 @@ npm run check   # svelte-check + tsc
 
 **封装组件**: `$components/common/CytoscapeCanvas.svelte`，配置与解析在 `$utils/cytoscapeConfig.ts`、`$utils/graphLayout.ts`。
 
-### 2.10 国际化: svelte-i18n
+### 2.10 国际化: Paraglide JS
 
-词条位于 `src/lib/i18n/locales/{en,zh}.json`（扁平 key），组件中通过 `$t('...')` 取词，`LanguageSwitcher` 组件切换语言。
+词条位于 `frontend/messages/{en,zh}.json`，采用单层点号 key（如 `common.login`），由 Paraglide 编译为 `src/lib/paraglide` 下的类型化消息函数（生成物不入库）。组件从 `$i18n` 导入 `t()` 取词，key 在编译期校验；数据驱动场景用 `message()` 取得消息函数。语言检测与持久化由 Paraglide 的 `localStorage` 策略负责，`LanguageSwitcher` 调用 `setLocale()` 切换（切换会重载文档）。
 
 ---
 
@@ -146,8 +147,9 @@ npm run check   # svelte-check + tsc
 
 | 工具 | 用途 |
 |------|------|
-| svelte-check | Svelte + TypeScript 类型检查 |
-| tsc | TypeScript 编译校验（`tsconfig.node.json`） |
+| svelte-check | Svelte + TypeScript 类型检查（`tsconfig.json`） |
+| check-i18n | 校验 `en` / `zh` 词条 key 集合一致且非空 |
+| node:test | `src/lib/utils` 下的纯函数单元测试 |
 | Vite | 开发服务器与生产构建 |
 
 ---
@@ -159,15 +161,10 @@ npm run check   # svelte-check + tsc
 ```json
 {
   "dependencies": {
-    "axios": "^1.19.0",
-    "clsx": "^2.1.1",
     "cytoscape": "^3.34.0",
-    "dayjs": "^1.11.21",
     "json-bigint": "^1.0.0",
-    "lodash-es": "^4.18.1",
     "monaco-editor": "^0.57.0",
-    "svelte-i18n": "^4.0.1",
-    "svelte-routing": "^2.13.0"
+    "openapi-fetch": "^0.17.0"
   }
 }
 ```
@@ -216,8 +213,8 @@ VITE_API_BASE_URL=http://localhost:9758
 | 框架 | React 18 | Svelte 5 | 更小的运行时、编译期优化、Runes 细粒度响应式 |
 | UI 组件库 | Ant Design 5 | Tailwind CSS 4 | 原子化样式，避免重型组件库依赖 |
 | 状态管理 | Zustand | Svelte Store | 框架内置，零额外依赖 |
-| 路由 | React Router v6 | svelte-routing | 与 Svelte 生态一致 |
-| 国际化 | react-i18next | svelte-i18n | 与 Svelte 生态一致 |
+| 路由 | React Router v6 | SvelteKit 文件路由 | 官方方案，支持 `load` 与 `hooks` |
+| 国际化 | react-i18next | Paraglide JS | 编译期生成，无运行时 store |
 | 查询编辑器 | Ant Design TextArea | Monaco Editor | 满足 Cypher 高亮与补全的完整体验 |
 
 ---
@@ -228,8 +225,8 @@ VITE_API_BASE_URL=http://localhost:9758
 - [TypeScript 官方文档](https://www.typescriptlang.org/)
 - [Vite 官方文档](https://vite.dev/)
 - [Tailwind CSS 文档](https://tailwindcss.com/)
-- [svelte-routing 文档](https://github.com/EmilTholin/svelte-routing)
-- [svelte-i18n 文档](https://github.com/kaisermann/svelte-i18n)
+- [SvelteKit 文档](https://svelte.dev/docs/kit)
+- [Paraglide JS 文档](https://paraglidejs.com)
 - [Monaco Editor 文档](https://microsoft.github.io/monaco-editor/)
 - [Cytoscape.js 文档](https://js.cytoscape.org/)
 

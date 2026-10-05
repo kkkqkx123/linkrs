@@ -2,8 +2,10 @@ import { call, client } from '$lib/api/client';
 import type { components } from '$lib/api/schema';
 
 export type OverviewResponse = components['schemas']['OverviewResponse'];
-export type SystemResourceResponse = components['schemas']['SystemResourceResponse'];
-export type DatabaseOverviewResponse = components['schemas']['DatabaseOverviewResponse'];
+export type SystemResourceResponse =
+	components['schemas']['SystemResourceResponse'];
+export type DatabaseOverviewResponse =
+	components['schemas']['DatabaseOverviewResponse'];
 export type QueryStatsResponse = components['schemas']['QueryStatsResponse'];
 export type SearchStatsResponse = components['schemas']['SearchStatsResponse'];
 export type QueryProfileDetailResponse =
@@ -38,15 +40,15 @@ export const statisticsService = {
 	queries: async (params?: QueryStatsParams): Promise<QueryStatsResponse> =>
 		call(
 			client.GET('/v1/statistics/queries', {
-				params: { query: { from: params?.from, to: params?.to } }
-			})
+				params: { query: { from: params?.from, to: params?.to } },
+			}),
 		),
 
 	queryProfile: async (traceId: string): Promise<QueryProfileDetailResponse> =>
 		call(
 			client.GET('/v1/statistics/queries/{trace_id}', {
-				params: { path: { trace_id: traceId } }
-			})
+				params: { path: { trace_id: traceId } },
+			}),
 		),
 
 	search: async (): Promise<SearchStatsResponse> =>
@@ -56,7 +58,7 @@ export const statisticsService = {
 		call(client.GET('/v1/transactions/metrics')),
 
 	syncStatus: async (): Promise<SyncStatusResponse> =>
-		call(client.GET('/v1/sync/status'))
+		call(client.GET('/v1/sync/status')),
 };
 
 export default statisticsService;

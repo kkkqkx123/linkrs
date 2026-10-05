@@ -1,10 +1,11 @@
 import { writable, get } from 'svelte/store';
 import { statisticsService, type OverviewResponse } from '$services/statistics';
+import { t } from '$i18n';
 import type {
 	DatabaseOverviewResponse,
 	QueryStatsResponse,
 	SearchStatsResponse,
-	SystemResourceResponse
+	SystemResourceResponse,
 } from '$services/statistics';
 
 /** Poll interval for the monitoring page; also the store default. */
@@ -35,7 +36,7 @@ const emptySnapshots = (): MonitoringSnapshots => ({
 	queries: null,
 	search: null,
 	transaction: null,
-	sync: null
+	sync: null,
 });
 
 function createMonitoringStore() {
@@ -44,7 +45,7 @@ function createMonitoringStore() {
 		lastRefreshAt: null,
 		loading: false,
 		paused: false,
-		error: null
+		error: null,
 	});
 
 	let timer: ReturnType<typeof setInterval> | null = null;
@@ -61,12 +62,17 @@ function createMonitoringStore() {
 			statisticsService.queries(),
 			statisticsService.search(),
 			statisticsService.transactionMetrics(),
-			statisticsService.syncStatus()
+			statisticsService.syncStatus(),
 		]);
-		const [overview, system, database, queries, search, transaction, sync] = settled;
+		const [overview, system, database, queries, search, transaction, sync] =
+			settled;
 		const errors = settled
 			.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
-			.map((r) => (r.reason instanceof Error ? r.reason.message : 'Request failed'));
+			.map((r) =>
+				r.reason instanceof Error
+					? r.reason.message
+					: t('notification.requestFailed'),
+			);
 		update((s) => {
 			const next = { ...s.snapshots };
 			if (overview.status === 'fulfilled') next.overview = overview.value;
@@ -76,14 +82,16 @@ function createMonitoringStore() {
 			if (search.status === 'fulfilled') next.search = search.value;
 			if (transaction.status === 'fulfilled')
 				next.transaction = transaction.value as Record<string, unknown>;
-			if (sync.status === 'fulfilled') next.sync = sync.value as Record<string, unknown>;
+			if (sync.status === 'fulfilled')
+				next.sync = sync.value as Record<string, unknown>;
 			const failed = errors.length > 0;
 			return {
 				...s,
 				snapshots: next,
 				loading: false,
-				lastRefreshAt: failed && s.lastRefreshAt !== null ? s.lastRefreshAt : Date.now(),
-				error: failed ? errors[0] : null
+				lastRefreshAt:
+					failed && s.lastRefreshAt !== null ? s.lastRefreshAt : Date.now(),
+				error: failed ? errors[0] : null,
 			};
 		});
 	}
@@ -106,8 +114,7 @@ function createMonitoringStore() {
 		refresh,
 		startPolling,
 		stopPolling,
-		setPaused: (paused: boolean) =>
-			update((s) => ({ ...s, paused }))
+		setPaused: (paused: boolean) => update((s) => ({ ...s, paused })),
 	};
 }
 

@@ -29,7 +29,11 @@ function durationFormatter(unit: DurationUnit): Intl.NumberFormat {
 	const cacheKey = `${locale}/${unit}`;
 	let formatter = durationFormatters.get(cacheKey);
 	if (!formatter) {
-		formatter = new Intl.NumberFormat(locale, { style: 'unit', unit, unitDisplay: 'short' });
+		formatter = new Intl.NumberFormat(locale, {
+			style: 'unit',
+			unit,
+			unitDisplay: 'short',
+		});
 		durationFormatters.set(cacheKey, formatter);
 	}
 	return formatter;
@@ -40,7 +44,10 @@ export function formatBytes(value: unknown): string {
 	if (num === null) return MISSING;
 	if (num === 0) return '0 B';
 	const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-	const tier = Math.min(units.length - 1, Math.floor(Math.log(num) / Math.log(1024)));
+	const tier = Math.min(
+		units.length - 1,
+		Math.floor(Math.log(num) / Math.log(1024)),
+	);
 	const scaled = num / Math.pow(1024, tier);
 	return `${scaled >= 100 ? Math.round(scaled) : scaled.toFixed(scaled >= 10 ? 1 : 2)} ${units[tier]}`;
 }
@@ -56,7 +63,8 @@ export function formatLatencyUs(value: unknown): string {
 	const num = toFiniteNumber(value);
 	if (num === null) return MISSING;
 	if (num < 1000) return `${Math.round(num)} µs`;
-	if (num < 1_000_000) return `${(num / 1000).toFixed(num < 10_000 ? 2 : 1)} ms`;
+	if (num < 1_000_000)
+		return `${(num / 1000).toFixed(num < 10_000 ? 2 : 1)} ms`;
 	return `${(num / 1_000_000).toFixed(2)} s`;
 }
 
@@ -97,9 +105,12 @@ export function formatUptimeSecs(value: unknown): string {
 	const days = Math.floor(secs / 86400);
 	const hours = Math.floor((secs % 86400) / 3600);
 	const minutes = Math.floor((secs % 3600) / 60);
-	if (days > 0) return `${durationFormatter('day').format(days)} ${durationFormatter('hour').format(hours)}`;
-	if (hours > 0) return `${durationFormatter('hour').format(hours)} ${durationFormatter('minute').format(minutes)}`;
-	if (minutes > 0) return `${durationFormatter('minute').format(minutes)} ${durationFormatter('second').format(secs % 60)}`;
+	if (days > 0)
+		return `${durationFormatter('day').format(days)} ${durationFormatter('hour').format(hours)}`;
+	if (hours > 0)
+		return `${durationFormatter('hour').format(hours)} ${durationFormatter('minute').format(minutes)}`;
+	if (minutes > 0)
+		return `${durationFormatter('minute').format(minutes)} ${durationFormatter('second').format(secs % 60)}`;
 	return durationFormatter('second').format(secs);
 }
 

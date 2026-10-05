@@ -6,6 +6,7 @@
 //
 // Paths use the package's `exports` map (`./*` -> `./esm/vs/*`) so TypeScript
 // can resolve declarations for the editor API.
+import EditorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from 'monaco-editor/editor/editor.api.js';
 import 'monaco-editor/editor/contrib/suggest/browser/suggestController.js';
 import 'monaco-editor/editor/contrib/suggest/browser/suggestInlineCompletions.js';
@@ -26,6 +27,12 @@ import 'monaco-editor/editor/contrib/smartSelect/browser/smartSelect.js';
 import 'monaco-editor/editor/contrib/placeholderText/browser/placeholderText.contribution.js';
 import 'monaco-editor/editor/contrib/toggleTabFocusMode/browser/toggleTabFocusMode.js';
 import 'monaco-editor/editor/browser/coreCommands.js';
+
+// Monaco resolves its web worker through this global; Vite emits the worker as
+// its own chunk, so the editor needs no separate HTML bootstrap script.
+self.MonacoEnvironment = {
+	getWorker: () => new EditorWorker(),
+};
 
 export { monaco };
 export default monaco;

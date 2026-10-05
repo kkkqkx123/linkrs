@@ -128,7 +128,7 @@ Configuration is managed via `config.toml`:
 |------|-------------|
 | `crates/` | 11 sub-crates (8 core + migration + vector-client + cli) |
 | `src/` | Root crate: server binary, C API, library re-exports |
-| `frontend/` | graphdb-studio: Svelte + TypeScript web UI |
+| `frontend/` | graphdb-studio: SvelteKit + Svelte 5 + TypeScript web UI |
 | `crates/graphdb-cli/` | Interactive CLI client |
 | `proto/` | gRPC protobuf definitions |
 | `tests/` | Integration + C API + E2E tests |
@@ -198,10 +198,11 @@ Interactive REPL with syntax highlighting, history, CSV export, and pagination.
 ```shell
 cd frontend
 npm install
-npm run dev
+npm run dev          # against a backend on :9758
+npm run dev:mock     # against the in-repo mock layer, no backend needed
 ```
 
-Svelte 5 + Vite + TypeScript dashboard with graph visualization (Cytoscape.js), Tailwind CSS styling, and i18n support.
+SvelteKit (static SPA) + Svelte 5 + TypeScript dashboard with graph visualization (Cytoscape.js), Tailwind CSS styling, and compile-time-checked i18n (English / Chinese). See `frontend/README.md`.
 
 ---
 

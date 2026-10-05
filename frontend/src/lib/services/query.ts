@@ -3,6 +3,7 @@ import { resolveSessionId } from '$utils/http';
 import type { QueryResult, QueryError } from '$types/query';
 import type { components } from '$lib/api/schema';
 import { splitQueries } from '$utils/gql';
+import { t } from '$i18n';
 
 type QueryRequest = components['schemas']['QueryRequest'];
 type QueryResponse = components['schemas']['QueryResponse'];
@@ -56,7 +57,7 @@ export interface BatchExecuteResponse {
 function toStatementResult(
 	query: string,
 	response: QueryResponse,
-	fallbackMs: number
+	fallbackMs: number,
 ): BatchStatementResult {
 	const executionTime = response.metadata?.execution_time_ms ?? fallbackMs;
 	const traceId = response.metadata?.trace_id ?? undefined;
@@ -68,12 +69,12 @@ function toStatementResult(
 			success: false,
 			error: {
 				code: response.error?.code || 'EXECUTION_ERROR',
-				message: response.error?.message || 'Failed to execute query'
+				message: response.error?.message || t('errors.executeQuery'),
 			},
 			executionTime,
 			traceId,
 			stages,
-			planNodeCount
+			planNodeCount,
 		};
 	}
 	const columns = response.data?.columns ?? [];
@@ -88,17 +89,19 @@ function toStatementResult(
 		truncated,
 		traceId,
 		stages,
-		planNodeCount
+		planNodeCount,
 	};
 }
 
 export const queryService = {
-	execute: async (params: ExecuteQueryParams): Promise<ExecuteQueryResponse> => {
+	execute: async (
+		params: ExecuteQueryParams,
+	): Promise<ExecuteQueryResponse> => {
 		const resolved = resolveSessionId(params.sessionId);
 		if (resolved === undefined) {
 			return {
 				success: false,
-				error: { code: 'NO_SESSION', message: 'Missing session id for query execution' }
+				error: { code: 'NO_SESSION', message: t('errors.missingSessionQuery') },
 			};
 		}
 		try {
@@ -107,9 +110,16 @@ export const queryService = {
 			// carries the statement text plus the session id required by the wire contract.
 			const body: QueryRequest = { query: params.query, session_id: resolved };
 			if (params.parameters !== undefined) body.parameters = params.parameters;
-			if (params.sessionVariables !== undefined) body.session_variables = params.sessionVariables;
-			const response = await call<QueryResponse>(client.POST('/v1/query', { body }));
-			const result = toStatementResult(params.query, response, Date.now() - startTime);
+			if (params.sessionVariables !== undefined)
+				body.session_variables = params.sessionVariables;
+			const response = await call<QueryResponse>(
+				client.POST('/v1/query', { body }),
+			);
+			const result = toStatementResult(
+				params.query,
+				response,
+				Date.now() - startTime,
+			);
 			return {
 				success: result.success,
 				data: result.data,
@@ -117,15 +127,16 @@ export const queryService = {
 				executionTime: result.executionTime,
 				traceId: result.traceId,
 				stages: result.stages,
-				planNodeCount: result.planNodeCount
+				planNodeCount: result.planNodeCount,
 			};
 		} catch (error) {
 			return {
 				success: false,
 				error: {
 					code: 'EXECUTION_ERROR',
-					message: error instanceof Error ? error.message : 'Failed to execute query'
-				}
+					message:
+						error instanceof Error ? error.message : t('errors.executeQuery'),
+				},
 			};
 		}
 	},
@@ -136,7 +147,10 @@ export const queryService = {
 	 * script is split client-side so blank lines and comments are dropped before
 	 * the statements leave the browser.
 	 */
-	executeBatch: async (script: string, options?: BatchExecuteOptions): Promise<BatchExecuteResponse> => {
+	executeBatch: async (
+		script: string,
+		options?: BatchExecuteOptions,
+	): Promise<BatchExecuteResponse> => {
 		const startTime = Date.now();
 		const statements = splitQueries(script);
 		if (statements.length === 0) {
@@ -148,34 +162,43 @@ export const queryService = {
 				results: statements.map((query) => ({
 					query,
 					success: false,
-					error: { code: 'NO_SESSION', message: 'Missing session id for batch execution' },
-					executionTime: 0
+					error: {
+						code: 'NO_SESSION',
+						message: t('errors.missingSessionBatch'),
+					},
+					executionTime: 0,
 				})),
 				totalExecutionTime: 0,
-				success: false
+				success: false,
 			};
 		}
 		try {
 			const batchBody: BatchQueryRequest = {
 				session_id: resolved,
-				statements
+				statements,
 			};
-			if (options?.parameters !== undefined) batchBody.parameters = options.parameters;
+			if (options?.parameters !== undefined)
+				batchBody.parameters = options.parameters;
 			if (options?.sessionVariables !== undefined)
 				batchBody.session_variables = options.sessionVariables;
 			const response = await call<components['schemas']['BatchQueryResponse']>(
-				client.POST('/v1/query/batch', { body: batchBody })
+				client.POST('/v1/query/batch', { body: batchBody }),
 			);
 			const envelopes = response.results ?? [];
-			const fallbackMs = Math.round((Date.now() - startTime) / statements.length);
+			const fallbackMs = Math.round(
+				(Date.now() - startTime) / statements.length,
+			);
 			const results = statements.map((query, index) => {
 				const envelope = envelopes[index];
 				if (!envelope) {
 					return {
 						query,
 						success: false,
-						error: { code: 'MISSING_RESULT', message: 'Server returned no result for this statement' },
-						executionTime: 0
+						error: {
+							code: 'MISSING_RESULT',
+							message: t('errors.missingResult'),
+						},
+						executionTime: 0,
 					};
 				}
 				return toStatementResult(query, envelope, fallbackMs);
@@ -183,19 +206,20 @@ export const queryService = {
 			return {
 				results,
 				totalExecutionTime: Date.now() - startTime,
-				success: results.every((r) => r.success)
+				success: results.every((r) => r.success),
 			};
 		} catch (error) {
-			const message = error instanceof Error ? error.message : 'Failed to execute batch';
+			const message =
+				error instanceof Error ? error.message : t('errors.executeBatch');
 			return {
 				results: statements.map((query) => ({
 					query,
 					success: false,
 					error: { code: 'EXECUTION_ERROR', message },
-					executionTime: 0
+					executionTime: 0,
 				})),
 				totalExecutionTime: Date.now() - startTime,
-				success: false
+				success: false,
 			};
 		}
 	},
@@ -208,35 +232,47 @@ export const queryService = {
 	validate: async (
 		query: string,
 		sessionId?: number,
-		needEstimate?: boolean
-	): Promise<{ valid: boolean; message: string; estimatedRows: number | null }> => {
+		needEstimate?: boolean,
+	): Promise<{
+		valid: boolean;
+		message: string;
+		estimatedRows: number | null;
+	}> => {
 		const resolved = resolveSessionId(sessionId);
 		if (resolved === undefined) {
-			return { valid: false, message: 'Missing session id for validation', estimatedRows: null };
+			return {
+				valid: false,
+				message: t('errors.missingSessionValidate'),
+				estimatedRows: null,
+			};
 		}
 		try {
 			const body: ValidateRequest = {
 				query,
 				session_id: resolved,
-				need_estimate: needEstimate === true
+				need_estimate: needEstimate === true,
 			};
 			const response = await call<components['schemas']['ValidateResponse']>(
-				client.POST('/v1/query/validate', { body })
+				client.POST('/v1/query/validate', { body }),
 			);
 			const estimated = response.estimated_rows;
 			return {
 				valid: response.valid,
 				message: response.message,
-				estimatedRows: typeof estimated === 'number' && Number.isFinite(estimated) ? estimated : null
+				estimatedRows:
+					typeof estimated === 'number' && Number.isFinite(estimated)
+						? estimated
+						: null,
 			};
 		} catch (error) {
 			return {
 				valid: false,
-				message: error instanceof Error ? error.message : 'Failed to validate query',
-				estimatedRows: null
+				message:
+					error instanceof Error ? error.message : t('errors.validateQuery'),
+				estimatedRows: null,
 			};
 		}
-	}
+	},
 };
 
 export default queryService;

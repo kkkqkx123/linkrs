@@ -1,6 +1,7 @@
 import { call, client } from '$lib/api/client';
 import { resolveSessionId } from '$utils/http';
 import type { components } from '$lib/api/schema';
+import { t } from '$i18n';
 
 export interface OpenCursorResult {
 	cursorId: number;
@@ -16,18 +17,21 @@ export interface FetchCursorResult {
 
 export const cursorService = {
 	/** Open a forward-only cursor over a single statement. */
-	open: async (query: string, sessionId?: number): Promise<OpenCursorResult> => {
+	open: async (
+		query: string,
+		sessionId?: number,
+	): Promise<OpenCursorResult> => {
 		const resolved = resolveSessionId(sessionId);
 		if (resolved === undefined) {
-			throw new Error('Missing session id for cursor open');
+			throw new Error(t('errors.missingSessionCursor'));
 		}
 		const response = await call<components['schemas']['OpenCursorResponse']>(
 			client.POST('/v1/query/cursor/open', {
-				body: { session_id: resolved, query }
-			})
+				body: { session_id: resolved, query },
+			}),
 		);
 		if (response.cursor_id === undefined) {
-			throw new Error('Server returned no cursor id');
+			throw new Error(t('errors.noCursorId'));
 		}
 		return { cursorId: response.cursor_id, columns: response.columns ?? [] };
 	},
@@ -36,23 +40,27 @@ export const cursorService = {
 	fetch: async (
 		cursorId: number,
 		pageSize: number,
-		sessionId?: number
+		sessionId?: number,
 	): Promise<FetchCursorResult> => {
 		const resolved = resolveSessionId(sessionId);
 		if (resolved === undefined) {
-			throw new Error('Missing session id for cursor fetch');
+			throw new Error(t('errors.missingSessionFetchCursor'));
 		}
 		const response = await call<components['schemas']['FetchCursorResponse']>(
 			client.POST('/v1/query/cursor/fetch', {
-				body: { session_id: resolved, cursor_id: cursorId, page_size: pageSize }
-			})
+				body: {
+					session_id: resolved,
+					cursor_id: cursorId,
+					page_size: pageSize,
+				},
+			}),
 		);
 		const rows = (response.rows ?? []) as Record<string, unknown>[];
 		return {
 			columns: response.columns ?? [],
 			rows,
 			hasMore: response.has_more === true,
-			returned: response.returned ?? rows.length
+			returned: response.returned ?? rows.length,
 		};
 	},
 
@@ -63,13 +71,13 @@ export const cursorService = {
 		try {
 			await call<unknown>(
 				client.POST('/v1/query/cursor/close', {
-					body: { session_id: resolved, cursor_id: cursorId }
-				})
+					body: { session_id: resolved, cursor_id: cursorId },
+				}),
 			);
 		} catch {
 			/* closing is best-effort; the server sweeps idle cursors */
 		}
-	}
+	},
 };
 
 export default cursorService;

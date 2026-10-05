@@ -1,6 +1,13 @@
 import { call, client, unwrap } from '$lib/api/client';
 import { compileFilter } from '$utils/filterExpression';
-import type { VertexListResponse, EdgeListResponse, FilterGroup, Statistics, VertexData, EdgeData } from '$types/dataBrowser';
+import type {
+	VertexListResponse,
+	EdgeListResponse,
+	FilterGroup,
+	Statistics,
+	VertexData,
+	EdgeData,
+} from '$types/dataBrowser';
 import type { components } from '$lib/api/schema';
 
 type Paginated = components['schemas']['ApiResponse_PaginatedResponse_Value'];
@@ -13,7 +20,7 @@ export const dataBrowserService = {
 		page: number,
 		pageSize: number,
 		sort: { field: string; order: 'asc' | 'desc' },
-		filters: FilterGroup
+		filters: FilterGroup,
 	): Promise<VertexListResponse> => {
 		const filterExpression = compileFilter(filters);
 		const paged = await unwrap(
@@ -26,17 +33,17 @@ export const dataBrowserService = {
 							offset: (page - 1) * pageSize,
 							sort_by: sort.field,
 							sort_order: sort.order.toUpperCase(),
-							filter: filterExpression || undefined
-						}
-					}
-				})
-			)
+							filter: filterExpression || undefined,
+						},
+					},
+				}),
+			),
 		);
 		return {
 			data: (paged.items || []) as VertexData[],
 			total: paged.total || 0,
 			page,
-			pageSize
+			pageSize,
 		} as VertexListResponse;
 	},
 
@@ -46,7 +53,7 @@ export const dataBrowserService = {
 		page: number,
 		pageSize: number,
 		sort: { field: string; order: 'asc' | 'desc' },
-		filters: FilterGroup
+		filters: FilterGroup,
 	): Promise<EdgeListResponse> => {
 		const filterExpression = compileFilter(filters);
 		const paged = await unwrap(
@@ -59,17 +66,17 @@ export const dataBrowserService = {
 							offset: (page - 1) * pageSize,
 							sort_by: sort.field,
 							sort_order: sort.order.toUpperCase(),
-							filter: filterExpression || undefined
-						}
-					}
-				})
-			)
+							filter: filterExpression || undefined,
+						},
+					},
+				}),
+			),
 		);
 		return {
 			data: (paged.items || []) as EdgeData[],
 			total: paged.total || 0,
 			page,
-			pageSize
+			pageSize,
 		} as EdgeListResponse;
 	},
 
@@ -77,12 +84,12 @@ export const dataBrowserService = {
 		const stats = unwrap(
 			await call<components['schemas']['ApiResponse_SpaceStatistics']>(
 				client.GET('/api/v1/schema/spaces/{name}/statistics', {
-					params: { path: { name: space } }
-				})
-			)
+					params: { path: { name: space } },
+				}),
+			),
 		);
 		return toStatistics(stats);
-	}
+	},
 };
 
 /** Map the contract statistics onto the browser view model. */
@@ -93,7 +100,7 @@ function toStatistics(stats: SpaceStatistics): Statistics {
 		tagCount: stats.tag_count ?? 0,
 		edgeTypeCount: stats.edge_type_count ?? 0,
 		tagDistribution: [],
-		edgeTypeDistribution: []
+		edgeTypeDistribution: [],
 	};
 }
 

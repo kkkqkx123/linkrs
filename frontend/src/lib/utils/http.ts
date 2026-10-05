@@ -1,3 +1,5 @@
+import { BASE_URL } from '$lib/api/client';
+
 /**
  * Session helpers for API access.
  * JSON calls go through the typed client in `$lib/api/client`; this module
@@ -7,11 +9,13 @@
  */
 
 export function getApiBaseUrl(): string {
-	return import.meta.env.VITE_API_BASE_URL || 'http://localhost:9758';
+	return BASE_URL;
 }
 
 export function getSessionHeaders(): Record<string, string> {
-	const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+	const headers: Record<string, string> = {
+		'Content-Type': 'application/json',
+	};
 	try {
 		const sessionId = localStorage.getItem('sessionId');
 		if (sessionId) headers['X-Session-ID'] = sessionId;

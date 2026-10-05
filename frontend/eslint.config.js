@@ -26,6 +26,14 @@ export default defineConfig(
 		},
 	},
 	{
-		ignores: ['dist/**', 'node_modules/**', '*.config.ts', '*.config.js'],
+		ignores: [
+			'build/**',
+			'dist/**',
+			'node_modules/**',
+			'.svelte-kit/**',
+			'src/lib/paraglide/**',
+			'*.config.ts',
+			'*.config.js',
+		],
 	},
 );

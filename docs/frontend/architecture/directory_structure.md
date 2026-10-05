@@ -1,10 +1,10 @@
 # GraphDB 前端目录结构设计
 
-**文档版本**: v2.0  
+**文档版本**: v3.0  
 **创建日期**: 2026-03-29  
-**最后更新**: 2026-04-15
+**最后更新**: 2026-10-05
 
-> 本文档描述前端**实际采用**的目录结构。v1.0 曾按 React 生态规划（`index.tsx` + `index.module.less` 组件目录、`hooks/` 自定义 Hook、`locales/` 与 `styles/` 目录），但工程实现阶段改为 Svelte 生态；本版已按 `frontend/src/**` 与 `frontend/package.json` 的真实代码全面修订。
+> 本文档描述前端**实际采用**的目录结构。v1.0 曾按 React 生态规划（`index.tsx` + `index.module.less` 组件目录、`hooks/` 自定义 Hook、`locales/` 与 `styles/` 目录），v2.0 记录了 Svelte 5 + Vite + `svelte-routing` 的实现；v3.0 反映迁移到 SvelteKit 3 与 Paraglide JS 后的真实代码。
 
 ---
 
@@ -22,12 +22,13 @@
 | 方面 | v1.0 规划（React） | 实现（Svelte） |
 |------|-------------------|----------------|
 | 组件组织 | `ComponentName/index.tsx` 目录 | 单文件 `ComponentName.svelte` |
+| 页面组织 | 路由配置集中声明 | SvelteKit 文件路由（`src/routes/**/+page.svelte`） |
 | 样式 | `index.module.less` | Tailwind 原子类 + `src/app.css` |
 | 状态管理 | `zustand` store | Svelte `writable` store（`$stores/*`） |
 | 自定义 Hook | `src/hooks/useXxx.ts` | 无独立目录，逻辑内聚于组件或 `$utils/*` |
-| 国际化资源 | `src/locales/{zh-CN,en-US}/translation.json` | `src/lib/i18n/locales/{en,zh}.json` |
+| 国际化资源 | `src/locales/{zh-CN,en-US}/translation.json` | `messages/{en,zh}.json`（项目根，构建期编译） |
 | 全局样式 | `src/styles/*.less` | 单一 `src/app.css` + Tailwind 主题变量 |
-| 路径别名 | `@/*` 系列 | `$lib` / `$types` / `$utils` / `$services` / `$stores` / `$config` / `$components` / `$pages` |
+| 路径别名 | `@/*` 系列 | `$lib` / `$types` / `$utils` / `$services` / `$stores` / `$config` / `$i18n` / `$components` / `$paraglide` |
 
 ---
 
@@ -35,62 +36,63 @@
 
 ```
 frontend/                           # 前端项目根目录
-├── public/                         # 静态资源（不经过构建）
-├── src/                            # 源代码目录
-│   ├── assets/                     # 静态资源（经过构建）
-│   │   ├── hero.png
-│   │   ├── svelte.svg
-│   │   └── vite.svg
-│   ├── lib/                        # 应用主体（Svelte 约定的 $lib）
-│   │   ├── components/             # 公共组件
-│   │   │   ├── common/             # 通用基础组件
-│   │   │   ├── business/           # 业务组件
-│   │   │   └── layout/             # 布局组件
-│   │   ├── pages/                  # 页面组件
-│   │   │   ├── Login/              # 登录页面
-│   │   │   ├── MainPage.svelte     # 主布局页面
-│   │   │   ├── Console/            # 查询控制台
-│   │   │   ├── Schema/             # Schema 管理
-│   │   │   ├── Graph/              # 图可视化
-│   │   │   └── DataBrowser/        # 数据浏览
-│   │   ├── stores/                 # 状态管理（Svelte Store）
-│   │   ├── services/               # API 服务
-│   │   ├── utils/                  # 工具函数
-│   │   ├── types/                  # TypeScript 类型定义
-│   │   ├── config/                 # 配置文件
-│   │   ├── i18n/                   # 国际化配置与词条
-│   │   │   ├── index.ts            # i18n 初始化
-│   │   │   └── locales/            # 词条资源
-│   │   │       ├── en.json
-│   │   │       └── zh.json
-│   │   └── Counter.svelte          # 示例/计数器组件
-│   ├── App.svelte                  # 应用根组件（路由容器）
-│   ├── app.css                     # 全局样式（Tailwind 入口）
-│   └── main.ts                     # 应用入口文件
-├── index.html                      # HTML 入口
-├── package.json                    # 项目依赖
-├── tsconfig.json                   # TypeScript 根配置
-├── tsconfig.app.json               # 应用侧 TS 配置（含路径别名）
-├── tsconfig.node.json              # Node 侧 TS 配置
-├── vite.config.ts                  # Vite 配置
-├── svelte.config.js                # Svelte 配置
-└── README.md                       # 项目说明
+├── messages/                      # 词条资源（Paraglide 输入）
+│   ├── en.json                    # 英文词条（参考语言）
+│   └── zh.json                    # 中文词条
+├── project.inlang/                # inlang 项目配置
+│   └── settings.json              # 语言列表与词条路径规则
+├── public/                        # 静态资源（不经过构建）
+├── scripts/                       # 工程脚本（i18n 词条校验）
+├── src/
+│   ├── lib/                       # 应用主体
+│   │   ├── api/                   # API 客户端（openapi-fetch + mock 代理）
+│   │   │   ├── client.ts
+│   │   │   └── schema.d.ts        # 由 openapi.json 生成的契约类型
+│   │   ├── components/            # 公共组件
+│   │   │   ├── common/            # 通用基础组件
+│   │   │   ├── business/          # 业务组件
+│   │   │   └── layout/            # 布局组件
+│   │   ├── config/                # 常量与主题配置
+│   │   ├── i18n/                  # 词条取用入口（转出 Paraglide 生成物）
+│   │   │   └── index.ts
+│   │   ├── mock/                  # mock 层（USE_MOCK 时接管请求）
+│   │   │   ├── index.ts           # 路由表
+│   │   │   ├── fixtures.ts
+│   │   │   ├── scenario.ts        # slow / error / empty 场景
+│   │   │   └── handlers/          # 各业务域处理器
+│   │   ├── services/              # API 服务
+│   │   ├── stores/                # 状态管理（Svelte Store）
+│   │   ├── types/                 # TypeScript 类型定义
+│   │   ├── utils/                 # 工具函数（含单元测试）
+│   │   └── paraglide/             # Paraglide 生成物（不入库）
+│   ├── routes/                    # SvelteKit 文件路由
+│   │   ├── +layout.ts             # ssr = false 等页面选项
+│   │   ├── +layout.svelte         # 根布局（标题、主题、Toast）
+│   │   ├── +error.svelte          # 未匹配路由与渲染错误
+│   │   ├── login/                 # 登录页
+│   │   └── (app)/                 # 受鉴权守卫保护的路由组
+│   │       ├── +layout.svelte     # 守卫 + 侧边栏 + 顶栏
+│   │       ├── +page.svelte       # 首页
+│   │       ├── console/
+│   │       ├── data-browser/
+│   │       ├── graph/
+│   │       ├── monitoring/
+│   │       └── schema/[tab=schemaTab]/  # Schema 各子页
+│   ├── params.ts                  # 路由参数匹配器（schema tab 取值校验）
+│   ├── env.ts                     # 浏览器可见环境变量声明
+│   ├── app.html                   # HTML 模板
+│   ├── app.d.ts                   # App 类型 augment
+│   └── app.css                    # 全局样式（Tailwind 入口）
+├── .env                           # 默认环境变量
+├── .env.mock                      # mock 模式环境变量
+├── package.json
+├── tsconfig.json                  # TypeScript 配置（extends $app/tsconfig）
+├── vite.config.ts                 # Vite / SvelteKit / Paraglide 配置
+└── README.md
 ```
-
 ---
 
 ## 3. 详细目录说明
-
-### 3.1 src/assets/ - 构建资源
-
-存放需要经过构建处理的资源文件（图片、SVG）。
-
-```
-assets/
-├── hero.png
-├── svelte.svg
-└── vite.svg
-```
 
 ### 3.2 src/lib/components/ - 公共组件
 
@@ -99,58 +101,62 @@ assets/
 ```
 components/
 ├── common/                          # 通用基础组件
-│   ├── CopyableText.svelte          # 可复制文本
 │   ├── CypherEditor.svelte          # Monaco 查询编辑器
 │   ├── CytoscapeCanvas.svelte       # 图可视化画布
 │   ├── HealthMonitor.svelte         # 服务健康监控
-│   ├── IconButton.svelte            # 图标按钮
 │   ├── LanguageSwitcher.svelte      # 语言切换
-│   ├── LoadingFallback.svelte       # 加载兜底占位
 │   ├── LoadingScreen.svelte         # 全屏加载
 │   ├── PageSkeleton.svelte          # 页面骨架
 │   ├── Skeleton.svelte              # 骨架基元
 │   ├── ThemeToggle.svelte           # 主题切换
-│   └── Toast.svelte                 # 轻提示
+│   ├── Toast.svelte                 # 轻提示
+│   └── VirtualTable.svelte          # 虚拟滚动表格
 ├── business/                        # 业务组件
-│   └── SpaceSelector.svelte         # 空间选择器
+│   ├── CursorResult.svelte          # 游标结果展示
+│   ├── FilterPanel.svelte           # 条件过滤面板
+│   ├── GraphPreviewControls.svelte  # 图预览操作条
+│   ├── SchemaErGraph.svelte         # ER 关系图视图
+│   ├── SpaceSelector.svelte         # 空间选择器
+│   └── StreamingResult.svelte       # 流式结果展示
 └── layout/                          # 布局组件
     ├── Header.svelte                # 页面头部
-    ├── MainLayout.svelte            # 主布局
-    ├── ProtectedRoute.svelte        # 受保护路由
     └── Sidebar.svelte               # 侧边栏
 ```
+
+> 主布局与鉴权守卫是路由组布局 `(app)/+layout.svelte`，不再是独立组件——它们只在路由树里有意义。
 
 **组件命名规范**:
 - 文件名使用 PascalCase（如 `CypherEditor.svelte`）
 - 组件名与文件名一致
 - 样式优先使用 Tailwind 原子类；组件私有样式写在 `<style>` 块内
 
-### 3.3 src/lib/pages/ - 页面组件
+### 3.3 src/routes/ - 页面与路由
 
-页面级组件，与路由一一对应。页面私有子组件放在同目录下。
+页面即路由：目录结构决定 URL，`+page.svelte` 是页面组件，`+layout.svelte` 是嵌套布局。
 
 ```
-pages/
-├── Login/
-│   └── Login.svelte                 # 登录页
-├── MainPage.svelte                  # 主布局容器页面
-├── Console/
-│   └── Console.svelte               # 查询控制台
-├── Schema/
-│   ├── Schema.svelte                # Schema 管理主页面
-│   └── SchemaErGraph.svelte         # ER 关系图视图
-├── Graph/
-│   └── Graph.svelte                 # 图可视化
-└── DataBrowser/
-    ├── DataBrowser.svelte           # 数据浏览主页面
-    └── FilterPanel.svelte           # 条件过滤面板
+routes/
+├── +layout.ts                       # ssr = false 等页面选项
+├── +layout.svelte                   # 根布局：标题、主题 class、Toast
+├── +error.svelte                    # 未匹配路由与渲染错误
+├── login/
+│   └── +page.svelte                 # /login
+└── (app)/                           # 路由组：不进入 URL，只承载鉴权守卫与主布局
+    ├── +layout.svelte               # 守卫 + 侧边栏 + 顶栏
+    ├── +page.svelte                 # /
+    ├── console/+page.svelte         # /console
+    ├── data-browser/+page.svelte    # /data-browser
+    ├── graph/+page.svelte           # /graph
+    ├── monitoring/+page.svelte      # /monitoring
+    └── schema/[tab=schemaTab]/      # /schema/{spaces,tags,edges,indexes,visualization}
+        └── +page.svelte
 ```
 
 **页面组织约定**:
-- 每个页面目录对应一个路由
-- 页面入口文件名与目录名一致（如 `Console/Console.svelte`）
-- 页面私有组件放在同目录（如 `DataBrowser/FilterPanel.svelte`）
-- 子路由在页面内声明，路由表集中在 `App.svelte`
+- 一个路由一个目录，页面组件固定命名 `+page.svelte`
+- 可被多处复用的子组件上移到 `$components/business`，页面私有逻辑留在 `+page.svelte`
+- tab 属于路由而非组件状态，用 `src/params.ts` 的匹配器约束取值
+- 需要共享的外壳写成 `+layout.svelte`，而不是在页面里判断
 
 ### 3.4 src/lib/stores/ - 状态管理
 
@@ -290,19 +296,20 @@ config/
 └── theme.ts                         # 主题常量
 ```
 
-### 3.9 src/lib/i18n/ - 国际化
+### 3.9 词条资源与取词入口
 
-存放 i18n 初始化与词条资源。
+词条本身不在 `src/lib` 下，而是由 Paraglide 在构建期编译成 `src/lib/paraglide` 下的类型化消息函数（生成物，不入库）。
 
 ```
-i18n/
-├── index.ts                         # i18n 初始化、语言注册、MessageKey 类型推导
-└── locales/
-    ├── en.json                      # 英文词条（参考语言，嵌套结构）
-    └── zh.json                      # 中文词条（嵌套结构）
+frontend/
+├── messages/                        # 词条源（单层点号 key）
+│   ├── en.json                      # 英文词条（参考语言）
+│   └── zh.json                      # 中文词条
+├── project.inlang/settings.json     # baseLocale、语言列表、词条路径规则
+└── src/lib/i18n/index.ts            # 取词入口：t() / message() / MessageKey / setLocale()
 ```
 
-> 词条采用嵌套 JSON，取词路径与层级对应（如 `common.login`）。`en.json` 同时用于推导 `MessageKey` 类型，`$t()` 的字面量 key 在编译期校验。
+> 词条采用单层点号 key（如 `common.login`），取词写作 `t('common.login')`，key 在编译期校验。数据驱动场景用 `message('common.login')` 取得消息函数而非字符串 key。详见 `docs/frontend/i18n_integration_guide.md`。
 > 新增词条必须**同时**写入 `en.json` 与 `zh.json`，保持一致；`npm run check` 会校验两份词条库一致且所有引用都有定义。
 
 ---
@@ -347,49 +354,54 @@ PageName/
 
 ### 5.1 路径别名配置
 
-别名在 `tsconfig.app.json` 与 `vite.config.ts` 中**保持一致**：
+别名在 `tsconfig.json` 与 `vite.config.ts` 中**保持一致**：
 
 ```json
-// tsconfig.app.json（节选）
+// tsconfig.json（节选）
 {
+  "extends": "$app/tsconfig",
   "compilerOptions": {
-    "baseUrl": ".",
     "paths": {
-      "$lib": ["src/lib"],
-      "$lib/*": ["src/lib/*"],
-      "$components/*": ["src/lib/components/*"],
-      "$pages/*": ["src/lib/pages/*"],
-      "$stores/*": ["src/lib/stores/*"],
-      "$services/*": ["src/lib/services/*"],
-      "$utils/*": ["src/lib/utils/*"],
-      "$types/*": ["src/lib/types/*"],
-      "$config/*": ["src/lib/config/*"],
-      "$i18n": ["src/lib/i18n/index.ts"]
+      "$lib/*": ["./src/lib/*"],
+      "$components/*": ["./src/lib/components/*"],
+      "$stores/*": ["./src/lib/stores/*"],
+      "$services/*": ["./src/lib/services/*"],
+      "$utils/*": ["./src/lib/utils/*"],
+      "$types/*": ["./src/lib/types/*"],
+      "$config/*": ["./src/lib/config/*"],
+      "$paraglide/*": ["./src/lib/paraglide/*"],
+      "$i18n": ["./src/lib/i18n/index.ts"]
     }
   }
 }
 ```
 
+SvelteKit 自带的 `$app/*`（`navigation`、`state`、`env/public` 等）由框架解析，不需要在此声明。
+
 ### 5.2 导入顺序规范
 
 ```typescript
-// 1. Svelte 框架
+// 1. Svelte 与 SvelteKit
 import { onMount } from 'svelte';
 import { writable } from 'svelte/store';
+import { goto } from '$app/navigation';
+import { page } from '$app/state';
 
 // 2. 第三方库
-import { t } from 'svelte-i18n';
 import cytoscape from 'cytoscape';
 
 // 3. 路径别名导入
+import { t } from '$i18n';
 import CypherEditor from '$components/common/CypherEditor.svelte';
 import { consoleStore } from '$stores/console';
 import { queryService } from '$services/query';
 import type { GraphData } from '$types/graph';
 
 // 4. 相对路径导入（仅同目录）
-import FilterPanel from './FilterPanel.svelte';
+import GraphPreviewControls from '$components/business/GraphPreviewControls.svelte';
 ```
+
+> 业务组件之间也走 `$components` 别名，不使用相对路径，避免组件在各页面间移动时批量改导入。
 
 ---
 
@@ -398,13 +410,13 @@ import FilterPanel from './FilterPanel.svelte';
 | nebula-studio | GraphDB（现状） | 说明 |
 |---------------|----------------|------|
 | `app/components/` | `src/lib/components/` | 结构一致，组件改为 `.svelte` 单文件 |
-| `app/pages/` | `src/lib/pages/` | 结构一致 |
+| `app/pages/` | `src/routes/` | 改为文件路由，页面文件名统一为 `+page.svelte` |
 | `app/stores/` | `src/lib/stores/` | 结构一致，改用 Svelte Store |
 | `app/config/service.ts` | `src/lib/services/` | 拆分为独立目录 |
 | `app/utils/` | `src/lib/utils/` | 一致 |
 | `app/interfaces/` | `src/lib/types/` | 重命名 |
-| `app/config/locale/` | `src/lib/i18n/locales/` | 合并进 i18n 目录 |
-| `app/static/` | `public/` + `src/assets/` | 拆分静态资源 |
+| `app/config/locale/` | `messages/` | 词条移出 `src`，由 Paraglide 编译 |
+| `app/static/` | `public/` | 只保留不经过构建的静态资源 |
 | `app/pages/Import/` | ❌ 移除 | 不需要数据导入 |
 | `app/pages/LLMBot/` | ❌ 移除 | 不需要 LLM |
 | `app/pages/SketchModeling/` | ❌ 移除 | 不需要可视化建模 |

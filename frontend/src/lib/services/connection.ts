@@ -39,9 +39,11 @@ function asSessionDetail(value: unknown): SessionDetail {
 	return {
 		session_id: typeof record.session_id === 'number' ? record.session_id : 0,
 		username: typeof record.username === 'string' ? record.username : '',
-		space_name: typeof record.space_name === 'string' ? record.space_name : undefined,
-		graph_addr: typeof record.graph_addr === 'string' ? record.graph_addr : undefined,
-		timezone: typeof record.timezone === 'string' ? record.timezone : undefined
+		space_name:
+			typeof record.space_name === 'string' ? record.space_name : undefined,
+		graph_addr:
+			typeof record.graph_addr === 'string' ? record.graph_addr : undefined,
+		timezone: typeof record.timezone === 'string' ? record.timezone : undefined,
 	};
 }
 
@@ -51,28 +53,36 @@ export const connectionService = {
 
 	logout: async (sessionId: number): Promise<void> => {
 		await call<unknown>(
-			client.POST('/v1/auth/logout', { body: { session_id: sessionId } as LogoutRequest })
+			client.POST('/v1/auth/logout', {
+				body: { session_id: sessionId } as LogoutRequest,
+			}),
 		);
 	},
 
-	health: async (): Promise<HealthResponse> =>
-		call(client.GET('/v1/health')),
+	health: async (): Promise<HealthResponse> => call(client.GET('/v1/health')),
 
 	sessions: {
 		create: async (params: CreateSessionParams): Promise<SessionResponse> =>
 			call(
 				client.POST('/v1/sessions', {
-					body: { username: params.username, client_ip: params.clientIp } as CreateSessionRequest
-				})
+					body: {
+						username: params.username,
+						client_ip: params.clientIp,
+					} as CreateSessionRequest,
+				}),
 			),
 		get: async (id: number): Promise<SessionDetail> =>
 			asSessionDetail(
-				await call<unknown>(client.GET('/v1/sessions/{id}', { params: { path: { id } } }))
+				await call<unknown>(
+					client.GET('/v1/sessions/{id}', { params: { path: { id } } }),
+				),
 			),
 		delete: async (id: number): Promise<void> => {
-			await call<unknown>(client.DELETE('/v1/sessions/{id}', { params: { path: { id } } }));
-		}
-	}
+			await call<unknown>(
+				client.DELETE('/v1/sessions/{id}', { params: { path: { id } } }),
+			);
+		},
+	},
 };
 
 export default connectionService;

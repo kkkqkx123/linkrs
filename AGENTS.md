@@ -69,9 +69,14 @@ baseline, no flags needed).
 ```shell
 cargo test --lib -- --nocapture               # lib tests
 cargo test <test_name>                         # specific test(s)
+
+cd frontend && npm run check                   # i18n catalogue + svelte-check
+cd frontend && npm run test                    # frontend unit tests
+cd frontend && npm run lint                    # eslint
+cd frontend && npm run build                   # static bundle
 ```
 
-Test organization: unit tests in same file (`#[cfg(test)]`), separate `test.rs` for large files, integration tests in `tests/`, benchmarks in `benches/`.
+Test organization: unit tests in same file (`#[cfg(test)]`), separate `test.rs` for large files, integration tests in `tests/`, benchmarks in `benches/`. Frontend pure functions are tested with `node:test` in `src/lib/utils/*.test.ts`.
 
 ## Coding Standards
 

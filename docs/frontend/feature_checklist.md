@@ -156,8 +156,8 @@
 | 代码编辑器 | Monaco Editor | Cypher 高亮 + 自动补全 |
 | 图可视化 | Cytoscape.js | 功能强大 |
 | HTTP 客户端 | Axios | 广泛使用 |
-| 路由 | svelte-routing | 声明式路由 |
-| 国际化 | svelte-i18n | 多语言支持 |
+| 路由 | SvelteKit | 文件路由，`+page.svelte` / `+layout.svelte` |
+| 国际化 | Paraglide JS | 编译期生成消息函数，中英文，key 编译期校验 |
 
 ---
 

@@ -1,7 +1,26 @@
 {
-  "files": [],
-  "references": [
-    { "path": "./tsconfig.app.json" },
-    { "path": "./tsconfig.node.json" }
-  ]
+	"extends": "$app/tsconfig",
+	"compilerOptions": {
+		"target": "es2023",
+		"module": "esnext",
+		"moduleResolution": "bundler",
+		"types": ["$app/types", "vite/client", "node"],
+		"noEmit": true,
+		"resolveJsonModule": true,
+		"allowJs": true,
+		"checkJs": true,
+		"moduleDetection": "force",
+		"paths": {
+			"$lib/*": ["./src/lib/*"],
+			"$types/*": ["./src/lib/types/*"],
+			"$utils/*": ["./src/lib/utils/*"],
+			"$services/*": ["./src/lib/services/*"],
+			"$stores/*": ["./src/lib/stores/*"],
+			"$config/*": ["./src/lib/config/*"],
+			"$i18n": ["./src/lib/i18n/index.ts"],
+			"$components/*": ["./src/lib/components/*"],
+			"$paraglide/*": ["./src/lib/paraglide/*"]
+		}
+	},
+	"include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte", "vite.config.ts"]
 }

@@ -9,18 +9,18 @@ export const AUTO_STREAM_THRESHOLD_MAX = 10_000_000;
 export const DEFAULT_AUTO_STREAM_THRESHOLD = 1000;
 
 export function clampAutoThreshold(value: number): number {
-  if (!Number.isFinite(value)) return DEFAULT_AUTO_STREAM_THRESHOLD;
-  return Math.min(
-    AUTO_STREAM_THRESHOLD_MAX,
-    Math.max(AUTO_STREAM_THRESHOLD_MIN, Math.floor(value)),
-  );
+	if (!Number.isFinite(value)) return DEFAULT_AUTO_STREAM_THRESHOLD;
+	return Math.min(
+		AUTO_STREAM_THRESHOLD_MAX,
+		Math.max(AUTO_STREAM_THRESHOLD_MIN, Math.floor(value)),
+	);
 }
 
 export interface AutoRouteInput {
-  /** Stream shape from eligibility: multi-statement scripts have no
-   * per-statement estimate yet, anything else routes on the estimate. */
-  mode: 'single' | 'batch' | null;
-  estimatedRows: number | null | undefined;
+	/** Stream shape from eligibility: multi-statement scripts have no
+	 * per-statement estimate yet, anything else routes on the estimate. */
+	mode: 'single' | 'batch' | null;
+	estimatedRows: number | null | undefined;
 }
 
 /**
@@ -30,10 +30,13 @@ export interface AutoRouteInput {
  * queries render in one step. Empty or command-shaped input stays
  * materialized, matching the caller fallback.
  */
-export function resolveAutoPath(input: AutoRouteInput, threshold: number): AutoPath {
-  if (input.mode === 'batch') return 'stream';
-  if (input.mode !== 'single') return 'materialized';
-  const estimated = input.estimatedRows;
-  if (estimated === null || estimated === undefined) return 'stream';
-  return estimated > threshold ? 'stream' : 'materialized';
+export function resolveAutoPath(
+	input: AutoRouteInput,
+	threshold: number,
+): AutoPath {
+	if (input.mode === 'batch') return 'stream';
+	if (input.mode !== 'single') return 'materialized';
+	const estimated = input.estimatedRows;
+	if (estimated === null || estimated === undefined) return 'stream';
+	return estimated > threshold ? 'stream' : 'materialized';
 }
