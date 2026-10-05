@@ -430,7 +430,7 @@ mod tests {
     #[test]
     fn test_add_property_statistics() {
         let manager = StatisticsManager::new();
-        let mut prop_stats = PropertyStatistics::new("age".to_string(), Some("person".to_string()));
+        let mut prop_stats = PropertyStatistics::new("age".into(), Some("person".to_string()));
         prop_stats.distinct_values = 100;
 
         manager.update_property_stats(TEST_SPACE, prop_stats);
@@ -553,7 +553,7 @@ mod tests {
     #[test]
     fn test_property_stats_without_tag() {
         let manager = StatisticsManager::new();
-        let mut prop_stats = PropertyStatistics::new("global_prop".to_string(), None);
+        let mut prop_stats = PropertyStatistics::new("global_prop".into(), None);
         prop_stats.distinct_values = 200;
 
         manager.update_property_stats(TEST_SPACE, prop_stats);
@@ -607,16 +607,13 @@ mod tests {
 
         let mut stats = TagStatistics::new("person".to_string());
         stats.vertex_count = 42;
-        manager.update_tag_stats(
-            "basketball",
-            stats.with_version("basketball".to_string(), 7),
-        );
+        manager.update_tag_stats("basketball", stats.with_version("basketball".into(), 7));
 
         let mut edge_stats = EdgeTypeStatistics::new("follow".to_string());
         edge_stats.edge_count = 99;
         manager.update_edge_stats(
             "basketball",
-            edge_stats.with_version("basketball".to_string(), 7),
+            edge_stats.with_version("basketball".into(), 7),
         );
 
         assert_eq!(manager.get_vertex_count("basketball", "person"), 42);

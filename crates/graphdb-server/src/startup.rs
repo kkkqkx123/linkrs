@@ -634,7 +634,7 @@ pub async fn execute_query(query_str: &str) -> DBResult<()> {
 
     let session = match graph_service
         .get_session_manager()
-        .create_session("anonymous".to_string(), "127.0.0.1".to_string())
+        .create_session("anonymous".into(), "127.0.0.1".to_string())
         .await
     {
         Ok(session) => session,

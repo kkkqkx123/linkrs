@@ -15,7 +15,7 @@ use std::io::Write as _;
 fn dirty_group_roundtrip_preserves_cross_group_edges() {
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table.insert_edge(5000, 6000, 0, &[], 100).unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
@@ -70,10 +70,10 @@ fn missing_manifest_is_rejected() {
 fn successful_flush_loads_consistent_triple() {
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table
-        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 110)
+        .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.0))], 110)
         .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     table
@@ -91,7 +91,7 @@ fn successful_flush_loads_consistent_triple() {
     assert!(record
         .properties
         .iter()
-        .any(|(k, v)| k == "weight" && *v == Value::Double(1.0)));
+        .any(|(k, v)| &**k == "weight" && *v == Value::Double(1.0)));
     assert_eq!(
         loaded.mvcc.creation_ts_of(graphdb_core::types::EdgeId(0)),
         Some(100)
@@ -108,7 +108,7 @@ fn torn_manifest_tail_recovers_new_snapshot() {
     use crate::edge::node_group::TableShardManifest;
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     table
@@ -140,7 +140,7 @@ fn torn_manifest_tail_recovers_new_snapshot() {
 fn meta_without_tail_is_rejected() {
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     table
@@ -176,7 +176,7 @@ fn meta_without_tail_is_rejected() {
 fn crash_before_manifest_publish_recovers_new_snapshot() {
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     table
@@ -189,13 +189,7 @@ fn crash_before_manifest_publish_recovers_new_snapshot() {
         std::fs::read(dir.path().join(GROUPS_MANIFEST_FILE)).expect("old manifest readable");
 
     table
-        .insert_edge(
-            5000,
-            6000,
-            0,
-            &[("weight".to_string(), Value::Double(2.0))],
-            110,
-        )
+        .insert_edge(5000, 6000, 0, &[("weight".into(), Value::Double(2.0))], 110)
         .unwrap();
     table
         .flush(
@@ -235,7 +229,7 @@ fn crash_before_manifest_publish_recovers_new_snapshot() {
 fn torn_sidecar_is_rejected_not_replayed() {
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     table
@@ -245,7 +239,7 @@ fn torn_sidecar_is_rejected_not_replayed() {
         )
         .expect("first flush should succeed");
     table
-        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 110)
+        .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.0))], 110)
         .unwrap();
     table
         .flush(
@@ -273,7 +267,7 @@ fn torn_sidecar_is_rejected_not_replayed() {
 fn corrupt_manifest_is_rejected() {
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     table
@@ -380,7 +374,7 @@ fn sparse_endpoints_produce_no_hole_files() {
 fn wal_recovers_committed_unflushed_writes_idempotently() {
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     table
@@ -392,7 +386,7 @@ fn wal_recovers_committed_unflushed_writes_idempotently() {
 
     // Committed after the checkpoint, never flushed: redo log owns them.
     table
-        .insert_edge(2, 3, 0, &[("weight".to_string(), Value::Double(2.0))], 200)
+        .insert_edge(2, 3, 0, &[("weight".into(), Value::Double(2.0))], 200)
         .unwrap();
     assert!(table.delete_edge(0, 1, 0, 210).unwrap());
     drop(table);
@@ -455,7 +449,7 @@ fn torn_edge_wal_tail_rejects_load() {
 fn reshard_roundtrip_preserves_snapshot() {
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table.insert_edge(5000, 6000, 0, &[], 100).unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
@@ -479,11 +473,11 @@ fn reshard_roundtrip_preserves_snapshot() {
     let mut loaded = EdgeStore::with_config(
         crate::edge::EdgeSchema {
             label_id: 0,
-            label_name: "knows".to_string(),
+            label_name: "knows".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![crate::types::StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: graphdb_core::types::DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
@@ -506,7 +500,7 @@ fn reshard_roundtrip_preserves_snapshot() {
     assert!(record
         .properties
         .iter()
-        .any(|(k, v)| k == "weight" && *v == Value::Double(1.0)));
+        .any(|(k, v)| &**k == "weight" && *v == Value::Double(1.0)));
     assert_eq!(loaded.edge_count(), 2);
 }
 

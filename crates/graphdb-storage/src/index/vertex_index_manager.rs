@@ -17,6 +17,7 @@ use graphdb_core::types::{Index, Timestamp};
 use graphdb_core::value::ordered_codec::OrderedCodec;
 use graphdb_core::wal::EntityRef;
 use graphdb_core::{StorageError, StorageResult, Value};
+use std::sync::Arc;
 
 pub(crate) fn compute_vertex_index_scan_range(
     space_id: u64,
@@ -84,7 +85,7 @@ pub struct VertexIndexCursor {
     offset_remaining: usize,
     limit: Option<usize>,
     emitted: usize,
-    projection: Option<Vec<String>>,
+    projection: Option<Vec<Arc<str>>>,
     read_timestamp: Timestamp,
     invisible_skipped: u64,
     malformed_skipped: u64,
@@ -235,8 +236,8 @@ impl IndexCursor for VertexIndexCursor {
 
 fn project_vertex_row(
     entity_ref: EntityRef,
-    included_columns: Option<&[(String, Value)]>,
-    projection: Option<&[String]>,
+    included_columns: Option<&[(Arc<str>, Value)]>,
+    projection: Option<&[Arc<str>]>,
 ) -> IndexRow {
     let Some(projection) = projection else {
         return IndexRow::RowId(entity_ref);
@@ -255,7 +256,7 @@ fn project_vertex_row(
             columns
                 .iter()
                 .find(|(candidate, _)| candidate == name)
-                .cloned()
+                .map(|(candidate, value)| (candidate.clone(), value.clone()))
         })
         .collect();
     IndexRow::Covering {

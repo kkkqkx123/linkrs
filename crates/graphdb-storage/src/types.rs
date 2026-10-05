@@ -3,6 +3,7 @@
 use graphdb_core::types::PropertyDef as CorePropertyDef;
 use graphdb_core::DataType;
 use graphdb_core::Value;
+use std::sync::Arc;
 
 /// Property ID - a compact identifier for properties within a schema.
 /// Replaces string-based property lookups with numeric indices.
@@ -108,14 +109,14 @@ impl std::fmt::Display for EdgeOffset {
 /// Combines features from both vertex and edge property definitions.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StoragePropertyDef {
-    pub name: String,
+    pub name: Arc<str>,
     pub data_type: DataType,
     pub nullable: bool,
     pub default_value: Option<Value>,
 }
 
 impl StoragePropertyDef {
-    pub fn new(name: String, data_type: DataType) -> Self {
+    pub fn new(name: Arc<str>, data_type: DataType) -> Self {
         Self {
             name,
             data_type,
@@ -126,7 +127,7 @@ impl StoragePropertyDef {
 
     pub fn from_core(prop: &CorePropertyDef) -> Self {
         Self {
-            name: prop.name.clone(),
+            name: Arc::from(prop.name.as_str()),
             data_type: prop.data_type.clone(),
             nullable: prop.nullable,
             default_value: prop.default.clone(),
@@ -137,7 +138,7 @@ impl StoragePropertyDef {
 impl From<CorePropertyDef> for StoragePropertyDef {
     fn from(prop: CorePropertyDef) -> Self {
         Self {
-            name: prop.name,
+            name: prop.name.into(),
             data_type: prop.data_type,
             nullable: prop.nullable,
             default_value: prop.default,
@@ -148,7 +149,7 @@ impl From<CorePropertyDef> for StoragePropertyDef {
 impl From<&CorePropertyDef> for StoragePropertyDef {
     fn from(prop: &CorePropertyDef) -> Self {
         Self {
-            name: prop.name.clone(),
+            name: prop.name.as_str().into(),
             data_type: prop.data_type.clone(),
             nullable: prop.nullable,
             default_value: prop.default.clone(),

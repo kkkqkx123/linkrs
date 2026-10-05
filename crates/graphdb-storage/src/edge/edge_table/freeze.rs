@@ -92,11 +92,11 @@ mod tests {
     fn frozen_test_schema() -> EdgeSchema {
         EdgeSchema {
             label_id: 0,
-            label_name: "knows".to_string(),
+            label_name: "knows".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
@@ -118,7 +118,7 @@ mod tests {
                         src,
                         src + k + 1,
                         0,
-                        &[("weight".to_string(), Value::Double(1.0))],
+                        &[("weight".into(), Value::Double(1.0))],
                         100,
                     )
                     .unwrap();
@@ -187,7 +187,7 @@ mod tests {
             EdgeStore::with_config(frozen_test_schema(), config).expect("bundled table builds");
         assert_eq!(bundled.schema().record_form, RecordForm::Bundled);
         bundled
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .expect("valued insert");
         assert!(bundled.freeze_feasibility(true, 0).is_ready());
         assert!(bundled.freeze_feasibility(false, 0).is_ready());
@@ -210,7 +210,7 @@ mod tests {
                 .get_edge(0, 1, 0, 200)
                 .expect("frozen edge readable")
                 .properties,
-            vec![("weight".to_string(), Value::Double(1.0))]
+            vec![("weight".into(), Value::Double(1.0))]
         );
 
         // Writes stay rejected while frozen; unfreezing restores the live
@@ -223,14 +223,14 @@ mod tests {
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].properties, before[0].properties);
         bundled
-            .insert_edge(1, 9, 0, &[("weight".to_string(), Value::Double(2.0))], 400)
+            .insert_edge(1, 9, 0, &[("weight".into(), Value::Double(2.0))], 400)
             .expect("writes resume after unfreeze");
         assert_eq!(
             bundled
                 .get_edge(1, 9, 0, 500)
                 .expect("new edge readable")
                 .properties,
-            vec![("weight".to_string(), Value::Double(2.0))]
+            vec![("weight".into(), Value::Double(2.0))]
         );
     }
 
@@ -242,11 +242,11 @@ mod tests {
 
         let schema = EdgeSchema {
             label_id: 0,
-            label_name: "ordered".to_string(),
+            label_name: "ordered".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),

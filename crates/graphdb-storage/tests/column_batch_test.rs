@@ -21,9 +21,9 @@ fn setup_storage(nullable: bool) -> Arc<RwLock<GraphStorage>> {
         .create_tag(
             "t",
             &TagInfo::new("Node".to_string()).with_properties(vec![
-                PropertyDef::new("value".to_string(), DataType::BigInt).with_nullable(nullable),
-                PropertyDef::new("group".to_string(), DataType::BigInt).with_nullable(nullable),
-                PropertyDef::new("name".to_string(), DataType::String).with_nullable(nullable),
+                PropertyDef::new("value".into(), DataType::BigInt).with_nullable(nullable),
+                PropertyDef::new("group".into(), DataType::BigInt).with_nullable(nullable),
+                PropertyDef::new("name".into(), DataType::String).with_nullable(nullable),
             ]),
         )
         .unwrap();
@@ -37,22 +37,22 @@ fn setup_storage(nullable: bool) -> Arc<RwLock<GraphStorage>> {
         .unwrap();
     let mut vertices = Vec::new();
     for i in 0..500i64 {
-        let mut props = vec![
-            ("value".to_string(), Value::BigInt(i)),
-            ("group".to_string(), Value::BigInt(i % 7)),
-            ("name".to_string(), Value::string(format!("node_{i}"))),
+        let mut props: Vec<(Arc<str>, Value)> = vec![
+            (Arc::from("value"), Value::BigInt(i)),
+            (Arc::from("group"), Value::BigInt(i % 7)),
+            (Arc::from("name"), Value::string(format!("node_{i}"))),
         ];
         // The primary key column (`value`) must mirror the vertex id and can
         // never be null, so the nullable path is exercised on `group`.
         if nullable && i % 3 == 0 {
             props[1] = (
-                "group".to_string(),
+                Arc::from("group"),
                 Value::Null(graphdb_core::value::NullType::Null),
             );
         }
         vertices.push(Vertex::new(
             VertexId::try_from_int64(i).expect("test vertex id"),
-            Tag::new("Node".to_string(), props.into_iter().collect()),
+            Tag::new("Node".into(), props.into_iter().collect()),
         ));
     }
     storage.batch_insert_vertices("t", vertices).unwrap();
@@ -77,10 +77,10 @@ fn options(projection: Vec<&str>, range: Option<std::ops::Range<i64>>) -> ScanOp
 }
 
 fn drain_columns(storage: &Arc<RwLock<GraphStorage>>, opts: &ScanOptions) -> Vec<Vec<Value>> {
-    let prop_names: Vec<String> = opts
+    let prop_names: Vec<Arc<str>> = opts
         .projection
         .as_ref()
-        .map(|p| p.iter().map(|rp| rp.name.clone()).collect())
+        .map(|p| p.iter().map(|rp| Arc::from(&*rp.name)).collect())
         .unwrap_or_default();
     let mut cursor = open_vertex_scan(storage, "t", opts).expect("open cursor");
     let mut out = Vec::new();
@@ -108,8 +108,8 @@ fn drain_columns(storage: &Arc<RwLock<GraphStorage>>, opts: &ScanOptions) -> Vec
 
 fn drain_rows(storage: &Arc<RwLock<GraphStorage>>, opts: &ScanOptions) -> Vec<Vec<Value>> {
     // Canonical column order for normalization (matches the schema).
-    let all_columns = ["value".to_string(), "group".to_string(), "name".to_string()];
-    let columns: Vec<String> = match opts.projection.as_ref() {
+    let all_columns = [Arc::from("value"), Arc::from("group"), Arc::from("name")];
+    let columns: Vec<Arc<str>> = match opts.projection.as_ref() {
         Some(projection) => projection.iter().map(|rp| rp.name.clone()).collect(),
         None => all_columns.to_vec(),
     };
@@ -170,7 +170,7 @@ fn column_batch_matches_row_path_with_predicate() {
     let storage = setup_storage(false);
     let mut opts = options(vec![], None);
     opts.predicate = Some(vec![ScanPredicate::ColumnRange {
-        column: "value".to_string(),
+        column: "value".into(),
         lower: None,
         upper: Some(Value::BigInt(200)),
         include_lower: false,
@@ -186,7 +186,7 @@ fn column_batch_selective_predicate_does_not_end_scan_early() {
     let storage = setup_storage(false);
     let mut opts = options(vec![], None);
     opts.predicate = Some(vec![ScanPredicate::ColumnEqual {
-        column: "value".to_string(),
+        column: "value".into(),
         value: Value::BigInt(7),
     }]);
     let columns = drain_columns(&storage, &opts);
@@ -204,7 +204,7 @@ fn column_batch_limit_with_predicate() {
     let storage = setup_storage(false);
     let mut opts = options(vec![], None);
     opts.predicate = Some(vec![ScanPredicate::ColumnRange {
-        column: "value".to_string(),
+        column: "value".into(),
         lower: Some(Value::BigInt(10)),
         upper: Some(Value::BigInt(500)),
         include_lower: true,
@@ -229,7 +229,7 @@ fn column_batch_typed_columns_are_scalar() {
     let opts = options(vec!["value", "group"], None);
     let mut cursor = open_vertex_scan(&storage, "t", &opts).expect("open cursor");
     let batch = cursor
-        .next_column_batch(&["value".to_string(), "group".to_string()], 64)
+        .next_column_batch(&[Arc::from("value"), Arc::from("group")], 64)
         .expect("batch");
     assert_eq!(batch.len(), 64);
     assert_eq!(batch.columns.len(), 2);
@@ -290,8 +290,8 @@ fn setup_edge_storage() -> Arc<RwLock<GraphStorage>> {
                 .with_src_tag("Node".to_string())
                 .with_dst_tag("Node".to_string())
                 .with_properties(vec![
-                    PropertyDef::new("weight".to_string(), DataType::Double),
-                    PropertyDef::new("label".to_string(), DataType::String),
+                    PropertyDef::new("weight".into(), DataType::Double),
+                    PropertyDef::new("label".into(), DataType::String),
                 ]),
         )
         .unwrap();
@@ -301,7 +301,7 @@ fn setup_edge_storage() -> Arc<RwLock<GraphStorage>> {
                 VertexId::try_from_int64(i).expect("test vertex id"),
                 Tag::new(
                     "Node".to_string(),
-                    vec![("value".to_string(), Value::BigInt(i))]
+                    vec![("value".into(), Value::BigInt(i))]
                         .into_iter()
                         .collect(),
                 ),
@@ -317,8 +317,8 @@ fn setup_edge_storage() -> Arc<RwLock<GraphStorage>> {
             "Link".to_string(),
             0,
         );
-        edge.set_property("weight".to_string(), Value::Double(i as f64 * 1.5));
-        edge.set_property("label".to_string(), Value::string(format!("e{i}")));
+        edge.set_property("weight".into(), Value::Double(i as f64 * 1.5));
+        edge.set_property("label".into(), Value::string(format!("e{i}")));
         edges.push(edge);
     }
     storage.batch_insert_edges("t", edges).unwrap();
@@ -335,7 +335,7 @@ fn edge_options() -> ScanOptions {
 fn drain_edge_columns(
     storage: &Arc<RwLock<GraphStorage>>,
     opts: &ScanOptions,
-    prop_names: &[String],
+    prop_names: &[Arc<str>],
 ) -> Vec<Vec<Value>> {
     let mut cursor = open_edge_scan(storage, "t", opts).expect("open edge cursor");
     let mut out = Vec::new();
@@ -363,11 +363,11 @@ fn drain_edge_columns(
 }
 
 fn drain_edge_rows(storage: &Arc<RwLock<GraphStorage>>, opts: &ScanOptions) -> Vec<Vec<Value>> {
-    let prop_names: Vec<String> = opts
+    let prop_names: Vec<Arc<str>> = opts
         .projection
         .as_ref()
-        .map(|p| p.iter().map(|rp| rp.name.clone()).collect())
-        .unwrap_or_else(|| vec!["weight".to_string(), "label".to_string()]);
+        .map(|p| p.iter().map(|rp| Arc::from(&*rp.name)).collect())
+        .unwrap_or_else(|| vec![Arc::from("weight"), Arc::from("label")]);
     let mut cursor = open_edge_scan(storage, "t", opts).expect("open edge cursor");
     let mut out = Vec::new();
     loop {
@@ -397,12 +397,12 @@ fn edge_column_batch_matches_row_path() {
     let storage = setup_edge_storage();
     let mut opts = edge_options();
     opts.projection = Some(
-        vec!["weight".to_string(), "label".to_string()]
+        vec![Arc::from("weight"), Arc::from("label")]
             .into_iter()
             .map(RequiredProperty::new)
             .collect(),
     );
-    let prop_names = vec!["weight".to_string(), "label".to_string()];
+    let prop_names = vec![Arc::from("weight"), Arc::from("label")];
     assert_eq!(
         drain_edge_columns(&storage, &opts, &prop_names),
         drain_edge_rows(&storage, &opts)
@@ -426,19 +426,19 @@ fn edge_column_batch_predicate_matches_row_path() {
     }
     let mut opts = edge_options();
     opts.projection = Some(
-        vec!["weight".to_string()]
+        vec![Arc::from("weight")]
             .into_iter()
             .map(RequiredProperty::new)
             .collect(),
     );
     opts.predicate = Some(vec![ScanPredicate::ColumnRange {
-        column: "weight".to_string(),
+        column: "weight".into(),
         lower: Some(Value::Double(3.0)),
         upper: None,
         include_lower: true,
         include_upper: true,
     }]);
-    let prop_names = vec!["weight".to_string()];
+    let prop_names = vec![Arc::from("weight")];
     assert_eq!(
         drain_edge_columns(&storage, &opts, &prop_names),
         drain_edge_rows(&storage, &opts)
@@ -450,12 +450,12 @@ fn edge_column_batch_string_fallback_matches_row_path() {
     let storage = setup_edge_storage();
     let mut opts = edge_options();
     opts.projection = Some(
-        vec!["label".to_string()]
+        vec![Arc::from("label")]
             .into_iter()
             .map(RequiredProperty::new)
             .collect(),
     );
-    let prop_names = vec!["label".to_string()];
+    let prop_names = vec![Arc::from("label")];
     let columns = drain_edge_columns(&storage, &opts, &prop_names);
     let rows = drain_edge_rows(&storage, &opts);
     assert_eq!(columns, rows);

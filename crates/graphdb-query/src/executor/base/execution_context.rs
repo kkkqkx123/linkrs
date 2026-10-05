@@ -207,7 +207,7 @@ impl ExecutionContext {
     pub fn set_space_id(&self, space_id: u64) {
         self.variables
             .write()
-            .insert("space_id".to_string(), Value::Int(space_id as i32));
+            .insert("space_id".into(), Value::Int(space_id as i32));
     }
 
     pub fn sequence_manager(&self) -> Option<&Arc<SequenceManager>> {

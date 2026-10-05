@@ -385,7 +385,7 @@ impl GraphStorage {
     pub fn offline_bulk_import_vertices_str(
         &self,
         label: LabelId,
-        rows: &[(String, Vec<(String, Value)>)],
+        rows: &[(String, Vec<(Arc<str>, Value)>)],
         ts: Timestamp,
         sorted: bool,
     ) -> StorageResult<usize> {
@@ -394,7 +394,7 @@ impl GraphStorage {
                 StorageError::label_not_found(format!("vertex label {} not found", label))
             })
         })?;
-        let borrowed: Vec<(&str, &[(String, Value)])> = rows
+        let borrowed: Vec<(&str, &[(Arc<str>, Value)])> = rows
             .iter()
             .map(|(id, props)| (id.as_str(), props.as_slice()))
             .collect();
@@ -406,7 +406,7 @@ impl GraphStorage {
     pub fn offline_bulk_import_vertices_i64(
         &self,
         label: LabelId,
-        rows: &[(i64, Vec<(String, Value)>)],
+        rows: &[(i64, Vec<(Arc<str>, Value)>)],
         ts: Timestamp,
         sorted: bool,
     ) -> StorageResult<usize> {
@@ -415,7 +415,7 @@ impl GraphStorage {
                 StorageError::label_not_found(format!("vertex label {} not found", label))
             })
         })?;
-        let borrowed: Vec<(i64, &[(String, Value)])> = rows
+        let borrowed: Vec<(i64, &[(Arc<str>, Value)])> = rows
             .iter()
             .map(|(id, props)| (*id, props.as_slice()))
             .collect();

@@ -11,6 +11,7 @@ use super::seek_strategy::SeekStrategy;
 use super::seek_strategy_base::{SeekResult, SeekStrategyContext, SeekStrategyType};
 use crate::storage::StorageReader;
 use graphdb_core::{StorageError, Value};
+use std::sync::Arc;
 
 /// Edge pattern information
 #[derive(Debug, Clone, PartialEq)]
@@ -19,7 +20,7 @@ pub struct EdgePattern {
     pub direction: EdgeDirection,
     pub src_vid: Option<Value>,
     pub dst_vid: Option<Value>,
-    pub properties: Vec<(String, Value)>,
+    pub properties: Vec<(Arc<str>, Value)>,
 }
 
 /// edgewise

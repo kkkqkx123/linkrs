@@ -1,13 +1,14 @@
 use super::CsrWithProperties;
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
+use std::sync::Arc;
 
 impl CsrWithProperties {
     /// Insert properties for an edge and associate the row with `edge_id`.
     pub fn insert_for_edge(
         &mut self,
         edge_id: EdgeId,
-        values: &[(String, Value)],
+        values: &[(Arc<str>, Value)],
         create_ts: Timestamp,
     ) -> StorageResult<()> {
         self.reject_inline()?;

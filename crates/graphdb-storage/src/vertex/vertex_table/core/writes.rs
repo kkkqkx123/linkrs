@@ -1,6 +1,7 @@
 //! Insert pipeline, identity allocation, and primary-key mirror writes.
 
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use super::VertexTable;
 use crate::vertex::{primary_key_mirror_value, IdKey, PkLookup, Timestamp};
@@ -10,7 +11,7 @@ impl VertexTable {
     pub fn insert(
         &self,
         external_id: &str,
-        properties: &[(String, Value)],
+        properties: &[(Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<u32> {
         self.insert_by_key(IdKey::Text(external_id.to_string()), properties, ts)
@@ -19,7 +20,7 @@ impl VertexTable {
     pub fn insert_by_i64(
         &self,
         external_id: i64,
-        properties: &[(String, Value)],
+        properties: &[(Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<u32> {
         self.insert_by_key(IdKey::Int(external_id), properties, ts)
@@ -32,28 +33,27 @@ impl VertexTable {
     pub fn prepare_insert(
         &self,
         key: &IdKey,
-        properties: &[(String, Value)],
-    ) -> StorageResult<Vec<(String, Value)>> {
+        properties: &[(Arc<str>, Value)],
+    ) -> StorageResult<Vec<(std::sync::Arc<str>, Value)>> {
         if !self.is_open.load(Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
         }
 
         Self::validate_key_shape(key)?;
 
-        let mut converted: Vec<(String, Value)> = Vec::with_capacity(properties.len());
+        let mut converted: Vec<(std::sync::Arc<str>, Value)> = Vec::with_capacity(properties.len());
         for (name, value) in properties {
-            // Use cached index lookup instead of O(n) schema search
             let prop_idx = self
                 .property_index_cache
                 .get(name)
-                .ok_or_else(|| StorageError::column_not_found(name.clone()))?;
+                .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
             let prop_def = &self.schema.properties[*prop_idx];
 
             if value.data_type() != prop_def.data_type {
                 let converted_val = value.try_cast_to(&prop_def.data_type)?;
                 converted.push((name.clone(), converted_val));
             } else {
-                converted.push((name.clone(), value.clone()));
+                converted.push((name.clone().into(), value.clone()));
             }
         }
         self.apply_primary_key_mirror(key, converted)
@@ -72,7 +72,7 @@ impl VertexTable {
     pub fn apply_insert(
         &self,
         key: IdKey,
-        converted: &[(String, Value)],
+        converted: &[(Arc<str>, Value)],
         ts: Timestamp,
         reserved: Option<u32>,
     ) -> StorageResult<u32> {
@@ -175,7 +175,7 @@ impl VertexTable {
     fn insert_by_key(
         &self,
         key: IdKey,
-        properties: &[(String, Value)],
+        properties: &[(Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<u32> {
         let converted = self.prepare_insert(&key, properties)?;
@@ -251,14 +251,14 @@ impl VertexTable {
     fn apply_primary_key_mirror(
         &self,
         key: &IdKey,
-        mut properties: Vec<(String, Value)>,
-    ) -> StorageResult<Vec<(String, Value)>> {
+        mut properties: Vec<(std::sync::Arc<str>, Value)>,
+    ) -> StorageResult<Vec<(std::sync::Arc<str>, Value)>> {
         let Some(pk_def) = self.schema.properties.get(self.schema.primary_key_index) else {
             return Ok(properties);
         };
         let mirror = primary_key_mirror_value(&pk_def.data_type, key)?;
         let mirror = mirror.try_cast_to(&pk_def.data_type)?;
-        match properties.iter().find(|(name, _)| name == &pk_def.name) {
+        match properties.iter().find(|(name, _)| **name == *pk_def.name) {
             Some((_, provided)) => {
                 let provided = provided.try_cast_to(&pk_def.data_type)?;
                 if provided != mirror {
@@ -268,7 +268,7 @@ impl VertexTable {
                     )));
                 }
             }
-            None => properties.push((pk_def.name.clone(), mirror)),
+            None => properties.push((pk_def.name.clone().into(), mirror)),
         }
         Ok(properties)
     }

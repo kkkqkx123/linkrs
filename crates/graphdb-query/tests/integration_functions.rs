@@ -23,12 +23,13 @@ use graphdb_core::vertex_edge_path::{Edge, Path, Step, Tag, Vertex};
 use graphdb_core::{List, NullType, Value};
 use graphdb_query::executor::expression::functions::FunctionRegistry;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Create vertices for testing purposes.
 fn create_test_vertex(vid: i64, tag: (&str, HashMap<&str, Value>)) -> Vertex {
     let (name, props) = tag;
-    let props: HashMap<String, Value> =
-        props.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+    let props: HashMap<Arc<str>, Value> =
+        props.into_iter().map(|(k, v)| (Arc::from(k), v)).collect();
     let single = Tag::new(name.to_string(), props);
     Vertex::new(
         VertexId::try_from_int64(vid).expect("test vertex id"),
@@ -44,8 +45,8 @@ fn create_test_edge(
     rank: i64,
     props: HashMap<&str, Value>,
 ) -> Edge {
-    let props: HashMap<String, Value> =
-        props.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+    let props: HashMap<Arc<str>, Value> =
+        props.into_iter().map(|(k, v)| (Arc::from(k), v)).collect();
     Edge::new(
         VertexId::try_from_int64(src).expect("test vertex id"),
         VertexId::try_from_int64(dst).expect("test vertex id"),

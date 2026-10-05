@@ -4,7 +4,7 @@ fn stage_and_apply(
     ctx: &crate::engine::graph_storage::context::GraphStorageContext,
     label: graphdb_core::types::LabelId,
     name: &str,
-    props: &[(String, graphdb_core::Value)],
+    props: &[(std::sync::Arc<str>, graphdb_core::Value)],
     ts: graphdb_core::types::Timestamp,
 ) {
     let mut scope = crate::vertex::WriteScope::new(ts);
@@ -19,7 +19,7 @@ fn stage_and_apply_i64(
     ctx: &crate::engine::graph_storage::context::GraphStorageContext,
     label: graphdb_core::types::LabelId,
     external_id: i64,
-    props: &[(String, graphdb_core::Value)],
+    props: &[(std::sync::Arc<str>, graphdb_core::Value)],
     ts: graphdb_core::types::Timestamp,
 ) {
     let mut scope = crate::vertex::WriteScope::new(ts);
@@ -44,8 +44,8 @@ mod revalidation_tests {
             .create_vertex_type(
                 "Person",
                 vec![
-                    StoragePropertyDef::new("name".to_string(), DataType::String),
-                    StoragePropertyDef::new("value".to_string(), DataType::String),
+                    StoragePropertyDef::new("name".into(), DataType::String),
+                    StoragePropertyDef::new("value".into(), DataType::String),
                 ],
                 "name",
             )
@@ -65,8 +65,8 @@ mod revalidation_tests {
             label,
             name,
             &[
-                ("name".to_string(), Value::string(name)),
-                ("value".to_string(), Value::string(value)),
+                ("name".into(), Value::string(name)),
+                ("value".into(), Value::string(value)),
             ],
             ts,
         );
@@ -98,7 +98,7 @@ mod revalidation_tests {
             .expect("vertex must be visible")
             .properties
             .iter()
-            .find(|(k, _)| k == "value")
+            .find(|(k, _)| &**k == "value")
             .map(|(_, v)| v.clone())
             .expect("value property must be present")
     }
@@ -266,7 +266,7 @@ mod revalidation_tests {
                     let name = record
                         .properties
                         .iter()
-                        .find(|(k, _)| k == "value")
+                        .find(|(k, _)| &**k == "value")
                         .map(|(_, v)| v.clone())
                         .expect("value property must be present");
                     let stale = (0..=50u64).all(|i| name != Value::string(format!("v{i}")));
@@ -307,8 +307,8 @@ mod pending_visibility_tests {
             .create_vertex_type(
                 "Person",
                 vec![
-                    StoragePropertyDef::new("name".to_string(), DataType::String),
-                    StoragePropertyDef::new("value".to_string(), DataType::String),
+                    StoragePropertyDef::new("name".into(), DataType::String),
+                    StoragePropertyDef::new("value".into(), DataType::String),
                 ],
                 "name",
             )
@@ -342,8 +342,8 @@ mod pending_visibility_tests {
             label,
             "alice",
             &[
-                ("name".to_string(), Value::string("alice")),
-                ("value".to_string(), Value::string("A")),
+                ("name".into(), Value::string("alice")),
+                ("value".into(), Value::string("A")),
             ],
             start,
         );
@@ -356,18 +356,18 @@ mod pending_visibility_tests {
             record
                 .properties
                 .iter()
-                .find(|(k, _)| k == "value")
+                .find(|(k, _)| &**k == "value")
                 .map(|(_, v)| v),
             Some(&Value::string("A"))
         );
         let projected = bound
-            .get_vertex_projected(label, "alice", &["value".to_string()], start)
+            .get_vertex_projected(label, "alice", &["value".into()], start)
             .expect("own write visible to projection");
         assert_eq!(
             projected
                 .properties
                 .iter()
-                .find(|(k, _)| k == "value")
+                .find(|(k, _)| &**k == "value")
                 .map(|(_, v)| v),
             Some(&Value::string("A"))
         );
@@ -384,8 +384,8 @@ mod pending_visibility_tests {
             label,
             "alice",
             &[
-                ("name".to_string(), Value::string("alice")),
-                ("value".to_string(), Value::string("A")),
+                ("name".into(), Value::string("alice")),
+                ("value".into(), Value::string("A")),
             ],
             first,
         );
@@ -431,8 +431,8 @@ mod pending_visibility_tests {
             .create_vertex_type(
                 "Person",
                 vec![
-                    StoragePropertyDef::new("name".to_string(), DataType::String),
-                    StoragePropertyDef::new("value".to_string(), DataType::String),
+                    StoragePropertyDef::new("name".into(), DataType::String),
+                    StoragePropertyDef::new("value".into(), DataType::String),
                 ],
                 "name",
             )
@@ -441,8 +441,8 @@ mod pending_visibility_tests {
             .create_vertex_type(
                 "City",
                 vec![
-                    StoragePropertyDef::new("name".to_string(), DataType::String),
-                    StoragePropertyDef::new("value".to_string(), DataType::String),
+                    StoragePropertyDef::new("name".into(), DataType::String),
+                    StoragePropertyDef::new("value".into(), DataType::String),
                 ],
                 "name",
             )
@@ -465,8 +465,8 @@ mod pending_visibility_tests {
             src_label,
             1,
             &[
-                ("name".to_string(), Value::string("1")),
-                ("value".to_string(), Value::string("A")),
+                ("name".into(), Value::string("1")),
+                ("value".into(), Value::string("A")),
             ],
             start,
         );
@@ -475,8 +475,8 @@ mod pending_visibility_tests {
             dst_label,
             2,
             &[
-                ("name".to_string(), Value::string("2")),
-                ("value".to_string(), Value::string("B")),
+                ("name".into(), Value::string("2")),
+                ("value".into(), Value::string("B")),
             ],
             start,
         );
@@ -537,8 +537,8 @@ mod pending_visibility_tests {
             label,
             "alice",
             &[
-                ("name".to_string(), Value::string("alice")),
-                ("value".to_string(), Value::string("A")),
+                ("name".into(), Value::string("alice")),
+                ("value".into(), Value::string("A")),
             ],
             first,
         );
@@ -547,7 +547,7 @@ mod pending_visibility_tests {
         let bound_second = bound_writer(&ctx, 2, second, second);
         assert!(
             bound_second
-                .get_vertex_projected(label, "alice", &["value".to_string()], second)
+                .get_vertex_projected(label, "alice", &["value".into()], second)
                 .is_none(),
             "projection must not observe the foreign uncommitted row"
         );
@@ -562,7 +562,7 @@ mod pending_visibility_tests {
         vm.commit_ordered(first).expect("ordered commit");
         assert!(
             bound_second
-                .get_vertex_projected(label, "alice", &["value".to_string()], second)
+                .get_vertex_projected(label, "alice", &["value".into()], second)
                 .is_some(),
             "projection observes the row after commit"
         );

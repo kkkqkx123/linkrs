@@ -540,7 +540,7 @@ mod tests {
 
     fn create_test_context() -> FulltextExecutionContext {
         let mut source = HashMap::new();
-        source.insert("title".to_string(), Value::string("Database Optimization"));
+        source.insert("title".into(), Value::string("Database Optimization"));
         source.insert(
             "content".to_string(),
             Value::string("This is a test article about database optimization techniques."),
@@ -640,7 +640,7 @@ mod tests {
     fn test_highlight_non_ascii_truncation() {
         let func = FulltextFunction::Highlight;
         let mut source = HashMap::new();
-        source.insert("title".to_string(), Value::string("数据库优化指南"));
+        source.insert("title".into(), Value::string("数据库优化指南"));
         let context = FulltextExecutionContext {
             source: Some(source),
             ..FulltextExecutionContext::default()

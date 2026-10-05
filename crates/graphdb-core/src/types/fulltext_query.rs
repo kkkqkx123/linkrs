@@ -374,15 +374,14 @@ mod tests {
 
     #[test]
     fn test_fulltext_query_multi_field() {
-        let field_query = FieldQuery::new("title".to_string(), "database".to_string());
+        let field_query = FieldQuery::new("title".into(), "database".to_string());
         let query = FulltextQuery::multi_field(vec![field_query]);
         assert!(matches!(query, FulltextQuery::MultiField(_)));
     }
 
     #[test]
     fn test_field_query_with_boost() {
-        let field_query =
-            FieldQuery::new("title".to_string(), "database".to_string()).with_boost(2.0);
+        let field_query = FieldQuery::new("title".into(), "database".to_string()).with_boost(2.0);
         assert_eq!(field_query.boost, 2.0);
     }
 

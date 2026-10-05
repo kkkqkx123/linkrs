@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::types::VertexId;
 use crate::value::Value;
@@ -8,7 +9,7 @@ use crate::value::Value;
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Tag {
     pub name: String,
-    pub properties: HashMap<String, Value>,
+    pub properties: HashMap<Arc<str>, Value>,
 }
 
 // Implement Hash manually for Tag to handle HashMap hashing
@@ -26,7 +27,7 @@ impl std::hash::Hash for Tag {
 }
 
 impl Tag {
-    pub fn new(name: String, properties: HashMap<String, Value>) -> Self {
+    pub fn new(name: String, properties: HashMap<std::sync::Arc<str>, Value>) -> Self {
         Self { name, properties }
     }
 
@@ -42,7 +43,7 @@ impl Tag {
             * (8 + std::mem::size_of::<String>() + std::mem::size_of::<Value>());
 
         for (k, v) in &self.properties {
-            size += k.capacity();
+            size += k.len();
             size += v.estimated_size();
         }
 
@@ -86,7 +87,7 @@ impl Vertex {
         &self.tag.name
     }
 
-    pub fn properties(&self) -> &HashMap<String, Value> {
+    pub fn properties(&self) -> &HashMap<Arc<str>, Value> {
         &self.tag.properties
     }
 
@@ -103,8 +104,8 @@ impl Vertex {
     }
 
     fn cmp_properties(
-        a: &HashMap<String, Value>,
-        b: &HashMap<String, Value>,
+        a: &HashMap<Arc<str>, Value>,
+        b: &HashMap<Arc<str>, Value>,
     ) -> std::cmp::Ordering {
         match a.len().cmp(&b.len()) {
             std::cmp::Ordering::Equal => {
@@ -169,11 +170,11 @@ pub struct Edge {
     pub dst: VertexId,
     pub edge_type: String,
     pub ranking: i64,
-    pub props: HashMap<String, Value>,
+    pub props: HashMap<Arc<str>, Value>,
 }
 
 impl Edge {
-    pub fn properties(&self) -> &HashMap<String, Value> {
+    pub fn properties(&self) -> &HashMap<Arc<str>, Value> {
         &self.props
     }
 
@@ -193,7 +194,7 @@ impl Edge {
         self.ranking
     }
 
-    pub fn get_all_properties(&self) -> &HashMap<String, Value> {
+    pub fn get_all_properties(&self) -> &HashMap<Arc<str>, Value> {
         &self.props
     }
 
@@ -203,7 +204,7 @@ impl Edge {
     }
 
     /// Set a property value
-    pub fn set_property(&mut self, name: String, value: Value) {
+    pub fn set_property(&mut self, name: Arc<str>, value: Value) {
         self.props.insert(name, value);
     }
 
@@ -253,10 +254,10 @@ impl Edge {
         size += std::mem::size_of::<String>() + self.edge_type.capacity();
 
         size += self.props.capacity()
-            * (8 + std::mem::size_of::<String>() + std::mem::size_of::<Value>());
+            * (8 + std::mem::size_of::<Arc<str>>() + std::mem::size_of::<Value>());
 
         for (k, v) in &self.props {
-            size += k.capacity();
+            size += k.len();
             size += v.estimated_size();
         }
 
@@ -287,7 +288,7 @@ impl Edge {
         dst: VertexId,
         edge_type: String,
         ranking: i64,
-        props: HashMap<String, Value>,
+        props: HashMap<Arc<str>, Value>,
     ) -> Self {
         Self {
             src,
@@ -295,6 +296,34 @@ impl Edge {
             edge_type,
             ranking,
             props,
+        }
+    }
+}
+
+impl Edge {
+    fn cmp_properties(
+        a: &HashMap<Arc<str>, Value>,
+        b: &HashMap<Arc<str>, Value>,
+    ) -> std::cmp::Ordering {
+        match a.len().cmp(&b.len()) {
+            std::cmp::Ordering::Equal => {
+                let mut a_sorted: Vec<_> = a.iter().collect();
+                let mut b_sorted: Vec<_> = b.iter().collect();
+                a_sorted.sort_by_key(|(k1, _)| *k1);
+                b_sorted.sort_by_key(|(k1, _)| *k1);
+
+                for ((k1, v1), (k2, v2)) in a_sorted.iter().zip(b_sorted.iter()) {
+                    match k1.cmp(k2) {
+                        std::cmp::Ordering::Equal => match v1.cmp(v2) {
+                            std::cmp::Ordering::Equal => continue,
+                            ord => return ord,
+                        },
+                        ord => return ord,
+                    }
+                }
+                std::cmp::Ordering::Equal
+            }
+            ord => ord,
         }
     }
 }
@@ -307,7 +336,7 @@ impl Ord for Edge {
             .then_with(|| self.dst.cmp(&other.dst))
             .then_with(|| self.edge_type.cmp(&other.edge_type))
             .then_with(|| self.ranking.cmp(&other.ranking))
-            .then_with(|| Vertex::cmp_properties(&self.props, &other.props))
+            .then_with(|| Edge::cmp_properties(&self.props, &other.props))
     }
 }
 

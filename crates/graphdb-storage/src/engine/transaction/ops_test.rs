@@ -25,9 +25,9 @@ mod tests {
             label_id: label,
             label_name: name.to_string(),
             properties: vec![
-                StoragePropertyDef::new("id".to_string(), graphdb_core::DataType::String),
-                StoragePropertyDef::new("name".to_string(), graphdb_core::DataType::String),
-                StoragePropertyDef::new("age".to_string(), graphdb_core::DataType::BigInt),
+                StoragePropertyDef::new("id".into(), graphdb_core::DataType::String),
+                StoragePropertyDef::new("name".into(), graphdb_core::DataType::String),
+                StoragePropertyDef::new("age".into(), graphdb_core::DataType::BigInt),
             ],
             primary_key_index: 0,
             schema_version: 1,
@@ -47,7 +47,7 @@ mod tests {
             src_label,
             dst_label,
             properties: vec![StoragePropertyDef {
-                name: "since".to_string(),
+                name: "since".into(),
                 data_type: graphdb_core::DataType::Int,
                 nullable: false,
                 default_value: Some(Value::Int(0)),
@@ -68,8 +68,8 @@ mod tests {
 
         let vid = VertexId::try_from_int64(100).expect("test vertex id");
         let properties = vec![
-            ("name".to_string(), Value::string("Alice")),
-            ("age".to_string(), Value::BigInt(30)),
+            ("name".into(), Value::string("Alice")),
+            ("age".into(), Value::BigInt(30)),
         ];
 
         let result = TransactionOps::add_vertex(&vertex_tables, 0, vid, &properties, 1);
@@ -93,8 +93,8 @@ mod tests {
         // Use a string ID that is NOT 8 bytes (avoids as_int64() collision)
         let vid = VertexId::try_from_string("user-alice").expect("test vertex id");
         let properties = vec![
-            ("name".to_string(), Value::string("Alice")),
-            ("age".to_string(), Value::BigInt(30)),
+            ("name".into(), Value::string("Alice")),
+            ("age".into(), Value::BigInt(30)),
         ];
 
         let result = TransactionOps::add_vertex(&vertex_tables, 0, vid, &properties, 1);
@@ -184,14 +184,10 @@ mod tests {
     fn test_resolve_vertex_id() {
         let table = create_vertex_table(0, "Person");
         table
-            .insert_by_i64(100, &[("name".to_string(), Value::string("Alice"))], 1)
+            .insert_by_i64(100, &[("name".into(), Value::string("Alice"))], 1)
             .unwrap();
         table
-            .insert(
-                "user-bob-ext",
-                &[("name".to_string(), Value::string("Bob"))],
-                1,
-            )
+            .insert("user-bob-ext", &[("name".into(), Value::string("Bob"))], 1)
             .unwrap();
 
         let resolved_int = TransactionOps::resolve_vertex_id(
@@ -266,7 +262,7 @@ mod tests {
             &vertex_tables,
             0,
             vid,
-            &[("name".to_string(), Value::string("Alice"))],
+            &[("name".into(), Value::string("Alice"))],
             1,
         )
         .unwrap();
@@ -288,7 +284,7 @@ mod tests {
         let name_val = record
             .properties
             .iter()
-            .find(|(k, _)| k == "name")
+            .find(|(k, _)| &**k == "name")
             .map(|(_, v)| v);
         assert_eq!(name_val, Some(&Value::string("AliceUpdated")));
     }
@@ -310,12 +306,12 @@ mod tests {
         );
 
         let mut vertex_label_names: HashMap<String, LabelId> = HashMap::new();
-        vertex_label_names.insert("Person".to_string(), 0);
-        vertex_label_names.insert("Employee".to_string(), 1);
+        vertex_label_names.insert("Person".into(), 0);
+        vertex_label_names.insert("Employee".into(), 1);
 
         let mut edge_label_names: HashMap<String, LabelId> = HashMap::new();
-        edge_label_names.insert("KNOWS".to_string(), 0);
-        edge_label_names.insert("WORKS_AT".to_string(), 1);
+        edge_label_names.insert("KNOWS".into(), 0);
+        edge_label_names.insert("WORKS_AT".into(), 1);
 
         delete_vertex_type(
             &mut vertex_tables,
@@ -347,7 +343,7 @@ mod tests {
         );
 
         let mut edge_label_names: HashMap<String, LabelId> = HashMap::new();
-        edge_label_names.insert("KNOWS".to_string(), 0);
+        edge_label_names.insert("KNOWS".into(), 0);
 
         let params = DeleteEdgeTypeParams {
             src_label: 0,
@@ -534,7 +530,7 @@ mod tests {
             let table = vertex_tables.get_mut(&0).unwrap();
             table
                 .add_property(crate::types::StoragePropertyDef::new(
-                    "name".to_string(),
+                    "name".into(),
                     graphdb_core::DataType::String,
                 ))
                 .unwrap();
@@ -550,14 +546,14 @@ mod tests {
             &vertex_tables,
             &vertex_label_names,
             "Person",
-            &["full_name".to_string()],
-            &["name".to_string()],
+            &["full_name".into()],
+            &["name".into()],
         );
         assert!(result.is_ok());
 
         let table = vertex_tables.get(&0).unwrap();
         let schema = table.schema();
-        assert!(schema.properties.iter().any(|p| p.name == "name"));
+        assert!(schema.properties.iter().any(|p| &*p.name == "name"));
     }
 
     #[test]
@@ -583,7 +579,7 @@ mod tests {
             let table = vertex_tables.get_mut(&0).unwrap();
             table
                 .add_property(StoragePropertyDef::new(
-                    "email".to_string(),
+                    "email".into(),
                     graphdb_core::DataType::String,
                 ))
                 .unwrap();
@@ -608,8 +604,8 @@ mod tests {
             &vertex_tables,
             &vertex_label_names,
             "Person",
-            &["email_address".to_string()],
-            &["email".to_string()],
+            &["email_address".into()],
+            &["email".into()],
         );
         assert!(result.is_ok());
 
@@ -619,11 +615,15 @@ mod tests {
         assert_eq!(table.schema().schema_version, version_before_undo);
 
         // Verify the schema was actually reverted (name changed back to email)
-        assert!(table.schema().properties.iter().any(|p| p.name == "email"));
+        assert!(table
+            .schema()
+            .properties
+            .iter()
+            .any(|p| &*p.name == "email"));
         assert!(!table
             .schema()
             .properties
             .iter()
-            .any(|p| p.name == "email_address"));
+            .any(|p| &*p.name == "email_address"));
     }
 }

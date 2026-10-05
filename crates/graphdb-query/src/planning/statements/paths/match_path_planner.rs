@@ -8,6 +8,7 @@ use crate::planning::statements::seeks::seek_strategy_base::{
 };
 use graphdb_core::types::graph_schema::EdgeDirection;
 use graphdb_core::{StorageError, Value};
+use std::sync::Arc;
 
 pub type PlannerError = StorageError;
 
@@ -199,7 +200,7 @@ pub enum PathPatternKind {
 pub struct EdgePattern {
     pub types: Option<Vec<String>>,
     pub direction: Option<EdgeDirection>,
-    pub properties: Vec<(String, Value)>,
+    pub properties: Vec<(Arc<str>, Value)>,
 }
 
 #[derive(Debug)]
@@ -242,7 +243,7 @@ pub enum PathPlan {
 pub struct EdgeTraversal {
     pub direction: EdgeDirection,
     pub edge_types: Vec<String>,
-    pub properties: Vec<(String, Value)>,
+    pub properties: Vec<(Arc<str>, Value)>,
 }
 
 impl PathPattern {

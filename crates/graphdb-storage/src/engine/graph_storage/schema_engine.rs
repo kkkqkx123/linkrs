@@ -31,7 +31,7 @@ pub fn create_vertex_type_with_estimate(
 
     let primary_key_index = properties
         .iter()
-        .position(|p| p.name == primary_key)
+        .position(|p| &*p.name == primary_key)
         .ok_or_else(|| StorageError::property_not_found(primary_key.to_string()))?;
 
     ctx.data_store()
@@ -90,7 +90,7 @@ pub fn create_vertex_type_with_id_with_estimate(
 
     let primary_key_index = properties
         .iter()
-        .position(|p| p.name == primary_key)
+        .position(|p| p.name.as_ref() == primary_key)
         .ok_or_else(|| StorageError::property_not_found(primary_key.to_string()))?;
 
     ctx.data_store()
@@ -297,7 +297,7 @@ pub fn add_edge_property(
 
     ctx.data_store()
         .for_each_edge_partition_mut(edge_label, |_key, table| {
-            table.add_property(prop.name.clone(), prop.data_type.clone(), prop.nullable)
+            table.add_property(prop.name.to_string(), prop.data_type.clone(), prop.nullable)
         })?;
     Ok(())
 }
@@ -365,16 +365,14 @@ mod tests {
     use crate::edge::EdgeStrategy;
     use crate::types::StoragePropertyDef;
     use graphdb_core::DataType;
+    use std::sync::Arc;
 
     use super::super::GraphStorageContext;
 
     #[test]
     fn test_create_vertex_type() {
         let ctx = GraphStorageContext::new();
-        let props = vec![StoragePropertyDef::new(
-            "name".to_string(),
-            DataType::String,
-        )];
+        let props = vec![StoragePropertyDef::new("name".into(), DataType::String)];
         let label_id = ctx
             .create_vertex_type("Person", props, "name")
             .expect("create_vertex_type should succeed");
@@ -384,16 +382,10 @@ mod tests {
     #[test]
     fn test_create_duplicate_vertex_type() {
         let ctx = GraphStorageContext::new();
-        let props = vec![StoragePropertyDef::new(
-            "name".to_string(),
-            DataType::String,
-        )];
+        let props = vec![StoragePropertyDef::new("name".into(), DataType::String)];
         ctx.create_vertex_type("Person", props, "name")
             .expect("create_vertex_type should succeed");
-        let props2 = vec![StoragePropertyDef::new(
-            "name".to_string(),
-            DataType::String,
-        )];
+        let props2 = vec![StoragePropertyDef::new("name".into(), DataType::String)];
         let result = ctx.create_vertex_type("Person", props2, "name");
         assert!(result.is_err());
     }
@@ -403,10 +395,7 @@ mod tests {
         let ctx = GraphStorageContext::new();
         let result = ctx.create_vertex_type(
             "Person",
-            vec![StoragePropertyDef::new(
-                "name".to_string(),
-                DataType::String,
-            )],
+            vec![StoragePropertyDef::new("name".into(), DataType::String)],
             "nonexistent",
         );
         assert!(result.is_err());
@@ -415,10 +404,7 @@ mod tests {
     #[test]
     fn test_create_edge_type() {
         let ctx = GraphStorageContext::new();
-        let props = vec![StoragePropertyDef::new(
-            "name".to_string(),
-            DataType::String,
-        )];
+        let props = vec![StoragePropertyDef::new("name".into(), DataType::String)];
         ctx.create_vertex_type("Person", props, "name")
             .expect("create_vertex_type should succeed");
 
@@ -427,7 +413,7 @@ mod tests {
                 "KNOWS",
                 0,
                 0,
-                vec![StoragePropertyDef::new("since".to_string(), DataType::Int)],
+                vec![StoragePropertyDef::new("since".into(), DataType::Int)],
                 EdgeStrategy::Multiple,
                 EdgeStrategy::Multiple,
             )
@@ -450,10 +436,7 @@ mod tests {
     }
 
     fn name_prop() -> Vec<StoragePropertyDef> {
-        vec![StoragePropertyDef::new(
-            "name".to_string(),
-            DataType::String,
-        )]
+        vec![StoragePropertyDef::new("name".into(), DataType::String)]
     }
 
     #[test]
@@ -495,11 +478,8 @@ mod tests {
         let ctx = GraphStorageContext::new();
         ctx.create_vertex_type("Person", name_prop(), "name")
             .expect("create_vertex_type should succeed");
-        ctx.add_vertex_property(
-            0,
-            StoragePropertyDef::new("email".to_string(), DataType::String),
-        )
-        .expect("add_vertex_property should succeed");
+        ctx.add_vertex_property(0, StoragePropertyDef::new("email".into(), DataType::String))
+            .expect("add_vertex_property should succeed");
     }
 
     #[test]
@@ -518,7 +498,7 @@ mod tests {
         .expect("create_edge_type should succeed");
         ctx.add_edge_property(
             0,
-            StoragePropertyDef::new("weight".to_string(), DataType::Double),
+            StoragePropertyDef::new("weight".into(), DataType::Double),
         )
         .expect("add_edge_property should succeed");
     }
@@ -527,8 +507,8 @@ mod tests {
     fn test_delete_vertex_property() {
         let ctx = GraphStorageContext::new();
         let props = vec![
-            StoragePropertyDef::new("name".to_string(), DataType::String),
-            StoragePropertyDef::new("age".to_string(), DataType::BigInt),
+            StoragePropertyDef::new("name".into(), DataType::String),
+            StoragePropertyDef::new("age".into(), DataType::BigInt),
         ];
         ctx.create_vertex_type("Person", props, "name")
             .expect("create_vertex_type should succeed");
@@ -554,7 +534,7 @@ mod tests {
             "KNOWS",
             0,
             0,
-            vec![StoragePropertyDef::new("since".to_string(), DataType::Int)],
+            vec![StoragePropertyDef::new("since".into(), DataType::Int)],
             EdgeStrategy::Multiple,
             EdgeStrategy::Multiple,
         )
@@ -577,7 +557,7 @@ mod tests {
         let ctx = GraphStorageContext::new();
         let result = ctx.add_vertex_property(
             999,
-            StoragePropertyDef::new("email".to_string(), DataType::String),
+            StoragePropertyDef::new("email".into(), DataType::String),
         );
         assert!(result.is_err());
     }
@@ -601,7 +581,7 @@ mod tests {
             let label_id = ctx
                 .create_vertex_type(
                     &format!("Type{}", idx),
-                    vec![StoragePropertyDef::new("id".to_string(), data_type)],
+                    vec![StoragePropertyDef::new("id".into(), data_type)],
                     "id",
                 )
                 .unwrap_or_else(|_| panic!("Should accept {} as primary key type", type_name));
@@ -634,7 +614,7 @@ mod tests {
         for (type_name, data_type) in invalid_types {
             let result = ctx.create_vertex_type(
                 &format!("BadType{}", type_name),
-                vec![StoragePropertyDef::new("id".to_string(), data_type)],
+                vec![StoragePropertyDef::new("id".into(), data_type)],
                 "id",
             );
             assert!(
@@ -651,9 +631,9 @@ mod tests {
         let result = ctx.create_vertex_type(
             "BadSchema",
             vec![
-                StoragePropertyDef::new("id".to_string(), DataType::String),
+                StoragePropertyDef::new("id".into(), DataType::String),
                 StoragePropertyDef {
-                    name: "bad_prop".to_string(),
+                    name: "bad_prop".into(),
                     data_type: DataType::Empty,
                     nullable: false,
                     default_value: None,
@@ -670,9 +650,9 @@ mod tests {
         let result = ctx.create_vertex_type(
             "BadSchema",
             vec![
-                StoragePropertyDef::new("id".to_string(), DataType::String),
+                StoragePropertyDef::new("id".into(), DataType::String),
                 StoragePropertyDef {
-                    name: "bad_prop".to_string(),
+                    name: "bad_prop".into(),
                     data_type: DataType::Null,
                     nullable: false,
                     default_value: None,
@@ -691,8 +671,8 @@ mod tests {
         let result = ctx.create_vertex_type(
             "BadNames",
             vec![
-                StoragePropertyDef::new("id".to_string(), DataType::String),
-                StoragePropertyDef::new("123prop".to_string(), DataType::String),
+                StoragePropertyDef::new("id".into(), DataType::String),
+                StoragePropertyDef::new(Arc::from("123prop"), DataType::String),
             ],
             "id",
         );
@@ -705,8 +685,8 @@ mod tests {
         let result = ctx.create_vertex_type(
             "BadNames2",
             vec![
-                StoragePropertyDef::new("id".to_string(), DataType::String),
-                StoragePropertyDef::new("prop-name".to_string(), DataType::String),
+                StoragePropertyDef::new("id".into(), DataType::String),
+                StoragePropertyDef::new(Arc::from("prop-name"), DataType::String),
             ],
             "id",
         );
@@ -722,10 +702,10 @@ mod tests {
             .create_vertex_type(
                 "ValidNames",
                 vec![
-                    StoragePropertyDef::new("id".to_string(), DataType::String),
-                    StoragePropertyDef::new("_internal".to_string(), DataType::String),
-                    StoragePropertyDef::new("field_2".to_string(), DataType::String),
-                    StoragePropertyDef::new("CamelCase".to_string(), DataType::String),
+                    StoragePropertyDef::new("id".into(), DataType::String),
+                    StoragePropertyDef::new("_internal".into(), DataType::String),
+                    StoragePropertyDef::new("field_2".into(), DataType::String),
+                    StoragePropertyDef::new("CamelCase".into(), DataType::String),
                 ],
                 "id",
             )
@@ -764,8 +744,8 @@ mod tests {
                 0,
                 0,
                 vec![
-                    StoragePropertyDef::new("weight".to_string(), DataType::Double),
-                    StoragePropertyDef::new("since".to_string(), DataType::DateTime),
+                    StoragePropertyDef::new("weight".into(), DataType::Double),
+                    StoragePropertyDef::new("since".into(), DataType::DateTime),
                 ],
                 EdgeStrategy::Multiple,
                 EdgeStrategy::Multiple,
@@ -779,7 +759,7 @@ mod tests {
             0,
             0,
             vec![StoragePropertyDef {
-                name: "bad".to_string(),
+                name: "bad".into(),
                 data_type: DataType::Empty,
                 nullable: false,
                 default_value: None,
@@ -807,11 +787,8 @@ mod tests {
         assert_eq!(initial_version, 1, "Initial version should be 1");
 
         // Add property and verify version incremented
-        ctx.add_vertex_property(
-            0,
-            StoragePropertyDef::new("email".to_string(), DataType::String),
-        )
-        .expect("add_vertex_property should succeed");
+        ctx.add_vertex_property(0, StoragePropertyDef::new("email".into(), DataType::String))
+            .expect("add_vertex_property should succeed");
 
         let updated_version = ctx
             .data_store()
@@ -830,8 +807,8 @@ mod tests {
     fn test_delete_vertex_property_increments_version() {
         let ctx = GraphStorageContext::new();
         let props = vec![
-            StoragePropertyDef::new("name".to_string(), DataType::String),
-            StoragePropertyDef::new("age".to_string(), DataType::BigInt),
+            StoragePropertyDef::new("name".into(), DataType::String),
+            StoragePropertyDef::new("age".into(), DataType::BigInt),
         ];
         ctx.create_vertex_type("Person", props, "name")
             .expect("create_vertex_type should succeed");
@@ -895,7 +872,10 @@ mod tests {
         for expected_version in 2..=5 {
             ctx.add_vertex_property(
                 0,
-                StoragePropertyDef::new(format!("prop{}", expected_version), DataType::String),
+                StoragePropertyDef::new(
+                    Arc::from(format!("prop{}", expected_version)),
+                    DataType::String,
+                ),
             )
             .expect("add_vertex_property should succeed");
 
@@ -943,7 +923,7 @@ mod tests {
 
         ctx.add_edge_property(
             0,
-            StoragePropertyDef::new("weight".to_string(), DataType::Double),
+            StoragePropertyDef::new("weight".into(), DataType::Double),
         )
         .expect("add_edge_property should succeed");
 
@@ -972,10 +952,7 @@ mod tests {
             "KNOWS",
             0,
             0,
-            vec![StoragePropertyDef::new(
-                "weight".to_string(),
-                DataType::Double,
-            )],
+            vec![StoragePropertyDef::new("weight".into(), DataType::Double)],
             EdgeStrategy::Multiple,
             EdgeStrategy::Multiple,
         )
@@ -1020,10 +997,7 @@ mod tests {
             "KNOWS",
             0,
             0,
-            vec![StoragePropertyDef::new(
-                "weight".to_string(),
-                DataType::Double,
-            )],
+            vec![StoragePropertyDef::new("weight".into(), DataType::Double)],
             EdgeStrategy::Multiple,
             EdgeStrategy::Multiple,
         )
@@ -1077,7 +1051,10 @@ mod tests {
         for expected_version in 2..=4 {
             ctx.add_edge_property(
                 0,
-                StoragePropertyDef::new(format!("prop{}", expected_version), DataType::String),
+                StoragePropertyDef::new(
+                    Arc::from(format!("prop{}", expected_version)),
+                    DataType::String,
+                ),
             )
             .expect("add_edge_property should succeed");
 

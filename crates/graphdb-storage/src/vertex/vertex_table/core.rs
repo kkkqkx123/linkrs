@@ -66,7 +66,7 @@ pub struct VertexTable {
     pub(super) is_open: AtomicBool,
     /// Cache for property name → index mapping to avoid O(n) schema lookups.
     /// Invalidated whenever schema changes.
-    pub(super) property_index_cache: HashMap<String, usize>,
+    pub(super) property_index_cache: HashMap<Arc<str>, usize>,
     /// Version history tracking for schema changes
     pub(super) version_history: Arc<Mutex<LabelVersionHistory>>,
     /// Persistent encoding selector with accumulated compression feedback.
@@ -117,7 +117,7 @@ impl VertexTable {
         let columns = ColumnStore::with_capacity(schema.properties.len());
 
         for prop in &schema.properties {
-            columns.add_column(prop.name.clone(), prop.data_type.clone(), prop.nullable);
+            columns.add_column(prop.name.to_string(), prop.data_type.clone(), prop.nullable);
             if let Some(col) = columns.get_column(&prop.name) {
                 col.set_chunk_capacity(config.chunk_capacity);
             }

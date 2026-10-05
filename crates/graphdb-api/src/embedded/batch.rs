@@ -32,7 +32,7 @@ use graphdb_core::{Edge, Vertex};
 ///
 /// // Add vertices
 /// for i in 0..1000 {
-///     let vertex = Vertex::new(VertexId::try_from_int64(i).expect("test vertex id"), Tag::new("test".to_string(), std::collections::HashMap::new()));
+///     let vertex = Vertex::new(VertexId::try_from_int64(i).expect("test vertex id"), Tag::new("test".into(), std::collections::HashMap::new()));
 ///     inserter.add_vertex(vertex);
 /// }
 ///

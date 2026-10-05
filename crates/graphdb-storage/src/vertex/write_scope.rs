@@ -31,6 +31,7 @@
 //! path. Offline barriered tools bypass scopes and write directly.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use graphdb_core::error::storage::StorageErrorKind;
 use graphdb_core::types::{LabelId, Timestamp};
@@ -46,10 +47,10 @@ use super::id_indexer::IdKey;
 pub const MAX_WRITE_SCOPE_KEYS: usize = 4096;
 
 type ScopeKey = (LabelId, IdKey);
-type ScopeInsertRow = (u32, Vec<(String, Value)>);
-type ScopeUpdateRow = Vec<(String, Value)>;
+type ScopeInsertRow = (u32, Vec<(std::sync::Arc<str>, Value)>);
+type ScopeUpdateRow = Vec<(std::sync::Arc<str>, Value)>;
 type ScopeIdKey = (LabelId, u32);
-type ScopedInsert = (IdKey, u32, Vec<(String, Value)>);
+type ScopedInsert = (IdKey, u32, Vec<(std::sync::Arc<str>, Value)>);
 
 /// Caller-owned staging area for one write timestamp.
 ///
@@ -61,7 +62,7 @@ pub struct WriteScope {
     inserts: HashMap<ScopeKey, ScopeInsertRow>,
     updates: HashMap<ScopeIdKey, ScopeUpdateRow>,
     deletes: HashSet<ScopeIdKey>,
-    property_deletes: HashMap<ScopeIdKey, Vec<String>>,
+    property_deletes: HashMap<ScopeIdKey, Vec<Arc<str>>>,
 }
 
 impl WriteScope {
@@ -105,7 +106,7 @@ impl WriteScope {
         inserts: HashMap<ScopeKey, ScopeInsertRow>,
         updates: HashMap<ScopeIdKey, ScopeUpdateRow>,
         deletes: HashSet<ScopeIdKey>,
-        property_deletes: HashMap<ScopeIdKey, Vec<String>>,
+        property_deletes: HashMap<ScopeIdKey, Vec<Arc<str>>>,
     ) -> Self {
         Self {
             write_ts,
@@ -157,7 +158,7 @@ impl WriteScope {
         label: LabelId,
         key: IdKey,
         reserved_global_id: u32,
-        properties: Vec<(String, Value)>,
+        properties: Vec<(std::sync::Arc<str>, Value)>,
     ) -> StorageResult<()> {
         if self.inserts.contains_key(&(label, key.clone())) {
             return Err(StorageError::vertex_already_exists(format!(
@@ -179,7 +180,7 @@ impl WriteScope {
         &mut self,
         label: LabelId,
         global_id: u32,
-        properties: Vec<(String, Value)>,
+        properties: Vec<(Arc<str>, Value)>,
     ) -> StorageResult<()> {
         for (name, _) in &properties {
             if let Some(deleted) = self.property_deletes.get(&(label, global_id)) {
@@ -216,7 +217,7 @@ impl WriteScope {
         &mut self,
         label: LabelId,
         global_id: u32,
-        columns: Vec<String>,
+        columns: Vec<Arc<str>>,
     ) -> StorageResult<()> {
         if columns.is_empty() {
             return Ok(());
@@ -273,7 +274,10 @@ impl WriteScope {
     }
 
     /// Take every staged update of one label for the commit apply.
-    pub fn take_updates_for_label(&mut self, label: LabelId) -> Vec<(u32, Vec<(String, Value)>)> {
+    pub fn take_updates_for_label(
+        &mut self,
+        label: LabelId,
+    ) -> Vec<(u32, Vec<(std::sync::Arc<str>, Value)>)> {
         let keys: Vec<(LabelId, u32)> = self
             .updates
             .keys()
@@ -290,7 +294,7 @@ impl WriteScope {
     }
 
     /// Take every staged property deletion of one label for the commit apply.
-    pub fn take_property_deletes_for_label(&mut self, label: LabelId) -> Vec<(u32, Vec<String>)> {
+    pub fn take_property_deletes_for_label(&mut self, label: LabelId) -> Vec<(u32, Vec<Arc<str>>)> {
         let keys: Vec<(LabelId, u32)> = self
             .property_deletes
             .keys()
@@ -400,8 +404,8 @@ mod tests {
     use super::*;
     use graphdb_core::Value;
 
-    fn props(name: &str) -> Vec<(String, Value)> {
-        vec![("name".to_string(), Value::from(name))]
+    fn props(name: &str) -> Vec<(std::sync::Arc<str>, Value)> {
+        vec![("name".into(), Value::from(name))]
     }
 
     #[test]
@@ -486,7 +490,7 @@ mod tests {
             .stage_insert(1, IdKey::Text("a".to_string()), 7, props("a"))
             .unwrap();
         scope
-            .stage_update(1, 7, vec![("age".to_string(), Value::from(3))])
+            .stage_update(1, 7, vec![("age".into(), Value::from(3))])
             .unwrap();
         scope.stage_delete(1, 9).unwrap();
         assert_eq!(scope.len(), 3);
@@ -505,7 +509,7 @@ mod tests {
         let mut scope = WriteScope::new(10);
         scope.stage_insert(1, IdKey::Int(1), 5, props("a")).unwrap();
         scope
-            .stage_update(1, 2, vec![("v".to_string(), Value::from(2))])
+            .stage_update(1, 2, vec![("v".into(), Value::from(2))])
             .unwrap();
         scope.stage_delete(2, 3).unwrap();
         let released = scope.rollback_label(1);

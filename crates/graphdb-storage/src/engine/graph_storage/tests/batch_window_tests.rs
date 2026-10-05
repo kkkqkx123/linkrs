@@ -14,8 +14,8 @@ fn test_auto_commit_batch_window_reuses_snapshots() {
             Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::string(format!("person_{i}"))),
-                    ("age".to_string(), Value::BigInt(i)),
+                    ("name".into(), Value::string(format!("person_{i}"))),
+                    ("age".into(), Value::BigInt(i)),
                 ]
                 .into_iter()
                 .collect(),
@@ -51,7 +51,7 @@ fn test_auto_commit_batch_window_reuses_snapshots() {
         VertexId::try_from_int64(2000).expect("test vertex id"),
         Tag::new(
             "Person".to_string(),
-            vec![("name".to_string(), Value::string("after"))]
+            vec![("name".into(), Value::string("after"))]
                 .into_iter()
                 .collect(),
         ),
@@ -80,8 +80,8 @@ fn test_batch_window_unregisters_lazily_registered_snapshots() {
             Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::string(format!("leak_{i}"))),
-                    ("age".to_string(), Value::BigInt(i)),
+                    ("name".into(), Value::string(format!("leak_{i}"))),
+                    ("age".into(), Value::BigInt(i)),
                 ]
                 .into_iter()
                 .collect(),
@@ -121,8 +121,8 @@ fn test_auto_commit_batch_window_failed_statement_rolls_back_itself() {
             Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::string("keep")),
-                    ("age".to_string(), Value::BigInt(1)),
+                    ("name".into(), Value::string("keep")),
+                    ("age".into(), Value::BigInt(1)),
                 ]
                 .into_iter()
                 .collect(),
@@ -140,8 +140,8 @@ fn test_auto_commit_batch_window_failed_statement_rolls_back_itself() {
             Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::string("keep")),
-                    ("age".to_string(), Value::BigInt(2)),
+                    ("name".into(), Value::string("keep")),
+                    ("age".into(), Value::BigInt(2)),
                 ]
                 .into_iter()
                 .collect(),
@@ -200,8 +200,8 @@ fn test_auto_commit_batch_window_with_unique_index() {
             Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::string(format!("person_{i}"))),
-                    ("age".to_string(), Value::BigInt(i)),
+                    ("name".into(), Value::string(format!("person_{i}"))),
+                    ("age".into(), Value::BigInt(i)),
                 ]
                 .into_iter()
                 .collect(),
@@ -233,7 +233,7 @@ fn test_auto_commit_batch_window_with_unique_index() {
             VertexId::try_from_int64(2000).expect("test vertex id"),
             Tag::new(
                 "Person".to_string(),
-                vec![("name".to_string(), Value::string("person_10"))]
+                vec![("name".into(), Value::string("person_10"))]
                     .into_iter()
                     .collect(),
             ),
@@ -289,8 +289,8 @@ fn test_auto_commit_batch_window_via_sync_wrapper() {
             Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::string(format!("person_{i}"))),
-                    ("age".to_string(), Value::BigInt(i)),
+                    ("name".into(), Value::string(format!("person_{i}"))),
+                    ("age".into(), Value::BigInt(i)),
                 ]
                 .into_iter()
                 .collect(),

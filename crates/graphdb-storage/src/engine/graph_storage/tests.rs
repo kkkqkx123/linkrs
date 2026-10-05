@@ -47,9 +47,9 @@ pub(super) fn setup_person_tag(storage: &mut GraphStorage) -> u32 {
     // The first property is the primary key, which mirrors the external
     // vertex id: `id` must equal the vid on every write.
     let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-        PropertyDef::new("id".to_string(), DataType::BigInt),
-        PropertyDef::new("name".to_string(), DataType::String),
-        PropertyDef::new("age".to_string(), DataType::BigInt),
+        PropertyDef::new("id".into(), DataType::BigInt),
+        PropertyDef::new("name".into(), DataType::String),
+        PropertyDef::new("age".into(), DataType::BigInt),
     ]);
     storage
         .create_tag("test_space", &tag)
@@ -58,7 +58,7 @@ pub(super) fn setup_person_tag(storage: &mut GraphStorage) -> u32 {
 
 pub(super) fn setup_knows_edge(storage: &mut GraphStorage) -> u32 {
     let edge = EdgeTypeInfo::new("KNOWS".to_string())
-        .with_properties(vec![PropertyDef::new("since".to_string(), DataType::Int)]);
+        .with_properties(vec![PropertyDef::new("since".into(), DataType::Int)]);
     storage
         .create_edge_type("test_space", &edge)
         .expect("Failed to create edge type")
@@ -70,8 +70,8 @@ pub(super) fn insert_test_vertex(storage: &mut GraphStorage, id: i64, name: &str
         graphdb_core::vertex_edge_path::Tag::new(
             "Person".to_string(),
             vec![
-                ("id".to_string(), Value::BigInt(id)),
-                ("name".to_string(), Value::string(name)),
+                ("id".into(), Value::BigInt(id)),
+                ("name".into(), Value::string(name)),
             ]
             .into_iter()
             .collect(),
@@ -85,8 +85,8 @@ pub(super) fn setup_string_id_space(storage: &mut GraphStorage) {
     storage.create_space(&mut space).unwrap();
 
     let tag = graphdb_core::types::TagInfo::new("Node".to_string()).with_properties(vec![
-        PropertyDef::new("id".to_string(), DataType::String),
-        PropertyDef::new("name".to_string(), DataType::String),
+        PropertyDef::new("id".into(), DataType::String),
+        PropertyDef::new("name".into(), DataType::String),
     ]);
     storage.create_tag("str_space", &tag).unwrap();
 
@@ -99,9 +99,9 @@ pub(super) fn setup_serial_person_tag(storage: &mut GraphStorage) -> u32 {
     // allocated independently of the vertex id), so the mirror column
     // `vid` leads and the serial `id` follows as a business column.
     let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-        PropertyDef::new("vid".to_string(), DataType::BigInt),
-        PropertyDef::new("id".to_string(), DataType::BigInt).with_serial(true),
-        PropertyDef::new("name".to_string(), DataType::String),
+        PropertyDef::new("vid".into(), DataType::BigInt),
+        PropertyDef::new("id".into(), DataType::BigInt).with_serial(true),
+        PropertyDef::new("name".into(), DataType::String),
     ]);
     storage
         .create_tag("test_space", &tag)
@@ -113,7 +113,7 @@ pub(super) fn insert_serial_vertex(storage: &mut GraphStorage, vid: i64, name: &
         VertexId::try_from_int64(vid).expect("test vertex id"),
         Tag::new(
             "Person".to_string(),
-            vec![("name".to_string(), Value::string(name))]
+            vec![("name".into(), Value::string(name))]
                 .into_iter()
                 .collect(),
         ),

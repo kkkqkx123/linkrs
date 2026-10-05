@@ -14,11 +14,11 @@ use std::sync::Arc;
 fn test_schema() -> crate::vertex::VertexSchema {
     crate::vertex::VertexSchema {
         label_id: 1,
-        label_name: "person".to_string(),
+        label_name: "person".into(),
         properties: vec![
-            StoragePropertyDef::new("name".to_string(), DataType::String),
+            StoragePropertyDef::new("name".into(), DataType::String),
             StoragePropertyDef {
-                name: "age".to_string(),
+                name: "age".into(),
                 data_type: DataType::Int,
                 nullable: true,
                 default_value: None,
@@ -55,7 +55,7 @@ fn test_encode_decode_id() {
 
 #[test]
 fn test_segment_allocation_spans_boundaries() {
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
     let ts = TEST_TS;
     let mut ids = Vec::new();
     let n = table.layout().segment_slots() as usize + 32;
@@ -69,7 +69,7 @@ fn test_segment_allocation_spans_boundaries() {
             record
                 .properties
                 .iter()
-                .find(|(k, _)| k == "name")
+                .find(|(k, _)| &**k == "name")
                 .unwrap()
                 .1,
             Value::from(format!("s_{}", i))
@@ -81,7 +81,7 @@ fn test_segment_allocation_spans_boundaries() {
 #[test]
 fn test_load_resumes_allocation() {
     let dir = std::env::temp_dir().join(format!("sharded_load_{}", std::process::id()));
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 4);
     let ts = TEST_TS;
     let slots = table.layout().segment_slots();
     for i in 0..slots + 100 {
@@ -91,7 +91,7 @@ fn test_load_resumes_allocation() {
         .flush(&dir, crate::compression::CompressionType::Zstd { level: 0 })
         .unwrap();
 
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 4);
     reloaded.load(&dir).unwrap();
 
     for i in 0..slots + 100 {
@@ -109,14 +109,14 @@ fn test_load_resumes_allocation() {
 
 #[test]
 fn test_insert_and_read() {
-    let table = ShardedVertexTable::with_config(1, "person".to_string(), test_schema(), 4);
+    let table = ShardedVertexTable::with_config(1, "person".into(), test_schema(), 4);
     let ts = TEST_TS;
     let id = table
         .insert(
             "Alice",
             &[
-                ("name".to_string(), Value::from("Alice")),
-                ("age".to_string(), Value::from(30i64)),
+                ("name".into(), Value::from("Alice")),
+                ("age".into(), Value::from(30i64)),
             ],
             ts,
         )
@@ -127,7 +127,7 @@ fn test_insert_and_read() {
 
 fn insert_with_name(table: &ShardedVertexTable, name: &str, ts: Timestamp) -> u32 {
     table
-        .insert(name, &[("name".to_string(), Value::from(name))], ts)
+        .insert(name, &[("name".into(), Value::from(name))], ts)
         .unwrap()
 }
 
@@ -145,7 +145,7 @@ fn scan_guard<'a>(
 
 #[test]
 fn test_delete() {
-    let table = ShardedVertexTable::with_config(1, "person".to_string(), test_schema(), 4);
+    let table = ShardedVertexTable::with_config(1, "person".into(), test_schema(), 4);
     let ts = TEST_TS;
     let id = insert_with_name(&table, "bob", ts);
     assert!(table.get_by_internal_id_offline(id, ts).is_some());
@@ -156,7 +156,7 @@ fn test_delete() {
 
 #[test]
 fn test_get_internal_id_roundtrip() {
-    let table = ShardedVertexTable::with_config(1, "test".to_string(), test_schema(), 8);
+    let table = ShardedVertexTable::with_config(1, "test".into(), test_schema(), 8);
     let ts = TEST_TS;
     let id = insert_with_name(&table, "charlie", ts);
     let found = table.get_internal_id("charlie", ts).unwrap();
@@ -167,7 +167,7 @@ fn test_get_internal_id_roundtrip() {
 fn test_concurrent_inserts() {
     let table = Arc::new(ShardedVertexTable::with_config(
         1,
-        "person".to_string(),
+        "person".into(),
         test_schema(),
         8,
     ));
@@ -178,7 +178,7 @@ fn test_concurrent_inserts() {
         for i in 0..100 {
             t1.insert(
                 &format!("user_{}", i),
-                &[("name".to_string(), Value::from(format!("user_{}", i)))],
+                &[("name".into(), Value::from(format!("user_{}", i)))],
                 ts,
             )
             .unwrap();
@@ -188,7 +188,7 @@ fn test_concurrent_inserts() {
         for i in 100..200 {
             t2.insert(
                 &format!("user_{}", i),
-                &[("name".to_string(), Value::from(format!("user_{}", i)))],
+                &[("name".into(), Value::from(format!("user_{}", i)))],
                 ts,
             )
             .unwrap();
@@ -201,7 +201,7 @@ fn test_concurrent_inserts() {
 
 #[test]
 fn test_scan() {
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 4);
     let ts = TEST_TS;
     for i in 0..50 {
         insert_with_name(&table, &format!("k{}", i), ts);
@@ -213,7 +213,7 @@ fn test_scan() {
 
 #[test]
 fn test_sharded_eviction_pressure_scan_matches_resident() {
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 4);
     let ts = TEST_TS;
     for i in 0..200 {
         insert_with_name(&table, &format!("p_{}", i), ts);
@@ -241,7 +241,7 @@ fn test_sharded_eviction_concurrent_write_keeps_new_rows() {
     use std::sync::Arc;
     let table = Arc::new(ShardedVertexTable::with_config(
         1,
-        "t".to_string(),
+        "t".into(),
         test_schema(),
         4,
     ));
@@ -265,7 +265,7 @@ fn test_sharded_eviction_concurrent_write_keeps_new_rows() {
 
 #[test]
 fn test_gc() {
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 4);
     let ts_insert = 100;
     let ts_delete = 200;
     insert_with_name(&table, "gc_test", ts_insert);
@@ -279,7 +279,7 @@ fn test_gc() {
 
 #[test]
 fn test_id_uniqueness_across_shards() {
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 16);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 16);
     let ts = TEST_TS;
     let mut ids = std::collections::HashSet::new();
     for i in 0..200 {
@@ -293,7 +293,7 @@ fn test_id_uniqueness_across_shards() {
 fn test_id_hole_stats_tracks_allocated_and_live() {
     // Single shard: shard selection is hash-driven, so a multi-shard
     // table may skip low-fragmentation shards and remove only a subset.
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
     let ts_insert = 100;
     let ts_delete = 200;
     for i in 0..100 {
@@ -331,7 +331,7 @@ fn test_id_hole_stats_tracks_allocated_and_live() {
 #[test]
 fn test_internal_id_upper_bound_across_shard_counts() {
     for num_shards in [1usize, 2, 4, 8, 32, 128, 256] {
-        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), num_shards);
+        let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), num_shards);
         let ts = TEST_TS;
         let n = 20_000;
         for i in 0..n {
@@ -354,7 +354,7 @@ fn test_internal_id_upper_bound_across_shard_counts() {
 fn test_table_manifest_rejects_shard_count_mismatch() {
     let dir = std::env::temp_dir().join(format!("sharded_manifest_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 4);
     let ts = TEST_TS;
     insert_with_name(&table, "v_manifest", ts);
     table
@@ -363,11 +363,11 @@ fn test_table_manifest_rejects_shard_count_mismatch() {
 
     assert!(dir.join("table_manifest.json").exists());
 
-    let same = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+    let same = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 4);
     same.load(&dir).unwrap();
     assert!(same.get_internal_id("v_manifest", ts).is_some());
 
-    let other = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 8);
+    let other = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 8);
     let err = other.load(&dir).unwrap_err();
     let msg = err.to_string();
     assert!(
@@ -382,7 +382,7 @@ fn test_table_manifest_rejects_shard_count_mismatch() {
 fn test_table_manifest_missing_refuses_open() {
     let dir = std::env::temp_dir().join(format!("sharded_manifest_missing_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     insert_with_name(&table, "v_missing", TEST_TS);
     table
         .flush(&dir, crate::compression::CompressionType::Zstd { level: 0 })
@@ -392,7 +392,7 @@ fn test_table_manifest_missing_refuses_open() {
     std::fs::remove_file(dir.join("table_manifest.json")).unwrap();
     std::fs::remove_file(dir.join("commit_manifest.json")).unwrap();
 
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let err = reloaded.load(&dir).unwrap_err().to_string();
     assert!(
         err.contains("manifest"),
@@ -407,7 +407,7 @@ fn test_low_fragmentation_keeps_row_ids_stable() {
     // Single shard, 5 rows, 1 delete: hole rate 0.2 stays below the
     // watermark, so compaction must not move any live row and the
     // edge cascade sees an empty mapping (zero edge writes).
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
     let ts_insert = 100;
     let ts_delete = 200;
     let mut before = std::collections::HashMap::new();
@@ -441,7 +441,7 @@ fn test_stable_collect_moves_no_live_rows_above_watermark() {
     // offline remap path would re-densify. The stable path absorbs holes
     // through the free stack and returns an empty mapping (zero edge
     // rewrites) with survivors pinned to their ids.
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
     let ts_insert = 100;
     let ts_delete = 200;
     let mut before = std::collections::HashMap::new();
@@ -476,7 +476,7 @@ fn test_stable_collect_moves_no_live_rows_above_watermark() {
 fn test_stable_holes_are_reused_by_new_inserts() {
     // Identifier monotonicity plus hole reuse: new inserts fill free
     // slots without shifting survivors.
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
     let ts_insert = 100;
     let ts_delete = 200;
     let ts_reinsert = 300;
@@ -513,7 +513,7 @@ fn test_stable_holes_are_reused_by_new_inserts() {
 #[test]
 fn test_offline_and_stable_agree_on_removed_set_above_watermark() {
     let build = || {
-        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+        let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
         for i in 0..10 {
             insert_with_name(&table, &format!("row_{}", i), 100);
         }
@@ -561,7 +561,7 @@ fn test_offline_and_stable_agree_on_removed_set_above_watermark() {
 fn test_gc_detailed_keeps_row_ids_stable() {
     // Background GC must absorb deletes without moving survivors: no
     // edge cascade is involved on this path by design.
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
     let ts_insert = 100;
     let ts_delete = 200;
     let mut before = std::collections::HashMap::new();
@@ -593,7 +593,7 @@ fn test_concurrent_same_key_insert_allocates_once() {
     use std::sync::Arc;
     let table = Arc::new(ShardedVertexTable::with_config(
         1,
-        "person".to_string(),
+        "person".into(),
         test_schema(),
         8,
     ));
@@ -602,12 +602,8 @@ fn test_concurrent_same_key_insert_allocates_once() {
     for _ in 0..8 {
         let t = Arc::clone(&table);
         handles.push(std::thread::spawn(move || {
-            t.insert(
-                "hot_key",
-                &[("name".to_string(), Value::from("hot_key"))],
-                ts,
-            )
-            .map(|_| ())
+            t.insert("hot_key", &[("name".into(), Value::from("hot_key"))], ts)
+                .map(|_| ())
         }));
     }
     let mut oks = 0usize;
@@ -627,7 +623,7 @@ fn test_pk_delta_baseline_plus_incremental_reload() {
     let incr = std::env::temp_dir().join(format!("pk_incr_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let _ = std::fs::remove_dir_all(&incr);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 4);
     let ts = TEST_TS;
     for i in 0..4 {
         insert_with_name(&table, &format!("base_{}", i), ts);
@@ -665,7 +661,7 @@ fn test_pk_delta_baseline_plus_incremental_reload() {
     }
     assert!(saw_delta, "incremental must persist pk changes");
 
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 4);
     reloaded.load(&base).unwrap();
     reloaded.apply_delta_pages(&incr).unwrap();
     for i in 0..4 {
@@ -695,7 +691,7 @@ fn test_pk_delta_baseline_plus_incremental_reload() {
     }
     // ...and the repair entry enforces the same strict semantics.
     let _ = std::fs::remove_file(incr.join(COMMIT_MANIFEST_FILE_NAME));
-    let reloaded_missing = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+    let reloaded_missing = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 4);
     reloaded_missing.load(&base).unwrap();
     assert!(reloaded_missing.apply_delta_pages(&incr).is_err());
 
@@ -705,14 +701,14 @@ fn test_pk_delta_baseline_plus_incremental_reload() {
 
 #[test]
 fn test_insert_batch_str_groups_shards_and_aligns_results() {
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 8);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 8);
     let ts = TEST_TS;
     let names: Vec<String> = (0..100).map(|i| format!("b_{}", i)).collect();
-    let props: Vec<Vec<(String, Value)>> = names
+    let props: Vec<Vec<(Arc<str>, Value)>> = names
         .iter()
-        .map(|n| vec![("name".to_string(), Value::from(n.as_str()))])
+        .map(|n| vec![("name".into(), Value::from(n.as_str()))])
         .collect();
-    let rows: Vec<(&str, &[(String, Value)])> = names
+    let rows: Vec<(&str, &[(Arc<str>, Value)])> = names
         .iter()
         .zip(props.iter())
         .map(|(n, p)| (n.as_str(), p.as_slice()))
@@ -731,12 +727,12 @@ fn test_insert_batch_str_groups_shards_and_aligns_results() {
 
 #[test]
 fn test_insert_batch_reports_per_row_errors() {
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 4);
     let ts = TEST_TS;
     insert_with_name(&table, "dup", ts);
-    let pa = vec![("name".to_string(), Value::from("dup"))];
-    let pb = vec![("name".to_string(), Value::from("fresh"))];
-    let rows: Vec<(&str, &[(String, Value)])> =
+    let pa = vec![("name".into(), Value::from("dup"))];
+    let pb = vec![("name".into(), Value::from("fresh"))];
+    let rows: Vec<(&str, &[(Arc<str>, Value)])> =
         vec![("fresh", pb.as_slice()), ("dup", pa.as_slice())];
     let results = table.insert_batch_str(&rows, ts);
     assert_eq!(results.len(), 2);
@@ -747,7 +743,7 @@ fn test_insert_batch_reports_per_row_errors() {
 
 #[test]
 fn test_reshard_rebuilds_all_rows_under_new_count() {
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let ts = TEST_TS;
     for i in 0..20 {
         insert_with_name(&table, &format!("r_{}", i), ts);
@@ -780,7 +776,7 @@ fn test_reshard_rebuilds_all_rows_under_new_count() {
 
 #[test]
 fn test_storage_snapshot_combines_holes_and_buffers() {
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     for i in 0..6 {
         insert_with_name(&table, &format!("snap_{}", i), 100);
     }
@@ -795,7 +791,7 @@ fn test_storage_snapshot_combines_holes_and_buffers() {
 
 #[test]
 fn test_table_cardinality_matches_hole_stats() {
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 4);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 4);
     for i in 0..10 {
         insert_with_name(&table, &format!("card_{}", i), 100);
     }
@@ -812,11 +808,11 @@ fn test_table_cardinality_matches_hole_stats() {
 
 #[test]
 fn test_reshard_refuses_pending_schema_change() {
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     insert_with_name(&table, "r_0", TEST_TS);
     table
         .prepare_add_property_staged(StoragePropertyDef {
-            name: "nick".to_string(),
+            name: "nick".into(),
             data_type: DataType::String,
             nullable: true,
             default_value: None,
@@ -838,7 +834,7 @@ fn test_reshard_refuses_pending_schema_change() {
 
 #[test]
 fn test_reshard_preserves_creation_stamps() {
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     for i in 0..10 {
         insert_with_name(&table, &format!("aged_{}", i), 100 + i);
     }
@@ -854,7 +850,7 @@ fn test_reshard_preserves_creation_stamps() {
             let record = rebuilt
                 .get_by_internal_id_offline(new_id, 105)
                 .expect("readable below the rebuild stamp");
-            assert!(record.properties.iter().any(|(k, _)| k == "name"));
+            assert!(record.properties.iter().any(|(k, _)| &**k == "name"));
         } else {
             assert!(rebuilt.get_by_internal_id_offline(new_id, 105).is_none());
         }
@@ -864,7 +860,7 @@ fn test_reshard_preserves_creation_stamps() {
 #[test]
 fn test_remap_only_rebuilds_over_watermark_shards() {
     use super::routing::fxhash;
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let ts_insert = 100;
     let ts_delete = 200;
     let mut shard_names: Vec<Vec<String>> = vec![Vec::new(), Vec::new()];
@@ -947,18 +943,17 @@ fn test_estimate_driven_shard_counts() {
 
 #[test]
 fn test_new_table_defaults_to_single_shard() {
-    let table = ShardedVertexTable::new(1, "t".to_string(), test_schema());
+    let table = ShardedVertexTable::new(1, "t".into(), test_schema());
     assert_eq!(table.num_shards(), 1);
-    let small = ShardedVertexTable::with_estimate(1, "t".to_string(), test_schema(), 8, Some(10));
+    let small = ShardedVertexTable::with_estimate(1, "t".into(), test_schema(), 8, Some(10));
     assert_eq!(small.num_shards(), 1);
-    let large =
-        ShardedVertexTable::with_estimate(1, "t".to_string(), test_schema(), 8, Some(500_000));
+    let large = ShardedVertexTable::with_estimate(1, "t".into(), test_schema(), 8, Some(500_000));
     assert_eq!(large.num_shards(), 8);
 }
 
 #[test]
 fn test_single_shard_id_tail_bound() {
-    let table = ShardedVertexTable::with_estimate(1, "t".to_string(), test_schema(), 8, None);
+    let table = ShardedVertexTable::with_estimate(1, "t".into(), test_schema(), 8, None);
     assert_eq!(table.num_shards(), 1);
     let ts = TEST_TS;
     let n = 200usize;
@@ -975,7 +970,7 @@ fn test_single_shard_id_tail_bound() {
 
 #[test]
 fn test_dry_run_reports_distribution_and_refuses_noop() {
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let ts = TEST_TS;
     for i in 0..20 {
         insert_with_name(&table, &format!("d_{}", i), ts);
@@ -997,11 +992,11 @@ fn test_dry_run_reports_distribution_and_refuses_noop() {
 
 #[test]
 fn test_dry_run_refuses_pending_schema_change() {
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     insert_with_name(&table, "d_0", TEST_TS);
     table
         .prepare_add_property_staged(StoragePropertyDef {
-            name: "nick".to_string(),
+            name: "nick".into(),
             data_type: DataType::String,
             nullable: true,
             default_value: None,

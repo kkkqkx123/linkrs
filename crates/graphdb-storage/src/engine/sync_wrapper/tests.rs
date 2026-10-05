@@ -58,7 +58,7 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
         .create_tag(
             "test_space",
             &TagInfo::new("Person".to_string())
-                .with_properties(vec![PropertyDef::new("name".to_string(), DataType::String)]),
+                .with_properties(vec![PropertyDef::new("name".into(), DataType::String)]),
         )
         .expect("tag should be created");
 
@@ -96,7 +96,7 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
                 VertexId::try_from_int64(1).expect("test vertex id"),
                 Tag::new(
                     "Person".to_string(),
-                    [("name".to_string(), graphdb_core::Value::string("one"))]
+                    [("name".into(), graphdb_core::Value::string("one"))]
                         .into_iter()
                         .collect(),
                 ),
@@ -130,7 +130,7 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
                 VertexId::try_from_int64(2).expect("test vertex id"),
                 Tag::new(
                     "Person".to_string(),
-                    [("name".to_string(), graphdb_core::Value::string("two"))]
+                    [("name".into(), graphdb_core::Value::string("two"))]
                         .into_iter()
                         .collect(),
                 ),

@@ -329,10 +329,10 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
             return None;
         }
 
-        let properties: std::collections::HashMap<String, Value> = data
+        let properties: std::collections::HashMap<Arc<str>, Value> = data
             .properties
             .into_iter()
-            .filter_map(|(k, v)| json_to_value(v).map(|val| (k, val)))
+            .filter_map(|(k, v)| json_to_value(v).map(|val| (Arc::from(k.as_str()), val)))
             .collect();
 
         Some(Vertex::new(
@@ -347,10 +347,10 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
         let src_vid = value_to_vertex_id(&src_vid_value)?;
         let dst_vid = value_to_vertex_id(&dst_vid_value)?;
 
-        let props: std::collections::HashMap<String, Value> = data
+        let props: std::collections::HashMap<Arc<str>, Value> = data
             .properties
             .into_iter()
-            .filter_map(|(k, v)| json_to_value(v).map(|val| (k, val)))
+            .filter_map(|(k, v)| json_to_value(v).map(|val| (Arc::from(k.as_str()), val)))
             .collect();
 
         Some(Edge::new(src_vid, dst_vid, data.edge_type, 0, props))
@@ -359,11 +359,11 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
     fn convert_update_edge_data(&self, data: &UpdateEdgeData) -> Option<Edge> {
         let src_vid = value_to_vertex_id(&json_to_value(data.src_vid.clone())?)?;
         let dst_vid = value_to_vertex_id(&json_to_value(data.dst_vid.clone())?)?;
-        let props: std::collections::HashMap<String, Value> = data
+        let props: std::collections::HashMap<Arc<str>, Value> = data
             .properties
             .clone()
             .into_iter()
-            .filter_map(|(k, v)| json_to_value(v).map(|val| (k, val)))
+            .filter_map(|(k, v)| json_to_value(v).map(|val| (Arc::from(k.as_str()), val)))
             .collect();
         let mut edge = Edge::new(src_vid, dst_vid, data.edge_type.clone(), 0, props);
         edge.ranking = data.rank;

@@ -72,7 +72,7 @@ pub(crate) struct PendingDelta {
 pub(crate) struct PendingExistingScan<'a> {
     pub existing_values: &'a mut Vec<Value>,
     pub existing_encoded: &'a mut HashSet<Vec<u8>>,
-    pub existing_columns: &'a mut Vec<(String, Value)>,
+    pub existing_columns: &'a mut Vec<(Arc<str>, Value)>,
     pub covering_populated: &'a mut bool,
 }
 

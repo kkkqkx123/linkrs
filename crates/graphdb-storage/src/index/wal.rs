@@ -11,6 +11,7 @@ use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult};
 use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 
 const WAL_MAGIC: [u8; 4] = *b"INDW";
 
@@ -137,7 +138,7 @@ impl WalEntry {
                         .map_err(|e| {
                             std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
                         })?;
-                    included_columns.push((name, value));
+                    included_columns.push((Arc::from(name.as_str()), value));
                 }
 
                 let entity_ref = EntityRefReader::read(reader)?;
@@ -330,8 +331,10 @@ mod tests {
 
     #[test]
     fn serialize_with_included_columns() {
-        let record =
-            IndexRecord::new_with_columns(100, vec![("name".to_string(), Value::string("Alice"))]);
+        let record = IndexRecord::new_with_columns(
+            100,
+            vec![("name".into(), Value::string(Arc::from("Alice")))],
+        );
         let entry = WalEntry::Insert {
             is_forward: true,
             key: vec![1, 2, 3],
@@ -347,8 +350,8 @@ mod tests {
             WalEntry::Insert { record, .. } => {
                 let columns = record.included_columns.unwrap();
                 assert_eq!(columns.len(), 1);
-                assert_eq!(columns[0].0, "name");
-                assert_eq!(columns[0].1, Value::string("Alice"));
+                assert_eq!(columns[0].0, Arc::from("name"));
+                assert_eq!(columns[0].1, Value::string(Arc::from("Alice")));
             }
             _ => panic!("Expected Insert entry"),
         }

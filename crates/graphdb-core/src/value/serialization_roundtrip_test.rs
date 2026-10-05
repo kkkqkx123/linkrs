@@ -84,7 +84,7 @@ fn all_sample_values() -> Vec<Value> {
 
     let vertex = Vertex::new(
         VertexId::try_from_int64(10).expect("test vertex id"),
-        Tag::new("Person".to_string(), HashMap::new()),
+        Tag::new("Person".into(), HashMap::new()),
     );
     let edge = Edge::new_empty(
         VertexId::try_from_int64(1).expect("test vertex id"),
@@ -150,7 +150,7 @@ fn all_sample_values() -> Vec<Value> {
         Value::VertexId(VertexId::try_from_int64(99).expect("test vertex id")),
         Value::EdgeId(EdgeId::new(99)),
         Value::Struct(Box::new(StructValue::new(vec![
-            ("city".to_string(), Value::string("x")),
+            ("city".into(), Value::string("x")),
             (
                 "geo".to_string(),
                 Value::Struct(Box::new(StructValue::new(vec![(

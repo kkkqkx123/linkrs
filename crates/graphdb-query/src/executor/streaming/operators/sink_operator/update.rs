@@ -77,7 +77,7 @@ pub(super) fn handle_update_vertices(
                 // like `SET stock = stock - 1` and conditions like
                 // `WHEN age > 100` can resolve existing columns.
                 for (k, v) in &existing.tag.properties {
-                    context.set_variable(k.clone(), v.clone());
+                    context.set_variable(k.to_string(), v.clone());
                 }
                 if let Some(cond) = condition {
                     let keep = eval_expr(cond, &mut context)?;
@@ -91,7 +91,7 @@ pub(super) fn handle_update_vertices(
                 } else if *tag_name == existing.tag.name {
                     let mut merged = existing.tag.properties.clone();
                     for (k, v) in &props {
-                        merged.insert(k.clone(), v.clone());
+                        merged.insert(Arc::from(k.clone()), v.clone());
                     }
                     Tag::new(existing.tag.name.clone(), merged)
                 } else {
@@ -200,7 +200,7 @@ pub(super) fn handle_update_edges(
                         }
                     };
                     for (k, v) in &existing.props {
-                        context.set_variable(k.clone(), v.clone());
+                        context.set_variable(k.to_string(), v.clone());
                     }
                     if let Some(cond) = condition {
                         let keep = eval_expr(cond, &mut context)?;

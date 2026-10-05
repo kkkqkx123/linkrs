@@ -475,7 +475,10 @@ mod tests {
                 DataType::List(Box::new(DataType::Int)),
             ),
             (
-                Value::string_map(HashMap::from([("k".to_string(), Value::Int(1))])),
+                Value::string_map(HashMap::<String, Value>::from([(
+                    "k".into(),
+                    Value::Int(1),
+                )])),
                 DataType::Map(Box::new(DataType::Int)),
             ),
             (
@@ -513,7 +516,7 @@ mod tests {
             ),
             (Value::EdgeId(EdgeId::new(1)), DataType::Edge),
             (
-                Value::struct_(vec![("city".to_string(), Value::string("x"))]),
+                Value::struct_(vec![("city".into(), Value::string("x"))]),
                 DataType::Struct(Arc::new(StructTypeInfo::new(vec![(
                     "city".to_string(),
                     DataType::String,
@@ -601,7 +604,7 @@ mod tests {
             DataType::List(Box::new(DataType::Unknown))
         );
         // Map value type is derived from the entry values.
-        let map = Expression::Map(vec![("k".to_string(), literal(Value::Int(1)))]);
+        let map = Expression::Map(vec![("k".into(), literal(Value::Int(1)))]);
         assert_eq!(map.deduce_type(), DataType::Map(Box::new(DataType::Int)));
     }
 

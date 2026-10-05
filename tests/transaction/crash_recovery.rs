@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 type ReplayedVertices = Vec<(LabelId, VertexId, Timestamp)>;
-type ReplayedVertexProps = Vec<Vec<(String, Value)>>;
+type ReplayedVertexProps = Vec<Vec<(std::sync::Arc<str>, Value)>>;
 
 #[derive(Default)]
 struct RecordingApplier {
@@ -29,7 +29,7 @@ impl RecordingApplier {
     fn replayed_vertices(&self) -> Vec<(LabelId, VertexId, Timestamp)> {
         self.replayed_vertices.lock().unwrap().clone()
     }
-    fn replayed_vertex_props(&self) -> Vec<Vec<(String, Value)>> {
+    fn replayed_vertex_props(&self) -> Vec<Vec<(std::sync::Arc<str>, Value)>> {
         self.replayed_vertex_props.lock().unwrap().clone()
     }
 }
@@ -39,7 +39,7 @@ impl RecoveryApplier for RecordingApplier {
         &self,
         label: LabelId,
         vid: VertexId,
-        properties: &[(String, Value)],
+        properties: &[(std::sync::Arc<str>, Value)],
         ts: Timestamp,
     ) -> Result<(), StorageError> {
         self.replayed_vertices
@@ -246,7 +246,7 @@ fn write_wal_entries(
         let redo = InsertVertexRedo {
             label,
             vid: VertexId::try_from_int64(vid).expect("test vertex id"),
-            properties: vec![("name".to_string(), Value::string(name))],
+            properties: vec![(std::sync::Arc::from("name"), Value::string(name))],
         };
         let payload = to_allocvec(&redo)?;
         writer.append_transaction_batch(
@@ -331,7 +331,7 @@ fn test_uncommitted_tail_discarded() {
     let redo = InsertVertexRedo {
         label: 1,
         vid: VertexId::try_from_int64(1003).expect("test vertex id"),
-        properties: vec![("name".to_string(), Value::string("uncommitted"))],
+        properties: vec![(std::sync::Arc::from("name"), Value::string("uncommitted"))],
     };
     writer
         .append_entry(WalOpType::InsertVertex, 3, &to_allocvec(&redo).unwrap())
@@ -372,8 +372,8 @@ fn test_vertex_properties_preserved_after_recovery() {
         label: 1,
         vid: VertexId::try_from_int64(1001).expect("test vertex id"),
         properties: vec![
-            ("name".to_string(), Value::string("Alice")),
-            ("age".to_string(), Value::Int(30)),
+            (std::sync::Arc::from("name"), Value::string("Alice")),
+            (std::sync::Arc::from("age"), Value::Int(30)),
         ],
     };
     let payload = to_allocvec(&redo).unwrap();
@@ -396,10 +396,10 @@ fn test_vertex_properties_preserved_after_recovery() {
     assert_eq!(props[0].len(), 2);
     assert!(props[0]
         .iter()
-        .any(|(k, v)| k == "name" && v == &Value::string("Alice")));
+        .any(|(k, v)| k.as_ref() == "name" && v == &Value::string("Alice")));
     assert!(props[0]
         .iter()
-        .any(|(k, v)| k == "age" && v == &Value::Int(30)));
+        .any(|(k, v)| k.as_ref() == "age" && v == &Value::Int(30)));
 }
 
 /// TC-CR04: Corrupted trailing bytes should not prevent recovery of committed entries
@@ -421,7 +421,7 @@ fn test_corrupted_trailing_bytes_recovery() {
     let redo = InsertVertexRedo {
         label: 1,
         vid: VertexId::try_from_int64(1002).expect("test vertex id"),
-        properties: vec![("name".to_string(), Value::string("corrupted"))],
+        properties: vec![(std::sync::Arc::from("name"), Value::string("corrupted"))],
     };
     writer
         .append_entry(WalOpType::InsertVertex, 2, &to_allocvec(&redo).unwrap())

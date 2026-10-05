@@ -37,7 +37,7 @@ fn write_insert_vertex_wal(
     let redo = InsertVertexRedo {
         label,
         vid: VertexId::try_from_int64(vid).expect("test vertex id"),
-        properties: vec![("name".to_string(), Value::string(name))],
+        properties: vec![("name".into(), Value::string(name))],
     };
     let payload = to_allocvec(&redo).map_err(|e| StorageError::serialize_error(e.to_string()))?;
 
@@ -134,7 +134,7 @@ fn test_needs_recovery_true_when_wal_is_ahead_of_checkpoint() {
     let first_redo = InsertVertexRedo {
         label: 1,
         vid: VertexId::try_from_int64(1001).expect("test vertex id"),
-        properties: vec![("name".to_string(), Value::string("Alice"))],
+        properties: vec![("name".into(), Value::string("Alice"))],
     };
     let first_payload = to_allocvec(&first_redo).expect("Failed to serialize first redo");
     writer
@@ -145,7 +145,7 @@ fn test_needs_recovery_true_when_wal_is_ahead_of_checkpoint() {
     let second_redo = InsertVertexRedo {
         label: 1,
         vid: VertexId::try_from_int64(1002).expect("test vertex id"),
-        properties: vec![("name".to_string(), Value::string("Bob"))],
+        properties: vec![("name".into(), Value::string("Bob"))],
     };
     let second_payload = to_allocvec(&second_redo).expect("Failed to serialize second redo");
     writer
@@ -178,8 +178,8 @@ fn test_recover_from_wal_persists_checkpoint_baseline() {
         "person",
         1,
         vec![
-            StoragePropertyDef::new("id".to_string(), DataType::BigInt),
-            StoragePropertyDef::new("name".to_string(), DataType::String),
+            StoragePropertyDef::new("id".into(), DataType::BigInt),
+            StoragePropertyDef::new("name".into(), DataType::String),
         ],
         "id",
     )

@@ -6,10 +6,8 @@ fn test_edge_property_index_range_lookup() {
     setup_space(&mut storage);
     setup_person_tag(&mut storage);
 
-    let edge_type =
-        graphdb_core::types::EdgeTypeInfo::new("WEIGHTED".to_string()).with_properties(vec![
-            PropertyDef::new("weight".to_string(), DataType::BigInt),
-        ]);
+    let edge_type = graphdb_core::types::EdgeTypeInfo::new("WEIGHTED".into())
+        .with_properties(vec![PropertyDef::new("weight".into(), DataType::BigInt)]);
     storage
         .create_edge_type("test_space", &edge_type)
         .expect("Failed to create edge type");
@@ -22,9 +20,9 @@ fn test_edge_property_index_range_lookup() {
         Edge::new(
             VertexId::try_from_int64(src).expect("test vertex id"),
             VertexId::try_from_int64(dst).expect("test vertex id"),
-            "WEIGHTED".to_string(),
+            "WEIGHTED".into(),
             0,
-            [("weight".to_string(), Value::BigInt(weight))]
+            [("weight".into(), Value::BigInt(weight))]
                 .into_iter()
                 .collect(),
         )
@@ -121,9 +119,9 @@ fn test_insert_and_get_edge() {
     let edge = Edge::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         VertexId::try_from_int64(2).expect("test vertex id"),
-        "KNOWS".to_string(),
+        "KNOWS".into(),
         0,
-        vec![("since".to_string(), Value::Int(2020))]
+        vec![("since".into(), Value::Int(2020))]
             .into_iter()
             .collect(),
     );
@@ -162,7 +160,7 @@ fn test_delete_edge() {
     let edge = Edge::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         VertexId::try_from_int64(2).expect("test vertex id"),
-        "KNOWS".to_string(),
+        "KNOWS".into(),
         0,
         std::collections::HashMap::new(),
     );
@@ -205,7 +203,7 @@ fn test_get_node_edges() {
         let edge = Edge::new(
             VertexId::try_from_int64(1).expect("test vertex id"),
             VertexId::try_from_int64(*dst).expect("test vertex id"),
-            "KNOWS".to_string(),
+            "KNOWS".into(),
             0,
             std::collections::HashMap::new(),
         );
@@ -236,7 +234,7 @@ fn test_get_node_edges() {
             "test_space",
             &VertexId::try_from_int64(1).expect("test vertex id"),
             EdgeDirection::Out,
-            &["KNOWS".to_string()],
+            &["KNOWS".into()],
         )
         .unwrap();
     assert_eq!(filtered.len(), 2);
@@ -245,7 +243,7 @@ fn test_get_node_edges() {
             "test_space",
             &VertexId::try_from_int64(1).expect("test vertex id"),
             EdgeDirection::Out,
-            &["MISSING".to_string()],
+            &["MISSING".into()],
         )
         .unwrap();
     assert!(empty_filtered.is_empty());
@@ -267,7 +265,7 @@ fn test_batch_accessors_match_get_node_edges() {
         let edge = Edge::new(
             VertexId::try_from_int64(src).expect("test vertex id"),
             VertexId::try_from_int64(dst).expect("test vertex id"),
-            "KNOWS".to_string(),
+            "KNOWS".into(),
             0,
             std::collections::HashMap::new(),
         );
@@ -279,7 +277,7 @@ fn test_batch_accessors_match_get_node_edges() {
         VertexId::try_from_int64(2).expect("test vertex id"),
         VertexId::try_from_int64(5).expect("test vertex id"),
     ];
-    let knowses = vec!["KNOWS".to_string()];
+    let knowses = vec!["KNOWS".into()];
 
     for direction in [EdgeDirection::Out, EdgeDirection::In, EdgeDirection::Both] {
         for (edge_types, label) in [(Vec::<String>::new(), "all"), (knowses.clone(), "KNOWS")] {
@@ -357,7 +355,7 @@ fn test_scan_edges_by_type() {
     let edge = Edge::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         VertexId::try_from_int64(2).expect("test vertex id"),
-        "KNOWS".to_string(),
+        "KNOWS".into(),
         0,
         std::collections::HashMap::new(),
     );
@@ -381,14 +379,14 @@ fn test_batch_insert_edges_rolls_back_on_failure() {
         Edge::new(
             VertexId::try_from_int64(1).expect("test vertex id"),
             VertexId::try_from_int64(2).expect("test vertex id"),
-            "KNOWS".to_string(),
+            "KNOWS".into(),
             0,
             std::collections::HashMap::new(),
         ),
         Edge::new(
             VertexId::try_from_int64(1).expect("test vertex id"),
             VertexId::try_from_int64(3).expect("test vertex id"),
-            "KNOWS".to_string(),
+            "KNOWS".into(),
             0,
             std::collections::HashMap::new(),
         ),
@@ -410,13 +408,13 @@ fn batch_equivalence_edges() -> Vec<Edge> {
         for k in 0..3i64 {
             let mut props = std::collections::HashMap::new();
             props.insert(
-                "since".to_string(),
+                "since".into(),
                 graphdb_core::Value::from((src * 10 + k) as i32),
             );
             edges.push(Edge::new(
                 VertexId::try_from_int64(src).expect("test vertex id"),
                 VertexId::try_from_int64(src + k + 1).expect("test vertex id"),
-                "KNOWS".to_string(),
+                "KNOWS".into(),
                 k,
                 props,
             ));
@@ -485,14 +483,14 @@ fn test_batch_insert_edges_rejects_intra_batch_duplicates() {
         Edge::new(
             VertexId::try_from_int64(1).expect("test vertex id"),
             VertexId::try_from_int64(2).expect("test vertex id"),
-            "KNOWS".to_string(),
+            "KNOWS".into(),
             0,
             std::collections::HashMap::new(),
         ),
         Edge::new(
             VertexId::try_from_int64(1).expect("test vertex id"),
             VertexId::try_from_int64(2).expect("test vertex id"),
-            "KNOWS".to_string(),
+            "KNOWS".into(),
             0,
             std::collections::HashMap::new(),
         ),
@@ -512,12 +510,12 @@ fn test_get_edge_projected() {
     let mut storage = create_test_storage();
     setup_space(&mut storage);
     setup_person_tag(&mut storage);
-    let edge_type = graphdb_core::types::EdgeTypeInfo::new("KNOWS".to_string())
-        .with_src_tag("Person".to_string())
-        .with_dst_tag("Person".to_string())
+    let edge_type = graphdb_core::types::EdgeTypeInfo::new("KNOWS".into())
+        .with_src_tag("Person".into())
+        .with_dst_tag("Person".into())
         .with_properties(vec![
-            PropertyDef::new("since".to_string(), DataType::Int),
-            PropertyDef::new("weight".to_string(), DataType::Int),
+            PropertyDef::new("since".into(), DataType::Int),
+            PropertyDef::new("weight".into(), DataType::Int),
         ]);
     storage.create_edge_type("test_space", &edge_type).unwrap();
 
@@ -529,8 +527,8 @@ fn test_get_edge_projected() {
             Vertex::new(
                 src,
                 Tag::new(
-                    "Person".to_string(),
-                    vec![("name".to_string(), Value::string("Alice"))]
+                    "Person".into(),
+                    vec![("name".into(), Value::string("Alice"))]
                         .into_iter()
                         .collect(),
                 ),
@@ -543,8 +541,8 @@ fn test_get_edge_projected() {
             Vertex::new(
                 dst,
                 Tag::new(
-                    "Person".to_string(),
-                    vec![("name".to_string(), Value::string("Bob"))]
+                    "Person".into(),
+                    vec![("name".into(), Value::string("Bob"))]
                         .into_iter()
                         .collect(),
                 ),
@@ -557,11 +555,11 @@ fn test_get_edge_projected() {
             Edge::new(
                 src,
                 dst,
-                "KNOWS".to_string(),
+                "KNOWS".into(),
                 0,
                 vec![
-                    ("since".to_string(), Value::BigInt(2020)),
-                    ("weight".to_string(), Value::BigInt(7)),
+                    ("since".into(), Value::BigInt(2020)),
+                    ("weight".into(), Value::BigInt(7)),
                 ]
                 .into_iter()
                 .collect(),
@@ -576,14 +574,7 @@ fn test_get_edge_projected() {
     assert_eq!(full.properties().len(), 2);
 
     let projected = storage
-        .get_edge_projected(
-            "test_space",
-            &src,
-            &dst,
-            "KNOWS",
-            0,
-            &["weight".to_string()],
-        )
+        .get_edge_projected("test_space", &src, &dst, "KNOWS", 0, &["weight".into()])
         .unwrap()
         .expect("edge exists");
     assert_eq!(projected.properties().len(), 1);
@@ -614,7 +605,7 @@ fn test_batch_delete_edges_removes_many_keys_under_one_timestamp() {
         Edge::new(
             VertexId::try_from_int64(src).expect("test vertex id"),
             VertexId::try_from_int64(dst).expect("test vertex id"),
-            "KNOWS".to_string(),
+            "KNOWS".into(),
             0,
             std::collections::HashMap::new(),
         )
@@ -627,7 +618,7 @@ fn test_batch_delete_edges_removes_many_keys_under_one_timestamp() {
         graphdb_core::EdgeDeleteKey::new(
             VertexId::try_from_int64(src).expect("test vertex id"),
             VertexId::try_from_int64(dst).expect("test vertex id"),
-            "KNOWS".to_string(),
+            "KNOWS".into(),
             0,
         )
     };

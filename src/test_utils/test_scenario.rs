@@ -629,11 +629,11 @@ impl TestScenario {
                     if let Some(value) = row.get(i) {
                         if let Value::Vertex(vertex) = value {
                             for (prop_name, prop_value) in vertex.properties() {
-                                props.insert(prop_name.clone(), prop_value.clone());
+                                props.insert(prop_name.to_string(), prop_value.clone());
                             }
                         } else if let Value::Edge(edge) = value {
                             for (prop_name, prop_value) in &edge.props {
-                                props.insert(prop_name.clone(), prop_value.clone());
+                                props.insert(prop_name.to_string(), prop_value.clone());
                             }
                         } else {
                             props.insert(col_name.clone(), value.clone());

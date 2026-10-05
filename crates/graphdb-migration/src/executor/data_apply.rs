@@ -1,6 +1,7 @@
 //! Row-level migration step application for vertices and edges.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use graphdb_core::{Edge, Value, Vertex};
 
@@ -20,39 +21,39 @@ pub(super) fn apply_step_to_vertex(
 
     match step {
         MigrationStep::RenameColumn { old_name, new_name } => {
-            let value = match tag.properties.remove(old_name) {
+            let value = match tag.properties.remove(old_name.as_str()) {
                 Some(v) => v,
                 None => return Ok(None),
             };
-            tag.properties.insert(new_name.clone(), value);
+            tag.properties.insert(new_name.as_str().into(), value);
         }
         MigrationStep::ConvertType {
             name,
             from_type: _,
             to_type,
         } => {
-            let value = match tag.properties.get(name) {
+            let value = match tag.properties.get(name.as_str()) {
                 Some(v) => v.clone(),
                 None => return Ok(None),
             };
             let converted = convert_value(&value, to_type).map_err(|e| e.message)?;
-            tag.properties.insert(name.clone(), converted);
+            tag.properties.insert(name.as_str().into(), converted);
         }
         MigrationStep::DropColumn { name } => {
-            if !tag.properties.contains_key(name) {
+            if !tag.properties.contains_key(name.as_str()) {
                 return Ok(None);
             }
-            tag.properties.remove(name);
+            tag.properties.remove(name.as_str());
         }
         MigrationStep::SetDefault {
             name,
             default_value,
         } => {
-            if tag.properties.contains_key(name) {
+            if tag.properties.contains_key(name.as_str()) {
                 return Ok(None);
             }
             tag.properties.insert(
-                name.clone(),
+                name.as_str().into(),
                 default_value
                     .clone()
                     .unwrap_or(Value::Null(graphdb_core::value::null::NullType::Null)),
@@ -65,7 +66,7 @@ pub(super) fn apply_step_to_vertex(
         } => {
             if *was_nullable && !now_nullable {
                 for (prop_name, val) in tag.properties.iter() {
-                    if prop_name == name && matches!(val, Value::Null(_)) {
+                    if &**prop_name == name.as_str() && matches!(val, Value::Null(_)) {
                         return Err(format!(
                             "cannot set column '{}' NOT NULL: found NULL values",
                             name
@@ -81,18 +82,18 @@ pub(super) fn apply_step_to_vertex(
             nullable: _,
             default_value,
         } => {
-            if tag.properties.contains_key(name) {
+            if tag.properties.contains_key(name.as_str()) {
                 return Ok(None);
             }
             if let Some(default) = default_value {
-                if let Some(current) = tag.properties.get(name) {
+                if let Some(current) = tag.properties.get(name.as_str()) {
                     if current == default {
                         return Ok(None);
                     }
                 }
             }
             tag.properties.insert(
-                name.clone(),
+                name.as_str().into(),
                 default_value
                     .clone()
                     .unwrap_or(Value::Null(graphdb_core::value::null::NullType::Null)),
@@ -110,16 +111,16 @@ pub(super) fn apply_step_to_vertex(
 pub(super) fn apply_step_to_edge(
     edge: &Edge,
     step: &MigrationStep,
-) -> Result<HashMap<String, Value>, String> {
+) -> Result<HashMap<Arc<str>, Value>, String> {
     match step {
         MigrationStep::RenameColumn { old_name, new_name } => {
-            let value = match edge.props.get(old_name) {
+            let value = match edge.props.get(old_name.as_str()) {
                 Some(v) => v.clone(),
                 None => return Err(format!("Property '{}' not found on edge", old_name)),
             };
             let mut props = edge.props.clone();
-            props.remove(old_name);
-            props.insert(new_name.clone(), value);
+            props.remove(old_name.as_str());
+            props.insert(new_name.as_str().into(), value);
             Ok(props)
         }
         MigrationStep::ConvertType {
@@ -127,30 +128,30 @@ pub(super) fn apply_step_to_edge(
             from_type: _,
             to_type,
         } => {
-            let value = match edge.props.get(name) {
+            let value = match edge.props.get(name.as_str()) {
                 Some(v) => v,
                 None => return Err(format!("Property '{}' not found on edge", name)),
             };
             let converted = convert_value(value, to_type).map_err(|e| e.message)?;
             let mut props = edge.props.clone();
-            props.insert(name.clone(), converted);
+            props.insert(name.as_str().into(), converted);
             Ok(props)
         }
         MigrationStep::DropColumn { name } => {
             let mut props = edge.props.clone();
-            props.remove(name);
+            props.remove(name.as_str());
             Ok(props)
         }
         MigrationStep::SetDefault {
             name,
             default_value,
         } => {
-            if edge.props.contains_key(name) {
+            if edge.props.contains_key(name.as_str()) {
                 return Ok(edge.props.clone());
             }
             let mut props = edge.props.clone();
             props.insert(
-                name.clone(),
+                name.as_str().into(),
                 default_value
                     .clone()
                     .unwrap_or(Value::Null(graphdb_core::value::null::NullType::Null)),
@@ -164,7 +165,7 @@ pub(super) fn apply_step_to_edge(
         } => {
             if *was_nullable && !now_nullable {
                 for (prop_name, val) in edge.props.iter() {
-                    if prop_name == name && matches!(val, Value::Null(_)) {
+                    if &**prop_name == name.as_str() && matches!(val, Value::Null(_)) {
                         return Err(format!(
                             "cannot set column '{}' NOT NULL: found NULL values",
                             name
@@ -180,12 +181,12 @@ pub(super) fn apply_step_to_edge(
             nullable: _,
             default_value,
         } => {
-            if edge.props.contains_key(name) {
+            if edge.props.contains_key(name.as_str()) {
                 return Ok(edge.props.clone());
             }
             let mut props = edge.props.clone();
             props.insert(
-                name.clone(),
+                name.as_str().into(),
                 default_value
                     .clone()
                     .unwrap_or(Value::Null(graphdb_core::value::null::NullType::Null)),

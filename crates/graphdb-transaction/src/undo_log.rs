@@ -78,7 +78,7 @@ pub struct RestoreEdgeUndo {
     pub dst_vid: VertexId,
     pub edge_label: LabelId,
     pub rank: i64,
-    pub properties: Vec<(String, graphdb_core::Value)>,
+    pub properties: Vec<(std::sync::Arc<str>, graphdb_core::Value)>,
 }
 
 impl RestoreEdgeUndo {
@@ -350,6 +350,7 @@ impl Default for UndoLogManager {
 mod tests {
     use super::*;
     use graphdb_core::types::{StagedWriteMark, TransactionId, VertexIdentifier};
+    use std::sync::Arc;
 
     struct MockUndoTarget;
 
@@ -387,7 +388,7 @@ mod tests {
         fn revert_delete_vertex_properties(
             &self,
             _label_name: &str,
-            _prop_names: &[String],
+            _prop_names: &[Arc<str>],
         ) -> UndoLogResult<()> {
             Ok(())
         }
@@ -397,7 +398,7 @@ mod tests {
             _src_label: &str,
             _dst_label: &str,
             _edge_label: &str,
-            _prop_names: &[String],
+            _prop_names: &[Arc<str>],
         ) -> UndoLogResult<()> {
             Ok(())
         }
@@ -418,8 +419,8 @@ mod tests {
         fn revert_rename_vertex_properties(
             &self,
             _label_name: &str,
-            _current_names: &[String],
-            _original_names: &[String],
+            _current_names: &[Arc<str>],
+            _original_names: &[Arc<str>],
         ) -> UndoLogResult<()> {
             Ok(())
         }
@@ -429,8 +430,8 @@ mod tests {
             _src_label: &str,
             _dst_label: &str,
             _edge_label: &str,
-            _current_names: &[String],
-            _original_names: &[String],
+            _current_names: &[Arc<str>],
+            _original_names: &[Arc<str>],
         ) -> UndoLogResult<()> {
             Ok(())
         }

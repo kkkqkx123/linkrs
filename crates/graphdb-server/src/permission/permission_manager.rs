@@ -41,7 +41,7 @@ impl PermissionManager {
         // The root user acts as the "God" character (the global super administrator).
         // Using GOD_SPACE_ID(-1) to represent global roles, not bound to specific Space
         root_roles.insert(GOD_SPACE_ID, RoleType::God);
-        user_roles.insert("root".to_string(), root_roles);
+        user_roles.insert("root".into(), root_roles);
 
         Self {
             user_roles: Arc::new(user_roles),

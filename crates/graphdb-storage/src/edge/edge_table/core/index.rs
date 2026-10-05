@@ -12,6 +12,7 @@ use crate::index::edge_index_manager::EdgePropertyIndex;
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use super::super::iterator::EdgeTableScanIterator;
 
@@ -267,7 +268,7 @@ impl EdgeStore {
 
     pub(crate) fn update_property_index_on_delete(
         &mut self,
-        properties: &Option<Vec<(String, Value)>>,
+        properties: &Option<Vec<(Arc<str>, Value)>>,
         src: u32,
         dst: u32,
         rank: i64,
@@ -287,7 +288,7 @@ impl EdgeStore {
                         let started = std::time::Instant::now();
                         let result = index.delete(prop_name, prop_value, src, dst, rank, ts);
                         let latency = started.elapsed().as_millis() as u64;
-                        (prop_name.clone(), result, latency)
+                        (prop_name.to_string(), result, latency)
                     })
                     .collect()
             } else {

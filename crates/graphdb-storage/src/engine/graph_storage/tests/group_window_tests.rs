@@ -20,8 +20,8 @@ fn test_group_window_single_ts() {
             Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::string(format!("gperson_{i}"))),
-                    ("age".to_string(), Value::BigInt(i)),
+                    ("name".into(), Value::string(format!("gperson_{i}"))),
+                    ("age".into(), Value::BigInt(i)),
                 ]
                 .into_iter()
                 .collect(),
@@ -70,8 +70,8 @@ fn test_group_commit_visibility() {
             Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::string("visible")),
-                    ("age".to_string(), Value::BigInt(1)),
+                    ("name".into(), Value::string("visible")),
+                    ("age".into(), Value::BigInt(1)),
                 ]
                 .into_iter()
                 .collect(),
@@ -124,8 +124,8 @@ fn test_group_failed_statement_rolls_back_own_writes() {
             Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::string("keep")),
-                    ("age".to_string(), Value::BigInt(1)),
+                    ("name".into(), Value::string("keep")),
+                    ("age".into(), Value::BigInt(1)),
                 ]
                 .into_iter()
                 .collect(),
@@ -142,8 +142,8 @@ fn test_group_failed_statement_rolls_back_own_writes() {
             Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::string("changed")),
-                    ("age".to_string(), Value::BigInt(2)),
+                    ("name".into(), Value::string("changed")),
+                    ("age".into(), Value::BigInt(2)),
                 ]
                 .into_iter()
                 .collect(),
@@ -160,8 +160,8 @@ fn test_group_failed_statement_rolls_back_own_writes() {
             Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::string("also_keep")),
-                    ("age".to_string(), Value::BigInt(3)),
+                    ("name".into(), Value::string("also_keep")),
+                    ("age".into(), Value::BigInt(3)),
                 ]
                 .into_iter()
                 .collect(),
@@ -211,8 +211,8 @@ fn test_group_window_without_wal_manager() {
             Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::string("mem")),
-                    ("age".to_string(), Value::BigInt(1)),
+                    ("name".into(), Value::string("mem")),
+                    ("age".into(), Value::BigInt(1)),
                 ]
                 .into_iter()
                 .collect(),
@@ -257,8 +257,8 @@ fn test_group_window_staged_wal_bounded() {
             Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::string(format!("gbounded_{i}"))),
-                    ("age".to_string(), Value::BigInt(i)),
+                    ("name".into(), Value::string(format!("gbounded_{i}"))),
+                    ("age".into(), Value::BigInt(i)),
                 ]
                 .into_iter()
                 .collect(),
@@ -296,8 +296,8 @@ fn test_group_window_unregisters_lazily_registered_snapshots() {
             Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::string(format!("gleak_{i}"))),
-                    ("age".to_string(), Value::BigInt(i)),
+                    ("name".into(), Value::string(format!("gleak_{i}"))),
+                    ("age".into(), Value::BigInt(i)),
                 ]
                 .into_iter()
                 .collect(),
@@ -333,7 +333,7 @@ fn test_group_finalize_publishes_write_set() {
             VertexId::try_from_int64(11001).expect("test vertex id"),
             Tag::new(
                 "Person".to_string(),
-                vec![("name".to_string(), Value::string("published"))]
+                vec![("name".into(), Value::string("published"))]
                     .into_iter()
                     .collect(),
             ),

@@ -162,12 +162,12 @@ pub(super) fn eval_update_props(
     updates: &[(String, Expression)],
     replace_properties: bool,
     context: &mut ValueRowContext,
-) -> Result<HashMap<String, Value>, QueryError> {
+) -> Result<HashMap<Arc<str>, Value>, QueryError> {
     if !replace_properties {
         let mut props = HashMap::new();
         for (prop_name, expr) in updates.iter() {
             let val = eval_expr(expr, context)?;
-            props.insert(prop_name.clone(), val);
+            props.insert(Arc::from(prop_name.as_str()), val);
         }
         return Ok(props);
     }
@@ -181,10 +181,10 @@ pub(super) fn eval_update_props(
                 for (key, item) in entries.iter() {
                     match key {
                         Value::String(name) => {
-                            props.insert(name.to_string(), item.clone());
+                            props.insert(Arc::from(name.as_str()), item.clone());
                         }
                         Value::FixedString(name) => {
-                            props.insert(name.clone(), item.clone());
+                            props.insert(Arc::from(name.as_str()), item.clone());
                         }
                         _ => {
                             return Err(QueryError::execution(
@@ -195,7 +195,7 @@ pub(super) fn eval_update_props(
                 }
             }
             other => {
-                props.insert(prop_name.clone(), other);
+                props.insert(Arc::from(prop_name.as_str()), other);
             }
         }
     }

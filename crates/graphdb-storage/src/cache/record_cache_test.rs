@@ -12,7 +12,7 @@ fn test_vertex_cache_basic() {
     let vertex = CachedVertex {
         internal_id: 100,
         external_id: "test_vertex".to_string(),
-        properties: vec![("name".to_string(), Value::string("Alice"))],
+        properties: vec![("name".into(), Value::string("Alice"))],
         cached_at_ts: 0,
         generation: 0,
         create_ts: 0,
@@ -364,8 +364,8 @@ fn test_estimated_size_accuracy() {
         internal_id: 1,
         external_id: "test_vertex".to_string(),
         properties: vec![
-            ("name".to_string(), Value::string("Alice")),
-            ("age".to_string(), Value::Int(30)),
+            ("name".into(), Value::string("Alice")),
+            ("age".into(), Value::Int(30)),
         ],
         cached_at_ts: 0,
         generation: 0,
@@ -408,7 +408,7 @@ fn test_memory_weighted_eviction() {
         let vertex = CachedVertex {
             internal_id: i,
             external_id: format!("vertex_{}", i),
-            properties: vec![("data".to_string(), Value::string("x".repeat(50)))],
+            properties: vec![("data".into(), Value::string("x".repeat(50)))],
             cached_at_ts: 0,
             generation: 0,
             create_ts: 0,
@@ -440,7 +440,7 @@ fn test_memory_overflow_eviction() {
         let vertex = CachedVertex {
             internal_id: i,
             external_id: format!("v{}", i),
-            properties: vec![("data".to_string(), Value::string("x".repeat(100)))],
+            properties: vec![("data".into(), Value::string("x".repeat(100)))],
             cached_at_ts: 0,
             generation: 0,
             create_ts: 0,

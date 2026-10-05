@@ -33,6 +33,7 @@ use crate::edge::property_schema::PropertySchema;
 use crate::edge::{CsrShardSet, CsrWithProperties, MutableCsrTrait, RecordForm};
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
+use std::sync::Arc;
 
 /// Outcome of one offline record-form migration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,7 +67,7 @@ struct LiveEdge {
     rank: i64,
     edge_id: EdgeId,
     create_ts: Timestamp,
-    props: Vec<(String, Value)>,
+    props: Vec<(Arc<str>, Value)>,
 }
 
 /// Fresh shards, properties and owner map built without touching live state.
@@ -517,7 +518,7 @@ impl EdgeStore {
         edge_id: EdgeId,
         current: RecordForm,
         target: RecordForm,
-    ) -> StorageResult<Vec<(String, Value)>> {
+    ) -> StorageResult<Vec<(Arc<str>, Value)>> {
         let props = match current {
             RecordForm::Pure => Vec::new(),
             RecordForm::Columnar => self
@@ -595,11 +596,11 @@ mod tests {
     fn weight_schema() -> EdgeSchema {
         EdgeSchema {
             label_id: 0,
-            label_name: "rates".to_string(),
+            label_name: "rates".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
@@ -631,7 +632,7 @@ mod tests {
     fn bundled_eligibility_covers_all_schema_shapes() {
         use crate::edge::{bundled_ineligibility_reason, is_bundled_eligible};
         let prop = |data_type| StoragePropertyDef {
-            name: "p".to_string(),
+            name: "p".into(),
             data_type,
             nullable: false,
             default_value: None,
@@ -736,10 +737,10 @@ mod tests {
     fn bundled_insert_read_update_delete() {
         let mut table = make_bundled_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .expect("bundled insert");
         table
-            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
+            .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.5))], 100)
             .expect("bundled insert");
         table
             .insert_edge(0, 3, 0, &[], 100)
@@ -747,22 +748,19 @@ mod tests {
 
         // Point reads bypass the columnar store.
         let edge = table.get_edge(0, 1, 0, 200).expect("edge present");
-        assert_eq!(
-            edge.properties,
-            vec![("weight".to_string(), Value::Double(1.5))]
-        );
+        assert_eq!(edge.properties, vec![("weight".into(), Value::Double(1.5))]);
         let null_edge = table.get_edge(0, 3, 0, 200).expect("edge present");
         assert!(null_edge.properties.is_empty());
 
         // Row scans decode both directions from the value columns.
-        let mut out: Vec<(u32, Vec<(String, Value)>)> = table
+        let mut out: Vec<(u32, Vec<(Arc<str>, Value)>)> = table
             .out_edges(0, 200)
             .into_iter()
             .map(|e| (e.dst_vid.as_int64().unwrap_or(-1) as u32, e.properties))
             .collect();
         out.sort_by_key(|(dst, _)| *dst);
         assert_eq!(out.len(), 3);
-        assert_eq!(out[0].1, vec![("weight".to_string(), Value::Double(1.5))]);
+        assert_eq!(out[0].1, vec![("weight".into(), Value::Double(1.5))]);
 
         // Point writes land in both directions.
         assert!(table
@@ -771,13 +769,13 @@ mod tests {
         let updated = table.get_edge(0, 1, 0, 400).expect("edge present");
         assert_eq!(
             updated.properties,
-            vec![("weight".to_string(), Value::Double(9.25))]
+            vec![("weight".into(), Value::Double(9.25))]
         );
         let in_edges = table.in_edges(1, 400);
         assert_eq!(in_edges.len(), 1);
         assert_eq!(
             in_edges[0].properties,
-            vec![("weight".to_string(), Value::Double(9.25))]
+            vec![("weight".into(), Value::Double(9.25))]
         );
 
         // Deletes drop rows; the surviving set stays aligned.
@@ -787,7 +785,7 @@ mod tests {
         let survivor = table.get_edge(0, 1, 0, 600).expect("survivor");
         assert_eq!(
             survivor.properties,
-            vec![("weight".to_string(), Value::Double(9.25))]
+            vec![("weight".into(), Value::Double(9.25))]
         );
     }
 
@@ -795,13 +793,13 @@ mod tests {
     fn bundled_rejects_rank_and_duplicates() {
         let mut table = make_bundled_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .expect("insert");
         assert!(table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(2.0))], 100)
             .is_err());
         assert!(table
-            .insert_edge(0, 2, 3, &[("weight".to_string(), Value::Double(2.0))], 100)
+            .insert_edge(0, 2, 3, &[("weight".into(), Value::Double(2.0))], 100)
             .is_err());
     }
 
@@ -810,7 +808,7 @@ mod tests {
         use crate::mvcc_visibility::PendingGate;
         let mut table = make_bundled_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .expect("insert");
         let vm = graphdb_transaction::VersionManager::new();
         let gate = PendingGate::new(&vm, None);
@@ -823,7 +821,7 @@ mod tests {
             .expect("edge present");
         assert!(none.properties.is_empty());
         let missing = table
-            .get_edge_with_gate_projected(0, 1, 0, 200, &gate, Some(&["nope".to_string()]))
+            .get_edge_with_gate_projected(0, 1, 0, 200, &gate, Some(&["nope".into()]))
             .expect("edge present");
         assert!(missing.properties.is_empty());
     }
@@ -832,7 +830,7 @@ mod tests {
     fn bundled_schema_changes_require_offline_rebuild() {
         let mut table = make_bundled_table();
         assert!(table
-            .prepare_add_property("extra".to_string(), DataType::Double, true, None)
+            .prepare_add_property("extra".into(), DataType::Double, true, None)
             .is_err());
         assert!(table.prepare_drop_property("weight").is_err());
     }
@@ -841,16 +839,13 @@ mod tests {
     fn bundled_freeze_preserves_valued_groups() {
         let mut table = make_bundled_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .expect("insert");
         table
             .freeze_group(true, 0, graphdb_core::types::Timestamp::MAX, 0.0)
             .expect("valued freeze packs topology plus values");
         let edge = table.get_edge(0, 1, 0, 200).expect("edge present");
-        assert_eq!(
-            edge.properties,
-            vec![("weight".to_string(), Value::Double(1.0))]
-        );
+        assert_eq!(edge.properties, vec![("weight".into(), Value::Double(1.0))]);
         table.unfreeze_group(true, 0).expect("unfreeze restores");
         let live = table.get_edge(0, 1, 0, 200).expect("edge present");
         assert_eq!(live.properties, edge.properties);
@@ -868,7 +863,7 @@ mod tests {
     fn bundled_checkpoint_roundtrip_preserves_values() {
         let mut table = make_bundled_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .expect("insert");
         table.insert_edge(0, 2, 0, &[], 100).expect("insert");
         table.delete_edge(5, 6, 0, 150).expect("no-op delete");
@@ -883,10 +878,7 @@ mod tests {
         loaded.load(dir.path()).expect("load succeeds");
         assert_eq!(loaded.schema.record_form, RecordForm::Bundled);
         let edge = loaded.get_edge(0, 1, 0, 200).expect("edge present");
-        assert_eq!(
-            edge.properties,
-            vec![("weight".to_string(), Value::Double(1.5))]
-        );
+        assert_eq!(edge.properties, vec![("weight".into(), Value::Double(1.5))]);
         assert_eq!(loaded.out_edges(0, 200).len(), 2);
         // Writes continue on the loaded form.
         loaded
@@ -895,7 +887,7 @@ mod tests {
         let updated = loaded.get_edge(0, 1, 0, 400).expect("edge present");
         assert_eq!(
             updated.properties,
-            vec![("weight".to_string(), Value::Double(3.25))]
+            vec![("weight".into(), Value::Double(3.25))]
         );
     }
 
@@ -905,10 +897,10 @@ mod tests {
         let mut table = make_columnar_table();
         assert_eq!(table.schema.record_form, RecordForm::Columnar);
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .expect("insert");
         table
-            .insert_edge(2, 3, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
+            .insert_edge(2, 3, 0, &[("weight".into(), Value::Double(2.5))], 100)
             .expect("insert");
 
         let stats = table
@@ -918,10 +910,7 @@ mod tests {
         assert_eq!(table.schema.record_form, RecordForm::Bundled);
         assert!(table.properties.is_inline_stub());
         let edge = table.get_edge(0, 1, 0, 200).expect("edge present");
-        assert_eq!(
-            edge.properties,
-            vec![("weight".to_string(), Value::Double(1.5))]
-        );
+        assert_eq!(edge.properties, vec![("weight".into(), Value::Double(1.5))]);
         // The migration arms the mandatory-checkpoint fence; flushing the
         // new form lifts it so further switches are legal again.
         table
@@ -944,7 +933,7 @@ mod tests {
         let restored = table.get_edge(2, 3, 0, 200).expect("edge present");
         assert_eq!(
             restored.properties,
-            vec![("weight".to_string(), Value::Double(2.5))]
+            vec![("weight".into(), Value::Double(2.5))]
         );
     }
 
@@ -957,13 +946,13 @@ mod tests {
         let schema = EdgeSchema {
             properties: vec![
                 StoragePropertyDef {
-                    name: "a".to_string(),
+                    name: "a".into(),
                     data_type: DataType::Double,
                     nullable: true,
                     default_value: None,
                 },
                 StoragePropertyDef {
-                    name: "b".to_string(),
+                    name: "b".into(),
                     data_type: DataType::Double,
                     nullable: true,
                     default_value: None,
@@ -981,13 +970,13 @@ mod tests {
         use crate::cursor::ScanPredicate;
         let mut table = make_bundled_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .expect("insert");
         table
-            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
+            .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.5))], 100)
             .expect("insert");
         let equal = vec![ScanPredicate::ColumnEqual {
-            column: "weight".to_string(),
+            column: "weight".into(),
             value: Value::Double(1.5),
         }];
         assert!(table.matches_pushdown(EdgeId(0), 200, &equal));
@@ -995,7 +984,7 @@ mod tests {
         let hits = table.filter_edge_ids(&equal, 200, None);
         assert_eq!(hits, vec![EdgeId(0)]);
         let missing = vec![ScanPredicate::ColumnEqual {
-            column: "nope".to_string(),
+            column: "nope".into(),
             value: Value::Double(1.5),
         }];
         assert!(table.filter_edge_ids(&missing, 200, None).is_empty());
@@ -1005,10 +994,10 @@ mod tests {
     fn migration_plan_quotes_cost_without_touching_state() {
         let mut table = make_columnar_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .expect("insert");
         table
-            .insert_edge(2, 3, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
+            .insert_edge(2, 3, 0, &[("weight".into(), Value::Double(2.5))], 100)
             .expect("insert");
         table.delete_edge(0, 1, 0, 150).expect("delete");
 
@@ -1044,7 +1033,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temporary edge table directory");
         let mut table = make_columnar_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .expect("insert");
         assert!(!table.is_migration_checkpoint_required());
 
@@ -1057,12 +1046,9 @@ mod tests {
         // Reads see the new form with identical content. Writes stay fenced
         // until the mandatory checkpoint persists the switched form.
         let edge = table.get_edge(0, 1, 0, 200).expect("edge present");
-        assert_eq!(
-            edge.properties,
-            vec![("weight".to_string(), Value::Double(1.5))]
-        );
+        assert_eq!(edge.properties, vec![("weight".into(), Value::Double(1.5))]);
         assert!(table
-            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 200)
+            .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.5))], 200)
             .is_err());
         table
             .flush(
@@ -1072,7 +1058,7 @@ mod tests {
             .expect("mandatory checkpoint");
         assert!(!table.is_migration_checkpoint_required());
         table
-            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 200)
+            .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.5))], 200)
             .expect("write after checkpoint");
         assert!(table.audit_copy_drift().is_empty());
 
@@ -1084,7 +1070,7 @@ mod tests {
         let restored = table.get_edge(0, 2, 0, 300).expect("edge present");
         assert_eq!(
             restored.properties,
-            vec![("weight".to_string(), Value::Double(2.5))]
+            vec![("weight".into(), Value::Double(2.5))]
         );
         assert!(table.audit_copy_drift().is_empty());
     }
@@ -1093,12 +1079,12 @@ mod tests {
     fn failed_switch_rolls_back_to_original_form() {
         let mut table = make_columnar_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .expect("insert");
         // Inline forms reject nonzero ranks: the switch must fail with the
         // original form, data and audit untouched.
         table
-            .insert_edge(0, 2, 3, &[("weight".to_string(), Value::Double(2.5))], 100)
+            .insert_edge(0, 2, 3, &[("weight".into(), Value::Double(2.5))], 100)
             .expect("ranked insert");
         assert!(table
             .switch_record_form_online(RecordForm::Bundled)
@@ -1108,10 +1094,7 @@ mod tests {
         assert!(table.has_edge(0, 1, 0, 200));
         assert!(table.has_edge(0, 2, 3, 200));
         let edge = table.get_edge(0, 2, 3, 200).expect("ranked edge intact");
-        assert_eq!(
-            edge.properties,
-            vec![("weight".to_string(), Value::Double(2.5))]
-        );
+        assert_eq!(edge.properties, vec![("weight".into(), Value::Double(2.5))]);
         assert!(table.audit_copy_drift().is_empty());
     }
 
@@ -1126,7 +1109,7 @@ mod tests {
             )
             .expect("checkpoint gives the WAL a home");
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .expect("post-checkpoint write appends WAL");
         assert!(super::super::wal::wal_path(dir.path()).exists());
 
@@ -1149,10 +1132,7 @@ mod tests {
         loaded.load(dir.path()).expect("load succeeds");
         assert_eq!(loaded.schema.record_form, RecordForm::Bundled);
         let edge = loaded.get_edge(0, 1, 0, 200).expect("edge present");
-        assert_eq!(
-            edge.properties,
-            vec![("weight".to_string(), Value::Double(1.5))]
-        );
+        assert_eq!(edge.properties, vec![("weight".into(), Value::Double(1.5))]);
         assert!(loaded.audit_copy_drift().is_empty());
     }
 
@@ -1160,7 +1140,7 @@ mod tests {
     fn bundled_delete_drops_row_and_keyed_revert_reports_false() {
         let mut table = make_bundled_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .expect("insert");
 
         // Erase-on-delete: the row is dropped from both directions, so no

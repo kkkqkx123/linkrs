@@ -778,8 +778,8 @@ mod tests {
         assert!(TypeUtils::can_cast(&map_ty, &person));
         // Duplicate field names break isomorphism.
         let dup = DataType::Struct(Arc::new(StructTypeInfo::new(vec![
-            ("x".to_string(), DataType::Int),
-            ("x".to_string(), DataType::Int),
+            ("x".into(), DataType::Int),
+            ("x".into(), DataType::Int),
         ])));
         assert!(!TypeUtils::can_cast(&dup, &map_ty));
 

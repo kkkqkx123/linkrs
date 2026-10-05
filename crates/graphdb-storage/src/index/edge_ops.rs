@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::index::helpers::{edge_entity_ref, effective_index_values, merged_included_columns};
 use crate::index::key_codec::key_builder::normalize_int_value;
@@ -27,7 +28,7 @@ impl EdgeIndexOps for IndexDataManagerImpl {
         &self,
         edge: &EdgeIdentity<'_>,
         index_name: &str,
-        props: &[(String, Value)],
+        props: &[(Arc<str>, Value)],
         write_ts: Timestamp,
     ) -> Result<(), StorageError> {
         let EdgeIdentity {
@@ -55,7 +56,7 @@ impl EdgeIndexOps for IndexDataManagerImpl {
             let new_values = effective_index_values(index_definition.as_ref(), props, Vec::new());
 
             let values: Vec<Value>;
-            let included_columns: Vec<(String, Value)>;
+            let included_columns: Vec<(Arc<str>, Value)>;
             if !new_values.is_empty() {
                 values = new_values;
                 included_columns = if covering {

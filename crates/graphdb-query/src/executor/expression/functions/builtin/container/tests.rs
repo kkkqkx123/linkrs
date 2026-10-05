@@ -208,9 +208,9 @@ fn test_struct_pack() {
 
 #[test]
 fn test_struct_extract() {
-    let mut map = std::collections::HashMap::new();
-    map.insert("name".to_string(), Value::string("Alice"));
-    map.insert("age".to_string(), Value::Int(30));
+    let mut map: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+    map.insert("name".into(), Value::string("Alice"));
+    map.insert("age".into(), Value::Int(30));
     let result = ContainerFunction::StructExtract
         .execute(&[Value::string_map(map), Value::string("name")])
         .expect("struct_extract should succeed");
@@ -243,8 +243,8 @@ fn test_element_at_list() {
 
 #[test]
 fn test_element_at_map() {
-    let mut map = std::collections::HashMap::new();
-    map.insert("key".to_string(), Value::string("value"));
+    let mut map: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+    map.insert("key".into(), Value::string("value"));
     let result = ContainerFunction::ElementAt
         .execute(&[Value::string_map(map), Value::string("key")])
         .expect("element_at should succeed");
@@ -253,7 +253,7 @@ fn test_element_at_map() {
 
 #[test]
 fn test_cardinality() {
-    let map = std::collections::HashMap::new();
+    let map: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
     let result = ContainerFunction::Cardinality
         .execute(&[Value::string_map(map)])
         .expect("cardinality should succeed");
@@ -262,9 +262,9 @@ fn test_cardinality() {
 
 #[test]
 fn test_map_keys() {
-    let mut map = std::collections::HashMap::new();
-    map.insert("a".to_string(), Value::Int(1));
-    map.insert("b".to_string(), Value::Int(2));
+    let mut map: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+    map.insert("a".into(), Value::Int(1));
+    map.insert("b".into(), Value::Int(2));
     let result = ContainerFunction::MapKeys
         .execute(&[Value::string_map(map)])
         .expect("map_keys should succeed");
@@ -273,9 +273,9 @@ fn test_map_keys() {
 
 #[test]
 fn test_map_values() {
-    let mut map = std::collections::HashMap::new();
-    map.insert("a".to_string(), Value::Int(1));
-    map.insert("b".to_string(), Value::Int(2));
+    let mut map: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+    map.insert("a".into(), Value::Int(1));
+    map.insert("b".into(), Value::Int(2));
     let result = ContainerFunction::MapValues
         .execute(&[Value::string_map(map)])
         .expect("map_values should succeed");

@@ -13,11 +13,11 @@ pub(super) fn watermark_at(ts: Timestamp) -> graphdb_transaction::MvccWatermarks
 pub(super) fn create_test_schema() -> EdgeSchema {
     EdgeSchema {
         label_id: 0,
-        label_name: "knows".to_string(),
+        label_name: "knows".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![StoragePropertyDef {
-            name: "weight".to_string(),
+            name: "weight".into(),
             data_type: DataType::Double,
             nullable: false,
             default_value: Some(Value::Double(0.0)),

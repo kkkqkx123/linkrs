@@ -23,7 +23,7 @@ struct StagedColumnOut<'a> {
     internal_ids: &'a mut Vec<u32>,
     vids: &'a mut Vec<VertexId>,
     tag_names: &'a mut Vec<String>,
-    union_names: &'a mut Vec<String>,
+    union_names: &'a mut Vec<std::sync::Arc<str>>,
     columns: &'a mut Vec<ColumnValues>,
 }
 
@@ -45,7 +45,7 @@ pub(crate) struct GraphVertexCursor {
     offset_remaining: usize,
     emitted: usize,
     id_range: Option<Range<i64>>,
-    projection: Option<Vec<String>>,
+    projection: Option<Vec<Arc<str>>>,
     /// Pushed conjunctive scan predicates evaluated on decoded rows.
     predicate: Vec<crate::cursor::ScanPredicate>,
     exhausted: bool,
@@ -275,7 +275,7 @@ impl GraphVertexCursor {
         if rows_sel.is_empty() {
             return;
         }
-        let mut decoded_names: Vec<String> = Vec::new();
+        let mut decoded_names: Vec<std::sync::Arc<str>> = Vec::new();
         for &index in &rows_sel {
             for (name, _) in &self.staged_rows[index].properties {
                 if !decoded_names.contains(name) {
@@ -283,7 +283,7 @@ impl GraphVertexCursor {
                 }
             }
         }
-        let decoded: Vec<(String, ColumnValues)> = decoded_names
+        let decoded: Vec<(std::sync::Arc<str>, ColumnValues)> = decoded_names
             .into_iter()
             .map(|name| {
                 let values: Vec<Option<Value>> = rows_sel
@@ -331,7 +331,7 @@ impl VertexCursor for GraphVertexCursor {
     fn next_batch(&mut self, batch_size: usize) -> Result<Vec<Vertex>, StorageError> {
         self.scan_batch(batch_size, |vid, internal_id, tag_name, props| {
             let _ = internal_id;
-            let props_map: HashMap<String, Value> = props.into_iter().collect();
+            let props_map: HashMap<std::sync::Arc<str>, Value> = props.into_iter().collect();
             Vertex::new(vid, Tag::new(tag_name, props_map))
         })
     }
@@ -352,7 +352,7 @@ impl VertexCursor for GraphVertexCursor {
 
     fn next_column_batch(
         &mut self,
-        prop_names: &[String],
+        prop_names: &[std::sync::Arc<str>],
         batch_size: usize,
     ) -> Result<crate::cursor::VertexColumnBatch, StorageError> {
         if self.exhausted || self.tags.labels.is_empty() {
@@ -377,7 +377,7 @@ impl GraphVertexCursor {
     /// limit, and assemble the final [`VertexColumnBatch`].
     fn collect_column_batch(
         &mut self,
-        prop_names: &[String],
+        prop_names: &[std::sync::Arc<str>],
         batch_size: usize,
     ) -> Result<crate::cursor::VertexColumnBatch, StorageError> {
         let data_store = self.ctx.data_store().clone();
@@ -393,7 +393,7 @@ impl GraphVertexCursor {
             let mut internal_ids: Vec<u32> = Vec::new();
             let mut tag_names: Vec<String> = Vec::new();
             // Union of decoded column names, grown as tables are processed.
-            let mut union_names: Vec<String> = Vec::new();
+            let mut union_names: Vec<std::sync::Arc<str>> = Vec::new();
             let mut columns: Vec<crate::cursor::ColumnValues> = Vec::new();
 
             while internal_ids.len() < batch_size && !self.exhausted {
@@ -447,12 +447,12 @@ impl GraphVertexCursor {
                 // Decode names for this table run.  A full-row decode (empty
                 // projection) decodes every column of the table; otherwise the
                 // projection plus any pushed-predicate columns.
-                let run_names: Vec<String> = if prop_names.is_empty() {
+                let run_names: Vec<std::sync::Arc<str>> = if prop_names.is_empty() {
                     Vec::new()
                 } else {
                     let mut run = prop_names.to_vec();
                     for predicate in &self.predicate {
-                        let column = predicate.column().to_string();
+                        let column: std::sync::Arc<str> = predicate.column().into();
                         if !run.contains(&column) {
                             run.push(column);
                         }
@@ -560,7 +560,10 @@ impl GraphVertexCursor {
         } else {
             let mut keep = vec![true; internal_ids.len()];
             for predicate in &self.predicate {
-                match union_names.iter().position(|n| n == predicate.column()) {
+                match union_names
+                    .iter()
+                    .position(|n| *n.as_ref() == *predicate.column())
+                {
                     Some(index) => {
                         let column = &columns[index];
                         for (row, ok) in keep.iter_mut().enumerate() {
@@ -632,7 +635,7 @@ impl GraphVertexCursor {
     fn scan_batch<T>(
         &mut self,
         batch_size: usize,
-        mut build: impl FnMut(VertexId, i64, String, Vec<(String, Value)>) -> T,
+        mut build: impl FnMut(VertexId, i64, String, Vec<(std::sync::Arc<str>, Value)>) -> T,
     ) -> Result<Vec<T>, StorageError> {
         if self.exhausted || self.tags.labels.is_empty() {
             return Ok(Vec::new());
@@ -779,8 +782,8 @@ impl GraphVertexCursor {
     /// projection order, missing columns as all-null); an empty `prop_names`
     /// returns every decoded column.
     fn assemble_column_batch(
-        prop_names: &[String],
-        union_names: Vec<String>,
+        prop_names: &[std::sync::Arc<str>],
+        union_names: Vec<std::sync::Arc<str>>,
         columns: Vec<crate::cursor::ColumnValues>,
         internal_ids: Vec<u32>,
         vids: Vec<VertexId>,
@@ -803,13 +806,13 @@ impl GraphVertexCursor {
                 .map(|name| {
                     let values = union_names
                         .iter()
-                        .position(|n| n == name)
+                        .position(|n| n.as_ref() == name.as_ref())
                         .and_then(|index| columns.get(index).cloned())
                         .unwrap_or_else(|| {
                             crate::cursor::ColumnValues::General(vec![None; row_count])
                         });
                     crate::cursor::PropertyColumn {
-                        name: name.clone(),
+                        name: name.clone().into(),
                         data_type: graphdb_core::types::DataType::Empty,
                         values,
                     }

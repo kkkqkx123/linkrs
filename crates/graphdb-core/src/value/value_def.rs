@@ -423,7 +423,7 @@ impl Value {
     }
 
     /// Create a new Map value from string-keyed entries (the common case).
-    pub fn string_map(map: HashMap<String, Value>) -> Self {
+    pub fn string_map<K: AsRef<str>>(map: impl IntoIterator<Item = (K, Value)>) -> Self {
         Value::Map(Box::new(
             map.into_iter()
                 .map(|(k, v)| (Value::string(k), v))

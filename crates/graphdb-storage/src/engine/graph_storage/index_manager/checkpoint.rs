@@ -181,7 +181,7 @@ pub(crate) fn build_vertex_index_data(
             .filter_map(|name| {
                 vertex
                     .property_value(name)
-                    .map(|value| (name.clone(), value))
+                    .map(|value| (name.as_str().into(), value))
             })
             .collect::<Vec<_>>();
         let vid_value = Value::from(vertex.vid);
@@ -215,16 +215,16 @@ pub(crate) fn build_edge_index_data(
         let indexed_values: Vec<Value> = index
             .fields
             .iter()
-            .filter_map(|field| edge.props.get(&field.name).cloned())
+            .filter_map(|field| edge.props.get(field.name.as_str()).cloned())
             .collect();
         let included_columns = index
             .properties
             .iter()
             .filter_map(|name| {
                 edge.props
-                    .get(name)
+                    .get(name.as_str())
                     .cloned()
-                    .map(|value| (name.clone(), value))
+                    .map(|value| (name.as_str().into(), value))
             })
             .collect::<Vec<_>>();
         let src_value = Value::from(edge.src);

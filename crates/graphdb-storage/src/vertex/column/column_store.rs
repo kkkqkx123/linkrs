@@ -1,4 +1,5 @@
 use graphdb_core::{DataType, StorageError, StorageResult, Value};
+use std::sync::Arc;
 
 use super::column::Column;
 use super::mvcc::VersionChainStats;
@@ -9,7 +10,7 @@ use crate::encoding::EncodingType;
 use graphdb_core::types::Timestamp;
 
 /// One projected row: ordered `(column name, value-or-null)` pairs.
-type ProjectedRow = Vec<(String, Option<Value>)>;
+type ProjectedRow = Vec<(Arc<str>, Option<Value>)>;
 /// Projected rows in request order: one entry per requested row.
 type ProjectedRowBatch = Vec<ProjectedRow>;
 
@@ -419,7 +420,7 @@ impl ColumnStore {
         columns.iter().map(f).collect()
     }
 
-    pub fn set(&self, row_idx: usize, values: &[(String, Value)]) -> StorageResult<()> {
+    pub fn set(&self, row_idx: usize, values: &[(Arc<str>, Value)]) -> StorageResult<()> {
         for (name, value) in values {
             self.check_column_available(name)?;
             if let Some(col) = self.get_column(name) {
@@ -430,7 +431,7 @@ impl ColumnStore {
     }
 
     pub fn get(&self, row_idx: usize) -> ProjectedRow {
-        self.for_each_column(|col| (col.name.clone(), col.get(row_idx)))
+        self.for_each_column(|col| (col.name.as_str().into(), col.get(row_idx)))
     }
 
     // -----------------------------------------------------------------------
@@ -441,7 +442,7 @@ impl ColumnStore {
     pub fn set_versioned(
         &self,
         row_idx: usize,
-        values: &[(String, Value)],
+        values: &[(Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
         for (name, value) in values {
@@ -472,7 +473,7 @@ impl ColumnStore {
 
     /// Read all columns for one row as visible at `query_ts`.
     pub fn get_at_ts(&self, row_idx: usize, query_ts: Timestamp) -> ProjectedRow {
-        self.for_each_column(|col| (col.name.clone(), col.get_at_ts(row_idx, query_ts)))
+        self.for_each_column(|col| (col.name.as_str().into(), col.get_at_ts(row_idx, query_ts)))
     }
 
     /// Start timestamps of the per-column versions covering `query_ts`.
@@ -490,7 +491,7 @@ impl ColumnStore {
     pub fn get_projected_with_stamps_at_ts(
         &self,
         row_idx: usize,
-        projection: &[String],
+        projection: &[Arc<str>],
         query_ts: Timestamp,
     ) -> (ProjectedRow, Vec<Timestamp>) {
         let mut values = Vec::with_capacity(projection.len());
@@ -515,7 +516,7 @@ impl ColumnStore {
     pub fn get_projected_at_ts(
         &self,
         row_idx: usize,
-        projection: &[String],
+        projection: &[Arc<str>],
         query_ts: Timestamp,
     ) -> ProjectedRow {
         projection
@@ -554,7 +555,7 @@ impl ColumnStore {
                         col.name, row, e
                     ))
                 })?;
-                out[ri].push((col.name.clone(), value));
+                out[ri].push((col.name.as_str().into(), value));
             }
         }
         Ok(out)
@@ -565,7 +566,7 @@ impl ColumnStore {
     pub fn try_get_projected_batch_at_ts(
         &self,
         rows: &[usize],
-        projection: &[String],
+        projection: &[Arc<str>],
         query_ts: Timestamp,
     ) -> StorageResult<ProjectedRowBatch> {
         let mut out = vec![Vec::with_capacity(projection.len()); rows.len()];
@@ -573,7 +574,7 @@ impl ColumnStore {
             self.check_column_available(name)?;
             let column = self
                 .get_column(name)
-                .ok_or_else(|| StorageError::column_not_found(name.clone()))?;
+                .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
             for (ri, &row) in rows.iter().enumerate() {
                 let value = column.try_get_at_ts(row, query_ts).map_err(|e| {
                     StorageError::deserialize_error(format!(
@@ -591,19 +592,19 @@ impl ColumnStore {
     pub fn get_projected_columns_at_ts(
         &self,
         rows: &[usize],
-        names: &[String],
+        names: &[Arc<str>],
         query_ts: Timestamp,
-    ) -> Vec<(String, ColumnValues)> {
+    ) -> Vec<(Arc<str>, ColumnValues)> {
         if names.is_empty() {
             self.for_each_column(|column| {
                 if self.is_column_unavailable(&column.name) {
                     return (
-                        column.name.clone(),
+                        column.name.as_str().into(),
                         ColumnValues::General(vec![None; rows.len()]),
                     );
                 }
                 let values = decode_column_values_at_ts(column, rows, query_ts);
-                (column.name.clone(), values)
+                (column.name.as_str().into(), values)
             })
         } else {
             names

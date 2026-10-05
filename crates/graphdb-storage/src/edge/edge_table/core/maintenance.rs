@@ -548,7 +548,7 @@ mod tests {
     fn both_schema() -> EdgeSchema {
         EdgeSchema {
             label_id: 0,
-            label_name: "link".to_string(),
+            label_name: "link".into(),
             src_label: 0,
             dst_label: 0,
             properties: Vec::new(),
@@ -656,7 +656,7 @@ mod direction_migration_tests {
     fn both_schema() -> EdgeSchema {
         EdgeSchema {
             label_id: 0,
-            label_name: "link".to_string(),
+            label_name: "link".into(),
             src_label: 0,
             dst_label: 0,
             properties: Vec::new(),
@@ -747,7 +747,7 @@ mod direction_migration_tests {
         use graphdb_core::Value;
         let schema = EdgeSchema {
             properties: vec![StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
@@ -770,7 +770,7 @@ mod direction_migration_tests {
         assert!(table.can_accept_rank(0));
         assert!(!table.can_accept_rank(3));
         let err = table
-            .insert_edge(0, 1, 3, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 3, &[("weight".into(), Value::Double(1.0))], 100)
             .expect_err("nonzero rank on bundled must fail");
         assert!(err.to_string().contains("columnar record form"));
     }

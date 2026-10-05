@@ -71,6 +71,7 @@ fn column_block_matches_row_path_e2e() {
                             ("name".to_string(), Value::string(format!("node_{i}"))),
                         ]
                         .into_iter()
+                        .map(|(name, value)| (std::sync::Arc::from(name.as_str()), value))
                         .collect(),
                     ),
                 )
@@ -156,6 +157,7 @@ fn enrich_scan_slots_rule_differential() {
                             ("name".to_string(), Value::string(format!("node_{i}"))),
                         ]
                         .into_iter()
+                        .map(|(name, value)| (std::sync::Arc::from(name.as_str()), value))
                         .collect(),
                     ),
                 )

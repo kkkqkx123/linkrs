@@ -1727,8 +1727,7 @@ impl<
                                         "description".to_string(),
                                         change.details.description(),
                                     );
-                                    details
-                                        .insert("version".to_string(), change.version.to_string());
+                                    details.insert("version".into(), change.version.to_string());
                                     details
                                 },
                             })
@@ -1787,8 +1786,8 @@ impl<
                 change_type: format!("{:?}", change.details),
                 details: {
                     let mut details = std::collections::HashMap::new();
-                    details.insert("description".to_string(), change.details.description());
-                    details.insert("version".to_string(), change.version.to_string());
+                    details.insert("description".into(), change.details.description());
+                    details.insert("version".into(), change.version.to_string());
                     details
                 },
             })
@@ -1848,8 +1847,8 @@ impl<
                 change_type: format!("{:?}", change.details),
                 details: {
                     let mut details = std::collections::HashMap::new();
-                    details.insert("description".to_string(), change.details.description());
-                    details.insert("version".to_string(), change.version.to_string());
+                    details.insert("description".into(), change.details.description());
+                    details.insert("version".into(), change.version.to_string());
                     details
                 },
             })

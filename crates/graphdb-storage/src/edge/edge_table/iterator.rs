@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use graphdb_core::types::Timestamp;
 
@@ -204,7 +205,7 @@ pub struct EdgeTableScanIterator<'a> {
     max_records: Option<usize>,
     /// Current record count
     current_count: usize,
-    projection: Option<Vec<String>>,
+    projection: Option<Vec<Arc<str>>>,
     predicates: Vec<ScanPredicate>,
     pruned_groups: HashSet<usize>,
     segments_total: usize,
@@ -226,7 +227,7 @@ impl<'a> EdgeTableScanIterator<'a> {
     pub fn with_projection(
         table: &'a EdgeStore,
         ts: Timestamp,
-        projection: Option<Vec<String>>,
+        projection: Option<Vec<Arc<str>>>,
     ) -> Self {
         Self::with_predicates(table, ts, projection, Vec::new())
     }
@@ -241,7 +242,7 @@ impl<'a> EdgeTableScanIterator<'a> {
     pub fn with_predicates(
         table: &'a EdgeStore,
         ts: Timestamp,
-        projection: Option<Vec<String>>,
+        projection: Option<Vec<Arc<str>>>,
         predicates: Vec<ScanPredicate>,
     ) -> Self {
         let outgoing = table.has_out_edges();

@@ -23,7 +23,7 @@ fn layout_version_is_monotonic_and_domain_evidence_tracks_numeric_ids() {
                     VertexId::try_from_int64(id).expect("test vertex id"),
                     Tag::new(
                         "Person".to_string(),
-                        [("name".to_string(), Value::string(format!("p{id}")))]
+                        [("name".into(), Value::string(format!("p{id}")))]
                             .into_iter()
                             .collect(),
                     ),
@@ -46,7 +46,7 @@ fn layout_version_is_monotonic_and_domain_evidence_tracks_numeric_ids() {
             VertexId::try_from_string("alice").expect("test vertex id"),
             Tag::new(
                 "Person".to_string(),
-                [("name".to_string(), Value::string("Alice"))]
+                [("name".into(), Value::string("Alice"))]
                     .into_iter()
                     .collect(),
             ),
@@ -78,7 +78,7 @@ fn layout_version_bumps_after_compaction_and_restore() {
                     VertexId::try_from_int64(id).expect("test vertex id"),
                     Tag::new(
                         "Person".to_string(),
-                        [("name".to_string(), Value::string(format!("p{id}")))]
+                        [("name".into(), Value::string(format!("p{id}")))]
                             .into_iter()
                             .collect(),
                     ),

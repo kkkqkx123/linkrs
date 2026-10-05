@@ -14,6 +14,7 @@ use graphdb_core::{Value, Vertex};
 use graphdb_sync::{RebuildDoc, RebuildDocSource, RebuildEntity};
 #[cfg(feature = "vector")]
 use graphdb_sync::{VectorDocSource, VectorRebuildDoc};
+use std::sync::Arc;
 
 use crate::storage::{StorageError, StorageReader};
 
@@ -176,7 +177,7 @@ impl<S: StorageReader + ?Sized + Send + Sync> RebuildDocSource for StorageRebuil
                 }
                 let mut docs = Vec::new();
                 for edge in &page {
-                    if let Some(Value::String(text)) = edge.props.get(&self.field_name) {
+                    if let Some(Value::String(text)) = edge.props.get(self.field_name.as_str()) {
                         docs.push(RebuildDoc {
                             entity: RebuildEntity::Edge {
                                 src: edge.src,
@@ -240,7 +241,7 @@ impl<'a, S: StorageReader + ?Sized> StorageVectorSource<'a, S> {
         }
     }
 
-    fn vertex_properties(&self, vertex: &Vertex) -> Vec<(String, Value)> {
+    fn vertex_properties(&self, vertex: &Vertex) -> Vec<(Arc<str>, Value)> {
         // Single-label vertices carry exactly one tag; only its properties
         // are indexed.
         if vertex.tag.name != self.tag_name {
@@ -302,9 +303,9 @@ impl<S: StorageReader + ?Sized + Send + Sync> VectorDocSource for StorageVectorS
             let mut docs = Vec::new();
             for vertex in &page {
                 let properties = self.vertex_properties(vertex);
-                let has_vector = properties
-                    .iter()
-                    .any(|(name, value)| name == &self.field_name && value.as_vector().is_some());
+                let has_vector = properties.iter().any(|(name, value)| {
+                    name.as_ref() == self.field_name && value.as_vector().is_some()
+                });
                 if !has_vector {
                     continue;
                 }

@@ -1,6 +1,7 @@
 use super::{CsrWithProperties, ExportedRow};
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageResult, Value};
+use std::sync::Arc;
 
 impl CsrWithProperties {
     /// Export one edge row for per-group property sharding.
@@ -18,7 +19,7 @@ impl CsrWithProperties {
             .enumerate()
             .map(|(idx, schema)| {
                 let current = self.property_columns.get(idx).and_then(|col| col.get(pos));
-                (schema.name.to_string(), current)
+                (schema.name.clone(), current)
             })
             .collect();
         Some((vis.create_ts, vis.delete_ts, values))
@@ -35,15 +36,15 @@ impl CsrWithProperties {
         edge_id: EdgeId,
         create_ts: Timestamp,
         delete_ts: Option<Timestamp>,
-        values: &[(String, Option<Value>)],
+        values: &[(Arc<str>, Option<Value>)],
     ) -> StorageResult<()> {
         if self.mapped_row(edge_id).is_some() {
             return Ok(());
         }
         let mut present: Vec<(usize, Value)> = Vec::new();
-        let mut nulls: Vec<String> = Vec::new();
+        let mut nulls: Vec<Arc<str>> = Vec::new();
         for (name, opt) in values {
-            let Some(&idx) = self.column_index.get(name.as_str()) else {
+            let Some(&idx) = self.column_index.get(name.as_ref()) else {
                 continue;
             };
             match opt {

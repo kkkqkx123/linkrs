@@ -1,5 +1,6 @@
 use graphdb_core::types::{EdgeTypeInfo, Index, LabelId, PropertyDef, SpaceInfo, TagInfo};
 use graphdb_core::StorageError;
+use std::sync::Arc;
 
 use crate::{StorageOperationContext, StorageSchemaOps};
 
@@ -54,7 +55,13 @@ impl StorageSchemaOps for GraphStorage {
         deletions: Vec<String>,
     ) -> Result<bool, StorageError> {
         self.ctx.check_write_admission()?;
-        schema_writer::alter_tag(&self.ctx, space, tag_name, additions, deletions)
+        schema_writer::alter_tag(
+            &self.ctx,
+            space,
+            tag_name,
+            additions,
+            deletions.into_iter().map(Arc::from).collect(),
+        )
     }
 
     fn rename_vertex_property(
@@ -128,7 +135,13 @@ impl StorageSchemaOps for GraphStorage {
         deletions: Vec<String>,
     ) -> Result<bool, StorageError> {
         self.ctx.check_write_admission()?;
-        schema_writer::alter_edge_type(&self.ctx, space, edge_type_name, additions, deletions)
+        schema_writer::alter_edge_type(
+            &self.ctx,
+            space,
+            edge_type_name,
+            additions,
+            deletions.into_iter().map(Arc::from).collect(),
+        )
     }
 
     fn rename_edge_type(

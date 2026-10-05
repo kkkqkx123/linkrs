@@ -380,7 +380,7 @@ mod tests {
             .insert_to_group_and_scope_with_name(expr(2), Some("b".to_string()), unflat_pos)
             .unwrap();
         input
-            .insert_name_for_group("bare".to_string(), unflat_pos)
+            .insert_name_for_group("bare".into(), unflat_pos)
             .unwrap();
         let mut out = FactorizedSchema::new();
         SinkOperatorUtil::recompute_schema(&input, &[expr(1)], &mut out).unwrap();
@@ -403,7 +403,7 @@ mod tests {
             .expect_err("named scope OOR must fail");
         assert_eq!(err, FactorizationError::GroupPosOutOfRange(99));
         let err = schema
-            .insert_name_for_group("bare".to_string(), 99)
+            .insert_name_for_group("bare".into(), 99)
             .expect_err("bare name OOR must fail");
         assert_eq!(err, FactorizationError::GroupPosOutOfRange(99));
     }
@@ -434,9 +434,7 @@ mod tests {
         schema
             .insert_to_group_and_scope_with_name(expr(1), Some("shared".to_string()), g0)
             .unwrap();
-        schema
-            .insert_name_for_group("shared".to_string(), g1)
-            .unwrap();
+        schema.insert_name_for_group("shared".into(), g1).unwrap();
         assert_eq!(
             schema.resolve_group_pos(Some(&expr(1)), Some("shared")),
             Some(g0)

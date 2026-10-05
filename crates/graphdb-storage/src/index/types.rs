@@ -42,7 +42,7 @@ pub(crate) struct IndexIdentity {
 pub struct IndexRecord {
     pub created_ts: Timestamp,
     pub deleted_ts: Option<Timestamp>,
-    pub included_columns: Option<Vec<(String, Value)>>,
+    pub included_columns: Option<Vec<(Arc<str>, Value)>>,
     pub entity_ref: Option<EntityRef>,
 }
 
@@ -56,7 +56,10 @@ impl IndexRecord {
         }
     }
 
-    pub fn new_with_columns(created_ts: Timestamp, included_columns: Vec<(String, Value)>) -> Self {
+    pub fn new_with_columns(
+        created_ts: Timestamp,
+        included_columns: Vec<(Arc<str>, Value)>,
+    ) -> Self {
         Self {
             created_ts,
             deleted_ts: None,
@@ -149,7 +152,7 @@ mod tests {
 
     #[test]
     fn index_record_new_with_columns() {
-        let columns = vec![("name".to_string(), Value::string("test"))];
+        let columns = vec![("name".into(), Value::string("test"))];
         let record = IndexRecord::new_with_columns(10, columns.clone());
         assert_eq!(record.created_ts, 10);
         assert_eq!(record.included_columns, Some(columns));

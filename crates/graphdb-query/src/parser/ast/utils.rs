@@ -706,7 +706,7 @@ mod tests {
         assert!(const_expression.expression().is_some());
 
         // Test variable expressions
-        let var_expression = ExprFactory::variable("x".to_string(), ctx.clone());
+        let var_expression = ExprFactory::variable("x".into(), ctx.clone());
         assert!(var_expression.expression().is_some());
 
         // Testing binary expressions

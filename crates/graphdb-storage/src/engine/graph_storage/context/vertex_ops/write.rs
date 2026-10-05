@@ -1,6 +1,7 @@
 use graphdb_core::types::{LabelId, Timestamp, VertexId};
 use graphdb_core::{StorageError, StorageResult, Value};
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use crate::vertex::WriteScope;
 
@@ -17,7 +18,7 @@ impl GraphStorageContext {
         &self,
         label: LabelId,
         external_id: &str,
-        properties: &[(String, Value)],
+        properties: &[(std::sync::Arc<str>, Value)],
         ts: Timestamp,
         scope: &mut WriteScope,
     ) -> StorageResult<()> {
@@ -41,7 +42,7 @@ impl GraphStorageContext {
         &self,
         label: LabelId,
         external_id: i64,
-        properties: &[(String, Value)],
+        properties: &[(Arc<str>, Value)],
         ts: Timestamp,
         scope: &mut WriteScope,
     ) -> StorageResult<()> {

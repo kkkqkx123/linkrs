@@ -849,7 +849,7 @@ impl graphdb_transaction::UndoTarget for GraphStorage {
     fn restore_edge(
         &self,
         edge: graphdb_core::types::EdgeIdentifier,
-        properties: Vec<(String, graphdb_core::Value)>,
+        properties: Vec<(std::sync::Arc<str>, graphdb_core::Value)>,
         ts: graphdb_transaction::wal::Timestamp,
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         graphdb_core::types::UndoTarget::restore_edge(&*self.ctx, edge, properties, ts)
@@ -877,7 +877,7 @@ impl graphdb_transaction::UndoTarget for GraphStorage {
     fn revert_delete_vertex_properties(
         &self,
         label_name: &str,
-        prop_names: &[String],
+        prop_names: &[Arc<str>],
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         graphdb_core::types::UndoTarget::revert_delete_vertex_properties(
             &*self.ctx, label_name, prop_names,
@@ -889,7 +889,7 @@ impl graphdb_transaction::UndoTarget for GraphStorage {
         src_label: &str,
         dst_label: &str,
         edge_label: &str,
-        prop_names: &[String],
+        prop_names: &[Arc<str>],
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         graphdb_core::types::UndoTarget::revert_delete_edge_properties(
             &*self.ctx, src_label, dst_label, edge_label, prop_names,
@@ -917,8 +917,8 @@ impl graphdb_transaction::UndoTarget for GraphStorage {
     fn revert_rename_vertex_properties(
         &self,
         label: &str,
-        current_names: &[String],
-        original_names: &[String],
+        current_names: &[Arc<str>],
+        original_names: &[Arc<str>],
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         graphdb_core::types::UndoTarget::revert_rename_vertex_properties(
             &*self.ctx,
@@ -933,8 +933,8 @@ impl graphdb_transaction::UndoTarget for GraphStorage {
         src_label: &str,
         dst_label: &str,
         edge_label: &str,
-        current_names: &[String],
-        original_names: &[String],
+        current_names: &[Arc<str>],
+        original_names: &[Arc<str>],
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         graphdb_core::types::UndoTarget::revert_rename_edge_properties(
             &*self.ctx,

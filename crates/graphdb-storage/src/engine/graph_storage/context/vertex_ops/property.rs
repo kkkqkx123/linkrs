@@ -1,6 +1,7 @@
 use graphdb_core::types::{LabelId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use crate::vertex::IdKey;
 
@@ -26,7 +27,7 @@ impl GraphStorageContext {
             return self.stage_vertex_update(
                 label,
                 &IdKey::Text(external_id.to_string()),
-                vec![(property_name.to_string(), value.clone())],
+                vec![(Arc::from(property_name), value.clone())],
                 ts,
             );
         }
@@ -81,7 +82,7 @@ impl GraphStorageContext {
             return self.stage_vertex_update(
                 label,
                 &IdKey::Int(external_id),
-                vec![(property_name.to_string(), value.clone())],
+                vec![(Arc::from(property_name), value.clone())],
                 ts,
             );
         }

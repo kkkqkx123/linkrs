@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::types::ChangeType;
 use graphdb_core::{Edge, Value};
@@ -9,7 +10,7 @@ pub enum OutboxPayload {
         space_id: u64,
         tag_name: String,
         vertex_id: Value,
-        properties: Vec<(String, Value)>,
+        properties: Vec<(Arc<str>, Value)>,
         change_type: ChangeType,
     },
     EdgeInsert {

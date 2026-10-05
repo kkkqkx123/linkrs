@@ -174,7 +174,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                         vertex
                             .tag
                             .properties
-                            .get(name)
+                            .get(name.as_str())
                             .is_some_and(|actual| values_equal(actual, value))
                     })
                 })

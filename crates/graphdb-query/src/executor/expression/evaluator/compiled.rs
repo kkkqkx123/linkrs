@@ -843,7 +843,7 @@ mod tests {
         let rows = vec![vec![Value::Int(1)], vec![Value::Int(2)]];
         let compiled = CompiledExpr::compile(&expr, &layout);
         let mut params = HashMap::new();
-        params.insert("x".to_string(), Value::Int(9));
+        params.insert("x".into(), Value::Int(9));
         let env = EvalEnv {
             params: Some(Arc::new(params)),
             session_variables: None,

@@ -3,6 +3,7 @@ use crate::edge::property_schema::PropertySchema;
 use crate::vertex::column::Column;
 use graphdb_core::{DataType, StorageError, StorageResult, Value};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 impl CsrWithProperties {
     pub fn new(property_schema: Vec<PropertySchema>) -> Self {
@@ -171,11 +172,11 @@ impl CsrWithProperties {
     /// Names of columns mutated since the last checkpoint. Drives
     /// dirty-column incremental persistence: clean columns reuse the last
     /// flushed encoding instead of paying re-export and re-encode.
-    pub fn dirty_column_names(&self) -> Vec<String> {
+    pub fn dirty_column_names(&self) -> Vec<Arc<str>> {
         self.dirty_columns
             .iter()
             .filter_map(|idx| self.property_schema.get(*idx))
-            .map(|schema| schema.name.to_string())
+            .map(|schema| schema.name.clone())
             .collect()
     }
 

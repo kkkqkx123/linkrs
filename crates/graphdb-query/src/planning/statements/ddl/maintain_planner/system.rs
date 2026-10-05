@@ -223,8 +223,8 @@ pub(super) fn plan_load_from(
         return Ok(sub_plan);
     }
     let (source_kind, source_value, func_name, func_args_json) = match &load_stmt.source {
-        ScanSource::File(path) => ("file".to_string(), path.clone(), None, None),
-        ScanSource::Glob(pattern) => ("glob".to_string(), pattern.clone(), None, None),
+        ScanSource::File(path) => ("file".into(), path.clone(), None, None),
+        ScanSource::Glob(pattern) => ("glob".into(), pattern.clone(), None, None),
         ScanSource::TableFunc { name, args } => {
             let args_json = serde_json::to_string(
                 &args

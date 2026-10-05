@@ -9,6 +9,7 @@
 //! because reload rebuilds the property store from the published schema.
 
 use graphdb_core::{DataType, StorageError, StorageResult, Value};
+use std::sync::Arc;
 
 use super::core::EdgeStore;
 use crate::schema::ChangeDetails;
@@ -69,7 +70,12 @@ impl EdgeStore {
         if self.properties.has_property(&name) {
             return Err(StorageError::column_already_exists(name));
         }
-        if self.schema.properties.iter().any(|prop| prop.name == name) {
+        if self
+            .schema
+            .properties
+            .iter()
+            .any(|prop| prop.name.as_ref() == name.as_str())
+        {
             return Err(StorageError::column_already_exists(name));
         }
         if let Some(default) = &default_value {
@@ -117,7 +123,8 @@ impl EdgeStore {
         }
         // The backfill touches rows in every owner group: trace them all so
         // no clean group is skipped, with the new column as patch scope.
-        self.trace_all_owner_groups_for_columns(std::slice::from_ref(&name));
+        let name_arc: Arc<str> = name.as_str().into();
+        self.trace_all_owner_groups_for_columns(std::slice::from_ref(&name_arc));
         Ok(())
     }
 
@@ -155,10 +162,11 @@ impl EdgeStore {
                 }],
             )?;
         }
-        let prop_def = StoragePropertyDef::new(name.clone(), data_type.clone());
+        let prop_def = StoragePropertyDef::new(name.clone().into(), data_type.clone());
         let new_idx = self.schema.properties.len();
         self.schema.properties.push(prop_def);
-        self.property_index_cache.insert(name.clone(), new_idx);
+        self.property_index_cache
+            .insert(name.clone().into(), new_idx);
         if let Err(error) = self.record_schema_change(ChangeDetails::PropertyAdded {
             name: name.clone(),
             data_type,
@@ -166,7 +174,8 @@ impl EdgeStore {
             default_value,
         }) {
             self.schema.properties.pop();
-            self.property_index_cache.remove(&name);
+            let name_key: Arc<str> = name.as_str().into();
+            self.property_index_cache.remove(&name_key);
             return Err(error);
         }
         self.pending_add_column = None;
@@ -200,11 +209,11 @@ mod tests {
     fn make_table() -> EdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
-            label_name: "knows".to_string(),
+            label_name: "knows".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![StoragePropertyDef::new(
-                "weight".to_string(),
+                "weight".into(),
                 graphdb_core::types::DataType::Double,
             )],
             oe_strategy: EdgeStrategy::Multiple,
@@ -219,7 +228,7 @@ mod tests {
     fn pending_conflict_uses_the_shared_wording_everywhere() {
         let mut table = make_table();
         table
-            .prepare_add_property("score".to_string(), DataType::Int, true, None)
+            .prepare_add_property("score".into(), DataType::Int, true, None)
             .expect("first prepare succeeds");
         // Add, drop and rename share one pending slot: every second prepare
         // reports the same conflict from the same constant.
@@ -249,12 +258,7 @@ mod tests {
     fn staged_add_column_full_lifecycle() {
         let mut table = make_table();
         table
-            .prepare_add_property(
-                "score".to_string(),
-                DataType::Int,
-                false,
-                Some(Value::Int(0)),
-            )
+            .prepare_add_property("score".into(), DataType::Int, false, Some(Value::Int(0)))
             .expect("prepare should succeed");
         assert_eq!(
             table.pending_add_column().expect("pending exists").state,
@@ -269,16 +273,16 @@ mod tests {
             .publish_pending_add_property()
             .expect("publish should succeed");
         assert!(table.pending_add_column().is_none());
-        assert!(table.schema.properties.iter().any(|p| p.name == "score"));
-        assert!(table.property_index_cache.contains_key("score"));
+        assert!(table.schema.properties.iter().any(|p| &*p.name == "score"));
+        assert!(table.property_index_cache.contains_key(&Arc::from("score")));
         table
             .insert_edge(
                 0,
                 1,
                 0,
                 &[
-                    ("weight".to_string(), Value::Double(1.0)),
-                    ("score".to_string(), Value::Int(9)),
+                    ("weight".into(), Value::Double(1.0)),
+                    ("score".into(), Value::Int(9)),
                 ],
                 100,
             )
@@ -291,17 +295,17 @@ mod tests {
     fn abort_after_prepare_leaves_no_trace() {
         let mut table = make_table();
         table
-            .prepare_add_property("score".to_string(), DataType::Int, true, None)
+            .prepare_add_property("score".into(), DataType::Int, true, None)
             .expect("prepare should succeed");
         table
             .abort_pending_add_property()
             .expect("abort should succeed");
         assert!(table.pending_add_column().is_none());
         assert!(!table.properties.has_property("score"));
-        assert!(!table.schema.properties.iter().any(|p| p.name == "score"));
+        assert!(!table.schema.properties.iter().any(|p| &*p.name == "score"));
         // The name is reusable after an abort.
         table
-            .prepare_add_property("score".to_string(), DataType::Int, true, None)
+            .prepare_add_property("score".into(), DataType::Int, true, None)
             .expect("re-prepare should succeed");
     }
 
@@ -309,7 +313,7 @@ mod tests {
     fn abort_after_fill_removes_physical_column() {
         let mut table = make_table();
         table
-            .prepare_add_property("score".to_string(), DataType::Int, true, None)
+            .prepare_add_property("score".into(), DataType::Int, true, None)
             .expect("prepare should succeed");
         table
             .fill_pending_add_property()
@@ -319,7 +323,7 @@ mod tests {
             .abort_pending_add_property()
             .expect("abort should succeed");
         assert!(!table.properties.has_property("score"));
-        assert!(!table.schema.properties.iter().any(|p| p.name == "score"));
+        assert!(!table.schema.properties.iter().any(|p| &*p.name == "score"));
     }
 
     #[test]
@@ -329,10 +333,10 @@ mod tests {
         assert!(table.publish_pending_add_property().is_err());
         assert!(table.abort_pending_add_property().is_err());
         table
-            .prepare_add_property("score".to_string(), DataType::Int, true, None)
+            .prepare_add_property("score".into(), DataType::Int, true, None)
             .expect("first prepare should succeed");
         assert!(table
-            .prepare_add_property("other".to_string(), DataType::Int, true, None)
+            .prepare_add_property("other".into(), DataType::Int, true, None)
             .is_err());
         // Publishing before filling is rejected.
         assert!(table.publish_pending_add_property().is_err());
@@ -344,12 +348,12 @@ mod tests {
         // Duplicate names are rejected at prepare time.
         let mut dup = make_table();
         assert!(dup
-            .prepare_add_property("weight".to_string(), DataType::Double, true, None)
+            .prepare_add_property("weight".into(), DataType::Double, true, None)
             .is_err());
         // A default value of the wrong type is rejected at prepare time.
         assert!(dup
             .prepare_add_property(
-                "score".to_string(),
+                "score".into(),
                 DataType::Int,
                 true,
                 Some(Value::Double(1.0)),
@@ -361,15 +365,10 @@ mod tests {
     fn default_value_backfills_existing_rows() {
         let mut table = make_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .expect("insert should succeed");
         table
-            .prepare_add_property(
-                "score".to_string(),
-                DataType::Int,
-                false,
-                Some(Value::Int(7)),
-            )
+            .prepare_add_property("score".into(), DataType::Int, false, Some(Value::Int(7)))
             .expect("prepare should succeed");
         table
             .fill_pending_add_property()
@@ -382,17 +381,17 @@ mod tests {
         assert!(records[0]
             .properties
             .iter()
-            .any(|(k, v)| k == "score" && v == &Value::Int(7)));
+            .any(|(k, v)| &**k == "score" && v == &Value::Int(7)));
     }
 
     #[test]
     fn immediate_add_uses_the_staged_path() {
         let mut table = make_table();
         table
-            .add_property("score".to_string(), DataType::Int, true)
+            .add_property("score".into(), DataType::Int, true)
             .expect("immediate add should succeed");
         assert!(table.pending_add_column().is_none());
         assert!(table.properties.has_property("score"));
-        assert!(table.schema.properties.iter().any(|p| p.name == "score"));
+        assert!(table.schema.properties.iter().any(|p| &*p.name == "score"));
     }
 }

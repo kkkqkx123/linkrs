@@ -12,10 +12,10 @@ fn frozen_flush_writes_snapshot_and_load_serves_mapped() {
     use graphdb_core::types::Timestamp;
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table
-        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+        .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.0))], 100)
         .unwrap();
     table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
     let before: Vec<_> = table
@@ -68,7 +68,7 @@ fn missing_snapshot_falls_back_to_authoritative() {
     use graphdb_core::types::Timestamp;
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
     let before: Vec<_> = table
@@ -109,7 +109,7 @@ fn corrupt_snapshot_falls_back_to_authoritative() {
     use graphdb_core::types::Timestamp;
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
     let before: Vec<_> = table
@@ -152,7 +152,7 @@ fn mutable_flush_removes_stale_snapshot() {
     use graphdb_core::types::Timestamp;
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
@@ -185,10 +185,10 @@ fn snapshot_state_machine_full_cycle() {
     use graphdb_core::types::Timestamp;
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table
-        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+        .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.0))], 100)
         .unwrap();
     table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
@@ -264,11 +264,11 @@ fn memory_intent_snapshot_load_stays_correct() {
         };
         let schema = EdgeSchema {
             label_id: 0,
-            label_name: "knows".to_string(),
+            label_name: "knows".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: graphdb_core::types::DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
@@ -280,7 +280,7 @@ fn memory_intent_snapshot_load_stays_correct() {
         };
         let mut table = EdgeStore::with_config(schema.clone(), config).unwrap();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .unwrap();
         table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
         let dir = tempfile::tempdir().expect("temporary edge table directory");
@@ -311,7 +311,7 @@ fn reshard_drill_syncs_routes_manifest_and_snapshot() {
     // sidecar, and the rebuilt manifest reloads at the new width.
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table.insert_edge(5000, 6000, 0, &[], 100).unwrap();
     table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
@@ -348,11 +348,11 @@ fn reshard_drill_syncs_routes_manifest_and_snapshot() {
     let mut loaded = EdgeStore::with_config(
         crate::edge::EdgeSchema {
             label_id: 0,
-            label_name: "knows".to_string(),
+            label_name: "knows".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![crate::types::StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: graphdb_core::types::DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),

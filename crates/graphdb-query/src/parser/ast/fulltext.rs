@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn test_search_statement() {
         let query = FulltextQueryExpr::Simple("database".to_string());
-        let search = SearchStatement::new("idx_article".to_string(), query);
+        let search = SearchStatement::new("idx_article".into(), query);
 
         assert!(matches!(search.query, FulltextQueryExpr::Simple(_)));
     }

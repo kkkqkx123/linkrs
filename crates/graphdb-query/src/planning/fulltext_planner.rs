@@ -742,13 +742,10 @@ mod tests {
 
     fn metadata_with_tag_and_edge() -> MetadataContext {
         let mut metadata = MetadataContext::new();
-        metadata.set_tag_metadata(
-            "Article".to_string(),
-            TagMetadata::new("Article".to_string(), 1),
-        );
+        metadata.set_tag_metadata("Article".to_string(), TagMetadata::new("Article".into(), 1));
         metadata.set_edge_type_metadata(
             "WROTE".to_string(),
-            EdgeTypeMetadata::new("WROTE".to_string(), 1),
+            EdgeTypeMetadata::new("WROTE".into(), 1),
         );
         metadata
     }
@@ -934,12 +931,12 @@ mod tests {
 
         // Valid fuzzy query
         assert!(planner
-            .validate_query_expr(&FulltextQueryExpr::Fuzzy("database".to_string(), Some(2)))
+            .validate_query_expr(&FulltextQueryExpr::Fuzzy("database".into(), Some(2)))
             .is_ok());
 
         // Distance too large should fail
         assert!(planner
-            .validate_query_expr(&FulltextQueryExpr::Fuzzy("database".to_string(), Some(10)))
+            .validate_query_expr(&FulltextQueryExpr::Fuzzy("database".into(), Some(10)))
             .is_err());
     }
 }

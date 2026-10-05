@@ -56,11 +56,11 @@ pub(super) fn handle_insert_vertices(
                     continue;
                 }
 
-                let mut props = HashMap::new();
+                let mut props: HashMap<Arc<str>, Value> = HashMap::new();
                 for name in tag_property_names.iter() {
                     if let Some((_n, expr)) = vertex_properties.iter().find(|(n, _)| n == name) {
                         if let Ok(val) = eval_expr(expr, &mut context) {
-                            props.insert(name.clone(), val);
+                            props.insert(name.as_str().into(), val);
                         }
                     }
                 }
@@ -145,10 +145,10 @@ pub(super) fn handle_insert_edges(
                 {
                     continue;
                 }
-                let mut props = HashMap::new();
+                let mut props: HashMap<Arc<str>, Value> = HashMap::new();
                 for (prop_name, expr) in edge_properties.iter() {
                     let val = eval_expr(expr, &mut context)?;
-                    props.insert(prop_name.clone(), val);
+                    props.insert(prop_name.as_str().into(), val);
                 }
                 let edge = Edge::new(src, dst, edge_type.clone(), 0, props);
                 StorageWriter::insert_edge(&mut *writer, space_name, edge)

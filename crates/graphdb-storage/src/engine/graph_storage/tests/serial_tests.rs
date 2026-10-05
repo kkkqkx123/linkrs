@@ -41,8 +41,8 @@ fn test_serial_explicit_value_advances_counter() {
         Tag::new(
             "Person".to_string(),
             vec![
-                ("id".to_string(), Value::BigInt(5)),
-                ("name".to_string(), Value::string("Alice")),
+                ("id".into(), Value::BigInt(5)),
+                ("name".into(), Value::string("Alice")),
             ]
             .into_iter()
             .collect(),
@@ -77,8 +77,8 @@ fn test_serial_explicit_duplicate_is_rejected() {
         Tag::new(
             "Person".to_string(),
             vec![
-                ("id".to_string(), Value::BigInt(1)),
-                ("name".to_string(), Value::string("Bob")),
+                ("id".into(), Value::BigInt(1)),
+                ("name".into(), Value::string("Bob")),
             ]
             .into_iter()
             .collect(),
@@ -99,9 +99,9 @@ fn test_serial_allocates_per_tag_and_per_space() {
     setup_serial_person_tag(&mut storage);
 
     let city = graphdb_core::types::TagInfo::new("City".to_string()).with_properties(vec![
-        PropertyDef::new("vid".to_string(), DataType::BigInt),
-        PropertyDef::new("id".to_string(), DataType::BigInt).with_serial(true),
-        PropertyDef::new("name".to_string(), DataType::String),
+        PropertyDef::new("vid".into(), DataType::BigInt),
+        PropertyDef::new("id".into(), DataType::BigInt).with_serial(true),
+        PropertyDef::new("name".into(), DataType::String),
     ]);
     storage
         .create_tag("test_space", &city)
@@ -113,9 +113,9 @@ fn test_serial_allocates_per_tag_and_per_space() {
 
     let second_person =
         graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-            PropertyDef::new("vid".to_string(), DataType::BigInt),
-            PropertyDef::new("id".to_string(), DataType::BigInt).with_serial(true),
-            PropertyDef::new("name".to_string(), DataType::String),
+            PropertyDef::new("vid".into(), DataType::BigInt),
+            PropertyDef::new("id".into(), DataType::BigInt).with_serial(true),
+            PropertyDef::new("name".into(), DataType::String),
         ]);
     storage
         .create_tag("second_space", &second_person)
@@ -128,7 +128,7 @@ fn test_serial_allocates_per_tag_and_per_space() {
         VertexId::try_from_int64(101).expect("test vertex id"),
         Tag::new(
             "Person".to_string(),
-            vec![("name".to_string(), Value::string("Bob"))]
+            vec![("name".into(), Value::string("Bob"))]
                 .into_iter()
                 .collect(),
         ),
@@ -139,7 +139,7 @@ fn test_serial_allocates_per_tag_and_per_space() {
         VertexId::try_from_int64(201).expect("test vertex id"),
         Tag::new(
             "City".to_string(),
-            vec![("name".to_string(), Value::string("Paris"))]
+            vec![("name".into(), Value::string("Paris"))]
                 .into_iter()
                 .collect(),
         ),
@@ -183,7 +183,7 @@ fn test_serial_edge_type_auto_allocates() {
 
     let edge_type =
         graphdb_core::types::EdgeTypeInfo::new("KNOWS".to_string()).with_properties(vec![
-            PropertyDef::new("seq".to_string(), DataType::BigInt).with_serial(true),
+            PropertyDef::new("seq".into(), DataType::BigInt).with_serial(true),
         ]);
     storage
         .create_edge_type("test_space", &edge_type)
@@ -225,7 +225,7 @@ fn test_serial_validation_rejects_default_and_multiple_columns() {
 
     let with_default =
         graphdb_core::types::TagInfo::new("BadDefault".to_string()).with_properties(vec![
-            PropertyDef::new("id".to_string(), DataType::BigInt)
+            PropertyDef::new("id".into(), DataType::BigInt)
                 .with_serial(true)
                 .with_default(Some(Value::BigInt(1))),
         ]);
@@ -236,8 +236,8 @@ fn test_serial_validation_rejects_default_and_multiple_columns() {
 
     let two_serials =
         graphdb_core::types::TagInfo::new("BadMultiple".to_string()).with_properties(vec![
-            PropertyDef::new("id".to_string(), DataType::BigInt).with_serial(true),
-            PropertyDef::new("seq".to_string(), DataType::BigInt).with_serial(true),
+            PropertyDef::new("id".into(), DataType::BigInt).with_serial(true),
+            PropertyDef::new("seq".into(), DataType::BigInt).with_serial(true),
         ]);
     let error = storage
         .create_tag("test_space", &two_serials)

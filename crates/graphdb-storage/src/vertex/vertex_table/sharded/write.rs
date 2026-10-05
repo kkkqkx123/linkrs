@@ -2,8 +2,9 @@ use super::ShardedVertexTable;
 use crate::vertex::{IdKey, PkLookup, WriteScope};
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult, Value};
+use std::sync::Arc;
 
-type ShardStagedInsert = (IdKey, u32, Vec<(String, Value)>);
+type ShardStagedInsert = (IdKey, u32, Vec<(Arc<str>, Value)>);
 
 /// Every mutation a tracked commit installed, addressed by global id so a
 /// later durability failure can compensate the whole set.
@@ -11,18 +12,18 @@ type ShardStagedInsert = (IdKey, u32, Vec<(String, Value)>);
 pub struct CommitApplied {
     pub mapping: Vec<(IdKey, u32)>,
     pub inserts: Vec<u32>,
-    pub updates: Vec<(u32, String)>,
+    pub updates: Vec<(u32, Arc<str>)>,
     pub deletes: Vec<u32>,
-    pub property_deletes: Vec<(u32, String)>,
+    pub property_deletes: Vec<(u32, Arc<str>)>,
 }
 
 impl CommitApplied {
     fn from_shard_parts(
         table: &ShardedVertexTable,
         mapping: Vec<(IdKey, u32)>,
-        applied_updates: Vec<(usize, u32, String)>,
+        applied_updates: Vec<(usize, u32, Arc<str>)>,
         applied_deletes: Vec<(usize, u32)>,
-        applied_property_deletes: Vec<(usize, u32, String)>,
+        applied_property_deletes: Vec<(usize, u32, Arc<str>)>,
     ) -> Self {
         Self {
             inserts: mapping.iter().map(|(_, id)| *id).collect(),
@@ -47,7 +48,7 @@ impl ShardedVertexTable {
     pub fn insert(
         &self,
         external_id: &str,
-        properties: &[(String, Value)],
+        properties: &[(Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<u32> {
         let idx = self.shard_index_by_str(external_id);
@@ -64,7 +65,7 @@ impl ShardedVertexTable {
     pub fn insert_by_i64(
         &self,
         external_id: i64,
-        properties: &[(String, Value)],
+        properties: &[(Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<u32> {
         let idx = self.shard_index_by_i64(external_id);
@@ -123,7 +124,7 @@ impl ShardedVertexTable {
     /// prefix so the table stays empty.
     pub fn bulk_import_str(
         &self,
-        rows: &[(&str, &[(String, Value)])],
+        rows: &[(&str, &[(Arc<str>, Value)])],
         ts: Timestamp,
         sorted: bool,
     ) -> StorageResult<usize> {
@@ -177,7 +178,7 @@ impl ShardedVertexTable {
     /// [`Self::bulk_import_str`]: Self::bulk_import_str
     pub fn bulk_import_i64(
         &self,
-        rows: &[(i64, &[(String, Value)])],
+        rows: &[(i64, &[(Arc<str>, Value)])],
         ts: Timestamp,
         sorted: bool,
     ) -> StorageResult<usize> {
@@ -235,7 +236,7 @@ impl ShardedVertexTable {
     /// [`insert`]: Self::insert
     pub fn insert_batch_str(
         &self,
-        rows: &[(&str, &[(String, Value)])],
+        rows: &[(&str, &[(Arc<str>, Value)])],
         ts: Timestamp,
     ) -> Vec<StorageResult<u32>> {
         let mut by_shard: Vec<Vec<usize>> = vec![Vec::new(); self.layout.num_shards];
@@ -271,7 +272,7 @@ impl ShardedVertexTable {
     /// [`insert_batch_str`]: Self::insert_batch_str
     pub fn insert_batch_i64(
         &self,
-        rows: &[(i64, &[(String, Value)])],
+        rows: &[(i64, &[(Arc<str>, Value)])],
         ts: Timestamp,
     ) -> Vec<StorageResult<u32>> {
         let mut by_shard: Vec<Vec<usize>> = vec![Vec::new(); self.layout.num_shards];
@@ -306,12 +307,12 @@ impl ShardedVertexTable {
     /// is the schema authority, so any shard answers identically.
     pub fn prepare_vertex_update(
         &self,
-        columns: &[(String, Value)],
-    ) -> StorageResult<Vec<(String, Value)>> {
+        columns: &[(Arc<str>, Value)],
+    ) -> StorageResult<Vec<(std::sync::Arc<str>, Value)>> {
         let table = self.shards[0].read();
         columns
             .iter()
-            .map(|(name, value)| Ok((name.clone(), table.prepare_update(name, value)?)))
+            .map(|(name, value)| Ok((name.clone().into(), table.prepare_update(name, value)?)))
             .collect()
     }
 
@@ -365,7 +366,7 @@ impl ShardedVertexTable {
     pub fn insert_with_scope(
         &self,
         external_id: &str,
-        properties: &[(String, Value)],
+        properties: &[(std::sync::Arc<str>, Value)],
         ts: Timestamp,
         scope: &mut WriteScope,
     ) -> StorageResult<()> {
@@ -390,7 +391,7 @@ impl ShardedVertexTable {
     pub fn insert_by_i64_with_scope(
         &self,
         external_id: i64,
-        properties: &[(String, Value)],
+        properties: &[(Arc<str>, Value)],
         ts: Timestamp,
         scope: &mut WriteScope,
     ) -> StorageResult<()> {
@@ -414,7 +415,7 @@ impl ShardedVertexTable {
     /// fail per row. The commit hook applies the staged rows.
     pub fn insert_batch_str_with_scope(
         &self,
-        rows: &[(&str, &[(String, Value)])],
+        rows: &[(&str, &[(Arc<str>, Value)])],
         ts: Timestamp,
         scope: &mut WriteScope,
     ) -> Vec<StorageResult<()>> {
@@ -442,7 +443,7 @@ impl ShardedVertexTable {
     /// [`Self::insert_batch_str_with_scope`]: Self::insert_batch_str_with_scope
     pub fn insert_batch_i64_with_scope(
         &self,
-        rows: &[(i64, &[(String, Value)])],
+        rows: &[(i64, &[(Arc<str>, Value)])],
         ts: Timestamp,
         scope: &mut WriteScope,
     ) -> Vec<StorageResult<()>> {
@@ -486,7 +487,7 @@ impl ShardedVertexTable {
         scope.stage_update(
             self.label,
             global_id,
-            vec![(col_name.to_string(), value.clone())],
+            vec![(Arc::from(col_name), value.clone())],
         )?;
         Ok(())
     }
@@ -514,7 +515,7 @@ impl ShardedVertexTable {
                 col_name
             )));
         }
-        scope.stage_property_deletes(self.label, global_id, vec![col_name.to_string()])?;
+        scope.stage_property_deletes(self.label, global_id, vec![Arc::from(col_name)])?;
         Ok(())
     }
 
@@ -626,8 +627,8 @@ impl ShardedVertexTable {
             return Err(error);
         }
         let mut applied: Vec<(usize, u32)> = Vec::new();
-        let mut applied_updates: Vec<(usize, u32, String)> = Vec::new();
-        let mut applied_property_deletes: Vec<(usize, u32, String)> = Vec::new();
+        let mut applied_updates: Vec<(usize, u32, Arc<str>)> = Vec::new();
+        let mut applied_property_deletes: Vec<(usize, u32, Arc<str>)> = Vec::new();
         let mut applied_deletes: Vec<(usize, u32)> = Vec::new();
         let mut mapping: Vec<(IdKey, u32)> = Vec::new();
         let result = self.apply_staged_inserts(scope, ts, &mut applied, &mut mapping);
@@ -860,7 +861,7 @@ impl ShardedVertexTable {
         &self,
         scope: &mut WriteScope,
         ts: Timestamp,
-        applied: &mut Vec<(usize, u32, String)>,
+        applied: &mut Vec<(usize, u32, Arc<str>)>,
     ) -> StorageResult<()> {
         let staged = scope.take_updates_for_label(self.label);
         for (global_id, props) in staged {
@@ -879,7 +880,7 @@ impl ShardedVertexTable {
         &self,
         scope: &mut WriteScope,
         ts: Timestamp,
-        applied: &mut Vec<(usize, u32, String)>,
+        applied: &mut Vec<(usize, u32, Arc<str>)>,
     ) -> StorageResult<()> {
         let staged = scope.take_property_deletes_for_label(self.label);
         for (global_id, cols) in staged {
@@ -910,7 +911,7 @@ impl ShardedVertexTable {
         Ok(())
     }
 
-    fn undo_applied_updates(&self, applied: &[(usize, u32, String)], ts: Timestamp) {
+    fn undo_applied_updates(&self, applied: &[(usize, u32, Arc<str>)], ts: Timestamp) {
         for &(shard_idx, local_id, ref col_name) in applied.iter().rev() {
             let _ = self.shards[shard_idx]
                 .read()

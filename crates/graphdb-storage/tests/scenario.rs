@@ -218,7 +218,7 @@ fn test_alter_tag_properties_with_existing_data() {
         .alter_tag(
             "test_space",
             "Person",
-            vec![PropertyDef::new("email".to_string(), DataType::String)],
+            vec![PropertyDef::new("email".into(), DataType::String)],
             vec!["age".to_string()],
         )
         .expect("alter_tag should succeed");
@@ -244,8 +244,8 @@ fn test_alter_tag_properties_with_existing_data() {
         Tag::new(
             "Person".to_string(),
             vec![
-                ("name".to_string(), Value::string("Diana")),
-                ("email".to_string(), Value::string("diana@test.com")),
+                ("name".into(), Value::string("Diana")),
+                ("email".into(), Value::string("diana@test.com")),
             ]
             .into_iter()
             .collect(),
@@ -280,7 +280,7 @@ fn test_alter_edge_type_properties() {
         .alter_edge_type(
             "test_space",
             "KNOWS",
-            vec![PropertyDef::new("weight".to_string(), DataType::Double)],
+            vec![PropertyDef::new("weight".into(), DataType::Double)],
             vec!["since".to_string()],
         )
         .expect("alter_edge_type should succeed");
@@ -311,7 +311,7 @@ fn test_alter_edge_type_properties() {
         VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
         1,
-        vec![("weight".to_string(), Value::Double(0.5))]
+        vec![("weight".into(), Value::Double(0.5))]
             .into_iter()
             .collect(),
     );
@@ -353,8 +353,8 @@ fn test_multi_edge_type_traversal() {
         Tag::new(
             "Employee".to_string(),
             vec![
-                ("company".to_string(), Value::string("AcmeCorp")),
-                ("salary".to_string(), Value::BigInt(90000)),
+                ("company".into(), Value::string("AcmeCorp")),
+                ("salary".into(), Value::BigInt(90000)),
             ]
             .into_iter()
             .collect(),
@@ -376,7 +376,7 @@ fn test_multi_edge_type_traversal() {
         VertexId::try_from_int64(3).expect("test vertex id"),
         "WORKS_AT".to_string(),
         0,
-        vec![("role".to_string(), Value::string("Engineer"))]
+        vec![("role".into(), Value::string("Engineer"))]
             .into_iter()
             .collect(),
     );
@@ -494,7 +494,7 @@ fn test_batch_insert_failure_rollback_consistency() {
             VertexId::try_from_int64(2).expect("test vertex id"),
             Tag::new(
                 "Person".to_string(),
-                vec![("name".to_string(), Value::string("Bob"))]
+                vec![("name".into(), Value::string("Bob"))]
                     .into_iter()
                     .collect(),
             ),
@@ -504,7 +504,7 @@ fn test_batch_insert_failure_rollback_consistency() {
             VertexId::try_from_int64(1).expect("test vertex id"),
             Tag::new(
                 "Person".to_string(),
-                vec![("name".to_string(), Value::string("Duplicate"))]
+                vec![("name".into(), Value::string("Duplicate"))]
                     .into_iter()
                     .collect(),
             ),
@@ -791,9 +791,9 @@ fn test_string_vertex_id_operations() {
     // the (string) vertex id; name/age are ordinary properties, so `id` is
     // left out of the insert payloads below and filled by the storage mirror.
     let person_tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-        graphdb_core::types::PropertyDef::new("id".to_string(), graphdb_core::DataType::String),
-        graphdb_core::types::PropertyDef::new("name".to_string(), graphdb_core::DataType::String),
-        graphdb_core::types::PropertyDef::new("age".to_string(), graphdb_core::DataType::BigInt),
+        graphdb_core::types::PropertyDef::new("id".into(), graphdb_core::DataType::String),
+        graphdb_core::types::PropertyDef::new("name".into(), graphdb_core::DataType::String),
+        graphdb_core::types::PropertyDef::new("age".into(), graphdb_core::DataType::BigInt),
     ]);
     storage.create_tag("str_space", &person_tag).unwrap();
 
@@ -803,8 +803,8 @@ fn test_string_vertex_id_operations() {
         Tag::new(
             "Person".to_string(),
             vec![
-                ("name".to_string(), Value::string("Alice")),
-                ("age".to_string(), Value::BigInt(30)),
+                ("name".into(), Value::string("Alice")),
+                ("age".into(), Value::BigInt(30)),
             ]
             .into_iter()
             .collect(),
@@ -815,8 +815,8 @@ fn test_string_vertex_id_operations() {
         Tag::new(
             "Person".to_string(),
             vec![
-                ("name".to_string(), Value::string("Bob")),
-                ("age".to_string(), Value::BigInt(25)),
+                ("name".into(), Value::string("Bob")),
+                ("age".into(), Value::BigInt(25)),
             ]
             .into_iter()
             .collect(),
@@ -905,8 +905,8 @@ fn test_update_vertex_properties() {
         Tag::new(
             "Person".to_string(),
             vec![
-                ("name".to_string(), Value::string("AliceUpdated")),
-                ("age".to_string(), Value::BigInt(31)),
+                ("name".into(), Value::string("AliceUpdated")),
+                ("age".into(), Value::BigInt(31)),
             ]
             .into_iter()
             .collect(),

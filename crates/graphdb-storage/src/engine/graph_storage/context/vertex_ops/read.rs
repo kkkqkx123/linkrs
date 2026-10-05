@@ -40,7 +40,7 @@ impl GraphStorageContext {
         &self,
         label: LabelId,
         external_id: &str,
-        projection: &[String],
+        projection: &[std::sync::Arc<str>],
         ts: Timestamp,
     ) -> Option<VertexRecord> {
         if !self.persistent.is_open.load(Ordering::Acquire) {
@@ -68,7 +68,7 @@ impl GraphStorageContext {
         &self,
         label: LabelId,
         external_id: i64,
-        projection: &[String],
+        projection: &[std::sync::Arc<str>],
         ts: Timestamp,
     ) -> Option<VertexRecord> {
         // ID-index hits are mapping-revalidated; the record itself is

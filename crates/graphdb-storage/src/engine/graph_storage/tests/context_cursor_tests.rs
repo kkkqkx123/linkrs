@@ -23,8 +23,8 @@ fn bound_operation_contexts_are_isolated_across_concurrent_handles() {
             Vertex::new(
                 VertexId::try_from_int64(1).expect("test vertex id"),
                 Tag::new(
-                    "Person".to_string(),
-                    [("name".to_string(), Value::string("Alice"))]
+                    "Person".into(),
+                    [("name".into(), Value::string("Alice"))]
                         .into_iter()
                         .collect(),
                 ),
@@ -97,7 +97,7 @@ fn cursor_keeps_the_read_timestamp_from_its_bound_handle() {
             "test_space",
             Vertex::new(
                 VertexId::try_from_int64(1).expect("test vertex id"),
-                Tag::new("Person".to_string(), Default::default()),
+                Tag::new("Person".into(), Default::default()),
             ),
         )
         .expect("Failed to insert initial vertex");
@@ -133,7 +133,7 @@ fn cursor_keeps_the_read_timestamp_from_its_bound_handle() {
             "test_space",
             Vertex::new(
                 VertexId::try_from_int64(2).expect("test vertex id"),
-                Tag::new("Person".to_string(), Default::default()),
+                Tag::new("Person".into(), Default::default()),
             ),
         )
         .expect("Failed to insert later vertex");
@@ -157,10 +157,10 @@ fn cursor_applies_property_projection_during_scan() {
             Vertex::new(
                 VertexId::try_from_int64(1).expect("test vertex id"),
                 Tag::new(
-                    "Person".to_string(),
+                    "Person".into(),
                     [
-                        ("name".to_string(), Value::string("Alice")),
-                        ("age".to_string(), Value::BigInt(30)),
+                        ("name".into(), Value::string("Alice")),
+                        ("age".into(), Value::BigInt(30)),
                     ]
                     .into_iter()
                     .collect(),
@@ -172,7 +172,7 @@ fn cursor_applies_property_projection_during_scan() {
     let mut cursor = storage
         .create_vertex_cursor(
             "test_space",
-            &ScanOptions::default().with_projection_named(vec!["name".to_string()]),
+            &ScanOptions::default().with_projection_named(vec!["name".into()]),
         )
         .expect("cursor should open");
     let rows = cursor.next_batch(8).expect("cursor batch");
@@ -263,10 +263,10 @@ fn vertex_column_stats_snapshot_matches_inserted_range() {
                 Vertex::new(
                     VertexId::try_from_int64(i).expect("test vertex id"),
                     Tag::new(
-                        "Person".to_string(),
+                        "Person".into(),
                         [
-                            ("name".to_string(), Value::string(format!("P{i}"))),
-                            ("age".to_string(), Value::BigInt(i)),
+                            ("name".into(), Value::string(format!("P{i}"))),
+                            ("age".into(), Value::BigInt(i)),
                         ]
                         .into_iter()
                         .collect(),
@@ -314,10 +314,8 @@ fn vertex_column_stats_snapshot_row_count_excludes_deleted_rows() {
                 Vertex::new(
                     VertexId::try_from_int64(i).expect("test vertex id"),
                     Tag::new(
-                        "Person".to_string(),
-                        [("age".to_string(), Value::BigInt(i))]
-                            .into_iter()
-                            .collect(),
+                        "Person".into(),
+                        [("age".into(), Value::BigInt(i))].into_iter().collect(),
                     ),
                 ),
             )
@@ -368,8 +366,8 @@ fn edge_column_stats_snapshot_matches_inserted_range() {
             Vertex::new(
                 VertexId::try_from_int64(1).expect("test vertex id"),
                 Tag::new(
-                    "Person".to_string(),
-                    [("name".to_string(), Value::string("Alice"))]
+                    "Person".into(),
+                    [("name".into(), Value::string("Alice"))]
                         .into_iter()
                         .collect(),
                 ),
@@ -382,8 +380,8 @@ fn edge_column_stats_snapshot_matches_inserted_range() {
             Vertex::new(
                 VertexId::try_from_int64(2).expect("test vertex id"),
                 Tag::new(
-                    "Person".to_string(),
-                    [("name".to_string(), Value::string("Bob"))]
+                    "Person".into(),
+                    [("name".into(), Value::string("Bob"))]
                         .into_iter()
                         .collect(),
                 ),
@@ -396,11 +394,9 @@ fn edge_column_stats_snapshot_matches_inserted_range() {
             Edge::new(
                 VertexId::try_from_int64(1).expect("test vertex id"),
                 VertexId::try_from_int64(2).expect("test vertex id"),
-                "KNOWS".to_string(),
+                "KNOWS".into(),
                 0,
-                [("since".to_string(), Value::Int(2020))]
-                    .into_iter()
-                    .collect(),
+                [("since".into(), Value::Int(2020))].into_iter().collect(),
             ),
         )
         .unwrap();
@@ -410,11 +406,9 @@ fn edge_column_stats_snapshot_matches_inserted_range() {
             Edge::new(
                 VertexId::try_from_int64(2).expect("test vertex id"),
                 VertexId::try_from_int64(1).expect("test vertex id"),
-                "KNOWS".to_string(),
+                "KNOWS".into(),
                 0,
-                [("since".to_string(), Value::Int(2025))]
-                    .into_iter()
-                    .collect(),
+                [("since".into(), Value::Int(2025))].into_iter().collect(),
             ),
         )
         .unwrap();
@@ -454,7 +448,7 @@ fn edge_table_stats_snapshot_tracks_live_and_holes() {
                 "test_space",
                 Vertex::new(
                     VertexId::try_from_int64(i).expect("test vertex id"),
-                    Tag::new("Person".to_string(), Default::default()),
+                    Tag::new("Person".into(), Default::default()),
                 ),
             )
             .expect("insert should succeed");
@@ -470,7 +464,7 @@ fn edge_table_stats_snapshot_tracks_live_and_holes() {
         storage
             .insert_edge(
                 "test_space",
-                Edge::new(*src, *dst, "KNOWS".to_string(), rank, Default::default()),
+                Edge::new(*src, *dst, "KNOWS".into(), rank, Default::default()),
             )
             .expect("insert should succeed");
     }
@@ -527,7 +521,7 @@ fn cursor_allowlist_decodes_exact_id_set() {
     let mut probe = storage
         .create_vertex_cursor(
             "test_space",
-            &ScanOptions::default().with_tag("Person".to_string()),
+            &ScanOptions::default().with_tag("Person".into()),
         )
         .expect("probe cursor should open");
     let flat = probe.next_flat_batch(16).expect("probe batch");
@@ -551,7 +545,7 @@ fn cursor_allowlist_decodes_exact_id_set() {
         .create_vertex_cursor(
             "test_space",
             &ScanOptions::default()
-                .with_tag("Person".to_string())
+                .with_tag("Person".into())
                 .with_internal_id_allowlist(wanted.clone()),
         )
         .expect("allowlist cursor should open");
@@ -566,12 +560,12 @@ fn cursor_allowlist_decodes_exact_id_set() {
         .create_vertex_cursor(
             "test_space",
             &ScanOptions::default()
-                .with_tag("Person".to_string())
+                .with_tag("Person".into())
                 .with_internal_id_allowlist(wanted),
         )
         .expect("column allowlist cursor should open");
     let batch = column_cursor
-        .next_column_batch(&["name".to_string()], 16)
+        .next_column_batch(&["name".into()], 16)
         .expect("column batch");
     assert_eq!(batch.len(), 2);
     let mut batch_vids: Vec<i64> = batch.vids.iter().filter_map(|v| v.as_int64()).collect();

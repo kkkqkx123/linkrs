@@ -10,6 +10,7 @@ use graphdb_core::types::{Index, Timestamp};
 use graphdb_core::wal::{EntityRef, OutboxIntent};
 use graphdb_core::{StorageError, StorageResult, Value};
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 pub(crate) fn merge_split_wal_changes<F, R>(
     maps: &mut HashMap<u32, IndexMaps>,
@@ -192,7 +193,7 @@ pub(crate) fn stable_hash(bytes: &[u8]) -> u64 {
 
 pub(crate) fn effective_index_values(
     index_definition: Option<&Index>,
-    props: &[(String, Value)],
+    props: &[(Arc<str>, Value)],
     existing_values: Vec<Value>,
 ) -> Vec<Value> {
     let Some(index) = index_definition else {
@@ -204,7 +205,7 @@ pub(crate) fn effective_index_values(
         .filter_map(|field| {
             props
                 .iter()
-                .find(|(name, _)| name == &field.name)
+                .find(|(name, _)| &**name == field.name)
                 .map(|(_, value)| value.clone())
         })
         .collect::<Vec<_>>();
@@ -217,22 +218,23 @@ pub(crate) fn effective_index_values(
 
 pub(crate) fn merged_included_columns(
     index_definition: Option<&Index>,
-    mut existing: Vec<(String, Value)>,
-    props: &[(String, Value)],
-) -> Vec<(String, Value)> {
+    mut existing: Vec<(Arc<str>, Value)>,
+    props: &[(Arc<str>, Value)],
+) -> Vec<(Arc<str>, Value)> {
     let Some(index) = index_definition else {
         return props.to_vec();
     };
     for name in &index.properties {
-        let Some((_, value)) = props.iter().find(|(candidate, _)| candidate == name) else {
+        let Some((_, value)) = props.iter().find(|(candidate, _)| &**candidate == name) else {
             continue;
         };
-        if let Some((_, existing_value)) =
-            existing.iter_mut().find(|(candidate, _)| candidate == name)
+        if let Some((_, existing_value)) = existing
+            .iter_mut()
+            .find(|(candidate, _)| &**candidate == name)
         {
             *existing_value = value.clone();
         } else {
-            existing.push((name.clone(), value.clone()));
+            existing.push((name.as_str().into(), value.clone()));
         }
     }
     existing
@@ -340,8 +342,8 @@ mod tests {
     #[test]
     fn effective_index_values_without_definition_uses_all_props() {
         let props = vec![
-            ("name".to_string(), Value::string("Alice")),
-            ("age".to_string(), Value::Int(30)),
+            ("name".into(), Value::string("Alice")),
+            ("age".into(), Value::Int(30)),
         ];
         let values = effective_index_values(None, &props, vec![]);
         assert_eq!(values.len(), 2);
@@ -366,8 +368,8 @@ mod tests {
             partial_condition: None,
         });
         let props = vec![
-            ("name".to_string(), Value::string("Alice")),
-            ("age".to_string(), Value::Int(30)),
+            ("name".into(), Value::string("Alice")),
+            ("age".into(), Value::Int(30)),
         ];
         let values = effective_index_values(Some(&index), &props, vec![]);
         assert_eq!(values, vec![Value::string("Alice")]);
@@ -391,7 +393,7 @@ mod tests {
             covering: false,
             partial_condition: None,
         });
-        let props = vec![("age".to_string(), Value::Int(30))];
+        let props = vec![("age".into(), Value::Int(30))];
         let existing = vec![Value::string("Bob")];
         let values = effective_index_values(Some(&index), &props, existing.clone());
         assert_eq!(values, existing);
@@ -399,7 +401,7 @@ mod tests {
 
     #[test]
     fn merged_included_columns_without_definition_returns_props() {
-        let props = vec![("since".to_string(), Value::Int(2020))];
+        let props = vec![("since".into(), Value::Int(2020))];
         let merged = merged_included_columns(None, vec![], &props);
         assert_eq!(merged, props);
     }
@@ -411,17 +413,17 @@ mod tests {
             name: "idx_weight".to_string(),
             space_id: 1,
             schema_name: "knows".to_string(),
-            fields: vec![IndexField::new("weight".to_string(), Value::Int(0), false)],
+            fields: vec![IndexField::new("weight".into(), Value::Int(0), false)],
             properties: vec!["since".to_string()],
             index_type: IndexType::EdgeIndex,
             is_unique: false,
             covering: false,
             partial_condition: None,
         });
-        let existing = vec![("since".to_string(), Value::Int(2020))];
-        let props = vec![("since".to_string(), Value::Int(2024))];
+        let existing = vec![("since".into(), Value::Int(2020))];
+        let props = vec![("since".into(), Value::Int(2024))];
         let merged = merged_included_columns(Some(&index), existing, &props);
-        assert_eq!(merged, vec![("since".to_string(), Value::Int(2024))]);
+        assert_eq!(merged, vec![("since".into(), Value::Int(2024))]);
     }
 
     #[test]
@@ -431,7 +433,7 @@ mod tests {
             name: "idx_weight".to_string(),
             space_id: 1,
             schema_name: "knows".to_string(),
-            fields: vec![IndexField::new("weight".to_string(), Value::Int(0), false)],
+            fields: vec![IndexField::new("weight".into(), Value::Int(0), false)],
             properties: vec!["since".to_string()],
             index_type: IndexType::EdgeIndex,
             is_unique: false,
@@ -439,8 +441,8 @@ mod tests {
             partial_condition: None,
         });
         let existing = vec![];
-        let props = vec![("since".to_string(), Value::Int(2024))];
+        let props = vec![("since".into(), Value::Int(2024))];
         let merged = merged_included_columns(Some(&index), existing, &props);
-        assert_eq!(merged, vec![("since".to_string(), Value::Int(2024))]);
+        assert_eq!(merged, vec![("since".into(), Value::Int(2024))]);
     }
 }

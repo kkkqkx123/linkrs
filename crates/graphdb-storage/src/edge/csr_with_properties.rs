@@ -12,6 +12,7 @@
 //! for garbage collection. They must never decide query visibility alone.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::Value;
@@ -76,7 +77,7 @@ impl RowVisibility {
 const UNMAPPED_ROW: u32 = u32::MAX;
 
 /// Exported property row: `(create_ts, delete_ts, per-column values)`.
-pub type ExportedRow = (Timestamp, Option<Timestamp>, Vec<(String, Option<Value>)>);
+pub type ExportedRow = (Timestamp, Option<Timestamp>, Vec<(Arc<str>, Option<Value>)>);
 
 #[derive(Debug, Clone)]
 pub struct CsrWithProperties {

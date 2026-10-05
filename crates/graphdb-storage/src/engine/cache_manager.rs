@@ -20,7 +20,7 @@ pub struct CacheManager {
 /// Resolved vertex snapshot passed to [`CacheManager::cache_vertex`].
 pub struct VertexSeed<'a> {
     pub external_id: &'a str,
-    pub properties: &'a [(String, graphdb_core::Value)],
+    pub properties: &'a [(std::sync::Arc<str>, graphdb_core::Value)],
     /// Timestamp the record was read at (stored as `cached_at_ts`).
     pub read_ts: Timestamp,
     pub create_ts: Timestamp,

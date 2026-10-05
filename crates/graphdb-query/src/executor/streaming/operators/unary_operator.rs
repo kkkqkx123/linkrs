@@ -77,7 +77,7 @@ pub enum UnaryOperatorKind {
     AppendVertices {
         entity_var: String,
         entity_expr: Expression,
-        prop_names: Vec<String>,
+        prop_names: Vec<Arc<str>>,
         tag: String,
         storage: Option<Arc<parking_lot::RwLock<dyn crate::storage::QueryStorage>>>,
         space_name: String,
@@ -185,7 +185,10 @@ impl UnaryOperator {
             } => UnaryOperatorKind::AppendVertices {
                 entity_var: entity_var.clone(),
                 entity_expr: entity_expr.clone(),
-                prop_names: prop_names.clone(),
+                prop_names: prop_names
+                    .iter()
+                    .map(|name| Arc::from(name.as_str()))
+                    .collect(),
                 tag: tag.clone(),
                 storage: None,
                 space_name: space_name.clone(),
@@ -469,8 +472,8 @@ mod tests {
                 Tag::new(
                     "person".to_string(),
                     vec![
-                        ("name".to_string(), Value::string("Alice")),
-                        ("age".to_string(), Value::Int(30)),
+                        ("name".into(), Value::string("Alice")),
+                        ("age".into(), Value::Int(30)),
                     ]
                     .into_iter()
                     .collect(),
@@ -492,7 +495,7 @@ mod tests {
                 UnaryOperatorKind::AppendVertices {
                     entity_var: "v".to_string(),
                     entity_expr: Expression::Variable("vid".to_string()),
-                    prop_names: vec!["name".to_string(), "age".to_string()],
+                    prop_names: vec![Arc::from("name"), Arc::from("age")],
                     tag: "person".to_string(),
                     storage: None,
                     space_name: "test".to_string(),
@@ -523,7 +526,7 @@ mod tests {
                 VertexId::try_from_int64(7).expect("valid vertex id"),
                 Tag::new(
                     "person".to_string(),
-                    vec![("name".to_string(), Value::string("Bob"))]
+                    vec![("name".into(), Value::string("Bob"))]
                         .into_iter()
                         .collect(),
                 ),
@@ -582,7 +585,7 @@ mod tests {
                 UnaryOperatorKind::AppendVertices {
                     entity_var: "v".to_string(),
                     entity_expr: Expression::Variable("vid".to_string()),
-                    prop_names: vec!["name".to_string()],
+                    prop_names: vec![Arc::from("name")],
                     tag: "person".to_string(),
                     storage: None,
                     space_name: "test".to_string(),
@@ -686,7 +689,7 @@ mod tests {
                 UnaryOperatorKind::AppendVertices {
                     entity_var: "v".to_string(),
                     entity_expr: Expression::Variable("vid".to_string()),
-                    prop_names: vec!["name".to_string()],
+                    prop_names: vec![Arc::from("name")],
                     tag: "person".to_string(),
                     storage: None,
                     space_name: "test".to_string(),

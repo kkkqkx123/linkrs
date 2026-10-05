@@ -1006,9 +1006,9 @@ mod tests {
         qg.add_rel(QueryRel::new("e1", "e1", "a", "b").with_edge_types(vec!["knows".to_string()]));
         let qg = Arc::new(qg);
         let mut stats = JoinOrderStats::default();
-        stats.vertex_counts.insert("person".to_string(), 5_000);
-        stats.edge_counts.insert("knows".to_string(), 20_000);
-        stats.avg_out_degrees.insert("knows".to_string(), 4.0);
+        stats.vertex_counts.insert("person".into(), 5_000);
+        stats.edge_counts.insert("knows".into(), 20_000);
+        stats.avg_out_degrees.insert("knows".into(), 4.0);
         let mut enumerator = JoinOrderEnumerator::new().with_stats(stats);
         enumerator.plan_base_table_scans(&qg);
         let node_sg = crate::planning::join_order::SubqueryGraph::single_node(&qg, 0);

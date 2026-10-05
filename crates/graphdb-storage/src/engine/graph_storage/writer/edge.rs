@@ -5,6 +5,7 @@ use graphdb_core::{Edge, StorageError, StorageResult, Value};
 use graphdb_transaction::undo_log::{InsertEdgeUndo, RestoreEdgeUndo, UndoLogEntry};
 use graphdb_transaction::wal::TransactionWalEntry;
 use graphdb_transaction::{MutationEntityKey, MutationResult};
+use std::sync::Arc;
 
 use crate::engine::params::{EdgeOperationParams, InsertEdgeParams};
 use crate::index::types::EdgeIdentity;
@@ -44,7 +45,7 @@ pub(super) fn record_edge_insert(
 pub(super) fn record_edge_remove(
     ctx: &GraphStorageContext,
     edge: EdgeIdentifier,
-    properties: Vec<(String, Value)>,
+    properties: Vec<(Arc<str>, Value)>,
     redo_entry: Option<TransactionWalEntry>,
 ) -> StorageResult<()> {
     let Some(recorder) = ctx.mutation_recorder() else {
@@ -140,7 +141,7 @@ fn insert_edge_at_timestamp(
             ))
         })?;
 
-    let props: Vec<(String, Value)> = edge.props.into_iter().collect();
+    let props: Vec<(Arc<str>, Value)> = edge.props.into_iter().collect();
     let props =
         super::constraints::apply_edge_type_constraints(ctx, space, &edge.edge_type, props)?;
     let src_value = Value::from(edge.src);

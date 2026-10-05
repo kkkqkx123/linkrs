@@ -42,7 +42,7 @@ pub struct SeekStrategyContext {
 pub struct NodePattern {
     pub vid: Option<Value>,
     pub labels: Vec<String>,
-    pub properties: Vec<(String, Value)>,
+    pub properties: Vec<(Arc<str>, Value)>,
 }
 
 #[derive(Debug, Clone)]

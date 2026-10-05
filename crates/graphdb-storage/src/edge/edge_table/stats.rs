@@ -235,7 +235,7 @@ impl GroupSegmentStats {
             return true;
         }
         for range in crate::cursor::ScanPredicate::merged_ranges(predicates) {
-            let Some(stats) = self.columns.get(&range.column) else {
+            let Some(stats) = self.columns.get(&*range.column) else {
                 continue;
             };
             let (Some(min), Some(max)) = (stats.min_value.as_ref(), stats.max_value.as_ref())
@@ -568,7 +568,7 @@ pub fn estimate_value_bytes(value: &Value) -> u64 {
 }
 
 /// Estimated byte width of one edge property set for profiling.
-pub fn estimate_props_bytes(props: &[(String, Value)]) -> u64 {
+pub fn estimate_props_bytes(props: &[(std::sync::Arc<str>, Value)]) -> u64 {
     props.iter().map(|(_, v)| estimate_value_bytes(v)).sum()
 }
 
@@ -585,7 +585,7 @@ mod tests {
     fn create_edge_table() -> EdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
-            label_name: "knows".to_string(),
+            label_name: "knows".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![],
@@ -600,11 +600,11 @@ mod tests {
     fn create_edge_table_with_props() -> EdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
-            label_name: "knows".to_string(),
+            label_name: "knows".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
@@ -646,13 +646,13 @@ mod tests {
         let mut table = create_edge_table_with_props();
 
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 50)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 50)
             .unwrap();
         table
-            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+            .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.0))], 100)
             .unwrap();
         table
-            .insert_edge(0, 3, 0, &[("weight".to_string(), Value::Double(3.0))], 150)
+            .insert_edge(0, 3, 0, &[("weight".into(), Value::Double(3.0))], 150)
             .unwrap();
 
         table.delete_edge(0, 1, 0, 200).unwrap();
@@ -677,7 +677,7 @@ mod tests {
                     0,
                     1,
                     i as i64,
-                    &[("weight".to_string(), Value::Double(i as f64))],
+                    &[("weight".into(), Value::Double(i as f64))],
                     100 + i,
                 )
                 .unwrap();
@@ -719,7 +719,7 @@ mod tests {
 
         let mut column_values: HashMap<String, Vec<Option<Value>>> = HashMap::new();
         column_values.insert(
-            "weight".to_string(),
+            "weight".into(),
             vec![
                 Some(Value::Double(1.0)),
                 Some(Value::Double(2.0)),
@@ -737,12 +737,12 @@ mod tests {
         assert_eq!(stats.sort_max, Some(Value::BigInt(30)));
 
         let inside = vec![ScanPredicate::ColumnEqual {
-            column: "weight".to_string(),
+            column: "weight".into(),
             value: Value::Double(2.0),
         }];
         assert!(stats.may_contain(&inside));
         let outside = vec![ScanPredicate::ColumnRange {
-            column: "weight".to_string(),
+            column: "weight".into(),
             lower: Some(Value::Double(100.0)),
             upper: None,
             include_lower: true,
@@ -750,7 +750,7 @@ mod tests {
         }];
         assert!(!stats.may_contain(&outside));
         let unknown = vec![ScanPredicate::ColumnEqual {
-            column: "missing".to_string(),
+            column: "missing".into(),
             value: Value::Double(1.0),
         }];
         assert!(stats.may_contain(&unknown));
@@ -784,13 +784,13 @@ mod tests {
 
         let mut first_values: HashMap<String, Vec<Option<Value>>> = HashMap::new();
         first_values.insert(
-            "weight".to_string(),
+            "weight".into(),
             vec![Some(Value::Double(5.0)), Some(Value::Double(6.0))],
         );
         let mut stats =
             GroupSegmentStats::collect(0, 4096, 2, &[5], &first_values, &HashMap::new());
         let mut second_values: HashMap<String, Vec<Option<Value>>> = HashMap::new();
-        second_values.insert("weight".to_string(), vec![Some(Value::Double(1.0))]);
+        second_values.insert("weight".into(), vec![Some(Value::Double(1.0))]);
         let fresh = GroupSegmentStats::collect(1, 4096, 1, &[50], &second_values, &HashMap::new());
         stats.widen_with(&fresh);
         assert_eq!(stats.row_count, 4096);

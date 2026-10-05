@@ -10,6 +10,7 @@
 //! the published schema.
 
 use graphdb_core::{StorageError, StorageResult};
+use std::sync::Arc;
 
 use super::core::EdgeStore;
 use crate::edge::property_schema::PropertySchema;
@@ -74,7 +75,7 @@ impl EdgeStore {
             .schema
             .properties
             .iter()
-            .position(|prop| prop.name == name)
+            .position(|prop| prop.name.as_ref() == name)
             .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
         let column_index = self
             .properties
@@ -87,7 +88,8 @@ impl EdgeStore {
         };
         let schema_backup = self.properties.property_schema()[column_index].clone();
         let schema_def_backup = self.schema.properties[schema_index].clone();
-        let cached_index = self.property_index_cache.get(name).copied();
+        let name_key: Arc<str> = name.into();
+        let cached_index = self.property_index_cache.get(&name_key).copied();
         let had_column_dirt = self.properties.has_column_dirt(name);
         self.pending_drop_column = Some(PendingDropColumn {
             name: name.to_string(),
@@ -121,7 +123,8 @@ impl EdgeStore {
         }
         self.properties.remove_property(&pending.name)?;
         self.schema.properties.remove(pending.schema_index);
-        self.property_index_cache.remove(&pending.name);
+        let drop_key: Arc<str> = Arc::from(pending.name.as_str());
+        self.property_index_cache.remove(&drop_key);
         for idx in self.property_index_cache.values_mut() {
             if *idx > pending.schema_index {
                 *idx -= 1;
@@ -187,20 +190,14 @@ mod tests {
     fn make_table() -> EdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
-            label_name: "knows".to_string(),
+            label_name: "knows".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![
-                StoragePropertyDef::new(
-                    "weight".to_string(),
-                    graphdb_core::types::DataType::Double,
-                ),
+                StoragePropertyDef::new("weight".into(), graphdb_core::types::DataType::Double),
                 StoragePropertyDef {
                     nullable: true,
-                    ..StoragePropertyDef::new(
-                        "score".to_string(),
-                        graphdb_core::types::DataType::Int,
-                    )
+                    ..StoragePropertyDef::new("score".into(), graphdb_core::types::DataType::Int)
                 },
             ],
             oe_strategy: EdgeStrategy::Multiple,
@@ -215,7 +212,7 @@ mod tests {
     fn staged_drop_column_full_lifecycle() {
         let mut table = make_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .expect("insert should succeed");
         table
             .prepare_drop_property("score")
@@ -226,7 +223,7 @@ mod tests {
             .expect("publish should succeed");
         assert!(table.pending_drop_column().is_none());
         assert!(!table.properties.has_property("score"));
-        assert!(!table.schema.properties.iter().any(|p| p.name == "score"));
+        assert!(!table.schema.properties.iter().any(|p| &*p.name == "score"));
         assert!(table.properties.has_property("weight"));
         assert!(table.has_edge(0, 1, 0, 200));
     }
@@ -242,7 +239,7 @@ mod tests {
             .expect("abort should succeed");
         assert!(table.pending_drop_column().is_none());
         assert!(table.properties.has_property("score"));
-        assert!(table.schema.properties.iter().any(|p| p.name == "score"));
+        assert!(table.schema.properties.iter().any(|p| &*p.name == "score"));
         table
             .prepare_drop_property("score")
             .expect("re-prepare should succeed");
@@ -259,7 +256,7 @@ mod tests {
             .expect("first prepare should succeed");
         assert!(table.prepare_drop_property("weight").is_err());
         assert!(table
-            .prepare_add_property("extra".to_string(), graphdb_core::DataType::Int, true, None)
+            .prepare_add_property("extra".into(), graphdb_core::DataType::Int, true, None)
             .is_err());
     }
 
@@ -269,7 +266,7 @@ mod tests {
         table.remove_property("score").expect("drop should succeed");
         assert!(table.pending_drop_column().is_none());
         assert!(!table.properties.has_property("score"));
-        assert!(!table.schema.properties.iter().any(|p| p.name == "score"));
+        assert!(!table.schema.properties.iter().any(|p| &*p.name == "score"));
         assert!(table.remove_property("score").is_err());
     }
 
@@ -290,10 +287,16 @@ mod tests {
             .expect("removal runs");
         table.schema.properties.remove(0);
         table.restore_dropped_column(&pending);
-        assert_eq!(table.schema.properties[0].name, "weight");
-        assert_eq!(table.schema.properties[1].name, "score");
-        assert_eq!(table.property_index_cache.get("weight"), Some(&0));
-        assert_eq!(table.property_index_cache.get("score"), Some(&1));
+        assert_eq!(&*table.schema.properties[0].name, "weight");
+        assert_eq!(&*table.schema.properties[1].name, "score");
+        assert_eq!(
+            table.property_index_cache.get(&Arc::from("weight")),
+            Some(&0)
+        );
+        assert_eq!(
+            table.property_index_cache.get(&Arc::from("score")),
+            Some(&1)
+        );
         assert!(table.properties.has_property("weight"));
     }
 
@@ -313,7 +316,7 @@ mod tests {
         let mut loaded = make_table();
         loaded.load(dir.path()).expect("load should succeed");
         assert!(loaded.properties.has_property("score"));
-        assert!(loaded.schema.properties.iter().any(|p| p.name == "score"));
+        assert!(loaded.schema.properties.iter().any(|p| &*p.name == "score"));
         assert!(loaded.pending_drop_column().is_none());
     }
 
@@ -321,7 +324,7 @@ mod tests {
     fn published_drop_survives_reload() {
         let mut table = make_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .expect("insert should succeed");
         table.remove_property("score").expect("drop should succeed");
         let dir = tempfile::tempdir().expect("temporary edge table directory");

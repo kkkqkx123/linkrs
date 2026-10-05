@@ -15,6 +15,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult, Value};
@@ -77,7 +78,7 @@ pub(crate) enum EdgeWalOp {
         src: u32,
         dst: u32,
         rank: i64,
-        properties: Vec<(String, Value)>,
+        properties: Vec<(Arc<str>, Value)>,
         create_ts: Timestamp,
     },
     Delete {

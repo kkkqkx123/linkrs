@@ -2,6 +2,7 @@ use crate::index::types::EdgeIdentity;
 use crate::index::{EdgeIndexOps, VertexIndexOps};
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageResult, Value};
+use std::sync::Arc;
 
 use super::context::GraphStorageContext;
 
@@ -10,7 +11,7 @@ pub fn update_vertex_indexes_mvcc(
     space_id: u64,
     vertex_id: &Value,
     index_name: &str,
-    props: &[(String, Value)],
+    props: &[(Arc<str>, Value)],
     ts: Timestamp,
 ) -> StorageResult<()> {
     // Acquire the rebuild gate before the manager write lock. Rebuilds use
@@ -44,7 +45,7 @@ pub fn update_edge_indexes_mvcc(
     ctx: &GraphStorageContext,
     edge: &EdgeIdentity<'_>,
     index_name: &str,
-    props: &[(String, Value)],
+    props: &[(Arc<str>, Value)],
     ts: Timestamp,
 ) -> StorageResult<()> {
     let rebuild_gate = ctx.index_data_manager().read().rebuild_gate();

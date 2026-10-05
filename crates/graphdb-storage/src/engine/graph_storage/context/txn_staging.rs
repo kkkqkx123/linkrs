@@ -39,8 +39,8 @@ use crate::vertex::{IdKey, ShardedVertexTable, WriteScope};
 pub const MAX_TXN_STAGING_KEYS: usize = 1 << 20;
 
 type StagedKey = (LabelId, IdKey);
-type StagedInsertRow = (u32, Vec<(String, Value)>);
-type StagedUpdateRow = Vec<(String, Value)>;
+type StagedInsertRow = (u32, Vec<(std::sync::Arc<str>, Value)>);
+type StagedUpdateRow = Vec<(std::sync::Arc<str>, Value)>;
 
 /// Cross-statement vertex write staging owned by one transaction.
 ///
@@ -56,7 +56,7 @@ pub(crate) struct TxnStaging {
     inserts: HashMap<StagedKey, StagedInsertRow>,
     updates: HashMap<StagedKey, StagedUpdateRow>,
     deletes: HashSet<StagedKey>,
-    property_deletes: HashMap<StagedKey, Vec<String>>,
+    property_deletes: HashMap<StagedKey, Vec<Arc<str>>>,
     resolved: HashMap<StagedKey, u32>,
     journal: Vec<UndoOp>,
     index_ops: Vec<StagedIndexOp>,
@@ -72,13 +72,13 @@ pub(crate) enum StagedIndexOp {
         space_id: u64,
         vid: Value,
         tag: String,
-        properties: Vec<(String, Value)>,
+        properties: Vec<(Arc<str>, Value)>,
     },
     Update {
         space_id: u64,
         vid: Value,
         tag: String,
-        properties: Vec<(String, Value)>,
+        properties: Vec<(Arc<str>, Value)>,
     },
     Delete {
         space_id: u64,
@@ -115,11 +115,11 @@ impl TxnStagingMark {
 enum UndoOp {
     Inserts {
         pair: (LabelId, IdKey),
-        prev: Option<(u32, Vec<(String, Value)>)>,
+        prev: Option<(u32, Vec<(std::sync::Arc<str>, Value)>)>,
     },
     Updates {
         pair: (LabelId, IdKey),
-        prev: Option<Vec<(String, Value)>>,
+        prev: Option<Vec<(std::sync::Arc<str>, Value)>>,
     },
     Deletes {
         pair: (LabelId, IdKey),
@@ -127,7 +127,7 @@ enum UndoOp {
     },
     PropertyDeletes {
         pair: (LabelId, IdKey),
-        prev: Option<Vec<String>>,
+        prev: Option<Vec<Arc<str>>>,
     },
 }
 
@@ -248,7 +248,7 @@ impl TxnStaging {
         label: LabelId,
         key: IdKey,
         reserved: u32,
-        properties: Vec<(String, Value)>,
+        properties: Vec<(std::sync::Arc<str>, Value)>,
     ) -> StorageResult<Option<u32>> {
         let pair = (label, key.clone());
         if self.counts_as_new(label, &key) {
@@ -283,18 +283,21 @@ impl TxnStaging {
         &mut self,
         label: LabelId,
         key: IdKey,
-        columns: Vec<(String, Value)>,
+        columns: Vec<(std::sync::Arc<str>, Value)>,
     ) -> StorageResult<()> {
         let pair = (label, key.clone());
         if self.inserts.contains_key(&pair) {
             // An update of a row this transaction inserted merges into the
             // staged insert row; the main table never sees the update.
             self.record_inserts(pair.clone());
-            let row_names: Vec<String>;
+            let row_names: Vec<Arc<str>>;
             {
                 let row = &mut self.inserts.get_mut(&pair).expect("checked").1;
                 for (name, value) in columns {
-                    match row.iter_mut().find(|(existing, _)| *existing == name) {
+                    match row
+                        .iter_mut()
+                        .find(|(existing, _)| existing.as_ref() == name.as_ref())
+                    {
                         Some(slot) => slot.1 = value,
                         None => row.push((name, value)),
                     }
@@ -318,7 +321,8 @@ impl TxnStaging {
         if self.property_deletes.contains_key(&pair) {
             self.record_property_deletes(pair.clone());
             if let Some(deleted) = self.property_deletes.get_mut(&pair) {
-                let incoming: Vec<String> = columns.iter().map(|(name, _)| name.clone()).collect();
+                let incoming: Vec<Arc<str>> =
+                    columns.iter().map(|(name, _)| name.clone()).collect();
                 deleted.retain(|d| !incoming.iter().any(|n| n == d));
                 if deleted.is_empty() {
                     self.property_deletes.remove(&pair);
@@ -335,7 +339,7 @@ impl TxnStaging {
         &mut self,
         label: LabelId,
         key: IdKey,
-        columns: Vec<String>,
+        columns: Vec<Arc<str>>,
     ) -> StorageResult<()> {
         if columns.is_empty() {
             return Ok(());
@@ -436,7 +440,7 @@ impl TxnStaging {
         &self,
         label: LabelId,
         key: &IdKey,
-    ) -> Option<(u32, &[(String, Value)])> {
+    ) -> Option<(u32, &[(std::sync::Arc<str>, Value)])> {
         self.inserts
             .get(&(label, key.clone()))
             .map(|(id, props)| (*id, props.as_slice()))
@@ -455,7 +459,11 @@ impl TxnStaging {
             .map(|(id, _)| std::mem::replace(id, new_id))
     }
 
-    pub(crate) fn pending_update(&self, label: LabelId, key: &IdKey) -> Option<&[(String, Value)]> {
+    pub(crate) fn pending_update(
+        &self,
+        label: LabelId,
+        key: &IdKey,
+    ) -> Option<&[(std::sync::Arc<str>, Value)]> {
         self.updates.get(&(label, key.clone())).map(Vec::as_slice)
     }
 
@@ -463,7 +471,7 @@ impl TxnStaging {
         &self,
         label: LabelId,
         key: &IdKey,
-    ) -> Option<&[String]> {
+    ) -> Option<&[Arc<str>]> {
         self.property_deletes
             .get(&(label, key.clone()))
             .map(Vec::as_slice)
@@ -474,7 +482,7 @@ impl TxnStaging {
     pub(crate) fn insert_rows(
         &self,
         label: LabelId,
-    ) -> impl Iterator<Item = (&IdKey, u32, &[(String, Value)])> {
+    ) -> impl Iterator<Item = (&IdKey, u32, &[(std::sync::Arc<str>, Value)])> {
         self.inserts
             .iter()
             .filter(move |pair| pair.0 .0 == label)
@@ -485,7 +493,7 @@ impl TxnStaging {
     pub(crate) fn update_rows(
         &self,
         label: LabelId,
-    ) -> impl Iterator<Item = (&IdKey, &[(String, Value)])> {
+    ) -> impl Iterator<Item = (&IdKey, &[(std::sync::Arc<str>, Value)])> {
         self.updates
             .iter()
             .filter(move |pair| pair.0 .0 == label)
@@ -504,7 +512,7 @@ impl TxnStaging {
     pub(crate) fn property_delete_rows(
         &self,
         label: LabelId,
-    ) -> impl Iterator<Item = (&IdKey, &[String])> {
+    ) -> impl Iterator<Item = (&IdKey, &[Arc<str>])> {
         self.property_deletes
             .iter()
             .filter(move |pair| pair.0 .0 == label)
@@ -878,7 +886,7 @@ impl super::GraphStorageContext {
         &self,
         label: LabelId,
         key: &IdKey,
-        columns: Vec<(String, Value)>,
+        columns: Vec<(Arc<str>, Value)>,
         ts: Timestamp,
     ) -> StorageResult<()> {
         let table = self.staging_vertex_table(label)?;
@@ -915,7 +923,7 @@ impl super::GraphStorageContext {
         let buffer = self.txn_staging_buffer(ts)?;
         let mut guard = buffer.lock();
         if guard.pending_insert_id(label, key).is_some() {
-            return guard.stage_property_delete(label, key.clone(), vec![column.to_string()]);
+            return guard.stage_property_delete(label, key.clone(), vec![Arc::from(column)]);
         }
         if guard.has_pending_delete(label, key) {
             return Err(StorageError::vertex_not_found());
@@ -928,7 +936,7 @@ impl super::GraphStorageContext {
             return Err(StorageError::vertex_not_found());
         };
         guard.cache_resolution(label, key.clone(), id);
-        guard.stage_property_delete(label, key.clone(), vec![column.to_string()])
+        guard.stage_property_delete(label, key.clone(), vec![Arc::from(column)])
     }
 
     /// Stage one online vertex delete. Cancelling a staged insert drops that
@@ -1270,8 +1278,8 @@ mod tests {
         IdKey::Int(id)
     }
 
-    fn props(name: &str) -> Vec<(String, Value)> {
-        vec![("name".to_string(), Value::from(name))]
+    fn props(name: &str) -> Vec<(std::sync::Arc<str>, Value)> {
+        vec![("name".into(), Value::from(name))]
     }
 
     #[test]
@@ -1311,7 +1319,7 @@ mod tests {
         let mut staging = TxnStaging::new(10);
         staging.stage_insert(1, key(7), 5, props("a")).unwrap();
         staging
-            .stage_update(1, key(7), vec![("age".to_string(), Value::from(3))])
+            .stage_update(1, key(7), vec![("age".into(), Value::from(3))])
             .unwrap();
         let row = &staging.pending_insert_row(1, &key(7)).unwrap().1;
         assert_eq!(row.len(), 2);
@@ -1325,7 +1333,7 @@ mod tests {
         let mut staging = TxnStaging::new(10);
         staging.cache_resolution(1, key(7), 3);
         staging
-            .stage_update(1, key(7), vec![("age".to_string(), Value::from(3))])
+            .stage_update(1, key(7), vec![("age".into(), Value::from(3))])
             .unwrap();
         assert_eq!(staging.stage_delete(1, key(7)).unwrap(), None);
         assert!(staging.updates.is_empty());
@@ -1365,7 +1373,7 @@ mod tests {
         assert_eq!(staging.stage_delete(1, key(7)).unwrap(), Some(5));
         staging.stage_insert(1, key(7), 8, props("z")).unwrap();
         staging
-            .stage_update(1, key(7), vec![("age".to_string(), Value::from(2))])
+            .stage_update(1, key(7), vec![("age".into(), Value::from(2))])
             .unwrap();
         let outcome = staging.rollback_to(mark);
         assert_eq!(outcome.released, vec![(1, 8)]);

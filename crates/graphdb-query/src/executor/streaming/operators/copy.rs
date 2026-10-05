@@ -299,10 +299,10 @@ fn flush_edges(
     Ok(count)
 }
 
-fn collect_properties(mapping: &ColumnMapping, rec: &[String]) -> HashMap<String, Value> {
+fn collect_properties(mapping: &ColumnMapping, rec: &[String]) -> HashMap<Arc<str>, Value> {
     let mut props = HashMap::with_capacity(mapping.property_indices.len());
     for &(idx, ref name) in &mapping.property_indices {
-        props.insert(name.clone(), parse_copy_value(rec[idx].trim()));
+        props.insert(name.as_str().into(), parse_copy_value(rec[idx].trim()));
     }
     props
 }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use graphdb_core::error::storage::StorageErrorKind;
 use graphdb_core::metadata::IndexMetadataManager;
@@ -57,7 +58,7 @@ pub(super) struct StagedVertexRow {
     pub(super) key: IdKey,
     pub(super) vertex_id: Value,
     pub(super) tag_name: String,
-    pub(super) props: Vec<(String, Value)>,
+    pub(super) props: Vec<(Arc<str>, Value)>,
     pub(super) redo_entry: TransactionWalEntry,
 }
 
@@ -78,7 +79,7 @@ fn stage_vertex_row(
         .get(tag.name.as_str())
         .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag.name)))?;
     let label_id = tag_info.tag_id;
-    let props: Vec<(String, Value)> = tag
+    let props: Vec<(Arc<str>, Value)> = tag
         .properties
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -238,7 +239,7 @@ fn batch_insert_vertices_body(
     for tag in tags.iter() {
         for prop_def in tag.properties.iter().filter(|p| p.serial) {
             let needs_scan = vertices.iter().any(|v| {
-                v.tag.name == tag.tag_name && v.tag.properties.keys().any(|k| k == &prop_def.name)
+                v.tag.name == tag.tag_name && v.tag.properties.keys().any(|k| &**k == prop_def.name)
             });
             if needs_scan {
                 if let Some(scan) = scan_vertex_serial_column(ctx, tag.tag_id, &prop_def.name)? {
@@ -339,7 +340,7 @@ fn batch_insert_vertices_body(
             }
         }
         if !str_order.is_empty() {
-            let rows: Vec<(&str, &[(String, Value)])> = str_order
+            let rows: Vec<(&str, &[(Arc<str>, Value)])> = str_order
                 .iter()
                 .map(|&pos| {
                     let IdKey::Text(ref s) = staged[pos].key else {
@@ -356,7 +357,7 @@ fn batch_insert_vertices_body(
             }
         }
         if !i64_order.is_empty() {
-            let rows: Vec<(i64, &[(String, Value)])> = i64_order
+            let rows: Vec<(i64, &[(Arc<str>, Value)])> = i64_order
                 .iter()
                 .map(|&pos| {
                     let IdKey::Int(n) = staged[pos].key else {
@@ -629,7 +630,7 @@ fn batch_insert_vertices_online_chunked(
     for tag in tags.iter() {
         for prop_def in tag.properties.iter().filter(|p| p.serial) {
             let needs_scan = vertices.iter().any(|v| {
-                v.tag.name == tag.tag_name && v.tag.properties.keys().any(|k| k == &prop_def.name)
+                v.tag.name == tag.tag_name && v.tag.properties.keys().any(|k| &**k == prop_def.name)
             });
             if needs_scan {
                 if let Some(scan) = scan_vertex_serial_column(ctx, tag.tag_id, &prop_def.name)? {
@@ -732,7 +733,7 @@ fn batch_insert_vertices_online_chunked(
                 }
             }
             if !str_order.is_empty() {
-                let rows: Vec<(&str, &[(String, Value)])> = str_order
+                let rows: Vec<(&str, &[(Arc<str>, Value)])> = str_order
                     .iter()
                     .map(|&pos| {
                         let IdKey::Text(ref s) = staged[pos].key else {
@@ -749,7 +750,7 @@ fn batch_insert_vertices_online_chunked(
                 }
             }
             if !i64_order.is_empty() {
-                let rows: Vec<(i64, &[(String, Value)])> = i64_order
+                let rows: Vec<(i64, &[(Arc<str>, Value)])> = i64_order
                     .iter()
                     .map(|&pos| {
                         let IdKey::Int(n) = staged[pos].key else {

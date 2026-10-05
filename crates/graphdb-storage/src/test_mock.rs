@@ -118,7 +118,7 @@ impl StorageReader for MockStorage {
         space: &str,
         tag: &str,
         id: &VertexId,
-        projection: &[String],
+        projection: &[Arc<str>],
     ) -> Result<Option<Vertex>, StorageError> {
         let vertex = self.get_vertex(space, tag, id)?;
         if projection.is_empty() {
@@ -159,7 +159,7 @@ impl StorageReader for MockStorage {
         dst: &VertexId,
         edge_type: &str,
         rank: i64,
-        projection: &[String],
+        projection: &[Arc<str>],
     ) -> Result<Option<Edge>, StorageError> {
         let edge = self.get_edge(space, src, dst, edge_type, rank)?;
         if projection.is_empty() {
@@ -632,7 +632,7 @@ impl UndoTarget for MockStorage {
     fn restore_edge(
         &self,
         edge: graphdb_core::types::EdgeIdentifier,
-        properties: Vec<(String, graphdb_core::Value)>,
+        properties: Vec<(std::sync::Arc<str>, graphdb_core::Value)>,
         ts: graphdb_transaction::wal::Timestamp,
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph.restore_edge(edge, properties, ts)
@@ -659,7 +659,7 @@ impl UndoTarget for MockStorage {
     fn revert_delete_vertex_properties(
         &self,
         label_name: &str,
-        prop_names: &[String],
+        prop_names: &[Arc<str>],
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph
             .revert_delete_vertex_properties(label_name, prop_names)
@@ -670,7 +670,7 @@ impl UndoTarget for MockStorage {
         src_label: &str,
         dst_label: &str,
         edge_label: &str,
-        prop_names: &[String],
+        prop_names: &[Arc<str>],
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph
             .revert_delete_edge_properties(src_label, dst_label, edge_label, prop_names)
@@ -696,8 +696,8 @@ impl UndoTarget for MockStorage {
     fn revert_rename_vertex_properties(
         &self,
         label_name: &str,
-        current_names: &[String],
-        original_names: &[String],
+        current_names: &[Arc<str>],
+        original_names: &[Arc<str>],
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph
             .revert_rename_vertex_properties(label_name, current_names, original_names)
@@ -708,8 +708,8 @@ impl UndoTarget for MockStorage {
         src_label: &str,
         dst_label: &str,
         edge_label: &str,
-        current_names: &[String],
-        original_names: &[String],
+        current_names: &[Arc<str>],
+        original_names: &[Arc<str>],
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.graph.revert_rename_edge_properties(
             src_label,

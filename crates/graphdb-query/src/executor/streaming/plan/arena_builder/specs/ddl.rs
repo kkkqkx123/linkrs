@@ -134,7 +134,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_pipe_delete_edg
                 pipe_reference_column(dst).unwrap_or_else(|| "dst".to_string()),
             )
         })
-        .unwrap_or_else(|| ("src".to_string(), "dst".to_string()));
+        .unwrap_or_else(|| ("src".into(), "dst".to_string()));
     Ok(SinkSpec::PipeDeleteEdges {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         src_col,

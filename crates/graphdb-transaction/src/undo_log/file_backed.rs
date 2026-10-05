@@ -384,6 +384,7 @@ mod tests {
         ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, StagedWriteMark, TransactionId,
         UndoLogError, VertexIdentifier,
     };
+    use std::sync::Arc;
     use std::sync::Mutex;
 
     struct MockUndoTarget {
@@ -462,7 +463,7 @@ mod tests {
         fn revert_delete_vertex_properties(
             &self,
             label_name: &str,
-            prop_names: &[String],
+            prop_names: &[Arc<str>],
         ) -> UndoLogResult<()> {
             self.record(format!(
                 "revert_delete_vertex_properties:{label_name}:{prop_names:?}"
@@ -474,7 +475,7 @@ mod tests {
             src_label: &str,
             dst_label: &str,
             edge_label: &str,
-            prop_names: &[String],
+            prop_names: &[Arc<str>],
         ) -> UndoLogResult<()> {
             self.record(format!(
                 "revert_delete_edge_properties:{src_label}:{dst_label}:{edge_label}:{prop_names:?}"
@@ -499,8 +500,8 @@ mod tests {
         fn revert_rename_vertex_properties(
             &self,
             label_name: &str,
-            current_names: &[String],
-            original_names: &[String],
+            current_names: &[Arc<str>],
+            original_names: &[Arc<str>],
         ) -> UndoLogResult<()> {
             self.record(format!(
                 "revert_rename_vertex_properties:{label_name}:{current_names:?}:{original_names:?}"
@@ -512,8 +513,8 @@ mod tests {
             src_label: &str,
             dst_label: &str,
             edge_label: &str,
-            current_names: &[String],
-            original_names: &[String],
+            current_names: &[Arc<str>],
+            original_names: &[Arc<str>],
         ) -> UndoLogResult<()> {
             self.record(format!(
                 "revert_rename_edge_properties:{src_label}:{dst_label}:{edge_label}:{current_names:?}:{original_names:?}"

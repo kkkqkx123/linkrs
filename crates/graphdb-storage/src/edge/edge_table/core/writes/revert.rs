@@ -228,7 +228,7 @@ impl EdgeStore {
                             let result =
                                 index.insert(&prop_name, &prop_value, src, dst, rank, label, ts);
                             let latency = started.elapsed().as_millis() as u64;
-                            (prop_name, result, latency)
+                            (prop_name.to_string(), result, latency)
                         })
                         .collect()
                 } else {

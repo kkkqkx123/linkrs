@@ -539,7 +539,7 @@ mod tests {
 
         let client_session = ClientSession::new(session);
 
-        client_session.set_variable("x".to_string(), Value::Int(1));
+        client_session.set_variable("x".into(), Value::Int(1));
         assert_eq!(
             client_session.variable_value("x"),
             Some(Value::Int(1)),
@@ -547,7 +547,7 @@ mod tests {
         );
 
         // Overwrite.
-        client_session.set_variable("x".to_string(), Value::Int(2));
+        client_session.set_variable("x".into(), Value::Int(2));
         assert_eq!(client_session.variable_value("x"), Some(Value::Int(2)));
 
         let snapshot = client_session.variables_snapshot();
@@ -567,14 +567,14 @@ mod tests {
         let client_session = ClientSession::new(session);
 
         // Pre-transaction value.
-        client_session.set_variable("x".to_string(), Value::Int(1));
+        client_session.set_variable("x".into(), Value::Int(1));
 
         client_session.bind_transaction(graphdb_transaction::TransactionId(7));
         assert!(client_session.has_active_transaction());
 
         // Assignments inside the transaction go to the overlay.
-        client_session.set_variable("x".to_string(), Value::Int(100));
-        client_session.set_variable("y".to_string(), Value::string("txn"));
+        client_session.set_variable("x".into(), Value::Int(100));
+        client_session.set_variable("y".into(), Value::string("txn"));
         assert_eq!(client_session.variable_value("x"), Some(Value::Int(100)));
         assert_eq!(
             client_session.variable_value("y"),
@@ -601,7 +601,7 @@ mod tests {
         let client_session = ClientSession::new(session);
 
         client_session.bind_transaction(graphdb_transaction::TransactionId(8));
-        client_session.set_variable("a".to_string(), Value::Int(5));
+        client_session.set_variable("a".into(), Value::Int(5));
 
         client_session.commit_variables();
         client_session.unbind_transaction();
@@ -622,10 +622,10 @@ mod tests {
 
         client_session.bind_transaction(graphdb_transaction::TransactionId(9));
 
-        client_session.set_variable("a".to_string(), Value::Int(1));
+        client_session.set_variable("a".into(), Value::Int(1));
         client_session.push_variable_savepoint("sp1");
-        client_session.set_variable("a".to_string(), Value::Int(2));
-        client_session.set_variable("b".to_string(), Value::Int(3));
+        client_session.set_variable("a".into(), Value::Int(2));
+        client_session.set_variable("b".into(), Value::Int(3));
 
         assert!(
             client_session.rollback_variables_to("sp1"),
@@ -639,7 +639,7 @@ mod tests {
         assert_eq!(client_session.variable_value("b"), None);
 
         // Unknown savepoint: nothing changes.
-        client_session.set_variable("b".to_string(), Value::Int(4));
+        client_session.set_variable("b".into(), Value::Int(4));
         assert!(!client_session.rollback_variables_to("missing"));
         assert_eq!(client_session.variable_value("b"), Some(Value::Int(4)));
 

@@ -186,7 +186,7 @@ pub(crate) fn deserialize_chunk<R: Read>(reader: &mut R) -> std::io::Result<Chun
                 let value = OrderedCodec::new().decode(&val_bytes).map_err(|e| {
                     std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
                 })?;
-                included_columns.push((name, value));
+                included_columns.push((Arc::from(name.as_str()), value));
             }
 
             let entity_ref = EntityRefReader::read(&mut crc_reader)?;
@@ -454,7 +454,7 @@ mod tests {
             deserialized.entries[0].1.created_ts
         );
         assert_eq!(
-            chunk.entries[1].1.included_columns.as_ref().unwrap()[0].0,
+            &*chunk.entries[1].1.included_columns.as_ref().unwrap()[0].0,
             "name"
         );
     }

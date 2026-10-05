@@ -261,7 +261,7 @@ impl EdgeStore {
             .schema
             .properties
             .iter()
-            .map(|prop| prop.name.clone())
+            .map(|prop| prop.name.to_string())
             .collect();
         let mut encodings: HashMap<String, crate::encoding::EncodingType> = HashMap::new();
         for name in &column_names {
@@ -311,10 +311,14 @@ impl EdgeStore {
                         graphdb_core::types::MAX_TIMESTAMP,
                         None,
                     ) {
-                        let cell_map: HashMap<&String, &Option<Value>> =
-                            cells.iter().map(|(name, value)| (name, value)).collect();
+                        let cell_map: HashMap<&str, &Option<Value>> = cells
+                            .iter()
+                            .map(|(name, value)| (name.as_ref(), value))
+                            .collect();
                         for name in &column_names {
-                            let value = cell_map.get(name).and_then(|cell| (*cell).clone());
+                            let value = cell_map
+                                .get(&name.as_str())
+                                .and_then(|cell| (*cell).clone());
                             if let Some(slot) = column_values.get_mut(name) {
                                 slot.push(value);
                             }

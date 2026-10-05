@@ -272,9 +272,9 @@ mod tests {
     #[test]
     fn scan_uses_stats_snapshot_when_present() {
         let mut stats = JoinOrderStats::default();
-        stats.vertex_counts.insert("person".to_string(), 5_000);
-        stats.edge_counts.insert("knows".to_string(), 20_000);
-        stats.avg_out_degrees.insert("knows".to_string(), 4.0);
+        stats.vertex_counts.insert("person".into(), 5_000);
+        stats.edge_counts.insert("knows".into(), 20_000);
+        stats.avg_out_degrees.insert("knows".into(), 4.0);
         let est = CardinalityEstimator::new().with_stats(stats);
         assert_eq!(est.estimate_node_scan(&["person".to_string()]), 5_000);
         assert_eq!(est.estimate_rel_scan(&["knows".to_string()]), 20_000);

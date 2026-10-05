@@ -42,7 +42,7 @@ async fn get_or_create_session_id<
     // Try to find an existing anonymous session or create a new one
     // In a production system, this would use authenticated session from request context
     let session = session_manager
-        .create_session("anonymous".to_string(), "127.0.0.1".to_string())
+        .create_session("anonymous".into(), "127.0.0.1".to_string())
         .await
         .map_err(|e| WebError::Internal(format!("Failed to create session: {}", e)))?;
 

@@ -218,7 +218,7 @@ pub(crate) fn parse_primary_expression(
             ctx.next_token();
             if ctx.match_token(TokenKind::LParen) {
                 let span = ctx.merge_span(start_pos, ctx.current_position());
-                parse_function_call("list".to_string(), span, ctx)
+                parse_function_call("list".into(), span, ctx)
             } else {
                 let elements = parse_expression_list(ctx)?;
                 ctx.expect_token(TokenKind::RBracket)?;

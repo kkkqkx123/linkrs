@@ -392,11 +392,11 @@ mod tests {
     fn audit_table() -> EdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
-            label_name: "knows".to_string(),
+            label_name: "knows".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
@@ -415,13 +415,13 @@ mod tests {
         assert!(table.audit_copy_drift().is_empty());
 
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .unwrap();
         table
-            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+            .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.0))], 100)
             .unwrap();
         table
-            .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(3.0))], 100)
+            .insert_edge(1, 2, 0, &[("weight".into(), Value::Double(3.0))], 100)
             .unwrap();
         assert!(table.audit_copy_drift().is_empty());
 
@@ -468,7 +468,7 @@ mod tests {
         use std::io::Write as _;
         let mut table = audit_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .unwrap();
         let dir = tempfile::tempdir().expect("temporary edge table directory");
         table
@@ -510,10 +510,10 @@ mod tests {
     fn strict_property_reads_fence_pre_floor_history_after_reload() {
         let mut table = audit_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .unwrap();
         table
-            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 200)
+            .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.0))], 200)
             .unwrap();
         let dir = tempfile::tempdir().expect("temporary edge table directory");
         table
@@ -558,7 +558,7 @@ mod tests {
         let stats = std::sync::Arc::new(StatsManager::new());
         table.set_stats_manager(stats.clone());
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .unwrap();
         assert!(table.audit_and_report().is_empty());
         assert_eq!(
@@ -586,7 +586,7 @@ mod tests {
         let stats = std::sync::Arc::new(StatsManager::new());
         table.set_stats_manager(stats.clone());
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .unwrap();
         // The refusal gate counts orphans, not stamp drift: drop the
         // authority record so both CSR directions and the property row
@@ -619,7 +619,7 @@ mod tests {
     fn injected_authority_drift_is_reported_not_silent() {
         let mut table = audit_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .unwrap();
         assert!(table.audit_copy_drift().is_empty());
 
@@ -635,7 +635,7 @@ mod tests {
     fn injected_property_drift_is_reported_not_silent() {
         let mut table = audit_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .unwrap();
         assert!(table.audit_copy_drift().is_empty());
 
@@ -657,7 +657,7 @@ mod tests {
         );
 
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .unwrap();
         assert!(table.delete_edge(0, 1, 0, 150).unwrap());
         table.maybe_run_auto_maintenance();

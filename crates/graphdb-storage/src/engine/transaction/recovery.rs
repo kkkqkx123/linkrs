@@ -15,13 +15,14 @@ use graphdb_transaction::wal::{
     DropTagIndexRedo, InsertEdgeRedo, RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo,
     RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
 };
+use std::sync::Arc;
 
 impl RecoveryApplier for GraphStorageContext {
     fn replay_insert_vertex(
         &self,
         label: LabelId,
         vid: VertexId,
-        properties: &[(String, Value)],
+        properties: &[(Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
         data::replay_insert_vertex(self, label, vid, properties, ts)
@@ -230,12 +231,12 @@ mod tests {
 
         ctx.replay_create_vertex_type(
             &CreateVertexTypeRedo {
-                space_name: "test_space".to_string(),
+                space_name: "test_space".into(),
                 label_id: Some(1),
-                label_name: "Person".to_string(),
+                label_name: "Person".into(),
                 schema: vec![
-                    ("id".to_string(), "BIGINT".to_string(), true),
-                    ("name".to_string(), "STRING".to_string(), false),
+                    ("id".into(), "BIGINT".into(), true),
+                    ("name".into(), "STRING".into(), false),
                 ],
             },
             1,
@@ -244,12 +245,12 @@ mod tests {
 
         ctx.replay_create_vertex_type(
             &CreateVertexTypeRedo {
-                space_name: "test_space".to_string(),
+                space_name: "test_space".into(),
                 label_id: Some(2),
-                label_name: "City".to_string(),
+                label_name: "City".into(),
                 schema: vec![
-                    ("id".to_string(), "BIGINT".to_string(), false),
-                    ("name".to_string(), "STRING".to_string(), false),
+                    ("id".into(), "BIGINT".into(), false),
+                    ("name".into(), "STRING".into(), false),
                 ],
             },
             1,
@@ -268,7 +269,7 @@ mod tests {
         ctx.replay_add_vertex_prop(
             &AddVertexPropRedo {
                 label: person_label,
-                properties: vec![("age".to_string(), "INT".to_string(), false)],
+                properties: vec![("age".into(), "INT".into(), false)],
             },
             2,
         )
@@ -277,8 +278,8 @@ mod tests {
         ctx.replay_rename_vertex_prop(
             &RenameVertexPropRedo {
                 label: person_label,
-                old_name: "name".to_string(),
-                new_name: "full_name".to_string(),
+                old_name: "name".into(),
+                new_name: "full_name".into(),
             },
             2,
         )
@@ -287,7 +288,7 @@ mod tests {
         ctx.replay_delete_vertex_prop(
             &DeleteVertexPropRedo {
                 label: person_label,
-                prop_names: vec!["age".to_string()],
+                prop_names: vec!["age".into()],
             },
             2,
         )
@@ -295,12 +296,12 @@ mod tests {
 
         ctx.replay_create_edge_type(
             &CreateEdgeTypeRedo {
-                space_name: "test_space".to_string(),
+                space_name: "test_space".into(),
                 label_id: Some(3),
-                src_label: "Person".to_string(),
-                dst_label: "City".to_string(),
-                edge_label: "LIVES_IN".to_string(),
-                schema: vec![("since".to_string(), "INT".to_string(), false)],
+                src_label: "Person".into(),
+                dst_label: "City".into(),
+                edge_label: "LIVES_IN".into(),
+                schema: vec![("since".into(), "INT".into(), false)],
             },
             3,
         )
@@ -313,7 +314,7 @@ mod tests {
                 src_label: person_label,
                 dst_label: city_label,
                 edge_label: lives_in_label,
-                properties: vec![("cost".to_string(), "INT".to_string(), false)],
+                properties: vec![("cost".into(), "INT".into(), false)],
             },
             3,
         )
@@ -324,8 +325,8 @@ mod tests {
                 src_label: person_label,
                 dst_label: city_label,
                 edge_label: lives_in_label,
-                old_name: "since".to_string(),
-                new_name: "started".to_string(),
+                old_name: "since".into(),
+                new_name: "started".into(),
             },
             3,
         )
@@ -336,7 +337,7 @@ mod tests {
                 src_label: person_label,
                 dst_label: city_label,
                 edge_label: lives_in_label,
-                prop_names: vec!["cost".to_string()],
+                prop_names: vec!["cost".into()],
             },
             3,
         )
@@ -376,8 +377,8 @@ mod tests {
                 person_label,
                 1001,
                 &[
-                    ("id".to_string(), Value::BigInt(1001)),
-                    ("full_name".to_string(), Value::string("Alice")),
+                    ("id".into(), Value::BigInt(1001)),
+                    ("full_name".into(), Value::string("Alice")),
                 ],
                 4,
                 &mut scope,
@@ -393,8 +394,8 @@ mod tests {
                 city_label,
                 2001,
                 &[
-                    ("id".to_string(), Value::BigInt(2001)),
-                    ("name".to_string(), Value::string("Shanghai")),
+                    ("id".into(), Value::BigInt(2001)),
+                    ("name".into(), Value::string("Shanghai")),
                 ],
                 4,
                 &mut scope,
@@ -411,11 +412,11 @@ mod tests {
             vertex
                 .properties
                 .iter()
-                .find(|(name, _)| name == "full_name")
+                .find(|(name, _)| &**name == "full_name")
                 .map(|(_, value)| value),
             Some(&Value::string("Alice"))
         );
-        assert!(vertex.properties.iter().all(|(name, _)| name != "age"));
+        assert!(vertex.properties.iter().all(|(name, _)| &**name != "age"));
 
         ctx.insert_edge(InsertEdgeParams {
             edge_label: lives_in_label,
@@ -424,7 +425,7 @@ mod tests {
             dst_label: city_label,
             dst_id: VertexId::try_from_int64(2001).expect("test vertex id"),
             rank: 0,
-            properties: &[("started".to_string(), Value::Int(2012))],
+            properties: &[("started".into(), Value::Int(2012))],
             ts: 5,
         })
         .expect("Edge insert should succeed after property replay");
@@ -445,11 +446,11 @@ mod tests {
         assert_eq!(
             edge.properties
                 .iter()
-                .find(|(name, _)| name == "started")
+                .find(|(name, _)| &**name == "started")
                 .map(|(_, value)| value),
             Some(&Value::Int(2012))
         );
-        assert!(edge.properties.iter().all(|(name, _)| name != "cost"));
-        assert!(edge.properties.iter().all(|(name, _)| name != "since"));
+        assert!(edge.properties.iter().all(|(name, _)| &**name != "cost"));
+        assert!(edge.properties.iter().all(|(name, _)| &**name != "since"));
     }
 }

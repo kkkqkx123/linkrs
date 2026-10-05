@@ -1,5 +1,6 @@
 use graphdb_core::types::{LabelId, TagInfo};
 use graphdb_core::{StorageError, StorageResult, Value};
+use std::sync::Arc;
 
 use super::super::context::GraphStorageContext;
 use super::batch::SerialBatchState;
@@ -12,11 +13,11 @@ pub(super) fn apply_tag_constraints_prechecked(
     space_id: u64,
     tag: &TagInfo,
     serial_state: &mut SerialBatchState,
-    props: Vec<(String, Value)>,
-) -> StorageResult<Vec<(String, Value)>> {
+    props: Vec<(Arc<str>, Value)>,
+) -> StorageResult<Vec<(Arc<str>, Value)>> {
     let mut result = props;
     for prop_def in &tag.properties {
-        if let Some((_, value)) = result.iter().find(|(name, _)| name == &prop_def.name) {
+        if let Some((_, value)) = result.iter().find(|(name, _)| &**name == prop_def.name) {
             if !prop_def.nullable && value.is_null() {
                 return Err(StorageError::null_value_not_allowed(&prop_def.name));
             }
@@ -35,11 +36,11 @@ pub(super) fn apply_tag_constraints_prechecked(
         if prop_def.serial {
             let key = super::super::serial::SerialKey::new(space_id, tag.tag_name.clone());
             let next = ctx.serial_allocator().next(&key);
-            result.push((prop_def.name.clone(), Value::BigInt(next as i64)));
+            result.push((prop_def.name.as_str().into(), Value::BigInt(next as i64)));
             continue;
         }
         if let Some(default) = &prop_def.default {
-            result.push((prop_def.name.clone(), default.clone()));
+            result.push((prop_def.name.as_str().into(), default.clone()));
         } else if !prop_def.nullable {
             return Err(StorageError::null_value_not_allowed(&prop_def.name));
         }
@@ -53,8 +54,8 @@ pub(super) fn apply_tag_constraints(
     ctx: &GraphStorageContext,
     space: &str,
     tag_name: &str,
-    props: Vec<(String, Value)>,
-) -> StorageResult<Vec<(String, Value)>> {
+    props: Vec<(Arc<str>, Value)>,
+) -> StorageResult<Vec<(Arc<str>, Value)>> {
     let tag = ctx
         .schema_manager()
         .get_tag(space, tag_name)?
@@ -66,7 +67,7 @@ pub(super) fn apply_tag_constraints(
         .unwrap_or(0);
     let mut result = props;
     for prop_def in &tag.properties {
-        if let Some((_, value)) = result.iter().find(|(name, _)| name == &prop_def.name) {
+        if let Some((_, value)) = result.iter().find(|(name, _)| &**name == prop_def.name) {
             if !prop_def.nullable && value.is_null() {
                 return Err(StorageError::null_value_not_allowed(&prop_def.name));
             }
@@ -87,11 +88,11 @@ pub(super) fn apply_tag_constraints(
             // Auto-allocate the next value for this tag's serial column.
             let key = super::super::serial::SerialKey::new(space_id, tag_name.to_string());
             let next = ctx.serial_allocator().next(&key);
-            result.push((prop_def.name.clone(), Value::BigInt(next as i64)));
+            result.push((prop_def.name.as_str().into(), Value::BigInt(next as i64)));
             continue;
         }
         if let Some(default) = &prop_def.default {
-            result.push((prop_def.name.clone(), default.clone()));
+            result.push((prop_def.name.as_str().into(), default.clone()));
         } else if !prop_def.nullable {
             return Err(StorageError::null_value_not_allowed(&prop_def.name));
         }
@@ -105,8 +106,8 @@ pub(super) fn apply_edge_type_constraints(
     ctx: &GraphStorageContext,
     space: &str,
     edge_type: &str,
-    props: Vec<(String, Value)>,
-) -> StorageResult<Vec<(String, Value)>> {
+    props: Vec<(std::sync::Arc<str>, Value)>,
+) -> StorageResult<Vec<(std::sync::Arc<str>, Value)>> {
     let et = ctx
         .schema_manager()
         .get_edge_type(space, edge_type)?
@@ -118,7 +119,7 @@ pub(super) fn apply_edge_type_constraints(
         .unwrap_or(0);
     let mut result = props;
     for prop_def in &et.properties {
-        if let Some((_, value)) = result.iter().find(|(name, _)| name == &prop_def.name) {
+        if let Some((_, value)) = result.iter().find(|(name, _)| &**name == prop_def.name) {
             if !prop_def.nullable && value.is_null() {
                 return Err(StorageError::null_value_not_allowed(&prop_def.name));
             }
@@ -143,11 +144,11 @@ pub(super) fn apply_edge_type_constraints(
             // Auto-allocate the next value for this edge type's serial column.
             let key = super::super::serial::SerialKey::new(space_id, edge_type.to_string());
             let next = ctx.serial_allocator().next(&key);
-            result.push((prop_def.name.clone(), Value::BigInt(next as i64)));
+            result.push((prop_def.name.as_str().into(), Value::BigInt(next as i64)));
             continue;
         }
         if let Some(default) = &prop_def.default {
-            result.push((prop_def.name.clone(), default.clone()));
+            result.push((prop_def.name.as_str().into(), default.clone()));
         } else if !prop_def.nullable {
             return Err(StorageError::null_value_not_allowed(&prop_def.name));
         }

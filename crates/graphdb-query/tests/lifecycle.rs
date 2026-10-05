@@ -503,7 +503,6 @@ fn lifecycle_read_statement_binds_and_finalizes_read_operation_context() {
     use graphdb_query::storage::{
         StorageReader, StorageSchemaContextOps, StorageSchemaOps, StorageWriter,
     };
-    use std::collections::HashMap;
 
     let test_storage = common::TestStorage::new().expect("test storage");
     let storage = test_storage.storage();
@@ -527,7 +526,8 @@ fn lifecycle_read_statement_binds_and_finalizes_read_operation_context() {
                         ("name".to_string(), Value::string(format!("p{}", i))),
                     ]
                     .into_iter()
-                    .collect::<HashMap<_, _>>(),
+                    .map(|(name, value)| (Arc::from(name.as_str()), value))
+                    .collect(),
                 ),
             );
             store.insert_vertex("t2", vertex).unwrap();

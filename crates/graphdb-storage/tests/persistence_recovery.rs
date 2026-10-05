@@ -39,8 +39,8 @@ fn test_flush_after_vertex_update() {
             Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::string("Alice")),
-                    ("age".to_string(), Value::BigInt(31)),
+                    ("name".into(), Value::string("Alice")),
+                    ("age".into(), Value::BigInt(31)),
                 ]
                 .into_iter()
                 .collect(),

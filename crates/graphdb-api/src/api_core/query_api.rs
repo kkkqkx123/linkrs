@@ -810,7 +810,7 @@ mod tests {
         use std::collections::HashMap;
 
         let mut profiles = HashMap::new();
-        profiles.insert("cold".to_string(), StorageCostProfile::Hdd);
+        profiles.insert("cold".into(), StorageCostProfile::Hdd);
         let api = QueryApi::new(create_mock_storage(), Arc::new(StatsManager::new()))
             .with_cost_profile(StorageCostProfile::Ssd, &RuntimeConfig::memory())
             .with_space_cost_profiles(&profiles, &RuntimeConfig::memory());
@@ -834,7 +834,7 @@ mod tests {
         use std::collections::HashMap;
 
         let mut profiles = HashMap::new();
-        profiles.insert("cold".to_string(), StorageCostProfile::Hdd);
+        profiles.insert("cold".into(), StorageCostProfile::Hdd);
         let runtime = RuntimeConfig::file("/tmp/linkrs-test-data");
         let api = QueryApi::new(create_mock_storage(), Arc::new(StatsManager::new()))
             .with_space_cost_profiles(&profiles, &runtime)

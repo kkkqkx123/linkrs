@@ -12,6 +12,7 @@ use super::core::VertexTable;
 use crate::schema::ChangeDetails;
 use crate::types::StoragePropertyDef;
 use graphdb_core::{StorageError, StorageResult};
+use std::sync::Arc;
 
 /// Lifecycle state of one pending vertex schema change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +65,7 @@ impl VertexTable {
         self.ensure_open()?;
         self.ensure_no_pending_schema_change()?;
         if self.columns.get_column(&prop.name).is_some() {
-            return Err(StorageError::column_already_exists(prop.name.clone()));
+            return Err(StorageError::column_already_exists(prop.name.to_string()));
         }
         self.pending_schema_change = Some(PendingVertexSchemaChange {
             kind: PendingVertexSchemaKind::Add(prop),
@@ -81,7 +82,7 @@ impl VertexTable {
             .schema
             .properties
             .iter()
-            .position(|prop| prop.name == prop_name)
+            .position(|prop| &*prop.name == prop_name)
             .ok_or_else(|| StorageError::column_not_found(prop_name.to_string()))?;
         if index == self.schema.primary_key_index {
             return Err(StorageError::not_supported(
@@ -109,7 +110,7 @@ impl VertexTable {
             .schema
             .properties
             .iter()
-            .any(|prop| prop.name == new_name)
+            .any(|prop| &*prop.name == new_name)
         {
             return Err(StorageError::column_already_exists(new_name.to_string()));
         }
@@ -117,7 +118,7 @@ impl VertexTable {
             .schema
             .properties
             .iter()
-            .any(|prop| prop.name == old_name)
+            .any(|prop| &*prop.name == old_name)
         {
             return Err(StorageError::column_not_found(old_name.to_string()));
         }
@@ -154,8 +155,11 @@ impl VertexTable {
         };
         match kind {
             PendingVertexSchemaKind::Add(prop) => {
-                self.columns
-                    .add_column(prop.name.clone(), prop.data_type.clone(), prop.nullable);
+                self.columns.add_column(
+                    prop.name.to_string(),
+                    prop.data_type.clone(),
+                    prop.nullable,
+                );
                 if let Some(col) = self.columns.get_column(&prop.name) {
                     col.set_chunk_capacity(self.chunk_capacity);
                 }
@@ -208,7 +212,7 @@ impl VertexTable {
         match kind {
             PendingVertexSchemaKind::Add(prop) => {
                 if let Err(error) = self.record_schema_change(ChangeDetails::PropertyAdded {
-                    name: prop.name.clone(),
+                    name: prop.name.to_string(),
                     data_type: prop.data_type.clone(),
                     nullable: prop.nullable,
                     default_value: prop.default_value.clone(),
@@ -226,7 +230,7 @@ impl VertexTable {
                     .schema
                     .properties
                     .iter()
-                    .position(|prop| prop.name == name)
+                    .position(|prop| &*prop.name == name)
                     .ok_or_else(|| StorageError::column_not_found(name.clone()))?;
                 if index == self.schema.primary_key_index {
                     return Err(StorageError::not_supported(
@@ -235,7 +239,7 @@ impl VertexTable {
                 }
                 let removed_prop = self.schema.properties[index].clone();
                 self.record_schema_change(ChangeDetails::PropertyRemoved {
-                    name: removed_prop.name,
+                    name: removed_prop.name.to_string(),
                     data_type: removed_prop.data_type,
                 })?;
                 self.columns.remove_column(&name)?;
@@ -243,7 +247,8 @@ impl VertexTable {
                 if index < self.schema.primary_key_index {
                     self.schema.primary_key_index -= 1;
                 }
-                self.property_index_cache.remove(&name);
+                let drop_key: Arc<str> = name.as_str().into();
+                self.property_index_cache.remove(&drop_key);
                 for idx in self.property_index_cache.values_mut() {
                     if *idx > index {
                         *idx -= 1;
@@ -255,7 +260,7 @@ impl VertexTable {
                     .schema
                     .properties
                     .iter()
-                    .any(|prop| prop.name == new_name)
+                    .any(|prop| &*prop.name == new_name)
                 {
                     return Err(StorageError::column_already_exists(new_name.clone()));
                 }
@@ -263,16 +268,18 @@ impl VertexTable {
                     .schema
                     .properties
                     .iter()
-                    .position(|prop| prop.name == old_name)
+                    .position(|prop| &*prop.name == old_name)
                     .ok_or_else(|| StorageError::column_not_found(old_name.clone()))?;
                 self.record_schema_change(ChangeDetails::PropertyRenamed {
                     old_name: old_name.clone(),
                     new_name: new_name.clone(),
                 })?;
                 self.columns.rename_column(&old_name, new_name.clone())?;
-                self.schema.properties[index].name = new_name.clone();
-                if let Some(idx) = self.property_index_cache.remove(&old_name) {
-                    self.property_index_cache.insert(new_name.clone(), idx);
+                let new_arc: Arc<str> = new_name.as_str().into();
+                let old_arc: Arc<str> = old_name.as_str().into();
+                self.schema.properties[index].name = new_arc.clone();
+                if let Some(idx) = self.property_index_cache.remove(&old_arc) {
+                    self.property_index_cache.insert(new_arc, idx);
                 }
             }
         }
@@ -307,8 +314,8 @@ mod tests {
     fn test_schema() -> VertexSchema {
         VertexSchema {
             label_id: 0,
-            label_name: "person".to_string(),
-            properties: vec![StoragePropertyDef::new("id".to_string(), DataType::Int)],
+            label_name: "person".into(),
+            properties: vec![StoragePropertyDef::new("id".into(), DataType::Int)],
             primary_key_index: 0,
             schema_version: 1,
         }
@@ -317,7 +324,7 @@ mod tests {
     fn new_table() -> VertexTable {
         VertexTable::with_config(
             0,
-            "person".to_string(),
+            "person".into(),
             test_schema(),
             VertexTableConfig::default(),
         )
@@ -325,7 +332,7 @@ mod tests {
 
     fn age_prop() -> StoragePropertyDef {
         StoragePropertyDef {
-            name: "age".to_string(),
+            name: "age".into(),
             data_type: DataType::Int,
             nullable: true,
             default_value: None,
@@ -347,11 +354,11 @@ mod tests {
         assert!(table.has_pending_schema_change());
         assert!(table.columns.get_column("age").is_none());
         table.fill_pending_schema_change().expect("fill");
-        assert!(table.schema.properties.iter().all(|p| p.name != "age"));
+        assert!(table.schema.properties.iter().all(|p| &*p.name != "age"));
         table.publish_pending_schema_change().expect("publish");
         assert!(!table.has_pending_schema_change());
         assert!(table.columns.get_column("age").is_some());
-        assert!(table.schema.properties.iter().any(|p| p.name == "age"));
+        assert!(table.schema.properties.iter().any(|p| &*p.name == "age"));
     }
 
     #[test]
@@ -364,7 +371,7 @@ mod tests {
         table.abort_pending_schema_change().expect("abort");
         assert!(!table.has_pending_schema_change());
         assert!(table.columns.get_column("age").is_none());
-        assert!(table.schema.properties.iter().all(|p| p.name != "age"));
+        assert!(table.schema.properties.iter().all(|p| &*p.name != "age"));
     }
 
     #[test]

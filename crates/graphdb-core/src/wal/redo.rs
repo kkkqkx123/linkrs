@@ -4,6 +4,7 @@
 //! All vertex references use unified VertexId (supports both int64 and string IDs).
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::types::{LabelId, SpaceInfo, VertexId};
 use crate::Value;
@@ -16,7 +17,7 @@ use crate::Value;
 pub struct InsertVertexRedo {
     pub label: LabelId,
     pub vid: VertexId,
-    pub properties: Vec<(String, Value)>,
+    pub properties: Vec<(Arc<str>, Value)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,14 +28,14 @@ pub struct InsertEdgeRedo {
     pub dst_vid: VertexId,
     pub edge_label: LabelId,
     pub rank: i64,
-    pub properties: Vec<(String, Value)>,
+    pub properties: Vec<(Arc<str>, Value)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateVertexPropRedo {
     pub label: LabelId,
     pub vid: VertexId,
-    pub prop_name: String,
+    pub prop_name: std::sync::Arc<str>,
     pub value: Value,
 }
 
@@ -46,7 +47,7 @@ pub struct UpdateEdgePropRedo {
     pub dst_vid: VertexId,
     pub edge_label: LabelId,
     pub rank: i64,
-    pub prop_name: String,
+    pub prop_name: std::sync::Arc<str>,
     pub value: Value,
 }
 
@@ -144,7 +145,7 @@ pub struct AddEdgePropRedo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteVertexPropRedo {
     pub label: LabelId,
-    pub prop_names: Vec<String>,
+    pub prop_names: Vec<std::sync::Arc<str>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,14 +153,14 @@ pub struct DeleteEdgePropRedo {
     pub src_label: LabelId,
     pub dst_label: LabelId,
     pub edge_label: LabelId,
-    pub prop_names: Vec<String>,
+    pub prop_names: Vec<std::sync::Arc<str>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteVertexPropsRedo {
     pub label: LabelId,
     pub vid: VertexId,
-    pub prop_names: Vec<String>,
+    pub prop_names: Vec<std::sync::Arc<str>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -61,9 +61,11 @@ pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryEr
     if !matches!(&op.kind, SourceOperatorKind::IndexScan { .. }) {
         unreachable!("index_scan::next called for a non-index source");
     }
-    let vertex_projection = match &op.kind {
+    let vertex_projection: Vec<Arc<str>> = match &op.kind {
         SourceOperatorKind::IndexScan { projection, .. } => match projection {
-            IndexProjection::Columns(cols) => cols.clone(),
+            IndexProjection::Columns(cols) => {
+                cols.iter().map(|name| Arc::from(name.as_str())).collect()
+            }
             _ => Vec::new(),
         },
         _ => unreachable!("index_scan::next called for a non-index source"),
@@ -99,7 +101,12 @@ fn build_index_scan_plan(
 
     let projection = match projection {
         IndexProjection::RowIdOnly => None,
-        IndexProjection::Columns(columns) => Some(columns.clone()),
+        IndexProjection::Columns(columns) => Some(
+            columns
+                .iter()
+                .map(|name| Arc::from(name.as_str()))
+                .collect(),
+        ),
         IndexProjection::AllColumns => Some(Vec::new()),
     };
     let read_timestamp = storage
@@ -139,7 +146,7 @@ pub(crate) struct IndexScanContext<'a> {
 fn next_index_chunk(
     op: &mut SourceOperator,
     source: &str,
-    vertex_projection: &[String],
+    vertex_projection: &[Arc<str>],
 ) -> Result<Option<DataChunk>, QueryError> {
     let SourceOperatorKind::IndexScan {
         storage,
@@ -423,7 +430,7 @@ mod tests {
     fn covering_index_edge_rows_do_not_require_a_table_fetch() {
         let row = make_flat_covering_edge_row(
             &knows_edge_entity_ref(7),
-            vec![("since".to_string(), Value::Int(2024))],
+            vec![("since".into(), Value::Int(2024))],
             "KNOWS".to_string(),
             &[],
         )
@@ -457,7 +464,7 @@ mod tests {
             VertexId::try_from_int64(2).expect("valid vertex id"),
             "KNOWS".to_string(),
             7,
-            vec![("since".to_string(), Value::Int(2024))]
+            vec![("since".into(), Value::Int(2024))]
                 .into_iter()
                 .collect(),
         )]);
@@ -528,7 +535,7 @@ mod tests {
                 partition_range: None,
                 cursor: Some(Box::new(FakeIndexCursor::new(vec![IndexRow::Covering {
                     entity_ref: knows_edge_entity_ref(3),
-                    columns: vec![("since".to_string(), Value::Int(2024))],
+                    columns: vec![("since".into(), Value::Int(2024))],
                 }]))),
                 edge_type_names: std::collections::HashMap::new(),
             },
@@ -593,7 +600,7 @@ mod tests {
         let row = make_flat_covering_vertex_row(
             &EntityRef::Vertex(VertexId::try_from_int64(7).expect("valid vertex id")),
             "",
-            vec![("name".to_string(), Value::string("Alice"))],
+            vec![("name".into(), Value::string("Alice"))],
             &[],
         )
         .expect("vertex entity should produce a covering row");
@@ -633,8 +640,8 @@ mod tests {
                         VertexId::try_from_int64(7).expect("valid vertex id"),
                     ),
                     columns: vec![
-                        ("name".to_string(), Value::string("Alice")),
-                        ("age".to_string(), Value::BigInt(30)),
+                        ("name".into(), Value::string("Alice")),
+                        ("age".into(), Value::BigInt(30)),
                     ],
                 }]))),
                 edge_type_names: std::collections::HashMap::new(),

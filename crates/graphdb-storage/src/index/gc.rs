@@ -75,7 +75,7 @@ mod tests {
                 1,
                 &Value::Int(1),
                 "idx",
-                &[("name".to_string(), Value::string("Alice"))],
+                &[("name".into(), Value::string("Alice"))],
                 10,
             )
             .expect("write");

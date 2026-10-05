@@ -97,7 +97,7 @@ pub use schema::{EdgeMultiplicity, EdgeRecord, EdgeSchema, IndexConsistency, Sto
 pub use slot::{ColdStamps, HotNbr, Nbr};
 
 /// One edge batch-insert entry: `(src, dst, rank, properties, ts)`.
-pub type BatchInsertEntry<'a> = (u32, u32, i64, &'a [(String, Value)], Timestamp);
+pub type BatchInsertEntry<'a> = (u32, u32, i64, &'a [(std::sync::Arc<str>, Value)], Timestamp);
 
 /// Decoded neighbor for bulk puts: `(endpoint, rank, edge_id, ts)`.
 pub type EdgePut = (u32, i64, EdgeId, Timestamp);
@@ -139,7 +139,7 @@ mod tests {
     fn test_edge_schema_validation_both_none() {
         let schema = EdgeSchema {
             label_id: 0,
-            label_name: "invalid_edge".to_string(),
+            label_name: "invalid_edge".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![],
@@ -158,7 +158,7 @@ mod tests {
     fn test_edge_schema_validation_both_enabled() {
         let schema = EdgeSchema {
             label_id: 0,
-            label_name: "valid_edge".to_string(),
+            label_name: "valid_edge".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![],
@@ -176,7 +176,7 @@ mod tests {
     fn pure_target_rejection_comes_from_the_shared_constant() {
         use graphdb_core::DataType;
         let props = vec![StoragePropertyDef {
-            name: "p".to_string(),
+            name: "p".into(),
             data_type: DataType::Double,
             nullable: true,
             default_value: None,
@@ -200,7 +200,7 @@ mod tests {
     fn test_edge_schema_validation_ie_only() {
         let schema = EdgeSchema {
             label_id: 0,
-            label_name: "valid_edge".to_string(),
+            label_name: "valid_edge".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![],

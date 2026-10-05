@@ -7,6 +7,7 @@ use graphdb_core::types::{
     ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, LabelId, StagedWriteMark, Timestamp,
     TransactionId, UndoLogError, UndoLogResult, UndoTarget, VertexIdentifier,
 };
+use std::sync::Arc;
 
 fn checked_internal_vertex_id(vid: &graphdb_core::types::VertexId) -> UndoLogResult<u32> {
     let value = vid.as_int64().ok_or_else(|| {
@@ -74,7 +75,7 @@ impl UndoTarget for GraphStorageContext {
     fn restore_edge(
         &self,
         edge: EdgeIdentifier,
-        properties: Vec<(String, graphdb_core::Value)>,
+        properties: Vec<(std::sync::Arc<str>, graphdb_core::Value)>,
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         self.insert_edge(crate::engine::params::InsertEdgeParams {
@@ -145,7 +146,7 @@ impl UndoTarget for GraphStorageContext {
     fn revert_delete_vertex_properties(
         &self,
         label_name: &str,
-        prop_names: &[String],
+        prop_names: &[Arc<str>],
     ) -> UndoLogResult<()> {
         let label_id = {
             let catalog = self.data_store().catalog_write_set();
@@ -168,7 +169,7 @@ impl UndoTarget for GraphStorageContext {
         src_label: &str,
         dst_label: &str,
         edge_label: &str,
-        prop_names: &[String],
+        prop_names: &[Arc<str>],
     ) -> UndoLogResult<()> {
         let edge_label_id = {
             let mut catalog = self.data_store().catalog_write_set();
@@ -266,8 +267,8 @@ impl UndoTarget for GraphStorageContext {
     fn revert_rename_vertex_properties(
         &self,
         label: &str,
-        current_names: &[String],
-        original_names: &[String],
+        current_names: &[Arc<str>],
+        original_names: &[Arc<str>],
     ) -> UndoLogResult<()> {
         let label_id = {
             let catalog = self.data_store().catalog_write_set();
@@ -291,8 +292,8 @@ impl UndoTarget for GraphStorageContext {
         src_label: &str,
         dst_label: &str,
         edge_label: &str,
-        current_names: &[String],
-        original_names: &[String],
+        current_names: &[Arc<str>],
+        original_names: &[Arc<str>],
     ) -> UndoLogResult<()> {
         let edge_label_id = {
             let mut catalog = self.data_store().catalog_write_set();

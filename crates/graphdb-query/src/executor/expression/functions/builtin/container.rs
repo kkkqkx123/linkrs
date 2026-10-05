@@ -355,12 +355,12 @@ fn execute_keys(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Vertex(v) => {
             for key in v.tag.properties.keys() {
-                keys.insert(key.clone());
+                keys.insert(key.to_string());
             }
         }
         Value::Edge(e) => {
             for key in e.props.keys() {
-                keys.insert(key.clone());
+                keys.insert(key.to_string());
             }
         }
         Value::Map(m) => {
@@ -373,14 +373,14 @@ fn execute_keys(args: &[Value]) -> Result<Value, ExpressionError> {
         Value::Json(j) => {
             if let Ok(serde_json::Value::Object(m)) = j.to_value() {
                 for key in m.keys() {
-                    keys.insert(key.clone());
+                    keys.insert(key.to_string());
                 }
             }
         }
         Value::JsonB(j) => {
             if let serde_json::Value::Object(m) = j.as_value() {
                 for key in m.keys() {
-                    keys.insert(key.clone());
+                    keys.insert(key.to_string());
                 }
             }
         }

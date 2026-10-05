@@ -24,7 +24,7 @@ pub(crate) fn get_vertex_projected(
     space: &str,
     tag: &str,
     id: &VertexId,
-    projection: &[String],
+    projection: &[std::sync::Arc<str>],
 ) -> StorageResult<Option<Vertex>> {
     get_vertex_impl(ctx, space, tag, id, Some(projection))
 }
@@ -34,7 +34,7 @@ fn get_vertex_impl(
     space: &str,
     tag: &str,
     id: &VertexId,
-    projection: Option<&[String]>,
+    projection: Option<&[std::sync::Arc<str>]>,
 ) -> StorageResult<Option<Vertex>> {
     record_vertex_read(ctx, *id);
     record_schema_read(ctx, space);
@@ -64,7 +64,8 @@ fn get_vertex_impl(
     };
 
     Ok(record.map(|record| {
-        let props: HashMap<String, Value> = record.properties.iter().cloned().collect();
+        let props: HashMap<std::sync::Arc<str>, Value> =
+            record.properties.iter().cloned().collect();
         Vertex::new(id, Tag::new(tag.to_string(), props))
     }))
 }
@@ -85,7 +86,8 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
         };
         for record in records {
             record_vertex_read(ctx, record.vid);
-            let props: HashMap<String, Value> = record.properties.iter().cloned().collect();
+            let props: HashMap<std::sync::Arc<str>, Value> =
+                record.properties.iter().cloned().collect();
             out.push(Vertex::new(
                 record.vid,
                 Tag::new(tag.tag_name.clone(), props),
@@ -143,7 +145,7 @@ pub(crate) fn scan_vertices_by_prop(
             if record
                 .properties
                 .iter()
-                .any(|(k, v)| k == prop && v == value)
+                .any(|(k, v)| *k.as_ref() == *prop && v == value)
             {
                 let vertex = vertex_record_to_vertex(&record, tag);
                 vertices.push(vertex);
@@ -215,7 +217,8 @@ pub(crate) fn get_vertices_batch(
             RoutedVertexId::Text(id_str) => ctx.get_vertex(label_id, id_str, ts),
         };
         out.push(record.map(|record| {
-            let props: HashMap<String, Value> = record.properties.iter().cloned().collect();
+            let props: HashMap<std::sync::Arc<str>, Value> =
+                record.properties.iter().cloned().collect();
             Vertex::new(normalized, Tag::new(tag.to_string(), props))
         }));
     }

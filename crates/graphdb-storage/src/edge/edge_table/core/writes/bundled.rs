@@ -3,13 +3,14 @@ use crate::edge::bundled_csr::{decode_scalar, encode_scalar};
 use crate::edge::MutableCsrTrait;
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
+use std::sync::Arc;
 
 impl EdgeStore {
     /// Validate one staged insert against the bundled single-property shape
     /// and encode it to its storage word (`None` for NULL/absent).
     pub(super) fn convert_bundled_value(
         &self,
-        property_values: &[(String, Value)],
+        property_values: &[(Arc<str>, Value)],
     ) -> StorageResult<Option<u64>> {
         if property_values.is_empty() {
             return Ok(None);
@@ -20,11 +21,13 @@ impl EdgeStore {
             ));
         }
         let Some(def) = self.schema.properties.first() else {
-            return Err(StorageError::column_not_found(property_values[0].0.clone()));
+            return Err(StorageError::column_not_found(
+                property_values[0].0.to_string(),
+            ));
         };
         let (name, value) = &property_values[0];
         if name != &def.name {
-            return Err(StorageError::column_not_found(name.clone()));
+            return Err(StorageError::column_not_found(name.to_string()));
         }
         let cast = if value.data_type() != def.data_type {
             value.try_cast_to(&def.data_type)?
@@ -41,7 +44,7 @@ impl EdgeStore {
     pub(super) fn bundled_index_pair(&self, inline_value: Option<u64>) -> Option<(String, Value)> {
         let raw = inline_value?;
         let prop = self.schema.properties.first()?;
-        Some((prop.name.clone(), decode_scalar(raw, &prop.data_type)))
+        Some((prop.name.to_string(), decode_scalar(raw, &prop.data_type)))
     }
 
     /// Index pairs sourced from the inline column for erase paths.
@@ -54,7 +57,7 @@ impl EdgeStore {
         &self,
         src: u32,
         edge_id: EdgeId,
-    ) -> Vec<(String, Value)> {
+    ) -> Vec<(Arc<str>, Value)> {
         let Some(prop) = self.schema.properties.first() else {
             return Vec::new();
         };
@@ -88,7 +91,7 @@ impl EdgeStore {
         src: u32,
         dst: u32,
         rank: i64,
-        property_values: &[(String, Value)],
+        property_values: &[(Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<EdgeId> {
         if (self.schema.has_out() && self.out_csr.is_group_frozen_for(src))
@@ -187,7 +190,7 @@ impl EdgeStore {
         let Some(def) = self.schema.properties.first() else {
             return Err(StorageError::column_not_found(prop_name.to_string()));
         };
-        if prop_name != def.name {
+        if prop_name != def.name.as_ref() {
             return Err(StorageError::column_not_found(prop_name.to_string()));
         }
         let cast = if value.data_type() != def.data_type {

@@ -89,7 +89,7 @@ pub trait QueryStorage:
             }
 
             // Collect all property keys across all vertices from their tags.
-            let mut prop_keys: Vec<String> = vertices
+            let mut prop_keys: Vec<std::sync::Arc<str>> = vertices
                 .iter()
                 .flat_map(|v| v.tag.properties.keys())
                 .cloned()
@@ -105,7 +105,7 @@ pub trait QueryStorage:
 
             // Write header
             let mut header = vec!["vid".to_string()];
-            header.extend(prop_keys.clone());
+            header.extend(prop_keys.iter().map(|k| k.to_string()));
             writeln!(file, "{}", header.join(","))
                 .map_err(|e| StorageError::io_error(format!("CSV write error: {e}")))?;
 
@@ -131,7 +131,7 @@ pub trait QueryStorage:
                 continue;
             }
 
-            let mut prop_keys: Vec<String> = edges
+            let mut prop_keys: Vec<std::sync::Arc<str>> = edges
                 .iter()
                 .flat_map(|e| e.props.keys())
                 .cloned()
@@ -149,7 +149,7 @@ pub trait QueryStorage:
             })?;
 
             let mut header = vec!["src".to_string(), "dst".to_string(), "ranking".to_string()];
-            header.extend(prop_keys.clone());
+            header.extend(prop_keys.iter().map(|k| k.to_string()));
             writeln!(file, "{}", header.join(","))
                 .map_err(|e| StorageError::io_error(format!("CSV write error: {e}")))?;
 
@@ -162,7 +162,7 @@ pub trait QueryStorage:
                 for key in &prop_keys {
                     let val = edge
                         .props
-                        .get(key)
+                        .get(key.as_ref())
                         .map(format_csv_value)
                         .unwrap_or_default();
                     row.push(val);

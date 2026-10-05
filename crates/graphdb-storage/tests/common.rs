@@ -48,9 +48,9 @@ pub fn create_space(storage: &mut GraphStorage, name: &str) -> u64 {
 /// storage layer fills it from the vertex id mirror.
 pub fn create_person_tag(storage: &mut GraphStorage, space: &str) -> u32 {
     let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-        PropertyDef::new("id".to_string(), DataType::BigInt),
-        PropertyDef::new("name".to_string(), DataType::String),
-        PropertyDef::new("age".to_string(), DataType::BigInt),
+        PropertyDef::new("id".into(), DataType::BigInt),
+        PropertyDef::new("name".into(), DataType::String),
+        PropertyDef::new("age".into(), DataType::BigInt),
     ]);
     storage
         .create_tag(space, &tag)
@@ -62,9 +62,9 @@ pub fn create_person_tag(storage: &mut GraphStorage, space: &str) -> u32 {
 #[allow(dead_code)]
 pub fn create_employee_tag(storage: &mut GraphStorage, space: &str) -> u32 {
     let tag = graphdb_core::types::TagInfo::new("Employee".to_string()).with_properties(vec![
-        PropertyDef::new("id".to_string(), DataType::BigInt),
-        PropertyDef::new("company".to_string(), DataType::String),
-        PropertyDef::new("salary".to_string(), DataType::BigInt),
+        PropertyDef::new("id".into(), DataType::BigInt),
+        PropertyDef::new("company".into(), DataType::String),
+        PropertyDef::new("salary".into(), DataType::BigInt),
     ]);
     storage
         .create_tag(space, &tag)
@@ -76,7 +76,7 @@ pub fn create_knows_edge_type(storage: &mut GraphStorage, space: &str) -> u32 {
     let edge = EdgeTypeInfo::new("KNOWS".to_string())
         .with_src_tag("Person".to_string())
         .with_dst_tag("Person".to_string())
-        .with_properties(vec![PropertyDef::new("since".to_string(), DataType::Int)]);
+        .with_properties(vec![PropertyDef::new("since".into(), DataType::Int)]);
     storage
         .create_edge_type(space, &edge)
         .expect("Failed to create KNOWS edge type")
@@ -88,7 +88,7 @@ pub fn create_works_at_edge_type(storage: &mut GraphStorage, space: &str) -> u32
     let edge = EdgeTypeInfo::new("WORKS_AT".to_string())
         .with_src_tag("Person".to_string())
         .with_dst_tag("Employee".to_string())
-        .with_properties(vec![PropertyDef::new("role".to_string(), DataType::String)]);
+        .with_properties(vec![PropertyDef::new("role".into(), DataType::String)]);
     storage
         .create_edge_type(space, &edge)
         .expect("Failed to create WORKS_AT edge type")
@@ -101,8 +101,8 @@ pub fn create_person_vertex(id: i64, name: &str, age: i64) -> Vertex {
         Tag::new(
             "Person".to_string(),
             vec![
-                ("name".to_string(), Value::string(name)),
-                ("age".to_string(), Value::BigInt(age)),
+                ("name".into(), Value::string(name)),
+                ("age".into(), Value::BigInt(age)),
             ]
             .into_iter()
             .collect(),
@@ -118,8 +118,8 @@ pub fn create_employee_vertex(id: i64, company: &str, salary: i64) -> Vertex {
         Tag::new(
             "Employee".to_string(),
             vec![
-                ("company".to_string(), Value::string(company)),
-                ("salary".to_string(), Value::BigInt(salary)),
+                ("company".into(), Value::string(company)),
+                ("salary".into(), Value::BigInt(salary)),
             ]
             .into_iter()
             .collect(),
@@ -135,7 +135,7 @@ pub fn create_knows_edge(src: i64, dst: i64, since: i32) -> Edge {
         VertexId::try_from_int64(dst).expect("test vertex id"),
         "KNOWS".to_string(),
         0,
-        vec![("since".to_string(), Value::Int(since))]
+        vec![("since".into(), Value::Int(since))]
             .into_iter()
             .collect(),
     )

@@ -100,12 +100,12 @@ fn create_test_schema() -> VertexSchema {
     // id: inserts below omit it and let the table auto-fill the mirror.
     VertexSchema {
         label_id: 0,
-        label_name: "person".to_string(),
+        label_name: "person".into(),
         properties: vec![
-            StoragePropertyDef::new("id".to_string(), DataType::String),
-            StoragePropertyDef::new("name".to_string(), DataType::String),
+            StoragePropertyDef::new("id".into(), DataType::String),
+            StoragePropertyDef::new("name".into(), DataType::String),
             StoragePropertyDef {
-                name: "age".to_string(),
+                name: "age".into(),
                 data_type: DataType::Int,
                 nullable: true,
                 default_value: None,
@@ -125,8 +125,8 @@ fn test_insert_and_get() {
         .insert(
             "v1",
             &[
-                ("name".to_string(), Value::string("Alice")),
-                ("age".to_string(), Value::Int(30)),
+                ("name".into(), Value::string("Alice")),
+                ("age".into(), Value::Int(30)),
             ],
             100,
         )
@@ -149,8 +149,8 @@ fn test_batch_projected_read() {
         .insert(
             "v1",
             &[
-                ("name".to_string(), Value::string("Alice")),
-                ("age".to_string(), Value::Int(30)),
+                ("name".into(), Value::string("Alice")),
+                ("age".into(), Value::Int(30)),
             ],
             100,
         )
@@ -159,14 +159,14 @@ fn test_batch_projected_read() {
         .insert(
             "v2",
             &[
-                ("name".to_string(), Value::string("Bob")),
-                ("age".to_string(), Value::Int(25)),
+                ("name".into(), Value::string("Bob")),
+                ("age".into(), Value::Int(25)),
             ],
             100,
         )
         .unwrap();
     table
-        .insert("v3", &[("name".to_string(), Value::string("Carol"))], 100)
+        .insert("v3", &[("name".into(), Value::string("Carol"))], 100)
         .unwrap();
 
     let ids = table.live_ids(100);
@@ -180,7 +180,7 @@ fn test_batch_projected_read() {
         .iter()
         .map(|r| {
             r.as_ref()
-                .and_then(|rec| rec.properties.iter().find(|(n, _)| n == "name"))
+                .and_then(|rec| rec.properties.iter().find(|(n, _)| &**n == "name"))
                 .map(|(_, v)| v.clone())
         })
         .collect();
@@ -195,9 +195,9 @@ fn test_batch_projected_read() {
 
     // Projection only decodes the requested column.
     let projected = table
-        .try_get_projected_batch(&[0, 1], 100, Some(&["age".to_string()]))
+        .try_get_projected_batch(&[0, 1], 100, Some(&["age".into()]))
         .expect("strict batch");
-    let projected: Vec<Vec<String>> = projected
+    let projected: Vec<Vec<Arc<str>>> = projected
         .into_iter()
         .flatten()
         .map(|rec| {
@@ -207,10 +207,7 @@ fn test_batch_projected_read() {
                 .collect()
         })
         .collect();
-    assert_eq!(
-        projected,
-        vec![vec!["age".to_string()], vec!["age".to_string()]]
-    );
+    assert_eq!(projected, vec![vec!["age".into()], vec!["age".into()]]);
 
     // Invalid (deleted) id yields None in its input position.
     let id = table.get_internal_id_raw("v2").unwrap();
@@ -229,7 +226,7 @@ fn test_delete() {
     let table = new_table(0, "person", schema);
 
     table
-        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
+        .insert("v1", &[("name".into(), Value::string("Alice"))], 100)
         .unwrap();
 
     let id = table.get_internal_id_raw("v1").unwrap();
@@ -246,13 +243,13 @@ fn test_iterator() {
     let table = new_table(0, "person", schema);
 
     table
-        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
+        .insert("v1", &[("name".into(), Value::string("Alice"))], 100)
         .unwrap();
     table
-        .insert("v2", &[("name".to_string(), Value::string("Bob"))], 100)
+        .insert("v2", &[("name".into(), Value::string("Bob"))], 100)
         .unwrap();
     table
-        .insert("v3", &[("name".to_string(), Value::string("Charlie"))], 100)
+        .insert("v3", &[("name".into(), Value::string("Charlie"))], 100)
         .unwrap();
 
     let count = table.scan(100).count();
@@ -265,10 +262,10 @@ fn test_live_ids_at_excludes_timestamp_deleted_rows() {
     let table = new_table(0, "person", schema);
 
     table
-        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
+        .insert("v1", &[("name".into(), Value::string("Alice"))], 100)
         .unwrap();
     table
-        .insert("v2", &[("name".to_string(), Value::string("Bob"))], 100)
+        .insert("v2", &[("name".into(), Value::string("Bob"))], 100)
         .unwrap();
 
     let id = table.get_internal_id_raw("v1").unwrap();
@@ -287,7 +284,7 @@ fn test_rename_and_remove_property() {
 
     staged_add(
         &mut table,
-        StoragePropertyDef::new("city".to_string(), DataType::String),
+        StoragePropertyDef::new("city".into(), DataType::String),
     )
     .expect("add property should succeed");
 
@@ -295,9 +292,9 @@ fn test_rename_and_remove_property() {
         .insert(
             "v1",
             &[
-                ("name".to_string(), Value::string("Alice")),
-                ("age".to_string(), Value::Int(30)),
-                ("city".to_string(), Value::string("Shanghai")),
+                ("name".into(), Value::string("Alice")),
+                ("age".into(), Value::Int(30)),
+                ("city".into(), Value::string("Shanghai")),
             ],
             100,
         )
@@ -314,18 +311,18 @@ fn test_rename_and_remove_property() {
         record
             .properties
             .iter()
-            .find(|(name, _)| name == "years")
+            .find(|(name, _)| &**name == "years")
             .map(|(_, value)| value),
         Some(&Value::Int(30))
     );
-    assert!(record.properties.iter().all(|(name, _)| name != "age"));
-    assert!(record.properties.iter().all(|(name, _)| name != "city"));
+    assert!(record.properties.iter().all(|(name, _)| &**name != "age"));
+    assert!(record.properties.iter().all(|(name, _)| &**name != "city"));
     assert_eq!(
         table
             .schema()
             .properties
             .iter()
-            .map(|prop| prop.name.as_str())
+            .map(|prop| &*prop.name)
             .collect::<Vec<_>>(),
         vec!["id", "name", "years"]
     );
@@ -336,26 +333,26 @@ fn test_batch_insert() {
     let schema = create_test_schema();
     let table = new_table(0, "person", schema);
 
-    let vertices = vec![
+    let vertices: Vec<(String, Vec<(Arc<str>, Value)>)> = vec![
         (
-            "v1".to_string(),
+            "v1".into(),
             vec![
-                ("name".to_string(), Value::string("Alice")),
-                ("age".to_string(), Value::Int(30)),
+                (Arc::from("name"), Value::string("Alice")),
+                (Arc::from("age"), Value::Int(30)),
             ],
         ),
         (
-            "v2".to_string(),
+            "v2".into(),
             vec![
-                ("name".to_string(), Value::string("Bob")),
-                ("age".to_string(), Value::Int(25)),
+                (Arc::from("name"), Value::string("Bob")),
+                (Arc::from("age"), Value::Int(25)),
             ],
         ),
         (
-            "v3".to_string(),
+            "v3".into(),
             vec![
-                ("name".to_string(), Value::string("Charlie")),
-                ("age".to_string(), Value::Int(35)),
+                (Arc::from("name"), Value::string("Charlie")),
+                (Arc::from("age"), Value::Int(35)),
             ],
         ),
     ];
@@ -377,7 +374,7 @@ fn test_batch_insert() {
         record1
             .properties
             .iter()
-            .find(|(n, _)| n == "name")
+            .find(|(n, _)| &**n == "name")
             .map(|(_, v)| v),
         Some(&Value::string("Alice"))
     );
@@ -393,7 +390,7 @@ fn test_add_property_increments_version() {
 
     staged_add(
         &mut table,
-        StoragePropertyDef::new("email".to_string(), DataType::String),
+        StoragePropertyDef::new("email".into(), DataType::String),
     )
     .expect("add_property should succeed");
 
@@ -404,10 +401,9 @@ fn test_add_property_increments_version() {
 #[test]
 fn test_remove_property_increments_version() {
     let mut schema = create_test_schema();
-    schema.properties.push(StoragePropertyDef::new(
-        "email".to_string(),
-        DataType::String,
-    ));
+    schema
+        .properties
+        .push(StoragePropertyDef::new("email".into(), DataType::String));
     let mut table = new_table(0, "person", schema);
 
     let v1 = table.schema().schema_version;
@@ -440,14 +436,14 @@ fn test_sequential_property_modifications() {
 
     staged_add(
         &mut table,
-        StoragePropertyDef::new("email".to_string(), DataType::String),
+        StoragePropertyDef::new("email".into(), DataType::String),
     )
     .expect("add_property 1 should succeed");
     assert_eq!(table.schema().schema_version, 2);
 
     staged_add(
         &mut table,
-        StoragePropertyDef::new("phone".to_string(), DataType::String),
+        StoragePropertyDef::new("phone".into(), DataType::String),
     )
     .expect("add_property 2 should succeed");
     assert_eq!(table.schema().schema_version, 3);
@@ -468,7 +464,7 @@ fn test_version_history_add_property() {
 
     staged_add(
         &mut table,
-        StoragePropertyDef::new("email".to_string(), DataType::String),
+        StoragePropertyDef::new("email".into(), DataType::String),
     )
     .expect("add_property should succeed");
 
@@ -493,10 +489,9 @@ fn test_version_history_remove_property() {
     use crate::schema::ChangeDetails;
 
     let mut schema = create_test_schema();
-    schema.properties.push(StoragePropertyDef::new(
-        "email".to_string(),
-        DataType::String,
-    ));
+    schema
+        .properties
+        .push(StoragePropertyDef::new("email".into(), DataType::String));
 
     let mut table = new_table(1, "User", schema);
 
@@ -553,7 +548,7 @@ fn test_compact_delete_all() {
         table
             .insert(
                 &format!("v{}", i),
-                &[("name".to_string(), Value::string(format!("Person{}", i)))],
+                &[("name".into(), Value::string(format!("Person{}", i)))],
                 100,
             )
             .unwrap();
@@ -602,7 +597,7 @@ fn test_compact_multiple_cycles() {
             table
                 .insert(
                     &format!("v{}_{}", cycle, i),
-                    &[("name".to_string(), Value::string(format!("P{}", i)))],
+                    &[("name".into(), Value::string(format!("P{}", i)))],
                     ts_insert,
                 )
                 .unwrap_or_else(|_| panic!("insert cycle {} should succeed", cycle));
@@ -667,19 +662,19 @@ fn test_compact_id_consistency() {
 
     let _ids = [
         table
-            .insert("v0", &[("name".to_string(), Value::string("Alice"))], 100)
+            .insert("v0", &[("name".into(), Value::string("Alice"))], 100)
             .unwrap(),
         table
-            .insert("v2", &[("name".to_string(), Value::string("Bob"))], 100)
+            .insert("v2", &[("name".into(), Value::string("Bob"))], 100)
             .unwrap(),
         table
-            .insert("v4", &[("name".to_string(), Value::string("Charlie"))], 100)
+            .insert("v4", &[("name".into(), Value::string("Charlie"))], 100)
             .unwrap(),
         table
-            .insert("v5", &[("name".to_string(), Value::string("David"))], 100)
+            .insert("v5", &[("name".into(), Value::string("David"))], 100)
             .unwrap(),
         table
-            .insert("v8", &[("name".to_string(), Value::string("Eve"))], 100)
+            .insert("v8", &[("name".into(), Value::string("Eve"))], 100)
             .unwrap(),
     ];
 
@@ -712,7 +707,7 @@ fn test_compact_id_consistency() {
         let name_val = record
             .properties
             .iter()
-            .find(|(n, _)| n == "name")
+            .find(|(n, _)| &**n == "name")
             .map(|(_, v)| v);
 
         assert_eq!(
@@ -741,7 +736,7 @@ fn test_vertex_snapshot_isolation() {
     let table = new_table(0, "person", schema);
 
     table
-        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
+        .insert("v1", &[("name".into(), Value::string("Alice"))], 100)
         .unwrap();
 
     table
@@ -761,11 +756,11 @@ fn test_vertex_multiple_snapshots() {
     let table = new_table(0, "person", schema);
 
     table
-        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
+        .insert("v1", &[("name".into(), Value::string("Alice"))], 100)
         .unwrap();
 
     table
-        .insert("v2", &[("name".to_string(), Value::string("Bob"))], 150)
+        .insert("v2", &[("name".into(), Value::string("Bob"))], 150)
         .unwrap();
 
     let id = table.get_internal_id_raw("v1").unwrap();
@@ -786,7 +781,7 @@ fn test_vertex_gc_placeholder() {
     let table = new_table(0, "person", schema);
 
     table
-        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
+        .insert("v1", &[("name".into(), Value::string("Alice"))], 100)
         .unwrap();
 
     let (gc_vertices, gc_versions) = table.gc_detailed(200).unwrap();
@@ -803,7 +798,7 @@ fn test_vertex_mvcc_table_ops() {
     let table = new_table(0, "person", schema);
 
     table
-        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
+        .insert("v1", &[("name".into(), Value::string("Alice"))], 100)
         .unwrap();
 
     let (gc_vertices, gc_versions) = table.gc_detailed(200).unwrap();
@@ -821,8 +816,8 @@ fn test_repeatable_read_property_updates() {
         .insert(
             "v1",
             &[
-                ("name".to_string(), Value::string("Alice")),
-                ("age".to_string(), Value::Int(30)),
+                ("name".into(), Value::string("Alice")),
+                ("age".into(), Value::Int(30)),
             ],
             100,
         )
@@ -840,13 +835,15 @@ fn test_repeatable_read_property_updates() {
     // T1 re-reads at its snapshot timestamp: it must still see the old values
     // (RepeatableRead), not the values written by T2.
     let t1_read = table.get_by_internal_id_offline(0, 100).unwrap();
-    let props: std::collections::HashMap<String, Value> = t1_read.properties.into_iter().collect();
+    let props: std::collections::HashMap<Arc<str>, Value> =
+        t1_read.properties.into_iter().collect();
     assert_eq!(props.get("age"), Some(&Value::Int(30)));
     assert_eq!(props.get("name"), Some(&Value::string("Alice")));
 
     // A newer reader at ts=200 sees the new values.
     let t2_read = table.get_by_internal_id_offline(0, 200).unwrap();
-    let props: std::collections::HashMap<String, Value> = t2_read.properties.into_iter().collect();
+    let props: std::collections::HashMap<Arc<str>, Value> =
+        t2_read.properties.into_iter().collect();
     assert_eq!(props.get("age"), Some(&Value::Int(31)));
     assert_eq!(props.get("name"), Some(&Value::string("Alice-renamed")));
 }
@@ -860,8 +857,8 @@ fn test_property_version_gc_does_not_break_visible_snapshots() {
         .insert(
             "v1",
             &[
-                ("name".to_string(), Value::string("Alice")),
-                ("age".to_string(), Value::Int(30)),
+                ("name".into(), Value::string("Alice")),
+                ("age".into(), Value::Int(30)),
             ],
             100,
         )
@@ -883,7 +880,7 @@ fn test_property_version_gc_does_not_break_visible_snapshots() {
         removed, 0,
         "no versions may be reclaimed while a snapshot is active below them"
     );
-    let props_at_200: std::collections::HashMap<String, Value> = table
+    let props_at_200: std::collections::HashMap<Arc<str>, Value> = table
         .get_by_internal_id_offline(0, 200)
         .unwrap()
         .properties
@@ -899,7 +896,7 @@ fn test_property_version_gc_does_not_break_visible_snapshots() {
         removed >= 1,
         "old versions should be reclaimed after snapshots drop"
     );
-    let props_at_300: std::collections::HashMap<String, Value> = table
+    let props_at_300: std::collections::HashMap<Arc<str>, Value> = table
         .get_by_internal_id_offline(0, 300)
         .unwrap()
         .properties
@@ -914,10 +911,10 @@ fn test_strict_batch_fences_pre_floor_history_after_reload() {
     let schema = create_test_schema();
     let mut table = new_table(0, "person", schema.clone());
     table
-        .insert("v0", &[("age".to_string(), Value::Int(30))], 100)
+        .insert("v0", &[("age".into(), Value::Int(30))], 100)
         .unwrap();
     table
-        .insert("v1", &[("age".to_string(), Value::Int(40))], 200)
+        .insert("v1", &[("age".into(), Value::Int(40))], 200)
         .unwrap();
     let tmp = TempDir::new().unwrap();
     let shard = tmp.path().join("shard");
@@ -957,8 +954,8 @@ fn test_flush_chunk_sidecars_and_chunked_reload() {
             .insert(
                 &format!("v{}", i),
                 &[
-                    ("name".to_string(), Value::string(format!("n{}", i))),
-                    ("age".to_string(), Value::Int(i)),
+                    ("name".into(), Value::string(format!("n{}", i))),
+                    ("age".into(), Value::Int(i)),
                 ],
                 100,
             )
@@ -982,7 +979,7 @@ fn test_flush_chunk_sidecars_and_chunked_reload() {
     reloaded.load(&shard).unwrap();
     // Schema and stats load eagerly; verify a mid-table read first.
     let rec = reloaded.get_by_internal_id_offline(10, 100).unwrap();
-    let props: std::collections::HashMap<String, Value> = rec.properties.into_iter().collect();
+    let props: std::collections::HashMap<Arc<str>, Value> = rec.properties.into_iter().collect();
     assert_eq!(props.get("age"), Some(&Value::Int(10)));
 
     // Chunked columns serve point reads after reload.
@@ -993,7 +990,7 @@ fn test_flush_chunk_sidecars_and_chunked_reload() {
     let age = reloaded.columns.get_column("age").unwrap();
     assert_eq!(age.get(0), Some(Value::Int(0)));
     let rec = reloaded.get_by_internal_id_offline(0, 100).unwrap();
-    let props: std::collections::HashMap<String, Value> = rec.properties.into_iter().collect();
+    let props: std::collections::HashMap<Arc<str>, Value> = rec.properties.into_iter().collect();
     assert_eq!(props.get("age"), Some(&Value::Int(0)));
 }
 
@@ -1005,7 +1002,7 @@ fn test_flush_raw_chunk_under_encoded_column_keeps_rows() {
     // record form describes encodings only, so such a column must dump raw.
     let mut schema = create_test_schema();
     schema.properties.push(StoragePropertyDef {
-        name: "score".to_string(),
+        name: "score".into(),
         data_type: DataType::Double,
         nullable: true,
         default_value: None,
@@ -1014,7 +1011,7 @@ fn test_flush_raw_chunk_under_encoded_column_keeps_rows() {
         chunk_capacity: 8,
         ..VertexTableConfig::default()
     };
-    let mut table = VertexTable::with_config(0, "person".to_string(), schema.clone(), config());
+    let mut table = VertexTable::with_config(0, "person".into(), schema.clone(), config());
     let values: Vec<f64> = (0..16u32)
         .map(|row| {
             if row < 8 {
@@ -1031,8 +1028,8 @@ fn test_flush_raw_chunk_under_encoded_column_keeps_rows() {
             .insert(
                 &format!("v{}", row),
                 &[
-                    ("name".to_string(), Value::string(format!("n{}", row))),
-                    ("score".to_string(), Value::Double(*value)),
+                    ("name".into(), Value::string(format!("n{}", row))),
+                    ("score".into(), Value::Double(*value)),
                 ],
                 100,
             )
@@ -1066,7 +1063,7 @@ fn test_flush_raw_chunk_under_encoded_column_keeps_rows() {
         )
         .unwrap();
 
-    let mut reloaded = VertexTable::with_config(0, "person".to_string(), schema, config());
+    let mut reloaded = VertexTable::with_config(0, "person".into(), schema, config());
     reloaded.load(&shard).unwrap();
     let col = reloaded.columns.get_column("score").unwrap();
     assert_eq!(col.len(), 16);
@@ -1095,7 +1092,7 @@ fn test_partial_compact_preserves_unmoved_rows() {
         ("v4", "Eve"),
     ] {
         table
-            .insert(key, &[("name".to_string(), Value::string(name))], 100)
+            .insert(key, &[("name".into(), Value::string(name))], 100)
             .unwrap();
     }
     let id = table.get_internal_id_raw("v1").unwrap();
@@ -1117,7 +1114,7 @@ fn test_partial_compact_preserves_unmoved_rows() {
         let got = record
             .properties
             .iter()
-            .find(|(n, _)| n == "name")
+            .find(|(n, _)| &**n == "name")
             .map(|(_, v)| v.clone());
         assert_eq!(got, Some(Value::string(name)), "property lost for {}", key);
     }
@@ -1135,10 +1132,10 @@ fn test_history_floor_error_carries_floor_and_query_ts() {
     let schema = create_test_schema();
     let mut table = new_table(0, "person", schema.clone());
     table
-        .insert("v0", &[("name".to_string(), Value::string("Alice"))], 50)
+        .insert("v0", &[("name".into(), Value::string("Alice"))], 50)
         .unwrap();
     table
-        .insert("v1", &[("name".to_string(), Value::string("Bob"))], 100)
+        .insert("v1", &[("name".into(), Value::string("Bob"))], 100)
         .unwrap();
     table
         .update_property(0, "name", &Value::string("Alice2"), 200)
@@ -1189,10 +1186,10 @@ fn test_compact_preserves_moved_row_history() {
     let schema = create_test_schema();
     let mut table = new_table(0, "person", schema);
     table
-        .insert("tmp", &[("name".to_string(), Value::string("Tmp"))], 100)
+        .insert("tmp", &[("name".into(), Value::string("Tmp"))], 100)
         .unwrap();
     table
-        .insert("v0", &[("name".to_string(), Value::string("Alice"))], 100)
+        .insert("v0", &[("name".into(), Value::string("Alice"))], 100)
         .unwrap();
     let v0 = lookup_visible(&table, "v0", 100).expect("v0 exists");
     table
@@ -1213,7 +1210,7 @@ fn test_compact_preserves_moved_row_history() {
             .unwrap_or_else(|| panic!("no record for v0 at {}", ts))
             .properties
             .iter()
-            .find(|(n, _)| n == "name")
+            .find(|(n, _)| &**n == "name")
             .map(|(_, v)| v.clone())
     };
     assert_eq!(name_at(150), Some(Value::string("Alice")));

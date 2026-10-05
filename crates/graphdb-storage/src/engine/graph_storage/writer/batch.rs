@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::engine::{
     BatchEdgeDelete, BatchEdgeInsert, DeleteEdgesBatchParams, InsertEdgesBatchParams,
@@ -237,10 +238,10 @@ fn insert_one_type_batch(
             ))
         })?;
 
-    let mut prepared: Vec<(Vec<(String, Value)>, usize)> = Vec::with_capacity(positions.len());
+    let mut prepared: Vec<(Vec<(Arc<str>, Value)>, usize)> = Vec::with_capacity(positions.len());
     for &index in positions {
         let edge = &edges[index];
-        let props: Vec<(String, Value)> = edge
+        let props: Vec<(Arc<str>, Value)> = edge
             .props
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))

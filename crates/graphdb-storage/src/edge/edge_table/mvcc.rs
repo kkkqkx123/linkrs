@@ -633,11 +633,11 @@ mod tests {
     fn create_edge_table_with_props() -> EdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
-            label_name: "knows".to_string(),
+            label_name: "knows".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![crate::types::StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: graphdb_core::types::DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
@@ -682,7 +682,7 @@ mod tests {
         let mut table = create_edge_table_with_props();
 
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .unwrap();
 
         table.delete_edge(0, 1, 0, 150).unwrap();
@@ -735,7 +735,7 @@ mod tests {
                     0,
                     1,
                     i as i64,
-                    &[("weight".to_string(), Value::Double(i as f64))],
+                    &[("weight".into(), Value::Double(i as f64))],
                     i,
                 )
                 .unwrap();
@@ -769,7 +769,7 @@ mod tests {
                     0,
                     1,
                     i as i64,
-                    &[("weight".to_string(), Value::Double(i as f64))],
+                    &[("weight".into(), Value::Double(i as f64))],
                     i,
                 )
                 .unwrap();

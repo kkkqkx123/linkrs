@@ -52,7 +52,7 @@ pub(crate) fn replay_insert_vertex(
     ctx: &GraphStorageContext,
     label: LabelId,
     vid: VertexId,
-    properties: &[(String, Value)],
+    properties: &[(Arc<str>, Value)],
     ts: Timestamp,
 ) -> StorageResult<()> {
     ctx.data_store().with_vertex_tables_mut(|vertex_tables| {
@@ -391,7 +391,7 @@ impl GraphStorageContext {
         &self,
         label: LabelId,
         vid: VertexId,
-        properties: &[(String, Value)],
+        properties: &[(Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
         let Some((space_name, tag_info)) = self.schema_manager().find_tag_by_id(label) else {

@@ -293,7 +293,7 @@ mod tests {
             right: Box::new(var("y")),
         };
         let mut mapping = HashMap::new();
-        mapping.insert("x".to_string(), lit(21));
+        mapping.insert("x".into(), lit(21));
         let out = substitute_variables(&expr, &mapping);
         match out {
             Expression::Binary { left, right, .. } => {
@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn test_substitute_case_insensitive() {
         let mut mapping = HashMap::new();
-        mapping.insert("X".to_string(), lit(1));
+        mapping.insert("X".into(), lit(1));
         assert_eq!(substitute_variables(&var("x"), &mapping), lit(1));
     }
 
@@ -318,7 +318,7 @@ mod tests {
             body: Box::new(var("x")),
         };
         let mut mapping = HashMap::new();
-        mapping.insert("x".to_string(), lit(9));
+        mapping.insert("x".into(), lit(9));
         let out = substitute_variables(&expr, &mapping);
         // Bound lambda parameter must not be captured.
         assert_eq!(out, expr);
@@ -334,7 +334,7 @@ mod tests {
             map: Some(Box::new(var("x"))),
         };
         let mut mapping = HashMap::new();
-        mapping.insert("x".to_string(), lit(7));
+        mapping.insert("x".into(), lit(7));
         match substitute_variables(&expr, &mapping) {
             Expression::ListComprehension { source, map, .. } => {
                 assert_eq!(*source, lit(7));

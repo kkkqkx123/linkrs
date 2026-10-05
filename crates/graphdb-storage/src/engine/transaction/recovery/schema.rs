@@ -98,7 +98,7 @@ pub(crate) fn replay_create_vertex_type(
     let mut properties = Vec::with_capacity(redo.schema.len());
     for (name, type_name, _serial) in &redo.schema {
         properties.push(StoragePropertyDef::new(
-            name.clone(),
+            name.as_str().into(),
             parse_data_type(type_name)?,
         ));
     }
@@ -113,7 +113,7 @@ pub(crate) fn replay_create_vertex_type(
 
     let primary_key = properties
         .first()
-        .map(|prop| prop.name.clone())
+        .map(|prop| prop.name.to_string())
         .unwrap_or_else(|| redo.label_name.clone());
 
     ctx.ensure_recovery_space(&redo.space_name)?;
@@ -186,7 +186,7 @@ pub(crate) fn replay_create_edge_type(
     let mut properties = Vec::with_capacity(redo.schema.len());
     for (name, type_name, _serial) in &redo.schema {
         properties.push(StoragePropertyDef::new(
-            name.clone(),
+            name.as_str().into(),
             parse_data_type(type_name)?,
         ));
     }
@@ -412,7 +412,7 @@ pub(crate) fn replay_add_vertex_prop(
     let mut props = Vec::with_capacity(redo.properties.len());
     for (name, type_name, _serial) in &redo.properties {
         props.push(StoragePropertyDef::new(
-            name.clone(),
+            name.as_str().into(),
             parse_data_type(type_name)?,
         ));
     }
@@ -421,20 +421,20 @@ pub(crate) fn replay_add_vertex_prop(
     for prop in props {
         match ctx.add_vertex_property(redo.label, prop.clone()) {
             Ok(()) => {
-                added_props.push((prop.name, prop.data_type));
+                added_props.push((prop.name.to_string(), prop.data_type));
             }
             Err(e) => {
                 if e.to_string().contains("already exists") {
                     ctx.data_store().with_vertex_tables_mut(|vertex_tables| {
                         if let Some(table) = vertex_tables.get(&redo.label) {
                             let change_details = crate::schema::ChangeDetails::PropertyAdded {
-                                name: prop.name.clone(),
+                                name: prop.name.to_string(),
                                 data_type: prop.data_type.clone(),
                                 nullable: prop.nullable,
                                 default_value: None,
                             };
                             table.rebuild_schema_change_from_redo(change_details)?;
-                            added_props.push((prop.name, prop.data_type));
+                            added_props.push((prop.name.to_string(), prop.data_type));
                         }
                         Ok(())
                     })?;
@@ -471,7 +471,7 @@ pub(crate) fn replay_add_edge_prop(
     let mut props = Vec::with_capacity(redo.properties.len());
     for (name, type_name, _serial) in &redo.properties {
         props.push(StoragePropertyDef::new(
-            name.clone(),
+            name.as_str().into(),
             parse_data_type(type_name)?,
         ));
     }
@@ -495,7 +495,7 @@ pub(crate) fn replay_add_edge_prop(
                     if let Some(arc) = arc {
                         let mut table = arc.write();
                         let change_details = crate::schema::ChangeDetails::PropertyAdded {
-                            name: prop.name.clone(),
+                            name: prop.name.to_string(),
                             data_type: prop.data_type.clone(),
                             nullable: prop.nullable,
                             default_value: None,
@@ -541,7 +541,7 @@ pub(crate) fn replay_delete_vertex_prop(
         .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", redo.label)))?;
 
     tag.properties
-        .retain(|prop| !redo.prop_names.iter().any(|name| name == &prop.name));
+        .retain(|prop| !redo.prop_names.iter().any(|name| &**name == prop.name));
     ctx.schema_manager().update_tag(&space_name, &tag)?;
 
     for prop_name in &redo.prop_names {
@@ -562,7 +562,7 @@ pub(crate) fn replay_delete_edge_prop(
 
     edge_type
         .properties
-        .retain(|prop| !redo.prop_names.iter().any(|name| name == &prop.name));
+        .retain(|prop| !redo.prop_names.iter().any(|name| &**name == prop.name));
     ctx.schema_manager()
         .update_edge_type(&space_name, &edge_type)?;
 

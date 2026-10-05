@@ -46,6 +46,7 @@
 
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::Value;
+use std::sync::Arc;
 
 /// One uncommitted edge insert held in a staging batch.
 #[derive(Debug, Clone)]
@@ -53,7 +54,7 @@ pub struct StagedInsert {
     pub src: u32,
     pub dst: u32,
     pub rank: i64,
-    pub properties: Vec<(String, Value)>,
+    pub properties: Vec<(Arc<str>, Value)>,
     pub create_ts: Timestamp,
 }
 
@@ -102,7 +103,7 @@ impl EdgeStagingBatch {
         src: u32,
         dst: u32,
         rank: i64,
-        properties: &[(String, Value)],
+        properties: &[(std::sync::Arc<str>, Value)],
         create_ts: Timestamp,
     ) {
         let slot = self.inserts.len();

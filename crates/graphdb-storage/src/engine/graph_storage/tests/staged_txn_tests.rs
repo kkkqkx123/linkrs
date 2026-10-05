@@ -51,9 +51,9 @@ fn person(id: i64, name: &str, age: i64) -> Vertex {
         Tag::new(
             "Person".to_string(),
             [
-                ("id".to_string(), Value::BigInt(id)),
-                ("name".to_string(), Value::string(name)),
-                ("age".to_string(), Value::BigInt(age)),
+                ("id".into(), Value::BigInt(id)),
+                ("name".into(), Value::string(name)),
+                ("age".into(), Value::BigInt(age)),
             ]
             .into_iter()
             .collect(),

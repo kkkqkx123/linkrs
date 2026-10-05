@@ -2,6 +2,8 @@ use crate::error::StorageResult;
 use crate::types::{LabelId, Timestamp, VertexId};
 use crate::Value;
 
+use std::sync::Arc;
+
 use super::redo::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
     CreateEdgeTypeRedo, CreateMacroRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateTypeAliasRedo,
@@ -37,7 +39,7 @@ pub trait RecoveryApplier {
         &self,
         label: LabelId,
         vid: VertexId,
-        properties: &[(String, Value)],
+        properties: &[(Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<()>;
 

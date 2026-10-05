@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn observe_value_tracks_numeric_envelope() {
-        let mut stat = PropertyStatistics::new("age".to_string(), Some("person".to_string()));
+        let mut stat = PropertyStatistics::new("age".into(), Some("person".to_string()));
         for v in [
             Value::Int(30),
             Value::Int(5),
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn observe_value_ignores_null_and_keeps_first_family() {
-        let mut stat = PropertyStatistics::new("v".to_string(), None);
+        let mut stat = PropertyStatistics::new("v".into(), None);
         stat.observe_value(&Value::Null(graphdb_core::value::NullType::Null));
         assert_eq!(stat.min_value, None);
         stat.observe_value(&Value::Double(1.5));
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn observe_value_orders_strings_lexicographically() {
-        let mut stat = PropertyStatistics::new("name".to_string(), None);
+        let mut stat = PropertyStatistics::new("name".into(), None);
         for s in ["mango", "apple", "zebra"] {
             stat.observe_value(&Value::string(s));
         }
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn null_fraction_clamps_and_requires_rows() {
-        let mut stat = PropertyStatistics::new("age".to_string(), None);
+        let mut stat = PropertyStatistics::new("age".into(), None);
         assert_eq!(stat.null_fraction(), None);
         stat.total_rows = Some(0);
         stat.null_count = Some(0);

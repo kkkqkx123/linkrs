@@ -109,7 +109,7 @@ mod tests {
     fn test_vertex_conversion() {
         let vertex = Vertex::new(
             VertexId::try_from_string("vertex_123").expect("valid vertex id"),
-            Tag::new("person".to_string(), HashMap::new()),
+            Tag::new("person".into(), HashMap::new()),
         );
 
         let row = vertex_to_row(&vertex);

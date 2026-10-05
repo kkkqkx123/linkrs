@@ -422,11 +422,11 @@ mod tests {
     fn create_edge_table() -> EdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
-            label_name: "knows".to_string(),
+            label_name: "knows".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![crate::types::StoragePropertyDef::new(
-                "weight".to_string(),
+                "weight".into(),
                 graphdb_core::types::DataType::Double,
             )],
             oe_strategy: EdgeStrategy::Multiple,
@@ -443,13 +443,13 @@ mod tests {
 
         let ts = 100u64;
         table
-            .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.5))], ts)
+            .insert_edge(1, 2, 0, &[("weight".into(), Value::Double(1.5))], ts)
             .unwrap();
         table
-            .insert_edge(1, 3, 0, &[("weight".to_string(), Value::Double(2.5))], ts)
+            .insert_edge(1, 3, 0, &[("weight".into(), Value::Double(2.5))], ts)
             .unwrap();
         table
-            .insert_edge(2, 3, 0, &[("weight".to_string(), Value::Double(3.5))], ts)
+            .insert_edge(2, 3, 0, &[("weight".into(), Value::Double(3.5))], ts)
             .unwrap();
 
         let temp_dir = tempfile::tempdir().expect("temporary edge table directory");
@@ -482,10 +482,10 @@ mod tests {
         let mut table = create_edge_table();
 
         table
-            .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(1, 2, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .unwrap();
         table
-            .insert_edge(1, 3, 0, &[("weight".to_string(), Value::Double(2.5))], 110)
+            .insert_edge(1, 3, 0, &[("weight".into(), Value::Double(2.5))], 110)
             .unwrap();
         table.delete_edge(1, 2, 0, 200).unwrap();
 
@@ -513,13 +513,13 @@ mod tests {
         let mut table = create_edge_table();
 
         table
-            .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(1, 2, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .unwrap();
         table
-            .insert_edge(1, 3, 0, &[("weight".to_string(), Value::Double(2.0))], 200)
+            .insert_edge(1, 3, 0, &[("weight".into(), Value::Double(2.0))], 200)
             .unwrap();
         table
-            .insert_edge(2, 3, 0, &[("weight".to_string(), Value::Double(3.0))], 300)
+            .insert_edge(2, 3, 0, &[("weight".into(), Value::Double(3.0))], 300)
             .unwrap();
 
         // Verify edge_timestamps are populated before flush

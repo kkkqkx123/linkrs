@@ -1066,7 +1066,7 @@ fn test_space_calculator_falls_back_to_base() {
 fn test_space_override_reaches_space_calculator() {
     let engine = OptimizerEngine::new(CostModelConfig::for_ssd());
     let mut overrides = std::collections::HashMap::new();
-    overrides.insert("cold".to_string(), CostModelConfig::for_hdd());
+    overrides.insert("cold".into(), CostModelConfig::for_hdd());
     engine.set_space_cost_configs(overrides);
     assert_eq!(
         engine
@@ -1089,7 +1089,7 @@ fn test_cost_config_change_bumps_epoch_and_clears_spaces() {
     let mut engine = OptimizerEngine::new(CostModelConfig::for_ssd());
     assert_eq!(engine.cost_epoch(), 0);
     let mut overrides = std::collections::HashMap::new();
-    overrides.insert("cold".to_string(), CostModelConfig::for_hdd());
+    overrides.insert("cold".into(), CostModelConfig::for_hdd());
     engine.set_space_cost_configs(overrides);
     assert_eq!(engine.cost_epoch(), 1);
     assert_eq!(

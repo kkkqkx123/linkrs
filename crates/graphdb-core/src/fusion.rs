@@ -167,7 +167,10 @@ mod tests {
     fn weighted_fuse_blends_both_sources() {
         let vector = vec![ScoredHit::new("a", 1.0), ScoredHit::new("b", 0.0)];
         let fulltext = vec![ScoredHit::new("b", 5.0), ScoredHit::new("c", 1.0)];
-        let fused = weighted_fuse(&vector, &fulltext, 0.5, 10);
+        // Min-max normalization puts both a and b at 1.0 in their own list,
+        // so only a weight below the balance point lets the fulltext lead
+        // decide; an even split would tie and leave the order to hash order.
+        let fused = weighted_fuse(&vector, &fulltext, 0.3, 10);
         assert_eq!(fused.len(), 3);
         assert_eq!(fused[0].id, "b");
     }

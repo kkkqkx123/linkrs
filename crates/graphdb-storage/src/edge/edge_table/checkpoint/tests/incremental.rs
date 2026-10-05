@@ -19,7 +19,7 @@ fn persistence_live_markers_are_current() {
 fn clean_groups_are_skipped_on_flush() {
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     table
@@ -47,7 +47,7 @@ fn flush_records_incremental_checkpoint_metrics() {
 
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let stats = std::sync::Arc::new(StatsManager::new());
     table.set_stats_manager(stats.clone());
@@ -72,7 +72,7 @@ fn flush_records_incremental_checkpoint_metrics() {
 fn flush_without_metrics_registry_behaves_the_same() {
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     table
@@ -92,7 +92,7 @@ fn insert_only_flush_reports_append_only() {
 
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     let kind = table
@@ -110,10 +110,10 @@ fn delete_flush_reports_rebalance() {
 
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table
-        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+        .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.0))], 100)
         .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     table
@@ -138,7 +138,7 @@ fn property_only_update_skips_topology_rewrite() {
 
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     table
@@ -171,7 +171,7 @@ fn remap_forces_rebalance_checkpoint() {
 
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table.insert_edge(5000, 6000, 0, &[], 100).unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
@@ -205,10 +205,10 @@ fn flush_reports_tombstone_totals_to_registry() {
 
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table
-        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+        .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.0))], 100)
         .unwrap();
     table.delete_edge(0, 1, 0, 200).unwrap();
     let stats = std::sync::Arc::new(StatsManager::new());
@@ -235,7 +235,7 @@ fn append_only_flush_skips_base_rewrite() {
 
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     let kind = table
@@ -252,7 +252,7 @@ fn append_only_flush_skips_base_rewrite() {
     let stamp = base_path.metadata().unwrap().modified().unwrap();
 
     table
-        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 110)
+        .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.0))], 110)
         .unwrap();
     let kind = table
         .flush(
@@ -276,7 +276,7 @@ fn append_only_flush_skips_base_rewrite() {
 fn cumulative_sidecars_survive_two_append_flushes() {
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     table
@@ -288,7 +288,7 @@ fn cumulative_sidecars_survive_two_append_flushes() {
     // Two insert-only batches with a flush each: the second sidecar must
     // accumulate the first, never overwrite it.
     table
-        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 110)
+        .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.0))], 110)
         .unwrap();
     table
         .flush(
@@ -297,7 +297,7 @@ fn cumulative_sidecars_survive_two_append_flushes() {
         )
         .expect("second flush should succeed");
     table
-        .insert_edge(0, 3, 0, &[("weight".to_string(), Value::Double(3.0))], 120)
+        .insert_edge(0, 3, 0, &[("weight".into(), Value::Double(3.0))], 120)
         .unwrap();
     table
         .flush(
@@ -320,10 +320,10 @@ fn delete_flush_rewrites_base_and_drops_sidecar() {
 
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table
-        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+        .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.0))], 100)
         .unwrap();
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     table
@@ -333,7 +333,7 @@ fn delete_flush_rewrites_base_and_drops_sidecar() {
         )
         .expect("first flush should succeed");
     table
-        .insert_edge(0, 3, 0, &[("weight".to_string(), Value::Double(3.0))], 110)
+        .insert_edge(0, 3, 0, &[("weight".into(), Value::Double(3.0))], 110)
         .unwrap();
     table
         .flush(
@@ -462,7 +462,7 @@ fn small_property_write_stays_proportional_to_dirty_owners() {
                 i,
                 i + 1000,
                 0,
-                &[("weight".to_string(), Value::Double(1.0))],
+                &[("weight".into(), Value::Double(1.0))],
                 100,
             )
             .unwrap();
@@ -473,7 +473,7 @@ fn small_property_write_stays_proportional_to_dirty_owners() {
                 i,
                 i + 1000,
                 0,
-                &[("weight".to_string(), Value::Double(2.0))],
+                &[("weight".into(), Value::Double(2.0))],
                 100,
             )
             .unwrap();
@@ -519,7 +519,7 @@ fn small_property_write_stays_proportional_to_dirty_owners() {
     assert!(record
         .properties
         .iter()
-        .any(|(k, v)| k == "weight" && *v == Value::Double(9.0)));
+        .any(|(k, v)| &**k == "weight" && *v == Value::Double(9.0)));
 }
 
 #[test]

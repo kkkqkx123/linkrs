@@ -1,6 +1,7 @@
 //! Liveness checks, projected reads, and the offline snapshot iterator.
 
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use super::VertexTable;
 use crate::vertex::{IdKey, Timestamp, VertexId, VertexRecord};
@@ -97,7 +98,7 @@ impl VertexTable {
         &self,
         internal_ids: &[u32],
         ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> StorageResult<Vec<Option<VertexRecord>>> {
         if !self.is_open.load(Ordering::Acquire) {
             return Ok(internal_ids.iter().map(|_| None).collect());
@@ -138,7 +139,7 @@ impl VertexTable {
                     None => continue,
                 },
             };
-            let properties: Vec<(String, Value)> = prop_row
+            let properties: Vec<(Arc<str>, Value)> = prop_row
                 .into_iter()
                 .filter_map(|(name, opt_val)| opt_val.map(|v| (name, v)))
                 .collect();
@@ -158,8 +159,8 @@ impl VertexTable {
         &self,
         internal_ids: &[u32],
         ts: Timestamp,
-        names: &[String],
-    ) -> Vec<(String, crate::cursor::ColumnValues)> {
+        names: &[Arc<str>],
+    ) -> Vec<(Arc<str>, crate::cursor::ColumnValues)> {
         if !self.is_open.load(Ordering::Acquire) {
             return names
                 .iter()
@@ -180,7 +181,7 @@ impl VertexTable {
         &self,
         internal_id: u32,
         ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> Option<VertexRecord> {
         if !self.is_open.load(Ordering::Acquire) {
             return None;
@@ -201,7 +202,7 @@ impl VertexTable {
                     .get_projected_at_ts(internal_id as usize, names, ts)
             },
         );
-        let properties: Vec<(String, Value)> = props
+        let properties: Vec<(Arc<str>, Value)> = props
             .into_iter()
             .filter_map(|(name, opt_val)| opt_val.map(|v| (name, v)))
             .collect();
@@ -230,7 +231,7 @@ impl VertexTable {
         &self,
         internal_id: u32,
         ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> StorageResult<Option<VertexRecord>> {
         if !self.is_open.load(Ordering::Acquire) {
             return Ok(None);
@@ -239,7 +240,7 @@ impl VertexTable {
             return Ok(None);
         }
         self.check_history_floor(internal_id, ts)?;
-        let names: Vec<String> = match projection {
+        let names: Vec<Arc<str>> = match projection {
             Some(names) => names.to_vec(),
             None => self
                 .schema
@@ -275,7 +276,7 @@ impl VertexTable {
                 None => return Ok(None),
             },
         };
-        let properties: Vec<(String, Value)> = prop_row
+        let properties: Vec<(Arc<str>, Value)> = prop_row
             .into_iter()
             .filter_map(|(name, opt_val)| opt_val.map(|v| (name, v)))
             .collect();
@@ -294,7 +295,7 @@ impl VertexTable {
         &self,
         internal_id: u32,
         ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> Option<(VertexRecord, Vec<Timestamp>)> {
         if !self.is_open.load(Ordering::Acquire) {
             return None;
@@ -303,7 +304,7 @@ impl VertexTable {
             return None;
         }
         let external_id = self.id_indexer.get_key(internal_id)?;
-        let names: Vec<String> = match projection {
+        let names: Vec<Arc<str>> = match projection {
             Some(names) => names.to_vec(),
             None => self
                 .schema
@@ -315,7 +316,7 @@ impl VertexTable {
         let (props, stamps) =
             self.columns
                 .get_projected_with_stamps_at_ts(internal_id as usize, &names, ts);
-        let properties: Vec<(String, Value)> = props
+        let properties: Vec<(Arc<str>, Value)> = props
             .into_iter()
             .filter_map(|(name, opt_val)| opt_val.map(|v| (name, v)))
             .collect();
@@ -338,7 +339,7 @@ impl VertexTable {
         self.schema
             .properties
             .get(self.schema.primary_key_index)
-            .is_some_and(|pk| pk.name == col_name)
+            .is_some_and(|pk| &*pk.name == col_name)
     }
 
     /// Offline snapshot scan at `ts` for barrier-held maintenance tools.

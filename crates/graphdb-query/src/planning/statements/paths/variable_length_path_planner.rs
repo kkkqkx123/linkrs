@@ -11,6 +11,7 @@
 //! - BFS-based shortest path optimization
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::parser::ast::pattern::{EdgeRange, RepetitionType};
 use graphdb_core::types::graph_schema::EdgeDirection;
@@ -70,7 +71,7 @@ pub struct VariableLengthPathSpec {
     pub edge_types: Vec<String>,
     pub direction: EdgeDirection,
     pub range: EdgeRange,
-    pub properties: Vec<(String, Value)>,
+    pub properties: Vec<(Arc<str>, Value)>,
 }
 
 impl VariableLengthPathSpec {
@@ -78,7 +79,7 @@ impl VariableLengthPathSpec {
         edge_types: Vec<String>,
         direction: EdgeDirection,
         range: EdgeRange,
-        properties: Vec<(String, Value)>,
+        properties: Vec<(Arc<str>, Value)>,
     ) -> Self {
         Self {
             edge_types,
@@ -116,7 +117,7 @@ pub struct VariableLengthPathPlan {
     pub direction: EdgeDirection,
     pub min_hops: usize,
     pub max_hops: usize,
-    pub properties: Vec<(String, Value)>,
+    pub properties: Vec<(Arc<str>, Value)>,
     pub pruning: Option<PruningConfig>,
 }
 
@@ -231,7 +232,7 @@ impl VariableLengthPathPlanner {
         rep_type: &RepetitionType,
         edge_types: Vec<String>,
         direction: EdgeDirection,
-        properties: Vec<(String, Value)>,
+        properties: Vec<(Arc<str>, Value)>,
     ) -> Result<VariableLengthPathPlan, PlannerError> {
         let range = match rep_type {
             RepetitionType::ZeroOrMore => EdgeRange::at_least(0),

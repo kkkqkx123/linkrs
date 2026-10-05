@@ -835,7 +835,7 @@ mod tests {
             fn revert_delete_vertex_properties(
                 &self,
                 _label_name: &str,
-                _prop_names: &[String],
+                _prop_names: &[Arc<str>],
             ) -> UndoLogResult<()> {
                 Ok(())
             }
@@ -844,7 +844,7 @@ mod tests {
                 _src_label: &str,
                 _dst_label: &str,
                 _edge_label: &str,
-                _prop_names: &[String],
+                _prop_names: &[Arc<str>],
             ) -> UndoLogResult<()> {
                 Ok(())
             }
@@ -862,8 +862,8 @@ mod tests {
             fn revert_rename_vertex_properties(
                 &self,
                 _label_name: &str,
-                _current_names: &[String],
-                _original_names: &[String],
+                _current_names: &[Arc<str>],
+                _original_names: &[Arc<str>],
             ) -> UndoLogResult<()> {
                 Ok(())
             }
@@ -872,8 +872,8 @@ mod tests {
                 _src_label: &str,
                 _dst_label: &str,
                 _edge_label: &str,
-                _current_names: &[String],
-                _original_names: &[String],
+                _current_names: &[Arc<str>],
+                _original_names: &[Arc<str>],
             ) -> UndoLogResult<()> {
                 Ok(())
             }

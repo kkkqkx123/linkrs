@@ -75,7 +75,7 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
             dst: VertexId::try_from_int64((src + 2) % VERTEX_COUNT).expect("test vertex id"),
             edge_type: EDGE.to_string(),
             ranking: 1,
-            props: [("weight".to_string(), Value::BigInt(src * 10))]
+            props: [("weight".into(), Value::BigInt(src * 10))]
                 .into_iter()
                 .collect(),
         });
@@ -107,7 +107,7 @@ fn equality_predicate_keeps_only_matching_rows() {
     let mut opts = ScanOptions::new();
     opts.edge_type = Some(EDGE.to_string());
     opts.predicate = Some(vec![ScanPredicate::ColumnEqual {
-        column: "weight".to_string(),
+        column: "weight".into(),
         value: Value::BigInt(500),
     }]);
     let rows = drain(&storage, opts);
@@ -129,7 +129,7 @@ fn range_predicate_and_projection_narrowing() {
     // Predicate on a column that is NOT in the projection.
     opts.projection = Some(vec![RequiredProperty::new("unrelated".to_string())]);
     opts.predicate = Some(vec![ScanPredicate::ColumnRange {
-        column: "weight".to_string(),
+        column: "weight".into(),
         lower: Some(Value::BigInt(1000)),
         upper: Some(Value::BigInt(1500)),
         include_lower: true,
@@ -152,7 +152,7 @@ fn limit_applies_after_predicate_filtering() {
     opts.edge_type = Some(EDGE.to_string());
     opts.limit = Some(7);
     opts.predicate = Some(vec![ScanPredicate::ColumnEqual {
-        column: "weight".to_string(),
+        column: "weight".into(),
         value: Value::BigInt(30),
     }]);
     let rows = drain(&storage, opts);
@@ -168,7 +168,7 @@ fn missing_property_never_matches_predicate() {
     opts.edge_type = Some(EDGE.to_string());
     opts.limit = Some(10_000);
     opts.predicate = Some(vec![ScanPredicate::ColumnRange {
-        column: "weight".to_string(),
+        column: "weight".into(),
         lower: Some(Value::BigInt(i64::MIN)),
         upper: None,
         include_lower: true,

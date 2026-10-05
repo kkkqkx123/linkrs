@@ -58,7 +58,7 @@ pub struct EdgeStore {
     /// property patch to the columns each group actually touched; groups
     /// without an entry fall back to the table-wide dirty set. Cleared per
     /// group by the flush that persists it, and fully on load or rebuild.
-    pub(crate) property_column_dirt: HashMap<u32, HashSet<String>>,
+    pub(crate) property_column_dirt: HashMap<u32, HashSet<Arc<str>>>,
     pub is_open: bool,
     pub next_edge_id: EdgeId,
     pub config: EdgeTableConfig,
@@ -67,7 +67,7 @@ pub struct EdgeStore {
     pub version_history: Arc<Mutex<LabelVersionHistory>>,
     /// Cache for property name → schema index mapping to avoid O(n) linear lookups.
     /// Invalidated whenever schema changes.
-    pub property_index_cache: HashMap<String, usize>,
+    pub property_index_cache: HashMap<std::sync::Arc<str>, usize>,
 
     /// Edge property index for efficient property-based filtering.
     ///
@@ -198,7 +198,7 @@ impl std::fmt::Debug for EdgeStore {
 impl EdgeStore {
     /// Single write-path observation entry: relaxed width sample plus write
     /// counters. Called once per committed insert batch entry, never blocks.
-    pub(crate) fn observe_form_write(&self, props: &[(String, graphdb_core::Value)]) {
+    pub(crate) fn observe_form_write(&self, props: &[(std::sync::Arc<str>, graphdb_core::Value)]) {
         use super::stats::estimate_props_bytes;
         let bytes = estimate_props_bytes(props);
         self.form_width_bytes.fetch_add(bytes, Ordering::Relaxed);

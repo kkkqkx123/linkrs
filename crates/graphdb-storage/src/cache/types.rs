@@ -38,7 +38,7 @@ impl IdIndexCacheKey {
 pub struct CachedVertex {
     pub internal_id: u32,
     pub external_id: String,
-    pub properties: Vec<(String, Value)>,
+    pub properties: Vec<(std::sync::Arc<str>, Value)>,
     pub cached_at_ts: Timestamp,
     /// Row creation stamp observed when the entry was seeded. Hit
     /// revalidation rejects the entry when the live row's creation stamp

@@ -15,7 +15,7 @@ fn test_trigger_background_freeze_execution() {
         alice,
         graphdb_core::vertex_edge_path::Tag::new(
             "Person".to_string(),
-            [("name".to_string(), Value::string("Alice"))]
+            [("name".into(), Value::string("Alice"))]
                 .iter()
                 .cloned()
                 .collect(),
@@ -26,7 +26,7 @@ fn test_trigger_background_freeze_execution() {
         bob,
         graphdb_core::vertex_edge_path::Tag::new(
             "Person".to_string(),
-            [("name".to_string(), Value::string("Bob"))]
+            [("name".into(), Value::string("Bob"))]
                 .iter()
                 .cloned()
                 .collect(),
@@ -42,7 +42,7 @@ fn test_trigger_background_freeze_execution() {
         dst: bob,
         edge_type: "KNOWS".to_string(),
         ranking: 0,
-        props: [("since".to_string(), Value::Int(2020))]
+        props: [("since".into(), Value::Int(2020))]
             .iter()
             .cloned()
             .collect(),
@@ -71,7 +71,7 @@ fn test_cleanup_threshold_gc_integration() {
         alice,
         graphdb_core::vertex_edge_path::Tag::new(
             "Person".to_string(),
-            [("name".to_string(), Value::string("Alice"))]
+            [("name".into(), Value::string("Alice"))]
                 .iter()
                 .cloned()
                 .collect(),

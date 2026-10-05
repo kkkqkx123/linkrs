@@ -3,9 +3,13 @@ use crate::StorageClient;
 use graphdb_core::types::VertexId;
 use graphdb_core::{StorageError, Value, Vertex};
 use graphdb_sync::types::ChangeType;
+use std::sync::Arc;
 
 impl<S: StorageClient + 'static> SyncWrapper<S> {
-    fn detect_changed_properties(old_vertex: &Vertex, new_vertex: &Vertex) -> Vec<(String, Value)> {
+    fn detect_changed_properties(
+        old_vertex: &Vertex,
+        new_vertex: &Vertex,
+    ) -> Vec<(Arc<str>, Value)> {
         let mut changed_props = Vec::new();
 
         for (prop_name, new_value) in &new_vertex.tag.properties {
@@ -40,7 +44,7 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
         let txn_id = self.get_current_txn_id();
 
         let tag = &vertex.tag;
-        let props: Vec<(String, Value)> = tag
+        let props: Vec<(Arc<str>, Value)> = tag
             .properties
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
@@ -136,7 +140,7 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
         let txn_id = self.get_current_txn_id();
         let tag = &new_vertex.tag;
         let changed_props = Self::detect_changed_properties(old_vertex, new_vertex);
-        let mut removed: Vec<(String, Value)> = old_vertex
+        let mut removed: Vec<(Arc<str>, Value)> = old_vertex
             .tag
             .properties
             .iter()
@@ -204,7 +208,7 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
         let id_value = Value::from(*id);
 
         let tag = &vertex.tag;
-        let props: Vec<(String, Value)> = tag
+        let props: Vec<(Arc<str>, Value)> = tag
             .properties
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
@@ -250,7 +254,7 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
 
         for vertex in vertices {
             let tag = &vertex.tag;
-            let props: Vec<(String, Value)> = tag
+            let props: Vec<(Arc<str>, Value)> = tag
                 .properties
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))

@@ -32,7 +32,7 @@ impl StorageReader for GraphStorage {
         space: &str,
         tag: &str,
         id: &VertexId,
-        projection: &[String],
+        projection: &[std::sync::Arc<str>],
     ) -> Result<Option<Vertex>, StorageError> {
         reader::get_vertex_projected(&self.ctx, space, tag, id, projection)
     }
@@ -94,7 +94,7 @@ impl StorageReader for GraphStorage {
         dst: &VertexId,
         edge_type: &str,
         rank: i64,
-        projection: &[String],
+        projection: &[Arc<str>],
     ) -> Result<Option<Edge>, StorageError> {
         reader::get_edge_projected(&self.ctx, space, src, dst, edge_type, rank, projection)
     }
@@ -115,7 +115,7 @@ impl StorageReader for GraphStorage {
         node_id: &VertexId,
         direction: EdgeDirection,
         edge_types: &[String],
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
         limit: Option<usize>,
     ) -> Result<Vec<Edge>, StorageError> {
         reader::get_node_edges_projected(

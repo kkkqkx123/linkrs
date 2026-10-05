@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_sequence_basic() {
-        let seq = SequenceDef::new("test".to_string(), 1, 1, 1, 100, false);
+        let seq = SequenceDef::new("test".into(), 1, 1, 1, 100, false);
         assert_eq!(seq.current_value(), 1);
         assert_eq!(seq.next_value().unwrap(), 2);
         assert_eq!(seq.next_value().unwrap(), 3);
@@ -142,21 +142,21 @@ mod tests {
 
     #[test]
     fn test_sequence_increment() {
-        let seq = SequenceDef::new("test".to_string(), 10, 5, 1, 1000, false);
+        let seq = SequenceDef::new("test".into(), 10, 5, 1, 1000, false);
         assert_eq!(seq.next_value().unwrap(), 15);
         assert_eq!(seq.next_value().unwrap(), 20);
     }
 
     #[test]
     fn test_sequence_negative_increment() {
-        let seq = SequenceDef::new("test".to_string(), 100, -10, 1, 1000, false);
+        let seq = SequenceDef::new("test".into(), 100, -10, 1, 1000, false);
         assert_eq!(seq.next_value().unwrap(), 90);
         assert_eq!(seq.next_value().unwrap(), 80);
     }
 
     #[test]
     fn test_sequence_cycle() {
-        let seq = SequenceDef::new("test".to_string(), 1, 1, 1, 3, true);
+        let seq = SequenceDef::new("test".into(), 1, 1, 1, 3, true);
         assert_eq!(seq.next_value().unwrap(), 2);
         assert_eq!(seq.next_value().unwrap(), 3);
         assert_eq!(seq.next_value().unwrap(), 1); // cycles back to min
@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn test_sequence_overflow_no_cycle() {
-        let seq = SequenceDef::new("test".to_string(), 1, 1, 1, 3, false);
+        let seq = SequenceDef::new("test".into(), 1, 1, 1, 3, false);
         assert_eq!(seq.next_value().unwrap(), 2);
         assert_eq!(seq.next_value().unwrap(), 3);
         assert!(seq.next_value().is_err());
@@ -172,14 +172,14 @@ mod tests {
 
     #[test]
     fn test_sequence_underflow_no_cycle() {
-        let seq = SequenceDef::new("test".to_string(), 100, -50, 10, 200, false);
+        let seq = SequenceDef::new("test".into(), 100, -50, 10, 200, false);
         assert_eq!(seq.next_value().unwrap(), 50);
         assert!(seq.next_value().is_err());
     }
 
     #[test]
     fn test_sequence_reset() {
-        let seq = SequenceDef::new("test".to_string(), 1, 1, 1, 100, false);
+        let seq = SequenceDef::new("test".into(), 1, 1, 1, 100, false);
         seq.next_value().unwrap();
         seq.next_value().unwrap();
         assert_eq!(seq.current_value(), 3);
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_sequence_set_value() {
-        let seq = SequenceDef::new("test".to_string(), 1, 1, 1, 100, false);
+        let seq = SequenceDef::new("test".into(), 1, 1, 1, 100, false);
         seq.set_value(50);
         assert_eq!(seq.current_value(), 50);
         assert_eq!(seq.next_value().unwrap(), 51);
@@ -200,7 +200,7 @@ mod tests {
         use std::sync::Arc;
         use std::thread;
 
-        let seq = Arc::new(SequenceDef::new("test".to_string(), 0, 1, 0, 10000, false));
+        let seq = Arc::new(SequenceDef::new("test".into(), 0, 1, 0, 10000, false));
         let mut handles = vec![];
 
         for _ in 0..10 {

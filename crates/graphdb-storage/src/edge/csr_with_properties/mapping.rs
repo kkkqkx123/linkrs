@@ -1,6 +1,7 @@
 use super::{CsrWithProperties, RowVisibility, UNMAPPED_ROW};
 use graphdb_core::types::{EdgeId, Timestamp, INVALID_EDGE_ID};
 use graphdb_core::{StorageError, StorageResult, Value};
+use std::sync::Arc;
 
 impl CsrWithProperties {
     fn segment_of(slot: usize) -> (usize, usize) {
@@ -88,7 +89,7 @@ impl CsrWithProperties {
     /// Returns the row index (0-based).
     pub(crate) fn allocate_row(
         &mut self,
-        values: &[(String, Value)],
+        values: &[(Arc<str>, Value)],
         create_ts: Timestamp,
     ) -> StorageResult<usize> {
         // Resolve names through the schema index once per call; the hot
@@ -97,7 +98,7 @@ impl CsrWithProperties {
         // behavior of falling back to the column default.
         let mut positioned: Vec<(usize, Value)> = Vec::with_capacity(values.len());
         for (name, value) in values {
-            if let Some(&idx) = self.column_index.get(name.as_str()) {
+            if let Some(&idx) = self.column_index.get(&**name) {
                 positioned.push((idx, value.clone()));
             }
         }

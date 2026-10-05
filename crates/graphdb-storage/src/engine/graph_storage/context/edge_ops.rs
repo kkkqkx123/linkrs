@@ -542,7 +542,7 @@ impl GraphStorageContext {
         &self,
         params: &EdgeOperationParams,
         ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> Option<EdgeRecord> {
         if !self
             .persistent
@@ -752,7 +752,7 @@ impl GraphStorageContext {
         src_label: LabelId,
         src_id: VertexId,
         ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> Option<Vec<EdgeRecord>> {
         self.out_edges_projected_impl(edge_label, src_label, src_id, ts, projection, None)
     }
@@ -763,7 +763,7 @@ impl GraphStorageContext {
         dst_label: LabelId,
         dst_id: VertexId,
         ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> Option<Vec<EdgeRecord>> {
         self.in_edges_projected_impl(edge_label, dst_label, dst_id, ts, projection, None)
     }
@@ -774,7 +774,7 @@ impl GraphStorageContext {
         src_label: LabelId,
         src_id: VertexId,
         ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
         limit: usize,
     ) -> Option<Vec<EdgeRecord>> {
         self.out_edges_projected_impl(edge_label, src_label, src_id, ts, projection, Some(limit))
@@ -786,7 +786,7 @@ impl GraphStorageContext {
         dst_label: LabelId,
         dst_id: VertexId,
         ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
         limit: usize,
     ) -> Option<Vec<EdgeRecord>> {
         self.in_edges_projected_impl(edge_label, dst_label, dst_id, ts, projection, Some(limit))
@@ -800,7 +800,7 @@ impl GraphStorageContext {
         src_label: LabelId,
         src_id: VertexId,
         ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
         limit: Option<usize>,
     ) -> Option<Vec<EdgeRecord>> {
         if !self.persistent.is_open.load(Ordering::Acquire) {
@@ -861,7 +861,7 @@ impl GraphStorageContext {
         dst_label: LabelId,
         dst_id: VertexId,
         ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
         limit: Option<usize>,
     ) -> Option<Vec<EdgeRecord>> {
         if !self.persistent.is_open.load(Ordering::Acquire) {

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::engine::graph_storage::context::GraphStorageContext;
 use crate::index::manifest::{GenerationBuildState, GenerationState};
 use crate::index::types::IndexRecord;
@@ -154,8 +156,8 @@ fn concurrent_rebuild_and_writes_preserve_new_index_entries() {
         .create_space(&mut space)
         .expect("space should be created");
     let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-        graphdb_core::types::PropertyDef::new("id".to_string(), graphdb_core::DataType::BigInt),
-        graphdb_core::types::PropertyDef::new("name".to_string(), graphdb_core::DataType::String),
+        graphdb_core::types::PropertyDef::new("id".into(), graphdb_core::DataType::BigInt),
+        graphdb_core::types::PropertyDef::new("name".into(), graphdb_core::DataType::String),
     ]);
     storage
         .create_tag("test_space", &tag)
@@ -181,9 +183,9 @@ fn concurrent_rebuild_and_writes_preserve_new_index_entries() {
         .expect("index should be created");
 
     for vertex_id in 0..500 {
-        let mut properties = HashMap::new();
+        let mut properties: HashMap<Arc<str>, Value> = HashMap::new();
         properties.insert(
-            "name".to_string(),
+            Arc::from("name"),
             Value::string(format!("initial-{vertex_id}")),
         );
         storage
@@ -191,7 +193,7 @@ fn concurrent_rebuild_and_writes_preserve_new_index_entries() {
                 "test_space",
                 graphdb_core::Vertex::new(
                     VertexId::try_from_int64(vertex_id).expect("test vertex id"),
-                    graphdb_core::vertex_edge_path::Tag::new("Person".to_string(), properties),
+                    graphdb_core::vertex_edge_path::Tag::new("Person".into(), properties),
                 ),
             )
             .expect("initial vertex should be inserted");
@@ -208,9 +210,9 @@ fn concurrent_rebuild_and_writes_preserve_new_index_entries() {
     let writer = thread::spawn(move || {
         let mut writer_storage = writer_storage;
         for vertex_id in 10_000..10_050 {
-            let mut properties = HashMap::new();
+            let mut properties: HashMap<Arc<str>, Value> = HashMap::new();
             properties.insert(
-                "name".to_string(),
+                Arc::from("name"),
                 Value::string(format!("concurrent-{vertex_id}")),
             );
             writer_storage
@@ -218,7 +220,7 @@ fn concurrent_rebuild_and_writes_preserve_new_index_entries() {
                     "test_space",
                     graphdb_core::Vertex::new(
                         VertexId::try_from_int64(vertex_id).expect("test vertex id"),
-                        graphdb_core::vertex_edge_path::Tag::new("Person".to_string(), properties),
+                        graphdb_core::vertex_edge_path::Tag::new("Person".into(), properties),
                     ),
                 )
                 .expect("concurrent vertex should be inserted");
@@ -274,7 +276,7 @@ fn rebuild_restarts_after_incremental_replay_failure() {
             .create_space(&mut space)
             .expect("space should be created");
         let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-            graphdb_core::types::PropertyDef::new("id".to_string(), graphdb_core::DataType::BigInt),
+            graphdb_core::types::PropertyDef::new("id".into(), graphdb_core::DataType::BigInt),
             graphdb_core::types::PropertyDef::new(
                 "name".to_string(),
                 graphdb_core::DataType::String,
@@ -290,7 +292,7 @@ fn rebuild_restarts_after_incremental_replay_failure() {
             VertexId::try_from_int64(1).expect("test vertex id"),
             graphdb_core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
-                vec![("name".to_string(), Value::string("Alice"))]
+                vec![("name".into(), Value::string("Alice"))]
                     .into_iter()
                     .collect(),
             ),

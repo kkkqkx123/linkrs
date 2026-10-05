@@ -5,6 +5,7 @@ use super::layout::props_group_path;
 use graphdb_core::StorageResult;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 impl EdgeStore {
     /// Mark property columns dirty. Every operation mutating property state
@@ -36,7 +37,7 @@ impl EdgeStore {
         &mut self,
         src: u32,
         dst: u32,
-        columns: &[String],
+        columns: &[Arc<str>],
     ) {
         self.mark_properties_dirty_for_edge(src, dst);
         if columns.is_empty() {
@@ -68,9 +69,9 @@ impl EdgeStore {
     ///
     /// `None` means the group carries no column-precise trace and the caller
     /// must fall back to the table-wide dirty set.
-    fn property_dirty_columns_for_group(&self, gid: u32) -> Option<Vec<String>> {
+    fn property_dirty_columns_for_group(&self, gid: u32) -> Option<Vec<Arc<str>>> {
         self.property_column_dirt.get(&gid).map(|set| {
-            let mut out: Vec<String> = set.iter().cloned().collect();
+            let mut out: Vec<Arc<str>> = set.iter().cloned().collect();
             out.sort();
             out
         })
@@ -90,7 +91,7 @@ impl EdgeStore {
     /// every owner keeps those groups in the dirty set even when no other
     /// write marked them, and records the column scope for the incremental
     /// patch. Dropped columns are removed from the traces instead.
-    pub(crate) fn trace_all_owner_groups_for_columns(&mut self, columns: &[String]) {
+    pub(crate) fn trace_all_owner_groups_for_columns(&mut self, columns: &[Arc<str>]) {
         self.properties_dirty = true;
         let owners = self.owner_group_ids();
         let use_out = self.schema.oe_strategy != crate::edge::EdgeStrategy::None;
@@ -118,9 +119,11 @@ impl EdgeStore {
 
     /// Rename one column inside every per-group trace after a rename publish.
     pub(crate) fn rename_property_column_in_dirt(&mut self, old_name: &str, new_name: &str) {
+        let new_name: Arc<str> = new_name.into();
         for set in self.property_column_dirt.values_mut() {
-            if set.remove(old_name) {
-                set.insert(new_name.to_string());
+            if set.iter().any(|name| &**name == old_name) {
+                set.retain(|name| &**name != old_name);
+                set.insert(new_name.clone());
             }
         }
     }
@@ -189,8 +192,8 @@ impl EdgeStore {
         let mut dirty: Vec<u32> = dirty_set.into_iter().collect();
         dirty.sort_unstable();
         if self.config.auto_encode_on_checkpoint {
-            let dirty_names: Vec<String> = self.properties.dirty_column_names();
-            let scope: Option<Vec<String>> = (!dirty_names.is_empty()).then_some(dirty_names);
+            let dirty_names: Vec<Arc<str>> = self.properties.dirty_column_names();
+            let scope: Option<Vec<Arc<str>>> = (!dirty_names.is_empty()).then_some(dirty_names);
             let adapted = self
                 .properties
                 .adapt_encodings_for_checkpoint(scope.as_deref(), self.config.auto_encode_min_rows);
@@ -226,11 +229,11 @@ impl EdgeStore {
             );
         }
         let schema: Vec<PropertySchema> = self.properties.property_schema().to_vec();
-        let dirty_columns: Vec<String> = self.properties.dirty_column_names();
+        let dirty_columns: Vec<Arc<str>> = self.properties.dirty_column_names();
         // Per-group patch scopes, snapshotted before the write loop: groups
         // with a precise trace patch only their own columns, groups without
         // one fall back to the table-wide set so no write is ever missed.
-        let mut group_scopes: HashMap<u32, Vec<String>> = HashMap::new();
+        let mut group_scopes: HashMap<u32, Vec<Arc<str>>> = HashMap::new();
         for gid in &dirty {
             if let Some(scoped) = self.property_dirty_columns_for_group(*gid) {
                 if !scoped.is_empty() {
@@ -261,7 +264,7 @@ impl EdgeStore {
                 }
                 continue;
             }
-            let scope: &[String] = group_scopes
+            let scope: &[Arc<str>] = group_scopes
                 .get(&gid)
                 .map(Vec::as_slice)
                 .unwrap_or(&dirty_columns);
@@ -334,7 +337,7 @@ impl EdgeStore {
         path: &Path,
         schema: &[crate::edge::property_schema::PropertySchema],
         edges: &[graphdb_core::types::EdgeId],
-        dirty_columns: &[String],
+        dirty_columns: &[Arc<str>],
     ) -> StorageResult<Option<Vec<u8>>> {
         use std::io::Read as _;
         let Ok((raw, _)) = super::super::persistence::read_pages_from_file(path) else {
@@ -374,10 +377,10 @@ impl EdgeStore {
         if shard_edges.len() != live_set.len() || !edges.iter().all(|id| shard_edges.contains(id)) {
             return Ok(None);
         }
-        let shard_cols: HashSet<String> = shard
+        let shard_cols: HashSet<Arc<str>> = shard
             .property_schema()
             .iter()
-            .map(|s| s.name.to_string())
+            .map(|schema| schema.name.clone())
             .collect();
         for name in dirty_columns {
             if !shard_cols.contains(name) {
@@ -394,12 +397,14 @@ impl EdgeStore {
             if !graphdb_core::types::is_allocatable_timestamp(create_ts) {
                 return Ok(None);
             }
-            let value_map: HashMap<&String, &Option<graphdb_core::Value>> =
-                values.iter().map(|(name, value)| (name, value)).collect();
+            let value_map: HashMap<&str, &Option<graphdb_core::Value>> = values
+                .iter()
+                .map(|(name, value)| (&**name, value))
+                .collect();
             for name in dirty_columns {
-                let value = value_map.get(name).and_then(|cell| (*cell).clone());
+                let value = value_map.get(&**name).and_then(|cell| (*cell).clone());
                 if shard
-                    .set_property_for_edge(*edge_id, name, value, create_ts)
+                    .set_property_for_edge(*edge_id, &**name, value, create_ts)
                     .is_err()
                 {
                     return Ok(None);

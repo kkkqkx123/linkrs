@@ -14,6 +14,8 @@ use graphdb_metrics::OutboxState;
 #[cfg(feature = "vector")]
 use std::collections::HashMap;
 #[cfg(feature = "fulltext")]
+use std::sync::Arc;
+#[cfg(feature = "fulltext")]
 pub(crate) struct FulltextFieldApply<'a> {
     manager: Arc<graphdb_fulltext::manager::FulltextIndexManager>,
     mutation: &'a graphdb_core::wal::IndexMutation,
@@ -21,7 +23,7 @@ pub(crate) struct FulltextFieldApply<'a> {
     space_id: u64,
     index_name: &'a str,
     entity_id: String,
-    properties: Vec<(String, Value)>,
+    properties: Vec<(Arc<str>, Value)>,
     deleted: bool,
     /// Rebuild catch-up replay targets the scratch engine instead of the
     /// live map lookup. `None` = resolve via the manager (live delivery).
@@ -500,7 +502,7 @@ impl super::SyncManager {
                             .get_space_indexes(*space_id)
                             .into_iter()
                             .filter(|metadata| metadata.tag_name == *tag_name)
-                            .map(|metadata| (metadata.field_name, Value::string("")))
+                            .map(|metadata| (metadata.field_name.into(), Value::string("")))
                             .collect()
                     } else {
                         properties.clone()
@@ -548,7 +550,7 @@ impl super::SyncManager {
                     .get_space_indexes(*space_id)
                     .into_iter()
                     .filter(|metadata| metadata.tag_name == *edge_type)
-                    .map(|metadata| (metadata.field_name, Value::string("")))
+                    .map(|metadata| (metadata.field_name.into(), Value::string("")))
                     .collect::<Vec<_>>();
                 Self::apply_fulltext_fields(FulltextFieldApply {
                     manager,
@@ -849,7 +851,7 @@ impl super::SyncManager {
                     contexts.push(crate::vector_sync::VectorChangeContext::new(
                         *space_id,
                         tag_name,
-                        field_name,
+                        field_name.as_ref(),
                         vector_change_type,
                         crate::vector_sync::VectorPointData {
                             id: format_vector_point_id(vertex_id, tag_name, field_name),
@@ -861,7 +863,7 @@ impl super::SyncManager {
                 if matches!(change_type, ChangeType::Delete) {
                     let staged_fields = properties
                         .iter()
-                        .map(|(field_name, _)| field_name.as_str())
+                        .map(|(field_name, _)| field_name.as_ref())
                         .collect::<std::collections::HashSet<_>>();
                     for metadata in coordinator.list_indexes() {
                         if metadata.space_id == *space_id

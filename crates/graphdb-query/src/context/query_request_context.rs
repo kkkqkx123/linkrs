@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn test_query_request_context_with_params() {
         let mut params = HashMap::new();
-        params.insert("name".to_string(), Value::from("test"));
+        params.insert("name".into(), Value::from("test"));
 
         let ctx = QueryRequestContext::new("QUERY".to_string())
             .with_parameters(params)

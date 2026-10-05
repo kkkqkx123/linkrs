@@ -628,8 +628,9 @@ pub async fn get_schema_changes<
         let change_list: Vec<_> = changes
             .iter()
             .map(|change| {
-                let mut details_map = std::collections::HashMap::new();
-                details_map.insert("description".to_string(), change.details.description());
+                let mut details_map: std::collections::HashMap<&str, String> =
+                    std::collections::HashMap::new();
+                details_map.insert("description".into(), change.details.description());
                 serde_json::json!({
                     "change_type": format!("{:?}", change.details),
                     "description": change.details.description(),
@@ -711,8 +712,9 @@ pub async fn detect_breaking_changes<
         let change_list: Vec<_> = changes
             .iter()
             .map(|change| {
-                let mut details_map = std::collections::HashMap::new();
-                details_map.insert("description".to_string(), change.details.description());
+                let mut details_map: std::collections::HashMap<&str, String> =
+                    std::collections::HashMap::new();
+                details_map.insert("description".into(), change.details.description());
                 serde_json::json!({
                     "change_type": format!("{:?}", change.details),
                     "description": change.details.description(),

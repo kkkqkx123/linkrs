@@ -2,6 +2,7 @@ use crate::index::traits::VertexIndexOps;
 use graphdb_core::metadata::IndexMetadataManager;
 use graphdb_core::types::{Index, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
+use std::sync::Arc;
 
 use super::super::context::GraphStorageContext;
 
@@ -24,7 +25,7 @@ pub(crate) fn update_vertex_indexes(
     space_id: u64,
     vertex_id: &Value,
     tag_name: &str,
-    props: &[(String, Value)],
+    props: &[(Arc<str>, Value)],
     ts: Timestamp,
 ) -> StorageResult<()> {
     let indexes = index_metadata_manager.list_tag_indexes(space_id)?;
@@ -37,7 +38,7 @@ pub(super) fn update_vertex_indexes_with_list(
     space_id: u64,
     vertex_id: &Value,
     tag_name: &str,
-    props: &[(String, Value)],
+    props: &[(Arc<str>, Value)],
     ts: Timestamp,
 ) -> StorageResult<()> {
     for index in indexes {
@@ -48,15 +49,20 @@ pub(super) fn update_vertex_indexes_with_list(
         // the complete entity property set. Keeping both sets here is
         // important: included columns must not become index keys, and an
         // update must refresh their covering values as well.
-        let indexed_props: Vec<(String, Value)> = index
+        let indexed_props: Vec<(Arc<str>, Value)> = index
             .fields
             .iter()
-            .filter_map(|field| props.iter().find(|(name, _)| name == &field.name).cloned())
+            .filter_map(|field| {
+                props
+                    .iter()
+                    .find(|(name, _)| &**name == field.name)
+                    .cloned()
+            })
             .collect();
         let included_changed = index
             .properties
             .iter()
-            .any(|name| props.iter().any(|(changed, _)| changed == name));
+            .any(|name| props.iter().any(|(changed, _)| &**changed == name));
         if indexed_props.is_empty() && !included_changed {
             continue;
         }
@@ -89,7 +95,7 @@ pub(super) fn check_vertex_unique_indexes(
     space_id: u64,
     vertex_id: &Value,
     tag_name: &str,
-    props: &[(String, Value)],
+    props: &[(Arc<str>, Value)],
 ) -> StorageResult<()> {
     let indexes = index_metadata_manager.list_tag_indexes(space_id)?;
     check_vertex_unique_indexes_with_list(ctx, &indexes, space_id, vertex_id, tag_name, props)
@@ -101,7 +107,7 @@ fn check_vertex_unique_indexes_with_list(
     space_id: u64,
     vertex_id: &Value,
     tag_name: &str,
-    props: &[(String, Value)],
+    props: &[(Arc<str>, Value)],
 ) -> StorageResult<()> {
     for index in indexes {
         if !index.is_unique || index.schema_name != tag_name {
@@ -109,7 +115,7 @@ fn check_vertex_unique_indexes_with_list(
         }
         for field in &index.fields {
             if let Some((_prop_name, prop_value)) =
-                props.iter().find(|(name, _)| *name == field.name)
+                props.iter().find(|(name, _)| &**name == field.name)
             {
                 let existing = ctx
                     .index_data_manager()
@@ -133,7 +139,7 @@ pub(crate) fn refresh_vertex_indexes(
     space_id: u64,
     vertex_id: &Value,
     tag_name: &str,
-    props: &[(String, Value)],
+    props: &[(Arc<str>, Value)],
     ts: Timestamp,
 ) -> StorageResult<()> {
     let index_names = tag_index_names(index_metadata_manager, space_id, tag_name)?;

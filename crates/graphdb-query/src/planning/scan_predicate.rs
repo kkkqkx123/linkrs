@@ -179,32 +179,32 @@ fn build_predicate(column: &str, op: BinaryOperator, literal: &Expression) -> Sc
     };
     match op {
         BinaryOperator::Equal => ScanPredicate::ColumnEqual {
-            column: column.to_string(),
+            column: column.into(),
             value: value.clone(),
         },
         BinaryOperator::GreaterThan => ScanPredicate::ColumnRange {
-            column: column.to_string(),
+            column: column.into(),
             lower: Some(value.clone()),
             upper: None,
             include_lower: false,
             include_upper: false,
         },
         BinaryOperator::GreaterThanOrEqual => ScanPredicate::ColumnRange {
-            column: column.to_string(),
+            column: column.into(),
             lower: Some(value.clone()),
             upper: None,
             include_lower: true,
             include_upper: false,
         },
         BinaryOperator::LessThan => ScanPredicate::ColumnRange {
-            column: column.to_string(),
+            column: column.into(),
             lower: None,
             upper: Some(value.clone()),
             include_lower: false,
             include_upper: false,
         },
         BinaryOperator::LessThanOrEqual => ScanPredicate::ColumnRange {
-            column: column.to_string(),
+            column: column.into(),
             lower: None,
             upper: Some(value.clone()),
             include_lower: false,
@@ -226,7 +226,7 @@ mod tests {
 
     fn prop(property: &str) -> Expression {
         Expression::Property {
-            object: Box::new(Expression::Variable("v".to_string())),
+            object: Box::new(Expression::Variable("v".into())),
             property: property.to_string(),
         }
     }
@@ -248,11 +248,11 @@ mod tests {
     #[test]
     fn extract_equality_conjunct() {
         let expr = bin(prop("age"), BinaryOperator::Equal, lit(Value::Int(30)));
-        let predicates = extract_scan_predicates(Some(&contextual(expr)), &["age".to_string()]);
+        let predicates = extract_scan_predicates(Some(&contextual(expr)), &["age".into()]);
         assert_eq!(predicates.len(), 1);
         assert_eq!(predicates[0].column(), "age");
-        assert!(predicates[0].matches(&[("age".to_string(), Value::Int(30))]));
-        assert!(!predicates[0].matches(&[("age".to_string(), Value::Int(31))]));
+        assert!(predicates[0].matches(&[("age".into(), Value::Int(30))]));
+        assert!(!predicates[0].matches(&[("age".into(), Value::Int(31))]));
     }
 
     #[test]
@@ -262,10 +262,10 @@ mod tests {
             BinaryOperator::GreaterThan,
             lit(Value::Int(18)),
         );
-        let predicates = extract_scan_predicates(Some(&contextual(expr)), &["age".to_string()]);
+        let predicates = extract_scan_predicates(Some(&contextual(expr)), &["age".into()]);
         assert_eq!(predicates.len(), 1);
-        assert!(predicates[0].matches(&[("age".to_string(), Value::Int(19))]));
-        assert!(!predicates[0].matches(&[("age".to_string(), Value::Int(18))]));
+        assert!(predicates[0].matches(&[("age".into(), Value::Int(19))]));
+        assert!(!predicates[0].matches(&[("age".into(), Value::Int(18))]));
     }
 
     #[test]
@@ -279,12 +279,12 @@ mod tests {
             BinaryOperator::And,
             bin(prop("age"), BinaryOperator::LessThan, lit(Value::Int(30))),
         );
-        let predicates = extract_scan_predicates(Some(&contextual(expr)), &["age".to_string()]);
+        let predicates = extract_scan_predicates(Some(&contextual(expr)), &["age".into()]);
         assert_eq!(predicates.len(), 2);
-        assert!(predicates[0].matches(&[("age".to_string(), Value::Int(25))]));
-        assert!(predicates[1].matches(&[("age".to_string(), Value::Int(25))]));
-        assert!(!predicates[0].matches(&[("age".to_string(), Value::Int(10))]));
-        assert!(!predicates[1].matches(&[("age".to_string(), Value::Int(40))]));
+        assert!(predicates[0].matches(&[("age".into(), Value::Int(25))]));
+        assert!(predicates[1].matches(&[("age".into(), Value::Int(25))]));
+        assert!(!predicates[0].matches(&[("age".into(), Value::Int(10))]));
+        assert!(!predicates[1].matches(&[("age".into(), Value::Int(40))]));
     }
 
     #[test]
@@ -294,10 +294,10 @@ mod tests {
             BinaryOperator::GreaterThan,
             prop("age"),
         );
-        let predicates = extract_scan_predicates(Some(&contextual(expr)), &["age".to_string()]);
+        let predicates = extract_scan_predicates(Some(&contextual(expr)), &["age".into()]);
         assert_eq!(predicates.len(), 1);
-        assert!(predicates[0].matches(&[("age".to_string(), Value::Int(25))]));
-        assert!(!predicates[0].matches(&[("age".to_string(), Value::Int(35))]));
+        assert!(predicates[0].matches(&[("age".into(), Value::Int(25))]));
+        assert!(!predicates[0].matches(&[("age".into(), Value::Int(35))]));
     }
 
     #[test]
@@ -307,47 +307,47 @@ mod tests {
             BinaryOperator::NotEqual,
             lit(Value::string("bob")),
         );
-        let predicates = extract_scan_predicates(Some(&contextual(expr)), &["name".to_string()]);
+        let predicates = extract_scan_predicates(Some(&contextual(expr)), &["name".into()]);
         assert!(predicates.is_empty());
 
         let expr = bin(
             prop("age"),
             BinaryOperator::Equal,
             Expression::Function {
-                name: "abs".to_string(),
+                name: "abs".into(),
                 args: vec![FunctionArg::Positional(lit(Value::Int(30)))],
             },
         );
-        let predicates = extract_scan_predicates(Some(&contextual(expr)), &["age".to_string()]);
+        let predicates = extract_scan_predicates(Some(&contextual(expr)), &["age".into()]);
         assert!(predicates.is_empty());
     }
 
     #[test]
     fn skip_unprojected_columns() {
         let expr = bin(prop("age"), BinaryOperator::Equal, lit(Value::Int(30)));
-        let predicates = extract_scan_predicates(Some(&contextual(expr)), &["name".to_string()]);
+        let predicates = extract_scan_predicates(Some(&contextual(expr)), &["name".into()]);
         assert!(predicates.is_empty());
     }
 
     #[test]
     fn missing_column_never_matches() {
         let predicate = ScanPredicate::ColumnEqual {
-            column: "age".to_string(),
+            column: "age".into(),
             value: Value::Int(30),
         };
-        assert!(!predicate.matches(&[("name".to_string(), Value::string("bob"))]));
+        assert!(!predicate.matches(&[("name".into(), Value::string("bob"))]));
     }
 
     #[test]
     fn cross_numeric_comparison() {
         let predicate = ScanPredicate::ColumnRange {
-            column: "age".to_string(),
+            column: "age".into(),
             lower: Some(Value::BigInt(18)),
             upper: None,
             include_lower: true,
             include_upper: false,
         };
-        assert!(predicate.matches(&[("age".to_string(), Value::Double(18.5))]));
-        assert!(!predicate.matches(&[("age".to_string(), Value::Double(17.9))]));
+        assert!(predicate.matches(&[("age".into(), Value::Double(18.5))]));
+        assert!(!predicate.matches(&[("age".into(), Value::Double(17.9))]));
     }
 }

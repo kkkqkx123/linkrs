@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::index::helpers::{effective_index_values, merged_included_columns, vertex_entity_ref};
 use crate::index::key_codec::key_builder::normalize_int_value;
@@ -29,7 +30,7 @@ impl VertexIndexOps for IndexDataManagerImpl {
         space_id: u64,
         vertex_id: &Value,
         index_name: &str,
-        props: &[(String, Value)],
+        props: &[(Arc<str>, Value)],
         write_ts: Timestamp,
     ) -> Result<(), StorageError> {
         let Some(index_id) = self.index_alias(space_id, index_name) else {

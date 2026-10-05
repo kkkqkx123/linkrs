@@ -38,11 +38,8 @@ fn make_manager(coordinator: Arc<VectorSyncCoordinator>) -> SyncManager {
     SyncManager::new_without_fulltext().with_vector_coordinator(coordinator)
 }
 
-fn vector_property(value: Vec<f32>) -> Vec<(String, Value)> {
-    vec![(
-        "embedding".to_string(),
-        Value::Vector(VectorValue::dense(value)),
-    )]
+fn vector_property(value: Vec<f32>) -> Vec<(Arc<str>, Value)> {
+    vec![("embedding".into(), Value::Vector(VectorValue::dense(value)))]
 }
 
 fn vertex_id(value: &Value) -> VertexId {
@@ -84,7 +81,7 @@ impl VectorDocSource for FailAfterPeekSource {
     }
 }
 
-fn rebuild_doc(vertex: &Value, properties: Vec<(String, Value)>) -> VectorRebuildDoc {
+fn rebuild_doc(vertex: &Value, properties: Vec<(Arc<str>, Value)>) -> VectorRebuildDoc {
     VectorRebuildDoc {
         vertex_id: vertex_id(vertex),
         properties,

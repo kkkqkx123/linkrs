@@ -11,6 +11,7 @@
 //! the published schema.
 
 use graphdb_core::{StorageError, StorageResult};
+use std::sync::Arc;
 
 use super::core::EdgeStore;
 use crate::schema::ChangeDetails;
@@ -63,7 +64,7 @@ impl EdgeStore {
             .schema
             .properties
             .iter()
-            .any(|prop| prop.name == new_name)
+            .any(|prop| prop.name.as_ref() == new_name)
         {
             return Err(StorageError::column_already_exists(new_name.to_string()));
         }
@@ -71,12 +72,13 @@ impl EdgeStore {
             .schema
             .properties
             .iter()
-            .position(|prop| prop.name == old_name)
+            .position(|prop| prop.name.as_ref() == old_name)
             .ok_or_else(|| StorageError::column_not_found(old_name.to_string()))?;
         if !self.properties.has_property(old_name) {
             return Err(StorageError::column_not_found(old_name.to_string()));
         }
-        let cached_index = self.property_index_cache.get(old_name).copied();
+        let old_key: Arc<str> = old_name.into();
+        let cached_index = self.property_index_cache.get(&old_key).copied();
         self.pending_rename_column = Some(PendingRenameColumn {
             old_name: old_name.to_string(),
             new_name: new_name.to_string(),
@@ -116,10 +118,11 @@ impl EdgeStore {
         }
         self.properties
             .rename_property(&pending.old_name, &pending.new_name)?;
-        self.schema.properties[pending.schema_index].name = pending.new_name.clone();
-        if let Some(idx) = self.property_index_cache.remove(&pending.old_name) {
+        self.schema.properties[pending.schema_index].name = pending.new_name.clone().into();
+        let old_key: Arc<str> = pending.old_name.as_str().into();
+        if let Some(idx) = self.property_index_cache.remove(&old_key) {
             self.property_index_cache
-                .insert(pending.new_name.clone(), idx);
+                .insert(pending.new_name.clone().into(), idx);
         }
         if let Err(error) = self.record_schema_change(ChangeDetails::PropertyRenamed {
             old_name: pending.old_name.clone(),
@@ -128,10 +131,11 @@ impl EdgeStore {
             let _ = self
                 .properties
                 .rename_property(&pending.new_name, &pending.old_name);
-            self.schema.properties[pending.schema_index].name = pending.old_name.clone();
-            if let Some(idx) = self.property_index_cache.remove(&pending.new_name) {
+            self.schema.properties[pending.schema_index].name = pending.old_name.clone().into();
+            let new_key: Arc<str> = pending.new_name.as_str().into();
+            if let Some(idx) = self.property_index_cache.remove(&new_key) {
                 self.property_index_cache
-                    .insert(pending.old_name.clone(), idx);
+                    .insert(pending.old_name.clone().into(), idx);
             }
             return Err(error);
         }
@@ -139,7 +143,8 @@ impl EdgeStore {
         // Renames change every owner shard's schema: trace them all and
         // carry the rename into the per-group scopes.
         self.rename_property_column_in_dirt(&pending.old_name, &pending.new_name);
-        self.trace_all_owner_groups_for_columns(std::slice::from_ref(&pending.new_name));
+        let new_arc: Arc<str> = pending.new_name.as_str().into();
+        self.trace_all_owner_groups_for_columns(std::slice::from_ref(&new_arc));
         Ok(())
     }
 
@@ -164,11 +169,11 @@ mod tests {
     fn make_table() -> EdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
-            label_name: "knows".to_string(),
+            label_name: "knows".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![StoragePropertyDef::new(
-                "weight".to_string(),
+                "weight".into(),
                 graphdb_core::types::DataType::Double,
             )],
             oe_strategy: EdgeStrategy::Multiple,
@@ -183,7 +188,7 @@ mod tests {
     fn staged_rename_full_lifecycle() {
         let mut table = make_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .expect("insert should succeed");
         table
             .prepare_rename_property("weight", "mass")
@@ -195,7 +200,11 @@ mod tests {
         assert!(table.pending_rename_column().is_none());
         assert!(!table.properties.has_property("weight"));
         assert!(table.properties.has_property("mass"));
-        assert!(table.schema.properties.iter().any(|p| p.name == "mass"));
+        assert!(table
+            .schema
+            .properties
+            .iter()
+            .any(|p| p.name == Arc::from("mass")));
         assert!(table.has_edge(0, 1, 0, 200));
     }
 
@@ -224,7 +233,7 @@ mod tests {
             .expect("first prepare should succeed");
         assert!(table.prepare_rename_property("weight", "other").is_err());
         assert!(table
-            .prepare_add_property("extra".to_string(), graphdb_core::DataType::Int, true, None)
+            .prepare_add_property("extra".into(), graphdb_core::DataType::Int, true, None)
             .is_err());
     }
 
@@ -252,7 +261,7 @@ mod tests {
     fn published_rename_replays_idempotently_after_crash() {
         let mut table = make_table();
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .unwrap();
         let dir = tempfile::tempdir().expect("temporary edge table directory");
         // First checkpoint gives commits a WAL home.

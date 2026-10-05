@@ -761,8 +761,8 @@ fn collects_inside_list_and_map() {
     );
     assert_collected(
         Expression::Map(vec![
-            ("a".to_string(), exists()),
-            ("b".to_string(), in_subq(Expression::variable("t"))),
+            ("a".into(), exists()),
+            ("b".into(), in_subq(Expression::variable("t"))),
         ]),
         2,
     );

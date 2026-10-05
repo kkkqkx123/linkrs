@@ -32,7 +32,7 @@ pub struct InsertEdgeParams<'a> {
     pub dst_label: LabelId,
     pub dst_id: VertexId,
     pub rank: i64,
-    pub properties: &'a [(String, Value)],
+    pub properties: &'a [(std::sync::Arc<str>, Value)],
     pub ts: Timestamp,
 }
 
@@ -41,7 +41,7 @@ pub struct BatchEdgeInsert<'a> {
     pub src_id: VertexId,
     pub dst_id: VertexId,
     pub rank: i64,
-    pub properties: &'a [(String, Value)],
+    pub properties: &'a [(std::sync::Arc<str>, Value)],
 }
 
 /// Parameters for a batch insert into one edge type.

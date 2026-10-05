@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::engine::params::{EdgeOperationParams, InsertEdgeParams};
 use crate::index::types::EdgeIdentity;
@@ -558,12 +559,12 @@ pub(crate) fn update_data(
             return Err(unwind(error));
         }
 
-        let mut merged_props: HashMap<String, Value> = current_record
+        let mut merged_props: HashMap<Arc<str>, Value> = current_record
             .as_ref()
             .map(|record| record.properties.iter().cloned().collect())
             .unwrap_or_default();
         merged_props.insert(prop.clone(), value);
-        let merged: Vec<(String, Value)> = merged_props.into_iter().collect();
+        let merged: Vec<(Arc<str>, Value)> = merged_props.into_iter().collect();
 
         if online {
             // Index refresh replays at commit apply, after the new bytes land.

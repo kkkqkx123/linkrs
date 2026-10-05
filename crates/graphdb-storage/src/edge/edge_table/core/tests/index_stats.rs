@@ -4,6 +4,7 @@ use crate::edge::{EdgeStrategy, RecordForm};
 use crate::types::StoragePropertyDef;
 use graphdb_core::types::DataType;
 use graphdb_core::Value;
+use std::sync::Arc;
 
 #[test]
 fn test_revert_delete_fast_path_restores_property_index() {
@@ -12,7 +13,7 @@ fn test_revert_delete_fast_path_restores_property_index() {
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table.enable_property_index(1024).unwrap();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
     assert!(table.delete_edge(0, 1, 0, 200).unwrap());
     assert!(table.revert_delete_edge(0, 1, 0, 250).unwrap());
@@ -38,7 +39,7 @@ fn test_delete_maintains_property_index() {
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table.enable_property_index(1024).unwrap();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
     assert!(table.delete_edge(0, 1, 0, 200).unwrap());
     let codec = OrderedCodec::new();
@@ -64,7 +65,7 @@ fn test_index_success_records_metrics_without_failures() {
     table.enable_property_index(1024).unwrap();
     assert_eq!(table.index_failure_count(), 0);
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
     assert_eq!(table.index_failure_count(), 0);
     assert!(stats.get_value(MetricType::NumIndexOperations).unwrap_or(0) > 0);
@@ -82,7 +83,7 @@ fn test_index_failure_counter_drives_threshold_rebuild() {
     table.set_stats_manager(stats.clone());
     table.enable_property_index(1024).unwrap();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
     let _ = table.note_index_result(
         "weight",
@@ -128,13 +129,13 @@ fn test_pushdown_filters_at_column_scan_layer() {
                 0,
                 dst,
                 0,
-                &[("weight".to_string(), Value::Double(dst as f64 * 10.0))],
+                &[("weight".into(), Value::Double(dst as f64 * 10.0))],
                 100,
             )
             .unwrap();
     }
     let equal = vec![ScanPredicate::ColumnEqual {
-        column: "weight".to_string(),
+        column: "weight".into(),
         value: Value::Double(20.0),
     }];
     let hits = table.filter_edge_ids(&equal, 200, None);
@@ -143,7 +144,7 @@ fn test_pushdown_filters_at_column_scan_layer() {
     assert!(table.matches_pushdown(edge_id, 200, &equal));
 
     let range = vec![ScanPredicate::ColumnRange {
-        column: "weight".to_string(),
+        column: "weight".into(),
         lower: Some(Value::Double(15.0)),
         upper: Some(Value::Double(35.0)),
         include_lower: true,
@@ -152,7 +153,7 @@ fn test_pushdown_filters_at_column_scan_layer() {
     assert_eq!(table.filter_edge_ids(&range, 200, None).len(), 2);
 
     let missing = vec![ScanPredicate::ColumnEqual {
-        column: "no_such_column".to_string(),
+        column: "no_such_column".into(),
         value: Value::Double(1.0),
     }];
     assert!(table.filter_edge_ids(&missing, 200, None).is_empty());
@@ -168,11 +169,11 @@ fn test_pushdown_null_cells_never_match() {
     use crate::edge::EdgeSchema;
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "link".to_string(),
+        label_name: "link".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![StoragePropertyDef {
-            name: "note".to_string(),
+            name: "note".into(),
             data_type: DataType::String,
             nullable: true,
             default_value: None,
@@ -185,16 +186,10 @@ fn test_pushdown_null_cells_never_match() {
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table.insert_edge(0, 1, 0, &[], 100).unwrap();
     table
-        .insert_edge(
-            0,
-            2,
-            0,
-            &[("note".to_string(), Value::string("hello"))],
-            100,
-        )
+        .insert_edge(0, 2, 0, &[("note".into(), Value::string("hello"))], 100)
         .unwrap();
     let equal = vec![ScanPredicate::ColumnEqual {
-        column: "note".to_string(),
+        column: "note".into(),
         value: Value::string("hello"),
     }];
     let hits = table.filter_edge_ids(&equal, 200, None);
@@ -213,7 +208,7 @@ fn test_segment_stats_checkpoint_roundtrip_and_pruning() {
                 0,
                 dst,
                 0,
-                &[("weight".to_string(), Value::Double(dst as f64))],
+                &[("weight".into(), Value::Double(dst as f64))],
                 100,
             )
             .unwrap();
@@ -232,7 +227,7 @@ fn test_segment_stats_checkpoint_roundtrip_and_pruning() {
     assert_eq!(stats.live_count, 4);
 
     let outside = vec![ScanPredicate::ColumnRange {
-        column: "weight".to_string(),
+        column: "weight".into(),
         lower: Some(Value::Double(1000.0)),
         upper: None,
         include_lower: true,
@@ -240,7 +235,7 @@ fn test_segment_stats_checkpoint_roundtrip_and_pruning() {
     }];
     assert!(!table.segment_may_contain(0, &outside));
     let inside = vec![ScanPredicate::ColumnEqual {
-        column: "weight".to_string(),
+        column: "weight".into(),
         value: Value::Double(2.0),
     }];
     assert!(table.segment_may_contain(0, &inside));
@@ -252,7 +247,7 @@ fn test_segment_stats_checkpoint_roundtrip_and_pruning() {
     assert!(report.prune_rate() > 0.0);
 
     let selective = vec![ScanPredicate::ColumnEqual {
-        column: "weight".to_string(),
+        column: "weight".into(),
         value: Value::Double(3.0),
     }];
     let mut selective_iter = EdgeTableScanIterator::with_predicates(&table, 200, None, selective);
@@ -286,7 +281,7 @@ fn test_topology_encoding_report_uses_integer_path() {
                 0,
                 dst,
                 0,
-                &[("weight".to_string(), Value::Double(dst as f64))],
+                &[("weight".into(), Value::Double(dst as f64))],
                 100,
             )
             .unwrap();
@@ -309,7 +304,7 @@ fn test_property_fallback_counter_stays_flat_under_normal_load() {
     let schema = create_test_schema();
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table
         .update_edge_property(0, 1, 0, "weight", &Value::Double(2.0), 120)
@@ -341,7 +336,7 @@ fn test_auto_maintenance_rebuilds_lagged_index() {
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table.enable_property_index(1024).unwrap();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
     let _ = table.note_index_result(
         "weight",
@@ -438,18 +433,18 @@ fn test_multi_equality_intersection_matches_full_scan() {
     use crate::edge::EdgeSchema;
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "rated".to_string(),
+        label_name: "rated".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![
             StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
             },
             StoragePropertyDef {
-                name: "tag".to_string(),
+                name: "tag".into(),
                 data_type: DataType::Int,
                 nullable: false,
                 default_value: Some(Value::Int(0)),
@@ -468,8 +463,8 @@ fn test_multi_equality_intersection_matches_full_scan() {
                 dst,
                 0,
                 &[
-                    ("weight".to_string(), Value::Double(weight)),
-                    ("tag".to_string(), Value::Int(tag)),
+                    ("weight".into(), Value::Double(weight)),
+                    ("tag".into(), Value::Int(tag)),
                 ],
                 100,
             )
@@ -478,11 +473,11 @@ fn test_multi_equality_intersection_matches_full_scan() {
     table.enable_property_index(1024).unwrap();
     let both = vec![
         ScanPredicate::ColumnEqual {
-            column: "weight".to_string(),
+            column: "weight".into(),
             value: Value::Double(10.0),
         },
         ScanPredicate::ColumnEqual {
-            column: "tag".to_string(),
+            column: "tag".into(),
             value: Value::Int(1),
         },
     ];
@@ -493,12 +488,12 @@ fn test_multi_equality_intersection_matches_full_scan() {
         .expect("equality conjunction must serve from index");
     assert_eq!(candidates.len(), 2);
     let single = vec![ScanPredicate::ColumnEqual {
-        column: "weight".to_string(),
+        column: "weight".into(),
         value: Value::Double(10.0),
     }];
     assert_eq!(table.filter_edge_ids(&single, 200, None).len(), 3);
     let range = vec![ScanPredicate::ColumnRange {
-        column: "weight".to_string(),
+        column: "weight".into(),
         lower: Some(Value::Double(5.0)),
         upper: Some(Value::Double(15.0)),
         include_lower: true,
@@ -517,18 +512,18 @@ fn test_checkpoint_skips_clean_columns_and_rewrites_only_dirty() {
     use crate::edge::EdgeSchema;
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "rated".to_string(),
+        label_name: "rated".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![
             StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
             },
             StoragePropertyDef {
-                name: "tag".to_string(),
+                name: "tag".into(),
                 data_type: DataType::Int,
                 nullable: false,
                 default_value: Some(Value::Int(0)),
@@ -547,8 +542,8 @@ fn test_checkpoint_skips_clean_columns_and_rewrites_only_dirty() {
                 dst,
                 0,
                 &[
-                    ("weight".to_string(), Value::Double(f64::from(dst))),
-                    ("tag".to_string(), Value::Int(dst as i32)),
+                    ("weight".into(), Value::Double(f64::from(dst))),
+                    ("tag".into(), Value::Int(dst as i32)),
                 ],
                 100,
             )
@@ -584,7 +579,7 @@ fn test_checkpoint_skips_clean_columns_and_rewrites_only_dirty() {
             .unwrap()
             .properties
             .iter()
-            .find(|(k, _)| k == "weight")
+            .find(|(k, _)| &**k == "weight")
             .map(|(_, v)| v.clone()),
         Some(Value::Double(99.0))
     );
@@ -596,18 +591,18 @@ fn test_checkpoint_adapts_constant_column_encoding() {
     use crate::encoding::EncodingType;
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "rated".to_string(),
+        label_name: "rated".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![
             StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
             },
             StoragePropertyDef {
-                name: "note".to_string(),
+                name: "note".into(),
                 data_type: DataType::String,
                 nullable: true,
                 default_value: None,
@@ -620,7 +615,7 @@ fn test_checkpoint_adapts_constant_column_encoding() {
     };
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     assert_eq!(table.schema.record_form, RecordForm::Columnar);
-    let props: Vec<(String, Value)> = vec![("weight".to_string(), Value::Double(7.0))];
+    let props: Vec<(Arc<str>, Value)> = vec![(Arc::from("weight"), Value::Double(7.0))];
     let entries: Vec<crate::edge::BatchInsertEntry> = (1..=200u32)
         .map(|dst| (0, dst, 0, props.as_slice(), 100))
         .collect();
@@ -646,5 +641,5 @@ fn test_checkpoint_adapts_constant_column_encoding() {
     assert!(edge
         .properties
         .iter()
-        .any(|(k, v)| k == "weight" && *v == Value::Double(7.0)));
+        .any(|(k, v)| &**k == "weight" && *v == Value::Double(7.0)));
 }

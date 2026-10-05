@@ -4,6 +4,7 @@ use crate::cursor::{EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOption
 use crate::schema::{LabelVersionHistory, PropertyChange};
 use graphdb_core::types::{EdgeTypeInfo, Index, SpaceInfo, TagInfo, VertexId};
 use graphdb_core::{Edge, EdgeDirection, StorageError, Value, Vertex};
+use std::sync::Arc;
 
 /// Read-only data and schema operations.
 pub trait StorageReader: Send + Sync + std::fmt::Debug {
@@ -44,7 +45,7 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         space: &str,
         tag: &str,
         id: &VertexId,
-        projection: &[String],
+        projection: &[std::sync::Arc<str>],
     ) -> Result<Option<Vertex>, StorageError> {
         let vertex = self.get_vertex(space, tag, id)?;
         if projection.is_empty() {
@@ -99,7 +100,7 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         dst: &VertexId,
         edge_type: &str,
         rank: i64,
-        projection: &[String],
+        projection: &[Arc<str>],
     ) -> Result<Option<Edge>, StorageError> {
         let edge = self.get_edge(space, src, dst, edge_type, rank)?;
         if projection.is_empty() {
@@ -132,7 +133,7 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         node_id: &VertexId,
         direction: EdgeDirection,
         edge_types: &[String],
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
         limit: Option<usize>,
     ) -> Result<Vec<Edge>, StorageError> {
         let mut edges = self.get_node_edges(space, node_id, direction, edge_types)?;

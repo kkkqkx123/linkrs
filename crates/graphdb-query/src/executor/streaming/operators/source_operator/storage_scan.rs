@@ -305,7 +305,7 @@ where
 fn next_column_chunk(
     op: &mut SourceOperator,
     source: &str,
-    projected_properties: &[String],
+    projected_properties: &[Arc<str>],
 ) -> Result<Option<DataChunk>, QueryError> {
     let (cursor, space_name) = match &mut op.kind {
         SourceOperatorKind::StorageScanVertices {
@@ -338,7 +338,7 @@ fn build_column_chunk(
     runtime: &Option<Arc<ExecutionRuntime>>,
     output_layout: &Arc<SlotLayout>,
     batch: VertexColumnBatch,
-    flatten: &[String],
+    flatten: &[Arc<str>],
 ) -> Result<DataChunk, QueryError> {
     let layout = Arc::clone(output_layout);
     let row_count = batch.len();
@@ -381,7 +381,11 @@ fn build_column_chunk(
             chunk.rows.iter().map(|r| r[0].clone()).collect(),
         ));
         for prop in flatten {
-            match batch.columns.iter().find(|c| c.name == *prop) {
+            match batch
+                .columns
+                .iter()
+                .find(|c| c.name.as_ref() == prop.as_ref())
+            {
                 Some(column) => typed.push(typed_from_storage_column(&column.values)),
                 None => typed.push(TypedColumn::Fallback(
                     (0..row_count)
@@ -551,7 +555,7 @@ fn valid_to_bitmap(valid: &[u8]) -> Vec<u64> {
 fn next_edge_column_chunk(
     op: &mut SourceOperator,
     source: &str,
-    projected_properties: &[String],
+    projected_properties: &[Arc<str>],
 ) -> Result<Option<DataChunk>, QueryError> {
     let (cursor, space_name) = match &mut op.kind {
         SourceOperatorKind::StorageScanEdges {
@@ -584,7 +588,7 @@ fn build_edge_column_chunk(
     runtime: &Option<Arc<ExecutionRuntime>>,
     output_layout: &Arc<SlotLayout>,
     batch: EdgeColumnBatch,
-    flatten: &[String],
+    flatten: &[Arc<str>],
 ) -> Result<DataChunk, QueryError> {
     let layout = Arc::clone(output_layout);
     let row_count = batch.len();
@@ -633,7 +637,11 @@ fn build_edge_column_chunk(
             chunk.rows.iter().map(|r| r[0].clone()).collect(),
         ));
         for prop in flatten {
-            match batch.columns.iter().find(|c| c.name == *prop) {
+            match batch
+                .columns
+                .iter()
+                .find(|c| c.name.as_ref() == prop.as_ref())
+            {
                 Some(column) => typed.push(typed_from_storage_column(&column.values)),
                 None => typed.push(TypedColumn::Fallback(
                     (0..row_count)

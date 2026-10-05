@@ -808,7 +808,7 @@ mod tests {
         ]);
         let mut raw = bindings();
         raw.parameters = Arc::new(
-            [("p".to_string(), graphdb_core::Value::string("value"))]
+            [("p".into(), graphdb_core::Value::string("value"))]
                 .into_iter()
                 .collect(),
         );

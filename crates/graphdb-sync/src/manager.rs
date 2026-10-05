@@ -273,7 +273,7 @@ mod tests {
                 1,
                 "Node",
                 &Value::string("v1"),
-                &[("text".to_string(), Value::string("hello"))],
+                &[("text".into(), Value::string("hello"))],
                 ChangeType::Insert,
             )
             .expect("change should stage");
@@ -316,7 +316,7 @@ mod tests {
                 1,
                 "Node",
                 &Value::string("node-1"),
-                &[("text".to_string(), Value::string("durable graph event"))],
+                &[("text".into(), Value::string("durable graph event"))],
                 ChangeType::Insert,
             )
             .expect("change should stage");

@@ -301,12 +301,16 @@ pub(crate) fn import_vertex_csv_from_path<W: StorageWriter + ?Sized>(
         };
         stats.accepted += 1;
 
-        let mut properties = std::collections::HashMap::new();
+        let mut properties: std::collections::HashMap<std::sync::Arc<str>, graphdb_core::Value> =
+            std::collections::HashMap::new();
         for (col_idx, col_name) in &prop_cols {
             if let Some(val_str) = fields.get(*col_idx) {
                 let val_str = val_str.trim().trim_matches('"');
                 if !val_str.is_empty() {
-                    properties.insert(col_name.clone(), graphdb_core::Value::string(val_str));
+                    properties.insert(
+                        col_name.clone().into(),
+                        graphdb_core::Value::string(val_str),
+                    );
                 }
             }
         }
@@ -423,12 +427,16 @@ pub(crate) fn import_edge_csv_from_path<W: StorageWriter + ?Sized>(
             .and_then(|s| s.trim().trim_matches('"').parse::<i64>().ok())
             .unwrap_or(0);
 
-        let mut props = std::collections::HashMap::new();
+        let mut props: std::collections::HashMap<std::sync::Arc<str>, graphdb_core::Value> =
+            std::collections::HashMap::new();
         for (col_idx, col_name) in &prop_cols {
             if let Some(val_str) = fields.get(*col_idx) {
                 let val_str = val_str.trim().trim_matches('"');
                 if !val_str.is_empty() {
-                    props.insert(col_name.clone(), graphdb_core::Value::string(val_str));
+                    props.insert(
+                        col_name.clone().into(),
+                        graphdb_core::Value::string(val_str),
+                    );
                 }
             }
         }

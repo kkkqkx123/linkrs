@@ -200,7 +200,7 @@ mod tests {
     fn create_test_vertex_with_id(id: i64) -> Vertex {
         Vertex::new(
             VertexId::try_from_int64(id).expect("valid vertex id"),
-            Tag::new("person".to_string(), HashMap::new()),
+            Tag::new("person".into(), HashMap::new()),
         )
     }
 

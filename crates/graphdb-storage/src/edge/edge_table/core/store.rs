@@ -75,7 +75,7 @@ impl EdgeStore {
                 schema
                     .properties
                     .first()
-                    .map(|p| p.name.as_str())
+                    .map(|p| p.name.as_ref())
                     .unwrap_or(""),
             );
         } else {

@@ -4,6 +4,7 @@ use crate::edge::{EdgeSchema, EdgeStrategy, RecordForm};
 use crate::types::StoragePropertyDef;
 use graphdb_core::types::{DataType, EdgeId};
 use graphdb_core::Value;
+use std::sync::Arc;
 
 #[test]
 fn test_csr_timestamps_agree_with_mvcc() {
@@ -74,13 +75,10 @@ fn test_authority_is_single_truth_for_deletion() {
 fn test_single_time_travel_survives_flush_load() {
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "spouse".to_string(),
+        label_name: "spouse".into(),
         src_label: 0,
         dst_label: 0,
-        properties: vec![StoragePropertyDef::new(
-            "weight".to_string(),
-            DataType::Double,
-        )],
+        properties: vec![StoragePropertyDef::new("weight".into(), DataType::Double)],
         oe_strategy: EdgeStrategy::Single,
         ie_strategy: EdgeStrategy::Single,
         schema_version: 1,
@@ -88,7 +86,7 @@ fn test_single_time_travel_survives_flush_load() {
     };
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table
-        .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(1, 2, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
     assert!(!table.has_edge(1, 2, 0, 99));
     assert!(table.has_edge(1, 2, 0, 100));
@@ -103,13 +101,10 @@ fn test_single_time_travel_survives_flush_load() {
 
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "spouse".to_string(),
+        label_name: "spouse".into(),
         src_label: 0,
         dst_label: 0,
-        properties: vec![StoragePropertyDef::new(
-            "weight".to_string(),
-            DataType::Double,
-        )],
+        properties: vec![StoragePropertyDef::new("weight".into(), DataType::Double)],
         oe_strategy: EdgeStrategy::Single,
         ie_strategy: EdgeStrategy::Single,
         schema_version: 1,
@@ -123,7 +118,7 @@ fn test_single_time_travel_survives_flush_load() {
     assert_eq!(
         edge.properties
             .iter()
-            .find(|(k, _)| k == "weight")
+            .find(|(k, _)| &**k == "weight")
             .map(|(_, v)| v),
         Some(&Value::Double(1.5))
     );
@@ -156,7 +151,7 @@ fn test_visibility_consistent_across_point_adjacency_and_scan() {
     let schema = create_test_schema();
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     assert!(table.delete_edge(0, 1, 0, 200).unwrap());
 
@@ -200,12 +195,12 @@ fn test_projected_scan_empty_projection_decodes_no_properties() {
     let schema = create_test_schema();
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
     let full = table.scan_projected(100, None);
     assert_eq!(full.len(), 1);
     assert_eq!(full[0].properties.len(), 1);
-    let empty: Vec<String> = Vec::new();
+    let empty: Vec<Arc<str>> = Vec::new();
     let pruned = table.scan_projected(100, Some(empty));
     assert_eq!(pruned.len(), 1);
     assert!(pruned[0].properties.is_empty());
@@ -240,7 +235,7 @@ fn test_batch_accessor_reuses_caller_buffer() {
                 0,
                 dst,
                 0,
-                &[("weight".to_string(), Value::Double(dst as f64))],
+                &[("weight".into(), Value::Double(dst as f64))],
                 100,
             )
             .unwrap();
@@ -299,11 +294,11 @@ fn test_gated_point_lookup_resolves_visible_generation() {
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     // Same key rebuilt: tombstone generation first, live generation after.
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     assert!(table.delete_edge(0, 1, 0, 150).unwrap());
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(2.0))], 200)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(2.0))], 200)
         .unwrap();
 
     let vm = graphdb_transaction::VersionManager::new();
@@ -316,7 +311,7 @@ fn test_gated_point_lookup_resolves_visible_generation() {
     assert!(record
         .properties
         .iter()
-        .any(|(k, v)| k == "weight" && *v == Value::Double(2.0)));
+        .any(|(k, v)| &**k == "weight" && *v == Value::Double(2.0)));
     let projected = table
         .get_edge_with_gate_projected(0, 1, 0, 250, &gate, Some(&[]))
         .expect("projected variant must resolve the same generation");

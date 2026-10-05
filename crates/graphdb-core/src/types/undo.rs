@@ -7,6 +7,7 @@ use super::storage_ids::{
     TransactionId, VertexId, VertexIdentifier,
 };
 use crate::Value;
+use std::sync::Arc;
 
 /// Undo log error
 #[derive(Debug, Clone, thiserror::Error)]
@@ -71,7 +72,7 @@ pub trait UndoTarget: Send + Sync {
     fn restore_edge(
         &self,
         _edge: EdgeIdentifier,
-        _properties: Vec<(String, Value)>,
+        _properties: Vec<(Arc<str>, Value)>,
         _ts: Timestamp,
     ) -> UndoLogResult<()> {
         Err(UndoLogError::UndoFailed(
@@ -89,14 +90,14 @@ pub trait UndoTarget: Send + Sync {
     fn revert_delete_vertex_properties(
         &self,
         label_name: &str,
-        prop_names: &[String],
+        prop_names: &[Arc<str>],
     ) -> UndoLogResult<()>;
     fn revert_delete_edge_properties(
         &self,
         src_label: &str,
         dst_label: &str,
         edge_label: &str,
-        prop_names: &[String],
+        prop_names: &[Arc<str>],
     ) -> UndoLogResult<()>;
     fn revert_delete_vertex_label(&self, label_name: &str) -> UndoLogResult<()>;
     fn revert_delete_edge_label(
@@ -108,16 +109,16 @@ pub trait UndoTarget: Send + Sync {
     fn revert_rename_vertex_properties(
         &self,
         label_name: &str,
-        current_names: &[String],
-        original_names: &[String],
+        current_names: &[Arc<str>],
+        original_names: &[Arc<str>],
     ) -> UndoLogResult<()>;
     fn revert_rename_edge_properties(
         &self,
         src_label: &str,
         dst_label: &str,
         edge_label: &str,
-        current_names: &[String],
-        original_names: &[String],
+        current_names: &[Arc<str>],
+        original_names: &[Arc<str>],
     ) -> UndoLogResult<()>;
     /// Capture this target's staged-write boundary for `txn_id`.
     ///

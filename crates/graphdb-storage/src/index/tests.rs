@@ -25,11 +25,7 @@ fn create_tag_index(name: &str, schema_name: &str) -> Index {
         name: name.to_string(),
         space_id: 1,
         schema_name: schema_name.to_string(),
-        fields: vec![IndexField::new(
-            "name".to_string(),
-            Value::string(""),
-            false,
-        )],
+        fields: vec![IndexField::new("name".into(), Value::string(""), false)],
         properties: vec![],
         index_type: IndexType::TagIndex,
         is_unique: false,
@@ -41,11 +37,11 @@ fn create_tag_index(name: &str, schema_name: &str) -> Index {
 fn create_edge_index_with_included_properties() -> Index {
     Index::new(IndexConfig {
         id: 1,
-        name: "knows_weight_idx".to_string(),
+        name: "knows_weight_idx".into(),
         space_id: 1,
-        schema_name: "Person".to_string(),
-        fields: vec![IndexField::new("weight".to_string(), Value::Int(0), false)],
-        properties: vec!["since".to_string()],
+        schema_name: "Person".into(),
+        fields: vec![IndexField::new("weight".into(), Value::Int(0), false)],
+        properties: vec!["since".into()],
         index_type: IndexType::EdgeIndex,
         is_unique: false,
         covering: true,
@@ -61,7 +57,7 @@ fn test_update_and_lookup_vertex_index() {
     let space_id = 1u64;
     let vertex_id = Value::Int(1);
     let index_name = "idx_person_name";
-    let props = vec![("name".to_string(), Value::string("Alice"))];
+    let props = vec![("name".into(), Value::string("Alice"))];
     let index = create_tag_index(index_name, "person");
 
     manager
@@ -96,7 +92,7 @@ fn same_index_id_in_different_spaces_uses_isolated_runtimes() {
             1,
             &Value::Int(1),
             "person_name",
-            &[("name".to_string(), Value::string("Alice"))],
+            &[("name".into(), Value::string("Alice"))],
             MAX_TIMESTAMP,
         )
         .expect("write first space index");
@@ -105,7 +101,7 @@ fn same_index_id_in_different_spaces_uses_isolated_runtimes() {
             2,
             &Value::Int(2),
             "person_name",
-            &[("name".to_string(), Value::string("Bob"))],
+            &[("name".into(), Value::string("Bob"))],
             MAX_TIMESTAMP,
         )
         .expect("write second space index");
@@ -146,7 +142,7 @@ fn split_writes_only_the_selected_index_to_each_shard() {
             1,
             &Value::Int(1),
             "first",
-            &[("name".to_string(), Value::string("Alice"))],
+            &[("name".into(), Value::string("Alice"))],
             1,
         )
         .expect("write first lower key");
@@ -155,7 +151,7 @@ fn split_writes_only_the_selected_index_to_each_shard() {
             1,
             &Value::Int(2),
             "first",
-            &[("name".to_string(), Value::string("Zoe"))],
+            &[("name".into(), Value::string("Zoe"))],
             1,
         )
         .expect("write first upper key");
@@ -164,7 +160,7 @@ fn split_writes_only_the_selected_index_to_each_shard() {
             1,
             &Value::Int(3),
             "second",
-            &[("name".to_string(), Value::string("Other"))],
+            &[("name".into(), Value::string("Other"))],
             1,
         )
         .expect("write unrelated index key");
@@ -222,7 +218,7 @@ fn resolve_split_crash_recovery_discards_building_state() {
             1,
             &Value::Int(1),
             "first",
-            &[("name".to_string(), Value::string("Alice"))],
+            &[("name".into(), Value::string("Alice"))],
             1,
         )
         .expect("write");
@@ -298,7 +294,7 @@ fn resolve_split_crash_recovery_completes_publishing_state_with_manifest() {
             1,
             &Value::Int(1),
             "first",
-            &[("name".to_string(), Value::string("Alice"))],
+            &[("name".into(), Value::string("Alice"))],
             1,
         )
         .expect("write");
@@ -400,20 +396,20 @@ fn included_columns_visible_in_covering_query_after_update() {
             &edge,
             "knows_weight_idx",
             &[
-                ("weight".to_string(), Value::Int(10)),
-                ("since".to_string(), Value::Int(2020)),
+                ("weight".into(), Value::Int(10)),
+                ("since".into(), Value::Int(2020)),
             ],
             10,
         )
         .expect("initial write");
 
     let covering_plan = IndexScanPlan {
-        space: "space".to_string(),
+        space: "space".into(),
         index_id: 1,
         predicate: IndexPredicate::All,
         partition: PartitionSelector::All,
         partition_id_range: None,
-        projection: Some(vec!["since".to_string()]),
+        projection: Some(vec!["since".into()]),
         limit: None,
         offset: 0,
         read_timestamp: 10,
@@ -429,7 +425,7 @@ fn included_columns_visible_in_covering_query_after_update() {
     match &rows[0] {
         IndexRow::Covering { columns, .. } => {
             assert_eq!(columns.len(), 1);
-            assert_eq!(columns[0], ("since".to_string(), Value::Int(2020)));
+            assert_eq!(columns[0], ("since".into(), Value::Int(2020)));
         }
         _ => panic!("expected covering row"),
     }
@@ -438,18 +434,18 @@ fn included_columns_visible_in_covering_query_after_update() {
         .update_edge_indexes_mvcc(
             &edge,
             "knows_weight_idx",
-            &[("since".to_string(), Value::Int(2024))],
+            &[("since".into(), Value::Int(2024))],
             20,
         )
         .expect("update");
 
     let after_update_plan = IndexScanPlan {
-        space: "space".to_string(),
+        space: "space".into(),
         index_id: 1,
         predicate: IndexPredicate::All,
         partition: PartitionSelector::All,
         partition_id_range: None,
-        projection: Some(vec!["since".to_string()]),
+        projection: Some(vec!["since".into()]),
         limit: None,
         offset: 0,
         read_timestamp: 20,
@@ -464,18 +460,18 @@ fn included_columns_visible_in_covering_query_after_update() {
     assert_eq!(rows.len(), 1);
     match &rows[0] {
         IndexRow::Covering { columns, .. } => {
-            assert_eq!(columns[0], ("since".to_string(), Value::Int(2024)));
+            assert_eq!(columns[0], ("since".into(), Value::Int(2024)));
         }
         _ => panic!("expected covering row after update"),
     }
 
     let snapshot_plan = IndexScanPlan {
-        space: "space".to_string(),
+        space: "space".into(),
         index_id: 1,
         predicate: IndexPredicate::All,
         partition: PartitionSelector::All,
         partition_id_range: None,
-        projection: Some(vec!["since".to_string()]),
+        projection: Some(vec!["since".into()]),
         limit: None,
         offset: 0,
         read_timestamp: 10,
@@ -490,7 +486,7 @@ fn included_columns_visible_in_covering_query_after_update() {
     assert_eq!(rows.len(), 1);
     match &rows[0] {
         IndexRow::Covering { columns, .. } => {
-            assert_eq!(columns[0], ("since".to_string(), Value::Int(2020)));
+            assert_eq!(columns[0], ("since".into(), Value::Int(2020)));
         }
         _ => panic!("expected covering row at snapshot"),
     }
@@ -512,20 +508,20 @@ fn included_columns_not_visible_after_delete() {
             &edge,
             "knows_weight_idx",
             &[
-                ("weight".to_string(), Value::Int(10)),
-                ("since".to_string(), Value::Int(2020)),
+                ("weight".into(), Value::Int(10)),
+                ("since".into(), Value::Int(2020)),
             ],
             10,
         )
         .expect("write");
 
     let covering_plan = IndexScanPlan {
-        space: "space".to_string(),
+        space: "space".into(),
         index_id: 1,
         predicate: IndexPredicate::All,
         partition: PartitionSelector::All,
         partition_id_range: None,
-        projection: Some(vec!["since".to_string()]),
+        projection: Some(vec!["since".into()]),
         limit: None,
         offset: 0,
         read_timestamp: 10,
@@ -540,16 +536,16 @@ fn included_columns_not_visible_after_delete() {
     assert_eq!(rows.len(), 1, "one edge before delete");
 
     manager
-        .delete_edge_indexes_mvcc(&edge, &["knows_weight_idx".to_string()], 20)
+        .delete_edge_indexes_mvcc(&edge, &["knows_weight_idx".into()], 20)
         .expect("delete");
 
     let after_delete_plan = IndexScanPlan {
-        space: "space".to_string(),
+        space: "space".into(),
         index_id: 1,
         predicate: IndexPredicate::All,
         partition: PartitionSelector::All,
         partition_id_range: None,
-        projection: Some(vec!["since".to_string()]),
+        projection: Some(vec!["since".into()]),
         limit: None,
         offset: 0,
         read_timestamp: 20,
@@ -584,8 +580,8 @@ fn included_columns_survive_rebuild_from_snapshot() {
             &edge,
             "knows_weight_idx",
             &[
-                ("weight".to_string(), Value::Int(10)),
-                ("since".to_string(), Value::Int(2020)),
+                ("weight".into(), Value::Int(10)),
+                ("since".into(), Value::Int(2020)),
             ],
             10,
         )
@@ -653,12 +649,12 @@ fn included_columns_survive_rebuild_from_snapshot() {
         .expect("publish");
 
     let covering_plan = IndexScanPlan {
-        space: "space".to_string(),
+        space: "space".into(),
         index_id: 1,
         predicate: IndexPredicate::All,
         partition: PartitionSelector::All,
         partition_id_range: None,
-        projection: Some(vec!["since".to_string()]),
+        projection: Some(vec!["since".into()]),
         limit: None,
         offset: 0,
         read_timestamp: 10,
@@ -673,7 +669,7 @@ fn included_columns_survive_rebuild_from_snapshot() {
     assert_eq!(rows.len(), 1, "rebuilt index should have one entry");
     match &rows[0] {
         IndexRow::Covering { columns, .. } => {
-            assert_eq!(columns[0], ("since".to_string(), Value::Int(2020)));
+            assert_eq!(columns[0], ("since".into(), Value::Int(2020)));
         }
         _ => panic!("expected covering row after rebuild"),
     }
@@ -792,7 +788,7 @@ fn memory_limit_triggers_compaction() {
             1,
             &Value::Int(1),
             "name_idx",
-            &[("name".to_string(), Value::string("Alice"))],
+            &[("name".into(), Value::string("Alice"))],
             100,
         )
         .expect("first update");
@@ -803,7 +799,7 @@ fn memory_limit_triggers_compaction() {
             1,
             &Value::Int(2),
             "name_idx",
-            &[("name".to_string(), Value::string("Bob"))],
+            &[("name".into(), Value::string("Bob"))],
             200,
         )
         .expect("second update with memory limit");
@@ -835,7 +831,7 @@ fn retire_generations_reclaims_retired_checkpoint_dirs() {
             1,
             &Value::Int(1),
             "name_idx",
-            &[("name".to_string(), Value::string("Alice"))],
+            &[("name".into(), Value::string("Alice"))],
             100,
         )
         .expect("first update");
@@ -844,7 +840,7 @@ fn retire_generations_reclaims_retired_checkpoint_dirs() {
             1,
             &Value::Int(2),
             "name_idx",
-            &[("name".to_string(), Value::string("Bob"))],
+            &[("name".into(), Value::string("Bob"))],
             200,
         )
         .expect("second update");
@@ -901,7 +897,7 @@ fn delta_accumulation_batches_generation_publication() {
                 1,
                 &Value::Int(i as i32),
                 "name_idx",
-                &[("name".to_string(), Value::string(format!("person_{i}")))],
+                &[("name".into(), Value::string(format!("person_{i}")))],
                 i + 1,
             )
             .unwrap();
@@ -943,7 +939,7 @@ fn delta_accumulation_rollback_path_publishes_per_statement() {
                 1,
                 &Value::Int(i as i32),
                 "name_idx",
-                &[("name".to_string(), Value::string(format!("person_{i}")))],
+                &[("name".into(), Value::string(format!("person_{i}")))],
                 i + 1,
             )
             .unwrap();
@@ -976,7 +972,7 @@ fn pending_aware_lookup_matches_published_lookup() {
                 1,
                 &Value::Int(i as i32),
                 "name_idx",
-                &[("name".to_string(), Value::string(format!("name_{i}")))],
+                &[("name".into(), Value::string(format!("name_{i}")))],
                 i + 1,
             )
             .unwrap();
@@ -1019,7 +1015,7 @@ fn pending_aware_lookup_matches_published_lookup() {
             1,
             &Value::Int(5),
             "name_idx",
-            &[("name".to_string(), Value::string("name_50"))],
+            &[("name".into(), Value::string("name_50"))],
             20,
         )
         .unwrap();

@@ -546,7 +546,7 @@ mod tests {
         let session_manager = create_test_session_manager();
 
         let session = session_manager
-            .create_session("testuser".to_string(), "127.0.0.1".to_string())
+            .create_session("testuser".into(), "127.0.0.1".to_string())
             .await
             .expect("Failed to create session");
 
@@ -567,7 +567,7 @@ mod tests {
         let session_manager = create_test_session_manager();
 
         let session = session_manager
-            .create_session("testuser".to_string(), "127.0.0.1".to_string())
+            .create_session("testuser".into(), "127.0.0.1".to_string())
             .await
             .expect("Failed to create session");
 
@@ -597,7 +597,7 @@ mod tests {
 
         // Attempts to create a 6th session should fail
         let result = session_manager
-            .create_session("user6".to_string(), "127.0.0.1".to_string())
+            .create_session("user6".into(), "127.0.0.1".to_string())
             .await;
         assert!(result.is_err());
     }
@@ -607,7 +607,7 @@ mod tests {
         let session_manager = create_test_session_manager();
 
         let session = session_manager
-            .create_session("testuser".to_string(), "127.0.0.1".to_string())
+            .create_session("testuser".into(), "127.0.0.1".to_string())
             .await
             .expect("Failed to create session");
 
@@ -622,7 +622,7 @@ mod tests {
 
         // Create a new session to test permission checking
         let session2 = session_manager
-            .create_session("user2".to_string(), "127.0.0.1".to_string())
+            .create_session("user2".into(), "127.0.0.1".to_string())
             .await
             .expect("Failed to create session");
 

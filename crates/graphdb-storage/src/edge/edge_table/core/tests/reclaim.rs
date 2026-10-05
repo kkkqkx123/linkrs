@@ -10,7 +10,7 @@ fn test_compact_reclaims_deleted_edge_properties() {
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
     assert_eq!(table.properties.row_count(), 1);
 
@@ -171,10 +171,10 @@ fn test_valid_edge_ids_survive_tombstone_gc() {
     let schema = create_test_schema();
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
     table
-        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
+        .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.5))], 100)
         .unwrap();
     assert!(table.delete_edge(0, 1, 0, 200).unwrap());
     // Authority records survive collection; visibility is unchanged.
@@ -191,10 +191,10 @@ fn test_compact_csr_only_refuses_drifted_table() {
     let schema = create_test_schema();
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
     table
-        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
+        .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.5))], 100)
         .unwrap();
     // Simulate a write-path regression that drops the authority entry of a
     // live edge: the physical rows survive, so the post-rebuild audit must
@@ -212,7 +212,7 @@ fn test_loaded_copy_mismatches_detect_orphans() {
     let schema = create_test_schema();
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
     assert_eq!(table.loaded_copy_mismatches(), (0, 0));
     // Simulate a write-path regression that drops the authority entry.
@@ -227,7 +227,7 @@ fn test_unified_row_space_insert_delete_reclaim_remap() {
     let schema = create_test_schema();
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
     table.insert_edge(0, 2, 0, &[], 100).unwrap();
     table.insert_edge(1, 2, 0, &[], 110).unwrap();

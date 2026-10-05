@@ -1,4 +1,5 @@
 use crate::cursor::column_batch::ColumnValues;
+use std::sync::Arc;
 
 /// Predicate understood by native index cursors.
 #[derive(Debug, Clone, PartialEq)]
@@ -27,12 +28,12 @@ pub enum IndexPredicate {
 pub enum ScanPredicate {
     /// `column = value`
     ColumnEqual {
-        column: String,
+        column: Arc<str>,
         value: graphdb_core::Value,
     },
     /// `column` bounded by constants (either bound may be absent).
     ColumnRange {
-        column: String,
+        column: Arc<str>,
         lower: Option<graphdb_core::Value>,
         upper: Option<graphdb_core::Value>,
         include_lower: bool,
@@ -45,10 +46,10 @@ impl ScanPredicate {
     ///
     /// Properties are a `(name, value)` slice in projection order.  A
     /// missing column (or any non-scalar comparison) never matches.
-    pub fn matches(&self, props: &[(String, graphdb_core::Value)]) -> bool {
+    pub fn matches(&self, props: &[(std::sync::Arc<str>, graphdb_core::Value)]) -> bool {
         let Some(value) = props
             .iter()
-            .find(|(name, _)| name == self.column())
+            .find(|(name, _)| name.as_ref() == self.column())
             .map(|(_, v)| v)
         else {
             return false;
@@ -99,6 +100,13 @@ impl ScanPredicate {
         }
     }
 
+    pub fn column_arc(&self) -> Arc<str> {
+        match self {
+            ScanPredicate::ColumnEqual { column, .. } => column.clone(),
+            ScanPredicate::ColumnRange { column, .. } => column.clone(),
+        }
+    }
+
     /// Merge pushed predicates into one value range per referenced column.
     ///
     /// The result is the conjunction of all predicates on that column:
@@ -120,7 +128,7 @@ impl ScanPredicate {
                     ..
                 } => (lower.clone(), *include_lower, upper.clone(), *include_upper),
             };
-            let column = predicate.column().to_string();
+            let column = predicate.column_arc();
             match ranges.iter_mut().find(|r| r.column == column) {
                 Some(range) => range.intersect(lower, include_lower, upper, include_upper),
                 None => ranges.push(PredicateRange {
@@ -141,7 +149,7 @@ impl ScanPredicate {
 /// bounds cannot overlap this range cannot contain matching rows.
 #[derive(Debug, Clone)]
 pub struct PredicateRange {
-    pub column: String,
+    pub column: Arc<str>,
     pub lower: Option<graphdb_core::Value>,
     pub include_lower: bool,
     pub upper: Option<graphdb_core::Value>,

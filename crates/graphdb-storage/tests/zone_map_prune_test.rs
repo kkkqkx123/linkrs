@@ -27,8 +27,8 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
         .create_tag(
             SPACE,
             &TagInfo::new("Node".to_string()).with_properties(vec![
-                PropertyDef::new("value".to_string(), DataType::BigInt),
-                PropertyDef::new("payload".to_string(), DataType::BigInt),
+                PropertyDef::new("value".into(), DataType::BigInt),
+                PropertyDef::new("payload".into(), DataType::BigInt),
             ]),
         )
         .unwrap();
@@ -39,12 +39,12 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
     let vertices: Vec<Vertex> = (0..5000i64)
         .map(|i| {
             let props = vec![
-                ("value".to_string(), Value::BigInt(i)),
-                ("payload".to_string(), Value::BigInt(i)),
+                ("value".into(), Value::BigInt(i)),
+                ("payload".into(), Value::BigInt(i)),
             ];
             Vertex::new(
                 VertexId::try_from_int64(i).expect("test vertex id"),
-                Tag::new("Node".to_string(), props.into_iter().collect()),
+                Tag::new("Node".into(), props.into_iter().collect()),
             )
         })
         .collect();
@@ -90,7 +90,7 @@ fn range_outside_all_zone_bounds_returns_nothing() {
     let rows = drain_with_predicate(
         &storage,
         vec![ScanPredicate::ColumnRange {
-            column: "value".to_string(),
+            column: "value".into(),
             lower: Some(Value::BigInt(10_000)),
             upper: None,
             include_lower: true,
@@ -107,7 +107,7 @@ fn range_spanning_multiple_zones_returns_exact_rows() {
     let rows = drain_with_predicate(
         &storage,
         vec![ScanPredicate::ColumnRange {
-            column: "value".to_string(),
+            column: "value".into(),
             lower: Some(Value::BigInt(1500)),
             upper: Some(Value::BigInt(3500)),
             include_lower: true,
@@ -125,7 +125,7 @@ fn equality_across_zone_boundary_finds_all_matches() {
     let rows = drain_with_predicate(
         &storage,
         vec![ScanPredicate::ColumnEqual {
-            column: "value".to_string(),
+            column: "value".into(),
             value: Value::BigInt(4096),
         }],
         None,
@@ -142,7 +142,7 @@ fn update_widening_bounds_keeps_results_correct() {
         VertexId::try_from_int64(42).expect("test vertex id"),
         Tag::new(
             "Node".to_string(),
-            vec![("payload".to_string(), Value::BigInt(99_999))]
+            vec![("payload".into(), Value::BigInt(99_999))]
                 .into_iter()
                 .collect(),
         ),
@@ -157,7 +157,7 @@ fn update_widening_bounds_keeps_results_correct() {
     let high = drain_with_predicate(
         &storage,
         vec![ScanPredicate::ColumnRange {
-            column: "payload".to_string(),
+            column: "payload".into(),
             lower: Some(Value::BigInt(50_000)),
             upper: None,
             include_lower: true,
@@ -170,7 +170,7 @@ fn update_widening_bounds_keeps_results_correct() {
     let mid = drain_with_predicate(
         &storage,
         vec![ScanPredicate::ColumnRange {
-            column: "payload".to_string(),
+            column: "payload".into(),
             lower: Some(Value::BigInt(100)),
             upper: Some(Value::BigInt(200)),
             include_lower: true,
@@ -188,7 +188,7 @@ fn limit_applies_after_zone_pruning() {
     let rows = drain_with_predicate(
         &storage,
         vec![ScanPredicate::ColumnRange {
-            column: "value".to_string(),
+            column: "value".into(),
             lower: Some(Value::BigInt(0)),
             upper: Some(Value::BigInt(100)),
             include_lower: true,
@@ -206,28 +206,28 @@ fn limit_applies_after_zone_pruning() {
 fn merged_ranges_tighten_conjunctive_bounds() {
     let predicates = vec![
         ScanPredicate::ColumnRange {
-            column: "a".to_string(),
+            column: "a".into(),
             lower: Some(Value::BigInt(0)),
             upper: Some(Value::BigInt(100)),
             include_lower: true,
             include_upper: true,
         },
         ScanPredicate::ColumnRange {
-            column: "a".to_string(),
+            column: "a".into(),
             lower: Some(Value::BigInt(50)),
             upper: Some(Value::BigInt(200)),
             include_lower: false,
             include_upper: false,
         },
         ScanPredicate::ColumnEqual {
-            column: "b".to_string(),
+            column: "b".into(),
             value: Value::BigInt(7),
         },
     ];
     let ranges = ScanPredicate::merged_ranges(&predicates);
     assert_eq!(ranges.len(), 2);
 
-    let ra = ranges.iter().find(|r| r.column == "a").expect("range a");
+    let ra = ranges.iter().find(|r| &*r.column == "a").expect("range a");
     match (&ra.lower, &ra.upper) {
         (Some(l), Some(u)) => {
             assert_eq!(*l, Value::BigInt(50));
@@ -238,7 +238,7 @@ fn merged_ranges_tighten_conjunctive_bounds() {
         _ => panic!("expected both bounds"),
     }
 
-    let rb = ranges.iter().find(|r| r.column == "b").expect("range b");
+    let rb = ranges.iter().find(|r| &*r.column == "b").expect("range b");
     assert_eq!(
         (&rb.lower, &rb.upper),
         (&Some(Value::BigInt(7)), &Some(Value::BigInt(7)))

@@ -3,6 +3,7 @@
 use super::create_test_manager;
 use crate::types::*;
 use crate::TransactionErrorKind;
+use std::sync::Arc;
 #[test]
 fn test_savepoint_basic() {
     let manager = create_test_manager();
@@ -89,7 +90,7 @@ fn test_abort_without_sink_executes_undo_against_target() {
         fn revert_delete_vertex_properties(
             &self,
             _label_name: &str,
-            _prop_names: &[String],
+            _prop_names: &[Arc<str>],
         ) -> UndoLogResult<()> {
             Ok(())
         }
@@ -98,7 +99,7 @@ fn test_abort_without_sink_executes_undo_against_target() {
             _src_label: &str,
             _dst_label: &str,
             _edge_label: &str,
-            _prop_names: &[String],
+            _prop_names: &[Arc<str>],
         ) -> UndoLogResult<()> {
             Ok(())
         }
@@ -116,8 +117,8 @@ fn test_abort_without_sink_executes_undo_against_target() {
         fn revert_rename_vertex_properties(
             &self,
             _label_name: &str,
-            _current_names: &[String],
-            _original_names: &[String],
+            _current_names: &[Arc<str>],
+            _original_names: &[Arc<str>],
         ) -> UndoLogResult<()> {
             Ok(())
         }
@@ -126,8 +127,8 @@ fn test_abort_without_sink_executes_undo_against_target() {
             _src_label: &str,
             _dst_label: &str,
             _edge_label: &str,
-            _current_names: &[String],
-            _original_names: &[String],
+            _current_names: &[Arc<str>],
+            _original_names: &[Arc<str>],
         ) -> UndoLogResult<()> {
             Ok(())
         }

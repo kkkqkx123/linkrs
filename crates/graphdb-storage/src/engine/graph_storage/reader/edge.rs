@@ -30,7 +30,7 @@ pub(crate) fn get_edge_projected(
     dst: &VertexId,
     edge_type: &str,
     rank: i64,
-    projection: &[String],
+    projection: &[Arc<str>],
 ) -> StorageResult<Option<Edge>> {
     get_edge_impl(ctx, space, src, dst, edge_type, rank, Some(projection))
 }
@@ -42,7 +42,7 @@ fn get_edge_impl(
     dst: &VertexId,
     edge_type: &str,
     rank: i64,
-    projection: Option<&[String]>,
+    projection: Option<&[Arc<str>]>,
 ) -> StorageResult<Option<Edge>> {
     record_schema_read(ctx, space);
     let space_info = ctx
@@ -113,7 +113,7 @@ fn edge_record_to_edge_with_projection(
     edge_type: &str,
     src_vid: VertexId,
     dst_vid: VertexId,
-    projection: Option<&[String]>,
+    projection: Option<&[Arc<str>]>,
 ) -> Edge {
     match projection {
         Some(projection) => {
@@ -145,7 +145,7 @@ pub(crate) fn get_node_edges_projected(
     node_id: &VertexId,
     direction: EdgeDirection,
     edge_types: &[String],
-    projection: Option<&[String]>,
+    projection: Option<&[Arc<str>]>,
     limit: Option<usize>,
 ) -> StorageResult<Vec<Edge>> {
     record_schema_read(ctx, space);
@@ -830,7 +830,7 @@ pub(crate) fn scan_edges_with_schema(
     let edges = scan_edges_by_type(ctx, space, edge_type)?;
     let mut results = Vec::with_capacity(edges.len());
     for edge in edges {
-        let mut props: Vec<(String, Value)> = edge.props.into_iter().collect();
+        let mut props: Vec<(Arc<str>, Value)> = edge.props.into_iter().collect();
         props.sort_by(|a, b| a.0.cmp(&b.0));
         results.push((edge_info.clone(), serialize_properties(&props)));
     }

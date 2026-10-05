@@ -4,8 +4,9 @@ use crate::vertex::column::zone_map::ZONE_MAP_CHUNK_ROWS;
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
 use std::collections::HashSet;
+use std::sync::Arc;
 
-type ProjectedProps = Vec<(String, Option<Value>)>;
+type ProjectedProps = Vec<(Arc<str>, Option<Value>)>;
 type ProjectedBatch = Vec<Option<ProjectedProps>>;
 
 impl CsrWithProperties {
@@ -22,8 +23,8 @@ impl CsrWithProperties {
         &self,
         edge_id: EdgeId,
         query_ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Option<Vec<(String, Option<Value>)>> {
+        projection: Option<&[std::sync::Arc<str>]>,
+    ) -> Option<Vec<(Arc<str>, Option<Value>)>> {
         let pos = self.mapped_row(edge_id)?;
         let vis = self.visibility.get(pos)?;
         if !vis.is_visible_at(query_ts) {
@@ -34,7 +35,7 @@ impl CsrWithProperties {
                 .into_iter()
                 .map(|(i, name)| {
                     let v = self.property_columns[i].get_at_ts(pos, query_ts);
-                    (name.to_string(), v)
+                    (name.clone(), v)
                 })
                 .collect(),
         )
@@ -46,7 +47,7 @@ impl CsrWithProperties {
         &self,
         edge_id: EdgeId,
         query_ts: Timestamp,
-    ) -> Option<Vec<(String, Option<Value>)>> {
+    ) -> Option<Vec<(Arc<str>, Option<Value>)>> {
         self.get_projected_by_edge_id(edge_id, query_ts, None)
     }
 
@@ -59,24 +60,27 @@ impl CsrWithProperties {
     /// historical filter semantics exactly. The pairs borrow the schema, so
     /// resolution itself allocates no name strings; only materialized output
     /// cells clone their column name.
-    fn resolve_projection<'s>(&'s self, projection: Option<&[String]>) -> Vec<(usize, &'s str)> {
+    fn resolve_projection<'s>(
+        &'s self,
+        projection: Option<&[std::sync::Arc<str>]>,
+    ) -> Vec<(usize, &'s Arc<str>)> {
         match projection {
             None => self
                 .property_schema
                 .iter()
                 .enumerate()
-                .map(|(i, s)| (i, &*s.name))
+                .map(|(i, s)| (i, &s.name))
                 .collect(),
             Some(names) => {
                 if names.is_empty() {
                     return Vec::new();
                 }
-                let wanted: HashSet<&str> = names.iter().map(|n| n.as_str()).collect();
+                let wanted: HashSet<&str> = names.iter().map(|n| n.as_ref()).collect();
                 self.property_schema
                     .iter()
                     .enumerate()
                     .filter(|(_, s)| wanted.contains(&*s.name))
-                    .map(|(i, s)| (i, &*s.name))
+                    .map(|(i, s)| (i, &s.name))
                     .collect()
             }
         }
@@ -93,8 +97,8 @@ impl CsrWithProperties {
         &self,
         edge_id: EdgeId,
         query_ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Option<Vec<(String, Option<Value>)>> {
+        projection: Option<&[std::sync::Arc<str>]>,
+    ) -> Option<Vec<(Arc<str>, Option<Value>)>> {
         if self.inline {
             return None;
         }
@@ -107,7 +111,7 @@ impl CsrWithProperties {
                 .into_iter()
                 .map(|(i, name)| {
                     let v = self.property_columns[i].get_at_ts(pos, query_ts);
-                    (name.to_string(), v)
+                    (name.clone(), v)
                 })
                 .collect(),
         )
@@ -125,7 +129,7 @@ impl CsrWithProperties {
         &self,
         edge_ids: &[EdgeId],
         query_ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[std::sync::Arc<str>]>,
     ) -> ProjectedBatch {
         if self.inline {
             return edge_ids.iter().map(|_| None).collect();
@@ -143,7 +147,7 @@ impl CsrWithProperties {
                         .iter()
                         .map(|(i, name)| {
                             let v = self.property_columns[*i].get_at_ts(pos, query_ts);
-                            (name.to_string(), v)
+                            ((*name).clone(), v)
                         })
                         .collect(),
                 )
@@ -194,7 +198,7 @@ impl CsrWithProperties {
         &self,
         edge_id: EdgeId,
         query_ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[std::sync::Arc<str>]>,
     ) -> StorageResult<Option<ProjectedProps>> {
         if self.inline {
             return Ok(None);
@@ -216,7 +220,7 @@ impl CsrWithProperties {
                         edge_id, name, e
                     ))
                 })?;
-            out.push((name.to_string(), value));
+            out.push((name.clone(), value));
         }
         Ok(Some(out))
     }
@@ -231,7 +235,7 @@ impl CsrWithProperties {
         &self,
         edge_ids: &[EdgeId],
         query_ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[std::sync::Arc<str>]>,
     ) -> StorageResult<ProjectedBatch> {
         if self.inline {
             return Ok(edge_ids.iter().map(|_| None).collect());
@@ -258,24 +262,24 @@ impl CsrWithProperties {
                             edge_id, name, e
                         ))
                     })?;
-                row.push((name.to_string(), value));
+                row.push(((*name).clone(), value));
             }
             out.push(Some(row));
         }
         Ok(out)
     }
-    pub fn read_properties_by_edge_id(&self, edge_id: EdgeId) -> Option<Vec<(String, Value)>> {
+    pub fn read_properties_by_edge_id(&self, edge_id: EdgeId) -> Option<Vec<(Arc<str>, Value)>> {
         if self.inline {
             return None;
         }
         let pos = self.mapped_row(edge_id)?;
-        let result: Vec<(String, Value)> = self
+        let result: Vec<(Arc<str>, Value)> = self
             .property_schema
             .iter()
             .enumerate()
             .filter_map(|(i, s)| {
                 let v = self.property_columns[i].get(pos)?;
-                Some((s.name.to_string(), v))
+                Some((s.name.clone(), v))
             })
             .collect();
         if result.is_empty() {
@@ -488,8 +492,8 @@ impl CsrWithProperties {
         &self,
         edge_ids: &[EdgeId],
         query_ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Vec<(String, crate::cursor::ColumnValues)> {
+        projection: Option<&[std::sync::Arc<str>]>,
+    ) -> Vec<(Arc<str>, crate::cursor::ColumnValues)> {
         use crate::cursor::ColumnValues;
         use graphdb_core::types::DataType;
         if self.inline {
@@ -505,7 +509,7 @@ impl CsrWithProperties {
                 .unwrap_or(DataType::Empty);
             let Some(column) = self.property_columns.get(col_idx) else {
                 out.push((
-                    name.to_string(),
+                    name.clone(),
                     ColumnValues::General(vec![None; edge_ids.len()]),
                 ));
                 continue;
@@ -670,7 +674,7 @@ impl CsrWithProperties {
                 _ => None,
             };
             match typed {
-                Some(values) => out.push((name.to_string(), values)),
+                Some(values) => out.push((name.clone(), values)),
                 None => {
                     let general: Vec<Option<Value>> = edge_ids
                         .iter()
@@ -679,7 +683,7 @@ impl CsrWithProperties {
                                 .and_then(|pos| column.get_at_ts(pos, query_ts))
                         })
                         .collect();
-                    out.push((name.to_string(), ColumnValues::General(general)));
+                    out.push((name.clone(), ColumnValues::General(general)));
                 }
             }
         }

@@ -770,16 +770,16 @@ mod tests {
 
     fn create_test_tables() -> Vec<TableInfo> {
         vec![
-            TableInfo::new("A".to_string(), 1000).with_bit_id(0),
-            TableInfo::new("B".to_string(), 500).with_bit_id(1),
-            TableInfo::new("C".to_string(), 2000).with_bit_id(2),
+            TableInfo::new("A".into(), 1000).with_bit_id(0),
+            TableInfo::new("B".into(), 500).with_bit_id(1),
+            TableInfo::new("C".into(), 2000).with_bit_id(2),
         ]
     }
 
     #[test]
     fn test_single_table() {
         let optimizer = create_test_optimizer();
-        let tables = vec![TableInfo::new("A".to_string(), 1000)];
+        let tables = vec![TableInfo::new("A".into(), 1000)];
         let result = optimizer.optimize_join_order(&tables, &[]);
 
         assert_eq!(result.order.len(), 1);
@@ -791,10 +791,10 @@ mod tests {
     fn test_two_tables() {
         let optimizer = create_test_optimizer();
         let tables = vec![
-            TableInfo::new("A".to_string(), 1000).with_bit_id(0),
-            TableInfo::new("B".to_string(), 500).with_bit_id(1),
+            TableInfo::new("A".into(), 1000).with_bit_id(0),
+            TableInfo::new("B".into(), 500).with_bit_id(1),
         ];
-        let conditions = vec![JoinCondition::new("A".to_string(), "B".to_string())];
+        let conditions = vec![JoinCondition::new("A".into(), "B".to_string())];
 
         let result = optimizer.optimize_join_order(&tables, &conditions);
 
@@ -807,8 +807,8 @@ mod tests {
         let optimizer = create_test_optimizer();
         let tables = create_test_tables();
         let conditions = vec![
-            JoinCondition::new("A".to_string(), "B".to_string()).with_selectivity(0.1),
-            JoinCondition::new("B".to_string(), "C".to_string()).with_selectivity(0.2),
+            JoinCondition::new("A".into(), "B".to_string()).with_selectivity(0.1),
+            JoinCondition::new("B".into(), "C".to_string()).with_selectivity(0.2),
         ];
 
         // Use DP (number of tables <= 8).
@@ -827,16 +827,16 @@ mod tests {
     fn test_dp_cost_matches_reconstructed_order() {
         let optimizer = create_test_optimizer();
         let tables = vec![
-            TableInfo::new("A".to_string(), 10000).with_bit_id(0),
-            TableInfo::new("B".to_string(), 800).with_bit_id(1),
-            TableInfo::new("C".to_string(), 5000).with_bit_id(2),
-            TableInfo::new("D".to_string(), 300).with_bit_id(3),
+            TableInfo::new("A".into(), 10000).with_bit_id(0),
+            TableInfo::new("B".into(), 800).with_bit_id(1),
+            TableInfo::new("C".into(), 5000).with_bit_id(2),
+            TableInfo::new("D".into(), 300).with_bit_id(3),
         ];
         let conditions = vec![
-            JoinCondition::new("A".to_string(), "B".to_string()).with_selectivity(0.1),
-            JoinCondition::new("B".to_string(), "C".to_string()).with_selectivity(0.05),
-            JoinCondition::new("C".to_string(), "D".to_string()).with_selectivity(0.2),
-            JoinCondition::new("A".to_string(), "D".to_string()).with_selectivity(0.5),
+            JoinCondition::new("A".into(), "B".to_string()).with_selectivity(0.1),
+            JoinCondition::new("B".into(), "C".to_string()).with_selectivity(0.05),
+            JoinCondition::new("C".into(), "D".to_string()).with_selectivity(0.2),
+            JoinCondition::new("A".into(), "D".to_string()).with_selectivity(0.5),
         ];
 
         let result = optimizer.optimize_join_order(&tables, &conditions);
@@ -874,7 +874,7 @@ mod tests {
 
     #[test]
     fn test_table_with_selectivity() {
-        let table = TableInfo::new("A".to_string(), 1000)
+        let table = TableInfo::new("A".into(), 1000)
             .with_selectivity(0.5)
             .with_index(true);
 
@@ -886,13 +886,13 @@ mod tests {
     fn test_cost_of_order_matches_dp_total_and_rejects_non_permutation() {
         let optimizer = create_test_optimizer();
         let tables = vec![
-            TableInfo::new("A".to_string(), 10000).with_bit_id(0),
-            TableInfo::new("B".to_string(), 800).with_bit_id(1),
-            TableInfo::new("C".to_string(), 5000).with_bit_id(2),
+            TableInfo::new("A".into(), 10000).with_bit_id(0),
+            TableInfo::new("B".into(), 800).with_bit_id(1),
+            TableInfo::new("C".into(), 5000).with_bit_id(2),
         ];
         let conditions = vec![
-            JoinCondition::new("A".to_string(), "B".to_string()).with_selectivity(0.1),
-            JoinCondition::new("B".to_string(), "C".to_string()).with_selectivity(0.05),
+            JoinCondition::new("A".into(), "B".to_string()).with_selectivity(0.1),
+            JoinCondition::new("B".into(), "C".to_string()).with_selectivity(0.05),
         ];
 
         let result = optimizer.optimize_join_order(&tables, &conditions);
@@ -930,7 +930,7 @@ mod tests {
 
     #[test]
     fn test_condition_with_selectivity() {
-        let condition = JoinCondition::new("A".to_string(), "B".to_string()).with_selectivity(0.25);
+        let condition = JoinCondition::new("A".into(), "B".to_string()).with_selectivity(0.25);
 
         assert_eq!(condition.selectivity, 0.25);
     }
@@ -939,7 +939,7 @@ mod tests {
     fn test_to_decision() {
         let optimizer = create_test_optimizer();
         let tables = create_test_tables();
-        let conditions = vec![JoinCondition::new("A".to_string(), "B".to_string())];
+        let conditions = vec![JoinCondition::new("A".into(), "B".to_string())];
 
         let result = optimizer.optimize_join_order(&tables, &conditions);
         let decision = optimizer.to_decision(&result);

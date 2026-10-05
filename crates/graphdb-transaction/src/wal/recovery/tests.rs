@@ -48,7 +48,7 @@ impl RecoveryApplier for RecordingApplier {
         &self,
         label: LabelId,
         vid: VertexId,
-        _properties: &[(String, Value)],
+        _properties: &[(std::sync::Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
         self.replayed_vertices
@@ -109,7 +109,7 @@ fn write_insert_vertex_wal(
     let redo = InsertVertexRedo {
         label,
         vid: VertexId::try_from_int64(vid).expect("test vertex id"),
-        properties: vec![("name".to_string(), Value::string(name))],
+        properties: vec![("name".into(), Value::string(name))],
     };
 
     let payload = to_allocvec(&redo).map_err(|e| StorageError::serialize_error(e.to_string()))?;
@@ -147,7 +147,7 @@ fn test_recover_with_start_lsn_skips_checkpointed_entries() {
     let first_redo = InsertVertexRedo {
         label: 1,
         vid: VertexId::try_from_int64(1001).expect("test vertex id"),
-        properties: vec![("name".to_string(), Value::string("Alice"))],
+        properties: vec![("name".into(), Value::string("Alice"))],
     };
     let first_payload = to_allocvec(&first_redo).expect("Failed to serialize first redo");
     let first_lsn = writer
@@ -167,7 +167,7 @@ fn test_recover_with_start_lsn_skips_checkpointed_entries() {
     let second_redo = InsertVertexRedo {
         label: 1,
         vid: VertexId::try_from_int64(1002).expect("test vertex id"),
-        properties: vec![("name".to_string(), Value::string("Bob"))],
+        properties: vec![("name".into(), Value::string("Bob"))],
     };
     let second_payload = to_allocvec(&second_redo).expect("Failed to serialize second redo");
     let second_lsn = writer
@@ -259,7 +259,7 @@ fn recovery_ignores_uncommitted_tail() {
     let redo = InsertVertexRedo {
         label: 1,
         vid: VertexId::try_from_int64(1002).expect("test vertex id"),
-        properties: vec![("name".to_string(), Value::string("uncommitted"))],
+        properties: vec![("name".into(), Value::string("uncommitted"))],
     };
     writer
         .append_entry(

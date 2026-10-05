@@ -10,7 +10,7 @@ fn test_insert_and_get() {
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
 
     assert!(table.has_edge(0, 1, 0, 100));
@@ -33,10 +33,10 @@ fn test_rank_distinguishes_parallel_edges() {
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     table
-        .insert_edge(0, 1, 10, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 10, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table
-        .insert_edge(0, 1, 20, &[("weight".to_string(), Value::Double(2.0))], 100)
+        .insert_edge(0, 1, 20, &[("weight".into(), Value::Double(2.0))], 100)
         .unwrap();
 
     let rank_10 = table.get_edge(0, 1, 10, 100).unwrap();
@@ -87,7 +87,7 @@ fn test_delete_marks_properties_deleted() {
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
 
     let dst_key = EdgeTable::edge_endpoint_key(1, 0);
@@ -105,7 +105,7 @@ fn test_revert_delete_restores_properties() {
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
 
     let dst_key = EdgeTable::edge_endpoint_key(1, 0);
@@ -123,7 +123,7 @@ fn test_revert_delete_restores_properties() {
     assert_eq!(
         edge.properties
             .iter()
-            .find(|(k, _)| k == "weight")
+            .find(|(k, _)| &**k == "weight")
             .map(|(_, v)| v),
         Some(&Value::Double(1.5))
     );
@@ -134,7 +134,7 @@ fn test_edge_property_update_keeps_current_value_only() {
     let schema = create_test_schema();
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     assert!(table
         .update_edge_property(0, 1, 0, "weight", &Value::Double(2.0), 200)
@@ -144,7 +144,7 @@ fn test_edge_property_update_keeps_current_value_only() {
         current
             .properties
             .iter()
-            .find(|(k, _)| k == "weight")
+            .find(|(k, _)| &**k == "weight")
             .map(|(_, v)| v),
         Some(&Value::Double(2.0))
     );
@@ -162,7 +162,7 @@ fn test_failed_insert_leaves_no_orphan_copies() {
         crate::edge::StorageDirection::OutOnly
     );
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
     assert!(table.get_edge(0, 1, 0, 100).is_some());
     assert!(table.merged_in_nbrs_with_limit(1, 100, 16).is_empty());
@@ -173,7 +173,7 @@ fn test_erase_edge_removes_all_copies_idempotently() {
     let schema = create_test_schema();
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
         .unwrap();
     assert!(table.erase_edge(0, 1, 0, 100));
     assert!(table.mvcc.creation_ts_of(EdgeId(0)).is_none());
@@ -322,7 +322,7 @@ fn test_in_only_table_serves_stored_leg_everywhere() {
     assert!(table.direction_note(false).is_none());
 
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(2.0))], 100)
         .unwrap();
     assert!(table.has_edge(0, 1, 0, 100));
     assert_eq!(table.edge_count(), 1);
@@ -385,18 +385,18 @@ fn batch_projection_matches_point_lookups() {
     use graphdb_core::types::DataType;
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "knows".to_string(),
+        label_name: "knows".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![
             StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
             },
             StoragePropertyDef {
-                name: "score".to_string(),
+                name: "score".into(),
                 data_type: DataType::Int,
                 nullable: true,
                 default_value: None,
@@ -414,17 +414,17 @@ fn batch_projection_matches_point_lookups() {
             1,
             0,
             &[
-                ("weight".to_string(), Value::Double(1.5)),
-                ("score".to_string(), Value::Int(7)),
+                ("weight".into(), Value::Double(1.5)),
+                ("score".into(), Value::Int(7)),
             ],
             100,
         )
         .unwrap();
     table
-        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
+        .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.5))], 100)
         .unwrap();
     table
-        .insert_edge(0, 3, 0, &[("weight".to_string(), Value::Double(3.5))], 100)
+        .insert_edge(0, 3, 0, &[("weight".into(), Value::Double(3.5))], 100)
         .unwrap();
     assert!(table.delete_edge(0, 2, 0, 300).unwrap());
 
@@ -451,10 +451,10 @@ fn batch_projection_matches_point_lookups() {
     let subset = table.properties_for_edge_projected_columnar_batch_assume_visible(
         &ids,
         400,
-        Some(&["score".to_string()]),
+        Some(&["score".into()]),
     );
     assert_eq!(subset.len(), 2);
-    assert!(subset[0].iter().any(|(name, _)| name == "score"));
+    assert!(subset[0].iter().any(|(name, _)| &**name == "score"));
     assert!(subset[1].is_empty());
 
     // Empty projection decodes nothing; unmapped edges decode to empty,
@@ -476,7 +476,7 @@ fn predicate_prune_stays_sound_across_stats_rebuild() {
     let schema = create_test_schema();
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(5.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(5.0))], 100)
         .unwrap();
     table.properties.refresh_column_stats();
     // Overwrite then rebuild: bounds must keep the old extreme so the
@@ -487,7 +487,7 @@ fn predicate_prune_stays_sound_across_stats_rebuild() {
     table.properties.refresh_column_stats();
 
     let covering_old = ScanPredicate::ColumnRange {
-        column: "weight".to_string(),
+        column: "weight".into(),
         lower: Some(Value::Double(0.0)),
         upper: Some(Value::Double(10.0)),
         include_lower: true,
@@ -507,7 +507,7 @@ fn predicate_prune_stays_sound_across_stats_rebuild() {
     assert!(new_hits.is_empty());
 
     let covering_new = ScanPredicate::ColumnRange {
-        column: "weight".to_string(),
+        column: "weight".into(),
         lower: Some(Value::Double(50.0)),
         upper: Some(Value::Double(150.0)),
         include_lower: true,
@@ -520,7 +520,7 @@ fn predicate_prune_stays_sound_across_stats_rebuild() {
 
     // Disjoint range exercises the early return with candidates too.
     let disjoint = ScanPredicate::ColumnRange {
-        column: "weight".to_string(),
+        column: "weight".into(),
         lower: Some(Value::Double(1000.0)),
         upper: Some(Value::Double(2000.0)),
         include_lower: true,
@@ -547,14 +547,14 @@ fn chunk_zone_skip_matches_full_walk_across_chunks() {
                 0,
                 dst,
                 0,
-                &[("weight".to_string(), Value::Double(dst as f64))],
+                &[("weight".into(), Value::Double(dst as f64))],
                 100,
             )
             .unwrap();
     }
     table.properties.refresh_column_stats();
     let selective = ScanPredicate::ColumnRange {
-        column: "weight".to_string(),
+        column: "weight".into(),
         lower: Some(Value::Double(2000.0)),
         upper: Some(Value::Double(2100.0)),
         include_lower: true,
@@ -572,7 +572,7 @@ fn chunk_zone_skip_matches_full_walk_across_chunks() {
             .expect("hit owns a row");
         let (_, value) = props
             .iter()
-            .find(|(name, _)| name == "weight")
+            .find(|(name, _)| &**name == "weight")
             .expect("weight projected");
         match value {
             Some(Value::Double(v)) => assert!((2000.0..=2100.0).contains(v)),

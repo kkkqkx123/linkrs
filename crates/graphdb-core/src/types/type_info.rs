@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn test_struct_type_info_roundtrip() {
         let info = TypeInfo::struct_(vec![
-            ("city".to_string(), DataType::String),
+            ("city".into(), DataType::String),
             (
                 "geo".to_string(),
                 DataType::Struct(Arc::new(StructTypeInfo::new(vec![(

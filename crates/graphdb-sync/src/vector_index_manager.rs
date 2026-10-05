@@ -1398,12 +1398,16 @@ impl VectorIndexManager {
                         .data
                         .payload
                         .into_iter()
-                        .filter_map(|(k, v)| serde_json::to_value(&v).ok().map(|json| (k, json)))
+                        .filter_map(|(k, v)| {
+                            serde_json::to_value(&v)
+                                .ok()
+                                .map(|json| (k.to_string(), json))
+                        })
                         .collect();
 
                     if let Some(gid) = self.group_id_for(&ctx.location) {
                         json_payload.insert(
-                            "group_id".to_string(),
+                            "group_id".into(),
                             serde_json::to_value(gid).unwrap_or(serde_json::Value::Null),
                         );
                     }

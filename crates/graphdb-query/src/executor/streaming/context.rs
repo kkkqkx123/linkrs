@@ -489,8 +489,8 @@ mod tests {
         let layout = Arc::new(SlotLayout::from_names(&col_names));
         let mut context = ValueRowContext::new(row, layout);
 
-        context.set_variable("var1".to_string(), Value::string("hello"));
-        context.set_variable("var2".to_string(), Value::Int(42));
+        context.set_variable("var1".into(), Value::string("hello"));
+        context.set_variable("var2".into(), Value::Int(42));
 
         assert_eq!(context.get_variable("var1"), Some(Value::string("hello")));
         assert_eq!(context.get_variable("var2"), Some(Value::Int(42)));

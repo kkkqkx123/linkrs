@@ -103,6 +103,6 @@ impl PropertyDef {
 
 impl Default for PropertyDef {
     fn default() -> Self {
-        Self::new("default".to_string(), DataType::String)
+        Self::new("default".into(), DataType::String)
     }
 }

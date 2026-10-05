@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use graphdb_core::types::{Timestamp, VertexId};
 use graphdb_core::wal::redo::{DeleteVertexPropsRedo, InsertVertexRedo, UpdateVertexPropRedo};
@@ -258,7 +259,7 @@ fn stage_vertex_row_single(
     let tag = &vertex.tag;
     let label_id = tag_label_id(ctx, space, &tag.name)?
         .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag.name)))?;
-    let props: Vec<(String, Value)> = tag
+    let props: Vec<(Arc<str>, Value)> = tag
         .properties
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -337,7 +338,7 @@ pub(crate) fn update_vertex(
     // key mirror, into the write set. Restating the mirror changes nothing
     // and is skipped; a divergent key is rejected by the update entry
     // (table layer offline, staging validation online).
-    let pk_mirror: Option<(String, DataType, Value)> =
+    let pk_mirror: Option<(Arc<str>, DataType, Value)> =
         ctx.data_store().with_vertex_tables(|tables| {
             tables.get(&label_id).and_then(|table| {
                 let schema = table.schema();
@@ -357,7 +358,7 @@ pub(crate) fn update_vertex(
         RoutedVertexId::Text(id_str) => ctx.get_vertex(label_id, &id_str, ts),
     };
 
-    let mut merged_props: HashMap<String, Value> = current_record
+    let mut merged_props: HashMap<Arc<str>, Value> = current_record
         .as_ref()
         .map(|record| record.properties.iter().cloned().collect())
         .unwrap_or_default();
@@ -403,7 +404,7 @@ pub(crate) fn update_vertex(
         }
     }
 
-    let props: Vec<(String, Value)> = merged_props.into_iter().collect();
+    let props: Vec<(Arc<str>, Value)> = merged_props.into_iter().collect();
     let vid_value = Value::from(vid);
     if online {
         // The refreshed row values must not collide with another vertex's
@@ -483,7 +484,7 @@ pub(crate) fn update_vertex_replace(
         ctx.abort_write_timestamp(ts);
         error
     };
-    let pk_mirror: Option<(String, DataType, Value)> =
+    let pk_mirror: Option<(Arc<str>, DataType, Value)> =
         ctx.data_store().with_vertex_tables(|tables| {
             tables.get(&label_id).and_then(|table| {
                 let schema = table.schema();
@@ -502,7 +503,7 @@ pub(crate) fn update_vertex_replace(
         RoutedVertexId::Int(id_int) => ctx.get_vertex_by_i64(label_id, id_int, ts),
         RoutedVertexId::Text(id_str) => ctx.get_vertex(label_id, &id_str, ts),
     };
-    let current_props: HashMap<String, Value> = current_record
+    let current_props: HashMap<Arc<str>, Value> = current_record
         .as_ref()
         .map(|record| record.properties.iter().cloned().collect())
         .unwrap_or_default();
@@ -512,14 +513,14 @@ pub(crate) fn update_vertex_replace(
             StorageError::not_found(format!("Vertex not found: {}", vid)),
         ));
     }
-    let mut new_props: HashMap<String, Value> = HashMap::new();
+    let mut new_props: HashMap<Arc<str>, Value> = HashMap::new();
     for (prop_name, value) in &tag.properties {
         if Some(prop_name) == pk_name.as_ref() {
             continue;
         }
         new_props.insert(prop_name.clone(), value.clone());
     }
-    let mut deleted: Vec<String> = current_props
+    let mut deleted: Vec<Arc<str>> = current_props
         .keys()
         .filter(|name| !new_props.contains_key(*name))
         .filter(|name| Some(*name) != pk_name.as_ref())
@@ -597,7 +598,7 @@ pub(crate) fn update_vertex_replace(
             return Err(unwind(ctx, error));
         }
     }
-    let props: Vec<(String, Value)> = new_props.into_iter().collect();
+    let props: Vec<(Arc<str>, Value)> = new_props.into_iter().collect();
     let vid_value = Value::from(vid);
     if online {
         if let Err(error) = super::index_maintenance::check_vertex_unique_indexes(

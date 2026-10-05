@@ -157,7 +157,7 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         space: &str,
         tag: &str,
         id: &VertexId,
-        projection: &[String],
+        projection: &[std::sync::Arc<str>],
     ) -> Result<Option<Vertex>, StorageError> {
         self.timed_read(|| self.inner.get_vertex_projected(space, tag, id, projection))
     }
@@ -236,7 +236,7 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         dst: &VertexId,
         edge_type: &str,
         rank: i64,
-        projection: &[String],
+        projection: &[Arc<str>],
     ) -> Result<Option<Edge>, StorageError> {
         self.timed_read(|| {
             self.inner
@@ -250,7 +250,7 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         node_id: &VertexId,
         direction: EdgeDirection,
         edge_types: &[String],
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
         limit: Option<usize>,
     ) -> Result<Vec<Edge>, StorageError> {
         self.timed_read(|| {
@@ -642,15 +642,15 @@ impl<S: graphdb_transaction::UndoTarget + StorageClient> graphdb_transaction::Un
         fn delete_edge_type(&self, edge_key: graphdb_core::types::EdgeKey) -> graphdb_transaction::undo_log::UndoLogResult<()>;
         fn delete_vertex(&self, vertex: graphdb_core::types::VertexIdentifier, ts: graphdb_transaction::wal::Timestamp) -> graphdb_transaction::undo_log::UndoLogResult<()>;
         fn delete_edge(&self, edge_ctx: graphdb_core::types::EdgeDeletionContext) -> graphdb_transaction::undo_log::UndoLogResult<()>;
-        fn restore_edge(&self, edge: graphdb_core::types::EdgeIdentifier, properties: Vec<(String, graphdb_core::Value)>, ts: graphdb_transaction::wal::Timestamp) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn restore_edge(&self, edge: graphdb_core::types::EdgeIdentifier, properties: Vec<(std::sync::Arc<str>, graphdb_core::Value)>, ts: graphdb_transaction::wal::Timestamp) -> graphdb_transaction::undo_log::UndoLogResult<()>;
         fn undo_update_edge_property(&self, edge_id: graphdb_core::types::EdgeIdentifier, col_id: graphdb_core::types::ColumnId, value: graphdb_core::Value, ts: graphdb_transaction::wal::Timestamp) -> graphdb_transaction::undo_log::UndoLogResult<()>;
         fn revert_delete_edge(&self, edge_ctx: graphdb_core::types::EdgeDeletionContext) -> graphdb_transaction::undo_log::UndoLogResult<()>;
-        fn revert_delete_vertex_properties(&self, label_name: &str, prop_names: &[String]) -> graphdb_transaction::undo_log::UndoLogResult<()>;
-        fn revert_delete_edge_properties(&self, src_label: &str, dst_label: &str, edge_label: &str, prop_names: &[String]) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn revert_delete_vertex_properties(&self, label_name: &str, prop_names: &[Arc<str>]) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn revert_delete_edge_properties(&self, src_label: &str, dst_label: &str, edge_label: &str, prop_names: &[Arc<str>]) -> graphdb_transaction::undo_log::UndoLogResult<()>;
         fn revert_delete_vertex_label(&self, label_name: &str) -> graphdb_transaction::undo_log::UndoLogResult<()>;
         fn revert_delete_edge_label(&self, src_label: &str, dst_label: &str, edge_label: &str) -> graphdb_transaction::undo_log::UndoLogResult<()>;
-        fn revert_rename_vertex_properties(&self, label_name: &str, current_names: &[String], original_names: &[String]) -> graphdb_transaction::undo_log::UndoLogResult<()>;
-        fn revert_rename_edge_properties(&self, src_label: &str, dst_label: &str, edge_label: &str, current_names: &[String], original_names: &[String]) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn revert_rename_vertex_properties(&self, label_name: &str, current_names: &[Arc<str>], original_names: &[Arc<str>]) -> graphdb_transaction::undo_log::UndoLogResult<()>;
+        fn revert_rename_edge_properties(&self, src_label: &str, dst_label: &str, edge_label: &str, current_names: &[Arc<str>], original_names: &[Arc<str>]) -> graphdb_transaction::undo_log::UndoLogResult<()>;
         fn staged_write_mark(&self, txn_id: graphdb_core::types::TransactionId) -> Option<graphdb_core::types::StagedWriteMark>;
         fn rollback_staged_writes(&self, txn_id: graphdb_core::types::TransactionId, mark: graphdb_core::types::StagedWriteMark) -> graphdb_transaction::undo_log::UndoLogResult<()>;
     );

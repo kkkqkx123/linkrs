@@ -445,8 +445,9 @@ fn test_update_vertex_indexes() {
     assert_ok(get_storage(&storage).create_tag_index("test_space", &index));
 
     let vertex_id = VertexId::try_from_int64(1).expect("test vertex id");
-    let mut props = std::collections::HashMap::new();
-    props.insert("name".to_string(), Value::string("Alice"));
+    let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
+        std::collections::HashMap::new();
+    props.insert(std::sync::Arc::from("name"), Value::string("Alice"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
     let vertex = Vertex::new(vertex_id, tag);
 
@@ -527,8 +528,9 @@ fn test_delete_edge_indexes() {
     assert_ok(get_storage(&storage).insert_vertex("test_space", vertex2));
 
     let edge_type = "KNOWS";
-    let mut props = std::collections::HashMap::new();
-    props.insert("since".to_string(), Value::string("2024-01-01"));
+    let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
+        std::collections::HashMap::new();
+    props.insert(std::sync::Arc::from("since"), Value::string("2024-01-01"));
     let edge = Edge::new(src, dst, edge_type.to_string(), 0, props);
 
     assert_ok(get_storage(&storage).insert_edge("test_space", edge));
@@ -595,8 +597,9 @@ fn test_index_exact_query() {
     ];
 
     for (vid, name) in &vertices {
-        let mut props = std::collections::HashMap::new();
-        props.insert("name".to_string(), name.clone());
+        let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
+            std::collections::HashMap::new();
+        props.insert(std::sync::Arc::from("name"), name.clone());
         let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
         let vertex = Vertex::new(*vid, tag);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
@@ -658,8 +661,9 @@ fn test_index_query_multiple_matches() {
     ];
 
     for (vid, age) in &vertices {
-        let mut props = std::collections::HashMap::new();
-        props.insert("age".to_string(), age.clone());
+        let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
+            std::collections::HashMap::new();
+        props.insert(std::sync::Arc::from("age"), age.clone());
         let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
         let vertex = Vertex::new(*vid, tag);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
@@ -710,8 +714,9 @@ fn test_index_query_no_match() {
     assert_ok(get_storage(&storage).create_tag_index("test_space", &index));
 
     let vertex_id = VertexId::try_from_int64(1).expect("test vertex id");
-    let mut props = std::collections::HashMap::new();
-    props.insert("name".to_string(), Value::string("Alice"));
+    let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
+        std::collections::HashMap::new();
+    props.insert(std::sync::Arc::from("name"), Value::string("Alice"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
     let vertex = Vertex::new(vertex_id, tag);
 
@@ -856,9 +861,10 @@ fn test_composite_index() {
     ];
 
     for (vid, name, age) in &vertices {
-        let mut props = std::collections::HashMap::new();
-        props.insert("name".to_string(), name.clone());
-        props.insert("age".to_string(), age.clone());
+        let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
+            std::collections::HashMap::new();
+        props.insert(std::sync::Arc::from("name"), name.clone());
+        props.insert(std::sync::Arc::from("age"), age.clone());
         let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
         let vertex = Vertex::new(*vid, tag);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
@@ -1008,8 +1014,9 @@ fn test_index_range_query_with_boundaries() {
     ];
 
     for (vid, age) in &vertices {
-        let mut props = std::collections::HashMap::new();
-        props.insert("age".to_string(), age.clone());
+        let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
+            std::collections::HashMap::new();
+        props.insert(std::sync::Arc::from("age"), age.clone());
         let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
         let vertex = Vertex::new(*vid, tag);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
@@ -1090,8 +1097,9 @@ fn test_scan_type_unique() {
     ];
 
     for (vid, name) in &vertices {
-        let mut props = std::collections::HashMap::new();
-        props.insert("name".to_string(), name.clone());
+        let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
+            std::collections::HashMap::new();
+        props.insert(std::sync::Arc::from("name"), name.clone());
         let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
         let vertex = Vertex::new(*vid, tag);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
@@ -1143,8 +1151,9 @@ fn test_scan_type_range() {
 
     // Insert data for different ages
     for age in [20, 25, 30, 35, 40] {
-        let mut props = std::collections::HashMap::new();
-        props.insert("age".to_string(), Value::Int(age));
+        let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
+            std::collections::HashMap::new();
+        props.insert(std::sync::Arc::from("age"), Value::Int(age));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
         let vertex = Vertex::new(
             VertexId::try_from_int64(age as i64).expect("test vertex id"),
@@ -1195,8 +1204,12 @@ fn test_scan_type_full() {
 
     // Insert multiple pieces of data
     for i in 1..=5 {
-        let mut props = std::collections::HashMap::new();
-        props.insert("name".to_string(), Value::string(format!("Person{}", i)));
+        let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
+            std::collections::HashMap::new();
+        props.insert(
+            std::sync::Arc::from("name"),
+            Value::string(format!("Person{}", i)),
+        );
         let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
         let vertex = Vertex::new(
             VertexId::try_from_int64(i as i64).expect("test vertex id"),

@@ -388,9 +388,9 @@ mod tests {
         std::fs::create_dir_all(&base_dir).expect("create temp dir should succeed");
 
         let storage = UserStorage::new();
-        let alice = UserInfo::new("alice".to_string(), "secret".to_string())
+        let alice = UserInfo::new("alice".into(), "secret".to_string())
             .expect("UserInfo::new should succeed");
-        let bob = UserInfo::new("bob".to_string(), "password".to_string())
+        let bob = UserInfo::new("bob".into(), "password".to_string())
             .expect("UserInfo::new should succeed")
             .with_locked(true)
             .with_max_queries_per_hour(12);

@@ -285,13 +285,16 @@ impl VectorApi {
         };
         let vector = point.vector.clone();
         let payload = point.payload.clone().unwrap_or_default();
-        let mut properties = Vec::new();
+        let mut properties: Vec<(Arc<str>, graphdb_core::Value)> = Vec::new();
         for (k, v) in payload {
             if let Ok(val) = serde_json::from_value::<graphdb_core::Value>(v) {
-                properties.push((k, val));
+                properties.push((Arc::from(k.as_str()), val));
             }
         }
-        properties.push((field.clone(), graphdb_core::Value::vector(vector)));
+        properties.push((
+            Arc::from(field.as_str()),
+            graphdb_core::Value::vector(vector),
+        ));
         let vertex_id = graphdb_core::Value::string(point.id.to_string());
         manager
             .on_vertex_change_with_txn(
@@ -329,13 +332,16 @@ impl VectorApi {
         for point in points {
             let vector = point.vector.clone();
             let payload = point.payload.clone().unwrap_or_default();
-            let mut properties = Vec::new();
+            let mut properties: Vec<(Arc<str>, graphdb_core::Value)> = Vec::new();
             for (k, v) in payload {
                 if let Ok(val) = serde_json::from_value::<graphdb_core::Value>(v) {
-                    properties.push((k, val));
+                    properties.push((Arc::from(k.as_str()), val));
                 }
             }
-            properties.push((field.clone(), graphdb_core::Value::vector(vector)));
+            properties.push((
+                Arc::from(field.as_str()),
+                graphdb_core::Value::vector(vector),
+            ));
             let vertex_id = graphdb_core::Value::string(point.id.to_string());
             manager
                 .on_vertex_change_with_txn(

@@ -114,22 +114,20 @@ mod tests {
     fn registration_updates_names_counters_tables_and_reverse_index() {
         let catalog = GraphDataStore::new();
         let person = catalog
-            .register_vertex_type("Person".to_string(), None, |label| {
+            .register_vertex_type("Person".into(), None, |label| {
                 Ok(vertex_table(label, "Person"))
             })
             .expect("vertex registration should succeed");
         let company = catalog
-            .register_vertex_type("Company".to_string(), Some(7), |label| {
+            .register_vertex_type("Company".into(), Some(7), |label| {
                 Ok(vertex_table(label, "Company"))
             })
             .expect("explicit vertex registration should succeed");
         let next = catalog
-            .register_vertex_type("City".to_string(), None, |label| {
-                Ok(vertex_table(label, "City"))
-            })
+            .register_vertex_type("City".into(), None, |label| Ok(vertex_table(label, "City")))
             .expect("counter should advance beyond explicit labels");
         let works_at = catalog
-            .register_edge_type("WORKS_AT".to_string(), None, person, company, |label| {
+            .register_edge_type("WORKS_AT".into(), None, person, company, |label| {
                 Ok(edge_table(label, person, company, "WORKS_AT"))
             })
             .expect("edge registration should succeed");
@@ -148,17 +146,17 @@ mod tests {
     fn dropping_vertex_atomically_removes_dependent_edge_entries() {
         let catalog = GraphDataStore::new();
         let person = catalog
-            .register_vertex_type("Person".to_string(), None, |label| {
+            .register_vertex_type("Person".into(), None, |label| {
                 Ok(vertex_table(label, "Person"))
             })
             .expect("vertex registration should succeed");
         let company = catalog
-            .register_vertex_type("Company".to_string(), None, |label| {
+            .register_vertex_type("Company".into(), None, |label| {
                 Ok(vertex_table(label, "Company"))
             })
             .expect("vertex registration should succeed");
         catalog
-            .register_edge_type("WORKS_AT".to_string(), None, person, company, |label| {
+            .register_edge_type("WORKS_AT".into(), None, person, company, |label| {
                 Ok(edge_table(label, person, company, "WORKS_AT"))
             })
             .expect("edge registration should succeed");
@@ -179,7 +177,7 @@ mod tests {
     fn concurrent_partition_creation_registers_one_reverse_index_entry() {
         let catalog = Arc::new(GraphDataStore::new());
         let edge_label = catalog
-            .register_edge_type("REL".to_string(), None, 0, 0, |label| {
+            .register_edge_type("REL".into(), None, 0, 0, |label| {
                 Ok(edge_table(label, 0, 0, "REL"))
             })
             .expect("template edge registration should succeed");

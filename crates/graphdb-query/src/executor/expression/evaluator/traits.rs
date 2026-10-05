@@ -386,7 +386,7 @@ mod tests {
     fn test_vertex() -> Value {
         let tag = Tag::new(
             "person".to_string(),
-            HashMap::from([("name".to_string(), Value::string("Alice"))]),
+            HashMap::from([("name".into(), Value::string("Alice"))]),
         );
         Value::Vertex(Box::new(graphdb_core::vertex_edge_path::Vertex::new(
             VertexId::try_from_int64(1).expect("valid vertex id"),
@@ -564,7 +564,7 @@ mod tests {
 
     #[test]
     fn evaluate_label_tag_property_accesses_vertex_property() {
-        let mut ctx = context().add_variable("n".to_string(), test_vertex());
+        let mut ctx = context().add_variable("n".into(), test_vertex());
         // Dynamic tag access: (n).name
         let expr = Expression::label_tag_property(Expression::variable("n"), "name");
         let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("tag property");

@@ -9,7 +9,7 @@ fn test_string_id_get_node_edges_in() {
         VertexId::try_from_string("a").expect("test vertex id"),
         Tag::new(
             "Node".to_string(),
-            vec![("name".to_string(), Value::string("A"))]
+            vec![("name".into(), Value::string("A"))]
                 .into_iter()
                 .collect(),
         ),
@@ -18,7 +18,7 @@ fn test_string_id_get_node_edges_in() {
         VertexId::try_from_string("b").expect("test vertex id"),
         Tag::new(
             "Node".to_string(),
-            vec![("name".to_string(), Value::string("B"))]
+            vec![("name".into(), Value::string("B"))]
                 .into_iter()
                 .collect(),
         ),
@@ -27,7 +27,7 @@ fn test_string_id_get_node_edges_in() {
         VertexId::try_from_string("c").expect("test vertex id"),
         Tag::new(
             "Node".to_string(),
-            vec![("name".to_string(), Value::string("C"))]
+            vec![("name".into(), Value::string("C"))]
                 .into_iter()
                 .collect(),
         ),
@@ -87,7 +87,7 @@ fn test_string_id_get_node_edges_out() {
         VertexId::try_from_string("a").expect("test vertex id"),
         Tag::new(
             "Node".to_string(),
-            vec![("name".to_string(), Value::string("A"))]
+            vec![("name".into(), Value::string("A"))]
                 .into_iter()
                 .collect(),
         ),
@@ -96,7 +96,7 @@ fn test_string_id_get_node_edges_out() {
         VertexId::try_from_string("b").expect("test vertex id"),
         Tag::new(
             "Node".to_string(),
-            vec![("name".to_string(), Value::string("B"))]
+            vec![("name".into(), Value::string("B"))]
                 .into_iter()
                 .collect(),
         ),
@@ -141,7 +141,7 @@ fn test_string_id_scan_edges_by_type() {
         VertexId::try_from_string("x").expect("test vertex id"),
         Tag::new(
             "Node".to_string(),
-            vec![("name".to_string(), Value::string("X"))]
+            vec![("name".into(), Value::string("X"))]
                 .into_iter()
                 .collect(),
         ),
@@ -150,7 +150,7 @@ fn test_string_id_scan_edges_by_type() {
         VertexId::try_from_string("y").expect("test vertex id"),
         Tag::new(
             "Node".to_string(),
-            vec![("name".to_string(), Value::string("Y"))]
+            vec![("name".into(), Value::string("Y"))]
                 .into_iter()
                 .collect(),
         ),

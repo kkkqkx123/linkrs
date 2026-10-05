@@ -52,6 +52,7 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
                         "node".to_string(),
                         vec![("value".to_string(), Value::BigInt(i))]
                             .into_iter()
+                            .map(|(name, value)| (std::sync::Arc::from(name.as_str()), value))
                             .collect(),
                     ),
                 )

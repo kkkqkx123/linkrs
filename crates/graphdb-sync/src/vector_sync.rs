@@ -30,7 +30,7 @@ use vector_search::{CollectionConfig, IndexMetadata, VectorFilter};
 pub struct VectorPointData {
     pub id: String,
     pub vector: Vec<f32>,
-    pub payload: HashMap<String, Value>,
+    pub payload: HashMap<Arc<str>, Value>,
 }
 
 /// Vector change type
@@ -602,12 +602,14 @@ impl VectorSyncCoordinator {
                                 .payload
                                 .into_iter()
                                 .filter_map(|(k, v)| {
-                                    serde_json::to_value(&v).ok().map(|json| (k, json))
+                                    serde_json::to_value(&v)
+                                        .ok()
+                                        .map(|json| (k.to_string(), json))
                                 })
                                 .collect();
                             if let Some(gid) = self.group_id_for(&ctx.location) {
                                 json_payload.insert(
-                                    "group_id".to_string(),
+                                    "group_id".into(),
                                     serde_json::to_value(gid).unwrap_or(serde_json::Value::Null),
                                 );
                             }

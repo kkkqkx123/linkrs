@@ -14,11 +14,8 @@ use graphdb_core::{DataType, Value};
 fn test_schema() -> crate::vertex::VertexSchema {
     crate::vertex::VertexSchema {
         label_id: 1,
-        label_name: "person".to_string(),
-        properties: vec![StoragePropertyDef::new(
-            "name".to_string(),
-            DataType::String,
-        )],
+        label_name: "person".into(),
+        properties: vec![StoragePropertyDef::new("name".into(), DataType::String)],
         primary_key_index: 0,
         schema_version: 1,
     }
@@ -40,10 +37,10 @@ fn unique_dir(tag: &str) -> std::path::PathBuf {
 fn commit_manifest_pinned_and_strict_on_corrupt() {
     let dir = unique_dir("strict");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let ts: Timestamp = 10;
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+        .insert("v1", &[("name".into(), Value::from("v1"))], ts)
         .unwrap();
     table
         .flush_with_epoch(
@@ -63,7 +60,7 @@ fn commit_manifest_pinned_and_strict_on_corrupt() {
     assert_eq!(manifest.kind, CommitKind::Full);
     assert!(!manifest.files.is_empty());
 
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     reloaded.load(&dir).unwrap();
     assert!(reloaded.get_internal_id("v1", ts).is_some());
 
@@ -83,12 +80,12 @@ fn commit_manifest_pinned_and_strict_on_corrupt() {
 fn missing_commit_manifest_refuses_open() {
     let dir = unique_dir("missing-manifest");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let ts: Timestamp = 10;
     table
         .insert(
             "v_missing",
-            &[("name".to_string(), Value::from("v_missing"))],
+            &[("name".into(), Value::from("v_missing"))],
             ts,
         )
         .unwrap();
@@ -96,7 +93,7 @@ fn missing_commit_manifest_refuses_open() {
         .flush(&dir, CompressionType::Zstd { level: 0 })
         .unwrap();
     std::fs::remove_file(dir.join(COMMIT_MANIFEST_FILE_NAME)).unwrap();
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let err = reloaded.load(&dir).unwrap_err().to_string();
     assert!(
         err.contains("commit manifest"),
@@ -122,10 +119,10 @@ fn orphan_tmp_cleaned_tolerantly() {
 fn offline_inspection_reports_healthy_and_halfway_stores() {
     let dir = unique_dir("health");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let ts: Timestamp = 10;
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+        .insert("v1", &[("name".into(), Value::from("v1"))], ts)
         .unwrap();
     table
         .flush_with_epoch(
@@ -149,7 +146,7 @@ fn offline_inspection_reports_healthy_and_halfway_stores() {
     let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
     assert!(report.is_healthy());
     assert_eq!(report.orphan_tmp_files.len(), 2);
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     reloaded.load(&dir).unwrap();
     assert!(reloaded.get_internal_id("v1", ts).is_some());
     let _ = std::fs::remove_dir_all(&dir);
@@ -159,10 +156,10 @@ fn offline_inspection_reports_healthy_and_halfway_stores() {
 fn fault_matrix_missing_listed_file_refuses_open() {
     let dir = unique_dir("fault-missing");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let ts: Timestamp = 10;
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+        .insert("v1", &[("name".into(), Value::from("v1"))], ts)
         .unwrap();
     table
         .flush_with_epoch(
@@ -181,7 +178,7 @@ fn fault_matrix_missing_listed_file_refuses_open() {
     let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
     assert!(!report.is_healthy());
     assert_eq!(report.missing_files, vec![victim.clone()]);
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let err = reloaded.load(&dir).unwrap_err().to_string();
     assert!(
         err.contains("13") && err.contains("missing"),
@@ -196,10 +193,10 @@ fn fault_matrix_broken_incremental_falls_back_to_baseline() {
     let incr = unique_dir("fault-incr");
     let _ = std::fs::remove_dir_all(&base);
     let _ = std::fs::remove_dir_all(&incr);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let ts: Timestamp = 10;
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+        .insert("v1", &[("name".into(), Value::from("v1"))], ts)
         .unwrap();
     table
         .flush_with_epoch(
@@ -211,7 +208,7 @@ fn fault_matrix_broken_incremental_falls_back_to_baseline() {
         )
         .unwrap();
     table
-        .insert("v2", &[("name".to_string(), Value::from("v2"))], ts)
+        .insert("v2", &[("name".into(), Value::from("v2"))], ts)
         .unwrap();
     table
         .flush_incremental_with_epoch(&incr, CompressionType::Zstd { level: 0 }, 22, Some(21))
@@ -224,7 +221,7 @@ fn fault_matrix_broken_incremental_falls_back_to_baseline() {
         let delta = entry.path().join("id_indexer.delta");
         if delta.exists() {
             std::fs::write(&delta, b"corrupt").unwrap();
-            let strict = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+            let strict = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
             strict.load(&base).unwrap();
             let err = strict.apply_delta_pages(&incr).unwrap_err().to_string();
             assert!(err.contains("22"), "strict error carries epoch: {err}");
@@ -232,7 +229,7 @@ fn fault_matrix_broken_incremental_falls_back_to_baseline() {
         }
     }
     let _ = std::fs::remove_file(incr.join(COMMIT_MANIFEST_FILE_NAME));
-    let reloaded_missing = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let reloaded_missing = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     reloaded_missing.load(&base).unwrap();
     assert!(reloaded_missing.apply_delta_pages(&incr).is_err());
     let _ = std::fs::remove_dir_all(&base);
@@ -243,10 +240,10 @@ fn fault_matrix_broken_incremental_falls_back_to_baseline() {
 fn fault_matrix_corrupt_manifest_refuses_open() {
     let dir = unique_dir("fault-corrupt");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let ts: Timestamp = 10;
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+        .insert("v1", &[("name".into(), Value::from("v1"))], ts)
         .unwrap();
     table
         .flush_with_epoch(
@@ -262,7 +259,7 @@ fn fault_matrix_corrupt_manifest_refuses_open() {
     assert!(report.manifest_present);
     assert!(!report.manifest_decodable);
     assert!(!report.is_healthy());
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let err = reloaded.load(&dir).unwrap_err().to_string();
     assert!(
         err.contains("commit manifest"),
@@ -275,10 +272,10 @@ fn fault_matrix_corrupt_manifest_refuses_open() {
 fn fault_matrix_tampered_manifest_checksum_refuses_open() {
     let dir = unique_dir("fault-tamper");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let ts: Timestamp = 10;
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+        .insert("v1", &[("name".into(), Value::from("v1"))], ts)
         .unwrap();
     table
         .flush_with_epoch(
@@ -298,7 +295,7 @@ fn fault_matrix_tampered_manifest_checksum_refuses_open() {
     assert!(report.manifest_present);
     assert!(!report.manifest_decodable);
     assert!(!report.is_healthy());
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let err = reloaded.load(&dir).unwrap_err().to_string();
     assert!(
         err.contains("checksum"),
@@ -311,9 +308,9 @@ fn fault_matrix_tampered_manifest_checksum_refuses_open() {
 fn table_manifest_pins_router_version_and_generation() {
     let dir = unique_dir("lineage-pinned");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+        .insert("v1", &[("name".into(), Value::from("v1"))], 10)
         .unwrap();
     table
         .flush_with_epoch(
@@ -346,9 +343,9 @@ fn table_manifest_pins_router_version_and_generation() {
 fn tampered_router_version_refuses_open() {
     let dir = unique_dir("lineage-router");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+        .insert("v1", &[("name".into(), Value::from("v1"))], 10)
         .unwrap();
     table
         .flush_with_epoch(
@@ -375,7 +372,7 @@ fn tampered_router_version_refuses_open() {
         last_full_flush_ms: manifest["last_full_flush_ms"].as_u64(),
     }));
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let err = reloaded.load(&dir).unwrap_err().to_string();
     assert!(
         err.contains("router"),
@@ -388,9 +385,9 @@ fn tampered_router_version_refuses_open() {
 fn commit_generation_mismatch_refuses_open() {
     let dir = unique_dir("lineage-mismatch");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+        .insert("v1", &[("name".into(), Value::from("v1"))], 10)
         .unwrap();
     table
         .flush_with_epoch(
@@ -430,7 +427,7 @@ fn commit_generation_mismatch_refuses_open() {
         written_at_ms: manifest["written_at_ms"].as_u64().unwrap(),
     }));
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let err = reloaded.load(&dir).unwrap_err().to_string();
     assert!(
         err.contains("generation"),
@@ -442,9 +439,9 @@ fn commit_generation_mismatch_refuses_open() {
 fn flushed_table_manifest_dir(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     let dir = unique_dir(tag);
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+        .insert("v1", &[("name".into(), Value::from("v1"))], 10)
         .unwrap();
     table
         .flush_with_epoch(
@@ -466,7 +463,7 @@ fn table_manifest_version_mismatch_refuses_open_and_health() {
         serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
     manifest["format_version"] = serde_json::Value::from(9u64);
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let err = reloaded.load(&dir).unwrap_err().to_string();
     assert!(
         err.contains("version"),
@@ -491,7 +488,7 @@ fn tampered_table_manifest_checksum_refuses_open_and_health() {
         serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
     manifest["checksum"] = serde_json::Value::from(0u64);
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let err = reloaded.load(&dir).unwrap_err().to_string();
     assert!(
         err.contains("checksum mismatch"),
@@ -513,7 +510,7 @@ fn tampered_table_manifest_checksum_refuses_open_and_health() {
 fn missing_table_manifest_refuses_open_and_health() {
     let (dir, manifest_path) = flushed_table_manifest_dir("table-missing");
     std::fs::remove_file(&manifest_path).unwrap();
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let err = reloaded.load(&dir).unwrap_err().to_string();
     assert!(
         err.contains("missing table manifest"),
@@ -535,9 +532,9 @@ fn missing_table_manifest_refuses_open_and_health() {
 fn commit_manifest_version_mismatch_refuses_open_and_health() {
     let dir = unique_dir("commit-version");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+        .insert("v1", &[("name".into(), Value::from("v1"))], 10)
         .unwrap();
     table
         .flush_with_epoch(
@@ -553,7 +550,7 @@ fn commit_manifest_version_mismatch_refuses_open_and_health() {
         serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
     manifest["format_version"] = serde_json::Value::from(9u64);
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let err = reloaded.load(&dir).unwrap_err().to_string();
     assert!(
         err.contains("version"),
@@ -579,12 +576,12 @@ fn commit_manifest_version_mismatch_refuses_open_and_health() {
 fn reshard_rebuild_opens_under_new_layout() {
     let staging = unique_dir("reshard-stage");
     let _ = std::fs::remove_dir_all(&staging);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     for i in 0..10 {
         table
             .insert(
                 &format!("s_{i}"),
-                &[("name".to_string(), Value::from(format!("s_{i}")))],
+                &[("name".into(), Value::from(format!("s_{i}")))],
                 10,
             )
             .unwrap();
@@ -596,7 +593,7 @@ fn reshard_rebuild_opens_under_new_layout() {
         .expect("rebuilt checkpoint flushes");
     let adopted = ShardedVertexTable::with_layout(
         1,
-        "t".to_string(),
+        "t".into(),
         test_schema(),
         super::super::routing::ShardLayout::for_new_table(4),
         1,
@@ -605,7 +602,7 @@ fn reshard_rebuild_opens_under_new_layout() {
     assert_eq!(adopted.approximate_total_count(), 10);
     let rebuilt_ts = graphdb_core::types::MAX_TIMESTAMP - 1;
     assert!(adopted.get_internal_id("s_3", rebuilt_ts).is_some());
-    let via_open_at = ShardedVertexTable::open_at(1, "t".to_string(), test_schema(), &staging)
+    let via_open_at = ShardedVertexTable::open_at(1, "t".into(), test_schema(), &staging)
         .expect("open adopts manifest layout and generation");
     assert_eq!(via_open_at.num_shards(), 4);
     assert_eq!(via_open_at.generation(), 1);
@@ -618,9 +615,9 @@ fn reshard_rebuild_opens_under_new_layout() {
 fn health_report_proves_lineage_on_healthy_checkpoint() {
     let dir = unique_dir("health-lineage");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+        .insert("v1", &[("name".into(), Value::from("v1"))], 10)
         .unwrap();
     table
         .flush_with_epoch(
@@ -647,9 +644,9 @@ fn health_report_proves_lineage_on_healthy_checkpoint() {
 fn health_report_flags_generation_mismatch_before_open() {
     let dir = unique_dir("health-mismatch");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+        .insert("v1", &[("name".into(), Value::from("v1"))], 10)
         .unwrap();
     table
         .flush_with_epoch(
@@ -705,9 +702,9 @@ fn health_report_flags_generation_mismatch_before_open() {
 fn flush_signals_track_delta_and_baseline_age() {
     let dir = unique_dir("flush-signals");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+        .insert("v1", &[("name".into(), Value::from("v1"))], 10)
         .unwrap();
     let pending = table.flush_signals();
     assert!(pending.delta_entries > 0);
@@ -731,9 +728,9 @@ fn flush_signals_track_delta_and_baseline_age() {
 fn baseline_timestamp_survives_restart_and_drives_age() {
     let dir = unique_dir("baseline-ts");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+        .insert("v1", &[("name".into(), Value::from("v1"))], 10)
         .unwrap();
     table
         .flush_with_epoch(
@@ -753,7 +750,7 @@ fn baseline_timestamp_survives_restart_and_drives_age() {
     );
     let reopened = ShardedVertexTable::with_layout(
         1,
-        "t".to_string(),
+        "t".into(),
         test_schema(),
         super::super::routing::ShardLayout::for_new_table(2),
         0,
@@ -772,9 +769,9 @@ fn baseline_timestamp_survives_restart_and_drives_age() {
 fn manifest_without_timestamp_refuses_open() {
     let dir = unique_dir("baseline-ts-missing");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+        .insert("v1", &[("name".into(), Value::from("v1"))], 10)
         .unwrap();
     table
         .flush_with_epoch(
@@ -797,7 +794,7 @@ fn manifest_without_timestamp_refuses_open() {
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let reopened = ShardedVertexTable::with_layout(
         1,
-        "t".to_string(),
+        "t".into(),
         test_schema(),
         super::super::routing::ShardLayout::for_new_table(2),
         0,
@@ -813,9 +810,9 @@ fn flush_plan_advises_baseline_before_first_full_flush() {
     use crate::vertex::vertex_table::flush_trigger::{FlushKind, FlushReason};
     let dir = unique_dir("flush-plan");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], 10)
+        .insert("v1", &[("name".into(), Value::from("v1"))], 10)
         .unwrap();
     // No baseline has ever been anchored in this process: the unknown
     // age reads as infinitely old, so the coordinator must escalate.
@@ -840,10 +837,10 @@ fn flush_plan_advises_baseline_before_first_full_flush() {
 fn offline_store_inspection_aggregates_labels_and_chain() {
     let root = unique_dir("store-health");
     let _ = std::fs::remove_dir_all(&root);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let ts: Timestamp = 10;
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+        .insert("v1", &[("name".into(), Value::from("v1"))], ts)
         .unwrap();
     table
         .flush_with_epoch(
@@ -906,10 +903,10 @@ fn write_enveloped_delta(path: &std::path::Path, raw: &[u8]) {
 fn pk_baseline_corrupt_refuses_open_and_health() {
     let dir = unique_dir("pk-base-corrupt");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
     let ts: Timestamp = 10;
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+        .insert("v1", &[("name".into(), Value::from("v1"))], ts)
         .unwrap();
     table
         .flush_with_epoch(
@@ -926,7 +923,7 @@ fn pk_baseline_corrupt_refuses_open_and_health() {
     assert!(report.pk_issues.is_empty());
 
     std::fs::write(dir.join("shard_0").join("id_indexer.bin"), b"corrupt").unwrap();
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
     let err = reloaded.load(&dir).unwrap_err().to_string();
     assert!(
         err.contains("41") && err.contains("shard"),
@@ -947,10 +944,10 @@ fn pk_diverging_delta_refuses_apply_and_health() {
     let incr = unique_dir("pk-div-incr");
     let _ = std::fs::remove_dir_all(&base);
     let _ = std::fs::remove_dir_all(&incr);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
     let ts: Timestamp = 10;
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+        .insert("v1", &[("name".into(), Value::from("v1"))], ts)
         .unwrap();
     table
         .flush_with_epoch(
@@ -962,19 +959,19 @@ fn pk_diverging_delta_refuses_apply_and_health() {
         )
         .unwrap();
     table
-        .insert("v2", &[("name".to_string(), Value::from("v2"))], ts)
+        .insert("v2", &[("name".into(), Value::from("v2"))], ts)
         .unwrap();
     table
         .flush_incremental_with_epoch(&incr, CompressionType::Zstd { level: 0 }, 43, Some(42))
         .unwrap();
 
     let mgr = IdManager::new();
-    mgr.insert(IdKey::Text("v1".to_string())).unwrap();
+    mgr.insert(IdKey::Text("v1".into())).unwrap();
     let mut raw = mgr.serialize_delta();
     raw[5..9].copy_from_slice(&7u32.to_le_bytes());
     write_enveloped_delta(&incr.join("shard_0").join("id_indexer.delta"), &raw);
 
-    let strict = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let strict = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
     strict.load(&base).unwrap();
     let err = strict.apply_delta_pages(&incr).unwrap_err().to_string();
     assert!(
@@ -995,10 +992,10 @@ fn pk_lingering_delta_flagged_by_health() {
 
     let dir = unique_dir("pk-linger");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
     let ts: Timestamp = 10;
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+        .insert("v1", &[("name".into(), Value::from("v1"))], ts)
         .unwrap();
     table
         .flush_with_epoch(
@@ -1011,7 +1008,7 @@ fn pk_lingering_delta_flagged_by_health() {
         .unwrap();
 
     let mgr = IdManager::new();
-    mgr.insert(IdKey::Text("v1".to_string())).unwrap();
+    mgr.insert(IdKey::Text("v1".into())).unwrap();
     let mut raw = mgr.serialize_delta();
     raw[5..9].copy_from_slice(&7u32.to_le_bytes());
     write_enveloped_delta(&dir.join("shard_0").join("id_indexer.delta"), &raw);
@@ -1027,10 +1024,10 @@ fn pk_lingering_delta_flagged_by_health() {
 fn snapshot_sidecars_stay_outside_manifest_and_load() {
     let dir = unique_dir("snap-manifest");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
     let ts: Timestamp = 10;
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+        .insert("v1", &[("name".into(), Value::from("v1"))], ts)
         .unwrap();
     table
         .flush_with_epoch(
@@ -1047,7 +1044,7 @@ fn snapshot_sidecars_stay_outside_manifest_and_load() {
     assert!(manifest.files.iter().all(|f| !f.ends_with(".snapshot")));
 
     std::fs::write(dir.join("shard_0").join("name.snapshot"), b"junk").unwrap();
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
     reloaded.load(&dir).unwrap();
     assert!(reloaded.get_internal_id("v1", ts).is_some());
     let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
@@ -1064,15 +1061,15 @@ fn pinned_sidecar_corruption_still_opens_with_discard() {
     let _ = std::fs::remove_dir_all(&dir);
     let schema = crate::vertex::VertexSchema {
         label_id: 1,
-        label_name: "person".to_string(),
+        label_name: "person".into(),
         properties: vec![
-            crate::types::StoragePropertyDef::new("name".to_string(), DataType::String),
-            crate::types::StoragePropertyDef::new("group".to_string(), DataType::String),
+            crate::types::StoragePropertyDef::new("name".into(), DataType::String),
+            crate::types::StoragePropertyDef::new("group".into(), DataType::String),
         ],
         primary_key_index: 0,
         schema_version: 1,
     };
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), schema, 1);
+    let table = ShardedVertexTable::with_config(1, "t".into(), schema, 1);
     let ts: Timestamp = 10;
     for i in 0..5000 {
         let id = format!("v{i:05}");
@@ -1080,8 +1077,8 @@ fn pinned_sidecar_corruption_still_opens_with_discard() {
             .insert(
                 &id,
                 &[
-                    ("name".to_string(), Value::from(id.clone())),
-                    ("group".to_string(), Value::from("same")),
+                    ("name".into(), Value::from(id.clone())),
+                    ("group".into(), Value::from("same")),
                 ],
                 ts,
             )
@@ -1123,15 +1120,15 @@ fn pinned_sidecar_corruption_still_opens_with_discard() {
     std::fs::write(&victim, b"tampered").unwrap();
     let reload_schema = crate::vertex::VertexSchema {
         label_id: 1,
-        label_name: "person".to_string(),
+        label_name: "person".into(),
         properties: vec![
-            crate::types::StoragePropertyDef::new("name".to_string(), DataType::String),
-            crate::types::StoragePropertyDef::new("group".to_string(), DataType::String),
+            crate::types::StoragePropertyDef::new("name".into(), DataType::String),
+            crate::types::StoragePropertyDef::new("group".into(), DataType::String),
         ],
         primary_key_index: 0,
         schema_version: 1,
     };
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), reload_schema, 1);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), reload_schema, 1);
     reloaded.load(&dir).unwrap();
     assert!(reloaded.get_internal_id("v00042", ts).is_some());
     let report = ShardedVertexTable::inspect_commit_health(&dir).unwrap();
@@ -1144,10 +1141,10 @@ fn pinned_sidecar_corruption_still_opens_with_discard() {
 fn strict_open_reports_shard_damage_class() {
     let dir = unique_dir("strict-shard-damage");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let ts: Timestamp = 10;
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+        .insert("v1", &[("name".into(), Value::from("v1"))], ts)
         .unwrap();
     table
         .flush_with_epoch(
@@ -1161,7 +1158,7 @@ fn strict_open_reports_shard_damage_class() {
     // Corrupt one shard's authoritative pages: strict open refuses with
     // a machine-readable isolatable class naming the shard.
     std::fs::write(dir.join("shard_0").join("columns.bin"), b"corrupt").unwrap();
-    let strict = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 2);
+    let strict = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 2);
     let err = strict.load(&dir).unwrap_err().to_string();
     assert!(
         err.contains("class=isolatable") && err.contains("shard"),
@@ -1173,11 +1170,11 @@ fn strict_open_reports_shard_damage_class() {
 fn two_column_schema() -> crate::vertex::VertexSchema {
     crate::vertex::VertexSchema {
         label_id: 1,
-        label_name: "person".to_string(),
+        label_name: "person".into(),
         properties: vec![
-            StoragePropertyDef::new("name".to_string(), DataType::String),
+            StoragePropertyDef::new("name".into(), DataType::String),
             StoragePropertyDef {
-                name: "bio".to_string(),
+                name: "bio".into(),
                 data_type: DataType::String,
                 nullable: true,
                 default_value: None,
@@ -1192,15 +1189,15 @@ fn two_column_schema() -> crate::vertex::VertexSchema {
 fn column_overflow_missing_degrades_single_column() {
     let dir = unique_dir("col-isolate");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), two_column_schema(), 1);
+    let table = ShardedVertexTable::with_config(1, "t".into(), two_column_schema(), 1);
     let ts: Timestamp = 10;
     let big_bio = "x".repeat(2000);
     table
         .insert(
             "v1",
             &[
-                ("name".to_string(), Value::from("v1")),
-                ("bio".to_string(), Value::from(big_bio.clone())),
+                ("name".into(), Value::from("v1")),
+                ("bio".into(), Value::from(big_bio.clone())),
             ],
             ts,
         )
@@ -1220,7 +1217,7 @@ fn column_overflow_missing_degrades_single_column() {
         "large string must spill to a per-column overflow sidecar"
     );
     std::fs::remove_file(&overflow).unwrap();
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), two_column_schema(), 1);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), two_column_schema(), 1);
     reloaded
         .load(&dir)
         .expect("single-column loss must not refuse the table");
@@ -1235,7 +1232,7 @@ fn column_overflow_missing_degrades_single_column() {
         crate::mvcc_visibility::PendingGate::new(&manager, None),
     );
     let healthy = reloaded
-        .resolve_projected_batch(&[gid], &guard, Some(&["name".to_string()]))
+        .resolve_projected_batch(&[gid], &guard, Some(&["name".into()]))
         .expect("healthy projection must still decode");
     assert!(healthy[0].is_some(), "healthy column must stay readable");
     let manager2 = graphdb_transaction::VersionManager::new();
@@ -1244,7 +1241,7 @@ fn column_overflow_missing_degrades_single_column() {
         crate::mvcc_visibility::PendingGate::new(&manager2, None),
     );
     let err = reloaded
-        .resolve_projected_batch(&[gid], &guard2, Some(&["bio".to_string()]))
+        .resolve_projected_batch(&[gid], &guard2, Some(&["bio".into()]))
         .unwrap_err()
         .to_string();
     assert!(
@@ -1258,10 +1255,10 @@ fn column_overflow_missing_degrades_single_column() {
 fn table_critical_columns_bin_missing_still_refuses() {
     let dir = unique_dir("table-critical");
     let _ = std::fs::remove_dir_all(&dir);
-    let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
     let ts: Timestamp = 10;
     table
-        .insert("v1", &[("name".to_string(), Value::from("v1"))], ts)
+        .insert("v1", &[("name".into(), Value::from("v1"))], ts)
         .unwrap();
     table
         .flush_with_epoch(
@@ -1273,7 +1270,7 @@ fn table_critical_columns_bin_missing_still_refuses() {
         )
         .unwrap();
     std::fs::remove_file(dir.join("shard_0").join("columns.bin")).unwrap();
-    let reloaded = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 1);
+    let reloaded = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 1);
     let err = reloaded.load(&dir).unwrap_err().to_string();
     assert!(
         err.contains("columns.bin") || err.contains("missing"),

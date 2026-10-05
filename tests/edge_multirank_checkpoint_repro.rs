@@ -46,6 +46,7 @@ fn build_chunked(
                     "N".to_string(),
                     [("value".to_string(), Value::BigInt(i as i64))]
                         .into_iter()
+                        .map(|(name, value)| (std::sync::Arc::from(name.as_str()), value))
                         .collect(),
                 ),
             )

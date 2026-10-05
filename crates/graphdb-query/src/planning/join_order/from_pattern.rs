@@ -276,7 +276,7 @@ mod tests {
         assert!(query_graph_from_match_patterns(&trailing).is_none());
         // Standalone variable.
         let variable = vec![Pattern::Variable(
-            crate::parser::ast::pattern::VariablePattern::new("x".to_string(), Span::default()),
+            crate::parser::ast::pattern::VariablePattern::new("x".into(), Span::default()),
         )];
         assert!(query_graph_from_match_patterns(&variable).is_none());
         // Empty input.

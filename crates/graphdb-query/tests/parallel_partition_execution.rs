@@ -47,6 +47,7 @@ fn insert_vertices(storage: &Arc<RwLock<GraphStorage>>) {
                             ("group_id".to_string(), Value::BigInt(i % 20)),
                         ]
                         .into_iter()
+                        .map(|(name, value)| (Arc::from(name.as_str()), value))
                         .collect(),
                     ),
                 )
@@ -139,6 +140,7 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
                                 ("value".to_string(), Value::BigInt(i + 1000)),
                             ]
                             .into_iter()
+                            .map(|(name, value)| (Arc::from(name.as_str()), value))
                             .collect(),
                         ),
                     )

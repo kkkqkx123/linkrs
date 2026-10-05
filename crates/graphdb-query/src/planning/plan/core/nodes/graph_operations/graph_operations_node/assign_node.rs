@@ -121,18 +121,15 @@ mod tests {
     #[test]
     fn test_assign_rejects_duplicate_alias() {
         let e = ctx_expr(Expression::Variable("n".to_string()));
-        let err = AssignNode::new(
-            start_enum(),
-            vec![("a".to_string(), e.clone()), ("a".to_string(), e)],
-        )
-        .expect_err("duplicate must fail");
+        let err = AssignNode::new(start_enum(), vec![("a".into(), e.clone()), ("a".into(), e)])
+            .expect_err("duplicate must fail");
         assert!(err.to_string().contains("duplicate"));
     }
 
     #[test]
     fn test_assign_appends_new_column_and_syncs_types() {
         let e = ctx_expr(Expression::Variable("n".to_string()));
-        let node = AssignNode::new(start_enum(), vec![("a".to_string(), e)]).expect("builds");
+        let node = AssignNode::new(start_enum(), vec![("a".into(), e)]).expect("builds");
         assert_eq!(node.col_names, vec!["a".to_string()]);
         assert_eq!(node.column_types.len(), node.col_names.len());
     }

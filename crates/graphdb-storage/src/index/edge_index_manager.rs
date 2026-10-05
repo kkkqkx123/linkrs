@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
 use crate::index::chunk::chunked_index::ChunkedIndex;
@@ -77,7 +78,7 @@ pub struct EdgeIndexCursor {
     offset_remaining: usize,
     limit: Option<usize>,
     emitted: usize,
-    projection: Option<Vec<String>>,
+    projection: Option<Vec<Arc<str>>>,
     read_timestamp: Timestamp,
     invisible_skipped: u64,
     malformed_skipped: u64,
@@ -222,8 +223,8 @@ impl IndexCursor for EdgeIndexCursor {
 
 fn project_edge_row(
     entity_ref: EntityRef,
-    included_columns: Option<&[(String, Value)]>,
-    projection: Option<&[String]>,
+    included_columns: Option<&[(Arc<str>, Value)]>,
+    projection: Option<&[Arc<str>]>,
 ) -> IndexRow {
     let Some(projection) = projection else {
         return IndexRow::RowId(entity_ref);
@@ -242,7 +243,7 @@ fn project_edge_row(
             columns
                 .iter()
                 .find(|(candidate, _)| candidate == name)
-                .cloned()
+                .map(|(candidate, value)| (candidate.clone(), value.clone()))
         })
         .collect();
     IndexRow::Covering {

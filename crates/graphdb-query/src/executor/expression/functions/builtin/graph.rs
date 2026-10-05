@@ -921,11 +921,11 @@ mod tests {
 
     fn create_test_vertex() -> Vertex {
         let mut props = HashMap::from([
-            ("name".to_string(), Value::string("Alice")),
-            ("age".to_string(), Value::Int(30)),
+            ("name".into(), Value::string("Alice")),
+            ("age".into(), Value::Int(30)),
         ]);
-        props.insert("dept".to_string(), Value::string("Engineering"));
-        let tag = Tag::new("person".to_string(), props);
+        props.insert("dept".into(), Value::string("Engineering"));
+        let tag = Tag::new("person".into(), props);
         Vertex::new(VertexId::try_from_int64(1).expect("valid vertex id"), tag)
     }
 
@@ -935,7 +935,7 @@ mod tests {
             VertexId::try_from_int64(2).expect("valid vertex id"),
             "knows".to_string(),
             0,
-            HashMap::from([("since".to_string(), Value::Int(2020))]),
+            HashMap::from([("since".into(), Value::Int(2020))]),
         )
     }
 

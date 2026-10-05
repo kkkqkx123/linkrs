@@ -231,7 +231,7 @@ pub async fn execute_batch<
                                 elapsed_us,
                                 &e,
                             );
-                            error_with_trace("CONFIG_ERROR".to_string(), e, trace_id, elapsed_us)
+                            error_with_trace("CONFIG_ERROR".into(), e, trace_id, elapsed_us)
                         }
                     }
                 }
@@ -244,7 +244,7 @@ pub async fn execute_batch<
                         elapsed_us,
                         &e.to_string(),
                     );
-                    error_with_trace("QUERY_ERROR".to_string(), e, trace_id, elapsed_us)
+                    error_with_trace("QUERY_ERROR".into(), e, trace_id, elapsed_us)
                 }
             }
         })

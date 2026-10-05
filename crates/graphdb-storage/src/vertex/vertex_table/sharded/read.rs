@@ -5,6 +5,7 @@ use crate::mvcc_visibility::VisibilityGuard;
 use crate::vertex::{IdKey, PkLookup, VertexRecord};
 use graphdb_core::types::{DataType, Timestamp, VertexId};
 use graphdb_core::StorageResult;
+use std::sync::Arc;
 
 /// Decode an ID-index key into the external vertex ID.
 ///
@@ -100,7 +101,7 @@ impl ShardedVertexTable {
         &self,
         global_id: u32,
         guard: &VisibilityGuard<'_>,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> Option<VertexRecord> {
         let (shard_idx, local_id) = self.decode_id(global_id);
         let table = self.shards[shard_idx].read();
@@ -126,7 +127,7 @@ impl ShardedVertexTable {
         &self,
         global_ids: &[u32],
         guard: &VisibilityGuard<'_>,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> StorageResult<Vec<Option<VertexRecord>>> {
         let snapshot = guard.snapshot();
         let mut out: Vec<Option<VertexRecord>> = global_ids.iter().map(|_| None).collect();
@@ -239,8 +240,12 @@ impl ShardedVertexTable {
         &self,
         global_ids: &[u32],
         guard: &VisibilityGuard<'_>,
-        names: &[String],
-    ) -> (Vec<u32>, Vec<VertexId>, Vec<(String, ColumnValues)>) {
+        names: &[std::sync::Arc<str>],
+    ) -> (
+        Vec<u32>,
+        Vec<VertexId>,
+        Vec<(std::sync::Arc<str>, ColumnValues)>,
+    ) {
         if let Err(error) = self.verify_shard_schema_uniform() {
             log::error!(
                 "scan_columns proceeding under shard schema divergence: {}",
@@ -249,7 +254,7 @@ impl ShardedVertexTable {
         }
         let snapshot = guard.snapshot();
         let (resolved_names, types) = self.column_layout(names);
-        let mut merged: Vec<(String, ColumnValues)> = resolved_names
+        let mut merged: Vec<(Arc<str>, ColumnValues)> = resolved_names
             .iter()
             .zip(types.iter())
             .map(|(name, data_type)| {
@@ -360,9 +365,9 @@ impl ShardedVertexTable {
 
     /// Column names and declared types for a decode request. An empty request
     /// means every column of the table.
-    fn column_layout(&self, names: &[String]) -> (Vec<String>, Vec<Option<DataType>>) {
+    fn column_layout(&self, names: &[Arc<str>]) -> (Vec<Arc<str>>, Vec<Option<DataType>>) {
         let table = self.shards[0].read();
-        let resolved_names: Vec<String> = if names.is_empty() {
+        let resolved_names: Vec<Arc<str>> = if names.is_empty() {
             table
                 .schema()
                 .properties

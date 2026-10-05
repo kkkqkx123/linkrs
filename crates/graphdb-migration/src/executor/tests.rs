@@ -29,7 +29,7 @@ impl TestStorage {
             migration_history: Arc::new(Mutex::new(Vec::new())),
         }
     }
-    fn insert_vertex(&self, space: &str, label: &str, vid: i64, props: HashMap<String, Value>) {
+    fn insert_vertex(&self, space: &str, label: &str, vid: i64, props: HashMap<Arc<str>, Value>) {
         let mut map = self.vertices.lock().unwrap();
         let entry = map
             .entry((space.to_string(), label.to_string()))
@@ -647,7 +647,7 @@ fn test_execute_add_column() {
 #[test]
 fn test_execute_drop_column() {
     let mut storage = TestStorage::new();
-    let mut props = HashMap::new();
+    let mut props: HashMap<Arc<str>, Value> = HashMap::new();
     props.insert("old".into(), Value::string("v"));
     storage.insert_vertex("s", "User", 1, props);
     let plan = MigrationPlan::new(
@@ -671,7 +671,7 @@ fn test_execute_drop_column() {
 #[test]
 fn test_execute_type_convert() {
     let mut storage = TestStorage::new();
-    let mut props = HashMap::new();
+    let mut props: HashMap<Arc<str>, Value> = HashMap::new();
     props.insert("age".into(), Value::Int(42));
     storage.insert_vertex("s", "User", 1, props);
     let plan = MigrationPlan::new(
@@ -772,7 +772,7 @@ fn test_idempotent_execution() {
 #[test]
 fn test_partial_failure() {
     let mut storage = TestStorage::new();
-    let mut props = HashMap::new();
+    let mut props: HashMap<Arc<str>, Value> = HashMap::new();
     props.insert("age".into(), Value::string("not_a_number"));
     storage.insert_vertex("s", "User", 1, props);
     let plan = MigrationPlan::new(
@@ -828,7 +828,7 @@ fn test_dry_run_no_commit() {
 #[test]
 fn test_idempotent_add_column() {
     let mut storage = TestStorage::new();
-    let mut props = HashMap::new();
+    let mut props: HashMap<Arc<str>, Value> = HashMap::new();
     props.insert("email".into(), Value::string("exists"));
     storage.insert_vertex("s", "User", 1, props);
     let plan = MigrationPlan::new(
@@ -860,7 +860,7 @@ fn test_idempotent_add_column() {
 #[test]
 fn test_expand_contract_rename() {
     let mut storage = TestStorage::new();
-    let mut props = HashMap::new();
+    let mut props: HashMap<Arc<str>, Value> = HashMap::new();
     props.insert("old_name".into(), Value::string("hello"));
     storage.insert_vertex("s", "User", 1, props);
     let plan = MigrationPlan::new(
@@ -903,7 +903,7 @@ fn test_expand_contract_rename() {
 fn test_checkpoint_resume() {
     let tmp = tempfile::tempdir().unwrap();
     let mut storage = TestStorage::new();
-    let mut props = HashMap::new();
+    let mut props: HashMap<Arc<str>, Value> = HashMap::new();
     props.insert("a".into(), Value::string("v1"));
     storage.insert_vertex("s", "User", 1, props);
     let mut plan = MigrationPlan::new(

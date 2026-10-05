@@ -323,7 +323,7 @@ mod tests {
 
         let vertex = Vertex::new(
             graphdb_core::types::VertexId::try_from_int64(1).expect("test vertex id"),
-            graphdb_core::Tag::new("test".to_string(), std::collections::HashMap::new()),
+            graphdb_core::Tag::new("test".into(), std::collections::HashMap::new()),
         );
         batch.add_vertex(vertex);
 
@@ -340,7 +340,7 @@ mod tests {
 
         let vertex = Vertex::new(
             graphdb_core::types::VertexId::try_from_int64(1).expect("test vertex id"),
-            graphdb_core::Tag::new("test".to_string(), std::collections::HashMap::new()),
+            graphdb_core::Tag::new("test".into(), std::collections::HashMap::new()),
         );
         batch.add_vertex(vertex.clone());
         batch.add_vertex(vertex);

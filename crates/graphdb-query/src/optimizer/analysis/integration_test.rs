@@ -376,7 +376,7 @@ fn test_expression_analyzer_with_map_expression() {
 
     // Mapping expression
     let map_expr = Expression::Map(vec![
-        ("key1".to_string(), Expression::Literal(Value::Int(1))),
+        ("key1".into(), Expression::Literal(Value::Int(1))),
         (
             "key2".to_string(),
             Expression::Literal(Value::string("value")),

@@ -1,5 +1,6 @@
 use super::SyncWrapper;
 use crate::StorageClient;
+use std::sync::Arc;
 
 impl<S: graphdb_transaction::UndoTarget + StorageClient> graphdb_transaction::UndoTarget
     for SyncWrapper<S>
@@ -36,7 +37,7 @@ impl<S: graphdb_transaction::UndoTarget + StorageClient> graphdb_transaction::Un
     fn restore_edge(
         &self,
         edge: graphdb_core::types::EdgeIdentifier,
-        properties: Vec<(String, graphdb_core::Value)>,
+        properties: Vec<(std::sync::Arc<str>, graphdb_core::Value)>,
         ts: graphdb_transaction::wal::Timestamp,
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner.restore_edge(edge, properties, ts)
@@ -63,7 +64,7 @@ impl<S: graphdb_transaction::UndoTarget + StorageClient> graphdb_transaction::Un
     fn revert_delete_vertex_properties(
         &self,
         label_name: &str,
-        prop_names: &[String],
+        prop_names: &[Arc<str>],
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner
             .revert_delete_vertex_properties(label_name, prop_names)
@@ -74,7 +75,7 @@ impl<S: graphdb_transaction::UndoTarget + StorageClient> graphdb_transaction::Un
         src_label: &str,
         dst_label: &str,
         edge_label: &str,
-        prop_names: &[String],
+        prop_names: &[Arc<str>],
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner
             .revert_delete_edge_properties(src_label, dst_label, edge_label, prop_names)
@@ -100,8 +101,8 @@ impl<S: graphdb_transaction::UndoTarget + StorageClient> graphdb_transaction::Un
     fn revert_rename_vertex_properties(
         &self,
         label_name: &str,
-        current_names: &[String],
-        original_names: &[String],
+        current_names: &[Arc<str>],
+        original_names: &[Arc<str>],
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner
             .revert_rename_vertex_properties(label_name, current_names, original_names)
@@ -112,8 +113,8 @@ impl<S: graphdb_transaction::UndoTarget + StorageClient> graphdb_transaction::Un
         src_label: &str,
         dst_label: &str,
         edge_label: &str,
-        current_names: &[String],
-        original_names: &[String],
+        current_names: &[Arc<str>],
+        original_names: &[Arc<str>],
     ) -> graphdb_transaction::undo_log::UndoLogResult<()> {
         self.inner.revert_rename_edge_properties(
             src_label,

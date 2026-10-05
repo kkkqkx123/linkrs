@@ -308,7 +308,7 @@ mod tests {
     fn test_manager_create_drop() {
         let manager = SequenceManager::new();
         manager
-            .create_sequence("seq1".to_string(), 1, 1, 1, 100, false)
+            .create_sequence("seq1".into(), 1, 1, 1, 100, false)
             .unwrap();
         assert!(manager.exists("seq1"));
         assert_eq!(manager.current_value("seq1").unwrap(), 1);
@@ -321,10 +321,10 @@ mod tests {
     fn test_manager_duplicate_create() {
         let manager = SequenceManager::new();
         manager
-            .create_sequence("seq1".to_string(), 1, 1, 1, 100, false)
+            .create_sequence("seq1".into(), 1, 1, 1, 100, false)
             .unwrap();
         assert!(manager
-            .create_sequence("seq1".to_string(), 1, 1, 1, 100, false)
+            .create_sequence("seq1".into(), 1, 1, 1, 100, false)
             .is_err());
     }
 
@@ -332,7 +332,7 @@ mod tests {
     fn test_manager_next_value() {
         let manager = SequenceManager::new();
         manager
-            .create_sequence("seq1".to_string(), 10, 5, 1, 1000, false)
+            .create_sequence("seq1".into(), 10, 5, 1, 1000, false)
             .unwrap();
         assert_eq!(manager.next_value("seq1").unwrap(), 15);
         assert_eq!(manager.next_value("seq1").unwrap(), 20);
@@ -343,7 +343,7 @@ mod tests {
     fn test_manager_alter() {
         let manager = SequenceManager::new();
         manager
-            .create_sequence("seq1".to_string(), 1, 1, 1, 100, false)
+            .create_sequence("seq1".into(), 1, 1, 1, 100, false)
             .unwrap();
         manager
             .alter_sequence("seq1", Some(10), None, None, Some(true))
@@ -355,10 +355,10 @@ mod tests {
     fn test_manager_list() {
         let manager = SequenceManager::new();
         manager
-            .create_sequence("a".to_string(), 1, 1, 1, 100, false)
+            .create_sequence("a".into(), 1, 1, 1, 100, false)
             .unwrap();
         manager
-            .create_sequence("b".to_string(), 1, 1, 1, 100, false)
+            .create_sequence("b".into(), 1, 1, 1, 100, false)
             .unwrap();
         let mut names = manager.list_sequences();
         names.sort();
@@ -370,7 +370,7 @@ mod tests {
         let storage = Arc::new(MockStorage::new());
         let manager = SequenceManager::with_storage(storage);
         manager
-            .create_sequence("seq1".to_string(), 1, 1, 1, 100, false)
+            .create_sequence("seq1".into(), 1, 1, 1, 100, false)
             .unwrap();
         assert!(manager.exists("seq1"));
     }

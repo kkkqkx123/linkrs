@@ -9,11 +9,11 @@ use graphdb_core::Value;
 fn batch_table() -> EdgeStore {
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "knows".to_string(),
+        label_name: "knows".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![StoragePropertyDef {
-            name: "weight".to_string(),
+            name: "weight".into(),
             data_type: DataType::Double,
             nullable: false,
             default_value: Some(Value::Double(0.0)),
@@ -43,7 +43,7 @@ fn committed_batch_replays_whole_after_crash() {
             0,
             dst,
             0,
-            &[("weight".to_string(), Value::Double(dst as f64))],
+            &[("weight".into(), Value::Double(dst as f64))],
             100,
         );
     }
@@ -69,7 +69,7 @@ fn failed_batch_leaves_no_visible_residue() {
     let dir = tempfile::tempdir().expect("temporary edge table directory");
     let mut table = batch_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table
         .flush(
@@ -102,13 +102,7 @@ fn large_delete_fanout_fails_atomically() {
     let mut table = batch_table();
     for dst in 1..=200u32 {
         table
-            .insert_edge(
-                0,
-                dst,
-                0,
-                &[("weight".to_string(), Value::Double(1.0))],
-                100,
-            )
+            .insert_edge(0, dst, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .unwrap();
     }
     // A committed edge outside the fanout: duplicating it fails the whole
@@ -116,7 +110,7 @@ fn large_delete_fanout_fails_atomically() {
     // would rebuild instead of failing, so the conflict must target a key
     // the batch does not delete.)
     table
-        .insert_edge(5, 6, 0, &[("weight".to_string(), Value::Double(9.0))], 100)
+        .insert_edge(5, 6, 0, &[("weight".into(), Value::Double(9.0))], 100)
         .unwrap();
 
     // No half-deleted graph: every fanout edge still visible in both
@@ -172,7 +166,7 @@ fn incident_vertex_delete_commits_fanout_in_one_batch() {
                 0,
                 dst,
                 0,
-                &[("weight".to_string(), Value::Double(dst as f64))],
+                &[("weight".into(), Value::Double(dst as f64))],
                 100,
             )
             .unwrap();
@@ -183,19 +177,13 @@ fn incident_vertex_delete_commits_fanout_in_one_batch() {
                 src,
                 0,
                 0,
-                &[("weight".to_string(), Value::Double(src as f64))],
+                &[("weight".into(), Value::Double(src as f64))],
                 100,
             )
             .unwrap();
     }
     table
-        .insert_edge(
-            70,
-            71,
-            0,
-            &[("weight".to_string(), Value::Double(9.0))],
-            100,
-        )
+        .insert_edge(70, 71, 0, &[("weight".into(), Value::Double(9.0))], 100)
         .unwrap();
 
     // One call removes both directions: each logical edge counts once even
@@ -214,7 +202,7 @@ fn incident_vertex_delete_commits_fanout_in_one_batch() {
         .expect("outgoing fanout edge reported");
     assert_eq!(
         hub_out.properties,
-        vec![("weight".to_string(), Value::Double(5.0))]
+        vec![("weight".into(), Value::Double(5.0))]
     );
     let hub_in = deleted
         .iter()
@@ -222,7 +210,7 @@ fn incident_vertex_delete_commits_fanout_in_one_batch() {
         .expect("incoming fanout edge reported");
     assert_eq!(
         hub_in.properties,
-        vec![("weight".to_string(), Value::Double(55.0))]
+        vec![("weight".into(), Value::Double(55.0))]
     );
 
     assert!(table.out_edges(0, 200).is_empty());
@@ -251,13 +239,7 @@ fn incident_vertex_delete_handles_single_direction_tables() {
         EdgeStore::with_config(schema, EdgeTableConfig::default()).expect("out-only table builds");
     for dst in 1..=5u32 {
         table
-            .insert_edge(
-                0,
-                dst,
-                0,
-                &[("weight".to_string(), Value::Double(1.0))],
-                100,
-            )
+            .insert_edge(0, dst, 0, &[("weight".into(), Value::Double(1.0))], 100)
             .unwrap();
     }
     let deleted = table
@@ -273,10 +255,10 @@ fn incident_vertex_delete_fails_closed_on_frozen_group() {
     use graphdb_core::types::Timestamp;
     let mut table = batch_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table
-        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+        .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.0))], 100)
         .unwrap();
     table
         .freeze_group(true, 0, Timestamp::MAX, 0.0)
@@ -295,10 +277,10 @@ fn incident_vertex_delete_fails_closed_on_frozen_group() {
 fn owner_rebuild_converges_reclaimed_tombstones_with_count() {
     let mut table = batch_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table
-        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+        .insert_edge(0, 2, 0, &[("weight".into(), Value::Double(2.0))], 100)
         .unwrap();
     assert!(table.delete_edge(0, 1, 0, 150).unwrap());
 
@@ -333,7 +315,7 @@ fn reclaim_boundary_stamp_uses_shared_gc_predicate() {
     assert!(crate::mvcc_visibility::Visibility::is_gc_eligible(200, 200));
     let mut table = batch_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     assert!(table.delete_edge(0, 1, 0, 200).unwrap());
     let watermarks = graphdb_transaction::MvccWatermarks::from_parts(

@@ -25,9 +25,9 @@ pub(crate) fn entity_ref_to_vertex_id(entity_ref: &EntityRef) -> Option<VertexId
 /// flat path cannot diverge from the per-row evaluator.
 pub(crate) fn make_flat_vertex_record_row(
     record: FlatVertexRecord,
-    flatten: &[String],
+    flatten: &[Arc<str>],
 ) -> Vec<Value> {
-    let properties: HashMap<String, Value> = record.props.into_iter().collect();
+    let properties: HashMap<Arc<str>, Value> = record.props.into_iter().collect();
     let vertex = Vertex::new(
         record.vid,
         graphdb_core::Tag::new(record.tag_name, properties),
@@ -35,7 +35,7 @@ pub(crate) fn make_flat_vertex_record_row(
     make_flat_vertex_row(vertex, flatten)
 }
 
-pub(crate) fn make_flat_vertex_row(vertex: Vertex, flatten: &[String]) -> Vec<Value> {
+pub(crate) fn make_flat_vertex_row(vertex: Vertex, flatten: &[Arc<str>]) -> Vec<Value> {
     let props: Vec<Value> = flatten
         .iter()
         .map(|prop| {
@@ -55,8 +55,8 @@ pub(crate) fn make_flat_vertex_row(vertex: Vertex, flatten: &[String]) -> Vec<Va
 pub(crate) fn make_flat_covering_vertex_row(
     entity_ref: &EntityRef,
     tag: &str,
-    columns: Vec<(String, Value)>,
-    flatten: &[String],
+    columns: Vec<(Arc<str>, Value)>,
+    flatten: &[Arc<str>],
 ) -> Option<Vec<Value>> {
     let vertex_id = entity_ref_to_vertex_id(entity_ref)?;
     let vertex = Vertex::new(
@@ -70,12 +70,12 @@ pub(crate) fn make_edge_row(edge: Edge) -> Vec<Value> {
     vec![Value::Edge(Box::new(edge))]
 }
 
-pub(crate) fn make_flat_edge_row(edge: Edge, flatten: &[String]) -> Vec<Value> {
+pub(crate) fn make_flat_edge_row(edge: Edge, flatten: &[Arc<str>]) -> Vec<Value> {
     let props: Vec<Value> = flatten
         .iter()
         .map(|prop| {
             edge.properties()
-                .get(prop)
+                .get(prop.as_ref())
                 .cloned()
                 .unwrap_or_else(|| Value::Null(graphdb_core::value::NullType::Null))
         })
@@ -90,9 +90,9 @@ pub(crate) fn make_flat_edge_row(edge: Edge, flatten: &[String]) -> Vec<Value> {
 /// and appends the columns as property slots after it.
 pub(crate) fn make_flat_covering_edge_row(
     entity_ref: &EntityRef,
-    columns: Vec<(String, Value)>,
+    columns: Vec<(Arc<str>, Value)>,
     edge_type: String,
-    flatten: &[String],
+    flatten: &[Arc<str>],
 ) -> Option<Vec<Value>> {
     let EntityRef::Edge {
         src, dst, ranking, ..
@@ -171,9 +171,13 @@ mod tests {
     use std::collections::HashMap;
 
     fn test_vertex_with_props(props: Vec<(String, Value)>) -> Vertex {
+        let properties: HashMap<Arc<str>, Value> = props
+            .into_iter()
+            .map(|(name, value)| (Arc::from(name.as_str()), value))
+            .collect();
         Vertex::new(
             VertexId::try_from_int64(1).expect("valid vertex id"),
-            Tag::new(String::new(), props.into_iter().collect()),
+            Tag::new(String::new(), properties),
         )
     }
 
@@ -184,12 +188,12 @@ mod tests {
             Tag::new(
                 String::new(),
                 HashMap::from([
-                    ("age".to_string(), Value::BigInt(30)),
-                    ("name".to_string(), Value::string("Alice")),
+                    ("age".into(), Value::BigInt(30)),
+                    ("name".into(), Value::string("Alice")),
                 ]),
             ),
         );
-        let row = make_flat_vertex_row(vertex, &["age".to_string(), "name".to_string()]);
+        let row = make_flat_vertex_row(vertex, &[Arc::from("age"), Arc::from("name")]);
         assert_eq!(row.len(), 3);
         assert!(matches!(&row[0], Value::Vertex(_)));
         assert_eq!(row[1], Value::BigInt(30));
@@ -207,7 +211,7 @@ mod tests {
     #[test]
     fn flat_vertex_row_missing_property_is_null() {
         let vertex = test_vertex_with_props(vec![]);
-        let row = make_flat_vertex_row(vertex, &["missing".to_string()]);
+        let row = make_flat_vertex_row(vertex, &[Arc::from("missing")]);
         assert_eq!(row.len(), 2);
         assert!(matches!(&row[1], Value::Null(_)));
     }
@@ -218,17 +222,17 @@ mod tests {
             VertexId::try_from_int64(1).expect("valid vertex id"),
             Tag::new(
                 "person".to_string(),
-                [("city".to_string(), Value::string("NYC"))]
+                [("city".into(), Value::string("NYC"))]
                     .into_iter()
                     .collect(),
             ),
         );
         // Tag property fallback mirrors eval_property_access semantics.
-        let row = make_flat_vertex_row(vertex.clone(), &["city".to_string()]);
+        let row = make_flat_vertex_row(vertex.clone(), &[Arc::from("city")]);
         assert_eq!(row[1], Value::string("NYC"));
         // The tag-name-yields-map implicit behavior is cancelled: a property
         // name that only equals the tag resolves to Null.
-        let row = make_flat_vertex_row(vertex, &["person".to_string()]);
+        let row = make_flat_vertex_row(vertex, &[Arc::from("person")]);
         assert!(matches!(&row[1], Value::Null(_)));
     }
 
@@ -240,8 +244,8 @@ mod tests {
             "friend".to_string(),
             0,
         );
-        edge.set_property("since".to_string(), Value::BigInt(2024));
-        let row = make_flat_edge_row(edge, &["since".to_string(), "missing".to_string()]);
+        edge.set_property("since".into(), Value::BigInt(2024));
+        let row = make_flat_edge_row(edge, &[Arc::from("since"), Arc::from("missing")]);
         assert_eq!(row.len(), 3);
         assert!(matches!(&row[0], Value::Edge(_)));
         assert_eq!(row[1], Value::BigInt(2024));
@@ -255,11 +259,11 @@ mod tests {
             internal_id: 7,
             tag_name: "person".to_string(),
             props: vec![
-                ("age".to_string(), Value::BigInt(30)),
-                ("name".to_string(), Value::string("Alice")),
+                ("age".into(), Value::BigInt(30)),
+                ("name".into(), Value::string("Alice")),
             ],
         };
-        let row = make_flat_vertex_record_row(record, &["name".to_string(), "age".to_string()]);
+        let row = make_flat_vertex_record_row(record, &[Arc::from("name"), Arc::from("age")]);
         assert_eq!(row.len(), 3);
         let Value::Vertex(vertex) = &row[0] else {
             panic!("slot 0 must hold the rebuilt vertex");
@@ -281,9 +285,9 @@ mod tests {
             vid: VertexId::try_from_int64(42).expect("valid vertex id"),
             internal_id: 7,
             tag_name: "person".to_string(),
-            props: vec![("age".to_string(), Value::BigInt(30))],
+            props: vec![("age".into(), Value::BigInt(30))],
         };
-        let row = make_flat_vertex_record_row(record, &["missing".to_string()]);
+        let row = make_flat_vertex_record_row(record, &[Arc::from("missing")]);
         assert_eq!(row.len(), 2);
         assert!(matches!(&row[1], Value::Null(_)));
     }
@@ -296,9 +300,9 @@ mod tests {
             vid: VertexId::try_from_int64(42).expect("valid vertex id"),
             internal_id: 7,
             tag_name: "person".to_string(),
-            props: vec![("age".to_string(), Value::BigInt(30))],
+            props: vec![("age".into(), Value::BigInt(30))],
         };
-        let row = make_flat_vertex_record_row(record, &["person".to_string()]);
+        let row = make_flat_vertex_record_row(record, &[Arc::from("person")]);
         assert!(matches!(&row[1], Value::Null(_)));
     }
 }

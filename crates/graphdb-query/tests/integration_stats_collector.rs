@@ -53,6 +53,7 @@ fn setup() -> Arc<RwLock<dyn graphdb_query::storage::QueryStorage>> {
                                 ("age".to_string(), Value::BigInt(i)),
                             ]
                             .into_iter()
+                            .map(|(name, value)| (Arc::from(name.as_str()), value))
                             .collect(),
                         ),
                     ),

@@ -89,7 +89,7 @@ pub enum SourceOperatorKind {
         limit: Option<usize>,
         partition_range: Option<std::ops::Range<i64>>,
         col_names: Vec<String>,
-        projected_properties: Vec<String>,
+        projected_properties: Vec<Arc<str>>,
         /// Scan predicates pushed into the storage layer.
         predicate: Vec<ScanPredicate>,
         /// Tag-restricted scan: only rows of this tag are scanned at the
@@ -114,7 +114,7 @@ pub enum SourceOperatorKind {
         edge_type: Option<String>,
         partition_range: Option<std::ops::Range<i64>>,
         col_names: Vec<String>,
-        projected_properties: Vec<String>,
+        projected_properties: Vec<Arc<str>>,
         /// Scan predicates pushed into the storage layer.
         predicate: Vec<ScanPredicate>,
         cursor: Option<Box<dyn EdgeCursor>>,
@@ -126,7 +126,7 @@ pub enum SourceOperatorKind {
         tag: String,
         vertex_ids: Option<Vec<Value>>,
         cached_ids: Vec<VertexId>,
-        projected_properties: Vec<String>,
+        projected_properties: Vec<Arc<str>>,
     },
     /// Fetch edges by src/dst/type/rank.
     GetEdges {
@@ -136,7 +136,7 @@ pub enum SourceOperatorKind {
         src: Option<String>,
         dst: Option<String>,
         rank: i64,
-        projected_properties: Vec<String>,
+        projected_properties: Vec<Arc<str>>,
         cursor: Option<Box<dyn EdgeCursor>>,
     },
     /// Traverse neighbors of each input vertex.
@@ -145,7 +145,7 @@ pub enum SourceOperatorKind {
         space_name: String,
         tag: String,
         direction: String,
-        projected_properties: Vec<String>,
+        projected_properties: Vec<Arc<str>>,
         state: NeighborScanState,
     },
     /// Index scan with typed predicate and projection.
@@ -191,6 +191,13 @@ pub struct SourceOperator {
     /// (one-shot) by `Argument`. Per-instance, so parallel partitions and
     /// nested subqueries never share or overwrite frames.
     pub frame: Option<(Arc<SlotLayout>, Vec<Value>)>,
+}
+
+/// Property names reach the planner as owned `String`s, while every storage
+/// read takes shared `Arc<str>` names. Converting once here keeps the
+/// per-chunk read paths free of per-row name allocations.
+fn shared_names(names: &[String]) -> Vec<Arc<str>> {
+    names.iter().map(|name| Arc::from(name.as_str())).collect()
 }
 
 impl SourceOperator {
@@ -242,7 +249,7 @@ impl SourceOperator {
                 limit: *limit,
                 partition_range: partition_range.clone(),
                 col_names: col_names.clone(),
-                projected_properties: projected_properties.clone(),
+                projected_properties: shared_names(projected_properties),
                 predicate: predicate.clone(),
                 tag: tag.clone(),
                 semi_mask: None,
@@ -270,7 +277,7 @@ impl SourceOperator {
                 edge_type: edge_type.clone(),
                 partition_range: partition_range.clone(),
                 col_names: col_names.clone(),
-                projected_properties: projected_properties.clone(),
+                projected_properties: shared_names(projected_properties),
                 predicate: predicate.clone(),
                 cursor: None,
             },
@@ -286,7 +293,7 @@ impl SourceOperator {
                 tag: tag.clone(),
                 vertex_ids: vertex_ids.clone(),
                 cached_ids: Vec::new(),
-                projected_properties: projected_properties.clone(),
+                projected_properties: shared_names(projected_properties),
             },
             super::spec::SourceSpec::GetEdges {
                 space_name,
@@ -302,7 +309,7 @@ impl SourceOperator {
                 src: src.clone(),
                 dst: dst.clone(),
                 rank: *rank,
-                projected_properties: projected_properties.clone(),
+                projected_properties: shared_names(projected_properties),
                 cursor: None,
             },
             super::spec::SourceSpec::GetNeighbors {
@@ -315,7 +322,7 @@ impl SourceOperator {
                 space_name: space_name.clone(),
                 tag: tag.clone(),
                 direction: direction.clone(),
-                projected_properties: projected_properties.clone(),
+                projected_properties: shared_names(projected_properties),
                 state: NeighborScanState::Init,
             },
             super::spec::SourceSpec::IndexScan {
@@ -862,8 +869,8 @@ mod tests {
             edge_type: "friend".to_string(),
             ranking: 0,
             props: vec![
-                ("degree".to_string(), Value::Double(0.8)),
-                ("since".to_string(), Value::Int(2020)),
+                ("degree".into(), Value::Double(0.8)),
+                ("since".into(), Value::Int(2020)),
             ]
             .into_iter()
             .collect(),
@@ -876,7 +883,7 @@ mod tests {
             src: Some("1".to_string()),
             dst: Some("2".to_string()),
             rank: 0,
-            projected_properties: vec!["degree".to_string()],
+            projected_properties: vec![Arc::from("degree")],
             cursor: None,
         });
         let runtime = Arc::new(ExecutionRuntime::new(

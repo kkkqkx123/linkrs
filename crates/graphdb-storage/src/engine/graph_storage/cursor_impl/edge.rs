@@ -73,13 +73,13 @@ pub(crate) struct GraphEdgeCursor {
     offset_remaining: usize,
     emitted: usize,
     src_id_range: Option<Range<i64>>,
-    projection: Option<Vec<String>>,
+    projection: Option<Vec<Arc<str>>>,
     /// Conjunctive predicates evaluated on decoded properties before
     /// offset/limit accounting; a pure pre-filter.
     predicate: Vec<crate::cursor::ScanPredicate>,
     /// Property names referenced by `predicate`; they are decoded even when
     /// absent from the projection so predicates can be evaluated.
-    predicate_columns: Vec<String>,
+    predicate_columns: Vec<Arc<str>>,
     exhausted: bool,
     /// Malformed/unparseable entries skipped so far, exposed through
     /// `EdgeCursor::malformed_skipped` for diagnostics.
@@ -126,7 +126,7 @@ impl GraphEdgeCursor {
         };
 
         let predicate = options.predicate.clone().unwrap_or_default();
-        let mut predicate_columns: Vec<String> = Vec::new();
+        let mut predicate_columns: Vec<Arc<str>> = Vec::new();
         for pred in &predicate {
             collect_predicate_columns(pred, &mut predicate_columns);
         }
@@ -161,23 +161,23 @@ impl GraphEdgeCursor {
     /// type mismatch instead of falling back to row transpose.
     fn collect_column_batch(
         &mut self,
-        prop_names: &[String],
+        prop_names: &[std::sync::Arc<str>],
         batch_size: usize,
     ) -> Result<EdgeColumnBatch, StorageError> {
         use crate::cursor::ColumnValues;
 
-        let fetch_names: Vec<String> = if prop_names.is_empty() {
+        let fetch_names: Vec<std::sync::Arc<str>> = if prop_names.is_empty() {
             Vec::new()
         } else {
             let mut run = prop_names.to_vec();
             for extra in self.predicate_columns.iter() {
-                if !run.iter().any(|c| c == extra) {
-                    run.push(extra.clone());
+                if !run.iter().any(|c| **c == **extra) {
+                    run.push(extra.clone().into());
                 }
             }
             run
         };
-        let fetch_opt: Option<Vec<String>> = if prop_names.is_empty() {
+        let fetch_opt: Option<Vec<std::sync::Arc<str>>> = if prop_names.is_empty() {
             None
         } else {
             Some(fetch_names.clone())
@@ -193,7 +193,7 @@ impl GraphEdgeCursor {
         let mut out_dsts: Vec<VertexId> = Vec::new();
         let mut out_types: Vec<String> = Vec::new();
         let mut out_ranks: Vec<i64> = Vec::new();
-        let mut union_names: Vec<String> = Vec::new();
+        let mut union_names: Vec<std::sync::Arc<str>> = Vec::new();
         let mut union_columns: Vec<ColumnValues> = Vec::new();
 
         let data_store = ctx.data_store().clone();
@@ -289,13 +289,14 @@ impl GraphEdgeCursor {
                     ts,
                     fetch_opt.as_deref(),
                 );
-                let mut col_map: std::collections::HashMap<String, ColumnValues> =
+                let mut col_map: std::collections::HashMap<std::sync::Arc<str>, ColumnValues> =
                     std::collections::HashMap::new();
                 for (name, values) in decoded {
                     col_map.insert(name, values);
                 }
-                let run_names: Vec<String> = if prop_names.is_empty() {
-                    let mut names: Vec<String> = col_map.keys().cloned().collect::<Vec<_>>();
+                let run_names: Vec<std::sync::Arc<str>> = if prop_names.is_empty() {
+                    let mut names: Vec<std::sync::Arc<str>> =
+                        col_map.keys().cloned().collect::<Vec<_>>();
                     names.sort();
                     names
                 } else {
@@ -316,7 +317,7 @@ impl GraphEdgeCursor {
                         let mut ok = true;
                         for pred in predicate.iter() {
                             let col_name = pred.column();
-                            let idx_opt = run_names.iter().position(|n| n == col_name);
+                            let idx_opt = run_names.iter().position(|n| *n.as_ref() == *col_name);
                             match idx_opt {
                                 Some(idx) => {
                                     if !pred.matches_column(&run_columns[idx], row) {
@@ -462,8 +463,8 @@ impl GraphEdgeCursor {
 
     /// Assemble the final [`EdgeColumnBatch`] from decoded union columns.
     fn assemble_edge_column_batch(
-        prop_names: &[String],
-        union_names: Vec<String>,
+        prop_names: &[std::sync::Arc<str>],
+        union_names: Vec<std::sync::Arc<str>>,
         columns: Vec<crate::cursor::ColumnValues>,
         srcs: Vec<VertexId>,
         dsts: Vec<VertexId>,
@@ -489,13 +490,13 @@ impl GraphEdgeCursor {
                 .map(|name| {
                     let values = union_names
                         .iter()
-                        .position(|n| n == name)
+                        .position(|n| n.as_ref() == name.as_ref())
                         .and_then(|index| columns.get(index).cloned())
                         .unwrap_or_else(|| {
                             crate::cursor::ColumnValues::General(vec![None; row_count])
                         });
                     PropertyColumn {
-                        name: name.clone(),
+                        name: name.clone().into(),
                         data_type: DataType::Empty,
                         values,
                     }
@@ -519,7 +520,7 @@ impl EdgeCursor for GraphEdgeCursor {
 
     fn next_column_batch(
         &mut self,
-        prop_names: &[String],
+        prop_names: &[std::sync::Arc<str>],
         batch_size: usize,
     ) -> Result<EdgeColumnBatch, StorageError> {
         if self.exhausted {
@@ -644,9 +645,9 @@ struct ScanArgs<'a> {
     td: &'a TableDef,
     ts: Timestamp,
     src_id_range: &'a Option<Range<i64>>,
-    projection: &'a Option<Vec<String>>,
+    projection: &'a Option<Vec<Arc<str>>>,
     predicate: &'a [crate::cursor::ScanPredicate],
-    predicate_columns: &'a [String],
+    predicate_columns: &'a [Arc<str>],
     limit: Option<usize>,
     emitted: &'a mut usize,
     offset_remaining: &'a mut usize,
@@ -851,7 +852,7 @@ fn scan_mutable(args: ScanArgs) {
     // Column pruning: fetch the projection plus any predicate-only columns
     // in one storage read instead of decoding every column per edge.
     // `None` still means all columns.
-    let fetch_columns: Option<Vec<String>> = match *projection {
+    let fetch_columns: Option<Vec<Arc<str>>> = match *projection {
         None => None,
         Some(ref names) => {
             let mut cols = names.clone();
@@ -966,7 +967,7 @@ struct EdgeBuildArgs<'a> {
     td: &'a TableDef,
     src_vid: &'a VertexId,
     nbr: Nbr,
-    props: Vec<(String, Value)>,
+    props: Vec<(Arc<str>, Value)>,
 }
 
 struct EdgeCandidate {
@@ -976,7 +977,7 @@ struct EdgeCandidate {
     src_vid: VertexId,
     dst_vid: VertexId,
     rank: i64,
-    props: HashMap<String, Value>,
+    props: HashMap<Arc<str>, Value>,
 }
 
 fn build_edge_candidate(args: EdgeBuildArgs<'_>) -> EdgeCandidate {
@@ -985,7 +986,7 @@ fn build_edge_candidate(args: EdgeBuildArgs<'_>) -> EdgeCandidate {
     let dst_vid = VertexId::from_u32(args.nbr.endpoint);
 
     let src_vid = VertexId::from_u32(src_internal);
-    let props: HashMap<String, Value> = args.props.into_iter().collect();
+    let props: HashMap<Arc<str>, Value> = args.props.into_iter().collect();
     EdgeCandidate {
         edge_type_name: args.target.edge_type_name.clone(),
         src_label: args.td.tbl_src,
@@ -1032,8 +1033,8 @@ fn try_decode_edge_properties(
     store: &EdgeStore,
     edge_id: graphdb_core::types::EdgeId,
     ts: Timestamp,
-    fetch: Option<&[String]>,
-) -> Option<StorageResult<Vec<(String, Value)>>> {
+    fetch: Option<&[Arc<str>]>,
+) -> Option<StorageResult<Vec<(Arc<str>, Value)>>> {
     if !store.is_visible(edge_id, ts) {
         return None;
     }
@@ -1051,14 +1052,14 @@ fn try_decode_edge_properties(
 }
 
 /// Drop predicate-only columns so emitted rows carry projected properties.
-fn trim_to_projection(props: &mut Vec<(String, Value)>, projection: &Option<Vec<String>>) {
+fn trim_to_projection(props: &mut Vec<(Arc<str>, Value)>, projection: &Option<Vec<Arc<str>>>) {
     if let Some(names) = projection {
         props.retain(|(k, _)| names.iter().any(|name| name == k));
     }
 }
 
 /// Collect the property names a scan predicate references.
-fn collect_predicate_columns(pred: &crate::cursor::ScanPredicate, out: &mut Vec<String>) {
+fn collect_predicate_columns(pred: &crate::cursor::ScanPredicate, out: &mut Vec<Arc<str>>) {
     use crate::cursor::ScanPredicate as P;
     match pred {
         P::ColumnEqual { column, .. } => {

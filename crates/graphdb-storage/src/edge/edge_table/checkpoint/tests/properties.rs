@@ -33,12 +33,12 @@ fn properties_file_skipped_when_clean() {
 fn unpublished_column_is_dropped_on_reload() {
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     // Fill the physical column but never publish: a crash here must be
     // equivalent to aborting the staged change.
     table
-        .prepare_add_property("score".to_string(), graphdb_core::DataType::Int, true, None)
+        .prepare_add_property("score".into(), graphdb_core::DataType::Int, true, None)
         .unwrap();
     table.fill_pending_add_property().unwrap();
     assert!(table.properties.has_property("score"));
@@ -53,7 +53,7 @@ fn unpublished_column_is_dropped_on_reload() {
     let mut loaded = make_table();
     loaded.load(dir.path()).expect("load should succeed");
     assert!(!loaded.properties.has_property("score"));
-    assert!(!loaded.schema.properties.iter().any(|p| p.name == "score"));
+    assert!(!loaded.schema.properties.iter().any(|p| &*p.name == "score"));
     assert!(loaded.has_edge(0, 1, 0, 200));
     assert!(loaded.pending_add_column().is_none());
 }
@@ -62,11 +62,11 @@ fn unpublished_column_is_dropped_on_reload() {
 fn published_column_survives_reload_with_stats() {
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(3.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(3.0))], 100)
         .unwrap();
     table
         .prepare_add_property(
-            "score".to_string(),
+            "score".into(),
             graphdb_core::DataType::Int,
             true,
             Some(Value::Int(7)),
@@ -85,12 +85,12 @@ fn published_column_survives_reload_with_stats() {
     // A fresh table only knows the published schema when loading.
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "knows".to_string(),
+        label_name: "knows".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![
-            StoragePropertyDef::new("weight".to_string(), graphdb_core::types::DataType::Double),
-            StoragePropertyDef::new("score".to_string(), graphdb_core::types::DataType::Int),
+            StoragePropertyDef::new("weight".into(), graphdb_core::types::DataType::Double),
+            StoragePropertyDef::new("score".into(), graphdb_core::types::DataType::Int),
         ],
         oe_strategy: EdgeStrategy::Multiple,
         ie_strategy: EdgeStrategy::Multiple,
@@ -118,7 +118,7 @@ fn encoded_values_survive_reload_with_encoding() {
                 i,
                 i + 100,
                 0,
-                &[("weight".to_string(), Value::Double(i as f64))],
+                &[("weight".into(), Value::Double(i as f64))],
                 100,
             )
             .unwrap();
@@ -142,7 +142,7 @@ fn encoded_values_survive_reload_with_encoding() {
     assert!(record
         .properties
         .iter()
-        .any(|(k, v)| k == "weight" && *v == Value::Double(3.0)));
+        .any(|(k, v)| &**k == "weight" && *v == Value::Double(3.0)));
     let snapshot = loaded
         .column_stats_snapshot("weight")
         .expect("flushed stats should be queryable");
@@ -153,12 +153,12 @@ fn encoded_values_survive_reload_with_encoding() {
 fn make_two_prop_table() -> EdgeStore {
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "knows".to_string(),
+        label_name: "knows".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![
-            StoragePropertyDef::new("a".to_string(), graphdb_core::types::DataType::Int),
-            StoragePropertyDef::new("b".to_string(), graphdb_core::types::DataType::Double),
+            StoragePropertyDef::new("a".into(), graphdb_core::types::DataType::Int),
+            StoragePropertyDef::new("b".into(), graphdb_core::types::DataType::Double),
         ],
         oe_strategy: EdgeStrategy::Multiple,
         ie_strategy: EdgeStrategy::Multiple,
@@ -174,12 +174,7 @@ fn point_write_tracks_group_column_scope() {
     // column, so the next flush patches that group alone and clean groups
     // reuse their files untouched.
     let mut table = make_two_prop_table();
-    let props = |a: i32, b: f64| {
-        vec![
-            ("a".to_string(), Value::Int(a)),
-            ("b".to_string(), Value::Double(b)),
-        ]
-    };
+    let props = |a: i32, b: f64| vec![("a".into(), Value::Int(a)), ("b".into(), Value::Double(b))];
     table.insert_edge(0, 1, 0, &props(1, 1.5), 100).unwrap();
     table
         .insert_edge(5000, 6000, 0, &props(2, 2.5), 100)
@@ -228,29 +223,29 @@ fn point_write_tracks_group_column_scope() {
     assert!(near
         .properties
         .iter()
-        .any(|(k, v)| k == "a" && *v == Value::Int(7)));
+        .any(|(k, v)| &**k == "a" && *v == Value::Int(7)));
     assert!(near
         .properties
         .iter()
-        .any(|(k, v)| k == "b" && *v == Value::Double(1.5)));
+        .any(|(k, v)| &**k == "b" && *v == Value::Double(1.5)));
     let far = loaded
         .get_edge(5000, 6000, 0, 300)
         .expect("far edge survives");
     assert!(far
         .properties
         .iter()
-        .any(|(k, v)| k == "a" && *v == Value::Int(2)));
+        .any(|(k, v)| &**k == "a" && *v == Value::Int(2)));
     assert!(far
         .properties
         .iter()
-        .any(|(k, v)| k == "b" && *v == Value::Double(2.5)));
+        .any(|(k, v)| &**k == "b" && *v == Value::Double(2.5)));
 }
 
 #[test]
 fn truncated_properties_payload_is_rejected() {
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let payload = table.properties.dump();
     assert!(!payload.is_empty());
@@ -265,10 +260,10 @@ fn truncated_properties_payload_is_rejected() {
 fn stable_column_ids_survive_drop_and_reload() {
     let mut table = make_table();
     table
-        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     table
-        .add_property("score".to_string(), graphdb_core::DataType::Int, true)
+        .add_property("score".into(), graphdb_core::DataType::Int, true)
         .expect("add score should succeed");
     let score_id = table
         .properties
@@ -287,11 +282,11 @@ fn stable_column_ids_survive_drop_and_reload() {
 
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "knows".to_string(),
+        label_name: "knows".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![StoragePropertyDef::new(
-            "score".to_string(),
+            "score".into(),
             graphdb_core::types::DataType::Int,
         )],
         oe_strategy: EdgeStrategy::Multiple,
@@ -304,7 +299,7 @@ fn stable_column_ids_survive_drop_and_reload() {
     loaded.load(dir.path()).expect("load should succeed");
     assert_eq!(loaded.properties.get_property_id("score"), Some(score_id));
     loaded
-        .add_property("extra".to_string(), graphdb_core::DataType::Int, true)
+        .add_property("extra".into(), graphdb_core::DataType::Int, true)
         .expect("add extra should succeed");
     let extra_id = loaded
         .properties

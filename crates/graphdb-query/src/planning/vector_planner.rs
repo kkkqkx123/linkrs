@@ -723,13 +723,10 @@ mod tests {
         use crate::metadata::{EdgeTypeMetadata, TagMetadata};
 
         let mut metadata = MetadataContext::new();
-        metadata.set_tag_metadata(
-            "Article".to_string(),
-            TagMetadata::new("Article".to_string(), 1),
-        );
+        metadata.set_tag_metadata("Article".to_string(), TagMetadata::new("Article".into(), 1));
         metadata.set_edge_type_metadata(
             "WROTE".to_string(),
-            EdgeTypeMetadata::new("WROTE".to_string(), 1),
+            EdgeTypeMetadata::new("WROTE".into(), 1),
         );
         let planner = VectorSearchPlanner::with_metadata_context(Arc::new(metadata));
 

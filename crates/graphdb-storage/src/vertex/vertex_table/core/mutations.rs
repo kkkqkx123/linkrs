@@ -17,7 +17,7 @@ impl VertexTable {
             .schema
             .properties
             .get(self.schema.primary_key_index)
-            .is_some_and(|pk| pk.name == col_name)
+            .is_some_and(|pk| &*pk.name == col_name)
         {
             return Err(StorageError::invalid_operation(format!(
                 "Primary key column '{}' mirrors the vertex id and cannot be updated; delete and re-insert the vertex instead",
@@ -54,7 +54,7 @@ impl VertexTable {
         // into a whole-row update always carries it), while a divergent
         // value would fork the key from its mirror and is rejected.
         if let Some(pk_def) = self.schema.properties.get(self.schema.primary_key_index) {
-            if pk_def.name == col_name {
+            if &*pk_def.name == col_name {
                 let key = self
                     .id_indexer
                     .get_key(internal_id)

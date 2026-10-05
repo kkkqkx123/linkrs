@@ -22,10 +22,7 @@ mod tests {
         let person_label = graph
             .create_vertex_type(
                 "person",
-                vec![StoragePropertyDef::new(
-                    "name".to_string(),
-                    DataType::String,
-                )],
+                vec![StoragePropertyDef::new("name".into(), DataType::String)],
                 "name",
             )
             .unwrap();
@@ -35,7 +32,7 @@ mod tests {
             .insert_vertex_with_scope(
                 person_label,
                 "alice",
-                &[("name".to_string(), Value::string("alice"))],
+                &[("name".into(), Value::string("alice"))],
                 100,
                 &mut scope,
             )

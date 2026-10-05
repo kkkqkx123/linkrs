@@ -1,6 +1,7 @@
 use crate::index::types::{EdgeIdentity, GcStats};
 use graphdb_core::types::{Index, Timestamp, MAX_TIMESTAMP};
 use graphdb_core::{StorageError, Value};
+use std::sync::Arc;
 
 pub trait VertexIndexOps: Send + Sync {
     fn update_vertex_indexes_mvcc(
@@ -8,7 +9,7 @@ pub trait VertexIndexOps: Send + Sync {
         space_id: u64,
         vertex_id: &Value,
         index_name: &str,
-        props: &[(String, Value)],
+        props: &[(Arc<str>, Value)],
         write_ts: Timestamp,
     ) -> Result<(), StorageError>;
 
@@ -71,7 +72,7 @@ pub trait EdgeIndexOps: Send + Sync {
         &self,
         edge: &EdgeIdentity<'_>,
         index_name: &str,
-        props: &[(String, Value)],
+        props: &[(Arc<str>, Value)],
         write_ts: Timestamp,
     ) -> Result<(), StorageError>;
 

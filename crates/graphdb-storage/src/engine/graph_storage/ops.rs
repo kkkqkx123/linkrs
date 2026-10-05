@@ -3,6 +3,7 @@
 //! Contains type conversion utilities, user operations, and maintenance operations.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::edge::EdgeRecord;
 use crate::vertex::VertexRecord;
@@ -101,7 +102,8 @@ pub(crate) fn edge_label_id(
 }
 
 pub(crate) fn vertex_record_to_vertex(record: &VertexRecord, tag_name: &str) -> Vertex {
-    let properties: HashMap<String, Value> = record.properties.iter().cloned().collect();
+    let properties: HashMap<std::sync::Arc<str>, Value> =
+        record.properties.iter().cloned().collect();
 
     Vertex::new(
         record.vid,
@@ -119,7 +121,7 @@ pub(crate) fn edge_record_to_edge(
     dst_vid: VertexId,
 ) -> Edge {
     let rank = record.rank;
-    let props: HashMap<String, Value> = record.properties.into_iter().collect();
+    let props: HashMap<Arc<str>, Value> = record.properties.into_iter().collect();
     edge_record_to_edge_with_props(rank, edge_type, src_vid, dst_vid, props)
 }
 
@@ -134,10 +136,10 @@ pub(crate) fn edge_record_to_edge_projected(
     edge_type: &str,
     src_vid: VertexId,
     dst_vid: VertexId,
-    projection: &[String],
+    projection: &[Arc<str>],
 ) -> Edge {
     let rank = record.rank;
-    let props: HashMap<String, Value> = if projection.is_empty() {
+    let props: HashMap<Arc<str>, Value> = if projection.is_empty() {
         record.properties.into_iter().collect()
     } else {
         record
@@ -154,7 +156,7 @@ fn edge_record_to_edge_with_props(
     edge_type: &str,
     src_vid: VertexId,
     dst_vid: VertexId,
-    props: HashMap<String, Value>,
+    props: HashMap<Arc<str>, Value>,
 ) -> Edge {
     Edge {
         src: src_vid,
@@ -165,7 +167,7 @@ fn edge_record_to_edge_with_props(
     }
 }
 
-pub(crate) fn serialize_properties(props: &[(String, Value)]) -> Vec<u8> {
+pub(crate) fn serialize_properties(props: &[(Arc<str>, Value)]) -> Vec<u8> {
     let mut data = Vec::new();
     for (key, value) in props {
         data.extend_from_slice(key.as_bytes());
@@ -417,8 +419,8 @@ mod tests {
             vid: int_42,
             internal_id: 5,
             properties: vec![
-                ("name".to_string(), Value::string("Alice")),
-                ("age".to_string(), Value::BigInt(30)),
+                ("name".into(), Value::string("Alice")),
+                ("age".into(), Value::BigInt(30)),
             ],
         };
 
@@ -441,7 +443,7 @@ mod tests {
             src_vid,
             dst_vid,
             rank: 0,
-            properties: vec![("since".to_string(), Value::Int(2020))],
+            properties: vec![("since".into(), Value::Int(2020))],
         };
 
         let edge = edge_record_to_edge(record, "KNOWS", src_vid, dst_vid);
@@ -474,7 +476,7 @@ mod tests {
 
     #[test]
     fn test_serialize_properties_string() {
-        let props = vec![("name".to_string(), Value::string("Alice"))];
+        let props = vec![("name".into(), Value::string("Alice"))];
         let data = serialize_properties(&props);
         assert!(!data.is_empty());
         assert!(data.contains(&b'n'));
@@ -483,21 +485,21 @@ mod tests {
 
     #[test]
     fn test_serialize_properties_int() {
-        let props = vec![("age".to_string(), Value::Int(30))];
+        let props = vec![("age".into(), Value::Int(30))];
         let data = serialize_properties(&props);
         assert!(!data.is_empty());
     }
 
     #[test]
     fn test_serialize_properties_bool() {
-        let props = vec![("active".to_string(), Value::Bool(true))];
+        let props = vec![("active".into(), Value::Bool(true))];
         let data = serialize_properties(&props);
         assert!(!data.is_empty());
     }
 
     #[test]
     fn test_serialize_properties_float() {
-        let props = vec![("score".to_string(), Value::Float(9.5))];
+        let props = vec![("score".into(), Value::Float(9.5))];
         let data = serialize_properties(&props);
         assert!(!data.is_empty());
     }
@@ -511,9 +513,9 @@ mod tests {
     #[test]
     fn test_serialize_properties_multiple() {
         let props = vec![
-            ("name".to_string(), Value::string("Bob")),
-            ("age".to_string(), Value::Int(25)),
-            ("active".to_string(), Value::Bool(true)),
+            ("name".into(), Value::string("Bob")),
+            ("age".into(), Value::Int(25)),
+            ("active".into(), Value::Bool(true)),
         ];
         let data = serialize_properties(&props);
         assert!(!data.is_empty());

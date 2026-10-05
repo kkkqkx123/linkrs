@@ -10,6 +10,7 @@ use crate::engine::cache_manager::VertexSeed;
 use crate::mvcc_visibility::{PendingGate, VisibilityGuard};
 use crate::vertex::{IdKey, ShardedVertexTable, VertexRecord};
 use graphdb_core::types::{LabelId, Timestamp, VertexId};
+use std::sync::Arc;
 
 use super::super::GraphStorageContext;
 
@@ -31,21 +32,24 @@ pub(crate) fn vid_of_key(key: &IdKey) -> Option<VertexId> {
 /// Overlay staged column updates onto a property list: later-staged values
 /// win, columns absent from the base row are appended.
 pub(crate) fn apply_staged_columns(
-    properties: &mut Vec<(String, graphdb_core::Value)>,
-    columns: &[(String, graphdb_core::Value)],
+    properties: &mut Vec<(std::sync::Arc<str>, graphdb_core::Value)>,
+    columns: &[(std::sync::Arc<str>, graphdb_core::Value)],
 ) {
     for (name, value) in columns {
-        match properties.iter_mut().find(|(existing, _)| existing == name) {
+        match properties
+            .iter_mut()
+            .find(|(existing, _)| existing.as_ref() == name.as_ref())
+        {
             Some(slot) => slot.1 = value.clone(),
-            None => properties.push((name.clone(), value.clone())),
+            None => properties.push((name.clone().into(), value.clone())),
         }
     }
 }
 
 /// Remove staged column deletions from a property list.
 pub(crate) fn apply_staged_property_deletes(
-    properties: &mut Vec<(String, graphdb_core::Value)>,
-    deleted: &[String],
+    properties: &mut Vec<(std::sync::Arc<str>, graphdb_core::Value)>,
+    deleted: &[Arc<str>],
 ) {
     if deleted.is_empty() {
         return;
@@ -59,7 +63,7 @@ pub(crate) fn apply_staged_property_deletes(
 pub(crate) struct StagedRow {
     pub vid: VertexId,
     pub id: u32,
-    pub properties: Vec<(String, graphdb_core::Value)>,
+    pub properties: Vec<(std::sync::Arc<str>, graphdb_core::Value)>,
 }
 
 /// Per-label scan merge input derived from staging.
@@ -72,15 +76,15 @@ pub(crate) struct StagedScanMerge {
     pub rows: Vec<StagedRow>,
 }
 
-type StagedProperties = Vec<(String, graphdb_core::Value)>;
+type StagedProperties = Vec<(std::sync::Arc<str>, graphdb_core::Value)>;
 type ComposedStagedRow = Option<(u32, StagedProperties)>;
 
 impl GraphStorageContext {
     /// Filter a property list through an optional projection.
     fn project_properties(
-        properties: &[(String, graphdb_core::Value)],
-        projection: Option<&[String]>,
-    ) -> Vec<(String, graphdb_core::Value)> {
+        properties: &[(std::sync::Arc<str>, graphdb_core::Value)],
+        projection: Option<&[Arc<str>]>,
+    ) -> Vec<(std::sync::Arc<str>, graphdb_core::Value)> {
         match projection {
             None => properties.to_vec(),
             Some(names) => properties
@@ -106,7 +110,7 @@ impl GraphStorageContext {
         &self,
         label: LabelId,
         key: &IdKey,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> Option<VertexRecord> {
         let buffer = self.active_txn_staging()?;
         let buffer = buffer.lock();
@@ -538,7 +542,7 @@ impl GraphStorageContext {
         &self,
         label: LabelId,
         internal_id: u32,
-        projection: Option<&[String]>,
+        projection: Option<&[std::sync::Arc<str>]>,
         ts: Timestamp,
     ) -> Option<VertexRecord> {
         let key = self.staged_key_for_id(label, internal_id);
@@ -577,7 +581,7 @@ impl GraphStorageContext {
                     match projection {
                         None => apply_staged_property_deletes(&mut properties, deleted),
                         Some(names) => {
-                            let scoped: Vec<String> = deleted
+                            let scoped: Vec<Arc<str>> = deleted
                                 .iter()
                                 .filter(|name| names.iter().any(|n| n == *name))
                                 .cloned()

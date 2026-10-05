@@ -7,6 +7,7 @@ use super::super::staging::EdgeStagingBatch;
 use super::EdgeStore;
 use graphdb_core::types::{EdgeId, Timestamp, VertexId};
 use graphdb_core::Value;
+use std::sync::Arc;
 
 use super::super::iterator::EdgeTableScanIterator;
 
@@ -14,7 +15,7 @@ use super::super::iterator::EdgeTableScanIterator;
 #[derive(Clone, Copy)]
 struct PropertyQuery<'a> {
     query_ts: Timestamp,
-    projection: Option<&'a [String]>,
+    projection: Option<&'a [Arc<str>]>,
     /// Selects the shard row holding the inline value for bundled tables.
     outgoing: bool,
 }
@@ -357,7 +358,7 @@ impl EdgeStore {
         src: u32,
         ts: Timestamp,
         gate: &crate::mvcc_visibility::PendingGate<'_>,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> Vec<EdgeRecord> {
         if !self.is_open || !self.schema.has_out() {
             return Vec::new();
@@ -416,7 +417,7 @@ impl EdgeStore {
         dst: u32,
         ts: Timestamp,
         gate: &crate::mvcc_visibility::PendingGate<'_>,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> Vec<EdgeRecord> {
         if !self.is_open || !self.schema.has_in() {
             return Vec::new();
@@ -465,7 +466,7 @@ impl EdgeStore {
         src: u32,
         ts: Timestamp,
         gate: &crate::mvcc_visibility::PendingGate<'_>,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
         limit: usize,
     ) -> Vec<EdgeRecord> {
         if !self.is_open || limit == 0 {
@@ -512,7 +513,7 @@ impl EdgeStore {
         dst: u32,
         ts: Timestamp,
         gate: &crate::mvcc_visibility::PendingGate<'_>,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
         limit: usize,
     ) -> Vec<EdgeRecord> {
         if !self.is_open || limit == 0 {
@@ -572,8 +573,8 @@ impl EdgeStore {
         row: u32,
         edge_id: EdgeId,
         query_ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Vec<(String, Value)> {
+        projection: Option<&[Arc<str>]>,
+    ) -> Vec<(Arc<str>, Value)> {
         if !self.is_visible(edge_id, query_ts) {
             return Vec::new();
         }
@@ -581,7 +582,7 @@ impl EdgeStore {
             return Vec::new();
         };
         if let Some(names) = projection {
-            if !names.iter().any(|n| n == &prop.name) {
+            if !names.iter().any(|n| *n.as_ref() == *prop.name.as_ref()) {
                 return Vec::new();
             }
         }
@@ -605,8 +606,8 @@ impl EdgeStore {
         &self,
         edge_id: EdgeId,
         query_ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Vec<(String, Value)> {
+        projection: Option<&[Arc<str>]>,
+    ) -> Vec<(Arc<str>, Value)> {
         if !self.is_visible(edge_id, query_ts) {
             return Vec::new();
         }
@@ -635,7 +636,7 @@ impl EdgeStore {
         &self,
         edge_id: EdgeId,
         query_ts: Timestamp,
-    ) -> Vec<(String, Value)> {
+    ) -> Vec<(Arc<str>, Value)> {
         self.properties_for_edge_projected(edge_id, query_ts, None)
     }
 
@@ -648,8 +649,8 @@ impl EdgeStore {
         &self,
         edge_id: EdgeId,
         query_ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Vec<(String, Value)> {
+        projection: Option<&[Arc<str>]>,
+    ) -> Vec<(Arc<str>, Value)> {
         if self.is_bundled() {
             return self.bundled_scan_properties(edge_id, query_ts, projection);
         }
@@ -668,8 +669,8 @@ impl EdgeStore {
         &self,
         edge_id: EdgeId,
         query_ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Vec<(String, Value)> {
+        projection: Option<&[Arc<str>]>,
+    ) -> Vec<(Arc<str>, Value)> {
         // MVCCManager is the single visibility authority. Row stamps exist
         // only for collection and must not decide query visibility here.
         if !self.is_visible(edge_id, query_ts) {
@@ -698,14 +699,14 @@ impl EdgeStore {
         row: u32,
         edge_id: EdgeId,
         query_ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Vec<(String, Value)> {
+        projection: Option<&[Arc<str>]>,
+    ) -> Vec<(Arc<str>, Value)> {
         let _ = query_ts;
         let Some(prop) = self.schema.properties.first() else {
             return Vec::new();
         };
         if let Some(names) = projection {
-            if !names.iter().any(|n| n == &prop.name) {
+            if !names.iter().any(|n| *n.as_ref() == *prop.name.as_ref()) {
                 return Vec::new();
             }
         }
@@ -728,8 +729,8 @@ impl EdgeStore {
         &self,
         edge_id: EdgeId,
         query_ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Vec<(String, Value)> {
+        projection: Option<&[Arc<str>]>,
+    ) -> Vec<(Arc<str>, Value)> {
         for gid in self.out_csr.existing_group_ids() {
             let base = crate::edge::node_group::group_base(gid, self.out_csr.group_bits());
             let mut hit: Option<u32> = None;
@@ -761,8 +762,8 @@ impl EdgeStore {
         &self,
         edge_id: EdgeId,
         query_ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Vec<(String, Value)> {
+        projection: Option<&[Arc<str>]>,
+    ) -> Vec<(Arc<str>, Value)> {
         self.properties
             .get_projected_physical_by_edge_id(edge_id, query_ts, projection)
             .map(|rows| {
@@ -785,8 +786,8 @@ impl EdgeStore {
         &self,
         edge_ids: &[EdgeId],
         query_ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Vec<Vec<(String, Value)>> {
+        projection: Option<&[Arc<str>]>,
+    ) -> Vec<Vec<(Arc<str>, Value)>> {
         self.properties
             .get_projected_physical_batch_by_edge_ids(edge_ids, query_ts, projection)
             .into_iter()
@@ -815,8 +816,8 @@ impl EdgeStore {
         edge_ids: &[EdgeId],
         rows: &[u32],
         query_ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Vec<(String, crate::cursor::ColumnValues)> {
+        projection: Option<&[std::sync::Arc<str>]>,
+    ) -> Vec<(std::sync::Arc<str>, crate::cursor::ColumnValues)> {
         if self.is_bundled() {
             let Some(prop) = self.schema.properties.first() else {
                 return Vec::new();
@@ -827,7 +828,7 @@ impl EdgeStore {
                     if names.is_empty() {
                         return Vec::new();
                     }
-                    names.iter().any(|n| n == &prop.name)
+                    names.iter().any(|n| *n.as_ref() == *prop.name.as_ref())
                 }
             };
             if !want {
@@ -866,6 +867,9 @@ impl EdgeStore {
         }
         self.properties
             .get_typed_columns_batch_by_edge_ids(edge_ids, query_ts, projection)
+            .into_iter()
+            .map(|(name, values)| (name, values))
+            .collect()
     }
 
     /// Hot record assembly without a visibility recheck.
@@ -912,7 +916,7 @@ impl EdgeStore {
         src: u32,
         nbr: Nbr,
         query_ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> EdgeRecord {
         let properties = if self.is_bundled() {
             self.bundled_properties_at_assume_visible(true, src, nbr.edge_id, query_ts, projection)
@@ -939,7 +943,7 @@ impl EdgeStore {
         dst: u32,
         nbr: Nbr,
         query_ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> EdgeRecord {
         let properties = if self.is_bundled() {
             self.bundled_properties_at_assume_visible(false, dst, nbr.edge_id, query_ts, projection)
@@ -1078,7 +1082,7 @@ impl EdgeStore {
         rank: i64,
         ts: Timestamp,
         gate: &crate::mvcc_visibility::PendingGate<'_>,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> Option<EdgeRecord> {
         self.get_edge_projected_with_id(src, dst, rank, ts, gate, projection)
             .map(|(record, _)| record)
@@ -1099,7 +1103,7 @@ impl EdgeStore {
         rank: i64,
         ts: Timestamp,
         gate: &crate::mvcc_visibility::PendingGate<'_>,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> Option<(EdgeRecord, EdgeId)> {
         if !self.is_open {
             return None;
@@ -1161,7 +1165,7 @@ impl EdgeStore {
         &self,
         src: u32,
         ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> Vec<EdgeRecord> {
         if !self.is_open {
             return Vec::new();
@@ -1239,7 +1243,7 @@ impl EdgeStore {
         &self,
         dst: u32,
         ts: Timestamp,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> Vec<EdgeRecord> {
         if !self.is_open {
             return Vec::new();
@@ -1389,7 +1393,7 @@ impl EdgeStore {
     pub fn scan_projected(
         &self,
         ts: Timestamp,
-        projection: Option<Vec<String>>,
+        projection: Option<Vec<Arc<str>>>,
     ) -> Vec<EdgeRecord> {
         if !self.is_open {
             return Vec::new();
@@ -1447,7 +1451,7 @@ impl EdgeStore {
         &self,
         ts: Timestamp,
         gate: &crate::mvcc_visibility::PendingGate<'_>,
-        projection: Option<&[String]>,
+        projection: Option<&[Arc<str>]>,
     ) -> Vec<EdgeRecord> {
         if !self.is_open {
             return Vec::new();
@@ -1498,7 +1502,7 @@ impl EdgeStore {
     pub fn iter_projected(
         &self,
         ts: Timestamp,
-        projection: Option<Vec<String>>,
+        projection: Option<Vec<Arc<str>>>,
     ) -> EdgeTableScanIterator<'_> {
         EdgeTableScanIterator::with_projection(self, ts, projection)
     }

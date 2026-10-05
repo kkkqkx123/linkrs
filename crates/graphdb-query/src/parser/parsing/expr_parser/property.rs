@@ -216,7 +216,7 @@ pub(crate) fn parse_postfix_expression(
             ctx.next_token();
             let span = ctx.merge_span(expression.span.start, ctx.current_position());
             expression = ParseResult {
-                expr: Expression::function("factorial".to_string(), vec![expression.expr]),
+                expr: Expression::function("factorial", vec![expression.expr]),
                 span,
             };
         } else {

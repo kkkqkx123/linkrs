@@ -52,7 +52,7 @@ pub enum ScanTarget {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RequiredProperty {
     /// Property name (column name in storage).
-    pub name: String,
+    pub name: Arc<str>,
     /// Resolved column index in the target `ColumnStore`, if known.
     pub column_id: Option<i32>,
     /// Data type from schema binding.
@@ -62,7 +62,8 @@ pub struct RequiredProperty {
 }
 
 impl RequiredProperty {
-    pub fn new(name: String) -> Self {
+    pub fn new(name: impl Into<Arc<str>>) -> Self {
+        let name = name.into();
         Self {
             name,
             column_id: None,
@@ -72,13 +73,13 @@ impl RequiredProperty {
     }
 
     pub fn with_metadata(
-        name: String,
+        name: impl Into<Arc<str>>,
         column_id: Option<i32>,
         data_type: Option<DataType>,
         schema_version: u64,
     ) -> Self {
         Self {
-            name,
+            name: name.into(),
             column_id,
             data_type,
             schema_version,
@@ -233,7 +234,7 @@ pub enum IndexRow {
     RowId(graphdb_core::wal::EntityRef),
     Covering {
         entity_ref: graphdb_core::wal::EntityRef,
-        columns: Vec<(String, graphdb_core::Value)>,
+        columns: Vec<(std::sync::Arc<str>, graphdb_core::Value)>,
     },
 }
 
@@ -248,7 +249,7 @@ pub struct IndexScanPlan {
     /// Forwarded from `PartitionView`; the storage layer converts this to
     /// precise key bounds using index metadata.
     pub partition_id_range: Option<std::ops::Range<i64>>,
-    pub projection: Option<Vec<String>>,
+    pub projection: Option<Vec<Arc<str>>>,
     pub limit: Option<usize>,
     pub offset: usize,
     pub read_timestamp: Timestamp,
@@ -261,7 +262,7 @@ pub struct IndexScanPlan {
 /// A vertex row read from the storage columns without `Vertex`/`HashMap`
 /// boxing.
 ///
-/// The properties are a plain `Vec<(String, Value)>` in storage projection
+/// The properties are a plain `Vec<(Arc<str>, Value)>` in storage projection
 /// order. The query layer rebuilds the `Value::Vertex` slot 0 only when a
 /// consumer actually needs the entity (graph operators, `RETURN p`, label
 /// checks), skipping the per-row `HashMap` construction at the storage
@@ -275,7 +276,7 @@ pub struct FlatVertexRecord {
     /// Tag (label) name of the scanned table.
     pub tag_name: String,
     /// Projected properties in storage order.
-    pub props: Vec<(String, graphdb_core::Value)>,
+    pub props: Vec<(std::sync::Arc<str>, graphdb_core::Value)>,
 }
 
 /// Default data type for a fallback `General` column: scan the decoded values
@@ -351,7 +352,7 @@ pub trait VertexCursor: Send + std::fmt::Debug {
     /// Returns an empty batch when the scan is exhausted.
     fn next_column_batch(
         &mut self,
-        prop_names: &[String],
+        prop_names: &[std::sync::Arc<str>],
         batch_size: usize,
     ) -> Result<VertexColumnBatch, StorageError> {
         let records = self.next_flat_batch(batch_size)?;
@@ -374,14 +375,14 @@ pub trait VertexCursor: Send + std::fmt::Debug {
                 let value = record
                     .props
                     .iter()
-                    .find(|(n, _)| n == name)
+                    .find(|(n, _)| n.as_ref() == name.as_ref())
                     .map(|(_, v)| v.clone());
                 per_name[i].push(value);
             }
         }
         for (i, name) in prop_names.iter().enumerate() {
             batch.columns.push(PropertyColumn {
-                name: name.clone(),
+                name: name.clone().into(),
                 data_type: column_data_type(&per_name[i]),
                 values: ColumnValues::General(std::mem::take(&mut per_name[i])),
             });
@@ -410,7 +411,7 @@ pub trait EdgeCursor: Send + std::fmt::Debug {
     /// Returns an empty batch when the scan is exhausted.
     fn next_column_batch(
         &mut self,
-        prop_names: &[String],
+        prop_names: &[std::sync::Arc<str>],
         batch_size: usize,
     ) -> Result<EdgeColumnBatch, StorageError> {
         let edges = self.next_batch(batch_size)?;
@@ -432,12 +433,12 @@ pub trait EdgeCursor: Send + std::fmt::Debug {
             batch.edge_types.push(edge.edge_type);
             batch.rankings.push(edge.ranking);
             for (i, name) in prop_names.iter().enumerate() {
-                per_name[i].push(edge.props.get(name).cloned());
+                per_name[i].push(edge.props.get(name.as_ref()).cloned());
             }
         }
         for (i, name) in prop_names.iter().enumerate() {
             batch.columns.push(PropertyColumn {
-                name: name.clone(),
+                name: name.clone().into(),
                 data_type: column_data_type(&per_name[i]),
                 values: ColumnValues::General(std::mem::take(&mut per_name[i])),
             });
@@ -558,10 +559,10 @@ mod tests {
     #[test]
     fn next_flat_batch_default_converts_vertices() {
         let mut props = HashMap::new();
-        props.insert("age".to_string(), Value::BigInt(30));
+        props.insert("age".into(), Value::BigInt(30));
         let vertex = Vertex::new(
             VertexId::try_from_int64(1).expect("test vertex id"),
-            Tag::new("person".to_string(), props),
+            Tag::new("person".into(), props),
         );
 
         let mut cursor = VecVertexCursor::new(vec![vertex]);
@@ -576,7 +577,7 @@ mod tests {
         );
         assert_eq!(rec.internal_id, 1);
         assert_eq!(rec.tag_name, "person");
-        assert_eq!(rec.props, vec![("age".to_string(), Value::BigInt(30))]);
+        assert_eq!(rec.props, vec![("age".into(), Value::BigInt(30))]);
     }
 
     #[test]

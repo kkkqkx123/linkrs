@@ -4,6 +4,7 @@ use crate::edge::MutableCsrTrait;
 use crate::edge::{EdgePosition, INVALID_EDGE_ID};
 use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
+use std::sync::Arc;
 
 /// One incident edge removed by the vertex-scoped batch delete.
 ///
@@ -16,7 +17,7 @@ pub struct IncidentDeletedEdge {
     pub dst: u32,
     pub rank: i64,
     pub edge_id: EdgeId,
-    pub properties: Vec<(String, Value)>,
+    pub properties: Vec<(Arc<str>, Value)>,
 }
 
 impl EdgeStore {
@@ -284,7 +285,7 @@ impl EdgeStore {
                             let started = std::time::Instant::now();
                             let result = index.delete(prop_name, prop_value, src, dst, rank, ts);
                             let latency = started.elapsed().as_millis() as u64;
-                            (prop_name.clone(), result, latency)
+                            (prop_name.to_string(), result, latency)
                         })
                         .collect()
                 } else {
@@ -516,7 +517,7 @@ impl EdgeStore {
                             let started = std::time::Instant::now();
                             let result = index.delete(prop_name, prop_value, src, dst, rank, ts);
                             let latency = started.elapsed().as_millis() as u64;
-                            (prop_name.clone(), result, latency)
+                            (prop_name.to_string(), result, latency)
                         })
                         .collect()
                 } else {

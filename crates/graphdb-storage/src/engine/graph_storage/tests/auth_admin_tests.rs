@@ -4,7 +4,7 @@ use super::*;
 fn test_create_and_drop_user() {
     let mut storage = create_test_storage();
 
-    let user = UserInfo::new("test_user".to_string(), "password123".to_string()).unwrap();
+    let user = UserInfo::new("test_user".into(), "password123".to_string()).unwrap();
     storage.create_user(&user).unwrap();
 
     storage.drop_user("test_user").unwrap();
@@ -16,7 +16,7 @@ fn test_grant_and_revoke_role() {
     let space_id = setup_space(&mut storage);
     setup_person_tag(&mut storage);
 
-    let user = UserInfo::new("role_user".to_string(), "pass".to_string()).unwrap();
+    let user = UserInfo::new("role_user".into(), "pass".to_string()).unwrap();
     storage.create_user(&user).unwrap();
 
     storage
@@ -31,7 +31,7 @@ fn test_grant_and_revoke_role() {
 fn test_user_storage_persists_across_reload() {
     let (temp_dir, mut storage) = create_persistent_storage();
 
-    let user = UserInfo::new("persist_user".to_string(), "password123".to_string())
+    let user = UserInfo::new("persist_user".into(), "password123".to_string())
         .expect("UserInfo::new should succeed")
         .with_locked(true)
         .with_max_queries_per_hour(42);

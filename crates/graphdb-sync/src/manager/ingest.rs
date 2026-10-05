@@ -16,7 +16,7 @@ impl super::SyncManager {
         space_id: u64,
         tag_name: &str,
         vertex_id: &Value,
-        properties: &[(String, Value)],
+        properties: &[(Arc<str>, Value)],
         change_type: ChangeType,
     ) -> Result<(), SyncError> {
         let staged = self.expand_auto_embed_text(space_id, tag_name, properties, change_type)?;
@@ -38,9 +38,9 @@ impl super::SyncManager {
         &self,
         _space_id: u64,
         _tag_name: &str,
-        properties: &[(String, Value)],
+        properties: &[(Arc<str>, Value)],
         _change_type: ChangeType,
-    ) -> Result<Vec<(String, Value)>, SyncError> {
+    ) -> Result<Vec<(Arc<str>, Value)>, SyncError> {
         Ok(properties.to_vec())
     }
 
@@ -49,9 +49,9 @@ impl super::SyncManager {
         &self,
         space_id: u64,
         tag_name: &str,
-        properties: &[(String, Value)],
+        properties: &[(Arc<str>, Value)],
         change_type: ChangeType,
-    ) -> Result<Vec<(String, Value)>, SyncError> {
+    ) -> Result<Vec<(Arc<str>, Value)>, SyncError> {
         if !self.auto_embed_text() {
             return Ok(properties.to_vec());
         }
@@ -67,12 +67,12 @@ impl super::SyncManager {
         let explicit_vectors: HashSet<&str> = properties
             .iter()
             .filter(|(_, value)| value.as_vector().is_some())
-            .map(|(field, _)| field.as_str())
+            .map(|(field, _)| field.as_ref())
             .collect();
         let mut pending_fields = Vec::new();
         let mut pending_texts = Vec::new();
         for (field, value) in properties {
-            if explicit_vectors.contains(field.as_str()) {
+            if explicit_vectors.contains(field.as_ref()) {
                 continue;
             }
             let Some(text) = value.string_value() else {

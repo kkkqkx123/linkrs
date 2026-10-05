@@ -191,8 +191,8 @@ mod tests {
     #[test]
     fn test_register_is_idempotent() {
         let manager = CardinalityFeedbackManager::new();
-        manager.register_key("k".to_string(), 10.0);
-        manager.register_key("k".to_string(), 1000.0);
+        manager.register_key("k".into(), 10.0);
+        manager.register_key("k".into(), 1000.0);
         assert_eq!(manager.corrected_rows("k"), Some(10.0));
     }
 

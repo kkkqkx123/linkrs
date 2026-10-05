@@ -2,6 +2,7 @@ use super::common::{create_test_schema, EdgeTable};
 use crate::edge::edge_table::config::EdgeTableConfig;
 use crate::edge::edge_table::core::EdgeStore;
 use crate::edge::EdgeStrategy;
+use std::sync::Arc;
 
 #[test]
 fn test_staging_batch_commit_is_atomic_on_duplicate() {
@@ -202,18 +203,18 @@ fn test_insert_edges_batch_on_empty_columnar_table_matches_staging_effects() {
     use graphdb_core::Value;
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "rated".to_string(),
+        label_name: "rated".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![
             StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
             },
             StoragePropertyDef {
-                name: "note".to_string(),
+                name: "note".into(),
                 data_type: DataType::String,
                 nullable: true,
                 default_value: None,
@@ -227,8 +228,8 @@ fn test_insert_edges_batch_on_empty_columnar_table_matches_staging_effects() {
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     assert_eq!(table.schema.record_form, RecordForm::Columnar);
 
-    let payloads: Vec<Vec<(String, Value)>> = (1..=4u32)
-        .map(|dst| vec![("weight".to_string(), Value::Double(f64::from(dst)))])
+    let payloads: Vec<Vec<(Arc<str>, Value)>> = (1..=4u32)
+        .map(|dst| vec![(Arc::from("weight"), Value::Double(f64::from(dst)))])
         .collect();
     let entries: Vec<crate::edge::BatchInsertEntry> = payloads
         .iter()
@@ -246,14 +247,14 @@ fn test_insert_edges_batch_on_empty_columnar_table_matches_staging_effects() {
         assert!(record
             .properties
             .iter()
-            .any(|(k, v)| k == "weight" && *v == Value::Double(f64::from(dst))));
+            .any(|(k, v)| &**k == "weight" && *v == Value::Double(f64::from(dst))));
         ids.push(table.edge_id_of(0, dst, 0, 150).unwrap().0);
     }
     ids.sort_unstable();
     assert_eq!(ids, vec![0, 1, 2, 3]);
 
     // A follow-up batch on the now non-empty table commits through staging.
-    let extra: Vec<(String, Value)> = vec![("weight".to_string(), Value::Double(9.0))];
+    let extra: Vec<(Arc<str>, Value)> = vec![(Arc::from("weight"), Value::Double(9.0))];
     let more: Vec<crate::edge::BatchInsertEntry> = vec![(0, 5, 0, extra.as_slice(), 160)];
     table.insert_edges_batch(&more).unwrap();
     assert!(table.has_edge(0, 5, 0, 200));
@@ -268,18 +269,18 @@ fn test_insert_edges_batch_on_empty_table_rejects_without_residue() {
     use graphdb_core::Value;
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "rated".to_string(),
+        label_name: "rated".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![
             StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
             },
             StoragePropertyDef {
-                name: "note".to_string(),
+                name: "note".into(),
                 data_type: DataType::String,
                 nullable: true,
                 default_value: None,
@@ -293,7 +294,7 @@ fn test_insert_edges_batch_on_empty_table_rejects_without_residue() {
     let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
     assert_eq!(table.schema.record_form, RecordForm::Columnar);
 
-    let props: Vec<(String, Value)> = vec![("weight".to_string(), Value::Double(1.0))];
+    let props: Vec<(Arc<str>, Value)> = vec![(Arc::from("weight"), Value::Double(1.0))];
     let entries: Vec<crate::edge::BatchInsertEntry> = vec![
         (0, 1, 0, props.as_slice(), 100),
         (0, 1, 0, props.as_slice(), 110),
@@ -317,11 +318,11 @@ fn test_insert_edges_batch_on_empty_bundled_table_matches_staging_effects() {
     fn bundled_schema() -> EdgeSchema {
         EdgeSchema {
             label_id: 0,
-            label_name: "link".to_string(),
+            label_name: "link".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
@@ -338,7 +339,7 @@ fn test_insert_edges_batch_on_empty_bundled_table_matches_staging_effects() {
             ..Default::default()
         }
     }
-    let weight = |v: f64| vec![("weight".to_string(), Value::Double(v))];
+    let weight = |v: f64| vec![("weight".into(), Value::Double(v))];
     let w1 = weight(1.0);
     let w2 = weight(2.0);
 
@@ -397,11 +398,11 @@ fn test_bundled_bulk_import_rejects_nonempty_and_ranked_batches() {
     use graphdb_core::Value;
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "link".to_string(),
+        label_name: "link".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![StoragePropertyDef {
-            name: "weight".to_string(),
+            name: "weight".into(),
             data_type: DataType::Double,
             nullable: false,
             default_value: Some(Value::Double(0.0)),
@@ -415,7 +416,7 @@ fn test_bundled_bulk_import_rejects_nonempty_and_ranked_batches() {
         record_form: RecordFormPreference::Bundled,
         ..Default::default()
     };
-    let props = vec![("weight".to_string(), Value::Double(1.0))];
+    let props = vec![("weight".into(), Value::Double(1.0))];
 
     // Non-empty bundled tables keep the original empty-table rejection.
     let mut table = EdgeTable::with_config(schema, config).unwrap();
@@ -505,11 +506,11 @@ fn test_inline_form_schema_change_reports_shared_guidance() {
     use graphdb_core::Value;
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "link".to_string(),
+        label_name: "link".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![StoragePropertyDef {
-            name: "weight".to_string(),
+            name: "weight".into(),
             data_type: DataType::Double,
             nullable: false,
             default_value: Some(Value::Double(0.0)),
@@ -527,7 +528,7 @@ fn test_inline_form_schema_change_reports_shared_guidance() {
     assert_eq!(table.schema.record_form, RecordForm::Bundled);
     let shared = crate::edge::INLINE_FORM_SCHEMA_CHANGE_MSG;
     let add_err = table
-        .prepare_add_property("extra".to_string(), DataType::Int, true, None)
+        .prepare_add_property("extra".into(), DataType::Int, true, None)
         .unwrap_err();
     assert_eq!(add_err.message(), shared);
     let drop_err = table.prepare_drop_property("weight").unwrap_err();

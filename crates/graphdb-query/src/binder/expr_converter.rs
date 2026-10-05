@@ -406,7 +406,7 @@ mod tests {
     fn test_bound_projection_default_alias_and_type() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let item = BoundProjectionItem {
-            expression: BoundExpression::Variable("n".to_string(), DataType::String),
+            expression: BoundExpression::Variable("n".into(), DataType::String),
             alias: None,
         };
         let col = bound_projection_to_yield_column(&item, &ctx).expect("convert");

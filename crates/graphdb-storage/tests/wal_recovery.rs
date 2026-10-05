@@ -43,7 +43,7 @@ fn test_crash_without_flush_loses_uncommitted_data() {
             VertexId::try_from_int64(3).expect("test vertex id"),
             Tag::new(
                 "Person".to_string(),
-                vec![("name".to_string(), Value::string("Extra"))]
+                vec![("name".into(), Value::string("Extra"))]
                     .into_iter()
                     .collect(),
             ),

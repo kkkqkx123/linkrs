@@ -4,8 +4,8 @@ use graphdb_core::DataType;
 
 fn schema() -> Vec<PropertySchema> {
     vec![
-        PropertySchema::new("weight".to_string(), 0, DataType::Double),
-        PropertySchema::new("label".to_string(), 1, DataType::String).nullable(true),
+        PropertySchema::new(Arc::from("weight"), 0, DataType::Double),
+        PropertySchema::new(Arc::from("label"), 1, DataType::String).nullable(true),
     ]
 }
 
@@ -14,18 +14,18 @@ fn edge_id_access() {
     let mut csr = CsrWithProperties::new(schema());
     let eid0 = EdgeId(1);
     let eid1 = EdgeId(2);
-    csr.insert_for_edge(eid0, &[("weight".to_string(), Value::Double(1.5))], 10)
+    csr.insert_for_edge(eid0, &[("weight".into(), Value::Double(1.5))], 10)
         .unwrap();
-    csr.insert_for_edge(eid1, &[("weight".to_string(), Value::Double(2.5))], 10)
+    csr.insert_for_edge(eid1, &[("weight".into(), Value::Double(2.5))], 10)
         .unwrap();
     let p0 = csr.get_by_edge_id(eid0, 10).unwrap();
     assert!(p0
         .iter()
-        .any(|(k, v)| k == "weight" && v == &Some(Value::Double(1.5))));
+        .any(|(k, v)| &**k == "weight" && v == &Some(Value::Double(1.5))));
     let by_id = csr.get_by_edge_id(eid1, 10).unwrap();
     assert!(by_id
         .iter()
-        .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.5))));
+        .any(|(k, v)| &**k == "weight" && v == &Some(Value::Double(2.5))));
     assert_eq!(csr.row_count(), 2);
 }
 
@@ -39,7 +39,7 @@ fn positioned_insert_matches_named_insert() {
     let got = csr.get_by_edge_id(eid, 10).unwrap();
     assert!(got
         .iter()
-        .any(|(k, v)| k == "weight" && v == &Some(Value::Double(4.5))));
+        .any(|(k, v)| &**k == "weight" && v == &Some(Value::Double(4.5))));
 
     // Out-of-range positions fail instead of writing the wrong column.
     assert!(csr
@@ -49,7 +49,7 @@ fn positioned_insert_matches_named_insert() {
     // Unknown names on the named path resolve to no column, so the
     // non-nullable column keeps its missing default and fails loudly.
     assert!(csr
-        .insert_for_edge(EdgeId(13), &[("nope".to_string(), Value::Double(1.0))], 10)
+        .insert_for_edge(EdgeId(13), &[("nope".into(), Value::Double(1.0))], 10)
         .is_err());
 }
 
@@ -57,7 +57,7 @@ fn positioned_insert_matches_named_insert() {
 fn visibility() {
     let mut csr = CsrWithProperties::new(schema());
     let eid = EdgeId(99);
-    csr.insert_for_edge(eid, &[("weight".to_string(), Value::Double(3.0))], 100)
+    csr.insert_for_edge(eid, &[("weight".into(), Value::Double(3.0))], 100)
         .unwrap();
     assert!(csr.get_by_edge_id(eid, 99).is_none());
     assert!(csr.get_by_edge_id(eid, 100).is_some());
@@ -70,7 +70,7 @@ fn visibility() {
 fn columnar_repeatable_read() {
     let mut csr = CsrWithProperties::new(schema());
     let eid = EdgeId(42);
-    csr.insert_for_edge(eid, &[("weight".to_string(), Value::Double(1.0))], 100)
+    csr.insert_for_edge(eid, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     csr.set_property_for_edge(eid, "weight", Some(Value::Double(2.0)), 200)
         .unwrap();
@@ -78,19 +78,19 @@ fn columnar_repeatable_read() {
     let old = csr.get_by_edge_id(eid, 150).unwrap();
     assert!(old
         .iter()
-        .any(|(k, v)| k == "weight" && v == &Some(Value::Double(1.0))));
+        .any(|(k, v)| &**k == "weight" && v == &Some(Value::Double(1.0))));
     // Newer readers observe the latest write.
     let got = csr.get_by_edge_id(eid, 250).unwrap();
     assert!(got
         .iter()
-        .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
+        .any(|(k, v)| &**k == "weight" && v == &Some(Value::Double(2.0))));
 }
 
 #[test]
 fn columnar_property_version_gc_keeps_visible_snapshots() {
     let mut csr = CsrWithProperties::new(schema());
     let eid = EdgeId(7);
-    csr.insert_for_edge(eid, &[("weight".to_string(), Value::Double(1.0))], 100)
+    csr.insert_for_edge(eid, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     csr.set_property_for_edge(eid, "weight", Some(Value::Double(2.0)), 200)
         .unwrap();
@@ -102,14 +102,14 @@ fn columnar_property_version_gc_keeps_visible_snapshots() {
     let at_200 = csr.get_by_edge_id(eid, 200).unwrap();
     assert!(at_200
         .iter()
-        .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
+        .any(|(k, v)| &**k == "weight" && v == &Some(Value::Double(2.0))));
     // Past every active snapshot, history is reclaimed but the latest
     // value stays readable.
     assert!(csr.gc_property_versions(300) >= 1);
     let at_300 = csr.get_by_edge_id(eid, 300).unwrap();
     assert!(at_300
         .iter()
-        .any(|(k, v)| k == "weight" && v == &Some(Value::Double(3.0))));
+        .any(|(k, v)| &**k == "weight" && v == &Some(Value::Double(3.0))));
 }
 
 #[test]
@@ -119,8 +119,8 @@ fn projected_read_returns_only_requested_columns() {
     csr.insert_for_edge(
         eid,
         &[
-            ("weight".to_string(), Value::Double(1.5)),
-            ("label".to_string(), Value::String("a".into())),
+            ("weight".into(), Value::Double(1.5)),
+            ("label".into(), Value::String("a".into())),
         ],
         100,
     )
@@ -130,24 +130,24 @@ fn projected_read_returns_only_requested_columns() {
     assert_eq!(all.len(), 2);
 
     let subset = csr
-        .get_projected_by_edge_id(eid, 100, Some(&["label".to_string()]))
+        .get_projected_by_edge_id(eid, 100, Some(&["label".into()]))
         .unwrap();
     assert_eq!(
         subset,
-        vec![("label".to_string(), Some(Value::String("a".into())))]
+        vec![("label".into(), Some(Value::String("a".into())))]
     );
 
     let topology_only = csr.get_projected_by_edge_id(eid, 100, Some(&[])).unwrap();
     assert!(topology_only.is_empty());
 
     let unknown = csr
-        .get_projected_by_edge_id(eid, 100, Some(&["missing".to_string()]))
+        .get_projected_by_edge_id(eid, 100, Some(&["missing".into()]))
         .unwrap();
     assert!(unknown.is_empty());
 
     assert!(csr.get_projected_by_edge_id(eid, 99, None).is_none());
     assert!(csr
-        .get_projected_by_edge_id(eid, 99, Some(&["weight".to_string()]))
+        .get_projected_by_edge_id(eid, 99, Some(&["weight".into()]))
         .is_none());
 }
 
@@ -157,9 +157,9 @@ fn dump_load_roundtrip() {
     let eid0 = EdgeId(10);
     let eid1 = EdgeId(11);
 
-    csr.insert_for_edge(eid0, &[("weight".to_string(), Value::Double(1.0))], 100)
+    csr.insert_for_edge(eid0, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
-    csr.insert_for_edge(eid1, &[("weight".to_string(), Value::Double(2.0))], 100)
+    csr.insert_for_edge(eid1, &[("weight".into(), Value::Double(2.0))], 100)
         .unwrap();
     csr.mark_deleted(eid0, 150);
 
@@ -172,7 +172,7 @@ fn dump_load_roundtrip() {
         .get_by_edge_id(eid1, 100)
         .unwrap()
         .iter()
-        .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
+        .any(|(k, v)| &**k == "weight" && v == &Some(Value::Double(2.0))));
     assert!(loaded.get_by_edge_id(eid0, 149).is_some());
     assert!(loaded.get_by_edge_id(eid0, 150).is_none());
 }
@@ -181,7 +181,7 @@ fn dump_load_roundtrip() {
 fn truncated_payload_is_rejected() {
     let mut csr = CsrWithProperties::new(schema());
     let eid = EdgeId(10);
-    csr.insert_for_edge(eid, &[("weight".to_string(), Value::Double(1.0))], 100)
+    csr.insert_for_edge(eid, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let bytes = csr.dump();
     let mut loaded = CsrWithProperties::new(schema());
@@ -191,12 +191,8 @@ fn truncated_payload_is_rejected() {
 #[test]
 fn trailing_bytes_are_rejected() {
     let mut csr = CsrWithProperties::new(schema());
-    csr.insert_for_edge(
-        EdgeId(10),
-        &[("weight".to_string(), Value::Double(1.0))],
-        100,
-    )
-    .unwrap();
+    csr.insert_for_edge(EdgeId(10), &[("weight".into(), Value::Double(1.0))], 100)
+        .unwrap();
     let mut bytes = csr.dump();
     bytes.push(0xff);
     let mut loaded = CsrWithProperties::new(schema());
@@ -205,9 +201,9 @@ fn trailing_bytes_are_rejected() {
 
 fn typed_store() -> CsrWithProperties {
     CsrWithProperties::new(vec![
-        PropertySchema::new("count".to_string(), 0, DataType::Int),
-        PropertySchema::new("flag".to_string(), 1, DataType::Bool),
-        PropertySchema::new("tag".to_string(), 2, DataType::String).nullable(true),
+        PropertySchema::new(Arc::from("count"), 0, DataType::Int),
+        PropertySchema::new(Arc::from("flag"), 1, DataType::Bool),
+        PropertySchema::new(Arc::from("tag"), 2, DataType::String).nullable(true),
     ])
 }
 
@@ -217,12 +213,9 @@ fn fill_typed_store(rows: i64) -> CsrWithProperties {
         csr.insert_for_edge(
             EdgeId(i as u64),
             &[
-                ("count".to_string(), Value::Int(i as i32)),
-                ("flag".to_string(), Value::Bool(i % 2 == 0)),
-                (
-                    "tag".to_string(),
-                    Value::String(format!("tag{}", i % 4).into()),
-                ),
+                ("count".into(), Value::Int(i as i32)),
+                ("flag".into(), Value::Bool(i % 2 == 0)),
+                ("tag".into(), Value::String(format!("tag{}", i % 4).into())),
             ],
             100,
         )
@@ -235,7 +228,7 @@ fn fill_typed_store(rows: i64) -> CsrWithProperties {
 fn dump_collapses_version_history_to_latest() {
     let mut csr = CsrWithProperties::new(schema());
     let eid = EdgeId(42);
-    csr.insert_for_edge(eid, &[("weight".to_string(), Value::Double(1.0))], 100)
+    csr.insert_for_edge(eid, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     csr.set_property_for_edge(eid, "weight", Some(Value::Double(2.0)), 200)
         .unwrap();
@@ -247,7 +240,7 @@ fn dump_collapses_version_history_to_latest() {
         .expect("row survives reload");
     assert!(collapsed
         .iter()
-        .any(|(k, v)| k == "weight" && v == &Some(Value::Double(2.0))));
+        .any(|(k, v)| &**k == "weight" && v == &Some(Value::Double(2.0))));
 }
 
 #[test]
@@ -265,7 +258,7 @@ fn dump_restores_recorded_encodings_with_current_values() {
         .expect("row should read");
     assert!(got
         .iter()
-        .any(|(k, v)| k == "count" && v == &Some(Value::Int(3))));
+        .any(|(k, v)| &**k == "count" && v == &Some(Value::Int(3))));
 }
 
 #[test]
@@ -362,26 +355,26 @@ fn auto_encode_preserves_values() {
             .expect("encoded row should stay readable");
         assert!(got
             .iter()
-            .any(|(k, v)| k == "count" && v == &Some(Value::Int(i))));
+            .any(|(k, v)| &**k == "count" && v == &Some(Value::Int(i))));
         assert!(got
             .iter()
-            .any(|(k, v)| k == "flag" && v == &Some(Value::Bool(i % 2 == 0))));
+            .any(|(k, v)| &**k == "flag" && v == &Some(Value::Bool(i % 2 == 0))));
         let expected_tag = Value::String(format!("tag{}", i % 4).into());
         assert!(got
             .iter()
-            .any(|(k, v)| k == "tag" && v == &Some(expected_tag.clone())));
+            .any(|(k, v)| &**k == "tag" && v == &Some(expected_tag.clone())));
     }
 }
 
 #[test]
 fn auto_encode_constant_column_uses_single_value_storage() {
     let mut csr = CsrWithProperties::new(vec![PropertySchema::new(
-        "level".to_string(),
+        Arc::from("level"),
         0,
         DataType::Int,
     )]);
     for i in 0..60 {
-        csr.insert_for_edge(EdgeId(i), &[("level".to_string(), Value::Int(7))], 100)
+        csr.insert_for_edge(EdgeId(i), &[("level".into(), Value::Int(7))], 100)
             .expect("constant insert should succeed");
     }
     assert_eq!(csr.auto_encode_properties(), 1);
@@ -392,7 +385,7 @@ fn auto_encode_constant_column_uses_single_value_storage() {
     let got = csr.get_by_edge_id(EdgeId(3), 200).expect("row should read");
     assert!(got
         .iter()
-        .any(|(k, v)| k == "level" && v == &Some(Value::Int(7))));
+        .any(|(k, v)| &**k == "level" && v == &Some(Value::Int(7))));
 }
 
 #[test]
@@ -408,7 +401,7 @@ fn encode_rejects_unknown_column_and_skips_empty() {
 #[test]
 fn refresh_stats_feeds_snapshot() {
     let mut csr = CsrWithProperties::new(vec![PropertySchema::new(
-        "count".to_string(),
+        Arc::from("count"),
         0,
         DataType::Int,
     )
@@ -416,7 +409,7 @@ fn refresh_stats_feeds_snapshot() {
     for i in 0..5 {
         csr.insert_for_edge(
             EdgeId(i),
-            &[("count".to_string(), Value::Int((i as i32 + 1) * 10))],
+            &[("count".into(), Value::Int((i as i32 + 1) * 10))],
             100,
         )
         .expect("stat insert should succeed");
@@ -447,12 +440,8 @@ fn refresh_stats_feeds_snapshot() {
 #[test]
 fn truncated_payloads_are_rejected() {
     let mut csr = CsrWithProperties::new(schema());
-    csr.insert_for_edge(
-        EdgeId(10),
-        &[("weight".to_string(), Value::Double(1.0))],
-        100,
-    )
-    .unwrap();
+    csr.insert_for_edge(EdgeId(10), &[("weight".into(), Value::Double(1.0))], 100)
+        .unwrap();
     let bytes = csr.dump();
     assert!(!bytes.is_empty());
     for cut in [1, 5, 9, bytes.len() / 2, bytes.len() - 1] {
@@ -474,7 +463,7 @@ fn release_never_admits_virgin_rows() {
     csr.release_row(999);
     assert!(csr.edge_ids().next().is_none());
     let eid = EdgeId(11);
-    csr.insert_for_edge(eid, &[("weight".to_string(), Value::Double(1.0))], 100)
+    csr.insert_for_edge(eid, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     let row = csr.get_row_for_edge(eid).expect("row exists");
     csr.release_row(row);
@@ -486,17 +475,17 @@ fn release_never_admits_virgin_rows() {
 #[test]
 fn stable_column_ids_survive_column_drop() {
     let mut csr = CsrWithProperties::new(vec![
-        PropertySchema::new("a".to_string(), 0, DataType::Int),
-        PropertySchema::new("b".to_string(), 1, DataType::Int),
-        PropertySchema::new("c".to_string(), 2, DataType::Int),
+        PropertySchema::new(Arc::from("a"), 0, DataType::Int),
+        PropertySchema::new(Arc::from("b"), 1, DataType::Int),
+        PropertySchema::new(Arc::from("c"), 2, DataType::Int),
     ]);
     let eid = EdgeId(1);
     csr.insert_for_edge(
         eid,
         &[
-            ("a".to_string(), Value::Int(1)),
-            ("b".to_string(), Value::Int(2)),
-            ("c".to_string(), Value::Int(3)),
+            ("a".into(), Value::Int(1)),
+            ("b".into(), Value::Int(2)),
+            ("c".into(), Value::Int(3)),
         ],
         100,
     )
@@ -509,7 +498,7 @@ fn stable_column_ids_survive_column_drop() {
     let got = csr.get_by_edge_id(eid, 110).expect("row readable");
     assert!(got
         .iter()
-        .any(|(k, v)| k == "c" && v == &Some(Value::Int(30))));
+        .any(|(k, v)| &**k == "c" && v == &Some(Value::Int(30))));
     // Dropped columns stay unknown by name and by stale position.
     assert!(csr.get_property_id("a").is_none());
 }
@@ -518,7 +507,7 @@ fn stable_column_ids_survive_column_drop() {
 fn physical_projection_ignores_row_visibility() {
     let mut csr = CsrWithProperties::new(schema());
     let eid = EdgeId(21);
-    csr.insert_for_edge(eid, &[("weight".to_string(), Value::Double(1.0))], 100)
+    csr.insert_for_edge(eid, &[("weight".into(), Value::Double(1.0))], 100)
         .unwrap();
     csr.mark_deleted(eid, 150);
     assert!(csr.get_projected_by_edge_id(eid, 200, None).is_none());

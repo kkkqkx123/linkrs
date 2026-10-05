@@ -49,6 +49,7 @@ fn build_10k(path: std::path::PathBuf) {
                     "N".to_string(),
                     [("value".to_string(), Value::BigInt(i as i64))]
                         .into_iter()
+                        .map(|(name, value)| (std::sync::Arc::from(name.as_str()), value))
                         .collect(),
                 ),
             )

@@ -75,13 +75,15 @@ pub(crate) fn scan_vertex_serial_column(
         let mut present: Vec<i64> = Vec::new();
         let mut max_value: Option<i64> = None;
         if !ids.is_empty() {
-            let projection = [prop_name.to_string()];
+            let projection: [Arc<str>; 1] = [prop_name.into()];
             for record in table.resolve_projected_batch(&ids, &guard, Some(&projection))? {
                 let Some(record) = record else {
                     continue;
                 };
-                if let Some((_, value)) =
-                    record.properties.iter().find(|(name, _)| name == prop_name)
+                if let Some((_, value)) = record
+                    .properties
+                    .iter()
+                    .find(|(name, _)| *name.as_ref() == *prop_name)
                 {
                     if let Some(integer) = value_as_i64(value) {
                         present.push(integer);
@@ -100,7 +102,10 @@ pub(crate) fn scan_vertex_serial_column(
                 .map(|(_, _, props)| props)
                 .chain(buffer.update_rows(label).map(|(_, cols)| cols));
             for properties in staged_rows {
-                if let Some((_, value)) = properties.iter().find(|(name, _)| name == prop_name) {
+                if let Some((_, value)) = properties
+                    .iter()
+                    .find(|(name, _)| *name.as_ref() == *prop_name)
+                {
                     if let Some(integer) = value_as_i64(value) {
                         present.push(integer);
                         max_value = Some(max_value.map_or(integer, |m| m.max(integer)));
@@ -132,9 +137,11 @@ pub(crate) fn scan_edge_serial_column(
                 continue;
             }
             let table = arc.read();
-            for record in table.scan_projected(ts, Some(vec![prop_name.to_string()])) {
-                if let Some((_, value)) =
-                    record.properties.iter().find(|(name, _)| name == prop_name)
+            for record in table.scan_projected(ts, Some(vec![prop_name.into()])) {
+                if let Some((_, value)) = record
+                    .properties
+                    .iter()
+                    .find(|(name, _)| *name.as_ref() == *prop_name)
                 {
                     if let Some(integer) = value_as_i64(value) {
                         scan.present.push(integer);

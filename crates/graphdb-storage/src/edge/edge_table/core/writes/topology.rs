@@ -11,7 +11,7 @@ impl EdgeStore {
         src: u32,
         dst: u32,
         rank: i64,
-        property_values: &[(String, Value)],
+        property_values: &[(std::sync::Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
         if !self.is_open {
@@ -146,7 +146,10 @@ impl EdgeStore {
                         src: *src,
                         dst: *dst,
                         rank: *rank,
-                        properties: property_values.to_vec(),
+                        properties: property_values
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
                         create_ts: *ts,
                     }
                 })
@@ -264,7 +267,7 @@ impl EdgeStore {
                                 let result = index
                                     .insert(prop_name, prop_value, *src, *dst, *rank, label, *ts);
                                 let latency = started.elapsed().as_millis() as u64;
-                                (prop_name.clone(), result, latency)
+                                (prop_name.to_string(), result, latency)
                             })
                             .collect()
                     } else {
@@ -353,7 +356,10 @@ impl EdgeStore {
                         src: *src,
                         dst: *dst,
                         rank: *rank,
-                        properties: property_values.to_vec(),
+                        properties: property_values
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
                         create_ts: *ts,
                     }
                 })
@@ -519,7 +525,7 @@ impl EdgeStore {
         src: u32,
         dst: u32,
         rank: i64,
-        property_values: &[(String, Value)],
+        property_values: &[(std::sync::Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<EdgeId> {
         if self.is_bundled() {
@@ -603,7 +609,7 @@ impl EdgeStore {
                         let prop_name = &self.schema.properties[*prop_idx].name;
                         let result = index.insert(prop_name, prop_value, src, dst, rank, label, ts);
                         let latency = started.elapsed().as_millis() as u64;
-                        (prop_name.clone(), result, latency)
+                        (prop_name.to_string(), result, latency)
                     })
                     .collect()
             } else {

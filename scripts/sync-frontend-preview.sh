@@ -21,10 +21,30 @@ fi
 
 echo "=== Syncing frontend-preview from frontend ==="
 
+# Mirror-delete files under $1 (preview tree) that have no counterpart under
+# $2 (frontend tree). Relative paths are matched against $3 (space-separated
+# basenames to preserve). Empty preview dirs left behind are pruned.
+prune_deleted() {
+    local preview_tree="$1" frontend_tree="$2" preserve="$3"
+    (cd "$preview_tree" && find . -type f) | while read -r rel; do
+        local base
+        base="$(basename "$rel")"
+        case " $preserve " in
+            *" $base "*) continue ;;
+        esac
+        if [ ! -e "$frontend_tree/$rel" ]; then
+            rm "$preview_tree/$rel"
+            echo "  removed (deleted in frontend): ${rel#./}"
+        fi
+    done
+    find "$preview_tree" -type d -empty -delete 2>/dev/null || true
+}
+
 # Static assets
 echo "Syncing public/ ..."
 mkdir -p "$PREVIEW_DIR/public"
 cp -r "$FRONTEND_DIR/public/." "$PREVIEW_DIR/public/" 2>/dev/null || true
+[ -d "$FRONTEND_DIR/public" ] && prune_deleted "$PREVIEW_DIR/public" "$FRONTEND_DIR/public" ""
 
 # Entry files and global styles
 echo "Syncing src root files ..."
@@ -38,6 +58,7 @@ for dir in types utils config stores services i18n assets; do
     if [ -d "$FRONTEND_DIR/src/lib/$dir" ]; then
         mkdir -p "$PREVIEW_DIR/src/lib/$dir"
         cp -r "$FRONTEND_DIR/src/lib/$dir/." "$PREVIEW_DIR/src/lib/$dir/"
+        prune_deleted "$PREVIEW_DIR/src/lib/$dir" "$FRONTEND_DIR/src/lib/$dir" ""
     fi
 done
 
@@ -47,6 +68,7 @@ for dir in components pages; do
     if [ -d "$FRONTEND_DIR/src/lib/$dir" ]; then
         mkdir -p "$PREVIEW_DIR/src/lib/$dir"
         cp -r "$FRONTEND_DIR/src/lib/$dir/." "$PREVIEW_DIR/src/lib/$dir/"
+        prune_deleted "$PREVIEW_DIR/src/lib/$dir" "$FRONTEND_DIR/src/lib/$dir" ""
     fi
 done
 
@@ -59,6 +81,7 @@ for file in "$FRONTEND_DIR/src/lib/api/"*; do
         cp "$file" "$PREVIEW_DIR/src/lib/api/"
     fi
 done
+prune_deleted "$PREVIEW_DIR/src/lib/api" "$FRONTEND_DIR/src/lib/api" "client.ts"
 
 # Root source files (main.ts, App.svelte, ...) except app.css/app.d.ts handled above
 echo "Syncing remaining src files ..."

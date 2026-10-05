@@ -11,6 +11,7 @@ use graphdb_core::types::graph_schema::EdgeDirection;
 use graphdb_core::types::VertexId;
 use graphdb_core::{Edge, StorageError, Value, Vertex};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 pub type PlannerError = StorageError;
 
@@ -89,7 +90,7 @@ impl ShortestPathPlanner {
 pub struct EdgePattern {
     pub types: Option<Vec<String>>,
     pub direction: Option<EdgeDirection>,
-    pub properties: Vec<(String, Value)>,
+    pub properties: Vec<(Arc<str>, Value)>,
 }
 
 #[derive(Debug)]

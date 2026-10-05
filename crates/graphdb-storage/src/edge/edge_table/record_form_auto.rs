@@ -117,11 +117,11 @@ mod tests {
     fn weight_schema() -> EdgeSchema {
         EdgeSchema {
             label_id: 0,
-            label_name: "rates".to_string(),
+            label_name: "rates".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![StoragePropertyDef {
-                name: "weight".to_string(),
+                name: "weight".into(),
                 data_type: DataType::Double,
                 nullable: false,
                 default_value: Some(Value::Double(0.0)),
@@ -149,7 +149,7 @@ mod tests {
 
         let mut two = weight_schema();
         two.properties.push(StoragePropertyDef {
-            name: "extra".to_string(),
+            name: "extra".into(),
             data_type: DataType::Double,
             nullable: true,
             default_value: None,
@@ -178,7 +178,7 @@ mod tests {
             .expect("columnar table builds");
         assert_eq!(table.recommended_record_form(), RecordForm::Columnar);
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .expect("insert");
         // One write without reads is write-hot, so it stays columnar.
         assert_eq!(table.recommended_record_form(), RecordForm::Columnar);
@@ -194,11 +194,11 @@ mod tests {
     fn recommender_holds_columnar_on_wide_profile() {
         let schema = EdgeSchema {
             label_id: 0,
-            label_name: "wide".to_string(),
+            label_name: "wide".into(),
             src_label: 0,
             dst_label: 0,
             properties: vec![StoragePropertyDef {
-                name: "note".to_string(),
+                name: "note".into(),
                 data_type: DataType::String,
                 nullable: false,
                 default_value: None,
@@ -219,7 +219,7 @@ mod tests {
         let mut table = EdgeStore::with_config(weight_schema(), EdgeTableConfig::default())
             .expect("columnar table builds");
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .expect("insert");
         // Drive the profile read-heavy through the observation entry.
         for _ in 0..4 {
@@ -233,10 +233,7 @@ mod tests {
         assert_eq!(table.schema.record_form, RecordForm::Bundled);
         assert!(table.is_migration_checkpoint_required());
         let edge = table.get_edge(0, 1, 0, 200).expect("edge present");
-        assert_eq!(
-            edge.properties,
-            vec![("weight".to_string(), Value::Double(1.5))]
-        );
+        assert_eq!(edge.properties, vec![("weight".into(), Value::Double(1.5))]);
     }
 
     #[test]
@@ -261,14 +258,14 @@ mod tests {
         let mut table = EdgeStore::with_config(weight_schema(), EdgeTableConfig::default())
             .expect("columnar table builds");
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .expect("insert");
         for _ in 0..4 {
             table.observe_form_read(1);
         }
         assert_eq!(table.recommended_record_form(), RecordForm::Bundled);
         table
-            .prepare_add_property("extra".to_string(), DataType::Double, true, None)
+            .prepare_add_property("extra".into(), DataType::Double, true, None)
             .expect("prepare add");
         assert!(table.auto_migrate_record_form_if_beneficial().is_err());
         assert_eq!(table.schema.record_form, RecordForm::Columnar);
@@ -279,7 +276,7 @@ mod tests {
         let mut unknown = EdgeStore::with_config(weight_schema(), EdgeTableConfig::default())
             .expect("columnar table builds");
         unknown
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .expect("insert");
         // Unknown read profile is write-hot, so no migration runs.
         assert!(unknown
@@ -302,7 +299,7 @@ mod tests {
         // Even a write-heavy profile never auto-reverses; manual migration
         // stays the only way back to columnar.
         for _ in 0..10 {
-            table.observe_form_write(&[("weight".to_string(), Value::Double(1.0))]);
+            table.observe_form_write(&[("weight".into(), Value::Double(1.0))]);
         }
         assert!(table
             .auto_migrate_record_form_if_beneficial()
@@ -320,7 +317,7 @@ mod tests {
             .expect("plan succeeds");
         assert!(unknown_plan.basis.contains("unknown"));
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .expect("insert");
         for _ in 0..4 {
             table.observe_form_read(1);
@@ -336,7 +333,7 @@ mod tests {
         let mut table = EdgeStore::with_config(weight_schema(), EdgeTableConfig::default())
             .expect("columnar table builds");
         table
-            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
             .expect("insert");
         for _ in 0..4 {
             table.observe_form_read(1);

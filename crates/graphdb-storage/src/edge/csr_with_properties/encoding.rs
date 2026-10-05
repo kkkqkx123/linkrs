@@ -1,5 +1,6 @@
 use super::CsrWithProperties;
 use graphdb_core::{StorageError, StorageResult, Value};
+use std::sync::Arc;
 
 impl CsrWithProperties {
     pub fn column_stats_snapshot(
@@ -145,10 +146,7 @@ impl CsrWithProperties {
                 continue;
             }
             let name = self.property_columns[idx].name.clone();
-            if self
-                .apply_encoding_to_column(name.as_str(), selected, 255)
-                .is_ok()
-            {
+            if self.apply_encoding_to_column(&name, selected, 255).is_ok() {
                 encoded += 1;
             }
         }
@@ -165,19 +163,23 @@ impl CsrWithProperties {
     /// the number of columns that changed encoding.
     pub fn adapt_encodings_for_checkpoint(
         &mut self,
-        dirty_only: Option<&[String]>,
+        dirty_only: Option<&[Arc<str>]>,
         min_rows: usize,
     ) -> usize {
         let selector = crate::encoding::EncodingSelector::default();
-        let targets: Vec<(usize, String)> = match dirty_only {
+        let targets: Vec<(usize, Arc<str>)> = match dirty_only {
             Some(names) if !names.is_empty() => names
                 .iter()
-                .filter_map(|name| self.column_index.get(name).map(|idx| (*idx, name.clone())))
+                .filter_map(|name| {
+                    self.column_index
+                        .get(&**name)
+                        .map(|idx| (*idx, name.clone()))
+                })
                 .collect(),
             _ => self
                 .property_columns
                 .iter()
-                .map(|col| col.name.clone())
+                .map(|col| Arc::from(col.name.as_str()))
                 .enumerate()
                 .collect(),
         };
@@ -199,10 +201,7 @@ impl CsrWithProperties {
             if selected == crate::encoding::EncodingType::None || selected == current {
                 continue;
             }
-            if self
-                .apply_encoding_to_column(name.as_str(), selected, 255)
-                .is_ok()
-            {
+            if self.apply_encoding_to_column(&*name, selected, 255).is_ok() {
                 changed += 1;
             }
         }

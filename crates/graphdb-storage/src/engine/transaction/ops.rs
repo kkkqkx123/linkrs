@@ -77,7 +77,7 @@ impl TransactionOps {
         vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         label: LabelId,
         vid: VertexId,
-        properties: &[(String, Value)],
+        properties: &[(Arc<str>, Value)],
         ts: Timestamp,
     ) -> UndoLogResult<VertexId> {
         let table = vertex_tables
@@ -105,7 +105,7 @@ impl TransactionOps {
         edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
         vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         params: AddEdgeParams,
-        properties: &[(String, Value)],
+        properties: &[(Arc<str>, Value)],
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         let src_table = vertex_tables
@@ -211,7 +211,7 @@ impl TransactionOps {
         vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         label: LabelId,
         vid: VertexId,
-        prop_names: &[String],
+        prop_names: &[Arc<str>],
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         let table = vertex_tables
@@ -305,8 +305,8 @@ impl TransactionOps {
         vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         vertex_label_names: &HashMap<String, LabelId>,
         label: &str,
-        current_names: &[String],
-        original_names: &[String],
+        current_names: &[Arc<str>],
+        original_names: &[Arc<str>],
     ) -> UndoLogResult<()> {
         let label_id = vertex_label_names
             .get(label)
@@ -333,8 +333,8 @@ impl TransactionOps {
         edge_label_names: &mut HashMap<String, LabelId>,
         vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         edge_labels: &EdgeTypeLabelParams,
-        current_names: &[String],
-        original_names: &[String],
+        current_names: &[Arc<str>],
+        original_names: &[Arc<str>],
     ) -> UndoLogResult<()> {
         let src_label_id = vertex_tables
             .values()
@@ -373,7 +373,7 @@ impl TransactionOps {
         vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         vertex_label_names: &HashMap<String, LabelId>,
         label_name: &str,
-        prop_names: &[String],
+        prop_names: &[Arc<str>],
     ) -> UndoLogResult<()> {
         let label_id = vertex_label_names
             .get(label_name)
@@ -399,7 +399,7 @@ impl TransactionOps {
         edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
         edge_label_names: &mut HashMap<String, LabelId>,
         vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
-        prop_names: &[String],
+        prop_names: &[Arc<str>],
         edge_labels: &EdgeTypeLabelParams,
     ) -> UndoLogResult<()> {
         let src_label_id = vertex_tables

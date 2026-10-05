@@ -2,6 +2,7 @@
 //!
 //! Test transaction context functionality, including state management, timeout checking, operation logs, etc.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::context::TransactionContext;
@@ -44,7 +45,7 @@ impl UndoTarget for MockUndoTarget {
     fn revert_delete_vertex_properties(
         &self,
         _label_name: &str,
-        _prop_names: &[String],
+        _prop_names: &[Arc<str>],
     ) -> UndoLogResult<()> {
         Ok(())
     }
@@ -53,7 +54,7 @@ impl UndoTarget for MockUndoTarget {
         _src_label: &str,
         _dst_label: &str,
         _edge_label: &str,
-        _prop_names: &[String],
+        _prop_names: &[Arc<str>],
     ) -> UndoLogResult<()> {
         Ok(())
     }
@@ -71,8 +72,8 @@ impl UndoTarget for MockUndoTarget {
     fn revert_rename_vertex_properties(
         &self,
         _label_name: &str,
-        _current_names: &[String],
-        _original_names: &[String],
+        _current_names: &[Arc<str>],
+        _original_names: &[Arc<str>],
     ) -> UndoLogResult<()> {
         Ok(())
     }
@@ -81,8 +82,8 @@ impl UndoTarget for MockUndoTarget {
         _src_label: &str,
         _dst_label: &str,
         _edge_label: &str,
-        _current_names: &[String],
-        _original_names: &[String],
+        _current_names: &[Arc<str>],
+        _original_names: &[Arc<str>],
     ) -> UndoLogResult<()> {
         Ok(())
     }

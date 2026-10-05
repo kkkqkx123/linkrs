@@ -4,6 +4,7 @@ use crate::edge::edge_table::wal;
 use crate::types::PropertyId;
 use graphdb_core::types::Timestamp;
 use graphdb_core::{StorageError, StorageResult, Value};
+use std::sync::Arc;
 
 impl EdgeStore {
     /// Single property point write with its own log entry.
@@ -31,9 +32,10 @@ impl EdgeStore {
         }
 
         // Validate property exists via cache
+        let prop_key: Arc<str> = prop_name.into();
         let _ = self
             .property_index_cache
-            .get(prop_name)
+            .get(&prop_key)
             .ok_or_else(|| StorageError::column_not_found(prop_name.to_string()))?;
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
@@ -60,10 +62,10 @@ impl EdgeStore {
                 self.properties
                     .set_property_for_edge(nbr.edge_id, prop_name, Some(value.clone()), ts)
                     .map_err(|_| StorageError::column_not_found(prop_name.to_string()))?;
-                self.mark_property_columns_dirty_for_edge(src, dst, &[prop_name.to_string()]);
+                self.mark_property_columns_dirty_for_edge(src, dst, &[prop_name.into()]);
             }
             self.maybe_run_auto_maintenance();
-            self.observe_form_write(&[(prop_name.to_string(), value.clone())]);
+            self.observe_form_write(&[(prop_name.into(), value.clone())]);
             return Ok(true);
         }
 
@@ -107,10 +109,10 @@ impl EdgeStore {
             // Resolve the column name before the write so the group-level
             // dirt below can record the precise column even on the bundled
             // path, which holds no columnar rows.
-            let prop_name_by_id = self
+            let prop_name_by_id: Option<Arc<str>> = self
                 .properties
                 .column_name_by_prop_id(params.prop_id as i32)
-                .map(|name| name.to_string());
+                .map(Into::into);
             if self.is_bundled() {
                 let prop_name = prop_name_by_id.clone().ok_or_else(|| {
                     StorageError::column_not_found(format!("prop_id={}", params.prop_id))

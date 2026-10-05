@@ -3,6 +3,7 @@ use crate::index::types::{EdgeIdentity, GcStats};
 use graphdb_core::metadata::IndexMetadataManager;
 use graphdb_core::types::{LabelId, Timestamp};
 use graphdb_core::{StorageResult, Value};
+use std::sync::Arc;
 
 use super::GraphStorageContext;
 
@@ -18,7 +19,7 @@ impl GraphStorageContext {
         space_id: u64,
         vertex_id: &Value,
         index_name: &str,
-        props: &[(String, Value)],
+        props: &[(Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
         super::super::index_engine::update_vertex_indexes_mvcc(
@@ -46,7 +47,7 @@ impl GraphStorageContext {
         &self,
         edge: &EdgeIdentity<'_>,
         index_name: &str,
-        props: &[(String, Value)],
+        props: &[(Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
         super::super::index_engine::update_edge_indexes_mvcc(self, edge, index_name, props, ts)
@@ -64,7 +65,7 @@ impl GraphStorageContext {
     pub(crate) fn update_all_edge_indexes_mvcc(
         &self,
         edge: &EdgeIdentity<'_>,
-        props: &[(String, Value)],
+        props: &[(Arc<str>, Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
         for index in self

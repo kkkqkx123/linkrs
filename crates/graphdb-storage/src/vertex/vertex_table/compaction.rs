@@ -33,6 +33,7 @@
 use super::core::VertexTable;
 use graphdb_core::StorageResult;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Stable row-id mode switch for the long-term compaction policy.
 ///
@@ -328,7 +329,7 @@ impl CompactionCoordinator {
     ) -> StorageResult<super::super::ColumnStore> {
         let new_columns = super::super::ColumnStore::with_capacity(table.id_indexer.len());
         for prop in &table.schema.properties {
-            new_columns.add_column(prop.name.clone(), prop.data_type.clone(), prop.nullable);
+            new_columns.add_column(prop.name.to_string(), prop.data_type.clone(), prop.nullable);
         }
         for prop in &table.schema.properties {
             if let (Some(src), Some(dst)) = (
@@ -347,7 +348,7 @@ impl CompactionCoordinator {
             let new_idx = new_id as usize;
 
             let values = table.columns.get(old_idx);
-            let pairs: Vec<(String, graphdb_core::Value)> = values
+            let pairs: Vec<(Arc<str>, graphdb_core::Value)> = values
                 .into_iter()
                 .filter_map(|(name, opt_val)| opt_val.map(|v| (name, v)))
                 .collect();
@@ -404,12 +405,12 @@ mod tests {
         // id: inserts below omit it and let the table auto-fill the mirror.
         VertexSchema {
             label_id: 0,
-            label_name: "test".to_string(),
+            label_name: "test".into(),
             properties: vec![
-                StoragePropertyDef::new("id".to_string(), DataType::String),
-                StoragePropertyDef::new("name".to_string(), DataType::String),
+                StoragePropertyDef::new("id".into(), DataType::String),
+                StoragePropertyDef::new("name".into(), DataType::String),
                 StoragePropertyDef {
-                    name: "age".to_string(),
+                    name: "age".into(),
                     data_type: DataType::Int,
                     nullable: true,
                     default_value: None,
@@ -424,7 +425,7 @@ mod tests {
     fn test_coordinator_empty_table() {
         let schema = create_test_schema();
         let mut table =
-            VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
+            VertexTable::with_config(0, "test".into(), schema, VertexTableConfig::default());
         let mut coordinator = CompactionCoordinator::new();
 
         // Empty table should compact without error
@@ -436,10 +437,10 @@ mod tests {
     fn test_coordinator_single_vertex() {
         let schema = create_test_schema();
         let mut table =
-            VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
+            VertexTable::with_config(0, "test".into(), schema, VertexTableConfig::default());
 
         table
-            .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
+            .insert("v1", &[("name".into(), Value::string("Alice"))], 100)
             .unwrap();
 
         let mut coordinator = CompactionCoordinator::new();
@@ -454,14 +455,14 @@ mod tests {
     fn test_coordinator_remapping() {
         let schema = create_test_schema();
         let mut table =
-            VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
+            VertexTable::with_config(0, "test".into(), schema, VertexTableConfig::default());
 
         // Insert 5 vertices to allocate space
         for i in 0..5 {
             table
                 .insert(
                     &format!("v{}", i),
-                    &[("name".to_string(), Value::string(format!("P{}", i)))],
+                    &[("name".into(), Value::string(format!("P{}", i)))],
                     100,
                 )
                 .unwrap();
@@ -482,18 +483,18 @@ mod tests {
     fn test_journaled_remap_is_atomic_and_committed() {
         let schema = create_test_schema();
         let mut table =
-            VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
+            VertexTable::with_config(0, "test".into(), schema, VertexTableConfig::default());
         for i in 0..5 {
             table
                 .insert(
                     &format!("v{}", i),
-                    &[("name".to_string(), Value::string(format!("P{}", i)))],
+                    &[("name".into(), Value::string(format!("P{}", i)))],
                     100,
                 )
                 .unwrap();
         }
-        table.id_indexer.remove(&IdKey::Text("v1".to_string()));
-        table.id_indexer.remove(&IdKey::Text("v3".to_string()));
+        table.id_indexer.remove(&IdKey::Text("v1".into()));
+        table.id_indexer.remove(&IdKey::Text("v3".into()));
 
         let mut coordinator = CompactionCoordinator::new();
         coordinator.execute(&mut table).unwrap();
@@ -521,7 +522,7 @@ mod tests {
                 record
                     .properties
                     .iter()
-                    .find(|(k, _)| k == "name")
+                    .find(|(k, _)| &**k == "name")
                     .unwrap()
                     .1,
                 Value::string(name)
@@ -533,12 +534,12 @@ mod tests {
     fn test_watermarked_compact_collects_mapping_and_preserves_data() {
         let schema = create_test_schema();
         let mut table =
-            VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
+            VertexTable::with_config(0, "test".into(), schema, VertexTableConfig::default());
         for i in 0..5 {
             table
                 .insert(
                     &format!("w{}", i),
-                    &[("name".to_string(), Value::string(format!("Q{}", i)))],
+                    &[("name".into(), Value::string(format!("Q{}", i)))],
                     100,
                 )
                 .unwrap();
@@ -563,7 +564,7 @@ mod tests {
                 record
                     .properties
                     .iter()
-                    .find(|(k, _)| k == "name")
+                    .find(|(k, _)| &**k == "name")
                     .unwrap()
                     .1,
                 Value::string(name)

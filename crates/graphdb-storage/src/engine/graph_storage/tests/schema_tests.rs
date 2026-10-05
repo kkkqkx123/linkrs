@@ -83,8 +83,8 @@ fn test_same_schema_names_are_isolated_by_space() {
     storage.create_space(&mut beta).unwrap();
 
     let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-        PropertyDef::new("id".to_string(), DataType::BigInt),
-        PropertyDef::new("name".to_string(), DataType::String),
+        PropertyDef::new("id".into(), DataType::BigInt),
+        PropertyDef::new("name".into(), DataType::String),
     ]);
     let alpha_tag_id = storage.create_tag("alpha", &tag).unwrap();
     let beta_tag_id = storage.create_tag("beta", &tag).unwrap();
@@ -104,7 +104,7 @@ fn test_same_schema_names_are_isolated_by_space() {
                 VertexId::try_from_int64(1).expect("test vertex id"),
                 Tag::new(
                     "Person".to_string(),
-                    vec![("name".to_string(), Value::string("Alice"))]
+                    vec![("name".into(), Value::string("Alice"))]
                         .into_iter()
                         .collect(),
                 ),
@@ -118,7 +118,7 @@ fn test_same_schema_names_are_isolated_by_space() {
                 VertexId::try_from_int64(1).expect("test vertex id"),
                 Tag::new(
                     "Person".to_string(),
-                    vec![("name".to_string(), Value::string("Bob"))]
+                    vec![("name".into(), Value::string("Bob"))]
                         .into_iter()
                         .collect(),
                 ),
@@ -132,7 +132,7 @@ fn test_same_schema_names_are_isolated_by_space() {
                 VertexId::try_from_int64(2).expect("test vertex id"),
                 Tag::new(
                     "Person".to_string(),
-                    vec![("name".to_string(), Value::string("Carol"))]
+                    vec![("name".into(), Value::string("Carol"))]
                         .into_iter()
                         .collect(),
                 ),
@@ -146,7 +146,7 @@ fn test_same_schema_names_are_isolated_by_space() {
                 VertexId::try_from_int64(2).expect("test vertex id"),
                 Tag::new(
                     "Person".to_string(),
-                    vec![("name".to_string(), Value::string("Dave"))]
+                    vec![("name".into(), Value::string("Dave"))]
                         .into_iter()
                         .collect(),
                 ),
@@ -294,8 +294,8 @@ fn test_schema_wal_replays_create_and_alter_after_restart() {
             .expect("Failed to persist base schema");
 
         let tag = graphdb_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-            PropertyDef::new("name".to_string(), DataType::String),
-            PropertyDef::new("age".to_string(), DataType::BigInt),
+            PropertyDef::new("name".into(), DataType::String),
+            PropertyDef::new("age".into(), DataType::BigInt),
         ]);
         storage
             .create_tag("test_space", &tag)
@@ -304,7 +304,7 @@ fn test_schema_wal_replays_create_and_alter_after_restart() {
         let edge = EdgeTypeInfo::new("KNOWS".to_string())
             .with_src_tag("Person".to_string())
             .with_dst_tag("Person".to_string())
-            .with_properties(vec![PropertyDef::new("since".to_string(), DataType::Int)]);
+            .with_properties(vec![PropertyDef::new("since".into(), DataType::Int)]);
         storage
             .create_edge_type("test_space", &edge)
             .expect("Failed to create edge type");
@@ -313,7 +313,7 @@ fn test_schema_wal_replays_create_and_alter_after_restart() {
             .alter_tag(
                 "test_space",
                 "Person",
-                vec![PropertyDef::new("email".to_string(), DataType::String)],
+                vec![PropertyDef::new("email".into(), DataType::String)],
                 vec!["age".to_string()],
             )
             .expect("Failed to alter tag");
@@ -321,7 +321,7 @@ fn test_schema_wal_replays_create_and_alter_after_restart() {
             .alter_edge_type(
                 "test_space",
                 "KNOWS",
-                vec![PropertyDef::new("weight".to_string(), DataType::Double)],
+                vec![PropertyDef::new("weight".into(), DataType::Double)],
                 vec!["since".to_string()],
             )
             .expect("Failed to alter edge type");
@@ -374,7 +374,7 @@ fn test_schema_wal_replays_drop_after_restart() {
         let edge = EdgeTypeInfo::new("KNOWS".to_string())
             .with_src_tag("Person".to_string())
             .with_dst_tag("Person".to_string())
-            .with_properties(vec![PropertyDef::new("since".to_string(), DataType::Int)]);
+            .with_properties(vec![PropertyDef::new("since".into(), DataType::Int)]);
         storage
             .create_edge_type("test_space", &edge)
             .expect("Failed to create edge type");

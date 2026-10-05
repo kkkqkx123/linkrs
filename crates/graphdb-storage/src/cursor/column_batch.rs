@@ -603,7 +603,7 @@ impl ColumnValues {
 /// One property column of a column-major vertex batch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PropertyColumn {
-    pub name: String,
+    pub name: std::sync::Arc<str>,
     pub data_type: DataType,
     pub values: ColumnValues,
 }

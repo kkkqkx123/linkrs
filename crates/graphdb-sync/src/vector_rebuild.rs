@@ -53,7 +53,7 @@ const BACKFILL_BATCH_CHUNK: usize = 500;
 #[derive(Debug, Clone)]
 pub struct VectorRebuildDoc {
     pub vertex_id: VertexId,
-    pub properties: Vec<(String, Value)>,
+    pub properties: Vec<(Arc<str>, Value)>,
 }
 
 /// Primary-storage scan feeding vector backfill. Batches stream; `None`
@@ -402,7 +402,7 @@ impl SyncManager {
                 let Some(vector) = doc
                     .properties
                     .iter()
-                    .find(|(name, _)| name == field_name)
+                    .find(|(name, _)| name.as_ref() == field_name)
                     .and_then(|(_, value)| value.as_vector())
                 else {
                     progress.docs_skipped += 1;

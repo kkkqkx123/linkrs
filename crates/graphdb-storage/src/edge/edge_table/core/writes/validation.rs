@@ -13,7 +13,7 @@ impl EdgeStore {
     /// the same positions at the call site.
     pub(crate) fn convert_property_values(
         &self,
-        property_values: &[(String, Value)],
+        property_values: &[(std::sync::Arc<str>, Value)],
     ) -> StorageResult<Vec<(usize, Value)>> {
         let mut converted_values: Vec<(usize, Value)> = Vec::with_capacity(property_values.len());
         for (name, value) in property_values {
@@ -21,7 +21,7 @@ impl EdgeStore {
                 .property_index_cache
                 .get(name)
                 .copied()
-                .ok_or_else(|| StorageError::column_not_found(name.clone()))?;
+                .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
             let prop_def = &self.schema.properties[prop_idx];
 
             if value.data_type() != prop_def.data_type {
@@ -85,7 +85,7 @@ impl EdgeStore {
                 let ins = &batch.staged_inserts()[ord.slot];
                 for (name, _) in &ins.properties {
                     if !self.property_index_cache.contains_key(name) {
-                        return Err(StorageError::column_not_found(name.clone()));
+                        return Err(StorageError::column_not_found(name.to_string()));
                     }
                 }
                 let key = (ins.src, ins.dst, ins.rank);
@@ -194,7 +194,7 @@ impl EdgeStore {
         for ins in inserts {
             for (name, _) in &ins.properties {
                 if !self.property_index_cache.contains_key(name) {
-                    return Err(StorageError::column_not_found(name.clone()));
+                    return Err(StorageError::column_not_found(name.to_string()));
                 }
             }
         }

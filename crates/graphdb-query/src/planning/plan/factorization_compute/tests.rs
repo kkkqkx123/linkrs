@@ -654,7 +654,7 @@ fn assign_node(rhs: ContextualExpression) -> LogicalNodeEnum {
     LogicalNodeEnum::Assign(LogicalAssignNode {
         id: next_node_id(),
         input: Some(Box::new(scan())),
-        assignments: vec![("c".to_string(), rhs)],
+        assignments: vec![("c".into(), rhs)],
         output_var: None,
         col_names: vec![],
         column_types: vec![],

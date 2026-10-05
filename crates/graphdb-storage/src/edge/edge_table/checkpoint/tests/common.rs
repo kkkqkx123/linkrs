@@ -7,11 +7,11 @@ use graphdb_core::Value;
 pub(super) fn make_table() -> EdgeStore {
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "knows".to_string(),
+        label_name: "knows".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![StoragePropertyDef {
-            name: "weight".to_string(),
+            name: "weight".into(),
             data_type: graphdb_core::types::DataType::Double,
             nullable: false,
             default_value: Some(Value::Double(0.0)),
@@ -27,7 +27,7 @@ pub(super) fn make_table() -> EdgeStore {
 pub(super) fn make_bounded_table(bound: usize) -> EdgeStore {
     let schema = EdgeSchema {
         label_id: 0,
-        label_name: "knows".to_string(),
+        label_name: "knows".into(),
         src_label: 0,
         dst_label: 0,
         properties: vec![],

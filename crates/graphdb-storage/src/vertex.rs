@@ -129,7 +129,7 @@ pub use graphdb_core::types::{LabelId, Timestamp, VertexId, INVALID_TIMESTAMP, M
 pub struct VertexRecord {
     pub vid: VertexId,
     pub internal_id: u32,
-    pub properties: Vec<(String, Value)>,
+    pub properties: Vec<(std::sync::Arc<str>, Value)>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

@@ -9,10 +9,10 @@ fn test_insert_and_get_vertex() {
     let vertex = Vertex::new(
         VertexId::try_from_int64(101).expect("test vertex id"),
         graphdb_core::vertex_edge_path::Tag::new(
-            "Person".to_string(),
+            "Person".into(),
             vec![
-                ("name".to_string(), Value::string("Alice")),
-                ("age".to_string(), Value::BigInt(30)),
+                ("name".into(), Value::string("Alice")),
+                ("age".into(), Value::BigInt(30)),
             ]
             .into_iter()
             .collect(),
@@ -41,14 +41,10 @@ fn test_update_vertex() {
 
     let index = Index::new(IndexConfig {
         id: 1,
-        name: "person_name_idx".to_string(),
+        name: "person_name_idx".into(),
         space_id: 1,
-        schema_name: "Person".to_string(),
-        fields: vec![IndexField::new(
-            "name".to_string(),
-            Value::string(""),
-            false,
-        )],
+        schema_name: "Person".into(),
+        fields: vec![IndexField::new("name".into(), Value::string(""), false)],
         properties: vec![],
         index_type: IndexType::TagIndex,
         is_unique: false,
@@ -60,10 +56,10 @@ fn test_update_vertex() {
     let vertex = Vertex::new(
         VertexId::try_from_int64(101).expect("test vertex id"),
         graphdb_core::vertex_edge_path::Tag::new(
-            "Person".to_string(),
+            "Person".into(),
             vec![
-                ("name".to_string(), Value::string("Alice")),
-                ("age".to_string(), Value::BigInt(30)),
+                ("name".into(), Value::string("Alice")),
+                ("age".into(), Value::BigInt(30)),
             ]
             .into_iter()
             .collect(),
@@ -84,10 +80,10 @@ fn test_update_vertex() {
     let updated = Vertex::new(
         VertexId::try_from_int64(101).expect("test vertex id"),
         graphdb_core::vertex_edge_path::Tag::new(
-            "Person".to_string(),
+            "Person".into(),
             vec![
-                ("name".to_string(), Value::string("AliceUpdated")),
-                ("age".to_string(), Value::BigInt(31)),
+                ("name".into(), Value::string("AliceUpdated")),
+                ("age".into(), Value::BigInt(31)),
             ]
             .into_iter()
             .collect(),
@@ -138,10 +134,10 @@ fn test_auto_commit_update_rolls_back_before_image_on_abort() {
     let vertex = Vertex::new(
         VertexId::try_from_int64(101).expect("test vertex id"),
         graphdb_core::vertex_edge_path::Tag::new(
-            "Person".to_string(),
+            "Person".into(),
             vec![
-                ("name".to_string(), Value::string("Alice")),
-                ("age".to_string(), Value::BigInt(30)),
+                ("name".into(), Value::string("Alice")),
+                ("age".into(), Value::BigInt(30)),
             ]
             .into_iter()
             .collect(),
@@ -156,10 +152,10 @@ fn test_auto_commit_update_rolls_back_before_image_on_abort() {
     let updated = Vertex::new(
         VertexId::try_from_int64(101).expect("test vertex id"),
         graphdb_core::vertex_edge_path::Tag::new(
-            "Person".to_string(),
+            "Person".into(),
             vec![
-                ("name".to_string(), Value::string("Alice")),
-                ("age".to_string(), Value::BigInt(31)),
+                ("name".into(), Value::string("Alice")),
+                ("age".into(), Value::BigInt(31)),
             ]
             .into_iter()
             .collect(),
@@ -190,8 +186,8 @@ fn test_delete_vertex() {
     let vertex = Vertex::new(
         VertexId::try_from_int64(101).expect("test vertex id"),
         graphdb_core::vertex_edge_path::Tag::new(
-            "Person".to_string(),
-            vec![("name".to_string(), Value::string("Alice"))]
+            "Person".into(),
+            vec![("name".into(), Value::string("Alice"))]
                 .into_iter()
                 .collect(),
         ),
@@ -225,10 +221,10 @@ fn test_scan_vertices() {
         let vertex = Vertex::new(
             VertexId::try_from_int64(i).expect("test vertex id"),
             graphdb_core::vertex_edge_path::Tag::new(
-                "Person".to_string(),
+                "Person".into(),
                 vec![
-                    ("name".to_string(), Value::string(format!("Person{}", i))),
-                    ("age".to_string(), Value::BigInt(20 + i)),
+                    ("name".into(), Value::string(format!("Person{}", i))),
+                    ("age".into(), Value::BigInt(20 + i)),
                 ]
                 .into_iter()
                 .collect(),
@@ -255,10 +251,10 @@ fn test_scan_vertices_by_prop() {
     let vertex = Vertex::new(
         VertexId::try_from_int64(101).expect("test vertex id"),
         graphdb_core::vertex_edge_path::Tag::new(
-            "Person".to_string(),
+            "Person".into(),
             vec![
-                ("name".to_string(), Value::string("Alice")),
-                ("age".to_string(), Value::BigInt(30)),
+                ("name".into(), Value::string("Alice")),
+                ("age".into(), Value::BigInt(30)),
             ]
             .into_iter()
             .collect(),
@@ -283,8 +279,8 @@ fn test_batch_insert_vertices() {
             Vertex::new(
                 VertexId::try_from_int64(i).expect("test vertex id"),
                 graphdb_core::vertex_edge_path::Tag::new(
-                    "Person".to_string(),
-                    vec![("name".to_string(), Value::string(format!("Person{}", i)))]
+                    "Person".into(),
+                    vec![("name".into(), Value::string(format!("Person{}", i)))]
                         .into_iter()
                         .collect(),
                 ),
@@ -308,8 +304,8 @@ fn test_batch_insert_vertices_rolls_back_on_failure() {
         Vertex::new(
             VertexId::try_from_int64(1).expect("test vertex id"),
             graphdb_core::vertex_edge_path::Tag::new(
-                "Person".to_string(),
-                vec![("name".to_string(), Value::string("Alice"))]
+                "Person".into(),
+                vec![("name".into(), Value::string("Alice"))]
                     .into_iter()
                     .collect(),
             ),
@@ -317,8 +313,8 @@ fn test_batch_insert_vertices_rolls_back_on_failure() {
         Vertex::new(
             VertexId::try_from_int64(1).expect("test vertex id"),
             graphdb_core::vertex_edge_path::Tag::new(
-                "Person".to_string(),
-                vec![("name".to_string(), Value::string("Duplicate"))]
+                "Person".into(),
+                vec![("name".into(), Value::string("Duplicate"))]
                     .into_iter()
                     .collect(),
             ),
@@ -347,10 +343,10 @@ fn test_get_vertex_projected() {
     let vertex = Vertex::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         Tag::new(
-            "Person".to_string(),
+            "Person".into(),
             vec![
-                ("name".to_string(), Value::string("Alice")),
-                ("age".to_string(), Value::BigInt(30)),
+                ("name".into(), Value::string("Alice")),
+                ("age".into(), Value::BigInt(30)),
             ]
             .into_iter()
             .collect(),
@@ -375,7 +371,7 @@ fn test_get_vertex_projected() {
             "test_space",
             "Person",
             &VertexId::try_from_int64(1).expect("test vertex id"),
-            &["age".to_string()],
+            &["age".into()],
         )
         .unwrap()
         .expect("vertex exists");
@@ -404,8 +400,8 @@ fn test_vertex_delete_missing_is_not_found() {
     let alice = Vertex::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         Tag::new(
-            "Person".to_string(),
-            vec![("name".to_string(), Value::string("Alice"))]
+            "Person".into(),
+            vec![("name".into(), Value::string("Alice"))]
                 .into_iter()
                 .collect(),
         ),
@@ -451,12 +447,12 @@ fn test_vertex_with_boundary_properties() {
     setup_person_tag(&mut storage);
 
     let mut props = std::collections::HashMap::new();
-    props.insert("name".to_string(), Value::string("")); // Empty string
-    props.insert("age".to_string(), Value::BigInt(i64::MAX)); // Max int
+    props.insert("name".into(), Value::string("")); // Empty string
+    props.insert("age".into(), Value::BigInt(i64::MAX)); // Max int
 
     let vertex = Vertex::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
-        graphdb_core::vertex_edge_path::Tag::new("Person".to_string(), props),
+        graphdb_core::vertex_edge_path::Tag::new("Person".into(), props),
     );
 
     storage.insert_vertex("test_space", vertex).unwrap();

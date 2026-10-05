@@ -124,13 +124,13 @@ fn test_parse_create_tag_with_composite_types() {
     assert_eq!(
         props[1].1,
         DataType::Struct(Arc::new(StructTypeInfo::new(vec![
-            ("city".to_string(), DataType::String),
-            ("street".to_string(), DataType::String),
+            ("city".into(), DataType::String),
+            ("street".into(), DataType::String),
             (
                 "geo".to_string(),
                 DataType::Struct(Arc::new(StructTypeInfo::new(vec![
-                    ("lat".to_string(), DataType::Double),
-                    ("lon".to_string(), DataType::Double),
+                    ("lat".into(), DataType::Double),
+                    ("lon".into(), DataType::Double),
                 ]))),
             ),
         ])))

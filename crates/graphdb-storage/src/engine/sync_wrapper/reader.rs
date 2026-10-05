@@ -4,13 +4,14 @@ use crate::macros::forward_methods;
 use crate::{StorageClient, StorageReader};
 use graphdb_core::types::{EdgeTypeInfo, TagInfo, VertexId};
 use graphdb_core::{Edge, StorageError, Value, Vertex};
+use std::sync::Arc;
 
 impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
     forward_methods!(inner;
         fn get_vertex(&self, space: &str, tag: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
         fn layout_version(&self) -> u64;
         fn vertex_id_domain(&self, space: &str) -> Option<std::ops::Range<i64>>;
-        fn get_vertex_projected(&self, space: &str, tag: &str, id: &VertexId, projection: &[String]) -> Result<Option<Vertex>, StorageError>;
+        fn get_vertex_projected(&self, space: &str, tag: &str, id: &VertexId, projection: &[std::sync::Arc<str>]) -> Result<Option<Vertex>, StorageError>;
         fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError>;
         fn scan_vertices_by_tag(&self, space: &str, tag: &str) -> Result<Vec<Vertex>, StorageError>;
         fn scan_vertices_by_tag_paginated(&self, space: &str, tag: &str, offset: usize, limit: usize) -> Result<Vec<Vertex>, StorageError>;
@@ -36,7 +37,7 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
             dst: &VertexId,
             edge_type: &str,
             rank: i64,
-            projection: &[String],
+            projection: &[Arc<str>],
         ) -> Result<Option<Edge>, StorageError>;
         fn get_node_edges(
             &self,
@@ -51,7 +52,7 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
             node_id: &VertexId,
             direction: graphdb_core::EdgeDirection,
             edge_types: &[String],
-            projection: Option<&[String]>,
+            projection: Option<&[Arc<str>]>,
             limit: Option<usize>,
         ) -> Result<Vec<Edge>, StorageError>;
         fn get_vertices_batch(

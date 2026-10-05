@@ -403,7 +403,7 @@ mod tests {
     fn test_alias_create_resolve_drop() {
         let manager = TypeAliasManager::new();
         manager
-            .create_alias(TypeAliasDef::new("uid".to_string(), "INT".to_string()))
+            .create_alias(TypeAliasDef::new("uid".into(), "INT".to_string()))
             .unwrap();
         assert!(manager.exists("UID"));
         assert_eq!(manager.resolve("uid", &builtin).unwrap(), DataType::Int);
@@ -415,10 +415,10 @@ mod tests {
     fn test_alias_chain() {
         let manager = TypeAliasManager::new();
         manager
-            .create_alias(TypeAliasDef::new("a".to_string(), "BIGINT".to_string()))
+            .create_alias(TypeAliasDef::new("a".into(), "BIGINT".to_string()))
             .unwrap();
         manager
-            .create_alias(TypeAliasDef::new("b".to_string(), "a".to_string()))
+            .create_alias(TypeAliasDef::new("b".into(), "a".to_string()))
             .unwrap();
         assert_eq!(manager.resolve("B", &builtin).unwrap(), DataType::BigInt);
     }
@@ -427,7 +427,7 @@ mod tests {
     fn test_alias_direct_cycle_rejected() {
         let manager = TypeAliasManager::new();
         assert!(manager
-            .create_alias(TypeAliasDef::new("a".to_string(), "a".to_string()))
+            .create_alias(TypeAliasDef::new("a".into(), "a".to_string()))
             .is_err());
     }
 
@@ -435,16 +435,16 @@ mod tests {
     fn test_alias_indirect_cycle_rejected() {
         let manager = TypeAliasManager::new();
         manager
-            .create_alias(TypeAliasDef::new("a".to_string(), "INT".to_string()))
+            .create_alias(TypeAliasDef::new("a".into(), "INT".to_string()))
             .unwrap();
         manager
-            .create_alias(TypeAliasDef::new("b".to_string(), "a".to_string()))
+            .create_alias(TypeAliasDef::new("b".into(), "a".to_string()))
             .unwrap();
         // Dropping `a` is refused while `b` references it, so re-creating a
         // cycle through redefinition is impossible; simulate by dropping first
         // is also refused — instead verify a 3-node cycle attempt fails.
         manager
-            .create_alias(TypeAliasDef::new("c".to_string(), "b".to_string()))
+            .create_alias(TypeAliasDef::new("c".into(), "b".to_string()))
             .unwrap();
         assert!(manager.drop_alias("a").is_err());
         assert!(manager.drop_alias("b").is_err());

@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn set_outside_transaction_mutates_base() {
         let s = store();
-        s.set_variable("x".to_string(), Value::Int(1), false);
+        s.set_variable("x".into(), Value::Int(1), false);
         assert_eq!(s.variable_value("x"), Some(Value::Int(1)));
         assert_eq!(s.variables_snapshot().len(), 1);
     }
@@ -178,9 +178,9 @@ mod tests {
     #[test]
     fn rollback_restores_pre_transaction_value() {
         let s = store();
-        s.set_variable("x".to_string(), Value::Int(1), false);
-        s.set_variable("x".to_string(), Value::Int(2), true);
-        s.set_variable("y".to_string(), Value::string("txn"), true);
+        s.set_variable("x".into(), Value::Int(1), false);
+        s.set_variable("x".into(), Value::Int(2), true);
+        s.set_variable("y".into(), Value::string("txn"), true);
         assert_eq!(s.variable_value("x"), Some(Value::Int(2)));
         assert_eq!(s.variable_value("y"), Some(Value::string("txn")));
         s.rollback_variables();
@@ -191,8 +191,8 @@ mod tests {
     #[test]
     fn commit_merges_overlay() {
         let s = store();
-        s.set_variable("a".to_string(), Value::Int(1), false);
-        s.set_variable("a".to_string(), Value::Int(5), true);
+        s.set_variable("a".into(), Value::Int(1), false);
+        s.set_variable("a".into(), Value::Int(5), true);
         s.commit_variables();
         assert_eq!(s.variable_value("a"), Some(Value::Int(5)));
         assert_eq!(s.variables_snapshot().len(), 1);
@@ -201,14 +201,14 @@ mod tests {
     #[test]
     fn rollback_to_savepoint_restores_after_marker() {
         let s = store();
-        s.set_variable("a".to_string(), Value::Int(1), false);
+        s.set_variable("a".into(), Value::Int(1), false);
         s.push_variable_savepoint("sp1");
-        s.set_variable("a".to_string(), Value::Int(2), true);
-        s.set_variable("b".to_string(), Value::Int(3), true);
+        s.set_variable("a".into(), Value::Int(2), true);
+        s.set_variable("b".into(), Value::Int(3), true);
         assert!(s.rollback_variables_to("sp1"));
         assert_eq!(s.variable_value("a"), Some(Value::Int(1)));
         assert_eq!(s.variable_value("b"), None);
-        s.set_variable("b".to_string(), Value::Int(4), true);
+        s.set_variable("b".into(), Value::Int(4), true);
         assert!(!s.rollback_variables_to("missing"));
         assert_eq!(s.variable_value("b"), Some(Value::Int(4)));
     }
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn rollback_of_new_variable_removes_it() {
         let s = store();
-        s.set_variable("new".to_string(), Value::Int(42), true);
+        s.set_variable("new".into(), Value::Int(42), true);
         s.rollback_variables();
         assert_eq!(s.variable_value("new"), None);
     }
