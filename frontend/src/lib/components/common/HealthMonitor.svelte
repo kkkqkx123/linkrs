@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { t } from 'svelte-i18n';
+  import { t } from '$i18n';
   import { connectionStore } from '$stores/connection';
   import { connectionService } from '$services/connection';
   import type { HealthResponse } from '$services/connection';

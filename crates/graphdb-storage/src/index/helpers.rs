@@ -205,7 +205,7 @@ pub(crate) fn effective_index_values(
         .filter_map(|field| {
             props
                 .iter()
-                .find(|(name, _)| &**name == field.name)
+                .find(|(name, _)| name.as_ref() == field.name.as_str())
                 .map(|(_, value)| value.clone())
         })
         .collect::<Vec<_>>();

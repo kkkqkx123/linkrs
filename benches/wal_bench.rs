@@ -125,7 +125,7 @@ fn bench_sync_policy_ingest(c: &mut Criterion) {
                 .create_tag(
                     &space_name,
                     &graphdb::core::types::TagInfo::new("Node".to_string()).with_properties(vec![
-                        graphdb::core::types::PropertyDef::new("id".to_string(), DataType::BigInt),
+                        graphdb::core::types::PropertyDef::new("id".into(), DataType::BigInt),
                     ]),
                 )
                 .expect("create tag");
@@ -135,7 +135,7 @@ fn bench_sync_policy_ingest(c: &mut Criterion) {
                         VertexId::try_from_int64(i).expect("valid vertex id"),
                         graphdb::core::vertex_edge_path::Tag::new(
                             "Node".to_string(),
-                            [("id".to_string(), graphdb::core::Value::BigInt(i))]
+                            [("id".into(), graphdb::core::Value::BigInt(i))]
                                 .into_iter()
                                 .collect(),
                         ),
@@ -193,7 +193,7 @@ fn bench_sync_policy_ingest(c: &mut Criterion) {
                                 VertexId::try_from_int64(i).expect("valid vertex id"),
                                 graphdb::core::vertex_edge_path::Tag::new(
                                     "Node".to_string(),
-                                    [("id".to_string(), graphdb::core::Value::BigInt(i))]
+                                    [("id".into(), graphdb::core::Value::BigInt(i))]
                                         .into_iter()
                                         .collect(),
                                 ),

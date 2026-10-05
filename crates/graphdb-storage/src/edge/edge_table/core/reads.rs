@@ -868,7 +868,6 @@ impl EdgeStore {
         self.properties
             .get_typed_columns_batch_by_edge_ids(edge_ids, query_ts, projection)
             .into_iter()
-            .map(|(name, values)| (name, values))
             .collect()
     }
 

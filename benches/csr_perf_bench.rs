@@ -13,6 +13,7 @@
 //! tune thresholds against measured data.
 
 use std::hint::black_box;
+use std::sync::Arc;
 use std::time::Instant;
 
 use graphdb::core::types::{EdgeId, Timestamp, VertexId};
@@ -334,8 +335,8 @@ fn property_schema_set(cols: usize) -> Vec<PropertySchema> {
 fn bench_properties(cols: usize) {
     const EDGES: u64 = 20_000;
     let mut props = CsrWithProperties::new(property_schema_set(cols));
-    let values: Vec<(String, Value)> = (0..cols)
-        .map(|i| (format!("c{i}"), Value::Double(i as f64)))
+    let values: Vec<(Arc<str>, Value)> = (0..cols)
+        .map(|i| (Arc::from(format!("c{i}")), Value::Double(i as f64)))
         .collect();
     let start = Instant::now();
     for eid in 0..EDGES {

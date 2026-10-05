@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { t } from 'svelte-i18n';
+  import { t } from '$i18n';
   import { navigate } from 'svelte-routing';
 </script>
 

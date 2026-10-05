@@ -41,7 +41,7 @@ pub(crate) fn apply_staged_columns(
             .find(|(existing, _)| existing.as_ref() == name.as_ref())
         {
             Some(slot) => slot.1 = value.clone(),
-            None => properties.push((name.clone().into(), value.clone())),
+            None => properties.push((name.clone(), value.clone())),
         }
     }
 }

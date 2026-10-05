@@ -306,7 +306,7 @@ fn build_b3() -> GraphStorage {
                 VertexId::try_from_int64(i as i64).expect("vid"),
                 Tag::new(
                     B3_TAG.to_string(),
-                    [("value".to_string(), Value::BigInt(i as i64))]
+                    [("value".into(), Value::BigInt(i as i64))]
                         .into_iter()
                         .collect(),
                 ),
@@ -487,7 +487,7 @@ fn build_b5_vertices(storage: &mut GraphStorage, space: &str, tag: &str, n: usiz
                 VertexId::try_from_int64(i as i64).expect("vid"),
                 Tag::new(
                     tag.to_string(),
-                    [("value".to_string(), Value::BigInt(i as i64))]
+                    [("value".into(), Value::BigInt(i as i64))]
                         .into_iter()
                         .collect(),
                 ),
@@ -624,7 +624,7 @@ fn build_b6_storage_chunked(
                 VertexId::try_from_int64(i as i64).expect("vid"),
                 Tag::new(
                     tag.to_string(),
-                    [("value".to_string(), Value::BigInt(i as i64))]
+                    [("value".into(), Value::BigInt(i as i64))]
                         .into_iter()
                         .collect(),
                 ),
@@ -736,7 +736,7 @@ fn bench_b7() {
         src_label: 0,
         dst_label: 0,
         properties: vec![StoragePropertyDef {
-            name: "weight".to_string(),
+            name: "weight".into(),
             data_type: DataType::Double,
             nullable: false,
             default_value: Some(Value::Double(0.0)),
@@ -758,7 +758,7 @@ fn bench_b7() {
                 i,
                 i + 1,
                 (i % 7) as i64,
-                &[("weight".to_string(), Value::Double(i as f64))],
+                &[("weight".into(), Value::Double(i as f64))],
                 100,
             )
             .expect("ranked insert");

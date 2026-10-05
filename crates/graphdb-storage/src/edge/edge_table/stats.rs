@@ -7,6 +7,7 @@ use graphdb_core::types::{EdgeId, Timestamp};
 use graphdb_core::{StorageError, StorageResult, Value};
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::column_stats::{compute_stats_streaming, deserialize_stat_value, serialize_stat_value};
 use crate::encoding::EncodingType;
@@ -95,7 +96,7 @@ pub struct GroupSegmentStats {
     pub null_count: u64,
     pub sort_min: Option<Value>,
     pub sort_max: Option<Value>,
-    pub columns: HashMap<String, crate::column_stats::ColumnStats>,
+    pub columns: HashMap<Arc<str>, crate::column_stats::ColumnStats>,
 }
 
 impl GroupSegmentStats {
@@ -107,8 +108,8 @@ impl GroupSegmentStats {
         row_count: u64,
         live_count: u64,
         endpoints: &[u32],
-        column_values: &HashMap<String, Vec<Option<Value>>>,
-        column_encodings: &HashMap<String, EncodingType>,
+        column_values: &HashMap<Arc<str>, Vec<Option<Value>>>,
+        column_encodings: &HashMap<Arc<str>, EncodingType>,
     ) -> Self {
         let endpoint_values = endpoints
             .iter()
@@ -275,7 +276,7 @@ impl GroupSegmentStats {
                 out.extend_from_slice(&0u32.to_le_bytes());
             }
         }
-        let mut names: Vec<&String> = self.columns.keys().collect();
+        let mut names: Vec<&Arc<str>> = self.columns.keys().collect();
         names.sort();
         out.extend_from_slice(&(names.len() as u32).to_le_bytes());
         for name in names {
@@ -370,7 +371,7 @@ impl GroupSegmentStats {
                     "unexpected trailing data in segment column stats",
                 ));
             }
-            columns.insert(name, stats);
+            columns.insert(Arc::from(name.as_str()), stats);
         }
         Ok(Self {
             group,
@@ -717,7 +718,7 @@ mod tests {
         use crate::cursor::ScanPredicate;
         use std::collections::HashMap;
 
-        let mut column_values: HashMap<String, Vec<Option<Value>>> = HashMap::new();
+        let mut column_values: HashMap<Arc<str>, Vec<Option<Value>>> = HashMap::new();
         column_values.insert(
             "weight".into(),
             vec![
@@ -782,14 +783,14 @@ mod tests {
     fn test_segment_stats_widen_only_bounds() {
         use std::collections::HashMap;
 
-        let mut first_values: HashMap<String, Vec<Option<Value>>> = HashMap::new();
+        let mut first_values: HashMap<Arc<str>, Vec<Option<Value>>> = HashMap::new();
         first_values.insert(
             "weight".into(),
             vec![Some(Value::Double(5.0)), Some(Value::Double(6.0))],
         );
         let mut stats =
             GroupSegmentStats::collect(0, 4096, 2, &[5], &first_values, &HashMap::new());
-        let mut second_values: HashMap<String, Vec<Option<Value>>> = HashMap::new();
+        let mut second_values: HashMap<Arc<str>, Vec<Option<Value>>> = HashMap::new();
         second_values.insert("weight".into(), vec![Some(Value::Double(1.0))]);
         let fresh = GroupSegmentStats::collect(1, 4096, 1, &[50], &second_values, &HashMap::new());
         stats.widen_with(&fresh);

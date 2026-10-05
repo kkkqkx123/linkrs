@@ -23,8 +23,8 @@ fn setup_vertices(storage: &mut GraphStorage, space: &str, count: usize) {
             Tag::new(
                 "Node".to_string(),
                 vec![
-                    ("name".to_string(), Value::string(format!("vertex_{}", i))),
-                    ("value".to_string(), Value::Int(i as i32)),
+                    ("name".into(), Value::string(format!("vertex_{}", i))),
+                    ("value".into(), Value::Int(i as i32)),
                 ]
                 .into_iter()
                 .collect(),
@@ -48,8 +48,8 @@ fn bench_data_loading_workflow(c: &mut Criterion) {
                     .create_tag(
                         &space,
                         &TagInfo::new("Node".to_string()).with_properties(vec![
-                            PropertyDef::new("name".to_string(), DataType::String),
-                            PropertyDef::new("value".to_string(), DataType::Int),
+                            PropertyDef::new("name".into(), DataType::String),
+                            PropertyDef::new("value".into(), DataType::Int),
                         ]),
                     )
                     .expect("create tag");
@@ -57,7 +57,7 @@ fn bench_data_loading_workflow(c: &mut Criterion) {
                     .create_edge_type(
                         &space,
                         &EdgeTypeInfo::new("Link".to_string()).with_properties(vec![
-                            PropertyDef::new("weight".to_string(), DataType::Double),
+                            PropertyDef::new("weight".into(), DataType::Double),
                         ]),
                     )
                     .expect("create edge type");
@@ -75,7 +75,7 @@ fn bench_data_loading_workflow(c: &mut Criterion) {
                                 .expect("valid vertex id"),
                             edge_type: "Link".to_string(),
                             ranking: 0,
-                            props: [("weight".to_string(), Value::Double(1.0))]
+                            props: [("weight".into(), Value::Double(1.0))]
                                 .into_iter()
                                 .collect(),
                         };
@@ -100,8 +100,8 @@ fn bench_query_analysis_workflow(c: &mut Criterion) {
         .create_tag(
             space,
             &TagInfo::new("Node".to_string()).with_properties(vec![
-                PropertyDef::new("name".to_string(), DataType::String),
-                PropertyDef::new("value".to_string(), DataType::Double),
+                PropertyDef::new("name".into(), DataType::String),
+                PropertyDef::new("value".into(), DataType::Double),
             ]),
         )
         .expect("create tag");
@@ -137,7 +137,7 @@ fn bench_search_workflow(c: &mut Criterion) {
         .create_tag(
             space,
             &TagInfo::new("Node".to_string())
-                .with_properties(vec![PropertyDef::new("name".to_string(), DataType::String)]),
+                .with_properties(vec![PropertyDef::new("name".into(), DataType::String)]),
         )
         .expect("create tag");
     setup_vertices(&mut storage, space, 100);
@@ -189,7 +189,7 @@ fn bench_write_transaction_workflow(c: &mut Criterion) {
                     VertexId::try_from_string(format!("u{}", i)).expect("valid vertex id"),
                     Tag::new(
                         "Node".to_string(),
-                        [("value".to_string(), Value::Int(i))].into_iter().collect(),
+                        [("value".into(), Value::Int(i))].into_iter().collect(),
                     ),
                 );
                 storage.insert_vertex(space, vertex).expect("insert");
@@ -211,7 +211,7 @@ fn bench_concurrent_mixed_workload(c: &mut Criterion) {
         .create_tag(
             space,
             &TagInfo::new("Node".to_string())
-                .with_properties(vec![PropertyDef::new("value".to_string(), DataType::Int)]),
+                .with_properties(vec![PropertyDef::new("value".into(), DataType::Int)]),
         )
         .expect("create tag");
     setup_vertices(&mut storage, space, 100);

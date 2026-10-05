@@ -5,6 +5,7 @@ use graphdb_core::types::{
 use graphdb_core::vertex_edge_path::Tag;
 use graphdb_core::{DataType, Value, Vertex};
 use graphdb_storage::{GraphStorage, StorageSchemaOps, StorageWriter};
+use std::sync::Arc;
 use std::time::Duration;
 
 fn create_benchmark_group<'a>(
@@ -20,7 +21,7 @@ fn create_benchmark_group<'a>(
 
 fn indexed_storage() -> GraphStorage {
     let mut storage = GraphStorage::new().expect("storage should initialize");
-    let mut space = SpaceInfo::new("bench".to_string()).with_vid_type(DataType::BigInt);
+    let mut space = SpaceInfo::new("bench".into()).with_vid_type(DataType::BigInt);
     storage
         .create_space(&mut space)
         .expect("space should be created");
@@ -28,9 +29,9 @@ fn indexed_storage() -> GraphStorage {
         .create_tag(
             "bench",
             &TagInfo::new("Node".to_string()).with_properties(vec![
-                PropertyDef::new("name".to_string(), DataType::String),
-                PropertyDef::new("age".to_string(), DataType::Int),
-                PropertyDef::new("city".to_string(), DataType::String),
+                PropertyDef::new("name".into(), DataType::String),
+                PropertyDef::new("age".into(), DataType::Int),
+                PropertyDef::new("city".into(), DataType::String),
             ]),
         )
         .expect("tag should be created");
@@ -64,10 +65,10 @@ fn build_vertex(id: i64) -> Vertex {
         Tag::new(
             "Node".to_string(),
             [
-                ("name".to_string(), Value::string(format!("node_{id}"))),
-                ("age".to_string(), Value::Int(id as i32)),
+                ("name".into(), Value::string(format!("node_{id}"))),
+                ("age".into(), Value::Int(id as i32)),
                 (
-                    "city".to_string(),
+                    Arc::from("city"),
                     Value::string(format!("city_{}", id % 1000)),
                 ),
             ]

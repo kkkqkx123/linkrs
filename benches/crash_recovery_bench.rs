@@ -35,8 +35,8 @@ fn make_vertex(i: i64) -> Vertex {
         Tag::new(
             "Node".to_string(),
             [
-                ("id".to_string(), Value::BigInt(i)),
-                ("value".to_string(), Value::Double(i as f64)),
+                ("id".into(), Value::BigInt(i)),
+                ("value".into(), Value::Double(i as f64)),
             ]
             .into_iter()
             .collect(),
@@ -54,8 +54,8 @@ fn populate(path: &std::path::Path, checkpoint: bool) {
         .create_tag(
             &space_name,
             &TagInfo::new("Node".to_string()).with_properties(vec![
-                PropertyDef::new("id".to_string(), DataType::BigInt),
-                PropertyDef::new("value".to_string(), DataType::Double),
+                PropertyDef::new("id".into(), DataType::BigInt),
+                PropertyDef::new("value".into(), DataType::Double),
             ]),
         )
         .expect("create tag");

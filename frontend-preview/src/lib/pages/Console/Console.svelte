@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { t } from 'svelte-i18n';
+  import { t } from '$i18n';
   import { get } from 'svelte/store';
   import { navigate } from 'svelte-routing';
   import { consoleStore, type QueryHistoryItem, type QueryFavoriteItem, type StatementResultEntry, type StreamState, type CursorState, type ResultMode, type AutoDecision } from '$stores/console';
@@ -312,7 +312,7 @@
 
   function handleSaveFavorite() {
     if (!favoriteName.trim()) {
-      saveModalError = get(t)('common.name') + ' is required';
+      saveModalError = get(t)('console.favoriteNameRequired');
       return;
     }
     const result = consoleStore.addToFavorites(favoriteName, editorContent);
@@ -390,7 +390,7 @@
         disabled={isBusy || !streamEligibility.eligible}
         title={streamEligibility.mode === 'single' && parameters.length > 0 ? $t('console.streamParamsIgnored') : undefined}
       >
-        {$t('console.streamExecute')}
+        {$t('console.execStream')}
       </button>
       <button
         class="px-4 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white text-sm rounded transition-colors disabled:opacity-50 cursor-pointer"
@@ -448,7 +448,7 @@
         </label>
       {/if}
       <button class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded transition-colors cursor-pointer" onclick={() => { consoleStore.setEditorContent(''); consoleStore.clearResult(); }}>
-        {$t('console.clear')}
+        {$t('common.clear')}
       </button>
       <div class="flex-1"></div>
       <button
@@ -498,7 +498,7 @@
                 <input
                   type="text"
                   bind:value={row.name}
-                  placeholder={$t('console.bindingName')}
+                  placeholder={$t('common.name')}
                   class="w-1/3 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
                 />
                 <input
@@ -528,7 +528,7 @@
                 <input
                   type="text"
                   bind:value={row.name}
-                  placeholder={$t('console.bindingName')}
+                  placeholder={$t('common.name')}
                   class="w-1/3 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
                 />
                 <input

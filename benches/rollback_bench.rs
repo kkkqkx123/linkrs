@@ -66,9 +66,7 @@ fn setup_storage() -> (GraphStorage, Option<TempDir>) {
                     VertexId::try_from_int64(i).expect("valid vertex id"),
                     Tag::new(
                         TAG.to_string(),
-                        [("value".to_string(), Value::BigInt(i))]
-                            .into_iter()
-                            .collect(),
+                        [("value".into(), Value::BigInt(i))].into_iter().collect(),
                     ),
                 )
             })

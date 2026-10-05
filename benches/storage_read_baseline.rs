@@ -11,6 +11,7 @@ use graphdb::core::{DataType, Value, Vertex};
 use graphdb::storage::{GraphStorage, ScanOptions, StorageReader, StorageSchemaOps, StorageWriter};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use std::sync::Arc;
 use std::time::Instant;
 
 const WIDE_PROPS: [(&str, DataType); 8] = [
@@ -58,7 +59,7 @@ fn build_table(vertex_count: u64, props: &[(&str, DataType)], label: &str) -> Gr
                         DataType::BigInt | DataType::Int => Value::BigInt(i as i64 + idx as i64),
                         _ => Value::string(format!("s{}_v{}", idx, i)),
                     };
-                    map.push((name.to_string(), value));
+                    map.push((Arc::from(*name), value));
                 }
                 Vertex::new(
                     VertexId::try_from_int64(i as i64).expect("valid vertex id"),
@@ -138,7 +139,7 @@ fn bench_random_access(
             let vid = VertexId::try_from_int64(id).expect("valid vid");
             if projected {
                 let _ = storage
-                    .get_vertex_projected(space, tag, &vid, &["v".to_string()])
+                    .get_vertex_projected(space, tag, &vid, &[Arc::from("v")])
                     .expect("get projected");
             } else {
                 let _ = storage.get_vertex(space, tag, &vid).expect("get vertex");

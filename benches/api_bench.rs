@@ -25,8 +25,8 @@ fn bench_json_serialization(c: &mut Criterion) {
         Tag::new(
             "Node".to_string(),
             vec![
-                ("name".to_string(), Value::string("test_node")),
-                ("value".to_string(), Value::BigInt(100)),
+                ("name".into(), Value::string("test_node")),
+                ("value".into(), Value::BigInt(100)),
             ]
             .into_iter()
             .collect(),
@@ -48,8 +48,8 @@ fn bench_json_serialization(c: &mut Criterion) {
                     Tag::new(
                         "Node".to_string(),
                         vec![
-                            ("name".to_string(), Value::string(format!("node_{}", i))),
-                            ("value".to_string(), Value::BigInt(i)),
+                            ("name".into(), Value::string(format!("node_{}", i))),
+                            ("value".into(), Value::BigInt(i)),
                         ]
                         .into_iter()
                         .collect(),
@@ -78,8 +78,8 @@ fn bench_json_deserialization(c: &mut Criterion) {
         Tag::new(
             "Node".to_string(),
             vec![
-                ("name".to_string(), Value::string("test_node")),
-                ("value".to_string(), Value::BigInt(100)),
+                ("name".into(), Value::string("test_node")),
+                ("value".into(), Value::BigInt(100)),
             ]
             .into_iter()
             .collect(),

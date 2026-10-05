@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { t } from 'svelte-i18n';
+  import { t } from '$i18n';
   import { get } from 'svelte/store';
   import { navigate } from 'svelte-routing';
   import { dataBrowserStore } from '$stores/dataBrowser';
@@ -171,7 +171,7 @@
 {:else if currentSpace}
   <div class="flex flex-col h-full gap-4">
     <div class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm px-5 py-3 flex items-center justify-between">
-      <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">📋 {$t('dataBrowser.title')}</h2>
+      <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">📋 {$t('sidebar.dataBrowser')}</h2>
       <div class="flex gap-2">
         <button class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer" onclick={loadStatistics}>
           🔄 {$t('common.refresh')}
@@ -200,7 +200,7 @@
             📦 {$t('dataBrowser.vertices')}
           </button>
           <button class="px-5 py-3 text-sm font-medium cursor-pointer {activeTab === 'edges' ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-500' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}" onclick={() => handleTabChange('edges')}>
-            ↔ {$t('dataBrowser.edges')}
+            ↔ {$t('sidebar.edges')}
           </button>
         </div>
 
@@ -223,7 +223,7 @@
                   <thead>
                     <tr class="bg-gray-50 dark:bg-gray-800/50">
                       <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">ID</th>
-                      <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">{$t('schema.tags')}</th>
+                      <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">{$t('sidebar.tags')}</th>
                       {#each vertexProperties as prop (prop)}
                         <th class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">{prop}</th>
                       {/each}
@@ -347,9 +347,9 @@
         {#if statistics}
           <div class="space-y-2 text-sm">
             <div class="flex justify-between"><span class="text-gray-500 dark:text-gray-400">{$t('dataBrowser.vertices')}:</span><span class="font-medium text-gray-800 dark:text-gray-200">{statistics.totalVertices ?? '-'}</span></div>
-            <div class="flex justify-between"><span class="text-gray-500 dark:text-gray-400">{$t('dataBrowser.edges')}:</span><span class="font-medium text-gray-800 dark:text-gray-200">{statistics.totalEdges ?? '-'}</span></div>
-            <div class="flex justify-between"><span class="text-gray-500 dark:text-gray-400">{$t('schema.tags')}:</span><span class="font-medium text-gray-800 dark:text-gray-200">{statistics.tagCount ?? '-'}</span></div>
-            <div class="flex justify-between"><span class="text-gray-500 dark:text-gray-400">{$t('schema.edges')}:</span><span class="font-medium text-gray-800 dark:text-gray-200">{statistics.edgeTypeCount ?? '-'}</span></div>
+            <div class="flex justify-between"><span class="text-gray-500 dark:text-gray-400">{$t('sidebar.edges')}:</span><span class="font-medium text-gray-800 dark:text-gray-200">{statistics.totalEdges ?? '-'}</span></div>
+            <div class="flex justify-between"><span class="text-gray-500 dark:text-gray-400">{$t('sidebar.tags')}:</span><span class="font-medium text-gray-800 dark:text-gray-200">{statistics.tagCount ?? '-'}</span></div>
+            <div class="flex justify-between"><span class="text-gray-500 dark:text-gray-400">{$t('sidebar.edges')}:</span><span class="font-medium text-gray-800 dark:text-gray-200">{statistics.edgeTypeCount ?? '-'}</span></div>
           </div>
         {:else}
           <p class="text-gray-400 dark:text-gray-500 text-xs">{$t('common.refresh')} {$t('common.loading')}</p>
@@ -369,7 +369,7 @@
     <div role="presentation" class="absolute inset-0 bg-black/20" onclick={() => dataBrowserStore.hideDetail()}></div>
     <div class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto">
       <div class="flex items-center justify-between mb-4">
-        <h3 class="font-semibold text-gray-800 dark:text-gray-100">{detailType === 'vertex' ? $t('dataBrowser.vertices') : $t('dataBrowser.edges')} {$t('common.detail')}</h3>
+        <h3 class="font-semibold text-gray-800 dark:text-gray-100">{detailType === 'vertex' ? $t('dataBrowser.vertices') : $t('sidebar.edges')} {$t('common.detail')}</h3>
         <button class="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer" onclick={() => dataBrowserStore.hideDetail()}>✕</button>
       </div>
       <div class="space-y-2">

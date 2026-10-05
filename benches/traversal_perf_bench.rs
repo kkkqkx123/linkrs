@@ -37,8 +37,8 @@ fn setup_data() -> Arc<RwLock<GraphStorage>> {
         .create_tag(
             SPACE,
             &TagInfo::new(TAG.to_string()).with_properties(vec![
-                PropertyDef::new("value".to_string(), DataType::BigInt),
-                PropertyDef::new("group_id".to_string(), DataType::BigInt),
+                PropertyDef::new("value".into(), DataType::BigInt),
+                PropertyDef::new("group_id".into(), DataType::BigInt),
             ]),
         )
         .expect("create tag");
@@ -61,8 +61,8 @@ fn setup_data() -> Arc<RwLock<GraphStorage>> {
                     Tag::new(
                         TAG.to_string(),
                         vec![
-                            ("value".to_string(), Value::BigInt(i as i64)),
-                            ("group_id".to_string(), Value::BigInt((i % 20) as i64)),
+                            ("value".into(), Value::BigInt(i as i64)),
+                            ("group_id".into(), Value::BigInt((i % 20) as i64)),
                         ]
                         .into_iter()
                         .collect(),

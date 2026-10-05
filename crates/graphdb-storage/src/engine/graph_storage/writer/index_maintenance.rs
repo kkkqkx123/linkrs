@@ -55,7 +55,7 @@ pub(super) fn update_vertex_indexes_with_list(
             .filter_map(|field| {
                 props
                     .iter()
-                    .find(|(name, _)| &**name == field.name)
+                    .find(|(name, _)| name.as_ref() == field.name.as_str())
                     .cloned()
             })
             .collect();
@@ -114,8 +114,9 @@ fn check_vertex_unique_indexes_with_list(
             continue;
         }
         for field in &index.fields {
-            if let Some((_prop_name, prop_value)) =
-                props.iter().find(|(name, _)| &**name == field.name)
+            if let Some((_prop_name, prop_value)) = props
+                .iter()
+                .find(|(name, _)| name.as_ref() == field.name.as_str())
             {
                 let existing = ctx
                     .index_data_manager()

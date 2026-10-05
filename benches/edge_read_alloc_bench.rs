@@ -1,9 +1,10 @@
-//! Allocation accounting for the edge property read path (§一.1 / §2.2).
+//! Allocation accounting for the edge property read path.
 //!
 //! Uses a counting global allocator to report per-operation heap bytes and
-//! allocation counts for `get_edge`, as a regression anchor for the
-//! per-row clone hotspot in `csr_with_properties/read.rs`. Small dataset,
-//! debug-mode friendly.
+//! allocation counts for `get_edge`. Column names travel as shared `Arc<str>`
+//! handles cloned from the label schema, so a per-edge read must not allocate
+//! for property names; any growth here means a name string is being rebuilt
+//! on the read path. Small dataset, debug-mode friendly.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
@@ -13,6 +14,7 @@ use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWri
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 static ALLOC_BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -65,8 +67,8 @@ fn setup_graph() -> GraphStorage {
         .create_tag(
             &space_name,
             &TagInfo::new("Node".to_string()).with_properties(vec![
-                PropertyDef::new("id".to_string(), DataType::BigInt),
-                PropertyDef::new("value".to_string(), DataType::Double),
+                PropertyDef::new("id".into(), DataType::BigInt),
+                PropertyDef::new("value".into(), DataType::Double),
             ]),
         )
         .expect("create tag");
@@ -88,8 +90,8 @@ fn setup_graph() -> GraphStorage {
                 Tag::new(
                     "Node".to_string(),
                     [
-                        ("id".to_string(), Value::BigInt(i)),
-                        ("value".to_string(), Value::Double(i as f64)),
+                        ("id".into(), Value::BigInt(i)),
+                        ("value".into(), Value::Double(i as f64)),
                     ]
                     .into_iter()
                     .collect(),
@@ -110,7 +112,12 @@ fn setup_graph() -> GraphStorage {
                 edge_type: "Link".to_string(),
                 ranking: 0,
                 props: (0..PROP_COUNT)
-                    .map(|i| (format!("p{}", i), Value::Double(k as f64 + i as f64 * 0.5)))
+                    .map(|i| {
+                        (
+                            Arc::from(format!("p{}", i)),
+                            Value::Double(k as f64 + i as f64 * 0.5),
+                        )
+                    })
                     .collect(),
             })
         })
@@ -160,9 +167,9 @@ fn bench_edge_read(c: &mut Criterion) {
     ));
     report.push_str(&format!(
         "get_edge (single edge, {} props):\n  heap bytes/op:  {:.1}\n  allocations/op: {:.1}\n\n\
-Per-edge read clones column-name Strings and Values on every access\n\
-(csr_with_properties/read.rs); these numbers are the regression anchor\n\
-for eliminating those clones.\n",
+Per-edge read allocates nothing for property names: column names are shared\n\
+Arc<str> handles cloned from the label schema. Residual heap traffic is the\n\
+value map plus Value clones, which are inherent to returning owned results.\n",
         PROP_COUNT, bytes_per_op, calls_per_op
     ));
 

@@ -2,9 +2,38 @@
  * Centralized unit formatting for monitoring numbers. Components must call
  * these helpers instead of scattering byte / percent / latency math inline.
  * Missing values render as an em dash so gaps never masquerade as zeros.
+ * Grouping and duration units follow the active locale.
  */
 
+import { currentLocale } from '$i18n';
+
 export const MISSING = '—';
+
+type DurationUnit = 'day' | 'hour' | 'minute' | 'second';
+
+const numberFormatters = new Map<string, Intl.NumberFormat>();
+const durationFormatters = new Map<string, Intl.NumberFormat>();
+
+function numberFormatter(): Intl.NumberFormat {
+	const locale = currentLocale();
+	let formatter = numberFormatters.get(locale);
+	if (!formatter) {
+		formatter = new Intl.NumberFormat(locale);
+		numberFormatters.set(locale, formatter);
+	}
+	return formatter;
+}
+
+function durationFormatter(unit: DurationUnit): Intl.NumberFormat {
+	const locale = currentLocale();
+	const cacheKey = `${locale}/${unit}`;
+	let formatter = durationFormatters.get(cacheKey);
+	if (!formatter) {
+		formatter = new Intl.NumberFormat(locale, { style: 'unit', unit, unitDisplay: 'short' });
+		durationFormatters.set(cacheKey, formatter);
+	}
+	return formatter;
+}
 
 export function formatBytes(value: unknown): string {
 	const num = toFiniteNumber(value);
@@ -44,13 +73,14 @@ export function formatCount(value: unknown): string {
 	const num = toFiniteNumber(value);
 	if (num === null) return MISSING;
 	if (!Number.isInteger(num)) return num.toFixed(2);
-	return num.toLocaleString('en-US');
+	return numberFormatter().format(num);
 }
 
+/** Grouped rate value; the surrounding label already carries the per-second unit. */
 export function formatQps(value: unknown): string {
 	const num = toFiniteNumber(value);
 	if (num === null) return MISSING;
-	return `${num.toFixed(num < 10 ? 2 : 1)} q/s`;
+	return numberFormatter().format(Number(num.toFixed(num < 10 ? 2 : 1)));
 }
 
 /** Permille (backend fragmentation unit) to percent label. */
@@ -67,10 +97,10 @@ export function formatUptimeSecs(value: unknown): string {
 	const days = Math.floor(secs / 86400);
 	const hours = Math.floor((secs % 86400) / 3600);
 	const minutes = Math.floor((secs % 3600) / 60);
-	if (days > 0) return `${days}d ${hours}h`;
-	if (hours > 0) return `${hours}h ${minutes}m`;
-	if (minutes > 0) return `${minutes}m ${secs % 60}s`;
-	return `${secs}s`;
+	if (days > 0) return `${durationFormatter('day').format(days)} ${durationFormatter('hour').format(hours)}`;
+	if (hours > 0) return `${durationFormatter('hour').format(hours)} ${durationFormatter('minute').format(minutes)}`;
+	if (minutes > 0) return `${durationFormatter('minute').format(minutes)} ${durationFormatter('second').format(secs % 60)}`;
+	return durationFormatter('second').format(secs);
 }
 
 function toFiniteNumber(value: unknown): number | null {

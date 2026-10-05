@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { t } from 'svelte-i18n';
+  import { t } from '$i18n';
   import { isAuthenticated, connectionStore } from '$stores/connection';
   import LoadingScreen from '$components/common/LoadingScreen.svelte';
 

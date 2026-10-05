@@ -17,7 +17,10 @@ pub(super) fn apply_tag_constraints_prechecked(
 ) -> StorageResult<Vec<(Arc<str>, Value)>> {
     let mut result = props;
     for prop_def in &tag.properties {
-        if let Some((_, value)) = result.iter().find(|(name, _)| &**name == prop_def.name) {
+        if let Some((_, value)) = result
+            .iter()
+            .find(|(name, _)| name.as_ref() == prop_def.name.as_str())
+        {
             if !prop_def.nullable && value.is_null() {
                 return Err(StorageError::null_value_not_allowed(&prop_def.name));
             }
@@ -67,7 +70,10 @@ pub(super) fn apply_tag_constraints(
         .unwrap_or(0);
     let mut result = props;
     for prop_def in &tag.properties {
-        if let Some((_, value)) = result.iter().find(|(name, _)| &**name == prop_def.name) {
+        if let Some((_, value)) = result
+            .iter()
+            .find(|(name, _)| name.as_ref() == prop_def.name.as_str())
+        {
             if !prop_def.nullable && value.is_null() {
                 return Err(StorageError::null_value_not_allowed(&prop_def.name));
             }
@@ -119,7 +125,10 @@ pub(super) fn apply_edge_type_constraints(
         .unwrap_or(0);
     let mut result = props;
     for prop_def in &et.properties {
-        if let Some((_, value)) = result.iter().find(|(name, _)| &**name == prop_def.name) {
+        if let Some((_, value)) = result
+            .iter()
+            .find(|(name, _)| name.as_ref() == prop_def.name.as_str())
+        {
             if !prop_def.nullable && value.is_null() {
                 return Err(StorageError::null_value_not_allowed(&prop_def.name));
             }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { t } from 'svelte-i18n';
+  import { t } from '$i18n';
   import { schemaStore } from '$stores/schema';
 
   let spaces = $state<Array<{ name: string }>>([]);

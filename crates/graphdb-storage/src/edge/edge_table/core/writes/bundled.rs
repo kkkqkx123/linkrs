@@ -41,10 +41,13 @@ impl EdgeStore {
     }
 
     /// Decode one stored inline word back to its indexed pair.
-    pub(super) fn bundled_index_pair(&self, inline_value: Option<u64>) -> Option<(String, Value)> {
+    pub(super) fn bundled_index_pair(
+        &self,
+        inline_value: Option<u64>,
+    ) -> Option<(Arc<str>, Value)> {
         let raw = inline_value?;
         let prop = self.schema.properties.first()?;
-        Some((prop.name.to_string(), decode_scalar(raw, &prop.data_type)))
+        Some((prop.name.clone(), decode_scalar(raw, &prop.data_type)))
     }
 
     /// Index pairs sourced from the inline column for erase paths.
@@ -139,7 +142,7 @@ impl EdgeStore {
         if self.property_index.is_some() {
             let label = self.label;
             let pair = self.bundled_index_pair(inline_value);
-            let outcomes: Vec<(String, StorageResult<()>, u64)> =
+            let outcomes: Vec<(Arc<str>, StorageResult<()>, u64)> =
                 if let Some(ref mut index) = self.property_index {
                     pair.into_iter()
                         .map(|(prop_name, prop_value)| {

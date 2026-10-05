@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { t } from 'svelte-i18n';
+  import { t } from '$i18n';
   import { get } from 'svelte/store';
   import { schemaStore } from '$stores/schema';
   import { theme } from '$stores/theme';
@@ -213,7 +213,7 @@
           onclick={() => handleTabChange(tab as 'spaces' | 'tags' | 'edges' | 'indexes' | 'er')}
           disabled={tab !== 'spaces' && tab !== 'er' && !currentSpace}
         >
-          {tab === 'spaces' ? $t('schema.spaces') : tab === 'tags' ? $t('schema.tags') : tab === 'edges' ? $t('schema.edges') : tab === 'indexes' ? $t('schema.indexes') : $t('schema.erGraph')}
+          {tab === 'spaces' ? $t('sidebar.spaces') : tab === 'tags' ? $t('sidebar.tags') : tab === 'edges' ? $t('sidebar.edges') : tab === 'indexes' ? $t('sidebar.indexes') : $t('schema.erGraph')}
         </button>
       {/each}
     </div>
@@ -250,7 +250,7 @@
         {/if}
       {:else if activeTab === 'tags'}
         <div class="flex justify-between items-center mb-4">
-          <span class="text-sm text-gray-500 dark:text-gray-400">{tags.length} {$t('schema.tags')}</span>
+          <span class="text-sm text-gray-500 dark:text-gray-400">{tags.length} {$t('sidebar.tags')}</span>
           <button class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer" onclick={() => { showCreateTag = true; }}>+ {$t('schema.createTag')}</button>
         </div>
         {#if isLoadingTags}
@@ -289,7 +289,7 @@
         {/if}
       {:else if activeTab === 'edges'}
         <div class="flex justify-between items-center mb-4">
-          <span class="text-sm text-gray-500 dark:text-gray-400">{edgeTypes.length} {$t('schema.edges')}</span>
+          <span class="text-sm text-gray-500 dark:text-gray-400">{edgeTypes.length} {$t('sidebar.edges')}</span>
           <button class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer" onclick={() => { showCreateEdge = true; }}>+ {$t('schema.createEdge')}</button>
         </div>
         {#if isLoadingEdgeTypes}
@@ -328,7 +328,7 @@
         {/if}
       {:else if activeTab === 'indexes'}
         <div class="flex justify-between items-center mb-4">
-          <span class="text-sm text-gray-500 dark:text-gray-400">{indexes.length} {$t('schema.indexes')}</span>
+          <span class="text-sm text-gray-500 dark:text-gray-400">{indexes.length} {$t('sidebar.indexes')}</span>
           <button class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer" onclick={() => { showCreateIndex = true; }}>+ {$t('schema.createIndex')}</button>
         </div>
         {#if isLoadingIndexes}
@@ -443,7 +443,7 @@
       <div class="space-y-3">
         <div>
           <label for="tag-name" class="block text-sm text-gray-600 dark:text-gray-400 mb-1">{$t('common.name')}</label>
-          <input id="tag-name" type="text" bind:value={newTagName} class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm focus:outline-none focus:border-blue-500 bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200" placeholder="{$t('schema.tags')}" />
+          <input id="tag-name" type="text" bind:value={newTagName} class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm focus:outline-none focus:border-blue-500 bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200" placeholder="{$t('sidebar.tags')}" />
         </div>
         <div>
           <!-- svelte-ignore a11y_label_has_associated_control -->
@@ -493,7 +493,7 @@
       <div class="space-y-3">
         <div>
           <label for="edge-name" class="block text-sm text-gray-600 dark:text-gray-400 mb-1">{$t('common.name')}</label>
-          <input id="edge-name" type="text" bind:value={newEdgeName} class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200" placeholder="{$t('schema.edges')}" />
+          <input id="edge-name" type="text" bind:value={newEdgeName} class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200" placeholder="{$t('sidebar.edges')}" />
         </div>
         <div>
           <!-- svelte-ignore a11y_label_has_associated_control -->
@@ -531,7 +531,7 @@
       <div class="space-y-3">
         <div>
           <label for="index-name" class="block text-sm text-gray-600 dark:text-gray-400 mb-1">{$t('common.name')}</label>
-          <input id="index-name" type="text" bind:value={newIndexName} class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200" placeholder="{$t('schema.indexes')}" />
+          <input id="index-name" type="text" bind:value={newIndexName} class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200" placeholder="{$t('sidebar.indexes')}" />
         </div>
         <div>
           <label for="index-entity-type" class="block text-sm text-gray-600 dark:text-gray-400 mb-1">{$t('common.entityType')}</label>
@@ -542,7 +542,7 @@
         </div>
         <div>
           <label for="index-entity-name" class="block text-sm text-gray-600 dark:text-gray-400 mb-1">{$t('common.entityName')}</label>
-          <input id="index-entity-name" type="text" bind:value={newIndexEntityName} class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200" placeholder="{$t('schema.tags')} / {$t('schema.edges')}" />
+          <input id="index-entity-name" type="text" bind:value={newIndexEntityName} class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200" placeholder="{$t('sidebar.tags')} / {$t('sidebar.edges')}" />
         </div>
         <div>
           <label for="index-fields" class="block text-sm text-gray-600 dark:text-gray-400 mb-1">{$t('common.fields')}</label>

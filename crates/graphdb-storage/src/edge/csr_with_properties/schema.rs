@@ -75,7 +75,7 @@ impl CsrWithProperties {
         self.column_index.clear();
         self.prop_id_index.clear();
         for (idx, schema) in self.property_schema.iter().enumerate() {
-            self.column_index.insert(schema.name.to_string(), idx);
+            self.column_index.insert(schema.name.clone(), idx);
             self.prop_id_index.insert(schema.prop_id, idx);
         }
     }
@@ -128,7 +128,7 @@ impl CsrWithProperties {
         }
         self.property_columns.push(col);
         let idx = self.property_schema.len() - 1;
-        self.column_index.insert(name, idx);
+        self.column_index.insert(Arc::from(name.as_str()), idx);
         self.mark_column_dirty_at(idx);
         Ok(crate::types::PropertyId::new(prop_id as u16))
     }
@@ -249,7 +249,7 @@ impl CsrWithProperties {
     /// starts from dense indexes, so identifiers are re-applied here to keep
     /// undo parameters keyed by id valid across checkpoints. Unknown names
     /// are skipped. The allocator moves past the maximum restored id.
-    pub fn restore_prop_ids(&mut self, ids: &HashMap<String, i32>) {
+    pub fn restore_prop_ids(&mut self, ids: &HashMap<Arc<str>, i32>) {
         for (idx, schema) in self.property_schema.iter_mut().enumerate() {
             if let Some(id) = ids.get(schema.name.as_ref()) {
                 schema.prop_id = *id;

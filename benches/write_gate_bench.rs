@@ -79,9 +79,7 @@ fn run_concurrent_writers(
                                 VertexId::try_from_int64(id).expect("valid vertex id"),
                                 Tag::new(
                                     TAG.to_string(),
-                                    [("value".to_string(), Value::BigInt(id))]
-                                        .into_iter()
-                                        .collect(),
+                                    [("value".into(), Value::BigInt(id))].into_iter().collect(),
                                 ),
                             ),
                         )

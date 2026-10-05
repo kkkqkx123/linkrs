@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import { get } from 'svelte/store';
-  import { t } from 'svelte-i18n';
+  import { t } from '$i18n';
   import { graphStore, type EdgeDetail, type NodeDetail } from '$stores/graph';
   import { schemaStore } from '$stores/schema';
   import { notificationStore } from '$stores/notification';
@@ -237,7 +237,7 @@
         onchange={handleLayoutChange}
       >
         {#each layoutOptions as opt (opt.value)}
-          <option value={opt.value}>{opt.label}</option>
+          <option value={opt.value}>{$t(opt.labelKey)}</option>
         {/each}
       </select>
       <button
@@ -337,7 +337,7 @@
           {/each}
           {#if detailData.properties && Object.keys(detailData.properties).length > 0}
             <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{$t('graph.properties')}</h4>
+              <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{$t('common.properties')}</h4>
               {#each Object.entries(detailData.properties) as [k, v] (k)}
                 <div class="text-sm mb-2">
                   <span class="text-gray-500 dark:text-gray-400 block text-xs">{k}</span>

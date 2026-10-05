@@ -92,9 +92,9 @@ fn build_storage() -> SharedStorage {
         .create_tag(
             SPACE,
             &TagInfo::new(TAG.to_string()).with_properties(vec![
-                PropertyDef::new("name".to_string(), DataType::String),
-                PropertyDef::new("value".to_string(), DataType::BigInt),
-                PropertyDef::new("bucket".to_string(), DataType::Int),
+                PropertyDef::new("name".into(), DataType::String),
+                PropertyDef::new("value".into(), DataType::BigInt),
+                PropertyDef::new("bucket".into(), DataType::Int),
             ]),
         )
         .expect("create tag");
@@ -119,9 +119,9 @@ fn build_storage() -> SharedStorage {
                     Tag::new(
                         TAG.to_string(),
                         [
-                            ("name".to_string(), Value::string(format!("p{}", i))),
-                            ("value".to_string(), Value::BigInt((i * 7919 % n) as i64)),
-                            ("bucket".to_string(), Value::Int((i % 32) as i32)),
+                            ("name".into(), Value::string(format!("p{}", i))),
+                            ("value".into(), Value::BigInt((i * 7919 % n) as i64)),
+                            ("bucket".into(), Value::Int((i % 32) as i32)),
                         ]
                         .into_iter()
                         .collect(),
@@ -164,7 +164,7 @@ fn build_storage() -> SharedStorage {
                 edge_type: EDGE_TYPE.to_string(),
                 ranking: 0,
                 props: [(
-                    "weight".to_string(),
+                    Arc::from("weight"),
                     Value::Double((rng.next_u64() % 1000) as f64 / 1000.0),
                 )]
                 .into_iter()

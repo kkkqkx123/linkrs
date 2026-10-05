@@ -241,7 +241,7 @@ impl CsrWithProperties {
                 let rows =
                     u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
                 offset += 4;
-                if let Some(&col_idx) = self.column_index.get(&name) {
+                if let Some(&col_idx) = self.column_index.get(name.as_str()) {
                     self.property_schema[col_idx].prop_id = prop_id;
                     let col = &mut self.property_columns[col_idx];
                     col.col_id = prop_id;

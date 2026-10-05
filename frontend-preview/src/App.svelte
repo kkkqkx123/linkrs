@@ -2,6 +2,7 @@
   import { Router, Route, navigate } from 'svelte-routing';
   import { setUnauthorizedHandler } from '$lib/api/client';
   import { theme } from '$stores/theme';
+  import { t } from '$i18n';
   import Login from '$pages/Login/Login.svelte';
   import ProtectedRoute from '$components/layout/ProtectedRoute.svelte';
   import MainLayout from '$components/layout/MainLayout.svelte';
@@ -28,6 +29,10 @@
 
   let currentTheme = $state('light');
   theme.subscribe(v => currentTheme = v);
+
+  $effect(() => {
+    document.title = $t('app.title');
+  });
 </script>
 
 <div class={currentTheme === 'dark' ? 'dark' : ''}>

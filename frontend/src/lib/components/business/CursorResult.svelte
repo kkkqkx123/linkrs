@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { t } from 'svelte-i18n';
+  import { t, type MessageKey } from '$i18n';
   import VirtualTable from '$components/common/VirtualTable.svelte';
   import CytoscapeCanvas from '$components/common/CytoscapeCanvas.svelte';
   import type { CursorState } from '$stores/console';
@@ -66,7 +66,7 @@
 
   let loading = $derived(cursor.status === 'opening' || cursor.status === 'fetching');
 
-  let statusKey = $derived(
+  let statusKey: MessageKey = $derived(
     cursor.status === 'opening'
       ? 'console.cursorStatusOpening'
       : cursor.status === 'fetching'
@@ -105,7 +105,7 @@
     class="px-2 py-0.5 text-xs rounded border border-gray-300 dark:border-gray-600 text-gray-500 hover:text-gray-700 cursor-pointer"
     onclick={onClose}
   >
-    {$t('console.cursorClose')}
+    {$t('common.close')}
   </button>
   <div class="flex-1"></div>
   <div class="flex gap-1">

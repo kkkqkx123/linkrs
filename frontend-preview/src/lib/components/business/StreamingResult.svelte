@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { t } from 'svelte-i18n';
+  import { t, type MessageKey } from '$i18n';
   import VirtualTable from '$components/common/VirtualTable.svelte';
   import CytoscapeCanvas from '$components/common/CytoscapeCanvas.svelte';
   import type { StreamCardState, StreamState } from '$stores/console';
@@ -75,7 +75,7 @@
 
   let isActive = $derived(stream.status === 'connecting' || stream.status === 'receiving');
 
-  let statusKey = $derived(
+  let statusKey: MessageKey = $derived(
     stream.status === 'connecting'
       ? 'console.streamStatusConnecting'
       : stream.status === 'receiving'
@@ -87,7 +87,7 @@
             : 'console.streamStatusFailed',
   );
 
-  function cardStatusKey(status: StreamCardState['status']): string {
+  function cardStatusKey(status: StreamCardState['status']): MessageKey {
     if (status === 'pending') return 'console.streamCardPending';
     if (status === 'receiving') return 'console.streamStatusReceiving';
     if (status === 'completed') return 'console.streamStatusCompleted';
@@ -180,7 +180,7 @@
       class="ml-2 px-2 py-0.5 text-xs rounded border border-red-300 dark:border-red-700 text-red-500 hover:text-red-700 cursor-pointer"
       onclick={onCancel}
     >
-      {$t('console.streamCancel')}
+      {$t('common.cancel')}
     </button>
   {/if}
   <div class="flex-1"></div>

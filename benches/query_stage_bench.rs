@@ -86,8 +86,8 @@ fn setup_graph() -> GraphStorage {
         .create_tag(
             &space_name,
             &TagInfo::new("Node".to_string()).with_properties(vec![
-                PropertyDef::new("name".to_string(), DataType::String),
-                PropertyDef::new("value".to_string(), DataType::Double),
+                PropertyDef::new("name".into(), DataType::String),
+                PropertyDef::new("value".into(), DataType::Double),
             ]),
         )
         .expect("create tag");
@@ -108,8 +108,8 @@ fn setup_graph() -> GraphStorage {
             Tag::new(
                 "Node".to_string(),
                 vec![
-                    ("name".to_string(), Value::string(format!("n{}", i))),
-                    ("value".to_string(), Value::Double(i as f64 * 0.1)),
+                    ("name".into(), Value::string(format!("n{}", i))),
+                    ("value".into(), Value::Double(i as f64 * 0.1)),
                 ]
                 .into_iter()
                 .collect(),
@@ -128,7 +128,7 @@ fn setup_graph() -> GraphStorage {
                 dst: VertexId::try_from_string(format!("n{}", dst)).expect("valid vertex id"),
                 edge_type: "Link".to_string(),
                 ranking: 0,
-                props: [("weight".to_string(), Value::Double(1.0 / k as f64))]
+                props: [("weight".into(), Value::Double(1.0 / k as f64))]
                     .into_iter()
                     .collect(),
             };

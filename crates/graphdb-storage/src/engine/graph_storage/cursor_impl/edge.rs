@@ -172,7 +172,7 @@ impl GraphEdgeCursor {
             let mut run = prop_names.to_vec();
             for extra in self.predicate_columns.iter() {
                 if !run.iter().any(|c| **c == **extra) {
-                    run.push(extra.clone().into());
+                    run.push(extra.clone());
                 }
             }
             run
@@ -496,7 +496,7 @@ impl GraphEdgeCursor {
                             crate::cursor::ColumnValues::General(vec![None; row_count])
                         });
                     PropertyColumn {
-                        name: name.clone().into(),
+                        name: name.clone(),
                         data_type: DataType::Empty,
                         values,
                     }

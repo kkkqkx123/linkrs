@@ -296,13 +296,14 @@ config/
 
 ```
 i18n/
-├── index.ts                         # i18n 初始化与语言注册
+├── index.ts                         # i18n 初始化、语言注册、MessageKey 类型推导
 └── locales/
-    ├── en.json                      # 英文词条（扁平 key）
-    └── zh.json                      # 中文词条（扁平 key）
+    ├── en.json                      # 英文词条（参考语言，嵌套结构）
+    └── zh.json                      # 中文词条（嵌套结构）
 ```
 
-> 新增词条必须**同时**写入 `en.json` 与 `zh.json`，保持一致。
+> 词条采用嵌套 JSON，取词路径与层级对应（如 `common.login`）。`en.json` 同时用于推导 `MessageKey` 类型，`$t()` 的字面量 key 在编译期校验。
+> 新增词条必须**同时**写入 `en.json` 与 `zh.json`，保持一致；`npm run check` 会校验两份词条库一致且所有引用都有定义。
 
 ---
 
@@ -362,7 +363,8 @@ PageName/
       "$services/*": ["src/lib/services/*"],
       "$utils/*": ["src/lib/utils/*"],
       "$types/*": ["src/lib/types/*"],
-      "$config/*": ["src/lib/config/*"]
+      "$config/*": ["src/lib/config/*"],
+      "$i18n": ["src/lib/i18n/index.ts"]
     }
   }
 }

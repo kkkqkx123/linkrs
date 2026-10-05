@@ -91,7 +91,7 @@ pub(super) fn handle_update_vertices(
                 } else if *tag_name == existing.tag.name {
                     let mut merged = existing.tag.properties.clone();
                     for (k, v) in &props {
-                        merged.insert(Arc::from(k.clone()), v.clone());
+                        merged.insert(k.clone(), v.clone());
                     }
                     Tag::new(existing.tag.name.clone(), merged)
                 } else {

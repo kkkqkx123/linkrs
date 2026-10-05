@@ -523,7 +523,7 @@ impl EdgeStore {
             RecordForm::Pure => Vec::new(),
             RecordForm::Columnar => self
                 .properties
-                .read_properties_by_edge_id(edge_id)
+                .latest_properties_by_edge_id(edge_id)
                 .unwrap_or_default(),
             RecordForm::Bundled => match shards.bundled_value_at(row, edge_id) {
                 Some((raw, true)) => {

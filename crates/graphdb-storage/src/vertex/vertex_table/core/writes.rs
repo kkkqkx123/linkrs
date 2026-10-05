@@ -53,7 +53,7 @@ impl VertexTable {
                 let converted_val = value.try_cast_to(&prop_def.data_type)?;
                 converted.push((name.clone(), converted_val));
             } else {
-                converted.push((name.clone().into(), value.clone()));
+                converted.push((name.clone(), value.clone()));
             }
         }
         self.apply_primary_key_mirror(key, converted)
@@ -268,7 +268,7 @@ impl VertexTable {
                     )));
                 }
             }
-            None => properties.push((pk_def.name.clone().into(), mirror)),
+            None => properties.push((pk_def.name.clone(), mirror)),
         }
         Ok(properties)
     }

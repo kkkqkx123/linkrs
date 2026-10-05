@@ -71,7 +71,7 @@ fn build_vertices(count: usize) -> Vec<Vertex> {
                 VertexId::try_from_int64(i as i64).expect("valid vertex id"),
                 Tag::new(
                     TAG.to_string(),
-                    [("value".to_string(), Value::BigInt(i as i64))]
+                    [("value".into(), Value::BigInt(i as i64))]
                         .into_iter()
                         .collect(),
                 ),

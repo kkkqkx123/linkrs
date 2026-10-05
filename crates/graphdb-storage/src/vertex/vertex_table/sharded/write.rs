@@ -312,7 +312,7 @@ impl ShardedVertexTable {
         let table = self.shards[0].read();
         columns
             .iter()
-            .map(|(name, value)| Ok((name.clone().into(), table.prepare_update(name, value)?)))
+            .map(|(name, value)| Ok((name.clone(), table.prepare_update(name, value)?)))
             .collect()
     }
 

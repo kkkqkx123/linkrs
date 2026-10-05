@@ -21,6 +21,7 @@ export default defineConfig({
       $services: path.resolve('./src/lib/services'),
       $stores: path.resolve('./src/lib/stores'),
       $config: path.resolve('./src/lib/config'),
+      $i18n: path.resolve('./src/lib/i18n/index.ts'),
       $components: path.resolve('./src/lib/components'),
       $pages: path.resolve('./src/lib/pages'),
     },

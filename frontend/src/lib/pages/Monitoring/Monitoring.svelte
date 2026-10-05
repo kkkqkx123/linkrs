@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
-	import { t } from 'svelte-i18n';
+	import { t } from '$i18n';
 	import { navigate } from 'svelte-routing';
 	import { monitoringStore, type MonitoringSnapshots } from '$stores/monitoring';
 	import { consoleStore } from '$stores/console';
@@ -147,7 +147,7 @@
 
 <div class="max-w-6xl mx-auto space-y-4 animate-fade-in pb-8">
 	<div class="flex items-center justify-between flex-wrap gap-2">
-		<h1 class="text-xl font-bold text-gray-800 dark:text-gray-100">{$t('monitoring.title')}</h1>
+		<h1 class="text-xl font-bold text-gray-800 dark:text-gray-100">{$t('sidebar.monitoring')}</h1>
 		<div class="flex items-center gap-2 text-sm">
 			{#if monitor.lastRefreshAt}
 				<span class="text-gray-500 dark:text-gray-400">
@@ -165,7 +165,7 @@
 				onclick={() => monitoringStore.refresh()}
 				disabled={monitor.loading}
 			>
-				{monitor.loading ? $t('monitoring.loading') : $t('monitoring.refresh')}
+				{monitor.loading ? $t('monitoring.loading') : $t('common.refresh')}
 			</button>
 		</div>
 	</div>
@@ -185,7 +185,7 @@
 		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">{$t('monitoring.overview')}</h2>
 		<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">{$t('monitoring.status')}</div>
+				<div class="text-gray-500 dark:text-gray-400 text-xs">{$t('common.status')}</div>
 				<div class="font-mono text-gray-800 dark:text-gray-200">
 					{system ? 'healthy' : $t('monitoring.noData')}
 				</div>
@@ -285,7 +285,7 @@
 				{/if}
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">{$t('monitoring.processMemory')}</div>
+				<div class="text-gray-500 dark:text-gray-400 text-xs">{$t('common.processMemory')}</div>
 				<div class="font-mono text-gray-800 dark:text-gray-200">
 					{formatBytes(system?.process_memory_bytes)}
 				</div>
@@ -324,7 +324,7 @@
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">{$t('monitoring.activeQueries')}</div>
+				<div class="text-gray-500 dark:text-gray-400 text-xs">{$t('monitoring.active')}</div>
 				<div class="font-mono text-gray-800 dark:text-gray-200">
 					{formatCount(database?.performance?.active_queries)}
 				</div>
@@ -584,7 +584,7 @@
 			<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">{$t('monitoring.sync')}</h2>
 			<div class="space-y-1 text-sm font-mono">
 				<div class="flex justify-between">
-					<span class="text-gray-500">{$t('monitoring.status')}</span>
+					<span class="text-gray-500">{$t('common.status')}</span>
 					<span>{overview?.sync?.is_running ?? num(monitor.snapshots.sync, 'is_running') ? 'running' : '—'}</span>
 				</div>
 				<div class="flex justify-between">
@@ -602,7 +602,7 @@
 		<section
 			class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
 		>
-			<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">{$t('monitoring.search')}</h2>
+			<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">{$t('common.search')}</h2>
 			<div class="space-y-1 text-sm font-mono">
 				<div class="flex justify-between">
 					<span class="text-gray-500">{$t('monitoring.totalQueries')}</span>
@@ -644,7 +644,7 @@
 			<button
 				class="absolute inset-0 bg-black/30 cursor-pointer"
 				onclick={closePortrait}
-				aria-label={$t('monitoring.close')}
+				aria-label={$t('common.close')}
 			></button>
 			<div
 				class="relative w-full max-w-md h-full bg-white dark:bg-[#1C2333] shadow-xl border-l border-gray-200 dark:border-gray-700 p-5 overflow-y-auto"
@@ -657,7 +657,7 @@
 						class="px-2 py-1 text-sm text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 cursor-pointer"
 						onclick={closePortrait}
 					>
-						{$t('monitoring.close')}
+						{$t('common.close')}
 					</button>
 				</div>
 				{#if portraitLoading}

@@ -58,8 +58,8 @@ impl CsrWithProperties {
     /// hot batch path performs no string comparison at all. Unknown names
     /// are skipped and an empty list resolves to no columns, matching the
     /// historical filter semantics exactly. The pairs borrow the schema, so
-    /// resolution itself allocates no name strings; only materialized output
-    /// cells clone their column name.
+    /// resolution itself allocates nothing; materialized output cells share
+    /// the schema name handle through an `Arc` reference-count increment.
     fn resolve_projection<'s>(
         &'s self,
         projection: Option<&[std::sync::Arc<str>]>,
@@ -268,7 +268,14 @@ impl CsrWithProperties {
         }
         Ok(out)
     }
-    pub fn read_properties_by_edge_id(&self, edge_id: EdgeId) -> Option<Vec<(Arc<str>, Value)>> {
+    /// Newest stored value of every non-null column for one edge.
+    ///
+    /// Snapshot-independent by design: callers need the word currently
+    /// stored (index maintenance, rollback bookkeeping), which must not
+    /// depend on a reader timestamp and must not pay a version-chain walk.
+    /// Nulls are dropped because an absent cell has no index entry to
+    /// reconcile; inline tables have no rows to read and yield `None`.
+    pub fn latest_properties_by_edge_id(&self, edge_id: EdgeId) -> Option<Vec<(Arc<str>, Value)>> {
         if self.inline {
             return None;
         }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { t } from 'svelte-i18n';
+  import { t } from '$i18n';
   import { dataBrowserStore } from '$stores/dataBrowser';
   import { schemaStore } from '$stores/schema';
   import type { FilterOperator, FilterCondition } from '$types/dataBrowser';

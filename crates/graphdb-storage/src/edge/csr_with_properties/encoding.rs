@@ -177,10 +177,10 @@ impl CsrWithProperties {
                 })
                 .collect(),
             _ => self
-                .property_columns
+                .property_schema
                 .iter()
-                .map(|col| Arc::from(col.name.as_str()))
                 .enumerate()
+                .map(|(idx, schema)| (idx, schema.name.clone()))
                 .collect(),
         };
         let mut changed = 0usize;
@@ -201,7 +201,7 @@ impl CsrWithProperties {
             if selected == crate::encoding::EncodingType::None || selected == current {
                 continue;
             }
-            if self.apply_encoding_to_column(&*name, selected, 255).is_ok() {
+            if self.apply_encoding_to_column(&name, selected, 255).is_ok() {
                 changed += 1;
             }
         }

@@ -382,7 +382,7 @@ pub trait VertexCursor: Send + std::fmt::Debug {
         }
         for (i, name) in prop_names.iter().enumerate() {
             batch.columns.push(PropertyColumn {
-                name: name.clone().into(),
+                name: name.clone(),
                 data_type: column_data_type(&per_name[i]),
                 values: ColumnValues::General(std::mem::take(&mut per_name[i])),
             });
@@ -438,7 +438,7 @@ pub trait EdgeCursor: Send + std::fmt::Debug {
         }
         for (i, name) in prop_names.iter().enumerate() {
             batch.columns.push(PropertyColumn {
-                name: name.clone().into(),
+                name: name.clone(),
                 data_type: column_data_type(&per_name[i]),
                 values: ColumnValues::General(std::mem::take(&mut per_name[i])),
             });

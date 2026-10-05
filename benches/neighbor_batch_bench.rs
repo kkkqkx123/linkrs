@@ -39,8 +39,8 @@ fn setup() -> GraphStorage {
             SPACE,
             &EdgeTypeInfo::new(EDGE.to_string())
                 .with_properties(vec![
-                    PropertyDef::new("weight".to_string(), DataType::BigInt),
-                    PropertyDef::new("label".to_string(), DataType::String),
+                    PropertyDef::new("weight".into(), DataType::BigInt),
+                    PropertyDef::new("label".into(), DataType::String),
                 ])
                 .with_src_tag(TAG.to_string())
                 .with_dst_tag(TAG.to_string()),
@@ -56,7 +56,7 @@ fn setup() -> GraphStorage {
                     VertexId::try_from_int64(i as i64).expect("valid vertex id"),
                     Tag::new(
                         TAG.to_string(),
-                        vec![("value".to_string(), Value::BigInt(i as i64))]
+                        vec![("value".into(), Value::BigInt(i as i64))]
                             .into_iter()
                             .collect(),
                     ),
@@ -73,8 +73,8 @@ fn setup() -> GraphStorage {
     for src in 0..VERTEX_COUNT as i64 {
         for k in 1..=EDGES_PER_VERTEX {
             let mut props = HashMap::new();
-            props.insert("weight".to_string(), Value::BigInt(k * 7));
-            props.insert("label".to_string(), Value::string(format!("e{src}_{k}")));
+            props.insert("weight".into(), Value::BigInt(k * 7));
+            props.insert("label".into(), Value::string(format!("e{src}_{k}")));
             edges.push(Edge {
                 src: VertexId::try_from_int64(src).expect("valid vertex id"),
                 dst: VertexId::try_from_int64((src + k) % VERTEX_COUNT as i64)

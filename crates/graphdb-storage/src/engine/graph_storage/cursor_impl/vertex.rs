@@ -812,7 +812,7 @@ impl GraphVertexCursor {
                             crate::cursor::ColumnValues::General(vec![None; row_count])
                         });
                     crate::cursor::PropertyColumn {
-                        name: name.clone().into(),
+                        name: name.clone(),
                         data_type: graphdb_core::types::DataType::Empty,
                         values,
                     }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { t } from 'svelte-i18n';
+  import { get } from 'svelte/store';
+  import { t } from '$i18n';
   import { navigate } from 'svelte-routing';
   import { connectionStore } from '$stores/connection';
 
@@ -33,7 +34,7 @@
       await connectionStore.login(username, password, rememberMe);
       navigate('/');
     } catch (err) {
-      errorMsg = err instanceof Error ? err.message : 'Login failed';
+      errorMsg = err instanceof Error ? err.message : get(t)('login.loginFailed');
     } finally {
       isLoading = false;
     }
@@ -42,7 +43,7 @@
 
 <div class="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-[#0B0F17] transition-colors duration-300">
   <div class="bg-white dark:bg-[#1C2333] rounded-lg shadow-md p-8 w-full max-w-sm transition-colors duration-300">
-    <h1 class="text-2xl font-bold text-center text-gray-800 dark:text-gray-100 mb-6">{$t('header.title')}</h1>
+    <h1 class="text-2xl font-bold text-center text-gray-800 dark:text-gray-100 mb-6">{$t('app.title')}</h1>
     <form onsubmit={handleSubmit}>
       {#if errorMsg}
         <div class="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-red-600 dark:text-red-400 text-sm">{errorMsg}</div>

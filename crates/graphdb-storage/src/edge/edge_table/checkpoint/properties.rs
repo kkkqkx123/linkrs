@@ -404,7 +404,7 @@ impl EdgeStore {
             for name in dirty_columns {
                 let value = value_map.get(&**name).and_then(|cell| (*cell).clone());
                 if shard
-                    .set_property_for_edge(*edge_id, &**name, value, create_ts)
+                    .set_property_for_edge(*edge_id, name, value, create_ts)
                     .is_err()
                 {
                     return Ok(None);
@@ -459,8 +459,8 @@ impl EdgeStore {
         }
         self.properties = crate::edge::CsrWithProperties::new(prop_schemas.clone());
         let owners = self.owner_list_for_load(manifest);
-        let mut encodings: HashMap<String, crate::encoding::EncodingType> = HashMap::new();
-        let mut prop_ids: HashMap<String, i32> = HashMap::new();
+        let mut encodings: HashMap<Arc<str>, crate::encoding::EncodingType> = HashMap::new();
+        let mut prop_ids: HashMap<Arc<str>, i32> = HashMap::new();
         for gid in &owners {
             let path = props_group_path(dir, *gid);
             if !path.exists() {
@@ -501,11 +501,11 @@ impl EdgeStore {
             {
                 if let Some(enc) = shard.column_encoding_type(&column) {
                     if enc != crate::encoding::EncodingType::None {
-                        encodings.entry(column.to_string()).or_insert(enc);
+                        encodings.entry(column.clone()).or_insert(enc);
                     }
                 }
                 if let Some(id) = shard.prop_id_of(&column) {
-                    prop_ids.entry(column.to_string()).or_insert(id);
+                    prop_ids.entry(column.clone()).or_insert(id);
                 }
             }
             for edge_id in shard.edge_ids().collect::<Vec<_>>() {

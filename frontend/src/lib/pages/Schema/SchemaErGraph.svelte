@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { t } from 'svelte-i18n';
+  import { t } from '$i18n';
   import { buildSchemaGraph } from '$utils/schemaGraph';
   import CytoscapeCanvas from '$components/common/CytoscapeCanvas.svelte';
   import type { Tag, EdgeType } from '$types/schema';

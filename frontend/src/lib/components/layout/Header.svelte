@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { t } from 'svelte-i18n';
+  import { t } from '$i18n';
   import { connectionStore } from '$stores/connection';
   import { navigate } from 'svelte-routing';
   import SpaceSelector from '$components/business/SpaceSelector.svelte';
@@ -13,7 +13,7 @@
 
 <header class="h-14 bg-white dark:bg-[#1C2333] border-b border-gray-200 dark:border-gray-700/50 flex items-center justify-between px-6 flex-shrink-0 transition-colors duration-300">
   <div class="flex items-center gap-4">
-    <span class="font-semibold text-gray-800 dark:text-gray-100">{$t('header.title')}</span>
+    <span class="font-semibold text-gray-800 dark:text-gray-100">{$t('app.title')}</span>
     {#if store.isVerified}
       <div class="h-4 w-px bg-gray-300 dark:bg-gray-600"></div>
       <SpaceSelector />

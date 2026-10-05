@@ -1,11 +1,19 @@
 <script lang="ts">
-  import { t } from 'svelte-i18n';
+  import { t, type MessageKey } from '$i18n';
   import { useLocation, navigate } from 'svelte-routing';
 
   const location = useLocation();
   const path = $derived($location.pathname);
 
-  const menuItems = [
+  interface MenuItem {
+    key: string;
+    icon: string;
+    label: MessageKey;
+    route?: string;
+    children?: MenuItem[];
+  }
+
+  const menuItems: MenuItem[] = [
     {
       key: '/console',
       icon: '⌨',
@@ -45,7 +53,7 @@
     },
   ];
 
-  function isActive(item: { key: string; route?: string; children?: Array<{ key: string }> }): boolean {
+  function isActive(item: MenuItem): boolean {
     if (item.route && path.startsWith(item.route)) return true;
     if (item.children) return item.children.some(c => path.startsWith(c.key));
     return false;

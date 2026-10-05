@@ -85,7 +85,7 @@ pub struct CsrWithProperties {
     property_columns: Vec<Column>,
     /// Column position by name, rebuilt on every schema mutation so hot
     /// paths never scan the schema linearly.
-    column_index: HashMap<String, usize>,
+    column_index: HashMap<Arc<str>, usize>,
     /// Column position by stable identifier, rebuilt with the name index.
     /// Undo parameters keyed by id resolve through this instead of scanning.
     prop_id_index: HashMap<i32, usize>,

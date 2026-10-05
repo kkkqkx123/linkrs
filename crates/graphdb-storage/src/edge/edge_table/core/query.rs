@@ -217,6 +217,7 @@ impl EdgeStore {
     /// monotonically so pruning stays conservative; counts are exact-current.
     pub(crate) fn refresh_segment_stats(&mut self) {
         use std::collections::{HashMap, HashSet};
+        use std::sync::Arc;
         let use_out = self.schema.oe_strategy != super::super::super::EdgeStrategy::None;
         let existing: Vec<u32> = if use_out {
             self.out_csr.existing_group_ids()
@@ -257,13 +258,13 @@ impl EdgeStore {
         } else {
             self.in_csr.group_size()
         } as u64;
-        let column_names: Vec<String> = self
+        let column_names: Vec<Arc<str>> = self
             .schema
             .properties
             .iter()
-            .map(|prop| prop.name.to_string())
+            .map(|prop| prop.name.clone())
             .collect();
-        let mut encodings: HashMap<String, crate::encoding::EncodingType> = HashMap::new();
+        let mut encodings: HashMap<Arc<str>, crate::encoding::EncodingType> = HashMap::new();
         for name in &column_names {
             if let Some(encoding) = self.properties.column_encoding_type(name) {
                 encodings.insert(name.clone(), encoding);
@@ -300,7 +301,7 @@ impl EdgeStore {
                     endpoints.push(nbr.endpoint);
                 }
             }
-            let mut column_values: HashMap<String, Vec<Option<Value>>> = HashMap::new();
+            let mut column_values: HashMap<Arc<str>, Vec<Option<Value>>> = HashMap::new();
             for name in &column_names {
                 column_values.insert(name.clone(), Vec::new());
             }
@@ -311,14 +312,10 @@ impl EdgeStore {
                         graphdb_core::types::MAX_TIMESTAMP,
                         None,
                     ) {
-                        let cell_map: HashMap<&str, &Option<Value>> = cells
-                            .iter()
-                            .map(|(name, value)| (name.as_ref(), value))
-                            .collect();
+                        let cell_map: HashMap<&Arc<str>, &Option<Value>> =
+                            cells.iter().map(|(name, value)| (name, value)).collect();
                         for name in &column_names {
-                            let value = cell_map
-                                .get(&name.as_str())
-                                .and_then(|cell| (*cell).clone());
+                            let value = cell_map.get(&name).and_then(|cell| (*cell).clone());
                             if let Some(slot) = column_values.get_mut(name) {
                                 slot.push(value);
                             }

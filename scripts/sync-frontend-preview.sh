@@ -62,6 +62,14 @@ for dir in types utils config stores services i18n assets; do
     fi
 done
 
+# Project-local tooling (i18n key checker, ...)
+echo "Syncing scripts/ ..."
+if [ -d "$FRONTEND_DIR/scripts" ]; then
+    mkdir -p "$PREVIEW_DIR/scripts"
+    cp -r "$FRONTEND_DIR/scripts/." "$PREVIEW_DIR/scripts/"
+    prune_deleted "$PREVIEW_DIR/scripts" "$FRONTEND_DIR/scripts" ""
+fi
+
 # Components and pages: whole directories
 echo "Syncing components and pages ..."
 for dir in components pages; do
@@ -110,5 +118,12 @@ do
     echo "  kept: $f"
 done
 echo "  kept: $PREVIEW_DIR/src/lib/mock/**"
+
+# package.json is preview-owned, so the npm script wiring check:i18n depends on
+# must be asserted here rather than copied from frontend/.
+if ! grep -q '"check:i18n"' "$PREVIEW_DIR/package.json"; then
+    echo "Error: $PREVIEW_DIR/package.json is missing the check:i18n script."
+    exit 1
+fi
 
 echo "=== Done. Run: cd frontend-preview && npm install && npm run dev ==="

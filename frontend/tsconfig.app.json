@@ -7,6 +7,7 @@
     "types": ["svelte", "vite/client", "node"],
     "ignoreDeprecations": "6.0",
     "noEmit": true,
+    "resolveJsonModule": true,
     "allowJs": true,
     "checkJs": true,
     "moduleDetection": "force",
@@ -19,6 +20,7 @@
       "$services/*": ["./src/lib/services/*"],
       "$stores/*": ["./src/lib/stores/*"],
       "$config/*": ["./src/lib/config/*"],
+      "$i18n": ["./src/lib/i18n/index.ts"],
       "$components/*": ["./src/lib/components/*"],
       "$pages/*": ["./src/lib/pages/*"]
     }

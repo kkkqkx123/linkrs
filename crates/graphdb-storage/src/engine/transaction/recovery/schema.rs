@@ -540,8 +540,12 @@ pub(crate) fn replay_delete_vertex_prop(
         .find_tag_by_id(redo.label)
         .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", redo.label)))?;
 
-    tag.properties
-        .retain(|prop| !redo.prop_names.iter().any(|name| &**name == prop.name));
+    tag.properties.retain(|prop| {
+        !redo
+            .prop_names
+            .iter()
+            .any(|name| name.as_ref() == prop.name.as_str())
+    });
     ctx.schema_manager().update_tag(&space_name, &tag)?;
 
     for prop_name in &redo.prop_names {
@@ -560,9 +564,12 @@ pub(crate) fn replay_delete_edge_prop(
         .find_edge_type_by_id(redo.edge_label)
         .ok_or_else(|| StorageError::label_not_found(format!("edge label {}", redo.edge_label)))?;
 
-    edge_type
-        .properties
-        .retain(|prop| !redo.prop_names.iter().any(|name| &**name == prop.name));
+    edge_type.properties.retain(|prop| {
+        !redo
+            .prop_names
+            .iter()
+            .any(|name| name.as_ref() == prop.name.as_str())
+    });
     ctx.schema_manager()
         .update_edge_type(&space_name, &edge_type)?;
 

@@ -1,5 +1,6 @@
 import type cytoscape from 'cytoscape';
 import type { LayoutType } from '$types/graph';
+import type { MessageKey } from '$i18n';
 
 export function applyLayout(cy: cytoscape.Core, layout: LayoutType, elementCount = 0): cytoscape.Layouts {
   const large = elementCount > 400;
@@ -14,11 +15,11 @@ export function applyLayout(cy: cytoscape.Core, layout: LayoutType, elementCount
   return cy.layout(layouts[layout]).run();
 }
 
-export function getLayoutOptions(): { label: string; value: LayoutType }[] {
+export function getLayoutOptions(): { labelKey: MessageKey; value: LayoutType }[] {
   return [
-    { label: 'Force Directed', value: 'force' },
-    { label: 'Circle', value: 'circle' },
-    { label: 'Grid', value: 'grid' },
-    { label: 'Hierarchical', value: 'hierarchical' },
+    { labelKey: 'graph.force', value: 'force' },
+    { labelKey: 'graph.circle', value: 'circle' },
+    { labelKey: 'graph.grid', value: 'grid' },
+    { labelKey: 'graph.hierarchical', value: 'hierarchical' },
   ];
 }

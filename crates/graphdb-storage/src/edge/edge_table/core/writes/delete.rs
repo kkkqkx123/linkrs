@@ -257,14 +257,7 @@ impl EdgeStore {
         edge_id: EdgeId,
         ts: Timestamp,
     ) {
-        let lookup_src = if self.schema.has_out() { src } else { dst };
-        let properties = if self.is_bundled() {
-            self.bundled_index_pairs_for_erase(lookup_src, edge_id)
-        } else {
-            self.properties
-                .read_properties_by_edge_id(edge_id)
-                .unwrap_or_default()
-        };
+        let properties = self.erased_edge_index_pairs(src, dst, edge_id);
         if self.schema.has_out() {
             self.out_csr.rollback_insert(src, edge_id);
         }
@@ -277,7 +270,7 @@ impl EdgeStore {
         self.mvcc.remove_edge_timestamps(edge_id);
         self.edge_owner.remove(&edge_id);
         if self.property_index.is_some() {
-            let outcomes: Vec<(String, StorageResult<()>, u64)> =
+            let outcomes: Vec<(Arc<str>, StorageResult<()>, u64)> =
                 if let Some(ref mut index) = self.property_index {
                     properties
                         .iter()
@@ -285,7 +278,7 @@ impl EdgeStore {
                             let started = std::time::Instant::now();
                             let result = index.delete(prop_name, prop_value, src, dst, rank, ts);
                             let latency = started.elapsed().as_millis() as u64;
-                            (prop_name.to_string(), result, latency)
+                            (prop_name.clone(), result, latency)
                         })
                         .collect()
                 } else {
@@ -489,14 +482,7 @@ impl EdgeStore {
         let Some(edge_id) = self.edge_id_of(src, dst, rank, ts) else {
             return false;
         };
-        let lookup_src = if self.schema.has_out() { src } else { dst };
-        let properties = if self.is_bundled() {
-            self.bundled_index_pairs_for_erase(lookup_src, edge_id)
-        } else {
-            self.properties
-                .read_properties_by_edge_id(edge_id)
-                .unwrap_or_default()
-        };
+        let properties = self.erased_edge_index_pairs(src, dst, edge_id);
         if self.schema.has_out() {
             self.out_csr.rollback_insert(src, edge_id);
         }
@@ -509,7 +495,7 @@ impl EdgeStore {
         self.mvcc.remove_edge_timestamps(edge_id);
         self.edge_owner.remove(&edge_id);
         if self.property_index.is_some() {
-            let outcomes: Vec<(String, StorageResult<()>, u64)> =
+            let outcomes: Vec<(Arc<str>, StorageResult<()>, u64)> =
                 if let Some(ref mut index) = self.property_index {
                     properties
                         .iter()
@@ -517,7 +503,7 @@ impl EdgeStore {
                             let started = std::time::Instant::now();
                             let result = index.delete(prop_name, prop_value, src, dst, rank, ts);
                             let latency = started.elapsed().as_millis() as u64;
-                            (prop_name.to_string(), result, latency)
+                            (prop_name.clone(), result, latency)
                         })
                         .collect()
                 } else {
@@ -529,5 +515,27 @@ impl EdgeStore {
         }
         self.debug_assert_copies_consistent(edge_id);
         true
+    }
+
+    /// Property pairs the secondary index must forget when one edge is
+    /// physically erased, whichever record form currently holds the row.
+    ///
+    /// Bundled rows keep their word in the inline column, so the columnar
+    /// read sees no rows there and the inline legs are probed instead.
+    /// Columnar rows read their newest stored values directly.
+    fn erased_edge_index_pairs(
+        &self,
+        src: u32,
+        dst: u32,
+        edge_id: EdgeId,
+    ) -> Vec<(Arc<str>, Value)> {
+        if !self.is_bundled() {
+            return self
+                .properties
+                .latest_properties_by_edge_id(edge_id)
+                .unwrap_or_default();
+        }
+        let lookup_src = if self.schema.has_out() { src } else { dst };
+        self.bundled_index_pairs_for_erase(lookup_src, edge_id)
     }
 }

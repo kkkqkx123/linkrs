@@ -23,7 +23,7 @@ fn create_benchmark_group<'a>(
 
 fn benchmark_storage_with_schema() -> GraphStorage {
     let mut storage = GraphStorage::new().expect("storage should initialize");
-    let mut space = SpaceInfo::new("bench".to_string()).with_vid_type(DataType::BigInt);
+    let mut space = SpaceInfo::new("bench".into()).with_vid_type(DataType::BigInt);
     storage
         .create_space(&mut space)
         .expect("space should be created");
@@ -49,9 +49,7 @@ fn build_vertices(vertex_count: u64) -> GraphStorage {
                     VertexId::try_from_int64(id).expect("valid vertex id"),
                     Tag::new(
                         "Node".to_string(),
-                        [("value".to_string(), Value::BigInt(id))]
-                            .into_iter()
-                            .collect(),
+                        [("value".into(), Value::BigInt(id))].into_iter().collect(),
                     ),
                 ),
             )
@@ -103,9 +101,7 @@ fn bench_real_vertex_insert(c: &mut Criterion) {
                 VertexId::try_from_int64(id).expect("valid vertex id"),
                 Tag::new(
                     "Node".to_string(),
-                    [("value".to_string(), Value::BigInt(id))]
-                        .into_iter()
-                        .collect(),
+                    [("value".into(), Value::BigInt(id))].into_iter().collect(),
                 ),
             );
             black_box(
@@ -132,9 +128,7 @@ fn bench_bulk_vertex_insert(c: &mut Criterion) {
                                 VertexId::try_from_int64(i).expect("valid vertex id"),
                                 Tag::new(
                                     "Node".to_string(),
-                                    [("value".to_string(), Value::BigInt(i))]
-                                        .into_iter()
-                                        .collect(),
+                                    [("value".into(), Value::BigInt(i))].into_iter().collect(),
                                 ),
                             )
                         })
@@ -170,9 +164,7 @@ fn bench_real_edge_insert(c: &mut Criterion) {
                     VertexId::try_from_int64(id).expect("valid vertex id"),
                     Tag::new(
                         "Node".to_string(),
-                        [("value".to_string(), Value::BigInt(id))]
-                            .into_iter()
-                            .collect(),
+                        [("value".into(), Value::BigInt(id))].into_iter().collect(),
                     ),
                 ),
             )
@@ -263,9 +255,7 @@ fn bench_real_cursor_scan(c: &mut Criterion) {
                     VertexId::try_from_int64(id).expect("valid vertex id"),
                     Tag::new(
                         "Node".to_string(),
-                        [("value".to_string(), Value::BigInt(id))]
-                            .into_iter()
-                            .collect(),
+                        [("value".into(), Value::BigInt(id))].into_iter().collect(),
                     ),
                 ),
             )
@@ -354,7 +344,7 @@ fn bench_real_checkpoint(c: &mut Criterion) {
     let root = TempDir::new().expect("temp directory");
     let mut storage = GraphStorage::new_with_path(root.path().to_path_buf())
         .expect("persistent storage should initialize");
-    let mut space = SpaceInfo::new("bench".to_string()).with_vid_type(DataType::BigInt);
+    let mut space = SpaceInfo::new("bench".into()).with_vid_type(DataType::BigInt);
     storage
         .create_space(&mut space)
         .expect("space should be created");
@@ -375,9 +365,7 @@ fn bench_real_checkpoint(c: &mut Criterion) {
                     VertexId::try_from_int64(id).expect("valid vertex id"),
                     Tag::new(
                         "Node".to_string(),
-                        [("value".to_string(), Value::BigInt(id))]
-                            .into_iter()
-                            .collect(),
+                        [("value".into(), Value::BigInt(id))].into_iter().collect(),
                     ),
                 ),
             )
@@ -402,7 +390,7 @@ fn bench_scaled_checkpoint(c: &mut Criterion) {
         let mut storage = GraphStorage::new_with_path(root.path().to_path_buf())
             .expect("persistent storage should initialize");
         {
-            let mut space = SpaceInfo::new("bench".to_string()).with_vid_type(DataType::BigInt);
+            let mut space = SpaceInfo::new("bench".into()).with_vid_type(DataType::BigInt);
             storage
                 .create_space(&mut space)
                 .expect("space should be created");
@@ -424,9 +412,7 @@ fn bench_scaled_checkpoint(c: &mut Criterion) {
                         VertexId::try_from_int64(id).expect("valid vertex id"),
                         Tag::new(
                             "Node".to_string(),
-                            [("value".to_string(), Value::BigInt(id))]
-                                .into_iter()
-                                .collect(),
+                            [("value".into(), Value::BigInt(id))].into_iter().collect(),
                         ),
                     ),
                 )
@@ -508,9 +494,7 @@ fn bench_sparse_id_insert_throughput(c: &mut Criterion) {
                                     VertexId::try_from_int64(id).expect("valid vertex id"),
                                     Tag::new(
                                         "Node".to_string(),
-                                        [("value".to_string(), Value::BigInt(id))]
-                                            .into_iter()
-                                            .collect(),
+                                        [("value".into(), Value::BigInt(id))].into_iter().collect(),
                                     ),
                                 ),
                             )
@@ -524,7 +508,7 @@ fn bench_sparse_id_insert_throughput(c: &mut Criterion) {
                                     VertexId::try_from_int64(high).expect("valid vertex id"),
                                     Tag::new(
                                         "Node".to_string(),
-                                        [("value".to_string(), Value::BigInt(high))]
+                                        [("value".into(), Value::BigInt(high))]
                                             .into_iter()
                                             .collect(),
                                     ),
@@ -627,9 +611,7 @@ fn bench_vertex_churn_reuse(c: &mut Criterion) {
                                 VertexId::try_from_int64(id).expect("valid vertex id"),
                                 Tag::new(
                                     "Node".to_string(),
-                                    [("value".to_string(), Value::BigInt(id))]
-                                        .into_iter()
-                                        .collect(),
+                                    [("value".into(), Value::BigInt(id))].into_iter().collect(),
                                 ),
                             ),
                         )
