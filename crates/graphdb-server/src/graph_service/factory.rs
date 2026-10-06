@@ -4,9 +4,9 @@ use std::time::Duration;
 use log::{info, warn};
 use parking_lot::RwLock;
 
-use graphdb_api::api_core::{QueryApi, SyncApi};
 #[cfg(feature = "vector")]
 use graphdb_api::api_core::VectorApi;
+use graphdb_api::api_core::{QueryApi, SyncApi};
 use graphdb_core::event_dispatch::EventSubscriptions;
 use graphdb_core::metadata::SchemaManager;
 use graphdb_metrics::StatsManager;

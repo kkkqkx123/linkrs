@@ -6,8 +6,8 @@ use graphdb_api::api_core::VectorApi;
 use graphdb_metrics::{MetricType, StatsManager};
 use graphdb_query::query_manager::QueryManager;
 
-use crate::query::executor::streaming::transaction_scope::CancelReason;
 use crate::auth::Authenticator;
+use crate::query::executor::streaming::transaction_scope::CancelReason;
 use crate::session::{SessionError, SessionResult};
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,

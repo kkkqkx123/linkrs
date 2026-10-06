@@ -137,8 +137,12 @@ impl<
                     },
                     txn_id
                 );
-                let result =
-                    self.run_transaction_command_plan(session.id(), context, Some(txn_id), consistency);
+                let result = self.run_transaction_command_plan(
+                    session.id(),
+                    context,
+                    Some(txn_id),
+                    consistency,
+                );
                 if result.is_err() {
                     let _ = txn_manager.abort_transaction(txn_id);
                     session.unbind_transaction();
@@ -186,7 +190,12 @@ impl<
                         txn_id,
                         savepoint_name
                     );
-                    self.run_transaction_command_plan(session.id(), context, Some(txn_id), consistency)
+                    self.run_transaction_command_plan(
+                        session.id(),
+                        context,
+                        Some(txn_id),
+                        consistency,
+                    )
                 } else {
                     let txn_id = session
                         .current_transaction()
@@ -202,7 +211,12 @@ impl<
                         session.id(),
                         txn_id
                     );
-                    self.run_transaction_command_plan(session.id(), context, Some(txn_id), consistency)
+                    self.run_transaction_command_plan(
+                        session.id(),
+                        context,
+                        Some(txn_id),
+                        consistency,
+                    )
                 }
             }
 
@@ -222,8 +236,12 @@ impl<
                     txn_id,
                     savepoint_id
                 );
-                let result =
-                    self.run_transaction_command_plan(session.id(), context, Some(txn_id), consistency);
+                let result = self.run_transaction_command_plan(
+                    session.id(),
+                    context,
+                    Some(txn_id),
+                    consistency,
+                );
                 if result.is_ok() {
                     session.push_variable_savepoint(&savepoint_stmt.name);
                 }
@@ -249,8 +267,12 @@ impl<
                     release_stmt.name,
                     txn_id
                 );
-                let result =
-                    self.run_transaction_command_plan(session.id(), context, Some(txn_id), consistency);
+                let result = self.run_transaction_command_plan(
+                    session.id(),
+                    context,
+                    Some(txn_id),
+                    consistency,
+                );
                 if result.is_ok() {
                     session.release_variable_savepoint(&release_stmt.name);
                 }

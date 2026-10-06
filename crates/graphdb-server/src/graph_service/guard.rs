@@ -59,8 +59,7 @@ impl<
             return Ok(());
         }
         let stmt_upper = context.stmt.trim().to_uppercase();
-        let session_only =
-            stmt_upper.starts_with("USE ") || stmt_upper.starts_with("LET ");
+        let session_only = stmt_upper.starts_with("USE ") || stmt_upper.starts_with("LET ");
         if session_only {
             return Ok(());
         }

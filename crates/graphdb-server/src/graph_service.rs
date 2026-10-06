@@ -16,9 +16,9 @@ pub use error::GraphServiceError;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
-use graphdb_api::api_core::{QueryApi, SyncApi};
 #[cfg(feature = "vector")]
 use graphdb_api::api_core::VectorApi;
+use graphdb_api::api_core::{QueryApi, SyncApi};
 use graphdb_metrics::StatsManager;
 use graphdb_query::query_manager::QueryManager;
 use graphdb_transaction::TransactionManager;
