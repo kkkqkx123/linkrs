@@ -99,10 +99,10 @@ pub async fn export_data<
         .execute_stream(session_id, query)
         .await
         .map_err(|e| {
-            if e.contains("Invalid session ID") {
-                HttpError::bad_request(e)
+            if e.message().contains("Invalid session ID") {
+                HttpError::bad_request(e.message().to_string())
             } else {
-                HttpError::InternalError(e)
+                HttpError::InternalError(e.message().to_string())
             }
         })?;
 

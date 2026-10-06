@@ -417,7 +417,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
                             .map_err(|cleanup| CoreError::StorageError(cleanup.to_string()))?;
                     }
                 }
-                return Err(CoreError::QueryExecutionFailed(error.to_string()));
+                return Err(CoreError::from(error));
             }
         };
 
@@ -538,7 +538,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         let result = self
             .pipeline_manager
             .execute_query_stream_with_request_scope(query, rctx, space_info, ctx.transaction_id)
-            .map_err(|e| CoreError::QueryExecutionFailed(e.to_string()))?;
+            .map_err(CoreError::from)?;
 
         if operation_owned {
             if let Some(storage) = result.runtime().storage.clone() {

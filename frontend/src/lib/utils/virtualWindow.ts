@@ -31,7 +31,7 @@ export function computeWindow(
 }
 
 export const STREAM_JSON_PREVIEW_LIMIT = 200;
-export const STREAM_COLUMN_SAMPLE_LIMIT = 50;
+export const STREAM_COLUMN_SAMPLE_LIMIT = 200;
 export const STREAM_MIN_COLUMN_WIDTH = 96;
 export const STREAM_MAX_COLUMN_WIDTH = 340;
 

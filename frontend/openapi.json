@@ -2373,7 +2373,9 @@
             "description": "Migration dry-run preview",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationExecuteResponse"
+                }
               }
             }
           },
@@ -2404,7 +2406,9 @@
             "description": "Migration execution report",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationExecuteResponse"
+                }
               }
             }
           },
@@ -2454,7 +2458,9 @@
             "description": "Migration history",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationHistoryResponse"
+                }
               }
             }
           },
@@ -2535,7 +2541,9 @@
             "description": "Migration plan",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationPlanResponse"
+                }
               }
             }
           },
@@ -2566,7 +2574,9 @@
             "description": "Migration rollback report",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationExecuteResponse"
+                }
               }
             }
           },
@@ -2616,7 +2626,9 @@
             "description": "Migration status",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationStatusResponse"
+                }
               }
             }
           },
@@ -2843,6 +2855,39 @@
           },
           "400": {
             "description": "Invalid cursor request"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/query/explain": {
+      "post": {
+        "tags": [
+          "Query"
+        ],
+        "operationId": "post_v1_query_explain",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExplainRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Query plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResponse"
+                }
+              }
+            }
           },
           "500": {
             "description": "Internal error"
@@ -7060,6 +7105,24 @@
           }
         }
       },
+      "ErrorPosition": {
+        "type": "object",
+        "description": "Error position within the query text (1-based line and column).",
+        "required": [
+          "line",
+          "column"
+        ],
+        "properties": {
+          "column": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "ExecuteBatchResponse": {
         "type": "object",
         "description": "Execute batch task response",
@@ -7122,6 +7185,39 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "ExplainRequest": {
+        "type": "object",
+        "description": "Explain request: plan a statement without executing it.",
+        "required": [
+          "query",
+          "session_id"
+        ],
+        "properties": {
+          "parameters": {
+            "type": "object",
+            "description": "Query parameters bound to `@name` references in the statement.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "query": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "session_variables": {
+            "type": "object",
+            "description": "Session variables bound to `$name` references in the statement.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },
@@ -7710,6 +7806,87 @@
           }
         }
       },
+      "MigrationExecuteResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "steps_completed",
+          "rows_migrated",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "preview": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "rows_migrated": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "steps_completed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MigrationHistoryResponse": {
+        "type": "object",
+        "required": [
+          "space",
+          "label",
+          "is_edge",
+          "applied_versions",
+          "history"
+        ],
+        "properties": {
+          "applied_versions": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          "history": {
+            "type": "array",
+            "items": {}
+          },
+          "is_edge": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "string"
+          },
+          "space": {
+            "type": "string"
+          }
+        }
+      },
+      "MigrationPlanResponse": {
+        "type": "object",
+        "required": [
+          "plan",
+          "plan_json"
+        ],
+        "properties": {
+          "plan": {},
+          "plan_json": {
+            "type": "string"
+          }
+        }
+      },
       "MigrationRollbackRequest": {
         "type": "object",
         "required": [
@@ -7718,6 +7895,53 @@
         "properties": {
           "plan_json": {
             "type": "string"
+          }
+        }
+      },
+      "MigrationStatusResponse": {
+        "type": "object",
+        "required": [
+          "applied_versions",
+          "history_count"
+        ],
+        "properties": {
+          "applied_versions": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          "history_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "is_edge": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latest_applied_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "space": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -8037,6 +8261,16 @@
           },
           "message": {
             "type": "string"
+          },
+          "position": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ErrorPosition"
+              }
+            ]
           }
         }
       },

@@ -9,18 +9,23 @@ type QueryRequest = components['schemas']['QueryRequest'];
 type QueryResponse = components['schemas']['QueryResponse'];
 type BatchQueryRequest = components['schemas']['BatchQueryRequest'];
 type ValidateRequest = components['schemas']['ValidateRequest'];
+type ExplainRequest = components['schemas']['ExplainRequest'];
 
 export interface ExecuteQueryParams {
 	query: string;
 	sessionId?: number;
 	parameters?: Record<string, unknown>;
 	sessionVariables?: Record<string, unknown>;
+	signal?: AbortSignal;
+	timeout?: number;
 }
 
 export interface BatchExecuteOptions {
 	sessionId?: number;
 	parameters?: Record<string, unknown>;
 	sessionVariables?: Record<string, unknown>;
+	signal?: AbortSignal;
+	timeout?: number;
 }
 
 export interface ExecuteQueryResponse {
@@ -64,12 +69,16 @@ function toStatementResult(
 	const stages = response.metadata?.stages ?? undefined;
 	const planNodeCount = response.metadata?.plan_node_count ?? undefined;
 	if (!response.success) {
+		const position = response.error?.position;
 		return {
 			query,
 			success: false,
 			error: {
 				code: response.error?.code || 'EXECUTION_ERROR',
 				message: response.error?.message || t('errors.executeQuery'),
+				...(position != null
+					? { position: { line: position.line, column: position.column } }
+					: {}),
 			},
 			executionTime,
 			traceId,
@@ -113,7 +122,7 @@ export const queryService = {
 			if (params.sessionVariables !== undefined)
 				body.session_variables = params.sessionVariables;
 			const response = await call<QueryResponse>(
-				client.POST('/v1/query', { body }),
+				client.POST('/v1/query', { body, signal: params.signal }),
 			);
 			const result = toStatementResult(
 				params.query,
@@ -130,6 +139,12 @@ export const queryService = {
 				planNodeCount: result.planNodeCount,
 			};
 		} catch (error) {
+			if (error instanceof DOMException && error.name === 'AbortError') {
+				return {
+					success: false,
+					error: { code: 'QUERY_CANCELLED', message: t('errors.queryCancelled') },
+				};
+			}
 			return {
 				success: false,
 				error: {
@@ -182,7 +197,7 @@ export const queryService = {
 			if (options?.sessionVariables !== undefined)
 				batchBody.session_variables = options.sessionVariables;
 			const response = await call<components['schemas']['BatchQueryResponse']>(
-				client.POST('/v1/query/batch', { body: batchBody }),
+				client.POST('/v1/query/batch', { body: batchBody, signal: options?.signal }),
 			);
 			const envelopes = response.results ?? [];
 			const fallbackMs = Math.round(
@@ -270,6 +285,61 @@ export const queryService = {
 				message:
 					error instanceof Error ? error.message : t('errors.validateQuery'),
 				estimatedRows: null,
+			};
+		}
+	},
+
+	/**
+	 * Plan a statement via EXPLAIN without executing it. Returns the plan
+	 * rows on success, or a positioned error on failure.
+	 */
+	explain: async (
+		params: ExecuteQueryParams,
+	): Promise<ExecuteQueryResponse> => {
+		const resolved = resolveSessionId(params.sessionId);
+		if (resolved === undefined) {
+			return {
+				success: false,
+				error: { code: 'NO_SESSION', message: t('errors.missingSessionQuery') },
+			};
+		}
+		try {
+			const startTime = Date.now();
+			const body: ExplainRequest = { query: params.query, session_id: resolved };
+			if (params.parameters !== undefined) body.parameters = params.parameters;
+			if (params.sessionVariables !== undefined)
+				body.session_variables = params.sessionVariables;
+			const response = await call<QueryResponse>(
+				client.POST('/v1/query/explain', { body, signal: params.signal }),
+			);
+			const result = toStatementResult(
+				params.query,
+				response,
+				Date.now() - startTime,
+			);
+			return {
+				success: result.success,
+				data: result.data,
+				error: result.error,
+				executionTime: result.executionTime,
+				traceId: result.traceId,
+				stages: result.stages,
+				planNodeCount: result.planNodeCount,
+			};
+		} catch (error) {
+			if (error instanceof DOMException && error.name === 'AbortError') {
+				return {
+					success: false,
+					error: { code: 'QUERY_CANCELLED', message: t('errors.queryCancelled') },
+				};
+			}
+			return {
+				success: false,
+				error: {
+					code: 'EXECUTION_ERROR',
+					message:
+						error instanceof Error ? error.message : t('errors.executeQuery'),
+				},
 			};
 		}
 	},

@@ -12,6 +12,10 @@
 		type QueryProfileDetailResponse,
 	} from '$services/statistics';
 	import {
+		operationsService,
+		type ActiveTransaction,
+	} from '$services/operations';
+	import {
 		formatBytes,
 		formatCount,
 		formatLatencyMs,
@@ -139,7 +143,88 @@
 		monitoringStore.setPaused(!monitor.paused);
 	}
 
+	let opsLoading = $state(false);
+	let opsError = $state<string | null>(null);
+	let configText = $state('');
+	let activeTransactions = $state<ActiveTransaction[]>([]);
+
+	async function loadOps() {
+		opsLoading = true;
+		opsError = null;
+		try {
+			const [config, txns] = await Promise.all([
+				operationsService.config(),
+				operationsService.transactions(),
+			]);
+			try {
+				configText = JSON.stringify(config, null, 2);
+			} catch {
+				configText = String(config ?? '');
+			}
+			activeTransactions = txns;
+		} catch (err) {
+			opsError = err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			opsLoading = false;
+		}
+	}
+
+	async function killTransaction(id: number) {
+		if (!confirm(t('monitoring.confirmKill', { id }))) return;
+		try {
+			await operationsService.killTransaction(id);
+			await loadOps();
+		} catch (err) {
+			opsError = err instanceof Error ? err.message : t('notification.requestFailed');
+		}
+	}
+
+	interface Thresholds {
+		cpuPercent: number;
+		memPercent: number;
+		slowMs: number;
+	}
+
+	function loadThresholds(): Thresholds {
+		const fallback: Thresholds = { cpuPercent: 80, memPercent: 80, slowMs: 500 };
+		try {
+			const raw = localStorage.getItem('graphdb_monitor_thresholds');
+			if (!raw) return fallback;
+			const parsed = JSON.parse(raw) as Partial<Thresholds>;
+			return {
+				cpuPercent:
+					typeof parsed.cpuPercent === 'number' ? parsed.cpuPercent : fallback.cpuPercent,
+				memPercent:
+					typeof parsed.memPercent === 'number' ? parsed.memPercent : fallback.memPercent,
+				slowMs: typeof parsed.slowMs === 'number' ? parsed.slowMs : fallback.slowMs,
+			};
+		} catch {
+			return fallback;
+		}
+	}
+
+	let thresholds = $state<Thresholds>({ cpuPercent: 80, memPercent: 80, slowMs: 500 });
+	let thresholdsReady = $state(false);
+
+	$effect(() => {
+		if (!thresholdsReady) return;
+		try {
+			localStorage.setItem('graphdb_monitor_thresholds', JSON.stringify(thresholds));
+		} catch {
+			/* storage unavailable */
+		}
+	});
+
+	const cpuExceeded = $derived(
+		cpuRatio !== null && cpuRatio * 100 > thresholds.cpuPercent,
+	);
+	const memExceeded = $derived(
+		memRatio !== null && memRatio * 100 > thresholds.memPercent,
+	);
+
 	onMount(() => {
+		thresholds = loadThresholds();
+		thresholdsReady = true;
 		const unsub = monitoringStore.subscribe((s) => {
 			monitor = {
 				snapshots: s.snapshots as MonitoringSnapshots,
@@ -187,6 +272,46 @@
 			</button>
 		</div>
 	</div>
+
+	<section
+		class="bg-white dark:bg-[#1C2333] rounded-xl px-5 py-3 border border-gray-100 dark:border-gray-700/50 shadow-sm flex items-center gap-4 flex-wrap text-sm"
+	>
+		<span class="font-medium text-gray-700 dark:text-gray-300">{t('monitoring.thresholds')}</span>
+		<label class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+			{t('monitoring.cpu')} &gt;
+			<input
+				type="number"
+				min="1"
+				max="100"
+				class="w-16 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				bind:value={thresholds.cpuPercent}
+			/>%
+		</label>
+		<label class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+			{t('monitoring.memory')} &gt;
+			<input
+				type="number"
+				min="1"
+				max="100"
+				class="w-16 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				bind:value={thresholds.memPercent}
+			/>%
+		</label>
+		<label class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+			{t('monitoring.slowQueries')} &gt;
+			<input
+				type="number"
+				min="1"
+				class="w-20 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				bind:value={thresholds.slowMs}
+			/>ms
+		</label>
+		{#if cpuExceeded || memExceeded}
+			<span class="text-xs font-medium text-red-500 dark:text-red-400">
+				{t('monitoring.thresholdExceeded')}
+			</span>
+		{/if}
+	</section>
 
 	{#if monitor.error}
 		<div
@@ -314,7 +439,11 @@
 				<div class="text-gray-500 dark:text-gray-400 text-xs">
 					{t('monitoring.cpu')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div
+					class="font-mono {cpuExceeded
+						? 'text-red-500 dark:text-red-400 font-semibold'
+						: 'text-gray-800 dark:text-gray-200'}"
+				>
 					{cpuRatio !== null ? formatPercent(cpuRatio) : '—'}
 				</div>
 			</div>
@@ -322,7 +451,11 @@
 				<div class="text-gray-500 dark:text-gray-400 text-xs">
 					{t('monitoring.memory')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div
+					class="font-mono {memExceeded
+						? 'text-red-500 dark:text-red-400 font-semibold'
+						: 'text-gray-800 dark:text-gray-200'}"
+				>
 					{formatBytes(system?.memory_usage?.used_bytes)} / {formatBytes(
 						system?.memory_usage?.total_bytes,
 					)}
@@ -550,7 +683,13 @@
 					</thead>
 					<tbody>
 						{#each slowRows as row (row.trace_id)}
-							<tr class="border-t border-gray-100 dark:border-gray-700/50">
+							<tr
+								class="border-t border-gray-100 dark:border-gray-700/50 {Number(
+									row.duration_ms,
+								) > thresholds.slowMs
+									? 'bg-red-50 dark:bg-red-900/10'
+									: ''}"
+							>
 								<td
 									class="py-1 pr-3 max-w-80 truncate font-mono text-gray-700 dark:text-gray-200"
 								>
@@ -800,6 +939,79 @@
 			{/if}
 		</section>
 	</div>
+
+	<!-- Operations -->
+	<section
+		class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+	>
+		<div class="flex items-center justify-between mb-3">
+			<h2 class="font-semibold text-gray-800 dark:text-gray-100">
+				{t('monitoring.operations')}
+			</h2>
+			<button
+				class="px-3 py-1 text-xs rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+				onclick={loadOps}
+				disabled={opsLoading}
+			>
+				{opsLoading ? t('monitoring.loading') : t('common.refresh')}
+			</button>
+		</div>
+		{#if opsError}
+			<p class="text-xs text-red-500 mb-2">{opsError}</p>
+		{/if}
+		<div class="grid md:grid-cols-2 gap-4">
+			<div>
+				<h3 class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+					{t('monitoring.activeTransactions')} ({activeTransactions.length})
+				</h3>
+				{#if activeTransactions.length === 0}
+					<p class="text-sm text-gray-400">{t('monitoring.noData')}</p>
+				{:else}
+					<div class="overflow-x-auto">
+						<table class="min-w-full text-xs font-mono">
+							<thead>
+								<tr class="text-left text-gray-500 dark:text-gray-400">
+									<th class="py-1 pr-3">id</th>
+									<th class="py-1 pr-3">{t('common.status')}</th>
+									<th class="py-1 pr-3">{t('monitoring.duration')}</th>
+									<th class="py-1 pr-3">{t('common.actions')}</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each activeTransactions as txn (txn.transaction_id)}
+									<tr class="border-t border-gray-100 dark:border-gray-700/50">
+										<td class="py-1 pr-3">{txn.transaction_id}</td>
+										<td class="py-1 pr-3">{txn.state}</td>
+										<td class="py-1 pr-3">{formatLatencyMs(txn.elapsed_ms)}</td>
+										<td class="py-1 pr-3">
+											<button
+												class="text-red-500 hover:text-red-700 cursor-pointer"
+												onclick={() => killTransaction(txn.transaction_id)}
+											>
+												{t('monitoring.kill')}
+											</button>
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
+			</div>
+			<div>
+				<h3 class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+					{t('monitoring.config')}
+				</h3>
+				{#if configText}
+					<pre
+						class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-64 text-gray-700 dark:text-gray-300">{configText}</pre
+					>
+				{:else}
+					<p class="text-sm text-gray-400">{t('monitoring.configHint')}</p>
+				{/if}
+			</div>
+		</div>
+	</section>
 
 	<!-- Portrait drawer -->
 	{#if selectedTrace}

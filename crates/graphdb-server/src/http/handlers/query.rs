@@ -1,3 +1,4 @@
+use crate::graph_service::GraphServiceError;
 use crate::value::{from_json as json_value_to_core, to_json as value_to_json};
 use axum::{
     extract::{Json, State},
@@ -5,8 +6,8 @@ use axum::{
 };
 use graphdb_metrics::{ErrorInfo, ErrorType, QueryMetrics, QueryPhase, QueryProfile, StatsManager};
 use graphdb_wire::query::{
-    BatchQueryRequest, BatchQueryResponse, QueryData, QueryMetadata, QueryRequest, QueryResponse,
-    QueryStageTimings, ValidateRequest, ValidateResponse,
+    BatchQueryRequest, BatchQueryResponse, ExplainRequest, QueryData, QueryMetadata, QueryRequest,
+    QueryResponse, QueryStageTimings, ValidateRequest, ValidateResponse,
 };
 use std::sync::Arc;
 use std::time::Instant;
@@ -122,7 +123,7 @@ pub async fn execute<
                     );
                     Ok::<_, HttpError>(error_with_trace(
                         "CONFIG_ERROR".to_string(),
-                        e,
+                        GraphServiceError::new(e),
                         trace_id,
                         elapsed_us,
                     ))
@@ -137,11 +138,11 @@ pub async fn execute<
                 &request.query,
                 trace_id.clone(),
                 elapsed_us,
-                &e.to_string(),
+                e.message(),
             );
             Ok::<_, HttpError>(error_with_trace(
                 "QUERY_ERROR".to_string(),
-                e.to_string(),
+                e,
                 trace_id,
                 elapsed_us,
             ))
@@ -231,7 +232,12 @@ pub async fn execute_batch<
                                 elapsed_us,
                                 &e,
                             );
-                            error_with_trace("CONFIG_ERROR".into(), e, trace_id, elapsed_us)
+                            error_with_trace(
+                                "CONFIG_ERROR".into(),
+                                GraphServiceError::new(e),
+                                trace_id,
+                                elapsed_us,
+                            )
                         }
                     }
                 }
@@ -242,7 +248,7 @@ pub async fn execute_batch<
                         &query_text,
                         trace_id.clone(),
                         elapsed_us,
-                        &e.to_string(),
+                        e.message(),
                     );
                     error_with_trace("QUERY_ERROR".into(), e, trace_id, elapsed_us)
                 }
@@ -303,6 +309,74 @@ pub async fn validate<
             message: e,
             estimated_rows: None,
         })),
+    }
+}
+
+#[utoipa::path(
+    post,
+    operation_id = "post_v1_query_explain",
+    path = "/v1/query/explain",
+    tag = "Query",
+    request_body = ExplainRequest,
+    responses(
+        (status = 200, body = QueryResponse, description = "Query plan"),
+        (status = 500, description = "Internal error")
+    )
+)]
+pub async fn explain<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Json(request): Json<ExplainRequest>,
+) -> Result<JsonResponse<QueryResponse>, HttpError> {
+    let graph_service = state.server.get_graph_service();
+    let parameters = json_params_to_core(&request.parameters);
+    let session_variables = json_params_to_core(&request.session_variables);
+    let row_limit = result_size_limit(&state);
+    let trace_id = new_trace_id();
+    let start = Instant::now();
+    match graph_service
+        .explain(
+            request.session_id,
+            &request.query,
+            parameters,
+            session_variables,
+        )
+        .await
+    {
+        Ok(exec_result) => {
+            let elapsed_us = start.elapsed().as_micros() as u64;
+            Ok(JsonResponse(query_result_to_response(
+                exec_result,
+                row_limit,
+                &trace_id,
+                elapsed_us,
+            )))
+        }
+        Err(e) => {
+            let elapsed_us = start.elapsed().as_micros() as u64;
+            record_failure_profile(
+                &state.server.get_stats_manager().clone(),
+                request.session_id,
+                &request.query,
+                trace_id.clone(),
+                elapsed_us,
+                e.message(),
+            );
+            Ok(JsonResponse(error_with_trace(
+                "QUERY_ERROR".to_string(),
+                e,
+                trace_id,
+                elapsed_us,
+            )))
+        }
     }
 }
 
@@ -368,11 +442,20 @@ fn stages_for_elapsed_us(elapsed_us: u64) -> QueryStageTimings {
 
 fn error_with_trace(
     code: String,
-    message: String,
+    error: GraphServiceError,
     trace_id: String,
     elapsed_us: u64,
 ) -> QueryResponse {
-    let mut response = QueryResponse::error(code, message, None);
+    let position = error.position().map(|p| graphdb_wire::query::ErrorPosition {
+        line: p.line,
+        column: p.column,
+    });
+    let mut response = QueryResponse::error_with_position(
+        code,
+        error.message().to_string(),
+        None,
+        position,
+    );
     response.metadata.trace_id = Some(trace_id);
     response.metadata.stages = Some(stages_for_elapsed_us(elapsed_us));
     response.metadata.execution_time_ms = elapsed_us / 1000;

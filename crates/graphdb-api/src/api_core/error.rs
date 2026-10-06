@@ -73,6 +73,7 @@ pub enum CoreError {
         message: String,
         extended_code: ExtendedErrorCode,
         offset: Option<usize>,
+        position: Option<graphdb_core::types::Position>,
     },
 
     #[error("Sync error: {0}")]
@@ -97,6 +98,13 @@ impl CoreError {
         }
     }
 
+    pub fn error_position(&self) -> Option<graphdb_core::types::Position> {
+        match self {
+            CoreError::DetailedQueryError { position, .. } => *position,
+            _ => None,
+        }
+    }
+
     pub fn detailed_query_error(
         message: impl Into<String>,
         extended_code: ExtendedErrorCode,
@@ -106,6 +114,21 @@ impl CoreError {
             message: message.into(),
             extended_code,
             offset,
+            position: None,
+        }
+    }
+
+    pub fn detailed_query_error_with_position(
+        message: impl Into<String>,
+        extended_code: ExtendedErrorCode,
+        offset: Option<usize>,
+        position: Option<graphdb_core::types::Position>,
+    ) -> Self {
+        CoreError::DetailedQueryError {
+            message: message.into(),
+            extended_code,
+            offset,
+            position,
         }
     }
 }
@@ -115,7 +138,19 @@ pub type CoreResult<T> = Result<T, CoreError>;
 
 impl From<graphdb_core::error::QueryError> for CoreError {
     fn from(err: graphdb_core::error::QueryError) -> Self {
-        CoreError::QueryExecutionFailed(err.to_string())
+        let position = err.parse_error_position();
+        let offset = err.offset();
+        let message = err.to_string();
+        if position.is_some() || offset.is_some() {
+            CoreError::detailed_query_error_with_position(
+                message,
+                ExtendedErrorCode::SyntaxError,
+                offset,
+                position,
+            )
+        } else {
+            CoreError::QueryExecutionFailed(message)
+        }
     }
 }
 
@@ -129,7 +164,16 @@ impl From<graphdb_core::error::DBError> for CoreError {
     fn from(err: graphdb_core::error::DBError) -> Self {
         use graphdb_core::error::ErrorKind;
         match err.kind() {
-            ErrorKind::Query => CoreError::QueryExecutionFailed(err.message().to_string()),
+            ErrorKind::Query => {
+                if let Some(source) = err.source() {
+                    if let Some(query_err) =
+                        source.downcast_ref::<graphdb_core::error::QueryError>()
+                    {
+                        return CoreError::from(query_err.clone());
+                    }
+                }
+                CoreError::QueryExecutionFailed(err.message().to_string())
+            }
             ErrorKind::Storage => CoreError::StorageError(err.message().to_string()),
             ErrorKind::Transaction => CoreError::TransactionFailed(err.message().to_string()),
             _ => CoreError::Internal(err.to_string()),

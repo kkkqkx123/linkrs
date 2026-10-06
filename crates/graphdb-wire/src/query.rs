@@ -113,6 +113,13 @@ pub struct QueryMetadata {
     pub result_row_count: Option<usize>,
 }
 
+/// Error position within the query text (1-based line and column).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ErrorPosition {
+    pub line: usize,
+    pub column: usize,
+}
+
 /// Query error.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct QueryError {
@@ -120,6 +127,8 @@ pub struct QueryError {
     pub message: String,
     #[serde(default)]
     pub details: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<ErrorPosition>,
 }
 
 /// Verify the response.
@@ -129,6 +138,19 @@ pub struct ValidateRequest {
     pub session_id: i64,
     #[serde(default)]
     pub need_estimate: bool,
+}
+
+/// Explain request: plan a statement without executing it.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ExplainRequest {
+    pub query: String,
+    pub session_id: i64,
+    /// Query parameters bound to `@name` references in the statement.
+    #[serde(default)]
+    pub parameters: HashMap<String, serde_json::Value>,
+    /// Session variables bound to `$name` references in the statement.
+    #[serde(default)]
+    pub session_variables: HashMap<String, serde_json::Value>,
 }
 
 /// Verify the response.
@@ -252,6 +274,16 @@ impl QueryResponse {
 
     /// Creating an error response
     pub fn error(code: String, message: String, details: Option<String>) -> Self {
+        Self::error_with_position(code, message, details, None)
+    }
+
+    /// Creating an error response with an optional source position.
+    pub fn error_with_position(
+        code: String,
+        message: String,
+        details: Option<String>,
+        position: Option<ErrorPosition>,
+    ) -> Self {
         Self {
             success: false,
             data: None,
@@ -259,6 +291,7 @@ impl QueryResponse {
                 code,
                 message,
                 details,
+                position,
             }),
             metadata: QueryMetadata::default(),
         }

@@ -85,6 +85,7 @@ pub fn create_router<
         .route("/sessions/{id}", get(get_session).delete(delete_session))
         .route("/query", post(query::execute))
         .route("/query/validate", post(query::validate))
+        .route("/query/explain", post(query::explain))
         .route("/query/batch", post(query::execute_batch))
         .route(
             "/transactions",

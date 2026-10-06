@@ -71,7 +71,7 @@ impl<'a, S: StorageReader + ?Sized> StorageRebuildSource<'a, S> {
         // are indexed.
         let mut texts = Vec::new();
         if vertex.tag.name == self.tag_name {
-            Self::push_field_text(&mut texts, vertex.tag.properties.get(&self.field_name));
+            Self::push_field_text(&mut texts, vertex.tag.properties.get(self.field_name.as_str()));
         }
         texts
     }

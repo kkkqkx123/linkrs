@@ -6,8 +6,15 @@
 	import { dataBrowserStore } from '$stores/dataBrowser';
 	import { graphStore } from '$stores/graph';
 	import { schemaStore } from '$stores/schema';
+	import { consoleStore } from '$stores/console';
 	import { dataBrowserService } from '$services/dataBrowser';
 	import { formatCellValue } from '$utils/parseData';
+	import {
+		buildEdgeDelete,
+		buildEdgeUpdate,
+		buildVertexDelete,
+		buildVertexUpdate,
+	} from '$utils/cypherTemplates';
 	import PageSkeleton from '$components/common/PageSkeleton.svelte';
 	import FilterPanel from '$components/business/FilterPanel.svelte';
 	import type { VertexData, EdgeData, Statistics } from '$types/dataBrowser';
@@ -174,6 +181,46 @@
 
 	function showDetail(data: VertexData | EdgeData, type: 'vertex' | 'edge') {
 		dataBrowserStore.showDetail(data, type);
+	}
+
+	async function copyText(value: string) {
+		try {
+			await navigator.clipboard.writeText(value);
+		} catch {
+			/* clipboard unavailable */
+		}
+	}
+
+	function editInConsole(template: string) {
+		consoleStore.setEditorContent(template);
+		goto('/console');
+	}
+
+	function vertexUpdateTemplate(v: VertexData): string {
+		return buildVertexUpdate(String(v.id), v.properties ?? {});
+	}
+
+	function vertexDeleteTemplate(v: VertexData): string {
+		return buildVertexDelete(String(v.id));
+	}
+
+	function edgeUpdateTemplate(e: EdgeData): string {
+		return buildEdgeUpdate(
+			e.type ?? 'unknown',
+			String(e.src),
+			String(e.dst),
+			e.rank ?? 0,
+			e.properties ?? {},
+		);
+	}
+
+	function edgeDeleteTemplate(e: EdgeData): string {
+		return buildEdgeDelete(
+			e.type ?? 'unknown',
+			String(e.src),
+			String(e.dst),
+			e.rank ?? 0,
+		);
 	}
 
 	function viewInGraph(data: VertexData | EdgeData, type: 'vertex' | 'edge') {
@@ -355,6 +402,21 @@
 														onclick={() => viewInGraph(v, 'vertex')}
 														>{t('graphPreview.openInGraph')}</button
 													>
+													<button
+														class="ml-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-xs cursor-pointer"
+														onclick={() => copyText(String(v.id))}
+														>{t('dataBrowser.copyId')}</button
+													>
+													<button
+														class="ml-2 text-amber-600 dark:text-amber-400 hover:text-amber-700 text-xs cursor-pointer"
+														onclick={() => editInConsole(vertexUpdateTemplate(v))}
+														>{t('dataBrowser.editUpdate')}</button
+													>
+													<button
+														class="ml-2 text-red-500 hover:text-red-700 text-xs cursor-pointer"
+														onclick={() => editInConsole(vertexDeleteTemplate(v))}
+														>{t('dataBrowser.editDelete')}</button
+													>
 												</td>
 											</tr>
 										{/each}
@@ -499,6 +561,21 @@
 														class="ml-2 text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300 text-xs cursor-pointer"
 														onclick={() => viewInGraph(e, 'edge')}
 														>{t('graphPreview.openInGraph')}</button
+													>
+													<button
+														class="ml-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-xs cursor-pointer"
+														onclick={() => copyText(String(e.src))}
+														>{t('dataBrowser.copyId')}</button
+													>
+													<button
+														class="ml-2 text-amber-600 dark:text-amber-400 hover:text-amber-700 text-xs cursor-pointer"
+														onclick={() => editInConsole(edgeUpdateTemplate(e))}
+														>{t('dataBrowser.editUpdate')}</button
+													>
+													<button
+														class="ml-2 text-red-500 hover:text-red-700 text-xs cursor-pointer"
+														onclick={() => editInConsole(edgeDeleteTemplate(e))}
+														>{t('dataBrowser.editDelete')}</button
 													>
 												</td>
 											</tr>

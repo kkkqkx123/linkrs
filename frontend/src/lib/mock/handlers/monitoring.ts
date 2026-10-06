@@ -171,6 +171,27 @@ export const monitoringHandlers: MockRegistry = {
 
 	'POST /v1/transactions': { transaction_id: 700001 } satisfies MockEntry,
 
+	'GET /v1/transactions': [
+		{
+			transaction_id: 700001,
+			state: 'active',
+			owner: 'mock-user',
+			elapsed_ms: 1200,
+			last_activity_ms: 200,
+			rollback_only: false,
+			staged_bytes: 1024,
+			undo_bytes: 512,
+			blocking_reason: null,
+		},
+	] satisfies MockEntry,
+
+	'POST /v1/transactions/{id}/kill': { success: true } satisfies MockEntry,
+
+	'GET /v1/config': {
+		server: { bind: '127.0.0.1:9758', log_level: 'info' },
+		query: { timeout_secs: 30, row_limit: 10000 },
+	} satisfies MockEntry,
+
 	'POST /v1/transactions/{id}/commit': { success: true } satisfies MockEntry,
 
 	'POST /v1/transactions/{id}/rollback': { success: true } satisfies MockEntry,

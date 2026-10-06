@@ -115,6 +115,8 @@ function loadBindings(key: string): Record<string, unknown> {
 	return {};
 }
 
+let materializedAbort: AbortController | null = null;
+
 export function createConsoleStore() {
 	const { subscribe, update } = writable<ConsoleState>({
 		editorContent: localStorage.getItem('graphdb_editor_draft') || '',
@@ -151,6 +153,8 @@ export function createConsoleStore() {
 		}
 		streamStore.abortActive();
 		await cursorStore.close();
+		materializedAbort?.abort();
+		materializedAbort = new AbortController();
 		const bindings = {
 			parameters: get({ subscribe }).parameters,
 			sessionVariables: get({ subscribe }).sessionVariables,
@@ -164,7 +168,10 @@ export function createConsoleStore() {
 			resultMode: 'materialized',
 		}));
 		try {
-			const response = await queryService.executeBatch(rawScript, bindings);
+			const response = await queryService.executeBatch(rawScript, {
+				...bindings,
+				signal: materializedAbort.signal,
+			});
 			if (response.results.length === 0) {
 				update((s) => ({
 					...s,
@@ -377,6 +384,10 @@ export function createConsoleStore() {
 		},
 		cancelStream: () => {
 			streamStore.cancel();
+		},
+		cancelMaterialized: () => {
+			materializedAbort?.abort();
+			materializedAbort = null;
 		},
 		clearResult: () => {
 			streamStore.reset();

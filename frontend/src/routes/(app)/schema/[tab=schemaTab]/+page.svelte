@@ -6,6 +6,7 @@
 	import { DATA_TYPE_LABELS } from '$config/constants';
 	import PageSkeleton from '$components/common/PageSkeleton.svelte';
 	import SchemaErGraph from '$components/business/SchemaErGraph.svelte';
+	import SchemaAlterModal from '$components/business/SchemaAlterModal.svelte';
 	import type { Space, Tag, EdgeType } from '$types/schema';
 	import type { components } from '$lib/api/schema';
 
@@ -66,6 +67,11 @@
 	let newIndexEntityType = $state('TAG');
 	let newIndexEntityName = $state('');
 	let newIndexFields = $state('');
+
+	// Alter dialogs
+	let alterTagName = $state<string | null>(null);
+	let alterEdgeName = $state<string | null>(null);
+	let alterBusy = $state(false);
 
 	const dataTypes = Object.values(DATA_TYPE_LABELS).filter(Boolean);
 
@@ -199,6 +205,53 @@
 			confirm(t('common.confirmDeleteItem', { name: indexName }))
 		) {
 			await schemaStore.deleteIndex(currentSpace, indexName);
+		}
+	}
+
+	async function rebuildIndex(indexName: string) {
+		if (!currentSpace) return;
+		await schemaStore.rebuildIndex(currentSpace, indexName);
+	}
+
+	async function submitAlterTag(
+		added: Array<{ name: string; data_type: string; nullable: boolean }>,
+		dropped: string[],
+	) {
+		if (!currentSpace || !alterTagName) return;
+		if (added.length === 0 && dropped.length === 0) {
+			alterTagName = null;
+			return;
+		}
+		alterBusy = true;
+		try {
+			await schemaStore.updateTag(currentSpace, alterTagName, {
+				add_properties: added,
+				drop_properties: dropped,
+			});
+			alterTagName = null;
+		} finally {
+			alterBusy = false;
+		}
+	}
+
+	async function submitAlterEdge(
+		added: Array<{ name: string; data_type: string; nullable: boolean }>,
+		dropped: string[],
+	) {
+		if (!currentSpace || !alterEdgeName) return;
+		if (added.length === 0 && dropped.length === 0) {
+			alterEdgeName = null;
+			return;
+		}
+		alterBusy = true;
+		try {
+			await schemaStore.updateEdgeType(currentSpace, alterEdgeName, {
+				add_properties: added,
+				drop_properties: dropped,
+			});
+			alterEdgeName = null;
+		} finally {
+			alterBusy = false;
 		}
 	}
 
@@ -401,7 +454,12 @@
 												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50"
 											>
 												<button
-													class="text-red-500 hover:text-red-700 text-xs cursor-pointer"
+													class="text-blue-500 hover:text-blue-700 text-xs cursor-pointer"
+													onclick={() => (alterTagName = tag.name)}
+													>{t('schema.alter')}</button
+												>
+												<button
+													class="ml-2 text-red-500 hover:text-red-700 text-xs cursor-pointer"
 													onclick={() => deleteTag(tag.name)}
 													>{t('common.delete')}</button
 												>
@@ -479,7 +537,12 @@
 												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50"
 											>
 												<button
-													class="text-red-500 hover:text-red-700 text-xs cursor-pointer"
+													class="text-blue-500 hover:text-blue-700 text-xs cursor-pointer"
+													onclick={() => (alterEdgeName = edge.name)}
+													>{t('schema.alter')}</button
+												>
+												<button
+													class="ml-2 text-red-500 hover:text-red-700 text-xs cursor-pointer"
 													onclick={() => deleteEdge(edge.name)}
 													>{t('common.delete')}</button
 												>
@@ -562,7 +625,12 @@
 												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50"
 											>
 												<button
-													class="text-red-500 hover:text-red-700 text-xs cursor-pointer"
+													class="text-blue-500 hover:text-blue-700 text-xs cursor-pointer"
+													onclick={() => rebuildIndex(idx.name)}
+													>{t('schema.rebuild')}</button
+												>
+												<button
+													class="ml-2 text-red-500 hover:text-red-700 text-xs cursor-pointer"
 													onclick={() => deleteIndex(idx.name)}
 													>{t('common.delete')}</button
 												>
@@ -960,3 +1028,20 @@
 		</div>
 	</div>
 {/if}
+
+<SchemaAlterModal
+	title={alterTagName ? `${t('schema.alterTag')}: ${alterTagName}` : ''}
+	properties={tags.find((item) => item.name === alterTagName)?.properties ?? []}
+	open={alterTagName !== null}
+	busy={alterBusy}
+	onClose={() => (alterTagName = null)}
+	onSubmit={submitAlterTag}
+/>
+<SchemaAlterModal
+	title={alterEdgeName ? `${t('schema.alterEdge')}: ${alterEdgeName}` : ''}
+	properties={edgeTypes.find((item) => item.name === alterEdgeName)?.properties ?? []}
+	open={alterEdgeName !== null}
+	busy={alterBusy}
+	onClose={() => (alterEdgeName = null)}
+	onSubmit={submitAlterEdge}
+/>

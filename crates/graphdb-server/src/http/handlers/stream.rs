@@ -295,12 +295,12 @@ async fn stream_statement_body<
         Err(e) => {
             let error_msg = json!({
                 "error": true,
-                "message": e,
+                "message": e.message(),
                 "code": "QUERY_ERROR",
                 "stmt": stmt_index
             });
             send_event(tx, "error", &error_msg.to_string()).await;
-            let outcome = failed("QUERY_ERROR", e.clone());
+            let outcome = failed("QUERY_ERROR", e.message().to_string());
             record_stream_profile(
                 stats_manager,
                 session_id,
@@ -308,7 +308,7 @@ async fn stream_statement_body<
                 &trace_id,
                 start_time.elapsed().as_micros() as u64,
                 0,
-                Some(e),
+                Some(e.message().to_string()),
             );
             return outcome;
         }

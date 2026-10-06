@@ -34,6 +34,7 @@ use utoipa::OpenApi;
         crate::http::handlers::session::delete_session,
         crate::http::handlers::query::execute,
         crate::http::handlers::query::validate,
+        crate::http::handlers::query::explain,
         crate::http::handlers::query::execute_batch,
         crate::http::handlers::transaction::begin,
         crate::http::handlers::transaction::list_transactions,

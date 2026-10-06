@@ -20,6 +20,7 @@
 		placeholder = '',
 		height = '10rem',
 		onExecute,
+		onCursorStatement,
 		historyProvider,
 	}: {
 		value?: string;
@@ -29,6 +30,8 @@
 		height?: string;
 		/** Receives the text to run: the selection, the statement under the cursor, or the whole buffer. */
 		onExecute?: (text: string) => void;
+		/** Reports the statement under the caret so background validation can target just that statement. */
+		onCursorStatement?: (text: string) => void;
 		/** Supplies past statements for slash-triggered history completion. */
 		historyProvider?: () => string[];
 	} = $props();
@@ -68,6 +71,19 @@
 		return query.trim() ? query : full;
 	}
 
+	/**
+	 * Move the caret to a 1-based line and column, reveal the line, and focus
+	 * the editor. Used for jumping to query error positions reported by the server.
+	 */
+	export function jumpToPosition(line: number, column: number): void {
+		if (!editor) return;
+		const safeLine = Math.max(1, Math.floor(line) || 1);
+		const safeColumn = Math.max(1, Math.floor(column) || 1);
+		editor.setPosition({ lineNumber: safeLine, column: safeColumn });
+		editor.revealLineInCenter(safeLine);
+		editor.focus();
+	}
+
 	async function initEditor() {
 		if (!containerEl || editor) return;
 		// Load Monaco lazily so the editor bundle stays out of the initial chunk.
@@ -97,6 +113,20 @@
 		});
 		editor = instance;
 
+		const reportCursorStatement = () => {
+			if (!onCursorStatement) return;
+			const model = instance.getModel();
+			const pos = instance.getPosition();
+			const full = instance.getValue();
+			if (!model || !pos) {
+				onCursorStatement(full);
+				return;
+			}
+			const offset = model.getOffsetAt(pos);
+			const { query } = getQueryAtCursor(full, offset);
+			onCursorStatement(query.trim() ? query : full);
+		};
+
 		instance.onDidChangeModelContent(() => {
 			const next = instance.getValue();
 			if (next !== value) {
@@ -104,7 +134,12 @@
 				value = next;
 				applyingExternalValue = false;
 			}
+			reportCursorStatement();
 		});
+		instance.onDidChangeCursorPosition(() => {
+			reportCursorStatement();
+		});
+		reportCursorStatement();
 
 		instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
 			onExecute?.(resolveExecutionText(instance));

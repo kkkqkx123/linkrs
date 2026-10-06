@@ -36,11 +36,109 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Error type for graph service operations, carrying an optional source
+/// position for parse errors so the HTTP layer can report it to clients.
+#[derive(Debug, Clone)]
+pub struct GraphServiceError {
+    pub message: String,
+    pub position: Option<graphdb_core::types::Position>,
+}
+
+impl std::fmt::Display for GraphServiceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for GraphServiceError {}
+
+impl GraphServiceError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            position: None,
+        }
+    }
+
+    pub fn with_position(
+        message: impl Into<String>,
+        position: Option<graphdb_core::types::Position>,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            position: position.filter(|p| p.is_valid()),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub fn position(&self) -> Option<graphdb_core::types::Position> {
+        self.position
+    }
+
+    pub fn from_core_error(e: graphdb_api::api_core::CoreError) -> Self {
+        let message = e.to_string();
+        let position = e.error_position().filter(|p| p.is_valid());
+        let position = match (position, e.error_offset()) {
+            (Some(pos), _) => Some(pos),
+            (None, _) => None,
+        };
+        Self { message, position }
+    }
+
+    pub fn from_core_error_with_query(
+        e: graphdb_api::api_core::CoreError,
+        query: &str,
+    ) -> Self {
+        let message = e.to_string();
+        if let Some(pos) = e.error_position().filter(|p| p.is_valid()) {
+            return Self {
+                message,
+                position: Some(pos),
+            };
+        }
+        if let Some(offset) = e.error_offset() {
+            return Self {
+                message,
+                position: offset_to_position(query, offset),
+            };
+        }
+        Self {
+            message,
+            position: None,
+        }
+    }
+}
+
+impl From<String> for GraphServiceError {
+    fn from(message: String) -> Self {
+        Self::new(message)
+    }
+}
+
+impl From<&str> for GraphServiceError {
+    fn from(message: &str) -> Self {
+        Self::new(message)
+    }
+}
+
+/// Convert a byte offset in query text to a 1-based line and column.
+fn offset_to_position(query: &str, offset: usize) -> Option<graphdb_core::types::Position> {
+    let offset = offset.min(query.len());
+    let prefix = &query[..offset];
+    let line = prefix.bytes().filter(|b| *b == b'\n').count() + 1;
+    let column = prefix.rsplit('\n').next().map(|s| s.chars().count() + 1).unwrap_or(1);
+    let position = graphdb_core::types::Position::new(line, column);
+    position.is_valid().then_some(position)
+}
+
 /// Common execution context shared by all query/command execution paths.
 ///
 /// Groups the per-statement parameters that flow through the execution
-/// pipeline, eliminating repetitive argument lists and reducing the risk
-/// of parameter-ordering mistakes.
+/// pipeline, eliminating repetitive argument lists and reducing the risk of
+/// parameter-ordering mistakes.
 pub struct QueryExecutionContext<'a> {
     /// The raw statement text.
     pub stmt: &'a str,
@@ -519,7 +617,7 @@ impl<
         }
     }
 
-    pub async fn execute(&self, session_id: i64, stmt: &str) -> Result<QueryResult, String> {
+    pub async fn execute(&self, session_id: i64, stmt: &str) -> Result<QueryResult, GraphServiceError> {
         self.execute_with_params(session_id, stmt, None, None).await
     }
 
@@ -536,11 +634,11 @@ impl<
         stmt: &str,
         parameters: Option<HashMap<String, graphdb_core::Value>>,
         session_variables: Option<HashMap<String, graphdb_core::Value>>,
-    ) -> Result<QueryResult, String> {
+    ) -> Result<QueryResult, GraphServiceError> {
         let session = self
             .session_manager
             .find_session(session_id)
-            .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
+            .ok_or_else(|| GraphServiceError::new(format!("Invalid session ID: {}", session_id)))?;
 
         let space_id = session.space().map(|s| s.id as i64).unwrap_or(0);
 
@@ -608,7 +706,10 @@ impl<
                         Err(e) => {
                             warn!("Auto-commit failed for transaction {}: {}", txn_id, e);
                             session.unbind_transaction();
-                            result = Err(format!("Auto-commit failed: {}", e));
+                            result = Err(GraphServiceError::new(format!(
+                                "Auto-commit failed: {}",
+                                e
+                            )));
                         }
                     }
                 }
@@ -626,11 +727,11 @@ impl<
         parameters: Option<HashMap<String, graphdb_core::Value>>,
         session_variables: Option<HashMap<String, graphdb_core::Value>>,
         consistency: graphdb_api::api_core::types::ConsistencyLevel,
-    ) -> Result<QueryResult, String> {
+    ) -> Result<QueryResult, GraphServiceError> {
         let session = self
             .session_manager
             .find_session(session_id)
-            .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
+            .ok_or_else(|| GraphServiceError::new(format!("Invalid session ID: {}", session_id)))?;
 
         let space_id = session.space().map(|s| s.id as i64).unwrap_or(0);
 
@@ -706,7 +807,10 @@ impl<
                         Err(e) => {
                             warn!("Auto-commit failed for transaction {}: {}", txn_id, e);
                             session.unbind_transaction();
-                            result = Err(format!("Auto-commit failed: {}", e));
+                            result = Err(GraphServiceError::new(format!(
+                                "Auto-commit failed: {}",
+                                e
+                            )));
                         }
                     }
                 }
@@ -723,11 +827,11 @@ impl<
         &self,
         session_id: i64,
         stmt: &str,
-    ) -> Result<StreamingQueryResult, String> {
+    ) -> Result<StreamingQueryResult, GraphServiceError> {
         let session = self
             .session_manager
             .find_session(session_id)
-            .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
+            .ok_or_else(|| GraphServiceError::new(format!("Invalid session ID: {}", session_id)))?;
         let snapshot = session.variables_snapshot();
         self.build_streaming_result(&session, stmt, None, Some(snapshot))
             .await
@@ -745,11 +849,11 @@ impl<
         stmt: &str,
         parameters: Option<HashMap<String, graphdb_core::Value>>,
         session_variables: Option<HashMap<String, graphdb_core::Value>>,
-    ) -> Result<StreamingQueryResult, String> {
+    ) -> Result<StreamingQueryResult, GraphServiceError> {
         let session = self
             .session_manager
             .find_session(session_id)
-            .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
+            .ok_or_else(|| GraphServiceError::new(format!("Invalid session ID: {}", session_id)))?;
         self.build_streaming_result(&session, stmt, parameters, session_variables)
             .await
     }
@@ -762,7 +866,7 @@ impl<
         stmt: &str,
         parameters: Option<HashMap<String, graphdb_core::Value>>,
         session_variables: Option<HashMap<String, graphdb_core::Value>>,
-    ) -> Result<StreamingQueryResult, String> {
+    ) -> Result<StreamingQueryResult, GraphServiceError> {
         let session_id = session.id();
         // Configuration statements resolve server-side on the materialized
         // path only: their results are single-row, and the streaming
@@ -771,10 +875,9 @@ impl<
         // guidance instead of bypassing permission or reporting success
         // without applying anything.
         if Self::is_config_statement(stmt) {
-            return Err(
-                "UPDATE CONFIGS and SHOW CONFIGS are not supported on streaming endpoints; use the unary query endpoint instead"
-                    .to_string(),
-            );
+            return Err(GraphServiceError::new(
+                "UPDATE CONFIGS and SHOW CONFIGS are not supported on streaming endpoints; use the unary query endpoint instead",
+            ));
         }
         // Transaction / session commands are forwarded to the materialized
         // `execute` path: the streaming path does not build a session
@@ -812,24 +915,26 @@ impl<
             let manager = self
                 .transaction_manager
                 .as_ref()
-                .ok_or_else(|| "Transaction manager is not configured".to_string())?;
+                .ok_or_else(|| {
+                    GraphServiceError::new("Transaction manager is not configured")
+                })?;
             manager
                 .refresh_statement_snapshot(txn_id)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| GraphServiceError::new(error.to_string()))?;
             let execution = manager
                 .create_execution(txn_id, false)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| GraphServiceError::new(error.to_string()))?;
             query_api
                 .execute_stream_with_execution(stmt, query_request, &execution)
-                .map_err(|e| e.to_string())?
+                .map_err(|e| GraphServiceError::from_core_error_with_query(e, stmt))?
         } else {
             let execution_storage = self
                 .storage
                 .bind_auto_commit_context()
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| GraphServiceError::new(error.to_string()))?;
             query_api
                 .execute_stream_with_operation_storage(stmt, query_request, execution_storage)
-                .map_err(|e| e.to_string())?
+                .map_err(|e| GraphServiceError::from_core_error_with_query(e, stmt))?
         };
 
         // Assign a server-side monotonic query ID (not from SQL text hash).
@@ -880,6 +985,55 @@ impl<
             None => return None,
         };
         Self::extract_root_estimate(text.as_str()?)
+    }
+
+    /// Plan a statement via `EXPLAIN` without executing it.
+    ///
+    /// The `EXPLAIN` prefix is added when missing. When the inner statement
+    /// fails to plan, the error position is mapped back to the original
+    /// statement text so clients can jump to the correct source location.
+    pub async fn explain(
+        &self,
+        session_id: i64,
+        stmt: &str,
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
+    ) -> Result<QueryResult, GraphServiceError> {
+        let trimmed = stmt.trim();
+        if trimmed.is_empty() {
+            return Err(GraphServiceError::new("query must not be empty"));
+        }
+        let already_explain =
+            trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("explain");
+        let explain_stmt = if already_explain {
+            trimmed.to_string()
+        } else {
+            format!("EXPLAIN {trimmed}")
+        };
+        match self
+            .execute_with_params(session_id, &explain_stmt, parameters, session_variables)
+            .await
+        {
+            Ok(result) => Ok(result),
+            Err(e) => {
+                if already_explain {
+                    return Err(e);
+                }
+                const PREFIX_LEN: usize = "EXPLAIN ".len();
+                if let Some(pos) = e.position() {
+                    if pos.line == 1 && pos.column > PREFIX_LEN {
+                        return Err(GraphServiceError::with_position(
+                            e.message().to_string(),
+                            Some(graphdb_core::types::Position::new(1, pos.column - PREFIX_LEN)),
+                        ));
+                    }
+                    if pos.line == 1 {
+                        return Err(GraphServiceError::new(e.message().to_string()));
+                    }
+                }
+                Err(e)
+            }
+        }
     }
 
     /// Scan an EXPLAIN table for `est_rows:<n>` markers and return the
@@ -938,7 +1092,10 @@ impl<
                     .to_string(),
             );
         }
-        let result = self.execute_stream(session_id, stmt).await?;
+        let result = self
+            .execute_stream(session_id, stmt)
+            .await
+            .map_err(|e| e.message().to_string())?;
         let columns = result.column_names().unwrap_or_default();
         let cursor_id = session.open_cursor(stmt.to_string(), result, columns.clone())?;
         Ok((cursor_id, columns))
@@ -1021,7 +1178,7 @@ impl<
     ///   specific parse error is surfaced instead of the generic recovery
     ///   abort (the parser's recovery masks the first error with
     ///   "Too many parse errors").
-    fn parse_command(stmt: &str) -> Result<Option<ParserResult>, String> {
+    fn parse_command(stmt: &str) -> Result<Option<ParserResult>, GraphServiceError> {
         if !Self::is_command_like(stmt) {
             return Ok(None);
         }
@@ -1042,7 +1199,14 @@ impl<
             Ok(_) => Ok(None),
             Err(_) => {
                 if let Some(first) = parser.errors().iter().next() {
-                    return Err(format!("Parse error: {}", first.message));
+                    let position = first.position.is_valid().then_some(first.position);
+                    let position = position.or_else(|| {
+                        first.offset.and_then(|offset| offset_to_position(stmt, offset))
+                    });
+                    return Err(GraphServiceError::with_position(
+                        format!("Parse error: {}", first.message),
+                        position,
+                    ));
                 }
                 Ok(None)
             }
@@ -1062,7 +1226,7 @@ impl<
         session: &Arc<ClientSession>,
         stmt: &Stmt,
         context: &QueryExecutionContext<'_>,
-    ) -> Result<QueryResult, String> {
+    ) -> Result<QueryResult, GraphServiceError> {
         self.validate_session_transaction_state(session)?;
         let txn_manager = self
             .transaction_manager
@@ -1072,7 +1236,9 @@ impl<
         match stmt {
             Stmt::BeginTransaction(begin_stmt) => {
                 if session.has_active_transaction() {
-                    return Err("Session already has an active transaction".to_string());
+                    return Err(GraphServiceError::new(
+                        "Session already has an active transaction",
+                    ));
                 }
 
                 let mut options = session.transaction_options();
@@ -1094,14 +1260,17 @@ impl<
                             {
                                 Ok(txn_id) => txn_id,
                                 Err(retry_err) => {
-                                    return Err(format!(
+                                    return Err(GraphServiceError::new(format!(
                                         "Failed to start transaction: {}",
                                         retry_err
-                                    ));
+                                    )));
                                 }
                             }
                         } else {
-                            return Err(format!("Failed to start transaction: {}", e));
+                            return Err(GraphServiceError::new(format!(
+                                "Failed to start transaction: {}",
+                                e
+                            )));
                         }
                     }
                 };
@@ -1237,7 +1406,7 @@ impl<
                 result
             }
 
-            _ => Err("Statement is not a transaction command".to_string()),
+            _ => Err(GraphServiceError::new("Statement is not a transaction command")),
         }
     }
 
@@ -1255,7 +1424,7 @@ impl<
         session_id: i64,
         context: &QueryExecutionContext<'_>,
         transaction_id: Option<TransactionId>,
-    ) -> Result<QueryResult, String> {
+    ) -> Result<QueryResult, GraphServiceError> {
         let session = self
             .session_manager
             .find_session(session_id)
@@ -1272,7 +1441,10 @@ impl<
                 self.permission_manager
                     .check_permission(&username, context.space_id, permission)
             {
-                return Err(format!("Permission check failed: {}", e));
+                return Err(GraphServiceError::new(format!(
+                    "Permission check failed: {}",
+                    e
+                )));
             }
         }
 
@@ -1303,7 +1475,7 @@ impl<
         parsed_ast: Arc<Ast>,
         assign: &crate::query::parser::ast::stmt::AssignVariableStmt,
         context: QueryExecutionContext<'_>,
-    ) -> Result<QueryResult, String> {
+    ) -> Result<QueryResult, GraphServiceError> {
         let result = self.execute_query_with_permission(
             session.id(),
             &QueryExecutionContext {
@@ -1316,16 +1488,16 @@ impl<
             // one value column. Guard instead of silently taking the
             // first value if a planner regression changes the shape.
             if result.columns().len() != 1 {
-                return Err(format!(
+                return Err(GraphServiceError::new(format!(
                     "LET expression must evaluate to a single value, got {} columns",
                     result.columns().len()
-                ));
+                )));
             }
             if result.rows().len() != 1 {
-                return Err(format!(
+                return Err(GraphServiceError::new(format!(
                     "LET expression must evaluate to a single row, got {} rows",
                     result.rows().len()
-                ));
+                )));
             }
             result
                 .first_value()
@@ -1341,7 +1513,7 @@ impl<
         &self,
         session_id: i64,
         context: &QueryExecutionContext<'_>,
-    ) -> Result<QueryResult, String> {
+    ) -> Result<QueryResult, GraphServiceError> {
         let session = self
             .session_manager
             .find_session(session_id)
@@ -1359,7 +1531,10 @@ impl<
                 self.permission_manager
                     .check_permission(&username, context.space_id, permission)
             {
-                return Err(format!("Permission check failed: {}", e));
+                return Err(GraphServiceError::new(format!(
+                    "Permission check failed: {}",
+                    e
+                )));
             }
         }
 
@@ -1382,7 +1557,7 @@ impl<
                                 txn_id
                             );
                         }
-                        return Err(e.to_string());
+                        return Err(GraphServiceError::new(e.to_string()));
                     }
                 }
             } else {
@@ -1396,7 +1571,7 @@ impl<
 
         if let Some((txn_manager, context, statement_start)) = statement_guard {
             if let Err(error) = txn_manager.finish_statement(&context, statement_start) {
-                result = Err(error.to_string());
+                result = Err(GraphServiceError::new(error.to_string()));
             }
         }
 
@@ -1444,7 +1619,7 @@ impl<
         context: &QueryExecutionContext<'_>,
         transaction_id: Option<TransactionId>,
         execution: Option<graphdb_transaction::types::TransactionExecution>,
-    ) -> Result<QueryResult, String> {
+    ) -> Result<QueryResult, GraphServiceError> {
         let merged_session_variables = match context.session_variables {
             Some(ref client_variables) => {
                 let mut merged = session.variables_snapshot();
@@ -1470,15 +1645,15 @@ impl<
         if let Some(execution) = execution.as_ref() {
             query_api
                 .execute_with_execution(context.stmt, query_request, execution)
-                .map_err(|e| e.to_string())
+                .map_err(|e| GraphServiceError::from_core_error_with_query(e, context.stmt))
         } else {
             let execution_storage = self
                 .storage
                 .bind_auto_commit_context()
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| GraphServiceError::new(error.to_string()))?;
             query_api
                 .execute_with_operation_storage(context.stmt, query_request, execution_storage)
-                .map_err(|e| e.to_string())
+                .map_err(|e| GraphServiceError::from_core_error_with_query(e, context.stmt))
         }
     }
 
@@ -1489,7 +1664,7 @@ impl<
         transaction_id: Option<TransactionId>,
         execution: Option<graphdb_transaction::types::TransactionExecution>,
         consistency: &ConsistencyParams,
-    ) -> Result<QueryResult, String> {
+    ) -> Result<QueryResult, GraphServiceError> {
         let merged_session_variables = match context.session_variables {
             Some(ref client_variables) => {
                 let mut merged = session.variables_snapshot();
@@ -1515,15 +1690,15 @@ impl<
         if let Some(execution) = execution.as_ref() {
             query_api
                 .execute_with_execution(context.stmt, query_request, execution)
-                .map_err(|e| e.to_string())
+                .map_err(|e| GraphServiceError::from_core_error_with_query(e, context.stmt))
         } else {
             let execution_storage = self
                 .storage
                 .bind_auto_commit_context()
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| GraphServiceError::new(error.to_string()))?;
             query_api
                 .execute_with_operation_storage(context.stmt, query_request, execution_storage)
-                .map_err(|e| e.to_string())
+                .map_err(|e| GraphServiceError::from_core_error_with_query(e, context.stmt))
         }
     }
 
@@ -1534,7 +1709,7 @@ impl<
         assign: &crate::query::parser::ast::stmt::AssignVariableStmt,
         context: &QueryExecutionContext<'_>,
         consistency: &ConsistencyParams,
-    ) -> Result<QueryResult, String> {
+    ) -> Result<QueryResult, GraphServiceError> {
         let result = self.execute_query_with_permission_and_consistency(
             session.id(),
             &QueryExecutionContext {
@@ -1548,16 +1723,16 @@ impl<
         )?;
         let value = {
             if result.columns().len() != 1 {
-                return Err(format!(
+                return Err(GraphServiceError::new(format!(
                     "LET expression must evaluate to a single value, got {} columns",
                     result.columns().len()
-                ));
+                )));
             }
             if result.rows().len() != 1 {
-                return Err(format!(
+                return Err(GraphServiceError::new(format!(
                     "LET expression must evaluate to a single row, got {} rows",
                     result.rows().len()
-                ));
+                )));
             }
             result
                 .first_value()
@@ -1575,7 +1750,7 @@ impl<
         stmt: &Stmt,
         context: &QueryExecutionContext<'_>,
         consistency: &ConsistencyParams,
-    ) -> Result<QueryResult, String> {
+    ) -> Result<QueryResult, GraphServiceError> {
         self.validate_session_transaction_state(session)?;
         let txn_manager = self
             .transaction_manager
@@ -1585,7 +1760,9 @@ impl<
         match stmt {
             Stmt::BeginTransaction(begin_stmt) => {
                 if session.has_active_transaction() {
-                    return Err("Session already has an active transaction".to_string());
+                    return Err(GraphServiceError::new(
+                        "Session already has an active transaction",
+                    ));
                 }
                 let mut options = session.transaction_options();
                 if let Some(read_only) = begin_stmt.read_only {
@@ -1606,14 +1783,17 @@ impl<
                             {
                                 Ok(txn_id) => txn_id,
                                 Err(retry_err) => {
-                                    return Err(format!(
+                                    return Err(GraphServiceError::new(format!(
                                         "Failed to start transaction: {}",
                                         retry_err
-                                    ));
+                                    )));
                                 }
                             }
                         } else {
-                            return Err(format!("Failed to start transaction: {}", e));
+                            return Err(GraphServiceError::new(format!(
+                                "Failed to start transaction: {}",
+                                e
+                            )));
                         }
                     }
                 };
@@ -1736,7 +1916,7 @@ impl<
                 }
                 result
             }
-            _ => Err("Statement is not a transaction command".to_string()),
+            _ => Err(GraphServiceError::new("Statement is not a transaction command")),
         }
     }
 
@@ -1746,7 +1926,7 @@ impl<
         context: &QueryExecutionContext<'_>,
         transaction_id: Option<TransactionId>,
         consistency: &ConsistencyParams,
-    ) -> Result<QueryResult, String> {
+    ) -> Result<QueryResult, GraphServiceError> {
         let session = self
             .session_manager
             .find_session(session_id)
@@ -1763,7 +1943,10 @@ impl<
                 self.permission_manager
                     .check_permission(&username, context.space_id, permission)
             {
-                return Err(format!("Permission check failed: {}", e));
+                return Err(GraphServiceError::new(format!(
+                    "Permission check failed: {}",
+                    e
+                )));
             }
         }
 
@@ -1790,7 +1973,7 @@ impl<
         session_id: i64,
         context: &QueryExecutionContext<'_>,
         consistency: &ConsistencyParams,
-    ) -> Result<QueryResult, String> {
+    ) -> Result<QueryResult, GraphServiceError> {
         let session = self
             .session_manager
             .find_session(session_id)
@@ -1808,7 +1991,10 @@ impl<
                 self.permission_manager
                     .check_permission(&username, context.space_id, permission)
             {
-                return Err(format!("Permission check failed: {}", e));
+                return Err(GraphServiceError::new(format!(
+                    "Permission check failed: {}",
+                    e
+                )));
             }
         }
 
@@ -1831,7 +2017,7 @@ impl<
                                 txn_id
                             );
                         }
-                        return Err(e.to_string());
+                        return Err(GraphServiceError::new(e.to_string()));
                     }
                 }
             } else {
@@ -1846,7 +2032,7 @@ impl<
 
         if let Some((txn_manager, context, statement_start)) = statement_guard {
             if let Err(error) = txn_manager.finish_statement(&context, statement_start) {
-                result = Err(error.to_string());
+                result = Err(GraphServiceError::new(error.to_string()));
             }
         }
 
@@ -2006,7 +2192,7 @@ impl<
     fn validate_session_transaction_state(
         &self,
         session: &Arc<ClientSession>,
-    ) -> Result<(), String> {
+    ) -> Result<(), GraphServiceError> {
         if let Some(txn_id) = session.current_transaction() {
             if let Some(ref txn_manager) = self.transaction_manager {
                 if !txn_manager.is_transaction_active(txn_id) {
@@ -2016,10 +2202,10 @@ impl<
                         txn_id
                     );
                     session.unbind_transaction();
-                    return Err(format!(
+                    return Err(GraphServiceError::new(format!(
                         "Transaction {} is no longer active, please retry the operation",
                         txn_id
-                    ));
+                    )));
                 }
             }
         }
@@ -2058,11 +2244,15 @@ where
         statements: &[String],
         parameters: Option<HashMap<String, graphdb_core::Value>>,
         session_variables: Option<HashMap<String, graphdb_core::Value>>,
-    ) -> Vec<Result<QueryResult, String>> {
+    ) -> Vec<Result<QueryResult, GraphServiceError>> {
         let Some(session) = self.session_manager.find_session(session_id) else {
             return statements
                 .iter()
-                .map(|_| Err(format!("Invalid session ID: {session_id}")))
+                .map(|_| {
+                    Err(GraphServiceError::new(format!(
+                        "Invalid session ID: {session_id}"
+                    )))
+                })
                 .collect();
         };
         session.charge();
@@ -2072,7 +2262,8 @@ where
         // Classification pass: transaction commands get an explicit error,
         // LET statements run per-statement, everything else joins the
         // batch window.
-        let mut results: Vec<Option<Result<QueryResult, String>>> = vec![None; statements.len()];
+        let mut results: Vec<Option<Result<QueryResult, GraphServiceError>>> =
+            vec![None; statements.len()];
         let mut batch_indices: Vec<usize> = Vec::new();
         let mut batch_statements: Vec<String> = Vec::new();
         for (index, stmt) in statements.iter().enumerate() {
@@ -2091,9 +2282,9 @@ where
                         );
                     }
                     _ => {
-                        results[index] = Some(Err(
-                            "Transaction commands are not supported in batch execution".to_string(),
-                        ));
+                        results[index] = Some(Err(GraphServiceError::new(
+                            "Transaction commands are not supported in batch execution",
+                        )));
                     }
                 },
                 Ok(None) => {
@@ -2185,11 +2376,15 @@ where
         session_id: i64,
         statements: &[String],
         group_size: usize,
-    ) -> Vec<Result<QueryResult, String>> {
+    ) -> Vec<Result<QueryResult, GraphServiceError>> {
         let Some(session) = self.session_manager.find_session(session_id) else {
             return statements
                 .iter()
-                .map(|_| Err(format!("Invalid session ID: {session_id}")))
+                .map(|_| {
+                    Err(GraphServiceError::new(format!(
+                        "Invalid session ID: {session_id}"
+                    )))
+                })
                 .collect();
         };
         session.charge();
@@ -2198,7 +2393,8 @@ where
 
         // Classification pass (same policy as execute_batch): transaction
         // commands get an explicit error, LET statements run per-statement.
-        let mut results: Vec<Option<Result<QueryResult, String>>> = vec![None; statements.len()];
+        let mut results: Vec<Option<Result<QueryResult, GraphServiceError>>> =
+            vec![None; statements.len()];
         let mut batch_indices: Vec<usize> = Vec::new();
         let mut batch_statements: Vec<String> = Vec::new();
         for (index, stmt) in statements.iter().enumerate() {
@@ -2209,9 +2405,9 @@ where
                         results[index] = Some(self.execute(session_id, stmt).await);
                     }
                     _ => {
-                        results[index] = Some(Err(
-                            "Transaction commands are not supported in batch execution".to_string(),
-                        ));
+                        results[index] = Some(Err(GraphServiceError::new(
+                            "Transaction commands are not supported in batch execution",
+                        )));
                     }
                 },
                 Ok(None) => {
@@ -2271,17 +2467,17 @@ where
 
 /// Convert the per-slot batch results into the final ordered outcome vector.
 fn finalize_batch_outcomes(
-    results: Vec<Option<Result<QueryResult, String>>>,
-) -> Vec<Result<QueryResult, String>> {
+    results: Vec<Option<Result<QueryResult, GraphServiceError>>>,
+) -> Vec<Result<QueryResult, GraphServiceError>> {
     results
         .into_iter()
-        .map(|slot| slot.unwrap_or_else(|| Err("Batch outcome missing".to_string())))
+        .map(|slot| slot.unwrap_or_else(|| Err(GraphServiceError::new("Batch outcome missing"))))
         .collect()
 }
 
 /// Merge the batch-window outcomes back into the per-slot results.
 fn merge_batch_outcomes(
-    results: &mut [Option<Result<QueryResult, String>>],
+    results: &mut [Option<Result<QueryResult, GraphServiceError>>],
     batch_indices: &[usize],
     denied: &[(usize, String)],
     outcomes: Vec<Result<graphdb_api::api_core::QueryResult, graphdb_api::api_core::CoreError>>,
@@ -2289,15 +2485,21 @@ fn merge_batch_outcomes(
     let mut permitted_outcomes = outcomes.into_iter();
     for (batch_pos, original_index) in batch_indices.iter().enumerate() {
         if let Some((_, error)) = denied.iter().find(|(i, _)| *i == batch_pos) {
-            results[*original_index] = Some(Err(error.clone()));
+            results[*original_index] = Some(Err(GraphServiceError::new(error.clone())));
             continue;
         }
         match permitted_outcomes.next() {
             Some(Ok(result)) => {
                 results[*original_index] = Some(Ok(result));
             }
-            Some(Err(error)) => results[*original_index] = Some(Err(error.to_string())),
-            None => results[*original_index] = Some(Err("Batch outcome missing".to_string())),
+            Some(Err(error)) => {
+                results[*original_index] =
+                    Some(Err(GraphServiceError::from_core_error(error)));
+            }
+            None => {
+                results[*original_index] =
+                    Some(Err(GraphServiceError::new("Batch outcome missing")));
+            }
         }
     }
 }
@@ -2374,7 +2576,7 @@ mod tests {
         let err =
             GraphService::<MockStorage>::parse_command("LET $x").expect_err("LET $x must fail");
         assert!(
-            err.contains("LET requires an assignment"),
+            err.message().contains("LET requires an assignment"),
             "unexpected error: {}",
             err
         );
@@ -2383,7 +2585,7 @@ mod tests {
         let bare_let =
             GraphService::<MockStorage>::parse_command("LET").expect_err("bare LET must fail");
         assert!(
-            bare_let.contains("Invalid session variable name"),
+            bare_let.message().contains("Invalid session variable name"),
             "unexpected error: {}",
             bare_let
         );
