@@ -88,10 +88,7 @@ impl GraphServiceError {
         Self { message, position }
     }
 
-    pub fn from_core_error_with_query(
-        e: graphdb_api::api_core::CoreError,
-        query: &str,
-    ) -> Self {
+    pub fn from_core_error_with_query(e: graphdb_api::api_core::CoreError, query: &str) -> Self {
         let message = e.to_string();
         if let Some(pos) = e.error_position().filter(|p| p.is_valid()) {
             return Self {
@@ -129,7 +126,11 @@ fn offset_to_position(query: &str, offset: usize) -> Option<graphdb_core::types:
     let offset = offset.min(query.len());
     let prefix = &query[..offset];
     let line = prefix.bytes().filter(|b| *b == b'\n').count() + 1;
-    let column = prefix.rsplit('\n').next().map(|s| s.chars().count() + 1).unwrap_or(1);
+    let column = prefix
+        .rsplit('\n')
+        .next()
+        .map(|s| s.chars().count() + 1)
+        .unwrap_or(1);
     let position = graphdb_core::types::Position::new(line, column);
     position.is_valid().then_some(position)
 }
@@ -617,7 +618,11 @@ impl<
         }
     }
 
-    pub async fn execute(&self, session_id: i64, stmt: &str) -> Result<QueryResult, GraphServiceError> {
+    pub async fn execute(
+        &self,
+        session_id: i64,
+        stmt: &str,
+    ) -> Result<QueryResult, GraphServiceError> {
         self.execute_with_params(session_id, stmt, None, None).await
     }
 
@@ -706,10 +711,8 @@ impl<
                         Err(e) => {
                             warn!("Auto-commit failed for transaction {}: {}", txn_id, e);
                             session.unbind_transaction();
-                            result = Err(GraphServiceError::new(format!(
-                                "Auto-commit failed: {}",
-                                e
-                            )));
+                            result =
+                                Err(GraphServiceError::new(format!("Auto-commit failed: {}", e)));
                         }
                     }
                 }
@@ -807,10 +810,8 @@ impl<
                         Err(e) => {
                             warn!("Auto-commit failed for transaction {}: {}", txn_id, e);
                             session.unbind_transaction();
-                            result = Err(GraphServiceError::new(format!(
-                                "Auto-commit failed: {}",
-                                e
-                            )));
+                            result =
+                                Err(GraphServiceError::new(format!("Auto-commit failed: {}", e)));
                         }
                     }
                 }
@@ -915,9 +916,7 @@ impl<
             let manager = self
                 .transaction_manager
                 .as_ref()
-                .ok_or_else(|| {
-                    GraphServiceError::new("Transaction manager is not configured")
-                })?;
+                .ok_or_else(|| GraphServiceError::new("Transaction manager is not configured"))?;
             manager
                 .refresh_statement_snapshot(txn_id)
                 .map_err(|error| GraphServiceError::new(error.to_string()))?;
@@ -1003,8 +1002,7 @@ impl<
         if trimmed.is_empty() {
             return Err(GraphServiceError::new("query must not be empty"));
         }
-        let already_explain =
-            trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("explain");
+        let already_explain = trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("explain");
         let explain_stmt = if already_explain {
             trimmed.to_string()
         } else {
@@ -1024,7 +1022,10 @@ impl<
                     if pos.line == 1 && pos.column > PREFIX_LEN {
                         return Err(GraphServiceError::with_position(
                             e.message().to_string(),
-                            Some(graphdb_core::types::Position::new(1, pos.column - PREFIX_LEN)),
+                            Some(graphdb_core::types::Position::new(
+                                1,
+                                pos.column - PREFIX_LEN,
+                            )),
                         ));
                     }
                     if pos.line == 1 {
@@ -1201,7 +1202,9 @@ impl<
                 if let Some(first) = parser.errors().iter().next() {
                     let position = first.position.is_valid().then_some(first.position);
                     let position = position.or_else(|| {
-                        first.offset.and_then(|offset| offset_to_position(stmt, offset))
+                        first
+                            .offset
+                            .and_then(|offset| offset_to_position(stmt, offset))
                     });
                     return Err(GraphServiceError::with_position(
                         format!("Parse error: {}", first.message),
@@ -1406,7 +1409,9 @@ impl<
                 result
             }
 
-            _ => Err(GraphServiceError::new("Statement is not a transaction command")),
+            _ => Err(GraphServiceError::new(
+                "Statement is not a transaction command",
+            )),
         }
     }
 
@@ -1916,7 +1921,9 @@ impl<
                 }
                 result
             }
-            _ => Err(GraphServiceError::new("Statement is not a transaction command")),
+            _ => Err(GraphServiceError::new(
+                "Statement is not a transaction command",
+            )),
         }
     }
 
@@ -2493,8 +2500,7 @@ fn merge_batch_outcomes(
                 results[*original_index] = Some(Ok(result));
             }
             Some(Err(error)) => {
-                results[*original_index] =
-                    Some(Err(GraphServiceError::from_core_error(error)));
+                results[*original_index] = Some(Err(GraphServiceError::from_core_error(error)));
             }
             None => {
                 results[*original_index] =

@@ -1,0 +1,137 @@
+//! Public tag management handlers.
+//!
+//! Handles tag creation and listing within a space.
+
+use axum::{
+    extract::{Json, Path, State},
+    response::Json as JsonResponse,
+};
+use graphdb_wire::schema::CreateTagRequest;
+use tokio::task;
+
+use super::common::parse_data_type;
+use crate::http::{error::HttpError, state::AppState};
+use crate::storage::{
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
+};
+use crate::value::from_json as json_to_core;
+use graphdb_api::api_core::PropertyDef as CorePropertyDef;
+
+// ==================== Tag related ====================
+
+#[utoipa::path(
+    post,
+    operation_id = "post_v1_schema_spaces_name_tags",
+    path = "/v1/schema/spaces/{name}/tags",
+    tag = "Schema",
+    params(("name" = String, Path, description = "Space name")),
+    request_body = CreateTagRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Tag created"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// Creating Tags
+pub async fn create_tag<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Path(space_name): Path<String>,
+    Json(request): Json<CreateTagRequest>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let result = task::spawn_blocking(move || {
+        let schema_api = state.server.get_schema_api();
+
+        // Get Space ID
+        let space_id = schema_api.use_space(&space_name)?;
+
+        // Conversion Attribute Definition
+        let properties: Vec<CorePropertyDef> = request
+            .properties
+            .into_iter()
+            .map(|p| CorePropertyDef {
+                name: p.name,
+                data_type: parse_data_type(&p.data_type),
+                nullable: p.nullable,
+                default_value: p.default_value.map(|v| json_to_core(&v)),
+                comment: p.comment,
+            })
+            .collect();
+
+        schema_api.create_tag(space_id, &request.name, properties)?;
+
+        Ok::<_, HttpError>(serde_json::json!({
+            "message": "Tag created successfully",
+            "tag_name": request.name,
+            "space_name": space_name,
+        }))
+    })
+    .await
+    .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
+
+    Ok(JsonResponse(result?))
+}
+
+#[utoipa::path(
+    get,
+    operation_id = "get_v1_schema_spaces_name_tags",
+    path = "/v1/schema/spaces/{name}/tags",
+    tag = "Schema",
+    params(("name" = String, Path, description = "Space name")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Tag list"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// List all tags
+pub async fn list_tags<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Path(space_name): Path<String>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let result = task::spawn_blocking(move || {
+        let storage = state.server.get_storage();
+        let storage = storage.read();
+        let tags = storage
+            .list_tags(&space_name)
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+        let tag_list: Vec<serde_json::Value> = tags
+            .into_iter()
+            .map(|tag| {
+                serde_json::json!({
+                    "name": tag.tag_name,
+                    "properties": tag.properties.iter().map(|p| {
+                        serde_json::json!({
+                            "name": p.name,
+                            "data_type": format!("{:?}", p.data_type),
+                            "nullable": p.nullable,
+                        })
+                    }).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        Ok::<_, HttpError>(serde_json::json!({
+            "tags": tag_list,
+            "space_name": space_name,
+        }))
+    })
+    .await
+    .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
+
+    Ok(JsonResponse(result?))
+}

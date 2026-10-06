@@ -446,16 +446,14 @@ fn error_with_trace(
     trace_id: String,
     elapsed_us: u64,
 ) -> QueryResponse {
-    let position = error.position().map(|p| graphdb_wire::query::ErrorPosition {
-        line: p.line,
-        column: p.column,
-    });
-    let mut response = QueryResponse::error_with_position(
-        code,
-        error.message().to_string(),
-        None,
-        position,
-    );
+    let position = error
+        .position()
+        .map(|p| graphdb_wire::query::ErrorPosition {
+            line: p.line,
+            column: p.column,
+        });
+    let mut response =
+        QueryResponse::error_with_position(code, error.message().to_string(), None, position);
     response.metadata.trace_id = Some(trace_id);
     response.metadata.stages = Some(stages_for_elapsed_us(elapsed_us));
     response.metadata.execution_time_ms = elapsed_us / 1000;
