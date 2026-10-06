@@ -731,7 +731,7 @@
 					<span
 						>{(overview?.sync?.is_running ??
 						num(monitor.snapshots.sync, 'is_running'))
-							? 'running'
+							? t('common.running')
 							: '—'}</span
 					>
 				</div>
@@ -772,7 +772,7 @@
 					<span>{formatLatencyMs(search?.search?.avg_latency_ms)}</span>
 				</div>
 				<div class="flex justify-between">
-					<span class="text-gray-500">cache</span>
+					<span class="text-gray-500">{t('monitoring.cacheHitRate')}</span>
 					<span>{formatPercent(search?.cache?.hit_rate)}</span>
 				</div>
 			</div>
@@ -880,27 +880,27 @@
 								</h3>
 								<ul class="font-mono space-y-1">
 									<li class="flex justify-between">
-										<span>parse</span><span
+										<span>{t('monitoring.stageParse')}</span><span
 											>{formatLatencyMs(portrait.stages.parse_ms)}</span
 										>
 									</li>
 									<li class="flex justify-between">
-										<span>validate</span><span
+										<span>{t('monitoring.stageValidate')}</span><span
 											>{formatLatencyMs(portrait.stages.validate_ms)}</span
 										>
 									</li>
 									<li class="flex justify-between">
-										<span>plan</span><span
+										<span>{t('monitoring.stagePlan')}</span><span
 											>{formatLatencyMs(portrait.stages.plan_ms)}</span
 										>
 									</li>
 									<li class="flex justify-between">
-										<span>optimize</span><span
+										<span>{t('monitoring.stageOptimize')}</span><span
 											>{formatLatencyMs(portrait.stages.optimize_ms)}</span
 										>
 									</li>
 									<li class="flex justify-between">
-										<span>execute</span><span
+										<span>{t('monitoring.stageExecute')}</span><span
 											>{formatLatencyMs(portrait.stages.execute_ms)}</span
 										>
 									</li>

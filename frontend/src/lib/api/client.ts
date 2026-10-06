@@ -14,6 +14,7 @@
 
 import { goto } from '$app/navigation';
 import { page } from '$app/state';
+import { t } from '$i18n';
 import createClient from 'openapi-fetch';
 import JSONBigint from 'json-bigint';
 import type { paths } from './schema';
@@ -147,7 +148,7 @@ export function unwrap<T>(envelope: Envelope<T>): T {
 		envelope.data === null
 	) {
 		throw new ApiError(
-			envelope.error?.message ?? 'Request failed',
+			envelope.error?.message ?? t('errors.requestFailed'),
 			0,
 			envelope.error?.code,
 		);

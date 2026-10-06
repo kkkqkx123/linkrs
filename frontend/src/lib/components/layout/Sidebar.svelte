@@ -54,12 +54,6 @@
 					label: 'sidebar.visualization',
 					route: '/schema/visualization',
 				},
-				{
-					key: '/schema/stats',
-					icon: '📊',
-					label: 'sidebar.stats',
-					route: '/schema/stats',
-				},
 			],
 		},
 		{

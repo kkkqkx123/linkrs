@@ -6,7 +6,6 @@
 		"moduleResolution": "bundler",
 		"types": ["$app/types", "vite/client", "node"],
 		"noEmit": true,
-		"resolveJsonModule": true,
 		"allowJs": true,
 		"checkJs": true,
 		"moduleDetection": "force",

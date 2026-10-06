@@ -149,20 +149,20 @@
 
 | 类别 | 技术选择 | 说明 |
 |------|---------|------|
-| 前端框架 | Svelte 5 + TypeScript | Runes 响应式，编译期优化 |
+| 前端框架 | SvelteKit 3 + Svelte 5 + TypeScript | 文件路由 + `load`，组件用 Runes |
 | 构建工具 | Vite 8 | rolldown 内核，快速开发体验 |
 | 样式方案 | Tailwind CSS 4 | 原子化类名，内置暗色模式 |
 | 状态管理 | Svelte Store | 框架内置，零额外依赖 |
 | 代码编辑器 | Monaco Editor | Cypher 高亮 + 自动补全 |
 | 图可视化 | Cytoscape.js | 功能强大 |
-| HTTP 客户端 | Axios | 广泛使用 |
+| HTTP 客户端 | openapi-fetch | 依据 OpenAPI 契约做编译期路径与请求体校验 |
 | 路由 | SvelteKit | 文件路由，`+page.svelte` / `+layout.svelte` |
 | 国际化 | Paraglide JS | 编译期生成消息函数，中英文，key 编译期校验 |
 
 ---
 
-**文档版本**: v2.0
+**文档版本**: v3.0
 **创建日期**: 2026-03-28
-**最后更新**: 2026-04-15
+**最后更新**: 2026-10-06
 
-> v2.0 说明：技术栈章节按 `frontend/package.json` 与真实代码修订（原 v1.0 规划为 React 生态，实际实现为 Svelte 生态）；查询编辑器、Schema 可视化、数据筛选三项状态已更新为已实现。
+> v3.0 说明：技术栈章节按 `frontend/package.json` 与真实代码修订——应用框架改为 SvelteKit 3（`adapter-static`、SPA 模式），HTTP 客户端由 Axios 改为 `openapi-fetch`，国际化由 `svelte-i18n` 改为 Paraglide JS。

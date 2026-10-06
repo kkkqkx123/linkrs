@@ -11,8 +11,6 @@ import type {
 } from '$types/schema';
 
 type Schemas = components['schemas'];
-type SpaceStatistics = Schemas['SpaceStatistics'];
-type SpaceDetailSchema = Schemas['SpaceDetail'];
 type TagDetailSchema = Schemas['TagDetail'];
 type EdgeTypeDetailSchema = Schemas['EdgeTypeDetail'];
 type IndexInfoSchema = Schemas['IndexInfo'];
@@ -130,22 +128,6 @@ export const schemaService = {
 				},
 			};
 		},
-		getDetail: async (name: string): Promise<SpaceDetailSchema> =>
-			unwrap(
-				await call<Envelope<SpaceDetailSchema>>(
-					client.GET('/api/v1/schema/spaces/{name}/details', {
-						params: { path: { name } },
-					}),
-				),
-			),
-		getStatistics: async (name: string): Promise<SpaceStatistics> =>
-			unwrap(
-				await call<Envelope<SpaceStatistics>>(
-					client.GET('/api/v1/schema/spaces/{name}/statistics', {
-						params: { path: { name } },
-					}),
-				),
-			),
 		delete: async (
 			name: string,
 		): Promise<{ message: string; space_name: string }> => {

@@ -353,7 +353,7 @@
 													<button
 														class="ml-2 text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300 text-xs cursor-pointer"
 														onclick={() => viewInGraph(v, 'vertex')}
-														>Graph</button
+														>{t('graphPreview.openInGraph')}</button
 													>
 												</td>
 											</tr>
@@ -436,15 +436,15 @@
 											>
 											<th
 												class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-												>Source</th
+												>{t('dataBrowser.source')}</th
 											>
 											<th
 												class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-												>Target</th
+												>{t('dataBrowser.target')}</th
 											>
 											<th
 												class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-												>Rank</th
+												>{t('dataBrowser.rank')}</th
 											>
 											{#each edgeProperties as prop (prop)}
 												<th
@@ -497,7 +497,8 @@
 													>
 													<button
 														class="ml-2 text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300 text-xs cursor-pointer"
-														onclick={() => viewInGraph(e, 'edge')}>Graph</button
+														onclick={() => viewInGraph(e, 'edge')}
+														>{t('graphPreview.openInGraph')}</button
 													>
 												</td>
 											</tr>
@@ -553,7 +554,7 @@
 				class="w-64 border-l border-gray-200 dark:border-gray-700 p-4 bg-gray-50 dark:bg-gray-800/20 overflow-y-auto"
 			>
 				<h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-3 text-sm">
-					{t('sidebar.stats')}
+					{t('dataBrowser.statistics')}
 				</h3>
 				{#if statistics}
 					<div class="space-y-2 text-sm">
@@ -566,21 +567,21 @@
 						</div>
 						<div class="flex justify-between">
 							<span class="text-gray-500 dark:text-gray-400"
-								>{t('sidebar.edges')}:</span
+								>{t('dataBrowser.edges')}:</span
 							><span class="font-medium text-gray-800 dark:text-gray-200"
 								>{statistics.totalEdges ?? '-'}</span
 							>
 						</div>
 						<div class="flex justify-between">
 							<span class="text-gray-500 dark:text-gray-400"
-								>{t('sidebar.tags')}:</span
+								>{t('dataBrowser.tags')}:</span
 							><span class="font-medium text-gray-800 dark:text-gray-200"
 								>{statistics.tagCount ?? '-'}</span
 							>
 						</div>
 						<div class="flex justify-between">
 							<span class="text-gray-500 dark:text-gray-400"
-								>{t('sidebar.edges')}:</span
+								>{t('dataBrowser.edgeTypes')}:</span
 							><span class="font-medium text-gray-800 dark:text-gray-200"
 								>{statistics.edgeTypeCount ?? '-'}</span
 							>

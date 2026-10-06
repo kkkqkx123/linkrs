@@ -52,7 +52,7 @@
 			healthData = result;
 			lastCheckTime = new Date().toLocaleTimeString();
 			if (result.status !== 'healthy') {
-				checkError = `Status: ${result.status}`;
+				checkError = t('errors.healthCheckFailed', { status: result.status });
 			}
 		} catch (err) {
 			latency = Math.round(performance.now() - start);
@@ -167,7 +167,9 @@
 									? 'text-green-600 dark:text-green-400'
 									: 'text-yellow-600 dark:text-yellow-400'}"
 							>
-								{healthData.status}
+								{healthData.status === 'healthy'
+									? t('common.healthy')
+									: t('common.unhealthy')}
 							</span>
 						</div>
 					{/if}

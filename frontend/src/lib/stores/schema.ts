@@ -13,8 +13,6 @@ import type {
 } from '$types/schema';
 import type { components } from '$lib/api/schema';
 
-type SpaceDetail = components['schemas']['SpaceDetail'];
-type SpaceStatistics = components['schemas']['SpaceStatistics'];
 type IndexInfo = components['schemas']['IndexInfo'];
 
 export interface CreateSpaceParams {
@@ -28,8 +26,6 @@ interface SchemaState {
 	spaces: Space[];
 	isLoadingSpaces: boolean;
 	currentSpace: string | null;
-	spaceDetails: Record<string, SpaceDetail>;
-	spaceStatistics: Record<string, SpaceStatistics>;
 	tags: Tag[];
 	isLoadingTags: boolean;
 	edgeTypes: EdgeType[];
@@ -49,8 +45,6 @@ function createSchemaStore() {
 		spaces: [],
 		isLoadingSpaces: false,
 		currentSpace: savedSpace,
-		spaceDetails: {},
-		spaceStatistics: {},
 		tags: [],
 		isLoadingTags: false,
 		edgeTypes: [],
@@ -96,28 +90,6 @@ function createSchemaStore() {
 		setCurrentSpace: (name: string | null) => {
 			update((s) => ({ ...s, currentSpace: name }));
 			persistCurrentSpace(name);
-		},
-		fetchSpaceDetail: async (name: string) => {
-			try {
-				const detail = await schemaService.spaces.getDetail(name);
-				update((s) => ({
-					...s,
-					spaceDetails: { ...s.spaceDetails, [name]: detail },
-				}));
-			} catch (err) {
-				console.error('Fetch space detail error:', err);
-			}
-		},
-		fetchSpaceStatistics: async (name: string) => {
-			try {
-				const statistics = await schemaService.spaces.getStatistics(name);
-				update((s) => ({
-					...s,
-					spaceStatistics: { ...s.spaceStatistics, [name]: statistics },
-				}));
-			} catch (err) {
-				console.error('Fetch space statistics error:', err);
-			}
 		},
 		fetchTags: async (spaceName: string) => {
 			update((s) => ({ ...s, isLoadingTags: true }));

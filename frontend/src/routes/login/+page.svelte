@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { get } from 'svelte/store';
 	import { t } from '$i18n';
 	import { goto } from '$app/navigation';
 	import { connectionStore } from '$stores/connection';
 
-	let username = $state('root');
+	let username = $state('');
 	let password = $state('');
 	let rememberMe = $state(false);
 	let isLoading = $state(false);
@@ -13,17 +14,10 @@
 
 	onMount(() => {
 		connectionStore.loadSavedConnection();
-		const saved = localStorage.getItem('graphdb_connection');
-		if (saved) {
-			try {
-				const info = JSON.parse(saved);
-				if (info.username) username = info.username;
-				if (info.password) password = info.password;
-				rememberMe = true;
-			} catch {
-				/* ignore */
-			}
-		}
+		const { connectionInfo, rememberMe: remembered } = get(connectionStore);
+		username = connectionInfo.username;
+		password = connectionInfo.password ?? '';
+		rememberMe = remembered;
 	});
 
 	async function handleSubmit(e: Event) {

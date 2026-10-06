@@ -699,7 +699,7 @@
 				<span>|</span>
 				<span
 					>{results.length}
-					{results.length === 1 ? 'statement' : 'statements'}</span
+					{t(results.length === 1 ? 'console.statement' : 'console.statements')}</span
 				>
 			</div>
 			<div class="flex-1 overflow-auto p-4 flex flex-col gap-3">
@@ -774,9 +774,9 @@
 										</table>
 									</div>
 								{:else}
-									<div class="text-xs text-green-600 dark:text-green-400">
-										OK
-									</div>
+<div class="text-xs text-green-600 dark:text-green-400">
+									{t('common.ok')}
+								</div>
 								{/if}
 							{/if}
 						</div>

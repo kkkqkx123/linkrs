@@ -295,7 +295,7 @@
 										>
 										<th
 											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>VID Type</th
+											>{t('schema.vidType')}</th
 										>
 										<th
 											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
@@ -631,7 +631,7 @@
 					<label
 						for="space-vid-type"
 						class="block text-sm text-gray-600 dark:text-gray-400 mb-1"
-						>VID Type</label
+						>{t('schema.vidType')}</label
 					>
 					<select
 						id="space-vid-type"
@@ -943,7 +943,7 @@
 						type="text"
 						bind:value={newIndexFields}
 						class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
-						placeholder="field1, field2"
+						placeholder={t('schema.fieldPlaceholder')}
 					/>
 				</div>
 			</div>

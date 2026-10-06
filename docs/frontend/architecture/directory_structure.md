@@ -248,7 +248,7 @@ utils/
 ├── function.ts                      # 通用工具函数
 ├── gql.ts                           # Cypher 查询生成
 ├── graphLayout.ts                   # 图布局算法封装
-├── http.ts                          # HTTP 请求封装（Axios）
+├── http.ts                          # 会话头构造与非 JSON 传输（导出 / SSE）
 ├── monacoCypher.ts                  # Monaco Cypher 语言与补全注册
 ├── monacoSetup.ts                   # Monaco 按需引入入口
 ├── parseData.ts                     # 图数据解析
@@ -260,7 +260,7 @@ utils/
 
 | 文件 | 用途 |
 |------|------|
-| `http.ts` | Axios 封装、请求/响应拦截、BigInt 解析 |
+| `http.ts` | 会话头构造与基址导出，供 SSE / 文件下载等绕过 codegen 的传输使用 |
 | `function.ts` | 通用工具函数 |
 | `gql.ts` | Cypher 查询语句生成 |
 | `parseData.ts` | 图数据解析与归一化 |

@@ -6,7 +6,7 @@
 
 import { envelope, type MockEntry, type MockRegistry } from '../index';
 import { scenarioIsEmpty } from '../scenario';
-import { demoEdgeTypes, demoSpace, demoTags, demoVertices } from '../fixtures';
+import { demoEdgeTypes, demoSpace, demoTags } from '../fixtures';
 
 const spaces = [{ id: 1, name: demoSpace, vid_type: 'STRING' }];
 
@@ -66,29 +66,6 @@ export const schemaHandlers: MockRegistry = {
 	'DELETE /api/v1/schema/spaces/{name}/edge-types/{edge_name}': {
 		message: 'edge type dropped',
 	} satisfies MockEntry,
-
-	'GET /api/v1/schema/spaces/{name}/details': envelope({
-		name: demoSpace,
-		vid_type: 'STRING',
-		tags: listOrEmpty(demoTags),
-		edge_types: listOrEmpty(demoEdgeTypes),
-		comment: 'demo space',
-	}) satisfies MockEntry,
-
-	'GET /api/v1/schema/spaces/{name}/statistics': envelope({
-		vertex_count: demoVertices.length,
-		edge_count: 3,
-		tag_count: demoTags.length,
-		edge_type_count: demoEdgeTypes.length,
-		tag_distribution: [
-			{ tag: 'person', count: 3 },
-			{ tag: 'company', count: 1 },
-		],
-		edge_type_distribution: [
-			{ type: 'knows', count: 2 },
-			{ type: 'works_at', count: 1 },
-		],
-	}) satisfies MockEntry,
 
 	'GET /api/v1/schema/spaces/{name}/indexes': envelope([
 		{
