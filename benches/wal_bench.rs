@@ -1,13 +1,15 @@
 //! Standalone WAL benchmark: fsync latency baseline and WAL durability cost
 //! under different sync policies, plus sequential replay-read throughput.
 //!
-//! Addresses the §2.2 gap: WAL previously only appeared inside import/rollback
-//! benches as a "persistent - memory" difference. Anchors the §一.4 hotspot
-//! (per-append fsync vs group commit / batched sync).
+//! WAL previously appeared only inside import/rollback benches as a
+//! "persistent - memory" difference. This suite isolates it: the cost of a
+//! per-append fsync barrier, and what a sync policy buys end to end.
 //!
-//! Uses public entry points only: a raw append+sync_all file (the per-append
-//! fsync pattern) and `GraphStorage::open_with_persistence` with each
-//! `SyncPolicy`, measuring batch insert throughput end-to-end.
+//! Uses public entry points only: a raw append+`sync_all` file as the
+//! synchronous-fsync baseline, and `GraphStorage::open_with_persistence` with
+//! each `SyncPolicy`, measuring batch insert throughput end to end. The raw
+//! baseline deliberately fsyncs metadata too; every log in the engine syncs
+//! data only, so it reads as an upper bound rather than the shipped path.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use graphdb::core::types::{EdgeTypeInfo, SpaceInfo, VertexId};
@@ -15,20 +17,12 @@ use graphdb::core::wal::SyncPolicy;
 use graphdb::core::{DataType, Edge};
 use graphdb::storage::{GraphStorage, StorageSchemaOps, StorageWriter};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
-/// Write a human-readable report into `benches/results/<bench_name>/`.
-fn write_results_report(bench_name: &str, filename: &str, content: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("benches")
-        .join("results")
-        .join(bench_name);
-    std::fs::create_dir_all(&dir).expect("create results dir");
-    let path = dir.join(filename);
-    std::fs::write(&path, content).expect("write results report");
-    path
-}
+#[path = "results_report.rs"]
+mod report;
+use report::write_results_report;
 
 const PAYLOAD_LEN: usize = 128;
 const EDGE_COUNT: usize = 2000;
@@ -57,7 +51,7 @@ fn bench_fsync_latency(c: &mut Criterion) {
     group.sample_size(30);
     group.warm_up_time(Duration::from_millis(500));
 
-    // The §一.4 pattern: one sync_all per append, no group commit.
+    // Synchronous baseline: one sync_all per append, no group commit.
     group.bench_function("append_plus_sync_all_per_op", |b| {
         let path = tmp.path().join("raw_sync.bin");
         let mut file = std::fs::OpenOptions::new()
@@ -97,7 +91,7 @@ fn open_store(path: &Path, sync_policy: Option<SyncPolicy>) -> GraphStorage {
 }
 
 fn bench_sync_policy_ingest(c: &mut Criterion) {
-    let mut report = String::from("WAL sync policy ingest throughput (debug build)\n\n");
+    let mut report = String::from("WAL sync policy ingest throughput (bench profile)\n\n");
     report.push_str(&format!(
         "workload: batch_insert_edges of {} edges into a fresh store\n\n",
         EDGE_COUNT

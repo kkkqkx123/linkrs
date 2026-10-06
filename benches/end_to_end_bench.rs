@@ -3,18 +3,12 @@ use graphdb_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexI
 use graphdb_core::vertex_edge_path::Tag;
 use graphdb_core::{DataType, Edge, Value, Vertex};
 use graphdb_storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
-use std::time::Duration;
 
-fn create_benchmark_group<'a>(
-    c: &'a mut Criterion,
-    name: &str,
-) -> criterion::BenchmarkGroup<'a, criterion::measurement::WallTime> {
-    let mut group = c.benchmark_group(name);
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(30);
-    group.warm_up_time(Duration::from_secs(1));
-    group
-}
+#[path = "bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
+
+const SAMPLE_SIZE: usize = 30;
 
 fn setup_vertices(storage: &mut GraphStorage, space: &str, count: usize) {
     for i in 0..count {
@@ -35,7 +29,7 @@ fn setup_vertices(storage: &mut GraphStorage, space: &str, count: usize) {
 }
 
 fn bench_data_loading_workflow(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "e2e_data_loading");
+    let mut group = create_benchmark_group(c, "e2e_data_loading", SAMPLE_SIZE);
 
     for (vertices, edges_per) in &[(1000usize, 5usize), (5000, 3)] {
         group.bench_function(format!("load_1k_v{}_e{}", vertices, edges_per), |b| {
@@ -90,7 +84,7 @@ fn bench_data_loading_workflow(c: &mut Criterion) {
 }
 
 fn bench_query_analysis_workflow(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "e2e_query_analysis");
+    let mut group = create_benchmark_group(c, "e2e_query_analysis", SAMPLE_SIZE);
 
     let mut storage = GraphStorage::new().expect("storage init");
     let space = "bench_query_analysis";
@@ -127,7 +121,7 @@ fn bench_query_analysis_workflow(c: &mut Criterion) {
 }
 
 fn bench_search_workflow(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "e2e_search");
+    let mut group = create_benchmark_group(c, "e2e_search", SAMPLE_SIZE);
 
     let mut storage = GraphStorage::new().expect("storage init");
     let space = "bench_search";
@@ -166,7 +160,7 @@ fn bench_search_workflow(c: &mut Criterion) {
 }
 
 fn bench_write_transaction_workflow(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "e2e_write_transaction");
+    let mut group = create_benchmark_group(c, "e2e_write_transaction", SAMPLE_SIZE);
 
     group.bench_function("insert_and_update_transaction", |b| {
         b.iter(|| {
@@ -201,7 +195,7 @@ fn bench_write_transaction_workflow(c: &mut Criterion) {
 }
 
 fn bench_concurrent_mixed_workload(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "e2e_concurrent_workload");
+    let mut group = create_benchmark_group(c, "e2e_concurrent_workload", SAMPLE_SIZE);
 
     let mut storage = GraphStorage::new().expect("storage init");
     let space = "bench_concurrent";

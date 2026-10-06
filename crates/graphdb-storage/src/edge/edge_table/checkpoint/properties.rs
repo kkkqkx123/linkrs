@@ -2,6 +2,7 @@
 
 use super::super::core::EdgeStore;
 use super::layout::props_group_path;
+use crate::edge::csr_with_properties::FSST_MAX_SYMBOLS;
 use graphdb_core::StorageResult;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -298,7 +299,7 @@ impl EdgeStore {
             for column in schema.iter().map(|s| s.name.clone()).collect::<Vec<_>>() {
                 if let Some(enc) = self.properties.column_encoding_type(&column) {
                     if enc != crate::encoding::EncodingType::None {
-                        let _ = shard.apply_encoding_to_column(&column, enc, 255);
+                        let _ = shard.apply_encoding_to_column(&column, enc, FSST_MAX_SYMBOLS);
                     }
                 }
             }
@@ -414,7 +415,7 @@ impl EdgeStore {
         for name in dirty_columns {
             if let Some(enc) = live.column_encoding_type(name) {
                 if enc != crate::encoding::EncodingType::None {
-                    let _ = shard.apply_encoding_to_column(name, enc, 255);
+                    let _ = shard.apply_encoding_to_column(name, enc, FSST_MAX_SYMBOLS);
                 }
             }
             shard.refresh_column_stats_for(name);
@@ -535,7 +536,9 @@ impl EdgeStore {
         }
         for (column, enc) in encodings {
             if self.properties.has_property(&column) {
-                let _ = self.properties.apply_encoding_to_column(&column, enc, 255);
+                let _ = self
+                    .properties
+                    .apply_encoding_to_column(&column, enc, FSST_MAX_SYMBOLS);
             }
         }
         self.properties.restore_prop_ids(&prop_ids);

@@ -65,25 +65,23 @@ pub(super) fn handle(
                         if current_step >= steps {
                             continue;
                         }
-                        if let Ok(edges) =
-                            reader.get_node_edges(space_name, &current, direction, edge_types)
-                        {
-                            for e in &edges {
-                                let neighbor_id = match direction {
-                                    EdgeDirection::Out => *e.dst(),
-                                    EdgeDirection::In => *e.src(),
-                                    EdgeDirection::Both => {
-                                        if e.src() == &current {
-                                            *e.dst()
-                                        } else {
-                                            *e.src()
-                                        }
+                        let edges =
+                            reader.get_node_edges(space_name, &current, direction, edge_types)?;
+                        for e in &edges {
+                            let neighbor_id = match direction {
+                                EdgeDirection::Out => *e.dst(),
+                                EdgeDirection::In => *e.src(),
+                                EdgeDirection::Both => {
+                                    if e.src() == &current {
+                                        *e.dst()
+                                    } else {
+                                        *e.src()
                                     }
-                                };
-                                history_edges.push((e.clone(), current_step + 1));
-                                if visited.insert(neighbor_id) && current_step + 1 < steps {
-                                    frontier.push((neighbor_id, current_step + 1));
                                 }
+                            };
+                            history_edges.push((e.clone(), current_step + 1));
+                            if visited.insert(neighbor_id) && current_step + 1 < steps {
+                                frontier.push((neighbor_id, current_step + 1));
                             }
                         }
                     }

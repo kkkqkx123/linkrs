@@ -19,18 +19,12 @@ use std::collections::HashMap;
 use std::env;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
-fn create_benchmark_group<'a>(
-    c: &'a mut Criterion,
-    name: &str,
-) -> criterion::BenchmarkGroup<'a, criterion::measurement::WallTime> {
-    let mut group = c.benchmark_group(name);
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(50);
-    group.warm_up_time(Duration::from_secs(1));
-    group
-}
+#[path = "bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
+
+const SAMPLE_SIZE: usize = 50;
 
 fn setup_graph(vertex_count: usize, edges_per_vertex: usize) -> GraphStorage {
     let mut storage = GraphStorage::new().expect("storage init");
@@ -158,7 +152,7 @@ fn setup_large_graph(vertex_count: u64, edges_per_vertex: usize) -> GraphStorage
 }
 
 fn bench_simple_query_parse(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "query_parse");
+    let mut group = create_benchmark_group(c, "query_parse", SAMPLE_SIZE);
     let storage = setup_graph(100, 3);
 
     group.bench_function("parse_simple_vertex_query", |b| {
@@ -185,7 +179,7 @@ fn bench_simple_query_parse(c: &mut Criterion) {
 }
 
 fn bench_query_data_access(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "query_data_access");
+    let mut group = create_benchmark_group(c, "query_data_access", SAMPLE_SIZE);
 
     for vertex_count in &[100, 1000] {
         let storage = setup_graph(*vertex_count, 3);
@@ -205,7 +199,7 @@ fn bench_query_data_access(c: &mut Criterion) {
 }
 
 fn bench_path_traversal(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "path_traversal");
+    let mut group = create_benchmark_group(c, "path_traversal", SAMPLE_SIZE);
     let storage = setup_graph(200, 5);
 
     for hop_count in &[2usize, 3] {
@@ -224,7 +218,7 @@ fn bench_path_traversal(c: &mut Criterion) {
 }
 
 fn bench_aggregation_queries(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "aggregation");
+    let mut group = create_benchmark_group(c, "aggregation", SAMPLE_SIZE);
     let storage = setup_graph(500, 3);
 
     group.bench_function("scan_edges_by_type", |b| {
@@ -247,7 +241,7 @@ fn bench_aggregation_queries(c: &mut Criterion) {
 }
 
 fn bench_large_vertex_scan(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "large_vertex_scan");
+    let mut group = create_benchmark_group(c, "large_vertex_scan", SAMPLE_SIZE);
     for &vertex_count in &[10_000u64, 100_000] {
         let space_name = format!("large_q{}e3", vertex_count);
         let storage = setup_large_graph(vertex_count, 3);
@@ -274,7 +268,7 @@ fn bench_large_vertex_scan(c: &mut Criterion) {
 }
 
 fn bench_large_count_operations(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "large_count");
+    let mut group = create_benchmark_group(c, "large_count", SAMPLE_SIZE);
     for &vertex_count in &[10_000u64, 100_000] {
         let space_name = format!("large_q{}e3", vertex_count);
         let storage = setup_large_graph(vertex_count, 3);
@@ -299,7 +293,7 @@ fn bench_large_count_operations(c: &mut Criterion) {
 }
 
 fn bench_large_edge_density(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "large_edge_density");
+    let mut group = create_benchmark_group(c, "large_edge_density", SAMPLE_SIZE);
     for &(label, edges_per_vertex) in &[("sparse_1k_x3", 3usize), ("dense_1k_x50", 50)] {
         let space_name = format!("large_q{}e{}", 1_000u64, edges_per_vertex);
         let storage = setup_large_graph(1_000, edges_per_vertex);
@@ -641,7 +635,7 @@ fn run_query_and_accumulate(
 
 /// B1: scan + filter (large vertex scan with a pushdown predicate).
 fn bench_b1_scan_filter(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "B1_scan_filter");
+    let mut group = create_benchmark_group(c, "B1_scan_filter", SAMPLE_SIZE);
     let (mut pipeline, space) = setup_query_pipeline(setup_query_graph());
     let accum = RefCell::new(Accum::default());
     let query = "MATCH (n:Node) WHERE n.value > 1000.0 RETURN n.name";
@@ -654,7 +648,7 @@ fn bench_b1_scan_filter(c: &mut Criterion) {
 
 /// B2: index-style point lookup / neighborhood expansion.
 fn bench_b2_point_lookup(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "B2_point_lookup");
+    let mut group = create_benchmark_group(c, "B2_point_lookup", SAMPLE_SIZE);
     let (mut pipeline, space) = setup_query_pipeline(setup_query_graph());
     let accum = RefCell::new(Accum::default());
     let query = "MATCH (a:Node)-[r:Link]->(b:Node) WHERE id(a) == 42 RETURN b.name, r.weight";
@@ -667,7 +661,7 @@ fn bench_b2_point_lookup(c: &mut Criterion) {
 
 /// B3: aggregation (count / sum over the vertex scan).
 fn bench_b3_aggregation(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "B3_aggregation");
+    let mut group = create_benchmark_group(c, "B3_aggregation", SAMPLE_SIZE);
     let (mut pipeline, space) = setup_query_pipeline(setup_query_graph());
     let count_accum = RefCell::new(Accum::default());
     let sum_accum = RefCell::new(Accum::default());
@@ -688,7 +682,7 @@ fn bench_b3_aggregation(c: &mut Criterion) {
 
 /// B4: sort + TopN.
 fn bench_b4_sort_topn(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "B4_sort_topn");
+    let mut group = create_benchmark_group(c, "B4_sort_topn", SAMPLE_SIZE);
     let (mut pipeline, space) = setup_query_pipeline(setup_query_graph());
     let accum = RefCell::new(Accum::default());
     let query = "MATCH (n:Node) RETURN n.name, n.value ORDER BY n.value DESC LIMIT 10";
@@ -701,7 +695,7 @@ fn bench_b4_sort_topn(c: &mut Criterion) {
 
 /// B5: multi-hop path traversal (2-hop from a seed vertex).
 fn bench_b5_path_traversal(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "B5_path_traversal");
+    let mut group = create_benchmark_group(c, "B5_path_traversal", SAMPLE_SIZE);
     let (mut pipeline, space) = setup_query_pipeline(setup_query_graph());
     let accum = RefCell::new(Accum::default());
     let query =
@@ -715,7 +709,7 @@ fn bench_b5_path_traversal(c: &mut Criterion) {
 
 /// B6: high edge density workload (full edge scan + count).
 fn bench_b6_edge_density(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "B6_edge_density");
+    let mut group = create_benchmark_group(c, "B6_edge_density", SAMPLE_SIZE);
     let (mut pipeline, space) = setup_query_pipeline(setup_query_graph());
     let accum = RefCell::new(Accum::default());
     let query = "MATCH ()-[r:Link]->() RETURN count(r)";
@@ -729,7 +723,7 @@ fn bench_b6_edge_density(c: &mut Criterion) {
 /// B7: mixed read/write (DML) scenario: insert -> read -> delete, cycling
 /// over a rotating id range to avoid key collisions across iterations.
 fn bench_b7_mixed_rw(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "B7_mixed_rw");
+    let mut group = create_benchmark_group(c, "B7_mixed_rw", SAMPLE_SIZE);
     let (mut pipeline, space) = setup_query_pipeline(setup_query_graph());
     let accum = RefCell::new(Accum::default());
     let mut counter = 0u64;

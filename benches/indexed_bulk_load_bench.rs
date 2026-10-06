@@ -6,18 +6,12 @@ use graphdb_core::vertex_edge_path::Tag;
 use graphdb_core::{DataType, Value, Vertex};
 use graphdb_storage::{GraphStorage, StorageSchemaOps, StorageWriter};
 use std::sync::Arc;
-use std::time::Duration;
 
-fn create_benchmark_group<'a>(
-    c: &'a mut Criterion,
-    name: &str,
-) -> criterion::BenchmarkGroup<'a, criterion::measurement::WallTime> {
-    let mut group = c.benchmark_group(name);
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(20);
-    group.warm_up_time(Duration::from_secs(1));
-    group
-}
+#[path = "bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
+
+const SAMPLE_SIZE: usize = 20;
 
 fn indexed_storage() -> GraphStorage {
     let mut storage = GraphStorage::new().expect("storage should initialize");
@@ -86,7 +80,7 @@ fn build_vertex(id: i64) -> Vertex {
 /// statement cost must stay flat as the number of already-loaded vertices
 /// (and thus generations) grows.
 fn bench_indexed_bulk_load(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "indexed_bulk_load");
+    let mut group = create_benchmark_group(c, "indexed_bulk_load", SAMPLE_SIZE);
     for vertex_count in [1_000usize, 2_000, 5_000, 10_000] {
         group.throughput(Throughput::Elements(vertex_count as u64));
         group.bench_with_input(

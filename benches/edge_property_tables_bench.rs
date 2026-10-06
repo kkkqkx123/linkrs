@@ -1,8 +1,8 @@
 //! Edge property tables: benchmark-first decision suite.
 //!
-//! One plain-main bench (harness = false) covering the seven open items in
-//! `docs/plan/edge_property_tables_benchmarks.md`. Small data on purpose:
-//! only the contrast matters, not absolute throughput.
+//! One plain-main bench (harness = false) covering the seven open decisions
+//! about edge property tables. Small data on purpose: only the contrast
+//! matters, not absolute throughput.
 //!
 //! Convention: 11 iterations, median reported, machine + core count printed.
 //! Run with:
@@ -796,5 +796,5 @@ fn main() {
     bench_b5();
     bench_b6();
     bench_b7();
-    println!("\nresult: per-section gates in docs/plan/edge_property_tables_benchmarks.md");
+    println!("\nresult: per-section pass/fail gates printed above");
 }

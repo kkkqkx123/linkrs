@@ -4,7 +4,7 @@
 use super::record_form_policy::{validate_record_form_target, RecordForm};
 use crate::types::StoragePropertyDef;
 use graphdb_core::types::{EdgeStrategy, LabelId, VertexId};
-use graphdb_core::{Edge, Value};
+use graphdb_core::Value;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -13,21 +13,6 @@ pub struct EdgeRecord {
     pub dst_vid: VertexId,
     pub rank: i64,
     pub properties: Vec<(Arc<str>, Value)>,
-}
-
-impl From<&EdgeRecord> for Edge {
-    fn from(record: &EdgeRecord) -> Self {
-        let props: std::collections::HashMap<Arc<str>, Value> =
-            record.properties.iter().cloned().collect();
-
-        Edge {
-            src: record.src_vid,
-            dst: record.dst_vid,
-            edge_type: String::new(),
-            ranking: record.rank,
-            props,
-        }
-    }
 }
 
 /// Storage direction of an edge table, derived from the CSR strategies.

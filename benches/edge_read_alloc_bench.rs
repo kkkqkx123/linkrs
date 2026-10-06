@@ -12,7 +12,6 @@ use graphdb::core::vertex_edge_path::Tag;
 use graphdb::core::{DataType, Edge, Value, Vertex};
 use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,17 +40,9 @@ unsafe impl GlobalAlloc for CountingAlloc {
 #[global_allocator]
 static GLOBAL: CountingAlloc = CountingAlloc;
 
-/// Write a human-readable report into `benches/results/<bench_name>/`.
-fn write_results_report(bench_name: &str, filename: &str, content: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("benches")
-        .join("results")
-        .join(bench_name);
-    std::fs::create_dir_all(&dir).expect("create results dir");
-    let path = dir.join(filename);
-    std::fs::write(&path, content).expect("write results report");
-    path
-}
+#[path = "results_report.rs"]
+mod report;
+use report::write_results_report;
 
 const VERTEX_COUNT: usize = 1000;
 const EDGES_PER_VERTEX: usize = 2;
@@ -160,7 +151,7 @@ fn bench_edge_read(c: &mut Criterion) {
     let calls_per_op = ALLOC_COUNT.load(Ordering::Relaxed) as f64 / iters as f64;
 
     let mut report =
-        String::from("edge property read path allocation accounting (debug build)\n\n");
+        String::from("edge property read path allocation accounting (bench profile)\n\n");
     report.push_str(&format!(
         "dataset: {} vertices, {} edges/vertex, {} edge properties\n\n",
         VERTEX_COUNT, EDGES_PER_VERTEX, PROP_COUNT

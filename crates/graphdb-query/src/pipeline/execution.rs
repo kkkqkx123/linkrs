@@ -85,23 +85,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
     }
 
-    pub fn execute_query_with_metrics(
-        &mut self,
-        query_text: &str,
-    ) -> DBResult<(ExecutionResult, QueryMetrics)> {
-        self.execute_query_with_session(query_text, 0, None)
-            .map(|(result, metrics, _)| (result, metrics))
-    }
-
-    pub fn execute_query_with_session(
-        &mut self,
-        query_text: &str,
-        session_id: i64,
-        space_info: Option<SpaceInfo>,
-    ) -> DBResult<(ExecutionResult, QueryMetrics, QueryProfile)> {
-        self.execute_query_with_profile(query_text, session_id, space_info)
-    }
-
+    /// Execute a statement end to end and report its stage profile.
+    ///
+    /// The only entry that produces a [`QueryProfile`]: stage timings and the
+    /// metric counters are recorded here so embedded and API callers get the
+    /// same picture the transport layer shows, with no second profile
+    /// assembly anywhere else. `space_info` selects the target space and is
+    /// `None` for statements that do not need one.
     pub fn execute_query_with_profile(
         &mut self,
         query_text: &str,

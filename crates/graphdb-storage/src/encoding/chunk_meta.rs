@@ -161,6 +161,10 @@ pub struct ChunkProfile {
     pub run_ratio: Option<f64>,
     pub distinct: Option<usize>,
     pub total_str_len: Option<usize>,
+    /// Share of float values ALP cannot encode exactly. `None` for
+    /// non-float columns; a float column with no recorded rate must not
+    /// select ALP, because an unmeasured exception rate is not a pass.
+    pub alp_exception_rate: Option<f64>,
     pub hot_update: bool,
 }
 
@@ -176,6 +180,7 @@ impl Default for ChunkProfile {
             run_ratio: None,
             distinct: None,
             total_str_len: None,
+            alp_exception_rate: None,
             hot_update: false,
         }
     }
@@ -202,6 +207,11 @@ pub fn profile_chunk(
         DataType::SmallInt | DataType::Int | DataType::BigInt
     );
     let is_str = matches!(data_type, DataType::String | DataType::FixedString(_));
+    let is_float = matches!(data_type, DataType::Float | DataType::Double);
+    // ALP fits its parameters over the whole value set, so the rate has to be
+    // measured, not inferred from bounds. Only the bare f64 lane is kept
+    // (8 bytes per row) instead of every `Value`.
+    let mut float_lane: Vec<Option<f64>> = Vec::new();
     if is_str {
         distinct_str = Some(std::collections::HashSet::new());
     }
@@ -214,10 +224,22 @@ pub fn profile_chunk(
 
     for v in values {
         match v {
-            None => profile.null_count += 1,
+            None => {
+                profile.null_count += 1;
+                if is_float {
+                    float_lane.push(None);
+                }
+            }
             Some(val) => {
                 profile.num_values += 1;
                 total += 1;
+                if is_float {
+                    float_lane.push(match &val {
+                        Value::Double(v) => Some(*v),
+                        Value::Float(v) => Some(f64::from(*v)),
+                        _ => None,
+                    });
+                }
                 if profile.min.is_none()
                     || crate::vertex::column::compare_values(
                         &val,
@@ -322,6 +344,10 @@ pub fn profile_chunk(
             profile.distinct = Some(s.len());
         }
         profile.total_str_len = Some(str_len);
+    }
+    if is_float && !float_lane.is_empty() {
+        profile.alp_exception_rate =
+            Some(crate::encoding::AlpColumn::analyze_f64(&float_lane).exception_rate());
     }
     profile
 }

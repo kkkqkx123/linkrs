@@ -189,39 +189,41 @@ pub(crate) fn bidir_bfs_shortest_path(
                 if current_npath.len() >= cfg.max_depth {
                     continue;
                 }
-                if let Ok(edges) = storage.get_node_edges(
+                let edges = storage.get_node_edges(
                     cfg.space_name,
                     &current_id,
                     forward_dir,
                     cfg.edge_type_filter.unwrap_or(&[]),
-                ) {
-                    for edge in &edges {
-                        let neighbor_id = edge.dst();
-                        if left_visited.contains_key(neighbor_id) {
-                            continue;
-                        }
-                        let Some(neighbor_tag) =
-                            crate::executor::traversal::graph_reader::resolve_neighbor_tag(
-                                storage,
-                                cfg.space_name,
-                                edge,
-                                neighbor_id,
-                                cfg.vertex_tag,
-                            )
-                        else {
-                            continue;
-                        };
-                        if let Ok(Some(neighbor_vertex)) =
-                            storage.get_vertex(cfg.space_name, &neighbor_tag, neighbor_id)
-                        {
-                            let new_npath = Arc::new(NPath::extend(
-                                current_npath.clone(),
-                                Arc::new((*edge).clone()),
-                                Arc::new(neighbor_vertex),
-                            ));
-                            left_next.push((*neighbor_id, new_npath.clone()));
-                            left_visited.insert(*neighbor_id, new_npath);
-                        }
+                )?;
+                for edge in &edges {
+                    let neighbor_id = edge.dst();
+                    if left_visited.contains_key(neighbor_id) {
+                        continue;
+                    }
+                    let Some(neighbor_tag) =
+                        crate::executor::traversal::graph_reader::resolve_neighbor_tag(
+                            storage,
+                            cfg.space_name,
+                            edge,
+                            neighbor_id,
+                            cfg.vertex_tag,
+                        )
+                    else {
+                        continue;
+                    };
+                    // An invisible neighbor is legitimately skipped, but a read
+                    // failure must abort: treating it as "no such vertex"
+                    // would silently drop paths from the result.
+                    if let Some(neighbor_vertex) =
+                        storage.get_vertex(cfg.space_name, &neighbor_tag, neighbor_id)?
+                    {
+                        let new_npath = Arc::new(NPath::extend(
+                            current_npath.clone(),
+                            Arc::new((*edge).clone()),
+                            Arc::new(neighbor_vertex),
+                        ));
+                        left_next.push((*neighbor_id, new_npath.clone()));
+                        left_visited.insert(*neighbor_id, new_npath);
                     }
                 }
             }
@@ -273,43 +275,42 @@ pub(crate) fn bidir_bfs_shortest_path(
                     continue;
                 }
 
-                if let Ok(edges) = storage.get_node_edges(
+                let edges = storage.get_node_edges(
                     cfg.space_name,
                     &current_id,
                     backward_dir,
                     cfg.edge_type_filter.unwrap_or(&[]),
-                ) {
-                    for edge in &edges {
-                        let neighbor_id = if edge.dst() == &current_id {
-                            edge.src()
-                        } else {
-                            edge.dst()
-                        };
-                        if right_visited.contains_key(neighbor_id) {
-                            continue;
-                        }
-                        let Some(neighbor_tag) =
-                            crate::executor::traversal::graph_reader::resolve_neighbor_tag(
-                                storage,
-                                cfg.space_name,
-                                edge,
-                                neighbor_id,
-                                cfg.vertex_tag,
-                            )
-                        else {
-                            continue;
-                        };
-                        if let Ok(Some(neighbor_vertex)) =
-                            storage.get_vertex(cfg.space_name, &neighbor_tag, neighbor_id)
-                        {
-                            let new_npath = Arc::new(NPath::extend(
-                                current_npath.clone(),
-                                Arc::new((*edge).clone()),
-                                Arc::new(neighbor_vertex),
-                            ));
-                            right_next.push((*neighbor_id, new_npath.clone()));
-                            right_visited.insert(*neighbor_id, new_npath);
-                        }
+                )?;
+                for edge in &edges {
+                    let neighbor_id = if edge.dst() == &current_id {
+                        edge.src()
+                    } else {
+                        edge.dst()
+                    };
+                    if right_visited.contains_key(neighbor_id) {
+                        continue;
+                    }
+                    let Some(neighbor_tag) =
+                        crate::executor::traversal::graph_reader::resolve_neighbor_tag(
+                            storage,
+                            cfg.space_name,
+                            edge,
+                            neighbor_id,
+                            cfg.vertex_tag,
+                        )
+                    else {
+                        continue;
+                    };
+                    if let Some(neighbor_vertex) =
+                        storage.get_vertex(cfg.space_name, &neighbor_tag, neighbor_id)?
+                    {
+                        let new_npath = Arc::new(NPath::extend(
+                            current_npath.clone(),
+                            Arc::new((*edge).clone()),
+                            Arc::new(neighbor_vertex),
+                        ));
+                        right_next.push((*neighbor_id, new_npath.clone()));
+                        right_visited.insert(*neighbor_id, new_npath);
                     }
                 }
             }

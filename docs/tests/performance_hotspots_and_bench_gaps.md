@@ -4,11 +4,15 @@
 **范围**: 全工作区（graphdb-storage / graphdb-transaction / graphdb-query / graphdb-fulltext / vector-search / graphdb-server）
 **说明**: 本文档基于当前代码库的静态排查，给出性能开销较大的环节定位与对应需要补充的基准测试。与 `docs/tests/benches/` 下早期路线图文档互补，不重复其内容。
 
+> **状态提示**: 本文记录的是 2026-10-02 的排查快照。随后多轮优化已落地，第一、三、四节中边属性读路径、提交临界区、WAL 同步三处均已改造（结论见 `docs/plan/performance_optimization_remaining_plan.md` 第六节）。下文保留原始定位与行号以便追溯，引用时请先核对当前代码。
+
 ---
 
 ## 一、性能开销较大的环节（按预期收益排序）
 
 ### 1. 边属性读取路径的逐行克隆（存储层，最高优先级）
+
+> **已修复**: 列名改为共享 `Arc<str>`，读入口收敛为四条；编码选择改为逐 chunk 流式剖面。下表为修复前的定位。
 
 | 位置 | 问题 |
 |---|---|
@@ -30,6 +34,8 @@
 
 ### 3. 事务提交临界区与线性扫描（事务层）
 
+> **部分收敛**: `committed_write_sets` 已改为按 commit_ts 排序的 `BTreeMap`，全量 prune 已批量化（每 64 次请求一次）。全局 `commit_lock` 经分析为有意设计（按写集 key 分片无法关闭 check-then-publish 窗口），不再作为待改项。下表为收敛前的定位。
+
 | 位置 | 问题 |
 |---|---|
 | `crates/graphdb-transaction/src/certify.rs:130-133` | 全局 `commit_lock: Mutex<()>`，所有并发写事务在 check-then-publish 临界区串行化（WAL fsync 已在锁外，但临界区本身不分片） |
@@ -39,6 +45,8 @@
 | `crates/graphdb-transaction/src/wal/parser.rs:760-762` | `get_entry_by_lsn` 对全部 WAL 条目线性查找，应改 BTreeMap |
 
 ### 4. 每次写入同步 fsync（存储层 WAL）
+
+> **已修复**: 索引 WAL 改为批量追加 + 一次 `sync_data`；边表 WAL 与事务 WAL 的 append-only 日志统一为 `sync_data`。`persistence.rs` 的原子写与父目录 fsync 属元数据路径，按设计保留 `sync_all`。下表为修复前的定位。
 
 | 位置 | 问题 |
 |---|---|

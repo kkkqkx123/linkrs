@@ -76,6 +76,11 @@ impl RowVisibility {
 /// Row slot holding no edge mapping inside the dense edge map.
 const UNMAPPED_ROW: u32 = u32::MAX;
 
+/// FSST symbol-table ceiling applied whenever a column is encoded. One
+/// value for every encode site, so a column encoded by maintenance and the
+/// same column encoded by a checkpoint share identical parameters.
+pub(crate) const FSST_MAX_SYMBOLS: usize = 255;
+
 /// Exported property row: `(create_ts, delete_ts, per-column values)`.
 pub type ExportedRow = (Timestamp, Option<Timestamp>, Vec<(Arc<str>, Option<Value>)>);
 

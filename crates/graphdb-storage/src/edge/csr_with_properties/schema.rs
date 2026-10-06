@@ -6,6 +6,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 impl CsrWithProperties {
+    /// Build the columnar store from its schema.
+    ///
+    /// `property_schema` owns every column name: `column_index`, the name
+    /// index and the dump format all read from it. `Column` also carries a
+    /// name, but only to label decode errors, so it is filled here and
+    /// refreshed on rename without any other code reading it.
     pub fn new(property_schema: Vec<PropertySchema>) -> Self {
         let mut property_columns = Vec::with_capacity(property_schema.len());
         for schema in &property_schema {
@@ -216,6 +222,8 @@ impl CsrWithProperties {
             .copied()
             .ok_or_else(|| StorageError::column_not_found(old_name.to_string()))?;
         self.property_schema[idx].name = new_name.into();
+        // Mirror into the column so its decode errors keep naming the column
+        // the reader asked for.
         if let Some(col) = self.property_columns.get_mut(idx) {
             col.name = new_name.to_string();
         }

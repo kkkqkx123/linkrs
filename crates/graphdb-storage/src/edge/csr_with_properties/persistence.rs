@@ -1,4 +1,4 @@
-use super::{CsrWithProperties, RowVisibility};
+use super::{CsrWithProperties, RowVisibility, FSST_MAX_SYMBOLS};
 use graphdb_core::types::{EdgeId, INVALID_EDGE_ID};
 use graphdb_core::{StorageError, StorageResult, Value};
 use std::collections::HashSet;
@@ -35,15 +35,12 @@ impl CsrWithProperties {
         // choice and its last refreshed statistics.
         buf.extend_from_slice(&(self.property_columns.len() as u32).to_le_bytes());
         for (idx, col) in self.property_columns.iter().enumerate() {
-            // Column name keys the payload to the schema entry on load.
-            buf.extend_from_slice(&(col.name.len() as u32).to_le_bytes());
-            buf.extend_from_slice(col.name.as_bytes());
-            let prop_id = self
-                .property_schema
-                .get(idx)
-                .map(|schema| schema.prop_id)
-                .unwrap_or(-1);
-            buf.extend_from_slice(&prop_id.to_le_bytes());
+            // The schema entry is the single name authority: the loader keys
+            // the payload back through `column_index`, which is built from it.
+            let schema = &self.property_schema[idx];
+            buf.extend_from_slice(&(schema.name.len() as u32).to_le_bytes());
+            buf.extend_from_slice(schema.name.as_bytes());
+            buf.extend_from_slice(&schema.prop_id.to_le_bytes());
             buf.push(col.encoding_type().to_u8());
             let rows = self.visibility.len();
             buf.extend_from_slice(&(rows as u32).to_le_bytes());
@@ -294,13 +291,13 @@ impl CsrWithProperties {
                             ));
                         }
                         if encoding != crate::encoding::EncodingType::None {
-                            self.apply_encoding_to_column(&name, encoding, 255)?;
+                            self.apply_encoding_to_column(&name, encoding, FSST_MAX_SYMBOLS)?;
                         }
                         let col = &mut self.property_columns[col_idx];
                         col.set_stats(stats);
                     } else if has_stats == 0 {
                         if encoding != crate::encoding::EncodingType::None {
-                            self.apply_encoding_to_column(&name, encoding, 255)?;
+                            self.apply_encoding_to_column(&name, encoding, FSST_MAX_SYMBOLS)?;
                         }
                     } else {
                         return Err(StorageError::deserialize_error(format!(

@@ -6,23 +6,24 @@ Performance benchmark suite for GraphDB using Criterion.rs
 
 ```
 benches/
-├── common/                           # Shared utilities
-│   ├── mod.rs                       # Module exports
-│   ├── data_generator.rs            # Data generation utilities
-│   ├── bench_utils.rs               # Benchmark helper functions
-│   └── test_context.rs              # Test context setup
+├── bench_group.rs                   # Shared criterion group setup
+├── results_report.rs                # Shared results.txt writer
 ├── data/                            # Benchmark data (GQL files)
 │   ├── generate_benchmark_data.py   # Data generation script
 │   └── bench_*.gql                  # Generated data files
-├── lib.rs                           # Library exports
+├── results/                         # Per-suite reports written by benches
 ├── storage_bench.rs                 # Storage layer benchmarks
 ├── transaction_bench.rs             # Transaction layer benchmarks
 ├── query_bench.rs                   # Query engine benchmarks
 ├── search_bench.rs                  # Search (fulltext + vector) benchmarks
 ├── api_bench.rs                     # API layer benchmarks
-├── end_to_end_bench.rs             # End-to-end workflow benchmarks
+├── end_to_end_bench.rs              # End-to-end workflow benchmarks
 └── README.md                        # This file
 ```
+
+Cargo compiles each `[[bench]]` as its own crate, so the two shared modules
+are pulled in per target with `#[path = "..."] mod ...;` rather than being
+declared as module roots.
 
 ## Running Benchmarks
 
@@ -52,6 +53,35 @@ cargo bench --bench api_bench
 
 # End-to-end workflow benchmarks
 cargo bench --bench end_to_end_bench
+```
+
+### Diagnostic Suites
+
+These isolate one subsystem each and write a short report under
+`benches/results/<suite>/results.txt`:
+
+```bash
+cargo bench --bench query_stage_bench        # parse / bind / plan+opt / execute
+cargo bench --bench csr_perf_bench           # CSR storage internals
+cargo bench --bench traversal_perf_bench     # 1-2 hop traversal scale curve
+cargo bench --bench neighbor_batch_bench     # adjacency + batch property reads
+cargo bench --bench edge_property_tables_bench
+cargo bench --bench edge_read_alloc_bench    # per-read heap bytes / allocations
+cargo bench --bench edge_point_write_bench
+cargo bench --bench edge_scan_speedup_bench
+cargo bench --bench edge_group_commit_bench
+cargo bench --bench write_gate_bench
+cargo bench --bench wal_bench                # fsync latency + sync policies
+cargo bench --bench txn_conflict_bench       # MVCC write-write contention
+cargo bench --bench crash_recovery_bench     # open + recover latency
+cargo bench --bench rollback_bench
+cargo bench --bench operator_bench
+cargo bench --bench accumulation_bench
+cargo bench --bench import_bench
+cargo bench --bench indexed_bulk_load_bench
+cargo bench --bench parallel_scale_bench
+cargo bench --bench storage_read_baseline
+cargo bench --bench columnar_necessity_bench
 ```
 
 ### Run Specific Benchmark
@@ -353,5 +383,5 @@ When adding new benchmarks:
 
 ---
 
-**Last Updated**: 2026-06-18  
+**Last Updated**: 2026-10-06  
 **Maintained By**: GraphDB Team

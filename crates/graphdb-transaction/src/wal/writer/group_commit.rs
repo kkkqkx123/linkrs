@@ -40,9 +40,11 @@ struct GroupCommitState {
 }
 
 impl GroupCommitCoordinator {
+    /// Barrier for the whole group: one `sync_data` covers every append the
+    /// group staged, since the log is append-only redo.
     fn sync_file(&self) -> WalResult<()> {
         let file = self.inner.file.lock();
-        file.sync_all()
+        file.sync_data()
             .map_err(|e| WalError::IoError(e.to_string()))
     }
 

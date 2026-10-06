@@ -2,16 +2,11 @@ use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
-fn create_benchmark_group<'a>(
-    c: &'a mut Criterion,
-    name: &str,
-) -> criterion::BenchmarkGroup<'a, criterion::measurement::WallTime> {
-    let mut group = c.benchmark_group(name);
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(50);
-    group.warm_up_time(Duration::from_secs(1));
-    group
-}
+#[path = "bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
+
+const SAMPLE_SIZE: usize = 50;
 
 #[cfg(feature = "fulltext")]
 fn bench_fulltext_index_build(c: &mut Criterion) {
@@ -155,7 +150,7 @@ fn bench_fulltext_search(c: &mut Criterion) {
 }
 
 fn bench_vector_distance(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "vector_distance");
+    let mut group = create_benchmark_group(c, "vector_distance", SAMPLE_SIZE);
 
     for dim in &[128, 256, 512] {
         group.bench_with_input(BenchmarkId::from_parameter(dim), dim, |b, &d| {

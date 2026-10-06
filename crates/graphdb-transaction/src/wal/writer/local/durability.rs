@@ -1,5 +1,10 @@
 //! Durability decision paths: group commit, buffered-flush fsync and plain
 //! file fsync, shared by `sync()` and `wait_for_durable()`.
+//!
+//! The WAL is an append-only redo log, so every barrier here is `sync_data`:
+//! the entry payload is what recovery needs, and `sync_all` would add a
+//! metadata flush that nothing reads. Header writes and rotation keep
+//! `sync_all` because those paths do change file metadata.
 
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -22,13 +27,13 @@ impl LocalWalWriter {
                 let guard = state.lock().map_err(|e| {
                     WalError::InvalidOperation(format!("flush state lock poisoned: {}", e))
                 })?;
-                guard.file.sync_all().map_err(|e| {
+                guard.file.sync_data().map_err(|e| {
                     self.poison(format!("fsync failed: {}", e));
                     WalError::IoError(e.to_string())
                 })?;
             }
         } else if let Some(ref file) = self.file {
-            if let Err(e) = file.sync_all() {
+            if let Err(e) = file.sync_data() {
                 self.poison(format!("fsync failed: {}", e));
                 return Err(WalError::IoError(e.to_string()));
             }
@@ -55,14 +60,14 @@ impl LocalWalWriter {
                 })?;
                 guard
                     .file
-                    .sync_all()
+                    .sync_data()
                     .map_err(|e| WalError::IoError(e.to_string()))?;
             }
             self.last_synced_lsn.store(appended_lsn, Ordering::SeqCst);
             Ok(())
         } else if let Some(ref file) = self.file {
             self.check_poisoned()?;
-            file.sync_all()
+            file.sync_data()
                 .map_err(|e| WalError::IoError(e.to_string()))?;
             self.last_synced_lsn.store(appended_lsn, Ordering::SeqCst);
             Ok(())

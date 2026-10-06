@@ -171,7 +171,7 @@ pub(super) fn handle_bi_expand(
                     }
                 };
                 {
-                    if let Ok(edges) = reader.get_node_edges(
+                    let edges = reader.get_node_edges(
                         space_name,
                         &vid,
                         dir,
@@ -180,29 +180,31 @@ pub(super) fn handle_bi_expand(
                             .filter(|t| t.as_str() != "both")
                             .cloned()
                             .collect::<Vec<_>>(),
-                    ) {
-                        for e in &edges {
-                            let neighbor_id = if e.src() == &vid { *e.dst() } else { *e.src() };
-                            let Some(neighbor_tag) =
-                                crate::executor::traversal::graph_reader::resolve_neighbor_tag(
-                                    &*reader,
-                                    space_name,
-                                    e,
-                                    &neighbor_id,
-                                    dst_tag,
-                                )
-                            else {
-                                continue;
-                            };
-                            if let Ok(Some(vertex)) =
-                                reader.get_vertex(space_name, &neighbor_tag, &neighbor_id)
-                            {
-                                let mut out_row = row.clone();
-                                out_row.push(Value::Vertex(Box::new(vertex)));
-                                out_row.push(Value::string(e.edge_type.clone()));
-                                out_row.push(Value::string("both"));
-                                out_rows.push(out_row);
-                            }
+                    )?;
+                    for e in &edges {
+                        let neighbor_id = if e.src() == &vid { *e.dst() } else { *e.src() };
+                        let Some(neighbor_tag) =
+                            crate::executor::traversal::graph_reader::resolve_neighbor_tag(
+                                &*reader,
+                                space_name,
+                                e,
+                                &neighbor_id,
+                                dst_tag,
+                            )
+                        else {
+                            continue;
+                        };
+                        // A neighbor that is not visible is legitimately absent,
+                        // but a read failure is a real error: dropping it here
+                        // would silently shorten the traversal result.
+                        if let Some(vertex) =
+                            reader.get_vertex(space_name, &neighbor_tag, &neighbor_id)?
+                        {
+                            let mut out_row = row.clone();
+                            out_row.push(Value::Vertex(Box::new(vertex)));
+                            out_row.push(Value::string(e.edge_type.clone()));
+                            out_row.push(Value::string("both"));
+                            out_rows.push(out_row);
                         }
                     }
                 }
@@ -307,7 +309,7 @@ pub(super) fn handle_bi_traverse(
                         if depth >= max_depth {
                             continue;
                         }
-                        if let Ok(edges) = reader.get_node_edges(
+                        let edges = reader.get_node_edges(
                             space_name,
                             &current,
                             dir,
@@ -316,43 +318,38 @@ pub(super) fn handle_bi_traverse(
                                 .filter(|t| t.as_str() != "both")
                                 .cloned()
                                 .collect::<Vec<_>>(),
-                        ) {
-                            for e in &edges {
-                                let nid = if e.src() == &current {
-                                    *e.dst()
-                                } else {
-                                    *e.src()
-                                };
-                                if local_visited.contains(&nid) || !visited.insert(nid) {
-                                    continue;
-                                }
-                                local_visited.insert(nid);
-
-                                if depth + 1 >= min_depth {
-                                    let Some(neighbor_tag) =
-                                        crate::executor::traversal::graph_reader::resolve_neighbor_tag(
-                                            &*reader,
-                                            space_name,
-                                            e,
-                                            &nid,
-                                            dst_tag,
-                                        )
-                                    else {
-                                        continue;
-                                    };
-                                    if let Ok(Some(vertex)) =
-                                        reader.get_vertex(space_name, &neighbor_tag, &nid)
-                                    {
-                                        let mut out_row = row.clone();
-                                        out_row.push(Value::Vertex(Box::new(vertex)));
-                                        out_row.push(Value::string(edge_types.join("/")));
-                                        out_row.push(Value::string("both"));
-                                        out_row.push(Value::BigInt((depth + 1) as i64));
-                                        out_rows.push(out_row);
-                                    }
-                                }
-                                frontier.push((nid, depth + 1));
+                        )?;
+                        for e in &edges {
+                            let nid = if e.src() == &current {
+                                *e.dst()
+                            } else {
+                                *e.src()
+                            };
+                            if local_visited.contains(&nid) || !visited.insert(nid) {
+                                continue;
                             }
+                            local_visited.insert(nid);
+
+                            if depth + 1 >= min_depth {
+                                let Some(neighbor_tag) =
+                                    crate::executor::traversal::graph_reader::resolve_neighbor_tag(
+                                        &*reader, space_name, e, &nid, dst_tag,
+                                    )
+                                else {
+                                    continue;
+                                };
+                                if let Some(vertex) =
+                                    reader.get_vertex(space_name, &neighbor_tag, &nid)?
+                                {
+                                    let mut out_row = row.clone();
+                                    out_row.push(Value::Vertex(Box::new(vertex)));
+                                    out_row.push(Value::string(edge_types.join("/")));
+                                    out_row.push(Value::string("both"));
+                                    out_row.push(Value::BigInt((depth + 1) as i64));
+                                    out_rows.push(out_row);
+                                }
+                            }
+                            frontier.push((nid, depth + 1));
                         }
                     }
                 }

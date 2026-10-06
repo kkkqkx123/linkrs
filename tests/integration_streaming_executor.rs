@@ -805,7 +805,7 @@ mod storage_backed {
 
         let mut total_rows = 0;
         let mut names: Vec<String> = Vec::new();
-        while let Ok(Some(chunk)) = result.next_chunk() {
+        while let Some(chunk) = result.next_chunk().expect("chunk ok") {
             for row in &chunk.rows {
                 if let (Some(Value::String(name)), Some(Value::BigInt(_age))) =
                     (row.first(), row.get(1))
@@ -875,7 +875,7 @@ mod storage_backed {
                     .execute_query_stream_with_request(sql, rctx, space_info.clone())
                     .expect("query should succeed");
                 let mut rows = Vec::new();
-                while let Ok(Some(chunk)) = result.next_chunk() {
+                while let Some(chunk) = result.next_chunk().expect("chunk ok") {
                     rows.extend(chunk.visible_rows().cloned());
                 }
                 rows

@@ -15,7 +15,7 @@ mod common;
 use common::{assertions::assert_ok, TestStorage};
 
 use graphdb_core::types::SpaceInfo;
-use graphdb_metrics::StatsManager;
+use graphdb_metrics::{QueryStatus, StatsManager};
 use graphdb_query::optimizer::OptimizerEngine;
 use graphdb_query::parser::Parser;
 use graphdb_query::pipeline::QueryPipelineManager;
@@ -250,7 +250,7 @@ fn test_complete_query_flow_show_spaces() {
 }
 
 #[test]
-fn test_complete_query_flow_with_metrics() {
+fn test_complete_query_flow_reports_stage_profile() {
     let test_storage = TestStorage::new().expect("Failed to create test storage");
     let storage = test_storage.storage();
     let stats_manager = Arc::new(StatsManager::new());
@@ -261,16 +261,13 @@ fn test_complete_query_flow_with_metrics() {
         Arc::new(OptimizerEngine::default()),
     );
 
-    // Execute the query that includes data collection with indicators.
-    let query = "SHOW SPACES";
-    let result = pipeline_manager.execute_query_with_metrics(query);
+    let (_result, _metrics, profile) = pipeline_manager
+        .execute_query_with_profile("SHOW SPACES", 0, None)
+        .expect("SHOW SPACES should execute");
 
-    match result {
-        Ok((_exec_result, _metrics)) => {
-            // Verify the execution results and indicators.
-        }
-        Err(_e) => {}
-    }
+    assert_eq!(profile.status, QueryStatus::Success);
+    assert!(profile.stages.parse_us > 0);
+    assert!(profile.total_duration_us >= profile.stages.parse_us);
 }
 
 #[test]

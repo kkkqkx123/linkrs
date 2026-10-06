@@ -6,7 +6,7 @@ use crate::persistence::{section, write_header_to};
 use graphdb_core::{StorageError, StorageResult};
 
 use super::super::core::VertexTable;
-use super::encoding_select::{select_encoding_for_column, COLUMNS_FORMAT_VERSION};
+use super::encoding_select::COLUMNS_FORMAT_VERSION;
 
 impl VertexTable {
     pub fn flush<P: AsRef<Path>>(
@@ -182,7 +182,7 @@ impl VertexTable {
             // accumulates across flushes, enabling the re-encoding detector.
             // Selection is streaming per chunk: each chunk profiles its own
             // rows without materializing a column-wide value vector.
-            let selection = select_encoding_for_column(&snapshot, &self.encoding_selector);
+            let selection = snapshot.select_encoding(&self.encoding_selector);
             if selection != EncodingType::None {
                 snapshot.apply_selected_encoding(
                     selection,

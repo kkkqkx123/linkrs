@@ -357,7 +357,17 @@ impl EncodingSelector {
                     }
                 }
             }
-            DataType::Float | DataType::Double => EncodingType::Alp,
+            DataType::Float | DataType::Double => {
+                // ALP is only worth its model maintenance when the measured
+                // exception rate stays under the ceiling; an unmeasured rate
+                // (profile built without float analysis) never selects ALP.
+                match profile.alp_exception_rate {
+                    Some(rate) if rate <= self.thresholds.alp_exception_threshold => {
+                        EncodingType::Alp
+                    }
+                    _ => EncodingType::None,
+                }
+            }
             DataType::String | DataType::FixedString(_) => {
                 let total = profile.num_values.max(1);
                 let distinct = profile.distinct.unwrap_or(total);

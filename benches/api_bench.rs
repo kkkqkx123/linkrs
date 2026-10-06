@@ -1,24 +1,17 @@
-use std::time::Duration;
-
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-fn create_benchmark_group<'a>(
-    c: &'a mut Criterion,
-    name: &str,
-) -> criterion::BenchmarkGroup<'a, criterion::measurement::WallTime> {
-    let mut group = c.benchmark_group(name);
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(100);
-    group.warm_up_time(Duration::from_secs(1));
-    group
-}
+#[path = "bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
+
+const SAMPLE_SIZE: usize = 100;
 
 fn bench_json_serialization(c: &mut Criterion) {
     use graphdb_core::types::VertexId;
     use graphdb_core::vertex_edge_path::Tag;
     use graphdb_core::{Value, Vertex};
 
-    let mut group = create_benchmark_group(c, "json_serialization");
+    let mut group = create_benchmark_group(c, "json_serialization", SAMPLE_SIZE);
 
     let vertex = Vertex::new(
         VertexId::try_from_int64(42).expect("valid vertex id"),
@@ -71,7 +64,7 @@ fn bench_json_deserialization(c: &mut Criterion) {
     use graphdb_core::vertex_edge_path::Tag;
     use graphdb_core::{Value, Vertex};
 
-    let mut group = create_benchmark_group(c, "json_deserialization");
+    let mut group = create_benchmark_group(c, "json_deserialization", SAMPLE_SIZE);
 
     let vertex = Vertex::new(
         VertexId::try_from_int64(42).expect("valid vertex id"),

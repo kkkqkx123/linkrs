@@ -9,21 +9,12 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use graphdb::core::types::VertexId;
 use graphdb::transaction::manager::TransactionManager;
 use graphdb::transaction::types::*;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Write a human-readable report into `benches/results/<bench_name>/`.
-fn write_results_report(bench_name: &str, filename: &str, content: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("benches")
-        .join("results")
-        .join(bench_name);
-    std::fs::create_dir_all(&dir).expect("create results dir");
-    let path = dir.join(filename);
-    std::fs::write(&path, content).expect("write results report");
-    path
-}
+#[path = "results_report.rs"]
+mod report;
+use report::write_results_report;
 
 const WRITE_SET_SIZE: usize = 20;
 const KEY_SPACE: usize = 200;
@@ -79,7 +70,7 @@ fn run_contention_rounds(
 
 fn bench_conflict(c: &mut Criterion) {
     let mut report =
-        String::from("multi-client write-write conflict (transaction layer, debug build)\n\n");
+        String::from("multi-client write-write conflict (transaction layer, bench profile)\n\n");
     report.push_str(&format!(
         "write-set size: {} keys, key space: {}\n\n",
         WRITE_SET_SIZE, KEY_SPACE

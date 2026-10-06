@@ -1,13 +1,13 @@
 //! Query stage isolation benchmark: parse / bind / plan+optimize / execute.
 //!
-//! Addresses the coverage gap in docs/tests/performance_hotspots_and_bench_gaps.md
-//! §2.2: per-stage costs were previously only inferable from end-to-end totals.
+//! Per-stage costs were previously only inferable from end-to-end totals.
 //!
 //! Stage strategy (from outside the query crate):
 //! - parse:   `Parser::parse` directly (public, no context needed).
 //! - bind:    `Binder::bind` directly (public, needs schema manager + space).
-//! - execute: from `execute_query_with_profile`, whose `profile.stages`
-//!   records parse_us / execute_us measured inside the pipeline.
+//! - e2e:    the stream entry, which receives the space explicitly and
+//!            reports parse_us / execute_us from inside the pipeline.
+//! - execute: e2e_total - parse - bind.
 //! - plan+optimize: derived as e2e_total - parse - execute.
 //!
 //! Small dataset (debug-mode friendly): 500 vertices, 4 edges/vertex.
@@ -26,7 +26,6 @@ use graphdb::storage::{
 };
 use graphdb_metrics::StatsManager;
 use parking_lot::RwLock;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -53,17 +52,9 @@ const QUERIES: &[(&str, &str)] = &[
     ("aggregate", "MATCH (n:Node) RETURN sum(n.value)"),
 ];
 
-/// Write a human-readable report into `benches/results/<bench_name>/`.
-fn write_results_report(bench_name: &str, filename: &str, content: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("benches")
-        .join("results")
-        .join(bench_name);
-    std::fs::create_dir_all(&dir).expect("create results dir");
-    let path = dir.join(filename);
-    std::fs::write(&path, content).expect("write results report");
-    path
-}
+#[path = "results_report.rs"]
+mod report;
+use report::write_results_report;
 
 fn short_group<'a>(
     c: &'a mut Criterion,
@@ -154,7 +145,7 @@ fn bench_query_stages(c: &mut Criterion) {
     )
     .with_schema_manager(schema_manager.clone());
 
-    let mut report = String::from("query stage isolation (debug build)\n");
+    let mut report = String::from("query stage isolation (bench profile)\n");
     report.push_str(&format!(
         "dataset: {} vertices x {} edges/vertex\n\n",
         VERTEX_COUNT, EDGES_PER_VERTEX

@@ -17,6 +17,46 @@ use super::Column;
 // ---------------------------------------------------------------------------
 
 impl Column {
+    /// Pick one encoding for the whole column by profiling each chunk
+    /// independently and voting for the most common non-`None` chunk choice.
+    ///
+    /// Streaming: each chunk is summarized into a [`ChunkProfile`] as it is
+    /// walked, so no column-wide value vector is ever built. Hot chunks vote
+    /// `None` through the profile, and a multi-chunk column needs a majority
+    /// so one odd chunk cannot force a column-wide encoding.
+    pub fn select_encoding(&self, selector: &crate::encoding::EncodingSelector) -> EncodingType {
+        use crate::encoding::profile_chunk;
+        use std::collections::HashMap;
+
+        if self.is_empty() {
+            return EncodingType::None;
+        }
+        let capacity = self.chunk_capacity().max(1);
+        let total = self.len();
+        let n_chunks = total.div_ceil(capacity).max(1);
+        let mut votes: HashMap<u8, usize> = HashMap::new();
+        for ci in 0..n_chunks {
+            let start = ci * capacity;
+            let end = (start + capacity).min(total);
+            let hot = self.chunk_needs_recode_for_row(start);
+            let profile = profile_chunk((start..end).map(|r| self.get(r)), &self.data_type, hot);
+            let choice = selector.select_for_chunk_profile(&profile);
+            *votes.entry(choice.to_u8()).or_insert(0) += 1;
+        }
+        let (best_tag, best_count) = votes
+            .iter()
+            .max_by_key(|(_, count)| **count)
+            .map(|(tag, count)| (*tag, *count))
+            .unwrap_or((EncodingType::None.to_u8(), 0));
+        if best_tag == EncodingType::None.to_u8() || best_count == 0 {
+            return EncodingType::None;
+        }
+        if n_chunks > 1 && best_count * 2 <= n_chunks {
+            return EncodingType::None;
+        }
+        EncodingType::from_u8(best_tag)
+    }
+
     /// Column-level view of the active encoding scheme: the first chunk (in
     /// row order) that carries one, including its pre-evict scheme when the
     /// chunk itself is evicted. `None` when no chunk is encoded.

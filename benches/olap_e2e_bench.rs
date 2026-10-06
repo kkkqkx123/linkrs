@@ -119,7 +119,7 @@ fn build_storage() -> SharedStorage {
                     Tag::new(
                         TAG.to_string(),
                         [
-                            ("name".into(), Value::string(format!("p{}", i))),
+                            ("name".into(), Value::string(i.to_string())),
                             ("value".into(), Value::BigInt((i * 7919 % n) as i64)),
                             ("bucket".into(), Value::Int((i % 32) as i32)),
                         ]

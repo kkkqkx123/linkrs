@@ -410,22 +410,33 @@ harness = false
 
 ## OLAP 端到端基线（olap_e2e_bench）
 
-**记录日期**: 2026-08-22
+**记录日期**: 2026-10-06（首次记录 2026-08-22）
 **环境**: 开发机（x86-64-v3），`cargo bench`（bench profile，优化构建）
 **数据**: BA 优先连接合成图（固定种子 `0x9E3779B97F4A7C15`），
 `OLAP_BENCH_SCALE=1` → 5,000 顶点 / 约 25,000 边（m=5）
 **说明**: 此为 P0 基线记录；后续各 OLAP 改进项合入前需对照本表，
->5% 回退必须说明原因或回滚（见 docs/plan/olap_semi_completed_formalization_plan.md §9）。
+>5% 回退必须说明原因或回滚。
 
-| 查询组 | 负载 | 基线中位耗时 |
-|--------|------|-------------|
-| olap_q1_two_hop_unanchored | 全图两跳计数 | ~439 ms |
-| olap_q2_two_hop_anchored | 锚点两跳计数 | ~1313 ms |
-| olap_q3_group_aggregate_topn | 展开 + 分组聚合 TopN | ~288 ms |
-| olap_q4_filtered_edge_scan | 边扫描范围谓词计数 | ~499 ms |
-| olap_q5_filtered_vertex_scan | 顶点扫描范围谓词计数 | ~73 ms |
+> **已过期（2026-10-06 复核）**: 下表 q1/q2 的两跳基线产生于多跳谓词下推落地之前，
+> 锚点过滤当时不会下推到扩展算子。此后 `predicate_pushdown` 的 anchor-only 下推
+> 已修复该路径（500 顶点小图上 two_hop 由 ~70 ms 降至 ~0.54 ms，见
+> `docs/issue/performance_bench_findings.md`），q1/q2 两行不再是当前水位，需重跑刷新。
+> q3-q5 未在本轮复核范围内。
 
-已知问题（基线即暴露，待后续立项）：
-- q2 锚点未下推：`id(a)==X` 未转化为种子点，执行代价不低于全图两跳；
-- q3/q4 的展开与边扫描在行存执行模型下逐行物化 Value，为下一阶段
-  执行层改进的主要候选。
+| 查询组 | 负载 | 原基线 (08-22) | 现基线 (10-06) | 变化 |
+|--------|------|---------------|---------------|------|
+| olap_q1_two_hop_unanchored | 全图两跳计数 | ~439 ms | 47.9 ms | -89% |
+| olap_q2_two_hop_anchored | 锚点两跳计数 | ~1313 ms | 5.21 ms | -99.6% |
+| olap_q3_group_aggregate_topn | 展开 + 分组聚合 TopN | ~288 ms | 127.9 ms | -56% |
+| olap_q4_filtered_edge_scan | 边扫描范围谓词计数 | ~499 ms | 38.8 ms | -92% |
+| olap_q5_filtered_vertex_scan | 顶点扫描范围谓词计数 | ~73 ms | 5.73 ms | -92% |
+
+q2 已不再劣于 q1（原基线暴露的“锚点未下推”问题已由多跳谓词下推修复，
+两跳由 251 倍于全图降到 0.11 倍）。
+
+> 两组基线的数据集规模一致（BA 优先连接合成图，5000 顶点 / 24985 边）。
+> 重跑前修正了基准数据生成：`name` 是 tag 主键列，必须镜像顶点 id，
+> 原代码写入 `p{i}` 被主键镜像校验拒绝，基准此前无法运行。
+
+其余候选（q3/q4 在行存执行模型下逐行物化 Value 的展开与边扫描）
+尚未改造，仍是后续执行层改进的着手点。

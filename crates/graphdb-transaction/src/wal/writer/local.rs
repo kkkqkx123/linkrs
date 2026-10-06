@@ -197,14 +197,24 @@ impl WalWriter for LocalWalWriter {
 
         // Drain pending buffered bytes so no staged entry is lost on close.
         // Crash-before-sync semantics still apply: only synced data is durable.
-        let _ = self.flush_buffered_to_file();
+        if let Err(e) = self.flush_buffered_to_file() {
+            log::error!("WAL buffered flush failed during close: {}", e);
+            self.poison(format!("close flush failed: {}", e));
+        }
 
         if let Some(ref coordinator) = self.flush_coordinator {
             coordinator.shutdown();
         }
 
         if let Some(ref file) = self.file {
-            let _ = file.sync_all();
+            // Append-only redo log: the payload is the durability barrier, not
+            // the file metadata, so `sync_data` matches every other sync on
+            // this log. A failure here means staged entries may be lost, so
+            // it poisons the writer instead of passing unnoticed.
+            if let Err(e) = file.sync_data() {
+                log::error!("WAL fsync failed during close: {}", e);
+                self.poison(format!("close fsync failed: {}", e));
+            }
         }
 
         self.file = None;

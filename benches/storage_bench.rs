@@ -7,19 +7,13 @@ use graphdb_storage::{
     StorageWriter,
 };
 use std::collections::HashMap;
-use std::time::Duration;
 use tempfile::TempDir;
 
-fn create_benchmark_group<'a>(
-    c: &'a mut Criterion,
-    name: &str,
-) -> criterion::BenchmarkGroup<'a, criterion::measurement::WallTime> {
-    let mut group = c.benchmark_group(name);
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(100);
-    group.warm_up_time(Duration::from_secs(1));
-    group
-}
+#[path = "bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
+
+const SAMPLE_SIZE: usize = 100;
 
 fn benchmark_storage_with_schema() -> GraphStorage {
     let mut storage = GraphStorage::new().expect("storage should initialize");
@@ -90,7 +84,7 @@ fn build_vertices_with_edges(vertex_count: u64, edges_per_vertex: usize) -> Grap
 }
 
 fn bench_real_vertex_insert(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "storage_vertex_insert");
+    let mut group = create_benchmark_group(c, "storage_vertex_insert", SAMPLE_SIZE);
     let mut storage = benchmark_storage_with_schema();
     let mut next_id = 0i64;
     group.bench_function("single", |b| {
@@ -115,7 +109,7 @@ fn bench_real_vertex_insert(c: &mut Criterion) {
 }
 
 fn bench_bulk_vertex_insert(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "storage_bulk_vertex_insert");
+    let mut group = create_benchmark_group(c, "storage_bulk_vertex_insert", SAMPLE_SIZE);
     for &size in &[1_000u64, 10_000] {
         group.throughput(Throughput::Elements(size));
         group.bench_function(BenchmarkId::from_parameter(size), |b| {
@@ -146,7 +140,7 @@ fn bench_bulk_vertex_insert(c: &mut Criterion) {
 }
 
 fn bench_real_edge_insert(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "storage_edge_insert");
+    let mut group = create_benchmark_group(c, "storage_edge_insert", SAMPLE_SIZE);
     let mut storage = benchmark_storage_with_schema();
     storage
         .create_edge_type(
@@ -195,7 +189,7 @@ fn bench_real_edge_insert(c: &mut Criterion) {
 }
 
 fn bench_edge_insert_density(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "storage_edge_insert_density");
+    let mut group = create_benchmark_group(c, "storage_edge_insert_density", SAMPLE_SIZE);
     for &(label, vertex_count, edges_per_vertex) in &[
         ("sparse_1k_x3", 1_000u64, 3usize),
         ("dense_1k_x100", 1_000, 100),
@@ -245,7 +239,7 @@ fn bench_edge_insert_density(c: &mut Criterion) {
 }
 
 fn bench_real_cursor_scan(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "storage_cursor_scan");
+    let mut group = create_benchmark_group(c, "storage_cursor_scan", SAMPLE_SIZE);
     let mut storage = benchmark_storage_with_schema();
     for id in 0..10_000i64 {
         storage
@@ -298,7 +292,7 @@ fn bench_real_cursor_scan(c: &mut Criterion) {
 }
 
 fn bench_scaled_cursor_scan(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "storage_scaled_cursor_scan");
+    let mut group = create_benchmark_group(c, "storage_scaled_cursor_scan", SAMPLE_SIZE);
     for &vertex_count in &[10_000u64, 100_000] {
         let name = format!("full_scan_{}", vertex_count);
         let storage = build_vertices(vertex_count);
@@ -325,7 +319,7 @@ fn bench_scaled_cursor_scan(c: &mut Criterion) {
 }
 
 fn bench_scan_all_vertices(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "storage_scan_all_vertices");
+    let mut group = create_benchmark_group(c, "storage_scan_all_vertices", SAMPLE_SIZE);
     for &vertex_count in &[10_000u64, 100_000] {
         let storage = build_vertices(vertex_count);
         group.throughput(Throughput::Elements(vertex_count));
@@ -340,7 +334,7 @@ fn bench_scan_all_vertices(c: &mut Criterion) {
 }
 
 fn bench_real_checkpoint(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "storage_checkpoint");
+    let mut group = create_benchmark_group(c, "storage_checkpoint", SAMPLE_SIZE);
     let root = TempDir::new().expect("temp directory");
     let mut storage = GraphStorage::new_with_path(root.path().to_path_buf())
         .expect("persistent storage should initialize");
@@ -384,7 +378,7 @@ fn bench_real_checkpoint(c: &mut Criterion) {
 }
 
 fn bench_scaled_checkpoint(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "storage_scaled_checkpoint");
+    let mut group = create_benchmark_group(c, "storage_scaled_checkpoint", SAMPLE_SIZE);
     for &vertex_count in &[10_000u64, 100_000] {
         let root = TempDir::new().expect("temp directory");
         let mut storage = GraphStorage::new_with_path(root.path().to_path_buf())
@@ -433,7 +427,7 @@ fn bench_scaled_checkpoint(c: &mut Criterion) {
 }
 
 fn bench_scaled_graph_operations(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "storage_scaled_mixed");
+    let mut group = create_benchmark_group(c, "storage_scaled_mixed", SAMPLE_SIZE);
     for &(label, vertex_count, edges_per_vertex) in
         &[("1k_x3", 1_000u64, 3usize), ("10k_x3", 10_000, 3)]
     {
@@ -465,7 +459,7 @@ fn bench_scaled_graph_operations(c: &mut Criterion) {
 }
 
 fn bench_sparse_id_insert_throughput(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "csr_sparse_id_insert");
+    let mut group = create_benchmark_group(c, "csr_sparse_id_insert", SAMPLE_SIZE);
     for &(label, high_ids) in &[
         ("dense_100k", &[][..]),
         ("sparse_1M", &[1_000_000i64][..]),
@@ -561,7 +555,7 @@ fn bench_sparse_id_insert_throughput(c: &mut Criterion) {
 /// hits every shard, so the result tracks the routing plus PK-index path
 /// rather than a single hot shard.
 fn bench_vertex_point_lookup(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "storage_vertex_point_lookup");
+    let mut group = create_benchmark_group(c, "storage_vertex_point_lookup", SAMPLE_SIZE);
     for &vertex_count in &[10_000u64, 100_000] {
         let storage = build_vertices(vertex_count);
         group.throughput(Throughput::Elements(1000));
@@ -588,7 +582,7 @@ fn bench_vertex_point_lookup(c: &mut Criterion) {
 /// Delete plus reinsert churn: exercises the free-stack reuse path (no
 /// compaction) so regressions in ID recycling show up as throughput loss.
 fn bench_vertex_churn_reuse(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "storage_vertex_churn_reuse");
+    let mut group = create_benchmark_group(c, "storage_vertex_churn_reuse", SAMPLE_SIZE);
     group.throughput(Throughput::Elements(10_000));
     group.bench_function("delete_reinsert_10k", |b| {
         b.iter_batched(

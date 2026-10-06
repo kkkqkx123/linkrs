@@ -11,20 +11,11 @@ use graphdb::core::{DataType, Edge, Value, Vertex};
 use graphdb::storage::{
     GraphStorage, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
 };
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-/// Write a human-readable report into `benches/results/<bench_name>/`.
-fn write_results_report(bench_name: &str, filename: &str, content: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("benches")
-        .join("results")
-        .join(bench_name);
-    std::fs::create_dir_all(&dir).expect("create results dir");
-    let path = dir.join(filename);
-    std::fs::write(&path, content).expect("write results report");
-    path
-}
+#[path = "results_report.rs"]
+mod report;
+use report::write_results_report;
 
 const VERTEX_COUNT: usize = 2000;
 const EDGES_PER_VERTEX: usize = 2;
@@ -132,7 +123,7 @@ fn open_settled(path: &std::path::Path) -> GraphStorage {
 }
 
 fn bench_restart(c: &mut Criterion) {
-    let mut report = String::from("crash recovery / restart latency (debug build)\n\n");
+    let mut report = String::from("crash recovery / restart latency (bench profile)\n\n");
     report.push_str(&format!(
         "dataset: {} vertices, {} edges\n\n",
         VERTEX_COUNT,
@@ -147,12 +138,12 @@ fn bench_restart(c: &mut Criterion) {
         populate(tmp.path(), *checkpoint);
 
         // One-shot wall measurement (outside criterion) for the report.
-        // Settle first so background checkpoint/snapshot started at drop has
-        // finished and the timed open measures recovery only.
+        // Warm the page cache with one open first: that open's drop drains
+        // the background checkpoint scheduler, so the timed open below
+        // measures recovery and not first-touch I/O.
         {
             let settled = open_settled(tmp.path());
             drop(settled);
-            std::thread::sleep(Duration::from_millis(100));
         }
         let start = Instant::now();
         let opened = open_settled(tmp.path());
@@ -174,13 +165,13 @@ fn bench_restart(c: &mut Criterion) {
                 || {
                     let tmp = tempfile::TempDir::new().expect("tmpdir");
                     populate(tmp.path(), checkpoint);
-                    // Settle background checkpoint/snapshot so the timed open
-                    // below is not polluted by "already active" retries.
+                    // Warm the directory once; dropping that handle drains
+                    // the checkpoint scheduler, so the timed open measures
+                    // recovery alone.
                     {
                         let settled = open_settled(tmp.path());
                         drop(settled);
                     }
-                    std::thread::sleep(Duration::from_millis(100));
                     tmp
                 },
                 |tmp| {

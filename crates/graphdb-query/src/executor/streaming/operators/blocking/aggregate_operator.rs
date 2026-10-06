@@ -26,6 +26,27 @@ use super::helpers::{aggregate_arg_field_name, emit_batch_slice, BlockingContext
 
 type BatchEvalResult = Option<(Vec<Vec<Value>>, Vec<Vec<Value>>)>;
 
+/// Evaluate the `GROUP BY` key of one row.
+///
+/// A key component that cannot be evaluated for this row becomes NULL, which
+/// is SQL's own propagation rule for an unknown key value: the row joins the
+/// NULL group instead of aborting the whole aggregation. Batch evaluation is
+/// the fast path; this is the authoritative per-row fallback, so all
+/// aggregation phases must funnel through it to keep group identity equal.
+fn eval_group_key(
+    row: &[Value],
+    col_names: &[String],
+    group_by_expressions: &[Expression],
+) -> Vec<Value> {
+    group_by_expressions
+        .iter()
+        .map(|expr| {
+            let mut ctx = ValueRowContext::from_names(row.to_vec(), col_names.to_vec());
+            ExpressionEvaluator::evaluate(expr, &mut ctx).unwrap_or(Value::Null(NullType::Null))
+        })
+        .collect()
+}
+
 pub(super) fn open_aggregate(state: &mut Option<AggregateState>, num_agg_funcs: usize) {
     *state = Some(AggregateState {
         group_map: HashMap::new(),
@@ -84,21 +105,6 @@ pub(super) fn next_aggregate(
     let num_group_keys = group_by_expressions.len();
     let has_group_keys = num_group_keys > 0;
     let group_overhead = state.accumulator_overhead;
-
-    let eval_group_key = |row: &[Value], col_names: &[String]| -> Vec<Value> {
-        if !has_group_keys {
-            return Vec::new();
-        }
-        let mut key = Vec::with_capacity(num_group_keys);
-        for expr in group_by_expressions.iter() {
-            let mut ctx = ValueRowContext::from_names(row.to_vec(), col_names.to_vec());
-            match ExpressionEvaluator::evaluate(expr, &mut ctx) {
-                Ok(value) => key.push(value),
-                Err(_) => key.push(Value::Null(NullType::Null)),
-            }
-        }
-        key
-    };
 
     loop {
         // Output phase: serve slices from the result batch.
@@ -245,7 +251,7 @@ pub(super) fn next_aggregate(
                         let row = &chunk.rows[idx];
                         let group_key: Vec<Value> = match &batch_eval {
                             Some((keys, _)) => keys.iter().map(|c| c[idx].clone()).collect(),
-                            None => eval_group_key(row, &state.col_names),
+                            None => eval_group_key(row, &state.col_names, group_by_expressions),
                         };
                         let arg_values: Vec<Value> = match &batch_eval {
                             Some((_, args)) => args.iter().map(|c| c[idx].clone()).collect(),
@@ -427,22 +433,10 @@ pub(super) fn next_groupby(
 ) -> Result<Option<DataChunk>, QueryError> {
     use crate::executor::streaming::spill::RunReader;
 
-    let eval_group_key = |row: &[Value], col_names: &[String]| -> Vec<Value> {
-        let mut key = Vec::with_capacity(group_by_expressions.len());
-        for expr in group_by_expressions.iter() {
-            let mut ctx = ValueRowContext::from_names(row.to_vec(), col_names.to_vec());
-            key.push(
-                ExpressionEvaluator::evaluate(expr, &mut ctx)
-                    .unwrap_or(Value::Null(NullType::Null)),
-            );
-        }
-        key
-    };
-
     let group_rows = |rows: Vec<Vec<Value>>, col_names: &[String]| -> Vec<Vec<Value>> {
         let mut groups: HashMap<String, Vec<Vec<Value>>> = HashMap::new();
         for row in rows {
-            let key_parts: Vec<String> = eval_group_key(&row, col_names)
+            let key_parts: Vec<String> = eval_group_key(&row, col_names, group_by_expressions)
                 .iter()
                 .map(|v| format!("{:?}", v))
                 .collect();
@@ -554,7 +548,8 @@ pub(super) fn next_groupby(
                                 .ok_or_else(|| {
                                     QueryError::execution("Spill manager not available".to_string())
                                 })?;
-                            let group_key = eval_group_key(&row, &state.col_names);
+                            let group_key =
+                                eval_group_key(&row, &state.col_names, group_by_expressions);
                             let p = crate::executor::streaming::spill::hash_row_partition(
                                 &group_key,
                                 spiller.num_partitions(),
@@ -571,7 +566,11 @@ pub(super) fn next_groupby(
                                 let mut spiller = HashPartitionSpiller::new(config, &sm, 0)?;
 
                                 for pending in state.batch.into_rows() {
-                                    let group_key = eval_group_key(&pending, &state.col_names);
+                                    let group_key = eval_group_key(
+                                        &pending,
+                                        &state.col_names,
+                                        group_by_expressions,
+                                    );
                                     let p = crate::executor::streaming::spill::hash_row_partition(
                                         &group_key,
                                         num_partitions,
@@ -581,7 +580,8 @@ pub(super) fn next_groupby(
                                         .release(MemoryBudget::estimate_row_memory(&pending));
                                 }
 
-                                let group_key = eval_group_key(&row, &state.col_names);
+                                let group_key =
+                                    eval_group_key(&row, &state.col_names, group_by_expressions);
                                 let p = crate::executor::streaming::spill::hash_row_partition(
                                     &group_key,
                                     num_partitions,
@@ -680,6 +680,9 @@ pub(super) fn next_partial_aggregate(
         for idx in &visible {
             memory_tracker.try_reserve_row(&chunk.rows[*idx])?;
         }
+        // Vectorized group-key evaluation is a fast path over the whole
+        // chunk; a chunk it cannot handle falls back to the authoritative
+        // per-row helper below rather than failing the query.
         let batch_keys: Option<Vec<Vec<Value>>> =
             if chunk.selection.is_none() && !chunk.rows.is_empty() {
                 chunk.evaluate_expressions(group_by_expressions, None).ok()
@@ -704,14 +707,7 @@ pub(super) fn next_partial_aggregate(
                         group_key = keys.iter().map(|c| c[idx].clone()).collect();
                     }
                     None => {
-                        for expr in group_by_expressions.iter() {
-                            let mut ctx =
-                                ValueRowContext::from_names(row.clone(), col_names.clone());
-                            match ExpressionEvaluator::evaluate(expr, &mut ctx) {
-                                Ok(value) => group_key.push(value),
-                                Err(_) => group_key.push(Value::Null(NullType::Null)),
-                            }
-                        }
+                        group_key = eval_group_key(row, &col_names, group_by_expressions);
                     }
                 }
             }

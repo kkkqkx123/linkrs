@@ -9,10 +9,10 @@ use graphdb::storage::{
 };
 
 fn config_for(path: std::path::PathBuf) -> PersistenceConfig {
-    // Crash-reopen shapes run with background checkpointing and async WAL
-    // flush disabled: without Drop-time quiescing, async tasks outlive the
-    // dropped handle and race the next open. That engine hardening is a
-    // separate issue; the commit-order matrix needs a deterministic fence.
+    // Background checkpointing and async WAL flush are disabled so the
+    // commit-order matrix has a deterministic fence: with them on, a
+    // checkpoint can land between the write being issued and the process
+    // "crashing", which changes what the tail replay has to redo.
     let mut cfg = PersistenceConfig::for_work_dir(&path);
     cfg.async_checkpoint_enabled = false;
     cfg.wal_enable_async_flush = false;
