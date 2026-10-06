@@ -27,6 +27,7 @@ pub struct CommandExecutor {
     single_transaction: bool,
     transaction_active: bool,
     tx_manager: TransactionManager,
+    active_cursor: Option<u64>,
 }
 
 impl CommandExecutor {
@@ -54,6 +55,7 @@ impl CommandExecutor {
             single_transaction: false,
             transaction_active: false,
             tx_manager: TransactionManager::new(),
+            active_cursor: None,
         }
     }
 
@@ -68,7 +70,16 @@ impl CommandExecutor {
             single_transaction,
             transaction_active: false,
             tx_manager: TransactionManager::new(),
+            active_cursor: None,
         }
+    }
+
+    pub fn active_cursor(&self) -> Option<u64> {
+        self.active_cursor
+    }
+
+    pub fn set_active_cursor(&mut self, cursor_id: Option<u64>) {
+        self.active_cursor = cursor_id;
     }
 
     pub fn formatter(&self) -> &OutputFormatter {
@@ -385,6 +396,26 @@ impl CommandExecutor {
             } => meta::io::execute_export_schema(self, output_path, format, session_mgr).await,
             MetaCommand::ImportSchema { file_path } => {
                 meta::io::execute_import_schema(self, file_path, session_mgr).await
+            }
+            MetaCommand::Stream { query } => {
+                meta::cursor::execute_stream(self, &query, session_mgr).await
+            }
+            MetaCommand::CursorOpen { query } => {
+                meta::cursor::execute_cursor_open(self, &query, session_mgr).await
+            }
+            MetaCommand::CursorFetch {
+                cursor_id,
+                page_size,
+            } => meta::cursor::execute_cursor_fetch(self, cursor_id, page_size, session_mgr).await,
+            MetaCommand::CursorClose { cursor_id } => {
+                meta::cursor::execute_cursor_close(self, cursor_id, session_mgr).await
+            }
+            MetaCommand::Statistics { target } => {
+                meta::stats::execute_statistics(self, target.as_deref(), session_mgr).await
+            }
+            MetaCommand::Status => meta::stats::execute_status(self, session_mgr).await,
+            MetaCommand::Config { action } => {
+                meta::config::execute_config(self, &action, session_mgr).await
             }
         }
     }

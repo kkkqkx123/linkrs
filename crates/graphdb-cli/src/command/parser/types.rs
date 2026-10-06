@@ -145,6 +145,46 @@ pub enum MetaCommand {
     ImportSchema {
         file_path: String,
     },
+    Stream {
+        query: String,
+    },
+    CursorOpen {
+        query: String,
+    },
+    CursorFetch {
+        cursor_id: Option<u64>,
+        page_size: Option<usize>,
+    },
+    CursorClose {
+        cursor_id: Option<u64>,
+    },
+    Statistics {
+        target: Option<String>,
+    },
+    Status,
+    Config {
+        action: ConfigAction,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum ConfigAction {
+    Show {
+        section: Option<String>,
+    },
+    Get {
+        section: String,
+        key: String,
+    },
+    Set {
+        section: String,
+        key: String,
+        value: String,
+    },
+    Reset {
+        section: String,
+        key: String,
+    },
 }
 
 #[derive(Debug, Clone)]

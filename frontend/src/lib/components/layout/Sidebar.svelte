@@ -54,6 +54,18 @@
 					label: 'sidebar.visualization',
 					route: '/schema/visualization',
 				},
+				{
+					key: '/schema/functions',
+					icon: 'ƒ',
+					label: 'sidebar.functions',
+					route: '/schema/functions',
+				},
+				{
+					key: '/schema/versions',
+					icon: '🕘',
+					label: 'sidebar.versions',
+					route: '/schema/versions',
+				},
 			],
 		},
 		{
@@ -73,6 +85,36 @@
 			icon: '📈',
 			label: 'sidebar.monitoring',
 			route: '/monitoring',
+		},
+		{
+			key: '/vector',
+			icon: '🧭',
+			label: 'sidebar.vector',
+			route: '/vector',
+		},
+		{
+			key: '/fulltext',
+			icon: '🔎',
+			label: 'sidebar.fulltext',
+			route: '/fulltext',
+		},
+		{
+			key: '/migration',
+			icon: '🚚',
+			label: 'sidebar.migration',
+			route: '/migration',
+		},
+		{
+			key: '/batch',
+			icon: '📦',
+			label: 'sidebar.batch',
+			route: '/batch',
+		},
+		{
+			key: '/transfer',
+			icon: '⇄',
+			label: 'sidebar.transfer',
+			route: '/transfer',
 		},
 	];
 

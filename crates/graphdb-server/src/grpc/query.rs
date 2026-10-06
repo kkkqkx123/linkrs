@@ -126,6 +126,54 @@ impl<
         }
     }
 
+    pub(crate) async fn handle_explain_query(
+        &self,
+        request: Request<ExplainQueryRequest>,
+    ) -> Result<Response<ExplainQueryResponse>, Status> {
+        let req = request.into_inner();
+        if req.query.trim().is_empty() {
+            return Err(Status::invalid_argument("query must not be empty"));
+        }
+        let session_id = match req.session_id.filter(|s| !s.is_empty()) {
+            Some(raw) => parse_session_id(&raw)?,
+            None => return Err(Status::unauthenticated("session_id is required")),
+        };
+        let wire = graphdb_wire::query::ExplainRequest {
+            query: req.query,
+            session_id,
+            parameters: std::collections::HashMap::new(),
+            session_variables: std::collections::HashMap::new(),
+        };
+        match crate::http::handlers::query::explain(
+            axum::extract::State(self.app_state.clone()),
+            axum::Json(wire),
+        )
+        .await
+        {
+            Ok(axum::Json(resp)) => {
+                if resp.success {
+                    Ok(Response::new(ExplainQueryResponse {
+                        success: true,
+                        plan_json: serde_json::to_string(&resp)
+                            .unwrap_or_else(|_| "{}".to_string()),
+                        error: String::new(),
+                    }))
+                } else {
+                    let message = resp
+                        .error
+                        .map(|e| e.message)
+                        .unwrap_or_else(|| "explain failed".to_string());
+                    Ok(Response::new(ExplainQueryResponse {
+                        success: false,
+                        plan_json: String::new(),
+                        error: message,
+                    }))
+                }
+            }
+            Err(e) => Err(http_error_to_status(e)),
+        }
+    }
+
     pub(crate) async fn handle_execute_query_stream(
         &self,
         request: Request<ExecuteQueryRequest>,
@@ -234,6 +282,70 @@ impl<
 
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(Response::new(Box::pin(stream) as ExecuteQueryStreamStream))
+    }
+}
+
+impl<
+        S: StorageClient
+            + StorageSchemaContextOps
+            + StorageSyncContextOps
+            + StorageOperationContextOps
+            + crate::storage::AutoCommitBatchOps
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    > GraphDBService<S>
+{
+    pub(crate) async fn handle_execute_batch_query(
+        &self,
+        request: Request<ExecuteBatchQueryRequest>,
+    ) -> Result<Response<ExecuteBatchQueryResponse>, Status> {
+        let req = request.into_inner();
+        if req.statements.is_empty() {
+            return Err(Status::invalid_argument("statements must not be empty"));
+        }
+        let session_id = match req.session_id.filter(|s| !s.is_empty()) {
+            Some(raw) => parse_session_id(&raw)?,
+            None => return Err(Status::unauthenticated("session_id is required")),
+        };
+        let graph_service = self.app_state.server.get_graph_service();
+        let outcomes = graph_service
+            .execute_batch(session_id, &req.statements, None, None)
+            .await;
+        let mut entries = Vec::with_capacity(outcomes.len());
+        let mut success = true;
+        for outcome in outcomes {
+            match outcome {
+                Ok(result) => entries.push(serde_json::json!({
+                    "success": true,
+                    "rows_returned": result.rows().len(),
+                })),
+                Err(e) => {
+                    success = false;
+                    entries.push(serde_json::json!({
+                        "success": false,
+                        "error": e.to_string(),
+                    }));
+                }
+            }
+        }
+        Ok(Response::new(ExecuteBatchQueryResponse {
+            success,
+            results_json: serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string()),
+            error: String::new(),
+        }))
+    }
+}
+
+fn http_error_to_status(error: crate::http::error::HttpError) -> Status {
+    use crate::http::error::HttpError;
+    match error {
+        HttpError::BadRequest(message) => Status::invalid_argument(message),
+        HttpError::NotFound(message) => Status::not_found(message),
+        HttpError::Conflict(message) => Status::already_exists(message),
+        HttpError::Unauthorized(message) => Status::unauthenticated(message),
+        HttpError::InternalError(message) => Status::internal(message),
     }
 }
 

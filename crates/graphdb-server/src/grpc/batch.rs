@@ -150,6 +150,28 @@ impl<
         }))
     }
 
+    pub(crate) async fn handle_delete_batch(
+        &self,
+        request: Request<DeleteBatchRequest>,
+    ) -> Result<Response<DeleteBatchResponse>, Status> {
+        let req = request.into_inner();
+        let batch_manager = self.app_state.server.get_batch_manager();
+        match batch_manager.remove_task(&req.batch_id) {
+            Ok(()) => Ok(Response::new(DeleteBatchResponse {
+                success: true,
+                error: String::new(),
+            })),
+            Err(e) => {
+                let message = e.to_string();
+                if message.contains("does not exist") {
+                    Err(Status::not_found(message))
+                } else {
+                    Err(Status::internal(message))
+                }
+            }
+        }
+    }
+
     pub(crate) async fn handle_cancel_batch(
         &self,
         request: Request<CancelBatchRequest>,

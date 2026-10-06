@@ -83,6 +83,11 @@ fn parse_meta_command(input: &str) -> Result<MetaCommand, String> {
         "export-space" => crate::command::parser::meta::io::parse_export_space(arg),
         "export-schema" => crate::command::parser::meta::io::parse_export_schema(arg),
         "import-schema" => crate::command::parser::meta::io::parse_import_schema(arg),
+        "stream" => crate::command::parser::meta::cursor::parse_stream(arg),
+        "cursor" => crate::command::parser::meta::cursor::parse_cursor(arg),
+        "statistics" => crate::command::parser::meta::stats::parse_statistics(arg),
+        "status" => Ok(MetaCommand::Status),
+        "config" => crate::command::parser::meta::config::parse_config(arg),
         _ => Err(format!("Unknown command: \\ {}", cmd)),
     }
 }

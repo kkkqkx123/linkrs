@@ -324,6 +324,193 @@ impl<
             Err(Status::unavailable("vector support is not compiled in"))
         }
     }
+
+    pub(crate) async fn handle_scroll_vector(
+        &self,
+        request: Request<ScrollVectorRequest>,
+    ) -> Result<Response<ScrollVectorResponse>, Status> {
+        #[cfg(feature = "vector")]
+        {
+            let req = request.into_inner();
+            if req.tag_name.is_empty() || req.field_name.is_empty() {
+                return Err(Status::invalid_argument(
+                    "tag_name and field_name are required",
+                ));
+            }
+            let wire = crate::http::handlers::vector::ScrollRequest {
+                space_id: req.space_id,
+                tag_name: req.tag_name,
+                field_name: req.field_name,
+                limit: req.limit.unwrap_or(100) as usize,
+                offset: req.offset.filter(|s| !s.is_empty()),
+                with_payload: None,
+                with_vector: None,
+            };
+            match crate::http::handlers::vector::scroll(
+                axum::extract::State(self.app_state.clone()),
+                axum::Json(wire),
+            )
+            .await
+            {
+                Ok(axum::Json(resp)) => Ok(Response::new(ScrollVectorResponse {
+                    points_json: serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()),
+                    error: String::new(),
+                })),
+                Err(e) => Err(vector_http_status(e)),
+            }
+        }
+        #[cfg(not(feature = "vector"))]
+        {
+            let _ = request;
+            Err(Status::unavailable("vector support is not compiled in"))
+        }
+    }
+
+    pub(crate) async fn handle_get_vector_count(
+        &self,
+        request: Request<GetVectorCountRequest>,
+    ) -> Result<Response<GetVectorCountResponse>, Status> {
+        #[cfg(feature = "vector")]
+        {
+            let req = request.into_inner();
+            match crate::http::handlers::vector::count(
+                axum::extract::State(self.app_state.clone()),
+                axum::extract::Path((req.space_id, req.tag_name, req.field_name)),
+            )
+            .await
+            {
+                Ok(axum::Json(resp)) => {
+                    let count = resp.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                    Ok(Response::new(GetVectorCountResponse {
+                        count,
+                        error: String::new(),
+                    }))
+                }
+                Err(e) => Err(vector_http_status(e)),
+            }
+        }
+        #[cfg(not(feature = "vector"))]
+        {
+            let _ = request;
+            Err(Status::unavailable("vector support is not compiled in"))
+        }
+    }
+
+    pub(crate) async fn handle_rebuild_vector_index(
+        &self,
+        request: Request<RebuildVectorIndexRequest>,
+    ) -> Result<Response<RebuildVectorIndexResponse>, Status> {
+        #[cfg(feature = "vector")]
+        {
+            let req = request.into_inner();
+            let wire = graphdb_wire::vector::RebuildVectorIndexRequest {
+                space_id: req.space_id,
+                tag_name: req.tag_name,
+                field_name: req.field_name,
+            };
+            match crate::http::handlers::rebuild::rebuild_vector(
+                axum::extract::State(self.app_state.clone()),
+                axum::Json(wire),
+            )
+            .await
+            {
+                Ok(axum::Json(resp)) => Ok(Response::new(RebuildVectorIndexResponse {
+                    rebuild_id: resp.rebuild_id,
+                    status: resp.status,
+                    error: String::new(),
+                })),
+                Err(e) => Err(vector_http_status(e)),
+            }
+        }
+        #[cfg(not(feature = "vector"))]
+        {
+            let _ = request;
+            Err(Status::unavailable("vector support is not compiled in"))
+        }
+    }
+
+    pub(crate) async fn handle_get_vector_rebuild_status(
+        &self,
+        request: Request<GetVectorRebuildStatusRequest>,
+    ) -> Result<Response<GetVectorRebuildStatusResponse>, Status> {
+        #[cfg(feature = "vector")]
+        {
+            let req = request.into_inner();
+            match crate::http::handlers::rebuild::vector_rebuild_status(
+                axum::extract::State(self.app_state.clone()),
+                axum::extract::Path(req.rebuild_id.clone()),
+            )
+            .await
+            {
+                Ok(axum::Json(resp)) => {
+                    let progress_json =
+                        serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
+                    Ok(Response::new(GetVectorRebuildStatusResponse {
+                        rebuild_id: resp.rebuild_id,
+                        status: resp.status,
+                        progress_json,
+                        error: String::new(),
+                    }))
+                }
+                Err(e) => Err(vector_http_status(e)),
+            }
+        }
+        #[cfg(not(feature = "vector"))]
+        {
+            let _ = request;
+            Err(Status::unavailable("vector support is not compiled in"))
+        }
+    }
+
+    pub(crate) async fn handle_clear_vector_index(
+        &self,
+        request: Request<ClearVectorIndexRequest>,
+    ) -> Result<Response<ClearVectorIndexResponse>, Status> {
+        #[cfg(feature = "vector")]
+        {
+            let req = request.into_inner();
+            if !req.force {
+                return Err(Status::invalid_argument(
+                    "Clearing a vector index is destructive and requires force=true",
+                ));
+            }
+            let wire = graphdb_wire::vector::ClearVectorIndexRequest {
+                space_id: req.space_id,
+                tag_name: req.tag_name,
+                field_name: req.field_name,
+                force: true,
+            };
+            match crate::http::handlers::rebuild::clear_vector(
+                axum::extract::State(self.app_state.clone()),
+                axum::Json(wire),
+            )
+            .await
+            {
+                Ok(axum::Json(resp)) => Ok(Response::new(ClearVectorIndexResponse {
+                    ok: resp.ok,
+                    error: String::new(),
+                })),
+                Err(e) => Err(vector_http_status(e)),
+            }
+        }
+        #[cfg(not(feature = "vector"))]
+        {
+            let _ = request;
+            Err(Status::unavailable("vector support is not compiled in"))
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn vector_http_status(error: crate::http::error::HttpError) -> Status {
+    use crate::http::error::HttpError;
+    match error {
+        HttpError::BadRequest(message) => Status::invalid_argument(message),
+        HttpError::NotFound(message) => Status::not_found(message),
+        HttpError::Conflict(message) => Status::already_exists(message),
+        HttpError::Unauthorized(message) => Status::unauthenticated(message),
+        HttpError::InternalError(message) => Status::internal(message),
+    }
 }
 
 /// Map a proto `DistanceMetric` discriminant to the local metric.

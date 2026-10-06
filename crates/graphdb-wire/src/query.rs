@@ -173,7 +173,7 @@ pub struct ValidateResponse {
 /// `statement_end` event pair per statement. The two modes are mutually
 /// exclusive: a non-empty `query` together with non-empty `statements` is
 /// rejected by the server.
-#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct StreamQueryRequest {
     pub query: String,
     pub session_id: i64,

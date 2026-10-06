@@ -12,7 +12,9 @@ pub mod batch;
 pub mod bootstrap;
 pub mod config;
 pub mod convert;
+pub mod cursor;
 pub mod error;
+pub mod fulltext;
 pub mod function;
 pub mod migration;
 pub mod query;
@@ -21,7 +23,9 @@ pub mod server;
 pub mod service;
 pub mod session;
 pub mod statistics;
+pub mod sync;
 pub mod transaction;
+pub mod transfer;
 pub mod vector;
 
 // Proto module will be generated at compile time

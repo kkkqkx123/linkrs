@@ -174,6 +174,52 @@ fn show_general_help() -> String {
         "\\rollback", "Rollback current transaction"
     ));
 
+    output.push_str(&format!("\n{}\n", "Streaming & Cursors".yellow().bold()));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\stream <query>", "Execute query in streaming mode (SSE)"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\cursor open <query>", "Open a forward-only cursor"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\cursor fetch [id] [n]", "Fetch next page (default 500 rows)"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\cursor close [id]", "Close the active cursor"
+    ));
+
+    output.push_str(&format!("\n{}\n", "Observability".yellow().bold()));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\statistics [target]", "Show query/database/system/overview/session stats"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\status", "Show database overview (alias for statistics overview)"
+    ));
+
+    output.push_str(&format!("\n{}\n", "Configuration".yellow().bold()));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\config [show [sec]]", "Show server configuration"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\config get <sec> <key>", "Get a single configuration item"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\config set <s> <k> <v>", "Update a configuration item"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\config reset <sec> <key>", "Reset a configuration item to default"
+    ));
+
     output.push_str(&format!("\n{}\n", "Conditional Execution".yellow().bold()));
     output.push_str(&format!(
         "  {:25} {}\n",
@@ -410,6 +456,43 @@ Example:
             s.push_str("  \\history clear        - Clear all history\n\n");
             s.push_str("History is saved to ~/.graphdb/cli_history\n");
             s.push_str("Use UP/DOWN arrows to navigate history in the REPL.\n");
+            s
+        }
+        "stream" => {
+            let mut s = String::new();
+            s.push_str("Streaming query execution (SSE)\n\n");
+            s.push_str("Syntax:\n");
+            s.push_str("  \\stream <query>\n\n");
+            s.push_str("Rows arrive chunk-at-a-time via POST /v1/query/stream and are\n");
+            s.push_str("rendered once the stream completes.\n");
+            s
+        }
+        "cursor" => {
+            let mut s = String::new();
+            s.push_str("Forward-only result cursors\n\n");
+            s.push_str("Commands:\n");
+            s.push_str("  \\cursor open <query>          - Open a cursor\n");
+            s.push_str("  \\cursor fetch [id] [n]        - Fetch next page (default 500)\n");
+            s.push_str("  \\cursor close [id]           - Release the cursor\n");
+            s
+        }
+        "statistics" | "status" => {
+            let mut s = String::new();
+            s.push_str("Server statistics\n\n");
+            s.push_str("Commands:\n");
+            s.push_str("  \\statistics [queries|database|system|overview|session]\n");
+            s.push_str("  \\status  - Alias for the overview report\n");
+            s
+        }
+        "config" => {
+            let mut s = String::new();
+            s.push_str("Server configuration\n\n");
+            s.push_str("Commands:\n");
+            s.push_str("  \\config                 - Show all sections\n");
+            s.push_str("  \\config show [section]   - Show one section or all\n");
+            s.push_str("  \\config get <sec> <key>  - Get a single item\n");
+            s.push_str("  \\config set <sec> <key> <value>   - Update an item\n");
+            s.push_str("  \\config reset <sec> <key> - Reset an item to default\n");
             s
         }
         "edit" | "buffer" => {

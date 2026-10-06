@@ -33,6 +33,32 @@ function toTransaction(row: Record<string, unknown>): ActiveTransaction {
 export const operationsService = {
 	config: async (): Promise<unknown> => call(client.GET('/v1/config')),
 
+	configKey: async (section: string, key: string): Promise<unknown> =>
+		call(
+			client.GET('/v1/config/{section}/{key}', {
+				params: { path: { section, key } },
+			}),
+		),
+
+	updateConfigKey: async (
+		section: string,
+		key: string,
+		value: unknown,
+	): Promise<unknown> =>
+		call(
+			client.PUT('/v1/config/{section}/{key}', {
+				params: { path: { section, key } },
+				body: { value: value as never },
+			}),
+		),
+
+	resetConfigKey: async (section: string, key: string): Promise<unknown> =>
+		call(
+			client.DELETE('/v1/config/{section}/{key}', {
+				params: { path: { section, key } },
+			}),
+		),
+
 	transactions: async (): Promise<ActiveTransaction[]> => {
 		const payload = await call<unknown>(client.GET('/v1/transactions'));
 		if (!Array.isArray(payload)) return [];

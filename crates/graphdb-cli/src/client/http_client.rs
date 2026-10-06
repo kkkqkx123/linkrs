@@ -11,8 +11,7 @@ use graphdb_wire::batch::{
 };
 use graphdb_wire::meta::{
     BeginTransactionRequest, DatabaseStatistics, LoginRequest, LoginResponse, LogoutRequest,
-    QueryStatistics, ServerConfig, SessionStatistics, TransactionActionRequest,
-    TransactionResponse, UpdateConfigRequest,
+    QueryStatistics, SessionStatistics, TransactionActionRequest, TransactionResponse,
 };
 use graphdb_wire::query::{BatchQueryRequest, BatchQueryResponse, QueryRequest, QueryResponse};
 use graphdb_wire::schema::{
@@ -645,8 +644,8 @@ impl HttpClient {
 
     // ── Server configuration ──
 
-    /// Get server configuration
-    pub async fn get_config(&self) -> Result<ServerConfig> {
+    /// Get server configuration (flat section map as served by `GET /v1/config`).
+    pub async fn get_config(&self) -> Result<serde_json::Value> {
         let url = format!("{}/config", self.base_url);
 
         let response = self.inner.get(&url).send().await?;
@@ -663,22 +662,39 @@ impl HttpClient {
         Ok(response.json().await?)
     }
 
-    /// Update server configuration
+    /// Get a single configuration item via `GET /v1/config/{section}/{key}`.
+    pub async fn get_config_key(&self, section: &str, key: &str) -> Result<serde_json::Value> {
+        let url = format!("{}/config/{}/{}", self.base_url, section, key);
+
+        let response = self.inner.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Failed to get config item ({}): {}",
+                status, body
+            )));
+        }
+
+        Ok(response.json().await?)
+    }
+
+    /// Update a single configuration item via `PUT /v1/config/{section}/{key}`.
     pub async fn update_config(
         &self,
         section: &str,
         key: &str,
         value: serde_json::Value,
-    ) -> Result<()> {
-        let url = format!("{}/config", self.base_url);
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/config/{}/{}", self.base_url, section, key);
 
-        let request = UpdateConfigRequest {
-            section: section.to_string(),
-            key: key.to_string(),
-            value,
-        };
-
-        let response = self.inner.post(&url).json(&request).send().await?;
+        let response = self
+            .inner
+            .put(&url)
+            .json(&serde_json::json!({ "value": value }))
+            .send()
+            .await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -689,7 +705,308 @@ impl HttpClient {
             )));
         }
 
-        Ok(())
+        Ok(response.json().await?)
+    }
+
+    /// Reset a single configuration item via `DELETE /v1/config/{section}/{key}`.
+    pub async fn reset_config(&self, section: &str, key: &str) -> Result<serde_json::Value> {
+        let url = format!("{}/config/{}/{}", self.base_url, section, key);
+
+        let response = self.inner.delete(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Failed to reset config ({}): {}",
+                status, body
+            )));
+        }
+
+        Ok(response.json().await?)
+    }
+
+    /// Get system resource statistics via `GET /v1/statistics/system`.
+    pub async fn get_system_statistics(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/statistics/system", self.base_url);
+
+        let response = self.inner.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Failed to get system statistics ({}): {}",
+                status, body
+            )));
+        }
+
+        Ok(response.json().await?)
+    }
+
+    /// Get cross-subsystem overview via `GET /v1/statistics/overview`.
+    pub async fn get_overview(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/statistics/overview", self.base_url);
+
+        let response = self.inner.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Failed to get overview ({}): {}",
+                status, body
+            )));
+        }
+
+        Ok(response.json().await?)
+    }
+
+    /// Execute a query in streaming mode (`POST /v1/query/stream`, SSE).
+    /// Rows are collected as they arrive and returned as one [`QueryResult`],
+    /// so large results avoid the materialized row ceiling of `/v1/query`.
+    pub async fn execute_query_stream(&self, query: &str, session_id: i64) -> Result<QueryResult> {
+        use graphdb_wire::query::StreamQueryRequest;
+        let url = format!("{}/query/stream", self.base_url);
+        let request = StreamQueryRequest {
+            query: query.to_string(),
+            session_id,
+            event_buffer_capacity: 100,
+            statements: Vec::new(),
+            parameters: std::collections::HashMap::new(),
+            session_variables: std::collections::HashMap::new(),
+            fail_fast: true,
+        };
+
+        let response = self
+            .inner
+            .post(&url)
+            .header("Accept", "text/event-stream")
+            .json(&request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Stream query failed ({}): {}",
+                status, body
+            )));
+        }
+
+        let text = response.text().await?;
+        let mut columns: Vec<String> = Vec::new();
+        let mut rows: Vec<std::collections::HashMap<String, serde_json::Value>> = Vec::new();
+        let mut execution_time_ms: u64 = 0;
+        let mut rows_scanned: u64 = 0;
+        let mut stream_error: Option<String> = None;
+
+        let mut current_event = String::new();
+        for line in text.lines() {
+            if let Some(name) = line.strip_prefix("event:") {
+                current_event = name.trim().to_string();
+                continue;
+            }
+            let Some(payload) = line.strip_prefix("data:") else {
+                continue;
+            };
+            let payload = payload.trim();
+            if payload.is_empty() {
+                continue;
+            }
+            let value: serde_json::Value = match serde_json::from_str(payload) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            match current_event.as_str() {
+                "schema" => {
+                    if let Some(cols) = value.get("columns").and_then(|c| c.as_array()) {
+                        columns = cols
+                            .iter()
+                            .filter_map(|c| c.as_str().map(|s| s.to_string()))
+                            .collect();
+                    } else if let Some(cols) = value.get("schema").and_then(|c| c.as_array()) {
+                        columns = cols
+                            .iter()
+                            .filter_map(|c| c.as_str().map(|s| s.to_string()))
+                            .collect();
+                    }
+                }
+                "row" | "data" => {
+                    let obj = value.get("row").unwrap_or(&value);
+                    if let Some(map) = obj.as_object() {
+                        rows.push(map.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+                    }
+                }
+                "metadata" | "done" => {
+                    if let Some(ms) = value.get("execution_time_ms").and_then(|v| v.as_u64()) {
+                        execution_time_ms = ms;
+                    }
+                    if let Some(scanned) = value.get("rows_scanned").and_then(|v| v.as_u64()) {
+                        rows_scanned = scanned;
+                    }
+                    if let Some(returned) = value.get("rows_returned").and_then(|v| v.as_u64()) {
+                        let _ = returned;
+                    }
+                }
+                "error" => {
+                    let message = value
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("stream error")
+                        .to_string();
+                    let code = value
+                        .get("code")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("STREAM_ERROR");
+                    stream_error = Some(format!("{}: {}", code, message));
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(error) = stream_error {
+            return Err(CliError::query(error));
+        }
+
+        let row_count = rows.len();
+        Ok(QueryResult {
+            columns,
+            rows,
+            row_count,
+            execution_time_ms,
+            rows_scanned,
+            error: None,
+        })
+    }
+
+    /// Open a forward-only cursor over a query via `POST /v1/query/cursor/open`.
+    pub async fn open_cursor(&self, query: &str, session_id: i64) -> Result<(u64, Vec<String>)> {
+        use graphdb_wire::query::{OpenCursorRequest, OpenCursorResponse};
+        let url = format!("{}/query/cursor/open", self.base_url);
+        let request = OpenCursorRequest {
+            session_id,
+            query: query.to_string(),
+        };
+
+        let response = self.inner.post(&url).json(&request).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Open cursor failed ({}): {}",
+                status, body
+            )));
+        }
+
+        let body: OpenCursorResponse = response.json().await?;
+        Ok((body.cursor_id, body.columns))
+    }
+
+    /// Fetch one page from a cursor via `POST /v1/query/cursor/fetch`.
+    pub async fn fetch_cursor(
+        &self,
+        cursor_id: u64,
+        page_size: usize,
+        session_id: i64,
+    ) -> Result<QueryResult> {
+        use graphdb_wire::query::{FetchCursorRequest, FetchCursorResponse};
+        let url = format!("{}/query/cursor/fetch", self.base_url);
+        let request = FetchCursorRequest {
+            session_id,
+            cursor_id,
+            page_size,
+        };
+
+        let response = self.inner.post(&url).json(&request).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Fetch cursor failed ({}): {}",
+                status, body
+            )));
+        }
+
+        let body: FetchCursorResponse = response.json().await?;
+        let row_count = body.rows.len();
+        Ok(QueryResult {
+            columns: body.columns,
+            rows: body.rows,
+            row_count,
+            execution_time_ms: 0,
+            rows_scanned: 0,
+            error: None,
+        })
+    }
+
+    /// Fetch a cursor page with the exhaustion flag.
+    pub async fn fetch_cursor_page(
+        &self,
+        cursor_id: u64,
+        page_size: usize,
+        session_id: i64,
+    ) -> Result<(QueryResult, bool)> {
+        use graphdb_wire::query::{FetchCursorRequest, FetchCursorResponse};
+        let url = format!("{}/query/cursor/fetch", self.base_url);
+        let request = FetchCursorRequest {
+            session_id,
+            cursor_id,
+            page_size,
+        };
+
+        let response = self.inner.post(&url).json(&request).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Fetch cursor failed ({}): {}",
+                status, body
+            )));
+        }
+
+        let body: FetchCursorResponse = response.json().await?;
+        let has_more = body.has_more;
+        let row_count = body.rows.len();
+        Ok((
+            QueryResult {
+                columns: body.columns,
+                rows: body.rows,
+                row_count,
+                execution_time_ms: 0,
+                rows_scanned: 0,
+                error: None,
+            },
+            has_more,
+        ))
+    }
+
+    /// Release a cursor via `POST /v1/query/cursor/close`.
+    pub async fn close_cursor(&self, cursor_id: u64, session_id: i64) -> Result<bool> {
+        use graphdb_wire::query::{CloseCursorRequest, CloseCursorResponse};
+        let url = format!("{}/query/cursor/close", self.base_url);
+        let request = CloseCursorRequest {
+            session_id,
+            cursor_id,
+        };
+
+        let response = self.inner.post(&url).json(&request).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Close cursor failed ({}): {}",
+                status, body
+            )));
+        }
+
+        let body: CloseCursorResponse = response.json().await?;
+        Ok(body.closed)
     }
 
     /// List all functions registered on the server.

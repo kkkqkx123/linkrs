@@ -57,6 +57,72 @@ impl<
         }))
     }
 
+    pub(crate) async fn handle_get_config_key(
+        &self,
+        request: Request<GetConfigKeyRequest>,
+    ) -> Result<Response<GetConfigKeyResponse>, Status> {
+        let req = request.into_inner();
+        let config = self.app_state.server.get_config();
+        let value =
+            crate::http::handlers::config::get_config_value(&config, &req.section, &req.key);
+        Ok(Response::new(GetConfigKeyResponse {
+            section: req.section,
+            key: req.key,
+            value_json: serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string()),
+            error: String::new(),
+        }))
+    }
+
+    pub(crate) async fn handle_bulk_update_config(
+        &self,
+        request: Request<BulkUpdateConfigRequest>,
+    ) -> Result<Response<BulkUpdateConfigResponse>, Status> {
+        let req = request.into_inner();
+        let updates: serde_json::Value = serde_json::from_str(&req.updates_json)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let sections = updates.as_object().ok_or_else(|| {
+            Status::invalid_argument("updates_json must be an object of section objects")
+        })?;
+        let store = self.app_state.server.config_store();
+        let config_path = self.app_state.server.get_config_path();
+        let mut updated = Vec::new();
+        let mut requires_restart = Vec::new();
+        let mut persisted = true;
+        for (section, values) in sections {
+            let values_obj = values.as_object().ok_or_else(|| {
+                Status::invalid_argument(format!(
+                    "section '{section}' must map to an object of key/value pairs"
+                ))
+            })?;
+            for (key, value) in values_obj {
+                match crate::http::handlers::config::apply_config_update(
+                    &store,
+                    config_path.as_deref(),
+                    section,
+                    key,
+                    value,
+                ) {
+                    Ok((restart, wrote)) => {
+                        updated.push(format!("{section}.{key}"));
+                        if restart {
+                            requires_restart.push(format!("{section}.{key}"));
+                        }
+                        persisted = persisted && wrote;
+                    }
+                    Err(e) => return Err(Status::invalid_argument(e)),
+                }
+            }
+        }
+        Ok(Response::new(BulkUpdateConfigResponse {
+            success: true,
+            updated_json: serde_json::to_string(&updated).unwrap_or_else(|_| "[]".to_string()),
+            requires_restart_json: serde_json::to_string(&requires_restart)
+                .unwrap_or_else(|_| "[]".to_string()),
+            persisted,
+            error: String::new(),
+        }))
+    }
+
     pub(crate) async fn handle_reset_config(
         &self,
         request: Request<ResetConfigRequest>,

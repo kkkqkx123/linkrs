@@ -134,6 +134,75 @@ impl<
         }))
     }
 
+    pub(crate) async fn handle_dry_run_migration(
+        &self,
+        request: Request<DryRunMigrationRequest>,
+    ) -> Result<Response<DryRunMigrationResponse>, Status> {
+        let req = request.into_inner();
+        let wire = graphdb_wire::migration::MigrationExecuteRequest {
+            plan_json: req.plan_json,
+        };
+        match crate::http::handlers::schema::migration::dry_run_migration(
+            axum::extract::State(self.app_state.clone()),
+            axum::Json(wire),
+        )
+        .await
+        {
+            Ok(axum::Json(resp)) => Ok(Response::new(DryRunMigrationResponse {
+                success: resp.success,
+                steps_completed: resp.steps_completed as u64,
+                rows_migrated: resp.rows_migrated,
+                errors: resp.errors,
+                error: String::new(),
+            })),
+            Err(e) => Err(map_http_error(e)),
+        }
+    }
+
+    pub(crate) async fn handle_get_migration_history(
+        &self,
+        request: Request<GetMigrationHistoryRequest>,
+    ) -> Result<Response<GetMigrationHistoryResponse>, Status> {
+        let req = request.into_inner();
+        let query =
+            std::collections::HashMap::from([("is_edge".to_string(), req.is_edge.to_string())]);
+        match crate::http::handlers::schema::migration::migration_history(
+            axum::extract::State(self.app_state.clone()),
+            axum::extract::Path((req.space, req.label)),
+            axum::extract::Query(query),
+        )
+        .await
+        {
+            Ok(axum::Json(resp)) => Ok(Response::new(GetMigrationHistoryResponse {
+                history_json: serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()),
+                error: String::new(),
+            })),
+            Err(e) => Err(map_http_error(e)),
+        }
+    }
+
+    pub(crate) async fn handle_get_migration_status(
+        &self,
+        request: Request<GetMigrationStatusRequest>,
+    ) -> Result<Response<GetMigrationStatusResponse>, Status> {
+        let req = request.into_inner();
+        let query =
+            std::collections::HashMap::from([("is_edge".to_string(), req.is_edge.to_string())]);
+        match crate::http::handlers::schema::migration::migration_status(
+            axum::extract::State(self.app_state.clone()),
+            axum::extract::Path((req.space, req.label)),
+            axum::extract::Query(query),
+        )
+        .await
+        {
+            Ok(axum::Json(resp)) => Ok(Response::new(GetMigrationStatusResponse {
+                status_json: serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()),
+                error: String::new(),
+            })),
+            Err(e) => Err(map_http_error(e)),
+        }
+    }
+
     pub(crate) async fn handle_stream_migration_progress(
         &self,
         request: Request<StreamMigrationProgressRequest>,
@@ -214,5 +283,16 @@ impl<
         });
         let boxed: StreamMigrationProgressStream = Box::pin(stream);
         Ok(Response::new(boxed))
+    }
+}
+
+fn map_http_error(error: crate::http::error::HttpError) -> Status {
+    use crate::http::error::HttpError;
+    match error {
+        HttpError::BadRequest(message) => Status::invalid_argument(message),
+        HttpError::NotFound(message) => Status::not_found(message),
+        HttpError::Conflict(message) => Status::already_exists(message),
+        HttpError::Unauthorized(message) => Status::unauthenticated(message),
+        HttpError::InternalError(message) => Status::internal(message),
     }
 }

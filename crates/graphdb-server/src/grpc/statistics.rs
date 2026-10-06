@@ -137,6 +137,57 @@ impl<
         }))
     }
 
+    pub(crate) async fn handle_get_overview_statistics(
+        &self,
+        _request: Request<GetOverviewStatisticsRequest>,
+    ) -> Result<Response<GetOverviewStatisticsResponse>, Status> {
+        match crate::http::handlers::statistics::overview::overview(axum::extract::State(
+            self.app_state.clone(),
+        ))
+        .await
+        {
+            Ok(axum::Json(resp)) => Ok(Response::new(GetOverviewStatisticsResponse {
+                overview_json: serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()),
+                error: String::new(),
+            })),
+            Err(e) => Err(statistics_http_status(e)),
+        }
+    }
+
+    pub(crate) async fn handle_get_search_statistics(
+        &self,
+        _request: Request<GetSearchStatisticsRequest>,
+    ) -> Result<Response<GetSearchStatisticsResponse>, Status> {
+        match crate::http::handlers::statistics::query::search(axum::extract::State(
+            self.app_state.clone(),
+        ))
+        .await
+        {
+            Ok(axum::Json(resp)) => Ok(Response::new(GetSearchStatisticsResponse {
+                search_json: serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()),
+                error: String::new(),
+            })),
+            Err(e) => Err(statistics_http_status(e)),
+        }
+    }
+
+    pub(crate) async fn handle_get_migration_statistics(
+        &self,
+        _request: Request<GetMigrationStatisticsRequest>,
+    ) -> Result<Response<GetMigrationStatisticsResponse>, Status> {
+        match crate::http::handlers::statistics::migration::migration(axum::extract::State(
+            self.app_state.clone(),
+        ))
+        .await
+        {
+            Ok(axum::Json(resp)) => Ok(Response::new(GetMigrationStatisticsResponse {
+                migration_json: serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()),
+                error: String::new(),
+            })),
+            Err(e) => Err(statistics_http_status(e)),
+        }
+    }
+
     pub(crate) async fn handle_get_system_statistics(
         &self,
         _request: Request<GetSystemStatisticsRequest>,
@@ -199,5 +250,16 @@ impl<
             network_rx_bytes: network_rx_bytes as i64,
             network_tx_bytes: network_tx_bytes as i64,
         }))
+    }
+}
+
+fn statistics_http_status(error: crate::http::error::HttpError) -> Status {
+    use crate::http::error::HttpError;
+    match error {
+        HttpError::BadRequest(message) => Status::invalid_argument(message),
+        HttpError::NotFound(message) => Status::not_found(message),
+        HttpError::Conflict(message) => Status::already_exists(message),
+        HttpError::Unauthorized(message) => Status::unauthenticated(message),
+        HttpError::InternalError(message) => Status::internal(message),
     }
 }

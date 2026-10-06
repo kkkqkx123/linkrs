@@ -88,6 +88,62 @@ service GraphDBService {
   rpc MigrateExecute(MigrateExecuteRequest) returns (MigrateExecuteResponse);
   rpc MigrateRollback(MigrateRollbackRequest) returns (MigrateRollbackResponse);
   rpc StreamMigrationProgress(StreamMigrationProgressRequest) returns (stream MigrationProgressEvent);
+  rpc DryRunMigration(DryRunMigrationRequest) returns (DryRunMigrationResponse);
+  rpc GetMigrationHistory(GetMigrationHistoryRequest) returns (GetMigrationHistoryResponse);
+  rpc GetMigrationStatus(GetMigrationStatusRequest) returns (GetMigrationStatusResponse);
+
+  // Cursor Queries
+  rpc OpenCursor(OpenCursorRequest) returns (OpenCursorResponse);
+  rpc FetchCursor(FetchCursorRequest) returns (FetchCursorResponse);
+  rpc CloseCursor(CloseCursorRequest) returns (CloseCursorResponse);
+
+  // Transaction Inspection
+  rpc ListTransactions(ListTransactionsRequest) returns (ListTransactionsResponse);
+  rpc KillTransaction(KillTransactionRequest) returns (KillTransactionResponse);
+  rpc GetTransactionMetrics(GetTransactionMetricsRequest) returns (GetTransactionMetricsResponse);
+
+  // Sync Management
+  rpc GetSyncStatus(GetSyncStatusRequest) returns (GetSyncStatusResponse);
+  rpc RetryOutbox(RetryOutboxRequest) returns (RetryOutboxResponse);
+  rpc GetOutboxDiagnostics(GetOutboxDiagnosticsRequest) returns (GetOutboxDiagnosticsResponse);
+  rpc ListDeadLetters(ListDeadLettersRequest) returns (ListDeadLettersResponse);
+  rpc RequeueDeadLetters(RequeueDeadLettersRequest) returns (RequeueDeadLettersResponse);
+  rpc GetRetentionStatus(GetRetentionStatusRequest) returns (GetRetentionStatusResponse);
+  rpc RunRetention(RunRetentionRequest) returns (RunRetentionResponse);
+
+  // Import / Export
+  rpc ImportData(ImportDataRequest) returns (ImportDataResponse);
+  rpc GetImportStatus(GetImportStatusRequest) returns (GetImportStatusResponse);
+  rpc ExportData(ExportDataRequest) returns (ExportDataResponse);
+
+  // Fulltext
+  rpc RebuildFulltextIndex(RebuildFulltextIndexRequest) returns (RebuildFulltextIndexResponse);
+  rpc GetFulltextRebuildStatus(GetFulltextRebuildStatusRequest) returns (GetFulltextRebuildStatusResponse);
+  rpc ClearFulltextIndex(ClearFulltextIndexRequest) returns (ClearFulltextIndexResponse);
+  rpc ListInconsistentFulltext(ListInconsistentFulltextRequest) returns (ListInconsistentFulltextResponse);
+
+  // Query Extras
+  rpc ExplainQuery(ExplainQueryRequest) returns (ExplainQueryResponse);
+  rpc ExecuteBatchQuery(ExecuteBatchQueryRequest) returns (ExecuteBatchQueryResponse);
+
+  // Config Extras
+  rpc GetConfigKey(GetConfigKeyRequest) returns (GetConfigKeyResponse);
+  rpc BulkUpdateConfig(BulkUpdateConfigRequest) returns (BulkUpdateConfigResponse);
+
+  // Batch Extras
+  rpc DeleteBatch(DeleteBatchRequest) returns (DeleteBatchResponse);
+
+  // Vector Extras
+  rpc ScrollVector(ScrollVectorRequest) returns (ScrollVectorResponse);
+  rpc GetVectorCount(GetVectorCountRequest) returns (GetVectorCountResponse);
+  rpc RebuildVectorIndex(RebuildVectorIndexRequest) returns (RebuildVectorIndexResponse);
+  rpc GetVectorRebuildStatus(GetVectorRebuildStatusRequest) returns (GetVectorRebuildStatusResponse);
+  rpc ClearVectorIndex(ClearVectorIndexRequest) returns (ClearVectorIndexResponse);
+
+  // Statistics Extras
+  rpc GetOverviewStatistics(GetOverviewStatisticsRequest) returns (GetOverviewStatisticsResponse);
+  rpc GetSearchStatistics(GetSearchStatisticsRequest) returns (GetSearchStatisticsResponse);
+  rpc GetMigrationStatistics(GetMigrationStatisticsRequest) returns (GetMigrationStatisticsResponse);
 }
 
 // ============================================================
@@ -1041,4 +1097,445 @@ message MigrationProgressEvent {
   uint64 rows = 4;
   bool success = 5;
   string error = 6;
+}
+
+// ============================================================
+// Cursor Queries (parity with /v1/query/cursor/*)
+// ============================================================
+
+message OpenCursorRequest {
+  string query = 1;
+  optional string session_id = 2;
+}
+
+message OpenCursorResponse {
+  bool success = 1;
+  uint64 cursor_id = 2;
+  repeated string columns = 3;
+  string error = 4;
+}
+
+message FetchCursorRequest {
+  uint64 cursor_id = 1;
+  uint64 page_size = 2;
+  optional string session_id = 3;
+}
+
+message FetchCursorResponse {
+  bool success = 1;
+  repeated string columns = 2;
+  string rows_json = 3;
+  bool has_more = 4;
+  uint64 returned = 5;
+  string error = 6;
+}
+
+message CloseCursorRequest {
+  uint64 cursor_id = 1;
+  optional string session_id = 2;
+}
+
+message CloseCursorResponse {
+  bool success = 1;
+  bool closed = 2;
+  string error = 3;
+}
+
+// ============================================================
+// Transaction Inspection (parity with list/kill/metrics)
+// ============================================================
+
+message ListTransactionsRequest {}
+
+message TransactionInfo {
+  uint64 transaction_id = 1;
+  string state = 2;
+  string owner = 3;
+  uint64 elapsed_ms = 4;
+  uint64 last_activity_ms = 5;
+  bool rollback_only = 6;
+  uint64 staged_bytes = 7;
+  uint64 undo_bytes = 8;
+}
+
+message ListTransactionsResponse {
+  repeated TransactionInfo transactions = 1;
+  string error = 2;
+}
+
+message KillTransactionRequest {
+  uint64 transaction_id = 1;
+  optional string owner = 2;
+}
+
+message KillTransactionResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GetTransactionMetricsRequest {}
+
+message GetTransactionMetricsResponse {
+  string metrics_json = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Sync Management (parity with /v1/sync/*)
+// ============================================================
+
+message GetSyncStatusRequest {}
+
+message GetSyncStatusResponse {
+  bool is_running = 1;
+  uint64 outbox_pending = 2;
+  uint64 outbox_retries = 3;
+  uint64 outbox_dead_lettered = 4;
+  string status_json = 5;
+  string error = 6;
+}
+
+message RetryOutboxRequest {}
+
+message RetryOutboxResponse {
+  uint64 delivered = 1;
+  string error = 2;
+}
+
+message GetOutboxDiagnosticsRequest {}
+
+message GetOutboxDiagnosticsResponse {
+  string diagnostics_json = 1;
+  string error = 2;
+}
+
+message ListDeadLettersRequest {
+  optional string target = 1;
+  optional uint64 index_id = 2;
+  optional uint64 generation = 3;
+  optional uint64 limit = 4;
+  optional uint64 offset = 5;
+}
+
+message ListDeadLettersResponse {
+  string dead_letters_json = 1;
+  string error = 2;
+}
+
+message RequeueDeadLettersRequest {
+  optional string target = 1;
+  optional uint64 index_id = 2;
+  optional uint64 generation = 3;
+  optional uint64 limit = 4;
+  repeated int64 event_ids = 5;
+}
+
+message RequeueDeadLettersResponse {
+  uint64 requeued = 1;
+  string error = 2;
+}
+
+message GetRetentionStatusRequest {}
+
+message GetRetentionStatusResponse {
+  uint64 retention_lsn = 1;
+  string error = 2;
+}
+
+message RunRetentionRequest {
+  optional uint64 grace_lsn_distance = 1;
+  optional uint64 max_age_ms = 2;
+}
+
+message RunRetentionResponse {
+  uint64 pruned = 1;
+  uint64 archived = 2;
+  uint64 retention_lsn = 3;
+  string error = 4;
+}
+
+// ============================================================
+// Import / Export (parity with /v1/import, /v1/export)
+// ============================================================
+
+message ImportDataRequest {
+  string space = 1;
+  string format = 2;
+  string target_type = 3;
+  string target_name = 4;
+  optional uint64 batch_size = 5;
+  string content_text = 6;
+  optional string session_id = 7;
+}
+
+message ImportDataResponse {
+  bool success = 1;
+  uint64 rows_imported = 2;
+  uint64 rows_failed = 3;
+  string message = 4;
+  string error = 5;
+}
+
+message GetImportStatusRequest {
+  string job_id = 1;
+}
+
+message GetImportStatusResponse {
+  string job_id = 1;
+  string status = 2;
+  uint64 rows_imported = 3;
+  uint64 rows_failed = 4;
+  string error = 5;
+}
+
+message ExportDataRequest {
+  string query = 1;
+  string format = 2;
+  optional string session_id = 3;
+}
+
+message ExportDataResponse {
+  bool success = 1;
+  string content_text = 2;
+  uint64 row_count = 3;
+  string error = 4;
+}
+
+// ============================================================
+// Fulltext (parity with /v1/fulltext/*)
+// ============================================================
+
+message RebuildFulltextIndexRequest {
+  uint64 space_id = 1;
+  string tag_name = 2;
+  string field_name = 3;
+}
+
+message RebuildFulltextIndexResponse {
+  string rebuild_id = 1;
+  string status = 2;
+  string error = 3;
+}
+
+message GetFulltextRebuildStatusRequest {
+  string rebuild_id = 1;
+}
+
+message GetFulltextRebuildStatusResponse {
+  string rebuild_id = 1;
+  string status = 2;
+  string progress_json = 3;
+  string error = 4;
+}
+
+message ClearFulltextIndexRequest {
+  uint64 space_id = 1;
+  string tag_name = 2;
+  string field_name = 3;
+  bool force = 4;
+}
+
+message ClearFulltextIndexResponse {
+  bool ok = 1;
+  string error = 2;
+}
+
+message ListInconsistentFulltextRequest {}
+
+message ListInconsistentFulltextResponse {
+  string indexes_json = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Query Extras (explain + batch parity)
+// ============================================================
+
+message ExplainQueryRequest {
+  string query = 1;
+  optional string session_id = 2;
+}
+
+message ExplainQueryResponse {
+  bool success = 1;
+  string plan_json = 2;
+  string error = 3;
+}
+
+message ExecuteBatchQueryRequest {
+  optional string session_id = 1;
+  repeated string statements = 2;
+}
+
+message ExecuteBatchQueryResponse {
+  bool success = 1;
+  string results_json = 2;
+  string error = 3;
+}
+
+// ============================================================
+// Config Extras (single-key fetch + bulk update parity)
+// ============================================================
+
+message GetConfigKeyRequest {
+  string section = 1;
+  string key = 2;
+}
+
+message GetConfigKeyResponse {
+  string section = 1;
+  string key = 2;
+  string value_json = 3;
+  string error = 4;
+}
+
+message BulkUpdateConfigRequest {
+  string updates_json = 1;
+}
+
+message BulkUpdateConfigResponse {
+  bool success = 1;
+  string updated_json = 2;
+  string requires_restart_json = 3;
+  bool persisted = 4;
+  string error = 5;
+}
+
+// ============================================================
+// Batch Extras (delete parity)
+// ============================================================
+
+message DeleteBatchRequest {
+  string batch_id = 1;
+}
+
+message DeleteBatchResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Vector Extras (scroll/count/rebuild/clear parity)
+// ============================================================
+
+message ScrollVectorRequest {
+  uint64 space_id = 1;
+  string tag_name = 2;
+  string field_name = 3;
+  optional uint64 limit = 4;
+  optional string offset = 5;
+}
+
+message ScrollVectorResponse {
+  string points_json = 1;
+  string error = 2;
+}
+
+message GetVectorCountRequest {
+  uint64 space_id = 1;
+  string tag_name = 2;
+  string field_name = 3;
+}
+
+message GetVectorCountResponse {
+  uint64 count = 1;
+  string error = 2;
+}
+
+message RebuildVectorIndexRequest {
+  uint64 space_id = 1;
+  string tag_name = 2;
+  string field_name = 3;
+}
+
+message RebuildVectorIndexResponse {
+  string rebuild_id = 1;
+  string status = 2;
+  string error = 3;
+}
+
+message GetVectorRebuildStatusRequest {
+  string rebuild_id = 1;
+}
+
+message GetVectorRebuildStatusResponse {
+  string rebuild_id = 1;
+  string status = 2;
+  string progress_json = 3;
+  string error = 4;
+}
+
+message ClearVectorIndexRequest {
+  uint64 space_id = 1;
+  string tag_name = 2;
+  string field_name = 3;
+  bool force = 4;
+}
+
+message ClearVectorIndexResponse {
+  bool ok = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Statistics Extras (overview/search/migration parity)
+// ============================================================
+
+message GetOverviewStatisticsRequest {}
+
+message GetOverviewStatisticsResponse {
+  string overview_json = 1;
+  string error = 2;
+}
+
+message GetSearchStatisticsRequest {}
+
+message GetSearchStatisticsResponse {
+  string search_json = 1;
+  string error = 2;
+}
+
+message GetMigrationStatisticsRequest {}
+
+message GetMigrationStatisticsResponse {
+  string migration_json = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Migration Extras (dry-run/history/status parity)
+// ============================================================
+
+message DryRunMigrationRequest {
+  string plan_json = 1;
+}
+
+message DryRunMigrationResponse {
+  bool success = 1;
+  uint64 steps_completed = 2;
+  uint64 rows_migrated = 3;
+  repeated string errors = 4;
+  string error = 5;
+}
+
+message GetMigrationHistoryRequest {
+  string space = 1;
+  string label = 2;
+  bool is_edge = 3;
+}
+
+message GetMigrationHistoryResponse {
+  string history_json = 1;
+  string error = 2;
+}
+
+message GetMigrationStatusRequest {
+  string space = 1;
+  string label = 2;
+  bool is_edge = 3;
+}
+
+message GetMigrationStatusResponse {
+  string status_json = 1;
+  string error = 2;
 }

@@ -161,6 +161,19 @@ const META_COMMANDS: &[&str] = &[
     "\\r",
     "\\w",
     "\\history",
+    "\\stream",
+    "\\cursor",
+    "\\statistics",
+    "\\status",
+    "\\config",
+    "\\explain",
+    "\\profile",
+    "\\import",
+    "\\export",
+    "\\copy",
+    "\\export-space",
+    "\\export-schema",
+    "\\import-schema",
 ];
 
 const FORMAT_VALUES: &[&str] = &["table", "csv", "json", "vertical", "html"];

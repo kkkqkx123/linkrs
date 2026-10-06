@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { t, type MessageKey } from '$i18n';
+	import { functionsService } from '$services/functions';
+	import { schemaVersionsService } from '$services/schemaVersions';
 	import { schemaStore } from '$stores/schema';
 	import { theme } from '$stores/theme';
 	import { DATA_TYPE_LABELS } from '$config/constants';
@@ -10,7 +12,14 @@
 	import type { Space, Tag, EdgeType } from '$types/schema';
 	import type { components } from '$lib/api/schema';
 
-	type SchemaTab = 'spaces' | 'tags' | 'edges' | 'indexes' | 'visualization';
+	type SchemaTab =
+		| 'spaces'
+		| 'tags'
+		| 'edges'
+		| 'indexes'
+		| 'visualization'
+		| 'functions'
+		| 'versions';
 
 	const TABS: { id: SchemaTab; label: MessageKey }[] = [
 		{ id: 'spaces', label: 'sidebar.spaces' },
@@ -18,6 +27,8 @@
 		{ id: 'edges', label: 'sidebar.edges' },
 		{ id: 'indexes', label: 'sidebar.indexes' },
 		{ id: 'visualization', label: 'sidebar.visualization' },
+		{ id: 'functions', label: 'sidebar.functions' },
+		{ id: 'versions', label: 'sidebar.versions' },
 	];
 
 	type IndexInfo = components['schemas']['IndexInfo'] & {
@@ -72,6 +83,129 @@
 	let alterTagName = $state<string | null>(null);
 	let alterEdgeName = $state<string | null>(null);
 	let alterBusy = $state(false);
+
+	// Functions
+	let functions = $state<string[]>([]);
+	let isLoadingFunctions = $state(false);
+	let functionsError = $state<string | null>(null);
+	let functionsResult = $state('');
+	let newFunctionName = $state('');
+	let newFunctionImpl = $state('');
+
+	// Versions
+	let versionSpace = $state('');
+	let versionLabel = $state('');
+	let versionIsEdge = $state(false);
+	let versionFrom = $state(1);
+	let versionTo = $state(2);
+	let isLoadingVersions = $state(false);
+	let versionsError = $state<string | null>(null);
+	let versionsResult = $state('');
+
+	function stringifyPayload(payload: unknown): string {
+		try {
+			return JSON.stringify(payload, null, 2);
+		} catch {
+			return String(payload ?? '');
+		}
+	}
+
+	function functionNames(payload: unknown): string[] {
+		if (Array.isArray(payload)) {
+			return payload
+				.map((item) =>
+					typeof item === 'string'
+						? item
+						: (item as Record<string, unknown>)?.name,
+				)
+				.filter((name): name is string => typeof name === 'string');
+		}
+		if (payload && typeof payload === 'object') {
+			const record = payload as Record<string, unknown>;
+			const list = record.functions;
+			if (Array.isArray(list)) return functionNames(list);
+			if (typeof record.name === 'string') return [record.name];
+		}
+		return [];
+	}
+
+	async function loadFunctions() {
+		isLoadingFunctions = true;
+		functionsError = null;
+		try {
+			const payload = await functionsService.list();
+			functions = functionNames(payload);
+			functionsResult = stringifyPayload(payload);
+		} catch (err) {
+			functionsError =
+				err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			isLoadingFunctions = false;
+		}
+	}
+
+	async function showFunctionInfo(name: string) {
+		isLoadingFunctions = true;
+		functionsError = null;
+		try {
+			functionsResult = stringifyPayload(await functionsService.info(name));
+		} catch (err) {
+			functionsError =
+				err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			isLoadingFunctions = false;
+		}
+	}
+
+	async function registerFunction() {
+		isLoadingFunctions = true;
+		functionsError = null;
+		try {
+			functionsResult = stringifyPayload(
+				await functionsService.register({
+					name: newFunctionName,
+					implementation: newFunctionImpl,
+				}),
+			);
+			newFunctionName = '';
+			newFunctionImpl = '';
+			await loadFunctions();
+		} catch (err) {
+			functionsError =
+				err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			isLoadingFunctions = false;
+		}
+	}
+
+	async function unregisterFunction(name: string) {
+		isLoadingFunctions = true;
+		functionsError = null;
+		try {
+			functionsResult = stringifyPayload(
+				await functionsService.unregister(name),
+			);
+			await loadFunctions();
+		} catch (err) {
+			functionsError =
+				err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			isLoadingFunctions = false;
+		}
+	}
+
+	async function runVersionQuery(fn: () => Promise<unknown>) {
+		isLoadingVersions = true;
+		versionsError = null;
+		try {
+			versionsResult = stringifyPayload(await fn());
+		} catch (err) {
+			versionsError =
+				err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			isLoadingVersions = false;
+		}
+	}
 
 	const dataTypes = Object.values(DATA_TYPE_LABELS).filter(Boolean);
 
@@ -640,6 +774,206 @@
 								</tbody>
 							</table>
 						</div>
+					{/if}
+				{:else if activeTab === 'functions'}
+					<div class="flex justify-between items-center mb-4">
+						<span class="text-sm text-gray-500 dark:text-gray-400">
+							{functions.length} {t('sidebar.functions')}
+						</span>
+						<button
+							class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer disabled:opacity-50"
+							onclick={loadFunctions}
+							disabled={isLoadingFunctions}
+						>
+							{t('common.refresh')}
+						</button>
+					</div>
+					{#if functionsError}
+						<p class="text-xs text-red-500 mb-2">{functionsError}</p>
+					{/if}
+					<div class="grid md:grid-cols-2 gap-2 text-sm mb-4">
+						<label class="flex flex-col gap-1 text-xs text-gray-500">
+							{t('common.name')}
+							<input
+								class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								bind:value={newFunctionName}
+							/>
+						</label>
+						<label class="flex flex-col gap-1 text-xs text-gray-500">
+							{t('functions.implementation')}
+							<input
+								class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								placeholder="/usr/lib/graphdb/udf.so"
+								bind:value={newFunctionImpl}
+							/>
+						</label>
+					</div>
+					<button
+						class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer disabled:opacity-50 mb-4"
+						onclick={registerFunction}
+						disabled={isLoadingFunctions || !newFunctionName || !newFunctionImpl}
+					>
+						{t('common.create')}
+					</button>
+					{#if isLoadingFunctions}
+						<div class="flex items-center justify-center p-8">
+							<div
+								class="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full"
+							></div>
+						</div>
+					{:else if functions.length === 0 && !functionsResult}
+						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
+							{t('functions.empty')}
+						</p>
+					{:else}
+						<div class="overflow-x-auto mb-4">
+							<table class="w-full text-sm border-collapse">
+								<thead>
+									<tr class="bg-gray-50 dark:bg-gray-800/50">
+										<th
+											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
+											>{t('common.name')}</th
+										>
+										<th
+											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
+											>{t('common.actions')}</th
+										>
+									</tr>
+								</thead>
+								<tbody>
+									{#each functions as name (name)}
+										<tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30">
+											<td
+												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 font-mono text-gray-800 dark:text-gray-200"
+												>{name}</td
+											>
+											<td
+												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50"
+											>
+												<button
+													class="text-blue-500 hover:text-blue-700 text-xs cursor-pointer"
+													onclick={() => showFunctionInfo(name)}
+													>{t('common.detail')}</button
+												>
+												<button
+													class="ml-2 text-red-500 hover:text-red-700 text-xs cursor-pointer"
+													onclick={() => unregisterFunction(name)}
+													>{t('common.delete')}</button
+												>
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					{/if}
+					{#if functionsResult}
+						<pre
+							class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-64 text-gray-700 dark:text-gray-300">{functionsResult}</pre
+						>
+					{/if}
+				{:else if activeTab === 'versions'}
+					<div class="grid md:grid-cols-5 gap-2 text-sm mb-3">
+						<label class="flex flex-col gap-1 text-xs text-gray-500">
+							{t('migration.space')}
+							<input
+								class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								bind:value={versionSpace}
+							/>
+						</label>
+						<label class="flex flex-col gap-1 text-xs text-gray-500">
+							{t('migration.label')}
+							<input
+								class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								bind:value={versionLabel}
+							/>
+						</label>
+						<label class="flex flex-col gap-1 text-xs text-gray-500">
+							{t('migration.fromVersion')}
+							<input
+								type="number"
+								class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								bind:value={versionFrom}
+							/>
+						</label>
+						<label class="flex flex-col gap-1 text-xs text-gray-500">
+							{t('migration.toVersion')}
+							<input
+								type="number"
+								class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								bind:value={versionTo}
+							/>
+						</label>
+						<label class="flex items-center gap-1 text-xs text-gray-500 mt-5">
+							<input type="checkbox" bind:checked={versionIsEdge} />
+							{t('migration.isEdge')}
+						</label>
+					</div>
+					{#if versionsError}
+						<p class="text-xs text-red-500 mb-2">{versionsError}</p>
+					{/if}
+					<div class="flex flex-wrap gap-2 mb-4">
+						<button
+							class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer disabled:opacity-50"
+							onclick={() =>
+								runVersionQuery(() =>
+									schemaVersionsService.history(
+										versionSpace,
+										versionLabel,
+										versionIsEdge,
+									),
+								)}
+							disabled={isLoadingVersions || !versionSpace || !versionLabel}
+						>
+							{t('versions.history')}
+						</button>
+						<button
+							class="px-3 py-1.5 bg-gray-100 dark:bg-gray-700/50 text-gray-700 dark:text-gray-200 text-sm rounded cursor-pointer disabled:opacity-50"
+							onclick={() =>
+								runVersionQuery(() =>
+									schemaVersionsService.changes(
+										versionSpace,
+										versionLabel,
+										versionFrom,
+										versionTo,
+										versionIsEdge,
+									),
+								)}
+							disabled={isLoadingVersions || !versionSpace || !versionLabel}
+						>
+							{t('versions.changes')}
+						</button>
+						<button
+							class="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-sm rounded cursor-pointer disabled:opacity-50"
+							onclick={() =>
+								runVersionQuery(() =>
+									schemaVersionsService.breakingChanges(
+										versionSpace,
+										versionLabel,
+										versionFrom,
+										versionTo,
+										versionIsEdge,
+									),
+								)}
+							disabled={isLoadingVersions || !versionSpace || !versionLabel}
+						>
+							{t('versions.breaking')}
+						</button>
+					</div>
+					{#if isLoadingVersions}
+						<div class="flex items-center justify-center p-8">
+							<div
+								class="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full"
+							></div>
+						</div>
+					{:else if versionsResult}
+						<pre
+							class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-96 text-gray-700 dark:text-gray-300">{versionsResult}</pre
+						>
+					{:else}
+						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
+							{t('versions.hint')}
+						</p>
 					{/if}
 				{:else if activeTab === 'visualization'}
 					<SchemaErGraph {tags} {edgeTypes} {isDark} />

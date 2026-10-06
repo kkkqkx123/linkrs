@@ -23,6 +23,7 @@ pub async fn run_server<
         + StorageSyncContextOps
         + StorageOperationContextOps
         + StorageSnapshotOps
+        + crate::storage::AutoCommitBatchOps
         + Clone
         + Send
         + Sync
@@ -76,6 +77,7 @@ pub async fn run_server_with_grpc_service<
         + StorageSchemaContextOps
         + StorageSyncContextOps
         + StorageOperationContextOps
+        + crate::storage::AutoCommitBatchOps
         + Clone
         + Send
         + Sync

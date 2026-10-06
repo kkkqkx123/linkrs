@@ -178,6 +178,7 @@ mod tests {
                 code: "QUERY_ERROR".to_string(),
                 message: "boom".to_string(),
                 details: None,
+                position: None,
             }),
             metadata: QueryMetadata::default(),
         };

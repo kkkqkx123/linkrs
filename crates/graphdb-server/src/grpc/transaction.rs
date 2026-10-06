@@ -149,6 +149,74 @@ impl<
         }))
     }
 
+    pub(crate) async fn handle_list_transactions(
+        &self,
+        _request: Request<ListTransactionsRequest>,
+    ) -> Result<Response<ListTransactionsResponse>, Status> {
+        let manager = self.app_state.server.get_txn_manager();
+        let transactions = manager
+            .list_transactions()
+            .into_iter()
+            .map(|info| TransactionInfo {
+                transaction_id: info.id.as_u64(),
+                state: info.state.to_string(),
+                owner: info.owner.unwrap_or_default(),
+                elapsed_ms: info.elapsed.as_millis() as u64,
+                last_activity_ms: info.last_activity.as_millis() as u64,
+                rollback_only: info.rollback_only,
+                staged_bytes: info.staged_bytes,
+                undo_bytes: info.undo_bytes,
+            })
+            .collect();
+        Ok(Response::new(ListTransactionsResponse {
+            transactions,
+            error: String::new(),
+        }))
+    }
+
+    pub(crate) async fn handle_kill_transaction(
+        &self,
+        request: Request<KillTransactionRequest>,
+    ) -> Result<Response<KillTransactionResponse>, Status> {
+        let req = request.into_inner();
+        let manager = self.app_state.server.get_txn_manager();
+        match manager.kill_transaction(req.transaction_id.into(), req.owner.as_deref()) {
+            Ok(()) => Ok(Response::new(KillTransactionResponse {
+                success: true,
+                error: String::new(),
+            })),
+            Err(e) => Err(transaction_status(e)),
+        }
+    }
+
+    pub(crate) async fn handle_get_transaction_metrics(
+        &self,
+        _request: Request<GetTransactionMetricsRequest>,
+    ) -> Result<Response<GetTransactionMetricsResponse>, Status> {
+        let manager = self.app_state.server.get_txn_manager();
+        let stats = manager.stats();
+        let resources = manager.resource_metrics();
+        let metrics = serde_json::json!({
+            "outcomes": {
+                "begun": stats.total_transactions.load(std::sync::atomic::Ordering::Relaxed),
+                "active": stats.active_transactions.load(std::sync::atomic::Ordering::Relaxed),
+                "committed": stats.committed_transactions.load(std::sync::atomic::Ordering::Relaxed),
+                "aborted": stats.aborted_transactions.load(std::sync::atomic::Ordering::Relaxed),
+            },
+            "resources": {
+                "active_statements": stats.active_statements.load(std::sync::atomic::Ordering::Relaxed),
+                "active_snapshots": resources.active_snapshots,
+                "pending_writes": resources.pending_writes,
+                "staged_wal_bytes": resources.staged_wal_bytes,
+                "undo_bytes": resources.undo_bytes,
+            },
+        });
+        Ok(Response::new(GetTransactionMetricsResponse {
+            metrics_json: serde_json::to_string(&metrics).unwrap_or_else(|_| "{}".to_string()),
+            error: String::new(),
+        }))
+    }
+
     pub(crate) async fn handle_release_savepoint(
         &self,
         request: Request<ReleaseSavepointRequest>,

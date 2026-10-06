@@ -15,6 +15,7 @@
 		operationsService,
 		type ActiveTransaction,
 	} from '$services/operations';
+	import { syncService } from '$services/sync';
 	import {
 		formatBytes,
 		formatCount,
@@ -146,11 +147,38 @@
 	let opsLoading = $state(false);
 	let opsError = $state<string | null>(null);
 	let configText = $state('');
+	let configSections = $state<Record<string, Record<string, unknown>>>({});
+	let configDrafts = $state<Record<string, string>>({});
+	let configBusy = $state<Record<string, boolean>>({});
+	let configMessage = $state<string | null>(null);
 	let activeTransactions = $state<ActiveTransaction[]>([]);
+
+	let syncLoading = $state(false);
+	let syncError = $state<string | null>(null);
+	let syncMessage = $state<string | null>(null);
+	let syncDiagnostics = $state('');
+	let deadLettersText = $state('');
+	let degradedText = $state('');
+	let retentionText = $state('');
+
+	function configEntryKey(section: string, key: string): string {
+		return `${section}.${key}`;
+	}
+
+	function parseDraftValue(raw: string): unknown {
+		const trimmed = raw.trim();
+		if (trimmed === '') return '';
+		try {
+			return JSON.parse(trimmed);
+		} catch {
+			return raw;
+		}
+	}
 
 	async function loadOps() {
 		opsLoading = true;
 		opsError = null;
+		configMessage = null;
 		try {
 			const [config, txns] = await Promise.all([
 				operationsService.config(),
@@ -161,11 +189,138 @@
 			} catch {
 				configText = String(config ?? '');
 			}
+			if (config && typeof config === 'object' && !Array.isArray(config)) {
+				const grouped: Record<string, Record<string, unknown>> = {};
+				const drafts: Record<string, string> = {};
+				for (const [section, values] of Object.entries(
+					config as Record<string, unknown>,
+				)) {
+					if (values && typeof values === 'object' && !Array.isArray(values)) {
+						const entries = values as Record<string, unknown>;
+						grouped[section] = entries;
+						for (const [key, value] of Object.entries(entries)) {
+							const entry = configEntryKey(section, key);
+							drafts[entry] =
+								typeof value === 'string' ? value : JSON.stringify(value ?? null);
+						}
+					}
+				}
+				configSections = grouped;
+				configDrafts = drafts;
+			} else {
+				configSections = {};
+				configDrafts = {};
+			}
 			activeTransactions = txns;
 		} catch (err) {
 			opsError = err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			opsLoading = false;
+		}
+	}
+
+	async function saveConfigKey(section: string, key: string) {
+		const entry = configEntryKey(section, key);
+		configBusy = { ...configBusy, [entry]: true };
+		configMessage = null;
+		try {
+			const value = parseDraftValue(configDrafts[entry] ?? '');
+			await operationsService.updateConfigKey(section, key, value);
+			configMessage = t('monitoring.configSaved', { id: entry });
+			await loadOps();
+		} catch (err) {
+			opsError = err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			configBusy = { ...configBusy, [entry]: false };
+		}
+	}
+
+	async function resetConfigKey(section: string, key: string) {
+		const entry = configEntryKey(section, key);
+		if (!confirm(t('monitoring.confirmReset', { id: entry }))) return;
+		configBusy = { ...configBusy, [entry]: true };
+		configMessage = null;
+		try {
+			await operationsService.resetConfigKey(section, key);
+			configMessage = t('monitoring.configReset', { id: entry });
+			await loadOps();
+		} catch (err) {
+			opsError = err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			configBusy = { ...configBusy, [entry]: false };
+		}
+	}
+
+	function stringifyPayload(payload: unknown): string {
+		try {
+			return JSON.stringify(payload, null, 2);
+		} catch {
+			return String(payload ?? '');
+		}
+	}
+
+	async function loadSyncDiagnostics() {
+		syncLoading = true;
+		syncError = null;
+		syncMessage = null;
+		try {
+			const [diagnostics, deadLetters, degraded, retention] = await Promise.all([
+				syncService.diagnostics(),
+				syncService.deadLetters({ limit: 20 }),
+				syncService.degradedRanges(),
+				syncService.retentionStatus(),
+			]);
+			syncDiagnostics = stringifyPayload(diagnostics);
+			deadLettersText = stringifyPayload(deadLetters);
+			degradedText = stringifyPayload(degraded);
+			retentionText = stringifyPayload(retention);
+		} catch (err) {
+			syncError = err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			syncLoading = false;
+		}
+	}
+
+	async function retryOutbox() {
+		syncLoading = true;
+		syncError = null;
+		try {
+			const result = await syncService.retryOutbox();
+			syncMessage = stringifyPayload(result);
+			await loadSyncDiagnostics();
+		} catch (err) {
+			syncError = err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			syncLoading = false;
+		}
+	}
+
+	async function requeueDeadLetters() {
+		if (!confirm(t('monitoring.confirmRequeue'))) return;
+		syncLoading = true;
+		syncError = null;
+		try {
+			const result = await syncService.requeue({ limit: 100 });
+			syncMessage = stringifyPayload(result);
+			await loadSyncDiagnostics();
+		} catch (err) {
+			syncError = err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			syncLoading = false;
+		}
+	}
+
+	async function runRetention() {
+		syncLoading = true;
+		syncError = null;
+		try {
+			const result = await syncService.retentionRun();
+			syncMessage = stringifyPayload(result);
+			await loadSyncDiagnostics();
+		} catch (err) {
+			syncError = err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			syncLoading = false;
 		}
 	}
 
@@ -861,10 +1016,19 @@
 		<section
 			class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
 		>
-			<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
-				{t('monitoring.sync')}
-			</h2>
-			<div class="space-y-1 text-sm font-mono">
+			<div class="flex items-center justify-between mb-3">
+				<h2 class="font-semibold text-gray-800 dark:text-gray-100">
+					{t('monitoring.sync')}
+				</h2>
+				<button
+					class="px-3 py-1 text-xs rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+					onclick={loadSyncDiagnostics}
+					disabled={syncLoading}
+				>
+					{syncLoading ? t('monitoring.loading') : t('common.refresh')}
+				</button>
+			</div>
+			<div class="space-y-1 text-sm font-mono mb-3">
 				<div class="flex justify-between">
 					<span class="text-gray-500">{t('common.status')}</span>
 					<span
@@ -892,6 +1056,87 @@
 								num(monitor.snapshots.sync, 'outbox_dead_lettered'),
 						)}
 					</span>
+				</div>
+			</div>
+			{#if syncError}
+				<p class="text-xs text-red-500 mb-2">{syncError}</p>
+			{/if}
+			{#if syncMessage}
+				<pre
+					class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-32 mb-2 text-gray-700 dark:text-gray-300">{syncMessage}</pre
+				>
+			{/if}
+			<div class="flex flex-wrap gap-2 mb-3">
+				<button
+					class="px-2 py-1 text-xs rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+					onclick={retryOutbox}
+					disabled={syncLoading}
+				>
+					{t('monitoring.retryOutbox')}
+				</button>
+				<button
+					class="px-2 py-1 text-xs rounded bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50 cursor-pointer"
+					onclick={requeueDeadLetters}
+					disabled={syncLoading}
+				>
+					{t('monitoring.requeueDeadLetters')}
+				</button>
+				<button
+					class="px-2 py-1 text-xs rounded bg-gray-500 hover:bg-gray-600 text-white disabled:opacity-50 cursor-pointer"
+					onclick={runRetention}
+					disabled={syncLoading}
+				>
+					{t('monitoring.runRetention')}
+				</button>
+			</div>
+			<div class="grid md:grid-cols-2 gap-3 text-xs">
+				<div>
+					<h3 class="font-medium text-gray-500 dark:text-gray-400 mb-1">
+						{t('monitoring.deadLetters')}
+					</h3>
+					{#if deadLettersText}
+						<pre
+							class="font-mono bg-gray-50 dark:bg-gray-800/50 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-40 text-gray-700 dark:text-gray-300">{deadLettersText}</pre
+						>
+					{:else}
+						<p class="text-gray-400">{t('monitoring.noData')}</p>
+					{/if}
+				</div>
+				<div>
+					<h3 class="font-medium text-gray-500 dark:text-gray-400 mb-1">
+						{t('monitoring.degradedRanges')}
+					</h3>
+					{#if degradedText}
+						<pre
+							class="font-mono bg-gray-50 dark:bg-gray-800/50 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-40 text-gray-700 dark:text-gray-300">{degradedText}</pre
+						>
+					{:else}
+						<p class="text-gray-400">{t('monitoring.noData')}</p>
+					{/if}
+				</div>
+				<div>
+					<h3 class="font-medium text-gray-500 dark:text-gray-400 mb-1">
+						{t('monitoring.diagnostics')}
+					</h3>
+					{#if syncDiagnostics}
+						<pre
+							class="font-mono bg-gray-50 dark:bg-gray-800/50 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-40 text-gray-700 dark:text-gray-300">{syncDiagnostics}</pre
+						>
+					{:else}
+						<p class="text-gray-400">{t('monitoring.noData')}</p>
+					{/if}
+				</div>
+				<div>
+					<h3 class="font-medium text-gray-500 dark:text-gray-400 mb-1">
+						{t('monitoring.retention')}
+					</h3>
+					{#if retentionText}
+						<pre
+							class="font-mono bg-gray-50 dark:bg-gray-800/50 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-40 text-gray-700 dark:text-gray-300">{retentionText}</pre
+						>
+					{:else}
+						<p class="text-gray-400">{t('monitoring.noData')}</p>
+					{/if}
 				</div>
 			</div>
 		</section>
@@ -1002,7 +1247,51 @@
 				<h3 class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
 					{t('monitoring.config')}
 				</h3>
-				{#if configText}
+				{#if configMessage}
+					<p class="text-xs text-green-600 dark:text-green-400 mb-2">{configMessage}</p>
+				{/if}
+				{#if Object.keys(configSections).length > 0}
+					<div class="space-y-3 max-h-96 overflow-auto">
+						{#each Object.entries(configSections) as [section, values] (section)}
+							<details
+								class="border border-gray-200 dark:border-gray-700 rounded"
+								open={section === 'monitoring'}
+							>
+								<summary
+									class="px-3 py-1.5 text-xs font-medium bg-gray-50 dark:bg-gray-800/50 cursor-pointer text-gray-700 dark:text-gray-300"
+								>
+									{section}
+								</summary>
+								<div class="p-2 space-y-2">
+									{#each Object.keys(values) as key (key)}
+										{@const entry = configEntryKey(section, key)}
+										<div class="flex items-center gap-2 text-xs">
+											<span class="font-mono w-40 shrink-0 truncate" title={key}>{key}</span>
+											<input
+												class="flex-1 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+												bind:value={configDrafts[entry]}
+											/>
+											<button
+												class="px-2 py-1 rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+												onclick={() => saveConfigKey(section, key)}
+												disabled={configBusy[entry] === true}
+											>
+												{t('common.save')}
+											</button>
+											<button
+												class="px-2 py-1 rounded bg-gray-100 dark:bg-gray-700/50 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50 cursor-pointer"
+												onclick={() => resetConfigKey(section, key)}
+												disabled={configBusy[entry] === true}
+											>
+												{t('common.clear')}
+											</button>
+										</div>
+									{/each}
+								</div>
+							</details>
+						{/each}
+					</div>
+				{:else if configText}
 					<pre
 						class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-64 text-gray-700 dark:text-gray-300">{configText}</pre
 					>
