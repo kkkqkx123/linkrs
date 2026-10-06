@@ -18,6 +18,9 @@
 		type ExecutionPreference,
 	} from '$utils/autoRoute';
 	import { graphStore } from '$stores/graph';
+	import { historyStore } from '$stores/history';
+	import { streamStore } from '$stores/stream';
+	import { cursorStore } from '$stores/cursor';
 	import { theme } from '$stores/theme';
 	import {
 		formatExecutionTime,
@@ -159,20 +162,29 @@
 			executionTime = s.executionTime;
 			error = s.error;
 			activeView = s.activeView;
-			history = s.history;
-			favorites = s.favorites;
-			stream = s.stream;
-			cursor = s.cursor;
 			resultMode = s.resultMode;
 			executionPreference = s.executionPreference;
 			autoStreamThreshold = s.autoStreamThreshold;
 			autoDecision = s.autoDecision;
+		});
+		const unsubHistory = historyStore.subscribe((s) => {
+			history = s.history;
+			favorites = s.favorites;
+		});
+		const unsubStream = streamStore.subscribe((s) => {
+			stream = s;
+		});
+		const unsubCursor = cursorStore.subscribe((s) => {
+			cursor = s;
 		});
 		const unsubTheme = theme.subscribe((v) => {
 			isDark = v === 'dark';
 		});
 		return () => {
 			unsub();
+			unsubHistory();
+			unsubStream();
+			unsubCursor();
 			unsubTheme();
 			if (saveTimer) clearTimeout(saveTimer);
 			if (validateTimer) clearTimeout(validateTimer);

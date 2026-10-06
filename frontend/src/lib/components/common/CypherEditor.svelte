@@ -112,6 +112,15 @@
 		instance.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => {
 			onExecute?.(resolveExecutionText(instance));
 		});
+		instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyZ, () => {
+			instance.trigger('keyboard', 'undo', null);
+		});
+		instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyZ, () => {
+			instance.trigger('keyboard', 'redo', null);
+		});
+		instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyY, () => {
+			instance.trigger('keyboard', 'redo', null);
+		});
 		instance.addAction({
 			id: 'graphdb-run-selection',
 			label: t('common.runSelectionAtCursor'),

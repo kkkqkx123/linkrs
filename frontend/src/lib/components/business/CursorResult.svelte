@@ -3,7 +3,7 @@
 	import VirtualTable from '$components/common/VirtualTable.svelte';
 	import CytoscapeCanvas from '$components/common/CytoscapeCanvas.svelte';
 	import GraphPreviewControls from '$components/business/GraphPreviewControls.svelte';
-	import type { CursorState } from '$stores/console';
+	import type { CursorState } from '$stores/cursor';
 	import type { QueryResult } from '$types/query';
 	import { formatRowCount } from '$utils/parseData';
 	import { exportStreamViaServer } from '$utils/export';

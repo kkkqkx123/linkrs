@@ -1,10 +1,10 @@
 import { writable } from 'svelte/store';
 import type {
-	GraphData,
 	LayoutType,
 	NodeDetail,
 	EdgeDetail,
 } from '$types/graph';
+import type { GraphData } from '$types/graph';
 
 export type { NodeDetail, EdgeDetail };
 
@@ -144,6 +144,19 @@ function createGraphStore() {
 		},
 	});
 
+	// Use Map for O(1) deduplication during merge operations
+	let nodeMap = new Map<string, GraphData['nodes'][number]>();
+	let edgeMap = new Map<string, GraphData['edges'][number]>();
+
+	function rebuildMaps(data: GraphData | null) {
+		nodeMap = new Map();
+		edgeMap = new Map();
+		if (data) {
+			for (const node of data.nodes) nodeMap.set(node.id, node);
+			for (const edge of data.edges) edgeMap.set(edge.id, edge);
+		}
+	}
+
 	return {
 		subscribe,
 		setGraphData: (data: GraphData) =>
@@ -153,6 +166,7 @@ function createGraphStore() {
 					s.edgeStyles,
 					data,
 				);
+				rebuildMaps(data);
 				const newState = {
 					...s,
 					graphData: data,
@@ -171,19 +185,17 @@ function createGraphStore() {
 			})),
 		mergeGraphData: (data: GraphData) =>
 			update((s) => {
-				const nodeIds = new Set((s.graphData?.nodes ?? []).map((n) => n.id));
-				const edgeIds = new Set((s.graphData?.edges ?? []).map((e) => e.id));
 				const nodes = [...(s.graphData?.nodes ?? [])];
 				const edges = [...(s.graphData?.edges ?? [])];
 				for (const node of data.nodes) {
-					if (!nodeIds.has(node.id)) {
-						nodeIds.add(node.id);
+					if (!nodeMap.has(node.id)) {
+						nodeMap.set(node.id, node);
 						nodes.push(node);
 					}
 				}
 				for (const edge of data.edges) {
-					if (!edgeIds.has(edge.id)) {
-						edgeIds.add(edge.id);
+					if (!edgeMap.has(edge.id)) {
+						edgeMap.set(edge.id, edge);
 						edges.push(edge);
 					}
 				}
@@ -202,6 +214,8 @@ function createGraphStore() {
 				persistStyles(newState);
 				return newState;
 			}),
+		hasNode: (id: string): boolean => nodeMap.has(id),
+		hasEdge: (id: string): boolean => edgeMap.has(id),
 		setLayout: (layout: LayoutType) => update((s) => ({ ...s, layout })),
 		setZoom: (zoom: number) => update((s) => ({ ...s, zoom })),
 		selectNode: (id: string, multi = false) =>
