@@ -16,6 +16,7 @@
 		type ActiveTransaction,
 	} from '$services/operations';
 	import { syncService } from '$services/sync';
+	import TrendChart from '$components/common/TrendChart.svelte';
 	import {
 		formatBytes,
 		formatCount,
@@ -58,24 +59,44 @@
 	const search = $derived(monitor.snapshots.search);
 
 	const trendPoints = $derived(overview?.timeseries ?? []);
-	const trendPath = $derived.by(() => {
-		if (trendPoints.length === 0) return '';
-		const width = 600;
-		const height = 80;
-		const maxQ = Math.max(1, ...trendPoints.map((p) => Number(p.queries) || 0));
-		const step = trendPoints.length > 1 ? width / (trendPoints.length - 1) : 0;
-		return trendPoints
-			.map((p, i) => {
-				const x = (i * step).toFixed(1);
-				const y = (
-					height -
-					((Number(p.queries) || 0) / maxQ) * (height - 8) -
-					4
-				).toFixed(1);
-				return `${i === 0 ? 'M' : 'L'}${x},${y}`;
-			})
-			.join(' ');
+
+	// Multi-series trend data for the TrendChart: queries, latency, and errors
+	// per timestamp, each normalized independently inside the chart.
+	const trendSeries = $derived.by(() => {
+		const points = trendPoints;
+		if (points.length === 0) return [];
+		return [
+			{
+				key: 'queries',
+				label: t('monitoring.qps'),
+				color: '#3b82f6',
+				values: points.map((p) => Number(p.queries) || 0),
+			},
+			{
+				key: 'latency',
+				label: t('monitoring.avgLatency'),
+				color: '#14b8a6',
+				values: points.map((p) => Number(p.avg_latency_ms) || 0),
+			},
+			{
+				key: 'errors',
+				label: t('monitoring.errors'),
+				color: '#ef4444',
+				values: points.map((p) => Number(p.errors) || 0),
+			},
+		];
 	});
+
+	const trendXLabels = $derived(
+		trendPoints.map((p) => {
+			const second = Number(p.second) || 0;
+			if (!second) return '';
+			return new Date(second * 1000).toLocaleTimeString([], {
+				hour: '2-digit',
+				minute: '2-digit',
+			});
+		}),
+	);
 
 	const memRatio = $derived.by(() => {
 		const used = Number(system?.memory_usage?.used_bytes ?? NaN);
@@ -602,27 +623,21 @@
 			</div>
 		</div>
 		{#if trendPoints.length > 0}
-			<div class="mt-4">
-				<div class="text-xs text-gray-500 dark:text-gray-400 mb-1">
-					{t('monitoring.trend')}: {formatCount(
-						trendPoints.reduce((a, p) => a + (Number(p.queries) || 0), 0),
-					)}
-					{t('monitoring.queriesAvg')}
-					{formatLatencyMs(
-						trendPoints.reduce(
-							(a, p) => a + (Number(p.avg_latency_ms) || 0),
-							0,
-						) / Math.max(1, trendPoints.length),
-					)}
-				</div>
-				<svg
-					viewBox="0 0 600 80"
-					class="w-full h-20 bg-gray-50 dark:bg-gray-800/50 rounded"
-					preserveAspectRatio="none"
-				>
-					<path d={trendPath} fill="none" stroke="#3b82f6" stroke-width="2" />
-				</svg>
-			</div>
+		 <div class="mt-4">
+		  <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">
+		   {t('monitoring.trend')}: {formatCount(
+		    trendPoints.reduce((a, p) => a + (Number(p.queries) || 0), 0),
+		   )}
+		   {t('monitoring.queriesAvg')}
+		   {formatLatencyMs(
+		    trendPoints.reduce(
+		     (a, p) => a + (Number(p.avg_latency_ms) || 0),
+		     0,
+		    ) / Math.max(1, trendPoints.length),
+		   )}
+		  </div>
+		  <TrendChart series={trendSeries} xLabels={trendXLabels} height={120} />
+		 </div>
 		{/if}
 	</section>
 

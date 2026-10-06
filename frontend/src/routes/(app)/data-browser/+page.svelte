@@ -3,10 +3,10 @@
 	import { t } from '$i18n';
 	import { get } from 'svelte/store';
 	import { goto } from '$app/navigation';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { dataBrowserStore } from '$stores/dataBrowser';
 	import { graphStore } from '$stores/graph';
 	import { schemaStore } from '$stores/schema';
-	import { consoleStore } from '$stores/console';
 	import { dataBrowserService } from '$services/dataBrowser';
 	import { formatCellValue } from '$utils/parseData';
 	import {
@@ -17,8 +17,10 @@
 	} from '$utils/cypherTemplates';
 	import PageSkeleton from '$components/common/PageSkeleton.svelte';
 	import FilterPanel from '$components/business/FilterPanel.svelte';
+	import EditPreviewModal from '$components/business/EditPreviewModal.svelte';
 	import type { VertexData, EdgeData, Statistics } from '$types/dataBrowser';
 	import type { Tag, EdgeType } from '$types/schema';
+	import { queryService } from '$services/query';
 
 	let currentSpace = $state<string | null>(null);
 	let tags = $state<Tag[]>([]);
@@ -191,37 +193,287 @@
 		}
 	}
 
-	function editInConsole(template: string) {
-		consoleStore.setEditorContent(template);
-		goto('/console');
-	}
+	// --- Edit preview with optimistic conflict protection ---
 
-	function vertexUpdateTemplate(v: VertexData): string {
-		return buildVertexUpdate(String(v.id), v.properties ?? {});
-	}
+	type EditTarget =
+		| { kind: 'vertex'; data: VertexData }
+		| { kind: 'edge'; data: EdgeData };
 
-	function vertexDeleteTemplate(v: VertexData): string {
-		return buildVertexDelete(String(v.id));
-	}
+	let editOpen = $state(false);
+	let editTarget = $state<EditTarget | null>(null);
+	let editOriginalProps = $state<Record<string, unknown>>({});
+	let editedProps = $state<Record<string, unknown>>({});
+	let editBusy = $state(false);
+	let editError = $state<string | null>(null);
+	let editDone = $state(false);
+	let conflictState = $state<'none' | 'detected'>('none');
 
-	function edgeUpdateTemplate(e: EdgeData): string {
+	function editStatement(props: Record<string, unknown>): string {
+		if (!editTarget) return '';
+		if (editTarget.kind === 'vertex') {
+			return buildVertexUpdate(String(editTarget.data.id), props);
+		}
+		const e = editTarget.data as EdgeData;
 		return buildEdgeUpdate(
 			e.type ?? 'unknown',
 			String(e.src),
 			String(e.dst),
 			e.rank ?? 0,
-			e.properties ?? {},
+			props,
 		);
 	}
 
-	function edgeDeleteTemplate(e: EdgeData): string {
-		return buildEdgeDelete(
-			e.type ?? 'unknown',
-			String(e.src),
-			String(e.dst),
-			e.rank ?? 0,
-		);
+	function openEdit(data: VertexData | EdgeData, kind: 'vertex' | 'edge') {
+		const props = { ...(data.properties ?? {}) };
+		editTarget =
+			kind === 'vertex'
+				? { kind, data: data as VertexData }
+				: { kind, data: data as EdgeData };
+		editOriginalProps = { ...props };
+		editedProps = props;
+		editOpen = true;
+		editError = null;
+		editDone = false;
+		conflictState = 'none';
 	}
+
+	function closeEdit() {
+		editOpen = false;
+		editTarget = null;
+	}
+
+	async function refreshTarget(): Promise<
+		Record<string, unknown> | null
+	> {
+		// Re-read the row being edited so a concurrent change can be detected
+		// before the update statement is submitted.
+		if (!currentSpace || !editTarget) return null;
+		try {
+			if (editTarget.kind === 'vertex') {
+				const tag = (editTarget.data as VertexData).tag ?? '';
+				const resp = await dataBrowserService.getVertices(
+					currentSpace,
+					tag,
+					1,
+					1,
+					{ field: 'id', order: 'asc' },
+					{
+						conditions: [
+							{
+								property: 'id',
+								operator: 'eq',
+								value: String(editTarget.data.id),
+							},
+						],
+						logic: 'AND',
+					},
+				);
+				return resp.data[0]?.properties ?? null;
+			}
+			const e = editTarget.data as EdgeData;
+			const resp = await dataBrowserService.getEdges(
+				currentSpace,
+				e.type ?? '',
+				1,
+				1,
+				{ field: 'id', order: 'asc' },
+				{
+					conditions: [
+						{ property: 'id', operator: 'eq', value: String(e.id) },
+					],
+					logic: 'AND',
+				},
+			);
+			return resp.data[0]?.properties ?? null;
+		} catch {
+			// Refresh failure must not block the edit; the server still rejects
+			// invalid statements, so proceed without conflict detection.
+			return null;
+		}
+	}
+
+	async function confirmEdit(rebase = false) {
+		if (!editTarget || editBusy) return;
+		editBusy = true;
+		editError = null;
+		try {
+			if (!editDone) {
+				const latest = await refreshTarget();
+				if (
+					latest !== null &&
+					JSON.stringify(latest) !== JSON.stringify(editOriginalProps) &&
+					!rebase
+				) {
+					// Someone else changed the row; surface both sides and stop.
+					conflictState = 'detected';
+					editOriginalProps = { ...latest };
+					return;
+				}
+				conflictState = 'none';
+				const outcome = await queryService.execute({
+					query: editStatement(editedProps),
+				});
+				if (!outcome.success) {
+					editError = outcome.error?.message ?? t('errors.executeQuery');
+					return;
+				}
+				editDone = true;
+				editOriginalProps = { ...editedProps };
+				if (editTarget.kind === 'vertex') loadVertices();
+				else loadEdges();
+			} else {
+				// Rebase mode: the user keeps editing from the latest values and
+				// submits a fresh statement on the next confirm.
+				editDone = false;
+				conflictState = 'none';
+			}
+		} finally {
+			editBusy = false;
+		}
+	}
+
+	// --- Delete protection ---
+
+	let deleteConfirm = $state<{
+		kind: 'vertex' | 'edge';
+		statement: string;
+		edgeCount: number | null;
+	} | null>(null);
+	let deleteBusy = $state(false);
+	let deleteError = $state<string | null>(null);
+
+	async function requestDelete(
+		data: VertexData | EdgeData,
+		kind: 'vertex' | 'edge',
+	) {
+		const statement =
+			kind === 'vertex'
+				? buildVertexDelete(String(data.id))
+				: buildEdgeDelete(
+						(data as EdgeData).type ?? 'unknown',
+						String((data as EdgeData).src),
+						String((data as EdgeData).dst),
+						(data as EdgeData).rank ?? 0,
+					);
+		// Vertex deletion cascades to linked edges, so count them first.
+		let edgeCount: number | null = null;
+		if (kind === 'vertex' && currentSpace) {
+			try {
+				const v = data as VertexData;
+				for (const et of edgeTypes) {
+					const resp = await dataBrowserService.getEdges(
+						currentSpace,
+						et.name,
+						1,
+						1,
+						{ field: 'id', order: 'asc' },
+						{
+							conditions: [
+								{ property: 'src', operator: 'eq', value: String(v.id) },
+							],
+							logic: 'OR',
+						},
+					);
+					edgeCount = (edgeCount ?? 0) + resp.total;
+				}
+			} catch {
+				edgeCount = null;
+			}
+		}
+		deleteConfirm = { kind, statement, edgeCount };
+		deleteError = null;
+	}
+
+	async function confirmDelete() {
+		if (!deleteConfirm || deleteBusy) return;
+		const kind = deleteConfirm.kind;
+		deleteBusy = true;
+		deleteError = null;
+		try {
+			const outcome = await queryService.execute({
+				query: deleteConfirm.statement,
+			});
+			if (!outcome.success) {
+				deleteError = outcome.error?.message ?? t('errors.executeQuery');
+				return;
+			}
+			deleteConfirm = null;
+			if (kind === 'vertex') loadVertices();
+			else if (activeTab === 'vertices') loadVertices();
+			else loadEdges();
+		} finally {
+			deleteBusy = false;
+		}
+	}
+
+	// --- Batch delete ---
+
+	let selectedIds = new SvelteSet<string>();
+	let batchBusy = $state(false);
+	let batchMessage = $state<string | null>(null);
+	let batchError = $state<string | null>(null);
+
+	function toggleSelect(id: string) {
+		if (selectedIds.has(id)) selectedIds.delete(id);
+		else selectedIds.add(id);
+	}
+
+	function clearSelection() {
+		selectedIds.clear();
+		batchMessage = null;
+		batchError = null;
+	}
+
+	async function batchDelete() {
+		const count = selectedIds.size;
+		if (count === 0 || batchBusy) return;
+		if (!confirm(t('dataBrowser.batch.confirmDelete', { count }))) return;
+		batchBusy = true;
+		batchError = null;
+		batchMessage = null;
+		try {
+			const statements: string[] = [];
+			if (activeTab === 'vertices') {
+				for (const v of vertices) {
+					if (selectedIds.has(String(v.id)))
+						statements.push(buildVertexDelete(String(v.id)));
+				}
+			} else {
+				for (const e of edges) {
+					if (selectedIds.has(String(e.id)))
+						statements.push(
+							buildEdgeDelete(
+								e.type ?? 'unknown',
+								String(e.src),
+								String(e.dst),
+								e.rank ?? 0,
+							),
+						);
+				}
+			}
+			const script = statements.join(';\n');
+			const outcome = await queryService.executeBatch(script);
+			const failed = outcome.results.filter((r) => !r.success);
+			const ok = outcome.results.length - failed.length;
+			batchMessage = t('dataBrowser.batch.done', { ok, failed: failed.length });
+			if (failed.length > 0) {
+				const first = outcome.results.findIndex((r) => !r.success);
+				batchError = t('dataBrowser.batch.failedAt', {
+					index: first + 1,
+					message: failed[0].error?.message ?? '',
+				});
+			}
+			selectedIds.clear();
+			if (activeTab === 'vertices') loadVertices();
+			else loadEdges();
+		} catch (err) {
+			batchError =
+				err instanceof Error ? err.message : t('errors.executeBatch');
+		} finally {
+			batchBusy = false;
+		}
+	}
+
 
 	function viewInGraph(data: VertexData | EdgeData, type: 'vertex' | 'edge') {
 		if (type === 'vertex') {
@@ -294,11 +546,44 @@
 		{/if}
 
 		{#if error}
-			<div
-				class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded p-3 text-red-600 dark:text-red-400 text-sm"
-			>
-				{error}
-			</div>
+		 <div
+		  class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded p-3 text-red-600 dark:text-red-400 text-sm"
+		 >
+		  {error}
+		 </div>
+		{/if}
+
+		{#if selectedIds.size > 0}
+		 <div
+		  class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded p-3 flex items-center gap-3 text-sm"
+		 >
+		  <span class="text-blue-700 dark:text-blue-300">
+		   {t('dataBrowser.batch.selected', { count: selectedIds.size })}
+		  </span>
+		  <button
+		   class="px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-xs rounded cursor-pointer disabled:opacity-50"
+		   disabled={batchBusy}
+		   onclick={batchDelete}
+		  >
+		   {t('dataBrowser.batch.deleteSelected')}
+		  </button>
+		  <button
+		   class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+		   onclick={clearSelection}
+		  >
+		   {t('common.clear')}
+		  </button>
+		 </div>
+		{/if}
+		{#if batchMessage}
+		 <div
+		  class="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded p-3 text-green-700 dark:text-green-400 text-sm"
+		 >
+		  {batchMessage}
+		  {#if batchError}
+		   <div class="mt-1 text-red-600 dark:text-red-400 text-xs">{batchError}</div>
+		  {/if}
+		 </div>
 		{/if}
 
 		<div
@@ -353,12 +638,16 @@
 									<thead>
 										<tr class="bg-gray-50 dark:bg-gray-800/50">
 											<th
-												class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-												>ID</th
+											 class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
+											 >{t('dataBrowser.batch.deletedColumn')}</th
 											>
 											<th
-												class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-												>{t('sidebar.tags')}</th
+											 class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
+											 >ID</th
+											>
+											<th
+											 class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
+											 >{t('sidebar.tags')}</th
 											>
 											{#each vertexProperties as prop (prop)}
 												<th
@@ -375,6 +664,16 @@
 									<tbody>
 										{#each vertices as v (v.id)}
 											<tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30">
+												<td
+													class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50"
+												>
+													<input
+														type="checkbox"
+														class="cursor-pointer"
+														checked={selectedIds.has(String(v.id))}
+														onchange={() => toggleSelect(String(v.id))}
+													/>
+												</td>
 												<td
 													class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 font-mono text-xs text-gray-800 dark:text-gray-200"
 													>{v.id}</td
@@ -409,12 +708,12 @@
 													>
 													<button
 														class="ml-2 text-amber-600 dark:text-amber-400 hover:text-amber-700 text-xs cursor-pointer"
-														onclick={() => editInConsole(vertexUpdateTemplate(v))}
+														onclick={() => openEdit(v, 'vertex')}
 														>{t('dataBrowser.editUpdate')}</button
 													>
 													<button
 														class="ml-2 text-red-500 hover:text-red-700 text-xs cursor-pointer"
-														onclick={() => editInConsole(vertexDeleteTemplate(v))}
+														onclick={() => requestDelete(v, 'vertex')}
 														>{t('dataBrowser.editDelete')}</button
 													>
 												</td>
@@ -489,12 +788,16 @@
 									<thead>
 										<tr class="bg-gray-50 dark:bg-gray-800/50">
 											<th
-												class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-												>ID</th
+											 class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
+											 >{t('dataBrowser.batch.deletedColumn')}</th
 											>
 											<th
-												class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-												>{t('common.type')}</th
+											 class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
+											 >ID</th
+											>
+											<th
+											 class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
+											 >{t('common.type')}</th
 											>
 											<th
 												class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
@@ -523,6 +826,16 @@
 									<tbody>
 										{#each edges as e (e.id)}
 											<tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30">
+												<td
+													class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50"
+												>
+													<input
+														type="checkbox"
+														class="cursor-pointer"
+														checked={selectedIds.has(String(e.id))}
+														onchange={() => toggleSelect(String(e.id))}
+													/>
+												</td>
 												<td
 													class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 font-mono text-xs text-gray-800 dark:text-gray-200"
 													>{e.id}</td
@@ -569,12 +882,12 @@
 													>
 													<button
 														class="ml-2 text-amber-600 dark:text-amber-400 hover:text-amber-700 text-xs cursor-pointer"
-														onclick={() => editInConsole(edgeUpdateTemplate(e))}
+														onclick={() => openEdit(e, 'edge')}
 														>{t('dataBrowser.editUpdate')}</button
 													>
 													<button
 														class="ml-2 text-red-500 hover:text-red-700 text-xs cursor-pointer"
-														onclick={() => editInConsole(edgeDeleteTemplate(e))}
+														onclick={() => requestDelete(e, 'edge')}
 														>{t('dataBrowser.editDelete')}</button
 													>
 												</td>
@@ -734,6 +1047,124 @@
 						{/each}
 					</div>
 				{/if}
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- Edit Preview Modal -->
+<EditPreviewModal
+	open={editOpen && conflictState === 'none'}
+	title={editTarget?.kind === 'vertex'
+		? t('dataBrowser.edit.titleVertex')
+		: t('dataBrowser.edit.titleEdge')}
+	original={editOriginalProps}
+	edited={editedProps}
+	statement={editStatement(editedProps)}
+	busy={editBusy}
+	errorMessage={editError}
+	onConfirm={() => confirmEdit(false)}
+	onClose={closeEdit}
+	onEditedChange={(values) => (editedProps = values)}
+/>
+
+<!-- Conflict Modal -->
+{#if editOpen && conflictState === 'detected'}
+	<div class="fixed inset-0 z-50 flex items-center justify-center">
+		<div
+			role="presentation"
+			class="absolute inset-0 bg-black/20"
+			onclick={() => (conflictState = 'none')}
+		></div>
+		<div
+			class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-[28rem] max-h-[85vh] overflow-y-auto"
+		>
+			<h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-2">
+				{t('dataBrowser.edit.changed')}
+			</h3>
+			<p class="text-sm text-gray-600 dark:text-gray-300 mb-3">
+				{t('dataBrowser.edit.conflict')}
+			</p>
+			<div class="space-y-1">
+				{#each Object.keys(editOriginalProps) as key (key)}
+					<div class="text-xs flex gap-2 font-mono">
+						<span class="text-gray-500 dark:text-gray-400 w-24 truncate">{key}</span>
+						<span class="text-gray-800 dark:text-gray-200 flex-1 truncate"
+							>{String(editOriginalProps[key] ?? '')}</span
+						>
+						<span class="text-amber-600 dark:text-amber-400 flex-1 truncate"
+							>{String(editedProps[key] ?? '')}</span
+						>
+					</div>
+				{/each}
+			</div>
+			<div class="mt-4 flex justify-end gap-2">
+				<button
+					class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+					onclick={closeEdit}>{t('dataBrowser.edit.conflictDiscard')}</button
+				>
+				<button
+					class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer disabled:opacity-50"
+					disabled={editBusy}
+					onclick={() => confirmEdit(true)}
+				>
+					{t('dataBrowser.edit.conflictRebase')}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- Delete Confirm Modal -->
+{#if deleteConfirm}
+	<div class="fixed inset-0 z-50 flex items-center justify-center">
+		<div
+			role="presentation"
+			class="absolute inset-0 bg-black/20"
+			onclick={() => (deleteConfirm = null)}
+		></div>
+		<div
+			class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-[26rem] max-h-[85vh] overflow-y-auto"
+		>
+			<h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-2">
+				{t('common.delete')}
+			</h3>
+			<p class="text-sm text-gray-600 dark:text-gray-300">
+				{t('dataBrowser.delete.confirm', {
+					kind:
+						deleteConfirm.kind === 'vertex'
+							? t('dataBrowser.vertices')
+							: t('sidebar.edges'),
+				})}
+			</p>
+			{#if deleteConfirm.kind === 'vertex' && deleteConfirm.edgeCount !== null && deleteConfirm.edgeCount > 0}
+				<p class="text-sm text-amber-600 dark:text-amber-400 mt-2">
+					{t('dataBrowser.delete.vertexWithEdges', {
+						count: deleteConfirm.edgeCount,
+					})}
+				</p>
+			{/if}
+			<pre
+				class="mt-3 text-xs bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded p-2 overflow-x-auto text-gray-700 dark:text-gray-300 font-mono whitespace-pre-wrap">{deleteConfirm.statement}</pre>
+			{#if deleteError}
+				<div
+					class="mt-3 p-2 text-xs rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400"
+				>
+					{deleteError}
+				</div>
+			{/if}
+			<div class="mt-4 flex justify-end gap-2">
+				<button
+					class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+					onclick={() => (deleteConfirm = null)}>{t('common.cancel')}</button
+				>
+				<button
+					class="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded cursor-pointer disabled:opacity-50"
+					disabled={deleteBusy}
+					onclick={confirmDelete}
+				>
+					{deleteBusy ? t('console.executing') : t('common.delete')}
+				</button>
 			</div>
 		</div>
 	</div>

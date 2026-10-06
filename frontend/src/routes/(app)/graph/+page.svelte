@@ -27,6 +27,9 @@
 	let syncDuration = $state(0);
 	const expandedNodes = new SvelteSet<string>();
 	const failedNodes = new SvelteSet<string>();
+	// Explore stack: one entry per successful expansion, holding the element ids
+	// that step added, so undo can remove exactly that step's contribution.
+	const exploreStack = $state<{ nodeId: string; nodeIds: string[]; edgeIds: string[] }[]>([]);
 
 	let storeState = $state<GraphState>(get(graphStore));
 	$effect(() => graphStore.subscribe((s) => { storeState = s; }));
@@ -219,6 +222,11 @@
 				};
 			});
 			graphStore.mergeGraphData({ nodes, edges });
+			exploreStack.push({
+				nodeId: id,
+				nodeIds: nodes.map((n) => n.id),
+				edgeIds: edges.map((e) => e.id),
+			});
 			relayoutToken += 1;
 		} catch (err) {
 			expandedNodes.delete(id);
@@ -243,10 +251,45 @@
 		graphStore.setLayout(val);
 	}
 
+	/** Remove the most recent expansion step's elements from the canvas. */
+	function undoExploreStep() {
+		const step = exploreStack.pop();
+		if (!step || !graphData) return;
+		const removedNodes = new Set(step.nodeIds);
+		const removedEdges = new Set(step.edgeIds);
+		graphStore.setGraphData({
+			nodes: graphData.nodes.filter((n) => !removedNodes.has(n.id)),
+			edges: graphData.edges.filter((e) => !removedEdges.has(e.id)),
+		});
+		expandedNodes.delete(step.nodeId);
+		relayoutToken += 1;
+	}
+
+	/** Drop every expansion step and keep only the originally loaded graph. */
+	function resetExplore() {
+		if (!graphData) return;
+		const keptNodes: string[] = [];
+		const keptEdges: string[] = [];
+		for (const step of exploreStack) {
+			for (const id of step.nodeIds) keptNodes.push(id);
+			for (const id of step.edgeIds) keptEdges.push(id);
+		}
+		exploreStack.length = 0;
+		if (keptNodes.length === 0 && keptEdges.length === 0) return;
+		graphStore.setGraphData({
+			nodes: graphData.nodes.filter((n) => !keptNodes.includes(n.id)),
+			edges: graphData.edges.filter((e) => !keptEdges.includes(e.id)),
+		});
+		expandedNodes.clear();
+		relayoutToken += 1;
+	}
+
 	function handleClearGraph() {
 		graphStore.clearGraphData();
 		graphStore.hideDetail();
 		expandedNodes.clear();
+		failedNodes.clear();
+		exploreStack.length = 0;
 		cyInstance?.elements().remove();
 	}
 
@@ -357,6 +400,22 @@
 				disabled={!graphData}
 			>
 				JSON
+			</button>
+			<button
+				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer disabled:opacity-50"
+				onclick={undoExploreStep}
+				disabled={!graphData || exploreStack.length === 0}
+				title={t('graph.undoExpand')}
+			>
+				↩ {t('graph.undoExpand')}
+			</button>
+			<button
+				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer disabled:opacity-50"
+				onclick={resetExplore}
+				disabled={!graphData || exploreStack.length === 0}
+				title={t('graph.resetExplore')}
+			>
+				{t('graph.resetExplore')}
 			</button>
 			<select
 				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200 focus:outline-none focus:border-blue-500"

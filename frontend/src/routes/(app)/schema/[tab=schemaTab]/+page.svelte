@@ -976,7 +976,13 @@
 						</p>
 					{/if}
 				{:else if activeTab === 'visualization'}
-					<SchemaErGraph {tags} {edgeTypes} {isDark} />
+					<SchemaErGraph
+						{tags}
+						{edgeTypes}
+						{isDark}
+						onAlterTag={(name) => (alterTagName = name)}
+						onAlterEdge={(name) => (alterEdgeName = name)}
+					/>
 				{/if}
 			</div>
 		</div>
