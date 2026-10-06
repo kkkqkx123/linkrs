@@ -5,7 +5,7 @@
 		convertToCytoscapeElements,
 		generateCytoscapeStyle,
 	} from '$utils/cytoscapeConfig';
-	import { applyLayout } from '$utils/graphLayout';
+	import { applyLayout, type LayoutParams } from '$utils/graphLayout';
 	import type { GraphData, GraphStyleConfig, LayoutType } from '$types/graph';
 
 	interface NodeTapData {
@@ -31,6 +31,7 @@
 		isDark = false,
 		zoom = 1,
 		relayoutToken = 0,
+		layoutParams = { nodeRepulsion: 4500, gravity: 0.1, numIter: 1500 },
 		cyInstance = $bindable<cytoscape.Core | null>(null),
 		onNodeTap,
 		onEdgeTap,
@@ -43,6 +44,7 @@
 		isDark?: boolean;
 		zoom?: number;
 		relayoutToken?: number;
+		layoutParams?: LayoutParams;
 		cyInstance?: cytoscape.Core | null;
 		onNodeTap?: (data: NodeTapData) => void;
 		onEdgeTap?: (data: EdgeTapData) => void;
@@ -54,6 +56,12 @@
 	let initialized = $state(false);
 	let eventsBound = $state(false);
 	let lastRelayoutToken = 0;
+	let layoutDuration = $state(0);
+	let syncDuration = $state(0);
+
+	export function getPerformanceMetrics() {
+		return { layoutDuration, syncDuration };
+	}
 
 	function bindEvents(cy: cytoscape.Core) {
 		if (eventsBound) return;
@@ -80,6 +88,7 @@
 
 	function syncElements(relayout: boolean) {
 		if (!cyInstance || !data) return;
+		const startSync = performance.now();
 		const elements = convertToCytoscapeElements(data, styleConfig);
 		const savedZoom = cyInstance.zoom();
 		const savedPan = { ...cyInstance.pan() };
@@ -100,36 +109,52 @@
 				const id = String((el.data as { id: string }).id);
 				const existing = cyInstance?.getElementById(id);
 				if (existing && existing.nonempty()) {
-					existing.data('label', (el.data as { label: string }).label);
+					const newData = el.data as Record<string, unknown>;
+					const oldData = existing.data() as Record<string, unknown>;
+					for (const key of Object.keys(newData)) {
+						if (JSON.stringify(oldData[key]) !== JSON.stringify(newData[key])) {
+							existing.data(key, newData[key]);
+						}
+					}
 				}
 			}
 		});
 		cyInstance.zoom(savedZoom);
 		cyInstance.pan(savedPan);
-		if (relayout) applyLayout(cyInstance, layout, cyInstance.elements().length);
+		syncDuration = performance.now() - startSync;
+		if (relayout) {
+			const startLayout = performance.now();
+			applyLayout(cyInstance, layout, cyInstance.elements().length, layoutParams);
+			layoutDuration = performance.now() - startLayout;
+		}
 	}
 
 	async function initCytoscape() {
 		if (!containerEl || !data) return;
-		const cytoscape = (await import('cytoscape')).default;
-		if (cyInstance) {
-			cyInstance.destroy();
-			cyInstance = null;
-			eventsBound = false;
+		try {
+			const cytoscape = (await import('cytoscape')).default;
+			if (cyInstance) {
+				cyInstance.destroy();
+				cyInstance = null;
+				eventsBound = false;
+			}
+			const cy = cytoscape({
+				container: containerEl,
+				elements: convertToCytoscapeElements(data, styleConfig),
+				style: generateCytoscapeStyle(styleConfig, isDark),
+				layout: { name: 'preset' },
+				minZoom: 0.1,
+				maxZoom: 10,
+				wheelSensitivity: 0.3,
+			});
+			bindEvents(cy);
+			cyInstance = cy;
+			initialized = true;
+			if (zoom > 0 && zoom !== 1) cy.zoom(zoom);
+		} catch (err) {
+			initialized = false;
+			throw err instanceof Error ? err : new Error('Cytoscape initialization failed');
 		}
-		const cy = cytoscape({
-			container: containerEl,
-			elements: convertToCytoscapeElements(data, styleConfig),
-			style: generateCytoscapeStyle(styleConfig, isDark),
-			layout: { name: 'preset' },
-			minZoom: 0.1,
-			maxZoom: 10,
-			wheelSensitivity: 0.3,
-		});
-		bindEvents(cy);
-		cyInstance = cy;
-		initialized = true;
-		if (zoom > 0 && zoom !== 1) cy.zoom(zoom);
 	}
 
 	$effect(() => {
@@ -143,17 +168,14 @@
 		syncElements(false);
 		if (relayoutToken !== lastRelayoutToken) {
 			lastRelayoutToken = relayoutToken;
-			applyLayout(cyInstance, layout, cyInstance.elements().length);
+			applyLayout(cyInstance, layout, cyInstance.elements().length, layoutParams);
+		} else if (layout) {
+			applyLayout(cyInstance, layout, cyInstance.elements().length, layoutParams);
 		}
 	});
 
 	$effect(() => {
 		if (cyInstance) refreshStyle();
-	});
-
-	$effect(() => {
-		if (cyInstance)
-			applyLayout(cyInstance, layout, cyInstance.elements().length);
 	});
 
 	onDestroy(() => {

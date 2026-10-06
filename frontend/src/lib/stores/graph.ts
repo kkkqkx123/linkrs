@@ -20,7 +20,7 @@ export interface EdgeStyle {
 	labelProperty: string;
 }
 
-interface GraphState {
+export interface GraphState {
 	graphData: GraphData | null;
 	layout: LayoutType;
 	zoom: number;
@@ -31,6 +31,15 @@ interface GraphState {
 	detailPanelVisible: boolean;
 	detailData: NodeDetail | EdgeDetail | null;
 	detailType: 'node' | 'edge' | null;
+	searchQuery: string;
+	filterTags: Set<string>;
+	filterEdgeTypes: Set<string>;
+	simplifiedMode: boolean;
+	layoutParams: {
+		nodeRepulsion: number;
+		gravity: number;
+		numIter: number;
+	};
 }
 
 const defaultNodeStyle: NodeStyle = {
@@ -86,6 +95,32 @@ function persistStyles(state: GraphState) {
 	);
 }
 
+function ensureStylesForData(
+	nodeStyles: Record<string, NodeStyle>,
+	edgeStyles: Record<string, EdgeStyle>,
+	data: GraphData,
+): { nodeStyles: Record<string, NodeStyle>; edgeStyles: Record<string, EdgeStyle> } {
+	const newNodeStyles = { ...nodeStyles };
+	const newEdgeStyles = { ...edgeStyles };
+	let nodeColorIndex = Object.keys(nodeStyles).length;
+	data.nodes.forEach((node) => {
+		if (!newNodeStyles[node.tag])
+			newNodeStyles[node.tag] = {
+				...defaultNodeStyle,
+				color: generateNodeColor(nodeColorIndex++),
+			};
+	});
+	let edgeColorIndex = Object.keys(edgeStyles).length;
+	data.edges.forEach((edge) => {
+		if (!newEdgeStyles[edge.type])
+			newEdgeStyles[edge.type] = {
+				...defaultEdgeStyle,
+				color: generateEdgeColor(edgeColorIndex++),
+			};
+	});
+	return { nodeStyles: newNodeStyles, edgeStyles: newEdgeStyles };
+}
+
 function createGraphStore() {
 	const { subscribe, update } = writable<GraphState>({
 		graphData: null,
@@ -98,35 +133,31 @@ function createGraphStore() {
 		detailPanelVisible: false,
 		detailData: null,
 		detailType: null,
+		searchQuery: '',
+		filterTags: new Set<string>(),
+		filterEdgeTypes: new Set<string>(),
+		simplifiedMode: false,
+		layoutParams: {
+			nodeRepulsion: 4500,
+			gravity: 0.1,
+			numIter: 1500,
+		},
 	});
 
 	return {
 		subscribe,
 		setGraphData: (data: GraphData) =>
 			update((s) => {
-				const newNodeStyles = { ...s.nodeStyles };
-				const newEdgeStyles = { ...s.edgeStyles };
-				let nodeColorIndex = Object.keys(s.nodeStyles).length;
-				data.nodes.forEach((node) => {
-					if (!newNodeStyles[node.tag])
-						newNodeStyles[node.tag] = {
-							...defaultNodeStyle,
-							color: generateNodeColor(nodeColorIndex++),
-						};
-				});
-				let edgeColorIndex = Object.keys(s.edgeStyles).length;
-				data.edges.forEach((edge) => {
-					if (!newEdgeStyles[edge.type])
-						newEdgeStyles[edge.type] = {
-							...defaultEdgeStyle,
-							color: generateEdgeColor(edgeColorIndex++),
-						};
-				});
+				const { nodeStyles, edgeStyles } = ensureStylesForData(
+					s.nodeStyles,
+					s.edgeStyles,
+					data,
+				);
 				const newState = {
 					...s,
 					graphData: data,
-					nodeStyles: newNodeStyles,
-					edgeStyles: newEdgeStyles,
+					nodeStyles,
+					edgeStyles,
 				};
 				persistStyles(newState);
 				return newState;
@@ -157,29 +188,16 @@ function createGraphStore() {
 					}
 				}
 				const merged: GraphData = { nodes, edges };
-				const newNodeStyles = { ...s.nodeStyles };
-				const newEdgeStyles = { ...s.edgeStyles };
-				let nodeColorIndex = Object.keys(s.nodeStyles).length;
-				merged.nodes.forEach((node) => {
-					if (!newNodeStyles[node.tag])
-						newNodeStyles[node.tag] = {
-							...defaultNodeStyle,
-							color: generateNodeColor(nodeColorIndex++),
-						};
-				});
-				let edgeColorIndex = Object.keys(s.edgeStyles).length;
-				merged.edges.forEach((edge) => {
-					if (!newEdgeStyles[edge.type])
-						newEdgeStyles[edge.type] = {
-							...defaultEdgeStyle,
-							color: generateEdgeColor(edgeColorIndex++),
-						};
-				});
+				const { nodeStyles, edgeStyles } = ensureStylesForData(
+					s.nodeStyles,
+					s.edgeStyles,
+					merged,
+				);
 				const newState = {
 					...s,
 					graphData: merged,
-					nodeStyles: newNodeStyles,
-					edgeStyles: newEdgeStyles,
+					nodeStyles,
+					edgeStyles,
 				};
 				persistStyles(newState);
 				return newState;
@@ -259,6 +277,36 @@ function createGraphStore() {
 				detailPanelVisible: false,
 				detailData: null,
 				detailType: null,
+			})),
+		setSearchQuery: (query: string) =>
+			update((s) => ({ ...s, searchQuery: query })),
+		toggleFilterTag: (tag: string) =>
+			update((s) => {
+				const next = new Set(s.filterTags);
+				if (next.has(tag)) next.delete(tag);
+				else next.add(tag);
+				return { ...s, filterTags: next };
+			}),
+		toggleFilterEdgeType: (type: string) =>
+			update((s) => {
+				const next = new Set(s.filterEdgeTypes);
+				if (next.has(type)) next.delete(type);
+				else next.add(type);
+				return { ...s, filterEdgeTypes: next };
+			}),
+		clearFilters: () =>
+			update((s) => ({
+				...s,
+				searchQuery: '',
+				filterTags: new Set<string>(),
+				filterEdgeTypes: new Set<string>(),
+			})),
+		setSimplifiedMode: (enabled: boolean) =>
+			update((s) => ({ ...s, simplifiedMode: enabled })),
+		setLayoutParams: (params: Partial<{ nodeRepulsion: number; gravity: number; numIter: number }>) =>
+			update((s) => ({
+				...s,
+				layoutParams: { ...s.layoutParams, ...params },
 			})),
 	};
 }

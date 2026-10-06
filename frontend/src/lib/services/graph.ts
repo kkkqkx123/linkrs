@@ -6,39 +6,9 @@ import type {
 	NeighborParams,
 } from '$types/graph';
 import type { components } from '$lib/api/schema';
+import { stringifyId, asRecord } from '$utils/graphData';
 
 type Envelope = components['schemas']['ApiResponse_Value'];
-
-// Normalize a scalar or structured id into a stable string. Mirrors the id
-// coercion used when building graph elements so that nodes produced from
-// different sources (query results, neighbor expansion) collapse onto the same
-// identifier.
-function stringifyId(value: unknown): string | null {
-	if (value === null || value === undefined) return null;
-	if (typeof value === 'string') return value;
-	if (
-		typeof value === 'number' ||
-		typeof value === 'bigint' ||
-		typeof value === 'boolean'
-	) {
-		return String(value);
-	}
-	if (typeof value === 'object') {
-		try {
-			return JSON.stringify(value);
-		} catch {
-			return String(value);
-		}
-	}
-	return String(value);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-	if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-		return value as Record<string, unknown>;
-	}
-	return null;
-}
 
 // Extract { vid, tag, properties } from a raw neighbor payload. The graph API
 // nests each neighbor as { vertex: { vid, tag } } where tag is

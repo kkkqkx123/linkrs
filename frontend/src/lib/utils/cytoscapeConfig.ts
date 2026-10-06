@@ -1,6 +1,7 @@
 import type cytoscape from 'cytoscape';
 import type { GraphData, GraphStyleConfig } from '$types/graph';
 import type { QueryResult } from '$types/query';
+import { stringifyId, asRecord } from '$utils/graphData';
 
 export const MAX_GRAPH_NODES = 800;
 export const MAX_GRAPH_EDGES = 1200;
@@ -13,32 +14,6 @@ export interface GraphParseStats {
 
 export interface ParsedGraph extends GraphData {
 	stats: GraphParseStats;
-}
-
-function stringifyId(value: unknown): string | null {
-	if (value === null || value === undefined) return null;
-	if (typeof value === 'string') return value;
-	if (
-		typeof value === 'number' ||
-		typeof value === 'bigint' ||
-		typeof value === 'boolean'
-	)
-		return String(value);
-	if (typeof value === 'object') {
-		try {
-			return JSON.stringify(value);
-		} catch {
-			return String(value);
-		}
-	}
-	return String(value);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-	if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-		return value as Record<string, unknown>;
-	}
-	return null;
 }
 
 function escapeEdgePart(value: string): string {
@@ -231,6 +206,32 @@ export function generateCytoscapeStyle(
 				'border-opacity': 1,
 				'line-color': '#1890ff',
 				'target-arrow-color': '#1890ff',
+			} as cytoscape.Css.Node,
+		},
+		{
+			selector: '.search-match',
+			css: {
+				'border-width': 3,
+				'border-color': '#faad14',
+				'border-opacity': 1,
+			} as cytoscape.Css.Node,
+		},
+		{
+			selector: '.search-dimmed',
+			css: {
+				'opacity': 0.2,
+			} as cytoscape.Css.Node,
+		},
+		{
+			selector: '.filter-hidden',
+			css: {
+				'display': 'none',
+			} as cytoscape.Css.Node,
+		},
+		{
+			selector: '.simplified-hidden',
+			css: {
+				'display': 'none',
 			} as cytoscape.Css.Node,
 		},
 		...nodeStyles,

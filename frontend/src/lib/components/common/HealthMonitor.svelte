@@ -52,7 +52,7 @@
 			healthData = result;
 			lastCheckTime = new Date().toLocaleTimeString();
 			if (result.status !== 'healthy') {
-				checkError = t('errors.healthCheckFailed', { status: result.status });
+				checkError = t('errors.healthCheckFailed', { status: result.status ?? 'unknown' });
 			}
 		} catch (err) {
 			latency = Math.round(performance.now() - start);

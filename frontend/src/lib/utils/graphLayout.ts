@@ -2,10 +2,17 @@ import type cytoscape from 'cytoscape';
 import type { LayoutType } from '$types/graph';
 import { message } from '$i18n';
 
+export interface LayoutParams {
+	nodeRepulsion?: number;
+	gravity?: number;
+	numIter?: number;
+}
+
 export function applyLayout(
 	cy: cytoscape.Core,
 	layout: LayoutType,
 	elementCount = 0,
+	params?: LayoutParams,
 ): cytoscape.Layouts {
 	const large = elementCount > 400;
 	const layouts: Record<LayoutType, cytoscape.LayoutOptions> = {
@@ -13,10 +20,10 @@ export function applyLayout(
 			? {
 					name: 'cose',
 					padding: 30,
-					nodeRepulsion: 2000,
+					nodeRepulsion: params?.nodeRepulsion ?? 2000,
 					edgeElasticity: 100,
-					gravity: 0.25,
-					numIter: 600,
+					gravity: params?.gravity ?? 0.25,
+					numIter: params?.numIter ?? 600,
 					initialTemp: 120,
 					coolingFactor: 0.95,
 					minTemp: 1.0,
@@ -26,10 +33,10 @@ export function applyLayout(
 			: {
 					name: 'cose',
 					padding: 30,
-					nodeRepulsion: 4500,
+					nodeRepulsion: params?.nodeRepulsion ?? 4500,
 					edgeElasticity: 100,
-					gravity: 0.1,
-					numIter: 1500,
+					gravity: params?.gravity ?? 0.1,
+					numIter: params?.numIter ?? 1500,
 					initialTemp: 200,
 					coolingFactor: 0.95,
 					minTemp: 1.0,
