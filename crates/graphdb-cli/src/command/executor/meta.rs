@@ -1,4 +1,5 @@
 pub mod analyze;
+pub mod batch;
 pub mod buffer;
 pub mod config;
 pub mod connection;
@@ -7,5 +8,6 @@ pub mod cursor;
 pub mod io;
 pub mod schema;
 pub mod stats;
+pub mod sync;
 pub mod transaction;
 pub mod variables;

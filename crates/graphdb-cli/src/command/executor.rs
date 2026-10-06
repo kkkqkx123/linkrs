@@ -417,6 +417,12 @@ impl CommandExecutor {
             MetaCommand::Config { action } => {
                 meta::config::execute_config(self, &action, session_mgr).await
             }
+            MetaCommand::Batch { action } => {
+                meta::batch::execute_batch(self, &action, session_mgr).await
+            }
+            MetaCommand::Sync { action } => {
+                meta::sync::execute_sync(self, &action, session_mgr).await
+            }
         }
     }
 

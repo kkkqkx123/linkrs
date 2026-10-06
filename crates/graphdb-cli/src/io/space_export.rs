@@ -150,6 +150,10 @@ impl SpaceExporter {
             errors: Vec::new(),
         };
 
+        self.ensure_space(session).await.unwrap_or_else(|e| {
+            stats.errors.push(format!("Use space failed: {}", e));
+        });
+
         let file = File::create(&self.config.output_path)?;
         let mut writer = BufWriter::new(file);
 
@@ -175,13 +179,16 @@ impl SpaceExporter {
         if self.config.include_data {
             match &self.config.format {
                 ExportFormat::Csv { .. } => {
-                    self.export_csv(&mut writer, &mut stats, &mut metadata)?;
+                    self.export_csv(&mut writer, &mut stats, &mut metadata, session)
+                        .await?;
                 }
                 ExportFormat::Json { .. } => {
-                    self.export_json(&mut writer, &mut stats, &mut metadata)?;
+                    self.export_json(&mut writer, &mut stats, &mut metadata, session)
+                        .await?;
                 }
                 ExportFormat::JsonLines => {
-                    self.export_jsonl(&mut writer, &mut stats, &mut metadata)?;
+                    self.export_jsonl(&mut writer, &mut stats, &mut metadata, session)
+                        .await?;
                 }
             }
         }
@@ -194,29 +201,142 @@ impl SpaceExporter {
         stats.duration_ms = self.start_time.elapsed().as_millis() as u64;
         stats.bytes_written = std::fs::metadata(&self.config.output_path)?.len();
 
-        let _ = session;
         Ok(stats)
     }
 
-    fn export_csv(
+    async fn ensure_space(&self, session: &mut SessionManager) -> Result<()> {
+        if self.config.space_name.is_empty() {
+            return Ok(());
+        }
+        let current = session.current_space().unwrap_or_default().to_string();
+        if current != self.config.space_name {
+            session
+                .switch_space(&self.config.space_name)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    async fn list_targets(&self, session: &SessionManager) -> (Vec<String>, Vec<String>) {
+        let space = if self.config.space_name.is_empty() {
+            session.current_space().unwrap_or_default().to_string()
+        } else {
+            self.config.space_name.clone()
+        };
+        let tags = session
+            .client()
+            .list_tags(&space)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| t.name)
+            .filter(|n| {
+                self.config
+                    .tag_filter
+                    .as_ref()
+                    .map(|f| f.contains(n))
+                    .unwrap_or(true)
+            })
+            .collect();
+        let edge_types = session
+            .client()
+            .list_edge_types(&space)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| e.name)
+            .filter(|n| {
+                self.config
+                    .edge_type_filter
+                    .as_ref()
+                    .map(|f| f.contains(n))
+                    .unwrap_or(true)
+            })
+            .collect();
+        (tags, edge_types)
+    }
+
+    async fn fetch_vertices(
+        &self,
+        session: &SessionManager,
+        tag: &str,
+    ) -> Vec<serde_json::Value> {
+        let mut out = Vec::new();
+        let mut offset = 0usize;
+        loop {
+            let query = format!(
+                "MATCH (n:{}) RETURN n SKIP {} LIMIT {}",
+                tag, offset, self.config.chunk_size
+            );
+            let result = match session.execute_query(&query).await {
+                Ok(r) => r,
+                Err(_) => break,
+            };
+            if result.rows.is_empty() {
+                break;
+            }
+            let len = result.rows.len();
+            for row in &result.rows {
+                out.push(serde_json::to_value(row).unwrap_or(serde_json::Value::Null));
+            }
+            offset += len;
+            if len < self.config.chunk_size {
+                break;
+            }
+        }
+        out
+    }
+
+    async fn fetch_edges(
+        &self,
+        session: &SessionManager,
+        edge_type: &str,
+    ) -> Vec<serde_json::Value> {
+        let mut out = Vec::new();
+        let mut offset = 0usize;
+        loop {
+            let query = format!(
+                "MATCH ()-[e:{}]->() RETURN e SKIP {} LIMIT {}",
+                edge_type, offset, self.config.chunk_size
+            );
+            let result = match session.execute_query(&query).await {
+                Ok(r) => r,
+                Err(_) => break,
+            };
+            if result.rows.is_empty() {
+                break;
+            }
+            let len = result.rows.len();
+            for row in &result.rows {
+                out.push(serde_json::to_value(row).unwrap_or(serde_json::Value::Null));
+            }
+            offset += len;
+            if len < self.config.chunk_size {
+                break;
+            }
+        }
+        out
+    }
+
+    async fn export_csv(
         &self,
         writer: &mut impl Write,
         stats: &mut SpaceExportStats,
         metadata: &mut SpaceExportMetadata,
+        session: &mut SessionManager,
     ) -> Result<()> {
-        writeln!(writer, "type,id,name,properties")?;
+        writeln!(writer, "type,tag,properties")?;
 
-        let tags: Vec<String> = Vec::new();
-        let edge_types: Vec<String> = Vec::new();
+        let (tags, edge_types) = self.list_targets(session).await;
 
         for tag in tags {
-            if let Some(ref filter) = self.config.tag_filter {
-                if !filter.contains(&tag) {
-                    continue;
-                }
+            let rows = self.fetch_vertices(session, &tag).await;
+            let count = rows.len() as u64;
+            for row in &rows {
+                writeln!(writer, "vertex,{},{}", tag, row)?;
+                stats.total_vertices += 1;
             }
-
-            let count = self.export_tag_vertices_csv(writer, &tag, stats)?;
             if count > 0 {
                 metadata.tags.push(TagExportData {
                     tag_name: tag.clone(),
@@ -228,13 +348,12 @@ impl SpaceExporter {
         }
 
         for edge_type in edge_types {
-            if let Some(ref filter) = self.config.edge_type_filter {
-                if !filter.contains(&edge_type) {
-                    continue;
-                }
+            let rows = self.fetch_edges(session, &edge_type).await;
+            let count = rows.len() as u64;
+            for row in &rows {
+                writeln!(writer, "edge,{},{}", edge_type, row)?;
+                stats.total_edges += 1;
             }
-
-            let count = self.export_edge_type_csv(writer, &edge_type, stats)?;
             if count > 0 {
                 metadata.edge_types.push(EdgeTypeExportData {
                     edge_type_name: edge_type.clone(),
@@ -245,61 +364,129 @@ impl SpaceExporter {
             }
         }
 
+        metadata.total_vertices = stats.total_vertices as u64;
+        metadata.total_edges = stats.total_edges as u64;
+
         Ok(())
     }
 
-    fn export_tag_vertices_csv(
-        &self,
-        _writer: &mut impl Write,
-        _tag: &str,
-        _stats: &mut SpaceExportStats,
-    ) -> Result<u64> {
-        Ok(0)
-    }
-
-    fn export_edge_type_csv(
-        &self,
-        _writer: &mut impl Write,
-        _edge_type: &str,
-        _stats: &mut SpaceExportStats,
-    ) -> Result<u64> {
-        Ok(0)
-    }
-
-    fn export_json(
+    async fn export_json(
         &self,
         writer: &mut impl Write,
-        _stats: &mut SpaceExportStats,
+        stats: &mut SpaceExportStats,
         metadata: &mut SpaceExportMetadata,
+        session: &mut SessionManager,
     ) -> Result<()> {
-        writer.write_all(b"{\n")?;
-        writer.write_all(b"  \"space\": \"")?;
-        writer.write_all(self.config.space_name.as_bytes())?;
-        writer.write_all(b"\",\n")?;
+        let (tags, edge_types) = self.list_targets(session).await;
+        let mut vertices: Vec<serde_json::Value> = Vec::new();
+        let mut edges: Vec<serde_json::Value> = Vec::new();
 
-        if self.config.include_schema {
-            writer.write_all(b"  \"schema\": {\n")?;
-            writer.write_all(b"    \"tags\": [],\n")?;
-            writer.write_all(b"    \"edge_types\": []\n")?;
-            writer.write_all(b"  },\n")?;
+        for tag in tags {
+            let rows = self.fetch_vertices(session, &tag).await;
+            let count = rows.len() as u64;
+            stats.total_vertices += rows.len();
+            if count > 0 {
+                metadata.tags.push(TagExportData {
+                    tag_name: tag.clone(),
+                    vertex_count: count,
+                    property_names: Vec::new(),
+                });
+                stats.tags_exported += 1;
+            }
+            for row in rows {
+                vertices.push(serde_json::json!({"tag": tag, "properties": row}));
+            }
         }
 
-        writer.write_all(b"  \"data\": {\n")?;
-        writer.write_all(b"    \"vertices\": [],\n")?;
-        writer.write_all(b"    \"edges\": []\n")?;
-        writer.write_all(b"  }\n")?;
-        writer.write_all(b"}\n")?;
+        for edge_type in edge_types {
+            let rows = self.fetch_edges(session, &edge_type).await;
+            let count = rows.len() as u64;
+            stats.total_edges += rows.len();
+            if count > 0 {
+                metadata.edge_types.push(EdgeTypeExportData {
+                    edge_type_name: edge_type.clone(),
+                    edge_count: count,
+                    property_names: Vec::new(),
+                });
+                stats.edge_types_exported += 1;
+            }
+            for row in rows {
+                edges.push(serde_json::json!({"edge_type": edge_type, "properties": row}));
+            }
+        }
 
-        let _ = metadata;
+        metadata.total_vertices = stats.total_vertices as u64;
+        metadata.total_edges = stats.total_edges as u64;
+
+        let doc = serde_json::json!({
+            "space": self.config.space_name,
+            "schema": {
+                "tags": metadata.tags,
+                "edge_types": metadata.edge_types,
+            },
+            "data": {
+                "vertices": vertices,
+                "edges": edges,
+            },
+        });
+        writer.write_all(serde_json::to_string_pretty(&doc)?.as_bytes())?;
+        writer.write_all(b"\n")?;
         Ok(())
     }
 
-    fn export_jsonl(
+    async fn export_jsonl(
         &self,
-        _writer: &mut impl Write,
-        _stats: &mut SpaceExportStats,
-        _metadata: &mut SpaceExportMetadata,
+        writer: &mut impl Write,
+        stats: &mut SpaceExportStats,
+        metadata: &mut SpaceExportMetadata,
+        session: &mut SessionManager,
     ) -> Result<()> {
+        let (tags, edge_types) = self.list_targets(session).await;
+
+        for tag in tags {
+            let rows = self.fetch_vertices(session, &tag).await;
+            let count = rows.len() as u64;
+            stats.total_vertices += rows.len();
+            if count > 0 {
+                metadata.tags.push(TagExportData {
+                    tag_name: tag.clone(),
+                    vertex_count: count,
+                    property_names: Vec::new(),
+                });
+                stats.tags_exported += 1;
+            }
+            for row in rows {
+                let line = serde_json::json!({"type": "vertex", "tag": tag, "properties": row});
+                writer.write_all(serde_json::to_string(&line)?.as_bytes())?;
+                writer.write_all(b"\n")?;
+            }
+        }
+
+        for edge_type in edge_types {
+            let rows = self.fetch_edges(session, &edge_type).await;
+            let count = rows.len() as u64;
+            stats.total_edges += rows.len();
+            if count > 0 {
+                metadata.edge_types.push(EdgeTypeExportData {
+                    edge_type_name: edge_type.clone(),
+                    edge_count: count,
+                    property_names: Vec::new(),
+                });
+                stats.edge_types_exported += 1;
+            }
+            for row in rows {
+                let line = serde_json::json!({
+                    "type": "edge",
+                    "edge_type": edge_type,
+                    "properties": row,
+                });
+                writer.write_all(serde_json::to_string(&line)?.as_bytes())?;
+                writer.write_all(b"\n")?;
+            }
+        }
+
+        metadata.total_vertices = stats.total_vertices as u64;
+        metadata.total_edges = stats.total_edges as u64;
         Ok(())
     }
 }

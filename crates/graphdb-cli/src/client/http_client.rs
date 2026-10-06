@@ -586,6 +586,24 @@ impl HttpClient {
         Ok(())
     }
 
+    /// Delete a batch task
+    pub async fn delete_batch(&self, batch_id: &str) -> Result<()> {
+        let url = format!("{}/batch/{}", self.base_url, batch_id);
+
+        let response = self.inner.delete(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Failed to delete batch ({}): {}",
+                status, body
+            )));
+        }
+
+        Ok(())
+    }
+
     // ── Statistics ──
 
     /// Get session statistics
@@ -903,44 +921,6 @@ impl HttpClient {
 
         let body: OpenCursorResponse = response.json().await?;
         Ok((body.cursor_id, body.columns))
-    }
-
-    /// Fetch one page from a cursor via `POST /v1/query/cursor/fetch`.
-    pub async fn fetch_cursor(
-        &self,
-        cursor_id: u64,
-        page_size: usize,
-        session_id: i64,
-    ) -> Result<QueryResult> {
-        use graphdb_wire::query::{FetchCursorRequest, FetchCursorResponse};
-        let url = format!("{}/query/cursor/fetch", self.base_url);
-        let request = FetchCursorRequest {
-            session_id,
-            cursor_id,
-            page_size,
-        };
-
-        let response = self.inner.post(&url).json(&request).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Fetch cursor failed ({}): {}",
-                status, body
-            )));
-        }
-
-        let body: FetchCursorResponse = response.json().await?;
-        let row_count = body.rows.len();
-        Ok(QueryResult {
-            columns: body.columns,
-            rows: body.rows,
-            row_count,
-            execution_time_ms: 0,
-            rows_scanned: 0,
-            error: None,
-        })
     }
 
     /// Fetch a cursor page with the exhaustion flag.

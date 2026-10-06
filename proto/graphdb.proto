@@ -144,6 +144,23 @@ service GraphDBService {
   rpc GetOverviewStatistics(GetOverviewStatisticsRequest) returns (GetOverviewStatisticsResponse);
   rpc GetSearchStatistics(GetSearchStatisticsRequest) returns (GetSearchStatisticsResponse);
   rpc GetMigrationStatistics(GetMigrationStatisticsRequest) returns (GetMigrationStatisticsResponse);
+  rpc GetFreezeStatistics(GetFreezeStatisticsRequest) returns (GetFreezeStatisticsResponse);
+  rpc TriggerFreeze(TriggerFreezeRequest) returns (TriggerFreezeResponse);
+  rpc GetQueryProfileDetail(GetQueryProfileDetailRequest) returns (GetQueryProfileDetailResponse);
+
+  // Sync Degraded Ranges
+  rpc ListDegradedRanges(ListDegradedRangesRequest) returns (ListDegradedRangesResponse);
+  rpc ClearDegradedRange(ClearDegradedRangeRequest) returns (ClearDegradedRangeResponse);
+
+  // Transaction Savepoints + Outbox
+  rpc ListSavepoints(ListSavepointsRequest) returns (ListSavepointsResponse);
+  rpc RetryTransactionOutbox(RetryTransactionOutboxRequest) returns (RetryTransactionOutboxResponse);
+
+  // Vector Payload + Point
+  rpc GetVectorPoint(GetVectorPointRequest) returns (GetVectorPointResponse);
+  rpc SetVectorPayload(SetVectorPayloadRequest) returns (SetVectorPayloadResponse);
+  rpc SetVectorPayloadFields(SetVectorPayloadFieldsRequest) returns (SetVectorPayloadFieldsResponse);
+  rpc DeleteVectorPayload(DeleteVectorPayloadRequest) returns (DeleteVectorPayloadResponse);
 }
 
 // ============================================================
@@ -1537,5 +1554,152 @@ message GetMigrationStatusRequest {
 
 message GetMigrationStatusResponse {
   string status_json = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Sync Degraded Ranges (parity with /v1/sync/outbox/degraded_ranges + degraded/clear)
+// ============================================================
+
+message ListDegradedRangesRequest {
+  optional string target = 1;
+  optional uint64 index_id = 2;
+  optional uint64 generation = 3;
+}
+
+message ListDegradedRangesResponse {
+  string degraded_ranges_json = 1;
+  string error = 2;
+}
+
+message ClearDegradedRangeRequest {
+  string target = 1;
+  uint64 index_id = 2;
+  uint64 generation = 3;
+  uint64 start_lsn = 4;
+  uint64 end_lsn = 5;
+}
+
+message ClearDegradedRangeResponse {
+  bool cleared = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Transaction Savepoints + Outbox (parity with
+// /v1/transactions/{id}/savepoints + /v1/transactions/{id}/outbox/retry)
+// ============================================================
+
+message ListSavepointsRequest {
+  uint64 transaction_id = 1;
+  optional string owner = 2;
+}
+
+message SavepointInfo {
+  uint64 savepoint_id = 1;
+  string name = 2;
+  string created_at = 3;
+}
+
+message ListSavepointsResponse {
+  repeated SavepointInfo savepoints = 1;
+  string error = 2;
+}
+
+message RetryTransactionOutboxRequest {
+  uint64 transaction_id = 1;
+  optional string owner = 2;
+}
+
+message RetryTransactionOutboxResponse {
+  uint64 transaction_id = 1;
+  uint64 delivered = 2;
+  string status = 3;
+  string error = 4;
+}
+
+// ============================================================
+// Vector Payload + Point (parity with /v1/vector payload endpoints +
+// /v1/vector/{space_id}/{tag_name}/{field_name}/{point_id})
+// ============================================================
+
+message GetVectorPointRequest {
+  uint64 space_id = 1;
+  string tag_name = 2;
+  string field_name = 3;
+  string point_id = 4;
+}
+
+message GetVectorPointResponse {
+  bool exists = 1;
+  string point_json = 2;
+  string error = 3;
+}
+
+message SetVectorPayloadRequest {
+  uint64 space_id = 1;
+  string tag_name = 2;
+  string field_name = 3;
+  repeated string point_ids = 4;
+  string payload_json = 5;
+}
+
+message SetVectorPayloadResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message SetVectorPayloadFieldsRequest {
+  uint64 space_id = 1;
+  string tag_name = 2;
+  string field_name = 3;
+  repeated string point_ids = 4;
+  string payload_json = 5;
+}
+
+message SetVectorPayloadFieldsResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message DeleteVectorPayloadRequest {
+  uint64 space_id = 1;
+  string tag_name = 2;
+  string field_name = 3;
+  repeated string point_ids = 4;
+  repeated string keys = 5;
+}
+
+message DeleteVectorPayloadResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Statistics Freeze + Query Detail (parity with
+// GET+POST /v1/statistics/freeze + /v1/statistics/queries/{trace_id})
+// ============================================================
+
+message GetFreezeStatisticsRequest {}
+
+message GetFreezeStatisticsResponse {
+  string freeze_json = 1;
+  string error = 2;
+}
+
+message TriggerFreezeRequest {}
+
+message TriggerFreezeResponse {
+  bool success = 1;
+  string message = 2;
+  string error = 3;
+}
+
+message GetQueryProfileDetailRequest {
+  string trace_id = 1;
+}
+
+message GetQueryProfileDetailResponse {
+  string profile_json = 1;
   string error = 2;
 }

@@ -6,7 +6,8 @@
 use tonic::{Request, Response, Status};
 
 use crate::storage::{
-    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSnapshotOps,
+    StorageSyncContextOps,
 };
 
 use super::proto::graph_db_service_server::GraphDbService as GraphDBServiceTrait;
@@ -22,6 +23,7 @@ impl<
             + StorageSchemaContextOps
             + StorageSyncContextOps
             + StorageOperationContextOps
+            + StorageSnapshotOps
             + crate::storage::AutoCommitBatchOps
             + Clone
             + Send
@@ -667,5 +669,82 @@ impl<
         request: Request<GetMigrationStatisticsRequest>,
     ) -> Result<Response<GetMigrationStatisticsResponse>, Status> {
         self.handle_get_migration_statistics(request).await
+    }
+
+    async fn get_freeze_statistics(
+        &self,
+        request: Request<GetFreezeStatisticsRequest>,
+    ) -> Result<Response<GetFreezeStatisticsResponse>, Status> {
+        self.handle_get_freeze_statistics(request).await
+    }
+
+    async fn trigger_freeze(
+        &self,
+        request: Request<TriggerFreezeRequest>,
+    ) -> Result<Response<TriggerFreezeResponse>, Status> {
+        self.handle_trigger_freeze(request).await
+    }
+
+    async fn get_query_profile_detail(
+        &self,
+        request: Request<GetQueryProfileDetailRequest>,
+    ) -> Result<Response<GetQueryProfileDetailResponse>, Status> {
+        self.handle_get_query_profile_detail(request).await
+    }
+
+    async fn list_degraded_ranges(
+        &self,
+        request: Request<ListDegradedRangesRequest>,
+    ) -> Result<Response<ListDegradedRangesResponse>, Status> {
+        self.handle_list_degraded_ranges(request).await
+    }
+
+    async fn clear_degraded_range(
+        &self,
+        request: Request<ClearDegradedRangeRequest>,
+    ) -> Result<Response<ClearDegradedRangeResponse>, Status> {
+        self.handle_clear_degraded_range(request).await
+    }
+
+    async fn list_savepoints(
+        &self,
+        request: Request<ListSavepointsRequest>,
+    ) -> Result<Response<ListSavepointsResponse>, Status> {
+        self.handle_list_savepoints(request).await
+    }
+
+    async fn retry_transaction_outbox(
+        &self,
+        request: Request<RetryTransactionOutboxRequest>,
+    ) -> Result<Response<RetryTransactionOutboxResponse>, Status> {
+        self.handle_retry_transaction_outbox(request).await
+    }
+
+    async fn get_vector_point(
+        &self,
+        request: Request<GetVectorPointRequest>,
+    ) -> Result<Response<GetVectorPointResponse>, Status> {
+        self.handle_get_vector_point(request).await
+    }
+
+    async fn set_vector_payload(
+        &self,
+        request: Request<SetVectorPayloadRequest>,
+    ) -> Result<Response<SetVectorPayloadResponse>, Status> {
+        self.handle_set_vector_payload(request).await
+    }
+
+    async fn set_vector_payload_fields(
+        &self,
+        request: Request<SetVectorPayloadFieldsRequest>,
+    ) -> Result<Response<SetVectorPayloadFieldsResponse>, Status> {
+        self.handle_set_vector_payload_fields(request).await
+    }
+
+    async fn delete_vector_payload(
+        &self,
+        request: Request<DeleteVectorPayloadRequest>,
+    ) -> Result<Response<DeleteVectorPayloadResponse>, Status> {
+        self.handle_delete_vector_payload(request).await
     }
 }

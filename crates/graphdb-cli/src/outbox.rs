@@ -167,6 +167,71 @@ pub mod client_ext {
             Self::check_response(resp).await
         }
 
+        pub async fn outbox_degraded_clear(&self, req: &DegradedClearPayload) -> Result<serde_json::Value> {
+            let url = format!("{}/sync/outbox/degraded/clear", self.base_url());
+            let resp = self
+                .inner()
+                .post(&url)
+                .json(req)
+                .send()
+                .await
+                .map_err(|e| CliError::connection(e.to_string()))?;
+            Self::check_response(resp).await
+        }
+
+        pub async fn outbox_retry(&self) -> Result<serde_json::Value> {
+            let url = format!("{}/sync/outbox/retry", self.base_url());
+            let resp = self
+                .inner()
+                .post(&url)
+                .send()
+                .await
+                .map_err(|e| CliError::connection(e.to_string()))?;
+            Self::check_response(resp).await
+        }
+
+        pub async fn sync_status(&self) -> Result<serde_json::Value> {
+            let url = format!("{}/sync/status", self.base_url());
+            let resp = self
+                .inner()
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| CliError::connection(e.to_string()))?;
+            Self::check_response(resp).await
+        }
+
+        pub async fn retention_status(&self) -> Result<serde_json::Value> {
+            let url = format!("{}/sync/outbox/retention/status", self.base_url());
+            let resp = self
+                .inner()
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| CliError::connection(e.to_string()))?;
+            Self::check_response(resp).await
+        }
+
+        pub async fn retention_run(
+            &self,
+            grace_lsn_distance: Option<u64>,
+            max_age_ms: Option<u64>,
+        ) -> Result<serde_json::Value> {
+            let url = format!("{}/sync/outbox/retention/run", self.base_url());
+            let body = serde_json::json!({
+                "grace_lsn_distance": grace_lsn_distance,
+                "max_age_ms": max_age_ms,
+            });
+            let resp = self
+                .inner()
+                .post(&url)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| CliError::connection(e.to_string()))?;
+            Self::check_response(resp).await
+        }
+
         async fn check_response(resp: reqwest::Response) -> Result<serde_json::Value> {
             let status = resp.status();
             let text = resp
@@ -187,5 +252,14 @@ pub mod client_ext {
         pub generation: Option<u64>,
         pub limit: Option<usize>,
         pub event_ids: Option<Vec<i64>>,
+    }
+
+    #[derive(serde::Serialize)]
+    pub struct DegradedClearPayload {
+        pub target: String,
+        pub index_id: u64,
+        pub generation: u64,
+        pub start_lsn: u64,
+        pub end_lsn: u64,
     }
 }

@@ -237,4 +237,55 @@ impl<
             error: String::new(),
         }))
     }
+
+    pub(crate) async fn handle_list_savepoints(
+        &self,
+        request: Request<ListSavepointsRequest>,
+    ) -> Result<Response<ListSavepointsResponse>, Status> {
+        let req = request.into_inner();
+        let manager = self.app_state.server.get_txn_manager();
+        manager
+            .check_transaction_owner(req.transaction_id.into(), req.owner.as_deref())
+            .map_err(transaction_status)?;
+        let txn_api = self.app_state.server.get_txn_api();
+        let handle =
+            graphdb_api::api_core::TransactionHandle::from(req.transaction_id);
+        match txn_api.get_savepoints(handle) {
+            Ok(savepoints) => Ok(Response::new(ListSavepointsResponse {
+                savepoints: savepoints
+                    .into_iter()
+                    .map(|sp| super::proto::SavepointInfo {
+                        savepoint_id: sp.id,
+                        name: sp.name.unwrap_or_default(),
+                        created_at: format!("{:?}", sp.created_at),
+                    })
+                    .collect(),
+                error: String::new(),
+            })),
+            Err(e) => Err(Status::internal(format!(
+                "Failed to list savepoints: {}",
+                e
+            ))),
+        }
+    }
+
+    pub(crate) async fn handle_retry_transaction_outbox(
+        &self,
+        request: Request<RetryTransactionOutboxRequest>,
+    ) -> Result<Response<RetryTransactionOutboxResponse>, Status> {
+        let req = request.into_inner();
+        let manager = self.app_state.server.get_txn_manager();
+        manager
+            .check_transaction_owner(req.transaction_id.into(), req.owner.as_deref())
+            .map_err(transaction_status)?;
+        match manager.retry_outbox_projection() {
+            Ok(delivered) => Ok(Response::new(RetryTransactionOutboxResponse {
+                transaction_id: req.transaction_id,
+                delivered: delivered as u64,
+                status: "completed".to_string(),
+                error: String::new(),
+            })),
+            Err(e) => Err(transaction_status(e)),
+        }
+    }
 }

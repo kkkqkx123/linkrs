@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use tonic::{Request, Response, Status};
 
 use crate::storage::{
-    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSnapshotOps,
+    StorageSyncContextOps,
 };
 
 use super::convert::profile_start_ms;
@@ -188,6 +189,122 @@ impl<
         }
     }
 
+    pub(crate) async fn handle_get_query_profile_detail(
+        &self,
+        request: Request<GetQueryProfileDetailRequest>,
+    ) -> Result<Response<GetQueryProfileDetailResponse>, Status> {
+        let req = request.into_inner();
+        if req.trace_id.is_empty() {
+            return Err(Status::invalid_argument("trace_id is required"));
+        }
+        let stats_manager = self.app_state.server.get_stats_manager();
+        match stats_manager.get_query_profile(&req.trace_id) {
+            Some(profile) => {
+                let status = match profile.status {
+                    graphdb_metrics::QueryStatus::Success => "success",
+                    graphdb_metrics::QueryStatus::Failed => "failed",
+                };
+                let error = profile
+                    .error_info
+                    .as_ref()
+                    .map(|info| info.error_message.clone())
+                    .or(profile.error_message.clone());
+                let detail = serde_json::json!({
+                    "trace_id": profile.trace_id,
+                    "session_id": profile.session_id,
+                    "query": profile.query_text,
+                    "duration_ms": profile.total_duration_us as f64 / 1000.0,
+                    "status": status,
+                    "error": error,
+                    "result_count": profile.result_count,
+                    "plan_node_count": profile.plan_node_count,
+                });
+                Ok(Response::new(GetQueryProfileDetailResponse {
+                    profile_json: serde_json::to_string(&detail)
+                        .unwrap_or_else(|_| "{}".to_string()),
+                    error: String::new(),
+                }))
+            }
+            None => Err(Status::not_found(format!(
+                "Query portrait does not exist: {}",
+                req.trace_id
+            ))),
+        }
+    }
+}
+
+impl<
+        S: StorageClient
+            + StorageSchemaContextOps
+            + StorageSnapshotOps
+            + StorageSyncContextOps
+            + StorageOperationContextOps
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    > GraphDBService<S>
+{
+    pub(crate) async fn handle_get_freeze_statistics(
+        &self,
+        _request: Request<GetFreezeStatisticsRequest>,
+    ) -> Result<Response<GetFreezeStatisticsResponse>, Status> {
+        let storage = self.app_state.server.get_storage();
+        let storage_guard = storage.read();
+        match storage_guard.get_freeze_stats() {
+            Some(stats) => Ok(Response::new(GetFreezeStatisticsResponse {
+                freeze_json: serde_json::to_string(&serde_json::json!({
+                    "freeze_count": stats.freeze_count,
+                    "total_frozen_edges": stats.total_frozen_edges,
+                    "last_freeze_duration_ms": stats.last_freeze_duration_ms,
+                    "current_delta_edges": stats.current_delta_edges,
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
+                error: String::new(),
+            })),
+            None => Ok(Response::new(GetFreezeStatisticsResponse {
+                freeze_json: serde_json::to_string(&serde_json::json!({
+                    "enabled": false,
+                    "message": "Background freeze manager not configured",
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
+                error: String::new(),
+            })),
+        }
+    }
+
+    pub(crate) async fn handle_trigger_freeze(
+        &self,
+        _request: Request<TriggerFreezeRequest>,
+    ) -> Result<Response<TriggerFreezeResponse>, Status> {
+        let storage = self.app_state.server.get_storage();
+        let storage_guard = storage.read();
+        match storage_guard.trigger_background_freeze() {
+            Ok(()) => Ok(Response::new(TriggerFreezeResponse {
+                success: true,
+                message: "Background freeze triggered successfully".to_string(),
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(TriggerFreezeResponse {
+                success: false,
+                message: String::new(),
+                error: e.to_string(),
+            })),
+        }
+    }
+}
+
+impl<
+        S: StorageClient
+            + StorageSchemaContextOps
+            + StorageSyncContextOps
+            + StorageOperationContextOps
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    > GraphDBService<S>
+{
     pub(crate) async fn handle_get_system_statistics(
         &self,
         _request: Request<GetSystemStatisticsRequest>,

@@ -499,6 +499,170 @@ impl<
             Err(Status::unavailable("vector support is not compiled in"))
         }
     }
+
+    pub(crate) async fn handle_get_vector_point(
+        &self,
+        request: Request<GetVectorPointRequest>,
+    ) -> Result<Response<GetVectorPointResponse>, Status> {
+        #[cfg(feature = "vector")]
+        {
+            let req = request.into_inner();
+            let vector_api = self
+                .app_state
+                .server
+                .get_graph_service()
+                .vector_api()
+                .cloned()
+                .ok_or_else(|| Status::unavailable("vector API is not available"))?;
+            match vector_api
+                .get_vector(req.space_id, &req.tag_name, &req.field_name, &req.point_id)
+                .await
+            {
+                Ok(Some(point)) => Ok(Response::new(GetVectorPointResponse {
+                    exists: true,
+                    point_json: serde_json::to_string(&serde_json::json!({
+                        "id": point.id.to_string(),
+                        "vector": point.vector,
+                        "payload": point.payload,
+                    }))
+                    .unwrap_or_else(|_| "{}".to_string()),
+                    error: String::new(),
+                })),
+                Ok(None) => Ok(Response::new(GetVectorPointResponse {
+                    exists: false,
+                    point_json: String::new(),
+                    error: String::new(),
+                })),
+                Err(e) => Err(Status::internal(e.to_string())),
+            }
+        }
+        #[cfg(not(feature = "vector"))]
+        {
+            let _ = request;
+            Err(Status::unavailable("vector support is not compiled in"))
+        }
+    }
+
+    pub(crate) async fn handle_set_vector_payload(
+        &self,
+        request: Request<SetVectorPayloadRequest>,
+    ) -> Result<Response<SetVectorPayloadResponse>, Status> {
+        #[cfg(feature = "vector")]
+        {
+            let req = request.into_inner();
+            let vector_api = self
+                .app_state
+                .server
+                .get_graph_service()
+                .vector_api()
+                .cloned()
+                .ok_or_else(|| Status::unavailable("vector API is not available"))?;
+            let payload: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&req.payload_json)
+                    .map_err(|e| Status::invalid_argument(format!("invalid payload_json: {}", e)))?;
+            let point_ids: Vec<&str> =
+                req.point_ids.iter().map(|s| s.as_str()).collect();
+            vector_api
+                .set_payload(
+                    req.space_id,
+                    &req.tag_name,
+                    &req.field_name,
+                    point_ids,
+                    payload.into_iter().collect(),
+                )
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+            Ok(Response::new(SetVectorPayloadResponse {
+                success: true,
+                error: String::new(),
+            }))
+        }
+        #[cfg(not(feature = "vector"))]
+        {
+            let _ = request;
+            Err(Status::unavailable("vector support is not compiled in"))
+        }
+    }
+
+    pub(crate) async fn handle_set_vector_payload_fields(
+        &self,
+        request: Request<SetVectorPayloadFieldsRequest>,
+    ) -> Result<Response<SetVectorPayloadFieldsResponse>, Status> {
+        #[cfg(feature = "vector")]
+        {
+            let req = request.into_inner();
+            let vector_api = self
+                .app_state
+                .server
+                .get_graph_service()
+                .vector_api()
+                .cloned()
+                .ok_or_else(|| Status::unavailable("vector API is not available"))?;
+            let payload: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&req.payload_json)
+                    .map_err(|e| Status::invalid_argument(format!("invalid payload_json: {}", e)))?;
+            let point_ids: Vec<&str> =
+                req.point_ids.iter().map(|s| s.as_str()).collect();
+            vector_api
+                .set_payload_fields(
+                    req.space_id,
+                    &req.tag_name,
+                    &req.field_name,
+                    point_ids,
+                    payload.into_iter().collect(),
+                )
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+            Ok(Response::new(SetVectorPayloadFieldsResponse {
+                success: true,
+                error: String::new(),
+            }))
+        }
+        #[cfg(not(feature = "vector"))]
+        {
+            let _ = request;
+            Err(Status::unavailable("vector support is not compiled in"))
+        }
+    }
+
+    pub(crate) async fn handle_delete_vector_payload(
+        &self,
+        request: Request<DeleteVectorPayloadRequest>,
+    ) -> Result<Response<DeleteVectorPayloadResponse>, Status> {
+        #[cfg(feature = "vector")]
+        {
+            let req = request.into_inner();
+            let vector_api = self
+                .app_state
+                .server
+                .get_graph_service()
+                .vector_api()
+                .cloned()
+                .ok_or_else(|| Status::unavailable("vector API is not available"))?;
+            let point_ids: Vec<&str> =
+                req.point_ids.iter().map(|s| s.as_str()).collect();
+            let keys: Vec<&str> = req.keys.iter().map(|s| s.as_str()).collect();
+            vector_api
+                .delete_payload(
+                    req.space_id,
+                    &req.tag_name,
+                    &req.field_name,
+                    point_ids,
+                    keys,
+                )
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+            Ok(Response::new(DeleteVectorPayloadResponse {
+                success: true,
+                error: String::new(),
+            }))
+        }
+        #[cfg(not(feature = "vector"))]
+        {
+            let _ = request;
+            Err(Status::unavailable("vector support is not compiled in"))
+        }
+    }
 }
 
 #[allow(dead_code)]

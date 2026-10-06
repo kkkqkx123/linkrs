@@ -88,6 +88,8 @@ fn parse_meta_command(input: &str) -> Result<MetaCommand, String> {
         "statistics" => crate::command::parser::meta::stats::parse_statistics(arg),
         "status" => Ok(MetaCommand::Status),
         "config" => crate::command::parser::meta::config::parse_config(arg),
+        "batch" => crate::command::parser::meta::batch::parse_batch(arg),
+        "sync" | "outbox" => crate::command::parser::meta::sync::parse_sync(arg),
         _ => Err(format!("Unknown command: \\ {}", cmd)),
     }
 }

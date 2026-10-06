@@ -174,6 +174,9 @@ const META_COMMANDS: &[&str] = &[
     "\\export-space",
     "\\export-schema",
     "\\import-schema",
+    "\\batch",
+    "\\sync",
+    "\\outbox",
 ];
 
 const FORMAT_VALUES: &[&str] = &["table", "csv", "json", "vertical", "html"];

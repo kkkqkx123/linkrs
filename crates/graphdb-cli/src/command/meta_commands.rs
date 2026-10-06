@@ -126,6 +126,14 @@ fn show_general_help() -> String {
         "  {:25} {}\n",
         "\\import-schema <file>", "Import schema definitions from file"
     ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\batch <subcommand>", "Manage server batch tasks (create|add|execute|status|cancel|delete)"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\sync <subcommand>", "Manage sync/outbox (status|diagnostics|dead-letters|requeue|retry|degraded|clear|retention-status|retention-run)"
+    ));
 
     output.push_str(&format!("\n{}\n", "Query Buffer".yellow().bold()));
     output.push_str(&format!(

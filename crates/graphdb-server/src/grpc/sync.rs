@@ -219,4 +219,60 @@ impl<
             })),
         }
     }
+
+    pub(crate) async fn handle_list_degraded_ranges(
+        &self,
+        request: Request<ListDegradedRangesRequest>,
+    ) -> Result<Response<ListDegradedRangesResponse>, Status> {
+        let req = request.into_inner();
+        let sync_api = require_sync(self)?;
+        let target = req
+            .target
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                graphdb_core::types::TargetId::new(s)
+                    .map_err(|e| Status::invalid_argument(e.to_string()))
+            })
+            .transpose()?;
+        match sync_api.list_degraded_ranges(target.as_ref(), req.index_id, req.generation) {
+            Ok(rows) => Ok(Response::new(ListDegradedRangesResponse {
+                degraded_ranges_json: serde_json::to_string(&rows)
+                    .unwrap_or_else(|_| "[]".to_string()),
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(ListDegradedRangesResponse {
+                degraded_ranges_json: "[]".to_string(),
+                error: e,
+            })),
+        }
+    }
+
+    pub(crate) async fn handle_clear_degraded_range(
+        &self,
+        request: Request<ClearDegradedRangeRequest>,
+    ) -> Result<Response<ClearDegradedRangeResponse>, Status> {
+        let req = request.into_inner();
+        if req.target.is_empty() {
+            return Err(Status::invalid_argument("target is required"));
+        }
+        let sync_api = require_sync(self)?;
+        let target = graphdb_core::types::TargetId::new(req.target)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        match sync_api.clear_degraded_range(
+            &target,
+            req.index_id,
+            req.generation,
+            graphdb_core::types::CommitLsn::new(req.start_lsn),
+            graphdb_core::types::CommitLsn::new(req.end_lsn),
+        ) {
+            Ok(cleared) => Ok(Response::new(ClearDegradedRangeResponse {
+                cleared,
+                error: String::new(),
+            })),
+            Err(e) => Ok(Response::new(ClearDegradedRangeResponse {
+                cleared: false,
+                error: e,
+            })),
+        }
+    }
 }

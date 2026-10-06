@@ -157,9 +157,15 @@
 	let syncError = $state<string | null>(null);
 	let syncMessage = $state<string | null>(null);
 	let syncDiagnostics = $state('');
+	let syncStatusText = $state('');
 	let deadLettersText = $state('');
 	let degradedText = $state('');
 	let retentionText = $state('');
+	let clearTarget = $state('');
+	let clearIndexId = $state('');
+	let clearGeneration = $state('');
+	let clearStartLsn = $state('');
+	let clearEndLsn = $state('');
 
 	function configEntryKey(section: string, key: string): string {
 		return `${section}.${key}`;
@@ -264,12 +270,15 @@
 		syncError = null;
 		syncMessage = null;
 		try {
-			const [diagnostics, deadLetters, degraded, retention] = await Promise.all([
-				syncService.diagnostics(),
-				syncService.deadLetters({ limit: 20 }),
-				syncService.degradedRanges(),
-				syncService.retentionStatus(),
-			]);
+			const [status, diagnostics, deadLetters, degraded, retention] =
+				await Promise.all([
+					syncService.status(),
+					syncService.diagnostics(),
+					syncService.deadLetters({ limit: 20 }),
+					syncService.degradedRanges(),
+					syncService.retentionStatus(),
+				]);
+			syncStatusText = stringifyPayload(status);
 			syncDiagnostics = stringifyPayload(diagnostics);
 			deadLettersText = stringifyPayload(deadLetters);
 			degradedText = stringifyPayload(degraded);
@@ -315,6 +324,41 @@
 		syncError = null;
 		try {
 			const result = await syncService.retentionRun();
+			syncMessage = stringifyPayload(result);
+			await loadSyncDiagnostics();
+		} catch (err) {
+			syncError = err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			syncLoading = false;
+		}
+	}
+
+	async function clearDegradedRange() {
+		const indexId = Number(clearIndexId);
+		const generation = Number(clearGeneration);
+		const startLsn = Number(clearStartLsn);
+		const endLsn = Number(clearEndLsn);
+		if (
+			!clearTarget.trim() ||
+			![indexId, generation, startLsn, endLsn].every(
+				(n) => Number.isInteger(n) && n >= 0,
+			)
+		) {
+			syncError = t('monitoring.clearDegradedInvalid');
+			return;
+		}
+		if (!confirm(t('monitoring.confirmClearDegraded', { id: clearTarget })))
+			return;
+		syncLoading = true;
+		syncError = null;
+		try {
+			const result = await syncService.clearDegraded({
+				target: clearTarget.trim(),
+				index_id: indexId,
+				generation,
+				start_lsn: startLsn,
+				end_lsn: endLsn,
+			});
 			syncMessage = stringifyPayload(result);
 			await loadSyncDiagnostics();
 		} catch (err) {
@@ -1038,6 +1082,11 @@
 							: '—'}</span
 					>
 				</div>
+				{#if syncStatusText}
+					<pre
+						class="font-mono bg-gray-50 dark:bg-gray-800/50 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-32 text-gray-700 dark:text-gray-300">{syncStatusText}</pre
+					>
+				{/if}
 				<div class="flex justify-between">
 					<span class="text-gray-500">{t('monitoring.outbox')}</span>
 					<span>
@@ -1113,6 +1162,44 @@
 					{:else}
 						<p class="text-gray-400">{t('monitoring.noData')}</p>
 					{/if}
+					<div class="grid grid-cols-2 gap-1 mt-2">
+						<input
+							class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+							placeholder="target"
+							bind:value={clearTarget}
+						/>
+						<input
+							class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+							placeholder="index_id"
+							inputmode="numeric"
+							bind:value={clearIndexId}
+						/>
+						<input
+							class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+							placeholder="generation"
+							inputmode="numeric"
+							bind:value={clearGeneration}
+						/>
+						<input
+							class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+							placeholder="start_lsn"
+							inputmode="numeric"
+							bind:value={clearStartLsn}
+						/>
+						<input
+							class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 col-span-2"
+							placeholder="end_lsn"
+							inputmode="numeric"
+							bind:value={clearEndLsn}
+						/>
+					</div>
+					<button
+						class="mt-2 px-2 py-1 text-xs rounded bg-red-500 hover:bg-red-600 text-white disabled:opacity-50 cursor-pointer"
+						onclick={clearDegradedRange}
+						disabled={syncLoading}
+					>
+						{t('monitoring.clearDegraded')}
+					</button>
 				</div>
 				<div>
 					<h3 class="font-medium text-gray-500 dark:text-gray-400 mb-1">

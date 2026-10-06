@@ -165,6 +165,12 @@ pub enum MetaCommand {
     Config {
         action: ConfigAction,
     },
+    Batch {
+        action: BatchAction,
+    },
+    Sync {
+        action: SyncAction,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -191,6 +197,68 @@ pub enum ConfigAction {
 pub enum CopyDirection {
     From,
     To,
+}
+
+#[derive(Debug, Clone)]
+pub enum BatchAction {
+    Create {
+        space_id: u64,
+        batch_type: String,
+        batch_size: usize,
+    },
+    Add {
+        batch_id: String,
+        file_path: String,
+    },
+    Execute {
+        batch_id: String,
+    },
+    Status {
+        batch_id: String,
+    },
+    Cancel {
+        batch_id: String,
+    },
+    Delete {
+        batch_id: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum SyncAction {
+    Status,
+    Diagnostics,
+    DeadLetters {
+        target: Option<String>,
+        index_id: Option<u64>,
+        generation: Option<u64>,
+        limit: usize,
+        offset: usize,
+    },
+    Requeue {
+        target: Option<String>,
+        index_id: Option<u64>,
+        generation: Option<u64>,
+        limit: usize,
+    },
+    Retry,
+    DegradedRanges {
+        target: Option<String>,
+        index_id: Option<u64>,
+        generation: Option<u64>,
+    },
+    DegradedClear {
+        target: String,
+        index_id: u64,
+        generation: u64,
+        start_lsn: u64,
+        end_lsn: u64,
+    },
+    RetentionStatus,
+    RetentionRun {
+        grace_lsn_distance: Option<u64>,
+        max_age_ms: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone)]

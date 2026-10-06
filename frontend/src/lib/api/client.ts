@@ -29,6 +29,7 @@ import {
 import { connectionHandlers } from '$lib/mock/handlers/connection';
 import { dataBrowserHandlers } from '$lib/mock/handlers/dataBrowser';
 import { graphHandlers } from '$lib/mock/handlers/graph';
+import { managementHandlers } from '$lib/mock/handlers/management';
 import { monitoringHandlers } from '$lib/mock/handlers/monitoring';
 import { queryHandlers } from '$lib/mock/handlers/query';
 import { schemaHandlers } from '$lib/mock/handlers/schema';
@@ -260,6 +261,7 @@ register({
 	...queryHandlers,
 	...dataBrowserHandlers,
 	...monitoringHandlers,
+	...managementHandlers,
 });
 
 export const client = (
